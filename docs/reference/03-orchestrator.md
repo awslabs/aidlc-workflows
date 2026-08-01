@@ -428,7 +428,10 @@ each link advances the work product directly:
 1. **Developer (link 1, the lead):** Scans the codebase, analyzes code structure, identifies components, maps dependencies, returns raw analysis.
 2. **Architect (link 2, the final link):** Receives the developer's raw analysis and synthesizes it into the 9 codekb artifacts under `aidlc/spaces/<active-space>/codekb/<repo>/` -- the final link leaves the `produces[]` artifacts complete, per the pipeline contract.
 
-Reverse Engineering has an **always-rerun policy**: it is always re-executed for brownfield projects even when prior artifacts exist, ensuring the analysis reflects the current codebase state.
+Reverse Engineering checks each brownfield repository's shared codekb before
+scanning. A verified-current store may be reused by human choice; stale,
+unverified, legacy, or intent-mismatched coverage is rescanned. Multi-repo
+intents resolve every repository decision before the stage reports or advances.
 
 ### Construction Execution <a id="construction-execution"></a>
 
@@ -604,7 +607,7 @@ The following intentional differences from the upstream `aidlc-workflows/` refer
 | 4 | Inline questions | All questions in files | `AskUserQuestion` for 1-3 simple options | Claude Code's structured UI |
 | 5 | Architecture Decision Records | Not present | `decisions.md` in Application Design | Architectural traceability |
 | 6 | Welcome message | Longer Unicode-based | Shorter, ASCII-safe; rendered via `companyAnnouncements` in `settings.json` (not a stage) | Fixes reference's own ascii-diagram-standards violation |
-| 7 | RE always-rerun policy | Uses cached artifacts | Always re-executes for brownfield | Ensures current codebase analysis |
+| 7 | RE rerun guard | Uses cached artifacts | Verifies scope/fingerprint, then offers reuse or rescan | Prevents stale or silently narrower analysis |
 | 8 | Session resume | File-based `[Answer]:` tag | Uses `AskUserQuestion` | More natural in Claude Code |
 | 9 | Clarification questions | Separate files | Handled inline | Typically 1-2 targeted queries |
 | 10 | Audit log formats | Single format | Three additional: Error, Recovery, Change Request | Post-hoc analysis |

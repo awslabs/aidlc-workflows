@@ -852,6 +852,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t179-orchestrate-rollforward-guard.test.ts",
     "unit/t180-kiro-rollforward-seam.test.ts",
     "unit/t182-codekb-placement.test.ts",
+    "unit/t248-codekb-scope-diff.test.ts",
     "unit/t184-stage-graph-drift.test.ts",
     "unit/t186-foreach-per-unit-iteration.test.ts",
     "unit/t188-human-presence-gate.test.ts",

@@ -400,7 +400,7 @@ describe("documentation parity derives current behavior from authored implementa
 
     const cliGuide = read("docs", "guide", "12-cli-commands.md");
     for (const verb of workspaceVerbs) expect(cliGuide).toContain(`/aidlc ${verb}`);
-    const directOnlyVerbs = ["codekb-path", "select-plugins"];
+    const directOnlyVerbs = ["codekb-path", "codekb-scope-diff", "select-plugins"];
     for (const verb of directOnlyVerbs) {
       expect(workspaceVerbs).not.toContain(verb);
       expect(cliGuide).toContain("direct utility invocation");

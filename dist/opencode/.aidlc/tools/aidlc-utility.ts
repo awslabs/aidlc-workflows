@@ -54,8 +54,11 @@ import {
   isoTimestamp,
   isPackageJson,
   codekbRepoName,
+  codekbScopeFingerprint,
+  parseReScope,
   relativeCodekbDir,
   RESERVED_RECORD_NAMES,
+  scopePathCovered,
   gridCostSummary,
   listIntents,
   listSpaces,
@@ -4207,6 +4210,171 @@ function handleCodekbPath(projectDir: string, flags: Record<string, string>): vo
   process.stdout.write(`${dir}/\n`);
 }
 
+// `aidlc-utility.ts codekb-scope-diff [--repo <name>] [--compare <timestamp.md>]
+// [--json]` - read-only. The deterministic half of the reverse-engineering
+// rerun guard (the store is shared space-level knowledge; a narrower rerun
+// overwrites it last-writer-wins, so the human decides on evidence).
+//
+// Status mode (default): parse the STORE's reverse-engineering-timestamp.md
+// scope block and recompute the content fingerprint over its analyzed paths.
+//   NO_STORE       no store timestamp - first scan, nothing to guard
+//   CURRENT        fingerprint matches - the store's deep knowledge is exact
+//   STALE          analyzed paths changed since the store was built
+//   UNVERIFIED     scope parsed but no/uncomputable fingerprint (non-git)
+//   UNKNOWN_SCOPE  block absent (legacy store) or malformed
+//
+// Compare mode (--compare <incoming timestamp.md>): does the incoming run's
+// analyzed scope cover the store's? COVERS, or NARROWER + the exact paths and
+// components an overwrite would discard.
+//
+// Mint mode (--mint --paths <a,b,...>): print the content fingerprint over
+// the given repo-relative paths - the value the architect writes into the
+// scope block's `fingerprint:` line at synthesis time. Prints `unknown` when
+// not computable (non-git or invalid pathspec), which the block records
+// verbatim.
+//
+// Always exits 0 with the verdict in the output (read-only query - mirrors
+// codekb-path; refusals are for lifecycle verbs). No mkdir, no state write,
+// no audit.
+function handleCodekbScopeDiff(projectDir: string, flags: Record<string, string>): void {
+  const asJson = flags.json === "true";
+  const space = activeSpace(projectDir);
+  const repo = flags.repo && flags.repo.length > 0 ? flags.repo : codekbRepoName(projectDir, space);
+  const storeDir = relativeCodekbDir(projectDir, repo, space);
+  const storePath = join(projectDir, ...storeDir.split("/"), "reverse-engineering-timestamp.md");
+
+  // The repo's source root: the sibling dir `<workspace>/<repo>/` when it
+  // exists (the multi-repo layout reverse-engineering.md Step 1 scans), else
+  // the workspace root itself (the lone-repo case, where codekbRepoName is
+  // basename(projectDir)).
+  const siblingDir = join(projectDir, repo);
+  const repoDir = existsSync(siblingDir) && statSync(siblingDir).isDirectory() ? siblingDir : projectDir;
+  // In the lone-repo layout the framework-owned aidlc workspace tree lives
+  // under the repository root. Exclude it from full-root fingerprints so
+  // writing the scope draft, codekb, audit, or state cannot stale its own hash.
+  const fingerprintExcludes = repoDir === projectDir ? ["aidlc"] : [];
+
+  if (flags.mint === "true") {
+    const paths = (flags.paths ?? "")
+      .split(",")
+      .map((p) => p.trim())
+      .filter((p) => p !== "");
+    if (paths.length === 0) {
+      die("codekb-scope-diff --mint: pass --paths <comma-separated repo-relative paths>");
+    }
+    const fp = codekbScopeFingerprint(repoDir, paths, fingerprintExcludes) ?? "unknown";
+    if (asJson) process.stdout.write(`${JSON.stringify({ repo, fingerprint: fp, paths })}\n`);
+    else process.stdout.write(`${fp}\n`);
+    return;
+  }
+
+  const emit = (payload: Record<string, unknown>, human: string): void => {
+    if (asJson) process.stdout.write(`${JSON.stringify({ repo, store: `${storeDir}/`, ...payload })}\n`);
+    else process.stdout.write(`${human}\n`);
+  };
+
+  if (!existsSync(storePath)) {
+    emit(
+      { verdict: "NO_STORE" },
+      `NO_STORE: no reverse-engineering-timestamp.md at ${storeDir}/ - first scan, nothing to compare.`,
+    );
+    return;
+  }
+  const parsed = parseReScope(readFileSync(storePath, "utf-8"));
+  if (!parsed.ok) {
+    emit(
+      { verdict: "UNKNOWN_SCOPE", reason: parsed.reason, detail: parsed.detail },
+      `UNKNOWN_SCOPE (${parsed.reason}): ${parsed.detail}. The store predates scope tracking - a rerun replaces it without a coverage comparison.`,
+    );
+    return;
+  }
+  const store = parsed.scope;
+
+  if (flags.compare !== undefined) {
+    const incomingPath = flags.compare;
+    if (!incomingPath || !existsSync(incomingPath)) {
+      die(`codekb-scope-diff --compare: file not found: ${incomingPath || "(missing path)"}`);
+    }
+    const incomingParsed = parseReScope(readFileSync(incomingPath, "utf-8"));
+    if (!incomingParsed.ok) {
+      emit(
+        { verdict: "UNKNOWN_SCOPE", reason: incomingParsed.reason, detail: `incoming: ${incomingParsed.detail}` },
+        `UNKNOWN_SCOPE (incoming ${incomingParsed.reason}): ${incomingParsed.detail}.`,
+      );
+      return;
+    }
+    const incoming = incomingParsed.scope;
+    const fullScopeDowngrade = store.kind === "full" && incoming.kind !== "full";
+    const discardedPaths =
+      incoming.kind === "full"
+        ? []
+        : fullScopeDowngrade
+          ? [...store.analyzedPaths]
+          : store.analyzedPaths.filter((p) => !scopePathCovered(incoming.analyzedPaths, p));
+    const discardedComponents =
+      incoming.kind === "full"
+        ? []
+        : store.analyzedComponents.filter((c) => !incoming.analyzedComponents.includes(c));
+    const narrower = discardedPaths.length > 0 || discardedComponents.length > 0;
+    const payload = {
+      verdict: narrower ? "NARROWER" : "COVERS",
+      store_intent: store.intent,
+      incoming_intent: incoming.intent,
+      discarded_paths: discardedPaths,
+      discarded_components: discardedComponents,
+    };
+    if (narrower) {
+      emit(
+        payload,
+        `NARROWER: replacing the store discards deep knowledge of:\n` +
+          discardedPaths.map((p) => `  - ${p}`).join("\n") +
+          (discardedComponents.length > 0
+            ? `\n  components: ${discardedComponents.join(", ")}`
+            : "") +
+          `\n(store intent: ${store.intent || "unrecorded"}; incoming intent: ${incoming.intent || "unrecorded"})`,
+      );
+    } else {
+      emit(payload, `COVERS: the incoming scan covers everything the store analyzed.`);
+    }
+    return;
+  }
+
+  // Status mode.
+  const currentFingerprint =
+    store.analyzedPaths.length > 0
+      ? codekbScopeFingerprint(repoDir, store.analyzedPaths, fingerprintExcludes)
+      : null;
+  const scopeLines = store.analyzedPaths.map((p) => `  - ${p}`).join("\n");
+  if (store.fingerprint === null || currentFingerprint === null) {
+    emit(
+      {
+        verdict: "UNVERIFIED",
+        store_intent: store.intent,
+        kind: store.kind,
+        analyzed_paths: store.analyzedPaths,
+        detail: store.fingerprint === null ? "store has no fingerprint" : "fingerprint not computable here",
+      },
+      `UNVERIFIED: the store (intent: ${store.intent || "unrecorded"}) analyzed:\n${scopeLines}\n` +
+        `but ${store.fingerprint === null ? "recorded no fingerprint" : "the current tree's fingerprint cannot be computed"} - freshness unknown.`,
+    );
+    return;
+  }
+  const current = store.fingerprint === currentFingerprint;
+  emit(
+    {
+      verdict: current ? "CURRENT" : "STALE",
+      store_intent: store.intent,
+      kind: store.kind,
+      analyzed_paths: store.analyzedPaths,
+      store_fingerprint: store.fingerprint,
+      current_fingerprint: currentFingerprint,
+    },
+    current
+      ? `CURRENT: the analyzed paths are unchanged since the store was built (intent: ${store.intent || "unrecorded"}, coverage: ${store.kind}):\n${scopeLines}`
+      : `STALE: the analyzed paths have changed since the store was built (intent: ${store.intent || "unrecorded"}):\n${scopeLines}`,
+  );
+}
+
 // `detect [--json]` - read-only. Runs the workspace scan (detectWorkspace) on
 // the bare project dir - it needs no aidlc/ workspace; it scans the app root -
 // and prints projectType (Greenfield/Brownfield), languages, frameworks, and
@@ -5404,6 +5572,12 @@ export async function main(argv: string[]): Promise<void> {
     case "codekb-path":
       handleCodekbPath(projectDir, flags);
       break;
+    // codekb-scope-diff - read-only query verb. Compares the codekb store's
+    // recorded scope of analysis against the live tree (status) or an
+    // incoming run's timestamp (--compare). The RE stage's rerun guard.
+    case "codekb-scope-diff":
+      handleCodekbScopeDiff(projectDir, flags);
+      break;
     // detect - read-only query verb. Prints the workspace scan
     // (greenfield/brownfield, languages) + the resolved scope-registry paths so
     // the composer agent is told where scope data lives. No mutation, no audit.
@@ -5466,7 +5640,7 @@ export async function main(argv: string[]): Promise<void> {
       break;
     default:
       die(
-        `Usage: aidlc-utility <help|version|status|doctor|intent-birth|intent|space|space-create|codekb-path|detect|select-plugins|plugin-list|plugin-sync|recompose|scope-change|config-change|config-get|config-list|set-status|detect-scope|resolve-env-scope|scope-table|stage-table|upgrade> [--project-dir <path>] [--scope <scope>] [--json]`
+        `Usage: aidlc-utility <help|version|status|doctor|intent-birth|intent|space|space-create|codekb-path|codekb-scope-diff|detect|select-plugins|plugin-list|plugin-sync|recompose|scope-change|config-change|config-get|config-list|set-status|detect-scope|resolve-env-scope|scope-table|stage-table|upgrade> [--project-dir <path>] [--scope <scope>] [--json]`
       );
   }
 }

@@ -124,6 +124,37 @@ describe("t154 codekb promotion — RE outputs land at aidlc/spaces/<active-spac
     expect((fm.condition as string).toLowerCase()).toContain("freshness");
   });
 
+  test("multi-repo reuse decisions resolve before one aggregate lifecycle report", () => {
+    const body = stageBody("inception", "reverse-engineering");
+    expect(body.indexOf("Resolve the intent's repo set")).toBeLessThan(
+      body.indexOf("Rerun guard: check each existing store"),
+    );
+    const decisionsStart = body.indexOf("For every repo in the resolved set");
+    const aggregateStart = body.indexOf("Only after every repository decision has been resolved");
+    const step2Start = body.indexOf("### Step 2:");
+    expect(decisionsStart).toBeGreaterThan(-1);
+    expect(aggregateStart).toBeGreaterThan(decisionsStart);
+    expect(body.slice(decisionsStart, aggregateStart)).not.toContain(
+      "aidlc-orchestrate.ts report",
+    );
+    const aggregate = body.slice(aggregateStart, step2Start);
+    expect(aggregate.match(/aidlc-orchestrate\.ts report/g)).toHaveLength(1);
+    expect(aggregate).toMatch(/report the stage as\s+skipped exactly once/);
+    expect(aggregate).toContain("directive.single === true");
+    expect(aggregate).toContain('report --single --stage "reverse-engineering" --result completed');
+    expect(aggregate).toContain("If any repo needs scanning, do not report a skip");
+  });
+
+  test("parallel repository comparisons use repository-specific scope drafts", () => {
+    const body = stageBody("inception", "reverse-engineering");
+    expect(body.match(/scope-draft-<repo>\.md/g)?.length).toBeGreaterThanOrEqual(3);
+    expect(body).toMatch(
+      /--compare <record>\/inception\/reverse-engineering\/scope-draft-<repo>\.md/,
+    );
+    expect(body).toContain("scope drafts are temporary and MUST NOT remain");
+    expect(body).not.toContain("reverse-engineering/scope-draft.md");
+  });
+
   // ── 4: frontmatter consumers — edge intact, read path re-pointed ─────────
   test("requirements-analysis keeps the reverse-engineering requires_stage edge", () => {
     const fm = stageFrontmatter("inception", "requirements-analysis");

@@ -563,6 +563,43 @@ It prints the active space's deterministic
 no audit event; reverse-engineering stage prose invokes it directly so paths
 are never derived by hand.
 
+### `aidlc-utility codekb-scope-diff` - check the code knowledge base before a rerun
+
+This is a **direct utility invocation**, not an `/aidlc codekb-scope-diff` command:
+
+```bash
+bun .claude/tools/aidlc-utility.ts codekb-scope-diff --repo <repo>
+bun .claude/tools/aidlc-utility.ts codekb-scope-diff --repo <repo> --compare <timestamp.md>
+bun .claude/tools/aidlc-utility.ts codekb-scope-diff --repo <repo> --mint --paths src/payments/,src/billing/
+```
+
+The reverse-engineering rerun guard. The codekb store is space-level and
+shared across intents; a rerun replaces it, so the stage checks first:
+
+- **Status mode** (default) reads the store's
+  `reverse-engineering-timestamp.md` Scope of Analysis block and recomputes a
+  content fingerprint over its analyzed paths. Verdicts: `NO_STORE` (first
+  scan), `CURRENT` (analyzed paths unchanged - reuse is safe), `STALE`
+  (analyzed paths changed), `UNVERIFIED` (no computable fingerprint - e.g.
+  not a git work tree), `UNKNOWN_SCOPE` (store predates scope tracking).
+- **Compare mode** (`--compare <incoming timestamp.md>`) answers whether the
+  incoming run's scope covers the store's: `COVERS`, or `NARROWER` plus the
+  exact paths and components an overwrite discards. A `kind: full` scope must
+  include repository root (`./`), and only another full scope can replace a
+  full store without a `NARROWER` warning.
+- **Mint mode** (`--mint --paths <a,b,...>`) prints the fingerprint the
+  architect pastes into the scope block at synthesis time (`unknown` outside
+  a git work tree or when a pathspec is invalid).
+
+Add `--json` for the structured shape. Always exits 0 with the verdict in the
+output (except usage errors); writes nothing, no audit event. The fingerprint
+is a `git write-tree` over a temporary index restricted to the analyzed paths,
+excluding the framework-owned `aidlc/` tree when the workspace root is the
+repository root. It tracks source working-tree content without invalidating
+itself when codekb/state artifacts are written; rebases or squashes that
+rewrite history do not fool it, and reverting an edit restores the original
+fingerprint.
+
 ### `aidlc-utility detect` - read-only workspace scan
 
 `bun .claude/tools/aidlc-utility.ts detect --json` prints the workspace scan (project type, languages, frameworks, build system, and a `submodules` array of any declared git submodules with their initialized state) plus the resolved scopes dir and scope-grid path. Pure read; the composer runs it to learn where scope data lives on the current harness.

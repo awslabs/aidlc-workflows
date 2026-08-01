@@ -14,12 +14,16 @@ All RE artifacts are created under `aidlc/spaces/<active-space>/codekb/<repo>/` 
 6. **technology-stack.md** — Languages, frameworks, libraries with versions
 7. **dependencies.md** — External dependencies, internal cross-package dependencies
 8. **code-quality-assessment.md** — Test coverage, linting, CI/CD, documentation quality, tech debt
-9. **reverse-engineering-timestamp.md** — Records when reverse engineering was performed (date, commit hash if available, scope of analysis)
+9. **reverse-engineering-timestamp.md** - Records when reverse engineering was performed (date, commit hash if available) plus the structured Scope of Analysis block (template below). The scope block is machine-read by `codekb-scope-diff` on the next rerun, so its accuracy decides whether a future intent is warned before overwriting this run's knowledge.
 
 ### Developer Code Scan Template
 
 ```markdown
 ## Developer Code Scan Results
+
+### Scan Coverage
+- **Analyzed deeply**: [repo-relative dirs/files actually read and understood, one per line]
+- **Skimmed only**: [areas noted at directory granularity without deep reading]
 
 ### Packages Found
 - [package name] — [type] — [language] — [purpose]
@@ -72,3 +76,33 @@ All RE artifacts are created under `aidlc/spaces/<active-space>/codekb/<repo>/` 
 ### Improvement Opportunities
 [Areas where the architecture could be strengthened]
 ```
+
+### Scope of Analysis Block (reverse-engineering-timestamp.md)
+
+End reverse-engineering-timestamp.md with exactly this fenced block, filled
+honestly from the Scan Coverage the developer reported - record what the run
+ACTUALLY covered deeply, not what the stage aspired to cover:
+
+````markdown
+## Scope of Analysis
+
+```yaml
+scope_version: 1
+kind: partial
+intent: [active intent slug]
+fingerprint: [output of the mint command in stage Step 3 - verbatim; it prints "unknown" when not computable]
+analyzed:
+  paths:
+    - [repo-relative dir (trailing slash) or file analyzed deeply, one per line]
+  components:
+    - [component names exactly as they appear in component-inventory.md]
+shallow:
+  paths:
+    - [areas only skimmed]
+```
+````
+
+Rules:
+- `kind: full` only when the scan genuinely covered the whole repo deeply; `analyzed.paths` MUST include the repo root (`./`). Anything less is `kind: partial`.
+- `analyzed.paths` entries are repo-relative, directories end with `/`, no glob characters.
+- Component names must match `component-inventory.md` headings verbatim - the rerun guard compares them literally.
