@@ -298,9 +298,26 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
         // The reason names the pending stage and re-feeds the loop...
         expect(parsed.reason).toContain(PENDING_STAGE);
         expect(parsed.reason).toContain("aidlc-orchestrate");
-        // ...and uses no override-shaped verbs (the security property SPIKE 1
-        // pinned; aidlc-stop.ts:298-307 phrases continuation, never override).
-        expect(/ignore|override|disregard|bypass/i.test(parsed.reason)).toBe(
+        // ...and the hook's OWN framing uses no override-shaped verbs (the
+        // security property SPIKE 1 pinned: the hook phrases continuation,
+        // never override). A load-steering reason EMBEDS rule-file text
+        // verbatim as a single-line JSON rules_content payload
+        // (continuationReason JSON.stringifies it, so the payload carries no
+        // raw newlines), and rule PROSE may legitimately contain these verbs
+        // (e.g. operation.md's "Never remove or bypass existing security
+        // controls"). Scan only the hook-authored lines, not the quoted
+        // payload — delivered content is not the hook speaking.
+        const hookFraming = parsed.reason
+          .split("\n")
+          .filter((line) => {
+            try {
+              return !Array.isArray(JSON.parse(line));
+            } catch {
+              return true;
+            }
+          })
+          .join("\n");
+        expect(/ignore|override|disregard|bypass/i.test(hookFraming)).toBe(
           false,
         );
       } finally {
