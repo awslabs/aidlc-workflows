@@ -3731,8 +3731,9 @@ export function engineTouchMarkerPath(projectDir: string, intent?: string, space
 }
 
 // The env marker that identifies the Stop hook's OWN read-only `next` probe.
-// Set by aidlc-stop.ts on its spawn; read by aidlc-orchestrate.ts to suppress
-// the engine touch. Without this the carve-out can never fire (see above).
+// Set by aidlc-continue-workflow.ts on its spawn; read by aidlc-orchestrate.ts
+// to suppress the engine touch. Without this the carve-out can never fire (see
+// above).
 export const STOP_HOOK_PROBE_ENV = "AIDLC_STOP_HOOK_PROBE";
 
 // Touch a turn-shape marker. Only the mtime carries meaning, so the body is a
@@ -3788,8 +3789,8 @@ function workflowIsBorn(projectDir: string, intent?: string, space?: string): bo
 }
 
 // Record that a human just submitted a prompt. Called from the UserPromptSubmit
-// seam of every harness: the core aidlc-mint-presence.ts hook (Claude, opencode)
-// and both Kiro adapters' inlined `mint` targets.
+// seam of every harness: the core aidlc-record-human-turn.ts hook (Claude,
+// opencode) and both Kiro adapters' inlined `record-human-turn` targets.
 export function markHumanTurn(projectDir: string, intent?: string, space?: string): void {
   if (!workflowIsBorn(projectDir, intent, space)) return;
   touchTurnMarker(humanTurnMarkerPath(projectDir, intent, space));

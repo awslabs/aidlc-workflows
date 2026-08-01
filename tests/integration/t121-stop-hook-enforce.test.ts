@@ -1330,8 +1330,9 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
   // pin the HOOK's decision, which is all this file can see; whether a given host
   // acts on {"decision":"block"} is the host's contract and varies (opencode's
   // plugin re-prompts with the reason; the Kiro IDE `Stop` trigger discards hook
-  // output entirely, so there the carve-out changes only stop.drops and the
-  // counter). See docs/reference/06-hooks-and-tools.md for the per-host table.
+  // output entirely, so there the carve-out changes only continue-workflow.drops
+  // and the counter). See docs/reference/06-hooks-and-tools.md for the per-host
+  // table.
   // =========================================================================
   test("(f2) MARKERS, no transcript - human turn NEWER than the last engine touch allows the stop (conversational carve-out)", () => {
     const proj = makeProject();

@@ -18,7 +18,15 @@
 // in-process. Both halves are needed: the carve-out is dead code if either the
 // hook forgets to mark its probe OR markEngineTouch forgets to honour the mark.
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -190,9 +198,9 @@ describe("t259 turn-shape markers — the transcript-free tier-3 predicate", () 
     rmSync(path, { force: true });
     mkdirSync(path, { recursive: true });
 
-    markEngineTouch(proj); // must not throw, and must not leave the stale path
-    // The directory is gone (rmSync recursive) OR the path no longer resolves to
-    // a readable marker; either way the predicate must find "no evidence".
+    markEngineTouch(proj); // must not throw, and must remove the stale path
+    expect(existsSync(path)).toBe(false);
+    // The predicate must independently fail closed after the cleanup.
     markHumanTurn(proj);
     expect(turnMarkersShowConversational(proj)).toBe(false);
   });

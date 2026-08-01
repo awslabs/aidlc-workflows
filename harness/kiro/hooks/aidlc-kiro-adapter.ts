@@ -20,8 +20,11 @@
 //   - session-start emits {"additionalContext": "..."} — Kiro's context
 //     channel is plain stdout at exit 0, so the shim unwraps the JSON and
 //     prints the text.
-//   - continue-workflow emits {"decision":"block","reason":"..."} — Kiro's continue-workflow contract
-//     is IDENTICAL (verified live), so it passes through verbatim.
+//   - continue-workflow emits {"decision":"block","reason":"..."} — Kiro CLI
+//     2.16.0's legacy/V2 runtime was verified live consuming this adapter's
+//     passthrough and reinjecting `reason`. The `--v3`/KAS runtime uses
+//     standalone `.kiro/hooks` registration instead of this adapter and was
+//     verified independently.
 //
 // Usage (registered in the conductor and delegated .kiro/agents/*.json configs):
 //   bun .kiro/hooks/aidlc-kiro-adapter.ts <target>
@@ -834,16 +837,17 @@ function buildForward(): Forward {
       // the core hook falls back to the `.aidlc-human-turn` / `.aidlc-engine-touch`
       // mtime comparison, and the userPromptSubmit seam above writes the former.
       //
-      // WHETHER kiro-cli ACTS ON {"decision":"block"} IS UNVERIFIED. This adapter
-      // relays the core hook's stdout and exit code verbatim, which is all it can
-      // do; whether the host consumes that shape is the host's contract, and no
-      // measurement has been taken here. Do not assume parity with Claude Code:
-      // the sibling IDE harness was probed live and its `Stop` trigger discards
-      // hook output entirely (see harness/kiro-ide/hooks/aidlc-kiro-adapter.ts),
-      // and Kiro documents no `{"decision":"block"}` contract for any trigger.
-      // What IS certain on this harness either way: the core hook runs, so the
-      // `stop.drops` carve-out record and the `.aidlc-stop-hook/` counter are
-      // correct. If someone measures the host's behaviour, record it here.
+      // Kiro CLI 2.16.0 legacy/V2 was measured live consuming this
+      // adapter's `{"decision":"block","reason":"..."}` output: it reinjects
+      // `reason`, and `Stop` fires twice across the induced continuation. The
+      // CLI's `--v3`/KAS runtime does NOT use this adapter; a separate probe of
+      // its standalone `.kiro/hooks` registration measured the same block and
+      // reinjection with one `Stop` invocation and no re-fire after the induced
+      // continuation. This evidence is CLI-only: Kiro IDE 1.x was measured
+      // discarding Stop-hook stdout and stderr.
+      //
+      // The core hook also records the `continue-workflow.drops` carve-out and
+      // maintains the `.aidlc-stop-hook/` counter on this legacy/V2 path.
       return {
         hook: "aidlc-continue-workflow.ts",
         input: { hook_event_name: "Stop", stop_hook_active: false },
@@ -900,8 +904,9 @@ if (target === "session-start") {
   return 0;
 }
 
-// continue-workflow (and any future passthrough target): forward stdout + exit code
-// verbatim — the {"decision":"block","reason"} contract is shared.
+// Preserve stdout + exit code verbatim for passthrough targets. Kiro CLI
+// 2.16.0 legacy/V2 was measured consuming this Stop block and reinjecting its
+// `reason`; the `--v3`/KAS runtime uses a separate standalone-hook path.
 if (result.stdout) process.stdout.write(result.stdout);
 return result.code;
 }

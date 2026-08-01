@@ -283,7 +283,8 @@ This is one of the framework's five flow-altering hooks, alongside the four PreT
   | Claude Code, Codex | Yes — native contract | The nudge is suppressed; the turn ends clean |
   | opencode | Yes — the plugin parses the block itself and re-prompts the session with the reason | The nudge is suppressed |
   | Kiro IDE | **No.** Measured live on IDE 1.x with a probe hook: the command ran, but neither stdout nor stderr reached the agent. Kiro documents `Stop` outside the blockable set and forwards stdout only for `SessionStart` / `UserPromptSubmit` | Nothing user-visible. Only `continue-workflow.drops` and the no-progress counter are corrected — the nudge was never delivered here in the first place |
-  | Kiro CLI | **Unverified.** The adapter relays stdout and the exit code verbatim; whether `kiro-cli` consumes that shape has not been measured | Unknown; the ledger and counter are correct either way |
+  | Kiro CLI 2.16.0 legacy/V2 | **Yes — measured live through this harness's adapter.** The host consumes `{"decision":"block","reason":"..."}`, reinjects `reason`, and fires `Stop` again after the induced continuation (two Stop invocations total) | The nudge is suppressed |
+  | Kiro CLI 2.16.0 `--v3`/KAS | **Yes — measured live through its standalone `.kiro/hooks` registration.** The host consumes the same block shape and reinjects `reason`; `Stop` fired once and did not fire again after the induced continuation | The nudge is suppressed |
 
   So on Kiro IDE the enforcement described in this section rests on the conductor's own Stop protocol, not on the hook — which is what `aidlc-continue-workflow.json` has always declared. Treat the hook there as an audit of the forwarding loop rather than a gate on it.
 

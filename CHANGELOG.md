@@ -1,7 +1,7 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
-## [2.5.59] - 2026-08-07
+## [2.5.59] - 2026-08-08
 
 Gives the Stop hook's conversational carve-out a second evidence source, so it stops counting a purely conversational turn mid-stage as a no-progress block on harnesses that deliver no transcript. Asking why an earlier decision was made, or reading code without advancing the workflow, previously fell through to the cap-bounded block on Kiro IDE, Kiro CLI, and opencode: the carve-out read its answer off the harness transcript, and only Claude Code and Codex deliver `transcript_path`. What that costs the user depends on the host — see the second bullet, because it is not the same everywhere. **Upgrade:** copy the tree CONTENTS for your harness, e.g. `mkdir -p your-project/.kiro && cp -R dist/kiro-ide/.kiro/. your-project/.kiro/` into your project.
 

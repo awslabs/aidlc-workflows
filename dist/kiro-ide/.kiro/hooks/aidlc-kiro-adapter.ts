@@ -623,8 +623,9 @@ if (target === "session-start") {
   return 0;
 }
 
-// stop (and any future passthrough target): forward stdout + exit code
-// verbatim — the {"decision":"block","reason"} contract is shared.
+// Preserve the core hook's stdout and exit code for passthrough targets. On
+// Kiro IDE 1.x the host discards Stop-hook output, so this relay does not imply
+// a shared `{"decision":"block","reason"}` contract.
 if (result.stdout) process.stdout.write(result.stdout);
 return result.code;
 }

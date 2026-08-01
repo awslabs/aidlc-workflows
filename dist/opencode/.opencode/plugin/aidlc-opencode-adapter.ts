@@ -664,7 +664,7 @@ export default async ({
       // (same degradation profile as Kiro). The absent transcript no longer makes
       // the conversational carve-out inert: the core hook falls back to the
       // `.aidlc-human-turn` / `.aidlc-engine-touch` mtime comparison, and the
-      // chat.message arm's aidlc-mint-presence.ts forward writes the former.
+      // chat.message arm's aidlc-record-human-turn.ts forward writes the former.
       let nudgeReason: string | null = null;
       try {
         const res = await runCore(
