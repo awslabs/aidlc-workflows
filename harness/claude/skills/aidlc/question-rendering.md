@@ -86,6 +86,47 @@ AskUserQuestion({
 })
 ```
 
+## Mandatory consolidated-summary checkpoint
+
+After guided or chat file-backed Q&A (and whenever a stage definition requires
+it explicitly, such as Requirements Analysis), the stage protocol requires a
+separate confirmation before any stage artifact is generated. Append or update
+`## Consolidated Summary Confirmation` in the questions file with the summary,
+the prompt, both options without A/B file-letter prefixes, and a blank
+`[Answer]:` tag, then render the two semantic options through
+`AskUserQuestion`:
+
+```
+AskUserQuestion({
+  questions: [{
+    question: "Does this all look correct before I generate the artifact?",
+    header: "Confirm",
+    multiSelect: false,
+    options: [
+      {
+        label: "Looks correct",
+        description: "Generate the artifact from these answers"
+      },
+      {
+        label: "Request changes",
+        description: "Revise one or more answers before generation"
+      }
+    ]
+  }]
+})
+```
+
+This is a mandatory human checkpoint, not the stage approval gate. END THE TURN
+after presenting it and wait for the user's response. Persist
+`[Answer]: Looks correct` or `[Answer]: Request changes` exactly. Strip any
+source letter, punctuation, and option description before writing:
+`[Answer]: A. Looks correct`, `[Answer]: 1. Looks correct`, `[Answer]: A`, and
+a self-selected answer are invalid. On Request changes, update the affected
+answers, reset this tag to blank, and present the consolidated summary again.
+Do not generate the artifact until the file contains the human's explicit
+`[Answer]: Looks correct`. Never merge this checkpoint with the later reviewer,
+learnings, or approval steps.
+
 ## Harness-specific behaviors
 
 - **Approval gate `[next stage]`**: on an approval question, render the

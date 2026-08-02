@@ -19,6 +19,7 @@ import {
   SNAPSHOT_STAGE_SLUG,
 } from "../harness/custom-harness.ts";
 import {
+  gridHasOption,
   gridIsApprovalGate,
   normalizeTuiCommand,
   pickRevisionOption,
@@ -183,6 +184,8 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
 `;
 
     expect(gridIsApprovalGate(summaryConfirmation)).toBe(false);
+    expect(gridHasOption(summaryConfirmation, "Looks correct")).toBe(true);
+    expect(gridHasOption(summaryConfirmation, "Approve")).toBe(false);
   });
 
   test("does not treat a pending multi-tab learnings tab as revision feedback", () => {

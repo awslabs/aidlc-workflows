@@ -41,6 +41,16 @@ function harnessSkills(): string[] {
     .sort();
 }
 
+/** Authored question-rendering annexes for every shipped distribution. */
+function harnessQuestionAnnexes(): string[] {
+  return HARNESS_MATRIX
+    .map(
+      (harness) =>
+        `harness/${harness.name}/skills/aidlc/question-rendering.md`,
+    )
+    .sort();
+}
+
 // A bare `--init` flag token: `--init` not preceded by another flag char — the
 // retired aidlc command. NOT `git init`/`npm init` (no leading hyphen). Same
 // predicate as t174's `--init` scan.
@@ -82,6 +92,25 @@ const KIRO_TASK_LIST_TOKEN =
 
 const KIRO_SUBAGENT_TOKEN =
   '{mode:"blocking", task:"...", stages:[{name:"...", role:"aidlc-...", prompt_template:"..."}]}';
+
+const SUMMARY_STOP_SKILL_TOKENS = [
+  "before running the stage body or writing `produces`",
+  "the isolated path does not bypass summary confirmation",
+  "Only after that separate human turn may the stage body produce artifacts",
+  "PRE-GENERATION SUMMARY STOP",
+  "before artifact generation, reviewer, learnings, or approval",
+];
+
+const SUMMARY_STOP_ANNEX_TOKENS = [
+  "## Mandatory consolidated-summary checkpoint",
+  "both options without A/B file-letter prefixes",
+  "and a blank",
+  "END THE TURN",
+  "`[Answer]: Looks correct`",
+  "`[Answer]: A. Looks correct`, `[Answer]: 1. Looks correct`",
+  "a self-selected answer",
+  "Do not generate the artifact until",
+];
 
 function stageTableRows(body: string): string[] {
   const lines = body.split(/\r?\n/);
@@ -212,7 +241,33 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
-  test("Kiro file-backed questions and summary confirmation use numbered prose", () => {
+  test("every conductor stops for summary confirmation before artifact work", () => {
+    const missing: string[] = [];
+    for (const rel of skills) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      for (const token of SUMMARY_STOP_SKILL_TOKENS) {
+        if (!body.includes(token)) {
+          missing.push(`${rel}  missing: ${token}`);
+        }
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
+  test("every question renderer pins the mandatory summary checkpoint", () => {
+    const missing: string[] = [];
+    for (const rel of harnessQuestionAnnexes()) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      for (const token of SUMMARY_STOP_ANNEX_TOKENS) {
+        if (!body.includes(token)) {
+          missing.push(`${rel}  missing: ${token}`);
+        }
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
+  test("Kiro file-backed questions remap source letters to numbered prose", () => {
     const missing: string[] = [];
     for (const harness of ["kiro", "kiro-ide"]) {
       const skillRel = `harness/${harness}/skills/aidlc/SKILL.md`;
@@ -226,41 +281,14 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       if (!skill.includes("user never answers with file letters")) {
         missing.push(`${skillRel}  missing no-letter answer rule`);
       }
-      if (!skill.includes("PRE-GENERATION SUMMARY STOP")) {
-        missing.push(`${skillRel}  missing summary stop`);
-      }
-      if (!skill.includes("before artifact generation, reviewer, learnings, or approval")) {
-        missing.push(`${skillRel}  missing summary ordering rule`);
-      }
-      if (!skill.includes("Only after that separate human turn may the stage body produce artifacts")) {
-        missing.push(`${skillRel}  missing gate-path summary stop`);
-      }
-      if (!skill.includes("before running the stage body or writing `produces`")) {
-        missing.push(`${skillRel}  run-stage branches too late`);
-      }
       if (!annex.includes("remap those choices to numbered prose")) {
         missing.push(`${annexRel}  missing numbered file-choice rule`);
       }
       if (!annex.includes("Never present file letters as response keys")) {
         missing.push(`${annexRel}  missing no-letter response rule`);
       }
-      if (!annex.includes("## Mandatory consolidated-summary checkpoint")) {
-        missing.push(`${annexRel}  missing summary checkpoint`);
-      }
       if (!annex.includes("1. **Looks correct**")) {
         missing.push(`${annexRel}  missing numbered Looks correct option`);
-      }
-      if (!annex.includes("and a blank")) {
-        missing.push(`${annexRel}  missing blank-before-presentation rule`);
-      }
-      if (!annex.includes("both options without A/B file-letter prefixes")) {
-        missing.push(`${annexRel}  missing unlettered summary-option rule`);
-      }
-      if (!annex.includes("persist `[Answer]: Looks correct`")) {
-        missing.push(`${annexRel}  missing exact persisted answer`);
-      }
-      if (!annex.includes("`[Answer]: A. Looks correct`, `[Answer]: 1. Looks correct`")) {
-        missing.push(`${annexRel}  missing prefixed-label rejection`);
       }
       if (!annex.includes("options have no source letters")) {
         missing.push(`${annexRel}  missing file-label exception`);

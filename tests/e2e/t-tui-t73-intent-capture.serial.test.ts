@@ -77,7 +77,11 @@ import { join } from "node:path";
 import { resolveWinNode } from "../harness/tui-drive.ts";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
-import { cleanupTuiProject, setupTuiProject } from "../harness/tui-fixtures.ts";
+import {
+  cleanupTuiProject,
+  markdownH2Section,
+  setupTuiProject,
+} from "../harness/tui-fixtures.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const AIDLC_SRC = join(import.meta.dir, "..", "..", "dist", "claude", ".claude");
@@ -279,10 +283,15 @@ describe("t-tui-t73-intent-capture (answering the stage gate produces artifacts 
               session,
               "--project-dir",
               sandbox,
-              "--per-gate-timeout-ms",
-              "200000",
               "--overall-timeout-ms",
               String(Math.max(60000, TEST_TIMEOUT_MS - 30000)),
+              // At the mandatory summary menu, artifact generation must not have
+              // begun. The driver checks this synchronously before selecting the
+              // highlighted Looks correct option.
+              "--assert-file-absent-at-option",
+              "Looks correct",
+              "--assert-file-absent",
+              "aidlc/spaces/default/intents/*/ideation/intent-capture/*intent*statement*",
               // Terminate when the stage has completed + been approved: the approve
               // tool writes `- **Last Completed Stage**: intent-capture` atomically
               // with STAGE_COMPLETED. Anchored so only the literal stage matches.
@@ -315,6 +324,14 @@ describe("t-tui-t73-intent-capture (answering the stage gate produces artifacts 
         expect(questionsBody).toContain("## Sources");
         expect(questionsBody).toContain("[desc]");
         expect(questionsBody).toContain("[scope]");
+        const summaryConfirmation = markdownH2Section(
+          questionsBody,
+          "Consolidated Summary Confirmation",
+        );
+        expect(summaryConfirmation).toContain("[Answer]: Looks correct");
+        expect(summaryConfirmation).not.toMatch(
+          /\[Answer\]:\s*(?:[A-Z]|\d+)\.?\s+Looks correct/,
+        );
 
         // .sh tests 4+5+6: a *intent*statement* artifact exists, > 100 bytes, with
         // at least one markdown heading. (The terminator already required it to

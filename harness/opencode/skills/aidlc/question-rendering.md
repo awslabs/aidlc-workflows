@@ -72,6 +72,38 @@ becomes:
 Reply with a number (or just tell me).
 ```
 
+## Mandatory consolidated-summary checkpoint
+
+After guided or chat file-backed Q&A (and whenever a stage definition requires
+it explicitly, such as Requirements Analysis), the stage protocol requires a
+separate confirmation before any stage artifact is generated. Append or update
+`## Consolidated Summary Confirmation` in the questions file with the summary,
+the prompt, both options without A/B file-letter prefixes, and a blank
+`[Answer]:` tag, then render this numbered question in chat:
+
+```
+**Confirm** — Does this all look correct before I generate the artifact?
+
+1. **Looks correct** — Generate the artifact from these answers
+2. **Request changes** — Revise one or more answers before generation
+3. **Other** — describe what you want instead
+
+Reply with a number (or just tell me).
+```
+
+This is a mandatory human checkpoint, not the stage approval gate. END THE TURN
+after presenting it and wait for the user's response. Map the response back to
+the exact option label and persist `[Answer]: Looks correct` or
+`[Answer]: Request changes`. Strip any source letter, numbered-prose index,
+punctuation, and option description before writing:
+`[Answer]: A. Looks correct`, `[Answer]: 1. Looks correct`, `[Answer]: A`,
+`[Answer]: 1`, and a self-selected answer are invalid. On Request changes,
+update the affected answers, reset this tag to blank, and present the
+consolidated summary again. Do not generate the artifact until the file
+contains the human's explicit
+`[Answer]: Looks correct`. Never merge this checkpoint with the later reviewer,
+learnings, or approval steps.
+
 Rules:
 
 - **Approval gate `[next stage]`**: on an approval question, render the
