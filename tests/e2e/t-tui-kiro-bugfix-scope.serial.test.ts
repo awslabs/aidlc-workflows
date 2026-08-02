@@ -37,6 +37,7 @@ import {
   cleanupTuiProject,
   createKiroNumberedProseAnswerState,
   KIRO_SRC,
+  markdownH2Section,
   nextKiroNumberedProseAnswer,
   setupTuiProject,
 } from "../harness/tui-fixtures.ts";
@@ -154,6 +155,18 @@ describe("t-tui-kiro-bugfix-scope (brownfield bugfix journey, numbered-prose gat
               `Kiro stopped at an unrecognized bugfix prompt:\n${screen.slice(-4000)}`,
             );
           }
+          if (answer === "Looks correct") {
+            expect(
+              existsSync(
+                join(
+                  recordDirFor(sandbox),
+                  "inception",
+                  "requirements-analysis",
+                  "requirements.md",
+                ),
+              ),
+            ).toBe(false);
+          }
           send(session, answer);
           answers += 1;
         }
@@ -171,9 +184,11 @@ describe("t-tui-kiro-bugfix-scope (brownfield bugfix journey, numbered-prose gat
         );
         expect(existsSync(questionsPath)).toBe(true);
         const questions = readFileSync(questionsPath, "utf-8");
-        expect(questions).toMatch(
-          /## Consolidated Summary Confirmation[\s\S]*\[Answer\]:[^\r\n]*Looks correct/i,
+        const confirmation = markdownH2Section(
+          questions,
+          "Consolidated Summary Confirmation",
         );
+        expect(confirmation).toMatch(/^\[Answer\]: Looks correct\s*$/m);
 
         // State surface — the Claude twin's assertion shapes (t50:309-330):
         // loose scope/brownfield matches (live init writes vary the field

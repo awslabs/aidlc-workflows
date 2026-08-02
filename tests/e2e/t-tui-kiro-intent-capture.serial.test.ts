@@ -64,6 +64,7 @@ import {
   cleanupTuiProject,
   createKiroNumberedProseAnswerState,
   KIRO_SRC,
+  markdownH2Section,
   nextKiroNumberedProseAnswer,
   setupTuiProject,
 } from "../harness/tui-fixtures.ts";
@@ -243,6 +244,14 @@ describe("t-tui-kiro-intent-capture (numbered-prose gates on the shipped dist/ki
               `Kiro stopped at an unrecognized intent-capture prompt:\n${screen.slice(-4000)}`,
             );
           }
+          if (answer === "Looks correct") {
+            const icDir = join(
+              seededRecordDir(sandbox),
+              "ideation",
+              "intent-capture",
+            );
+            expect(findArtifact(icDir, ["intent", "statement"])).toBeNull();
+          }
           send(session, answer, true);
         }
         if (!terminated) terminated = lastCompletedIsIntentCapture(sandbox);
@@ -261,9 +270,11 @@ describe("t-tui-kiro-intent-capture (numbered-prose gates on the shipped dist/ki
         expect(questionsFile).not.toBeNull();
         const questionsBody = readFileSync(questionsFile as string, "utf8");
         expect((questionsBody.match(/\[Answer\]:/g) ?? []).length).toBeGreaterThan(0);
-        expect(questionsBody).toMatch(
-          /## Consolidated Summary Confirmation[\s\S]*\[Answer\]:[^\r\n]*Looks correct/i,
+        const confirmation = markdownH2Section(
+          questionsBody,
+          "Consolidated Summary Confirmation",
         );
+        expect(confirmation).toMatch(/^\[Answer\]: Looks correct\s*$/m);
         expect(questionsBody).toContain("## Sources");
         expect(questionsBody).toContain("[desc]");
         expect(questionsBody).toContain("[scope]");

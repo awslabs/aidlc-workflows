@@ -239,7 +239,9 @@ When a stage needs to ask the user questions:
 
 **Step 1: Create the questions file** in the appropriate `<record>/` directory with full [Answer]: tag format:
 - Include options A-E as appropriate for each question
-- EVERY question MUST end with `X. Other (please specify)` as the final option — no exceptions
+- EVERY ordinary question MUST end with `X. Other (please specify)` as the final
+  option. The dedicated Consolidated Summary Confirmation added in Step 3a is
+  the sole exception: its two semantic options are intentionally unlettered.
 - Leave all `[Answer]:` tags blank
 
 For multi-select questions (where user may choose more than one option), add "(select all that apply)" to the question text. The user writes multiple letters: `[Answer]: A, B, E`
@@ -307,8 +309,19 @@ Log the user's mode choice to `<record>/audit/<host>-<clone>.md` using the Quest
       description: Revise one or more answers before generation
   ```
   Before presenting it, append or update a dedicated **Consolidated Summary Confirmation**
-  entry in `<slug>-questions.md` with this prompt, both options,
-  and a blank `[Answer]:` tag. Fill that tag only after the user responds.
+  entry in `<slug>-questions.md` with this prompt, both options **without
+  file-letter prefixes**, and a blank `[Answer]:` tag:
+  ```markdown
+  - Looks correct
+  - Request changes
+
+  [Answer]:
+  ```
+  This confirmation entry is the exception to ordinary file-backed A-E/X
+  labels. Fill its tag only after the user responds, storing exactly
+  `[Answer]: Looks correct` or `[Answer]: Request changes`. Strip any source
+  letter, chat number, punctuation, or option description before writing;
+  `[Answer]: A. Looks correct` and `[Answer]: 1. Looks correct` are invalid.
   Never ask for this confirmation as bare prose: the harness must render an
   answerable structured question before the turn ends. If the user requests
   changes, record that response, update the relevant answer tags, reset the

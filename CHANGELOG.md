@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.38] - 2026-08-05
+
+Every harness now treats the consolidated answer review as a mandatory, separate human checkpoint before artifact generation. The checkpoint is backed by a prompt-specific human receipt, the exact questions-file digest, and post-confirmation artifact-write evidence, so a conductor cannot satisfy it by writing `Looks correct` itself. **Upgrade:** re-copy the selected `dist/<harness>/` into the project so the updated conductor skill, tools, stage metadata, and question-rendering annex are installed.
+
+* All five conductor skills now require consolidated summary confirmation before artifact generation in workflow, isolated, self-guided, and per-unit runs. `aidlc-log.ts decision/answer --checkpoint summary-confirmation --questions-file <path>` records the reserved `SUMMARY_CONFIRMATION_RECORDED` receipt; the public audit CLI cannot forge this event, and completion refuses missing, stale, cross-unit, changed-file, or post-generation receipts.
+* Each harness renders **Looks correct / Request changes** through its native question surface as a separate turn and requires `[Answer]: Looks correct`; prefixed forms, bare letters/numbers, and self-selected answers do not satisfy the checkpoint. **Request changes** now stops again for concrete feedback before any answer is revised.
+
 ## [2.5.37] - 2026-08-03
 
 The orchestrator must never echo a fenced ` ```question ` block as literal chat text: the fence is an authoring spec rendered through each harness's question mechanism, never printed verbatim. Dumping the raw fence yields a non-interactive wall of text and drops the answerable options and "Other" escape supplied by the harness's native tool or numbered-prose fallback. This tightens the harness-neutral stage protocol and every per-harness question-rendering annex (Claude, Codex, Kiro CLI, Kiro IDE, opencode). Literal fences remain in framework documentation, but the stage protocol's fences are normative prompt specs whose contents must still be rendered when their surrounding instructions require them; only raw fence syntax is excluded from live chat. **Upgrade:** re-copy your `dist/<harness>/` shell into the project so the updated protocol and question-rendering annex are installed. Behavior is a documentation and contract change only; no command, flag, or state format changes.

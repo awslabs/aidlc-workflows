@@ -68,6 +68,16 @@ const CLAUDE_MEMORY_SRC = join(REPO_ROOT, "dist", "claude", "aidlc");
 const KIRO_MEMORY_SRC = join(REPO_ROOT, "dist", "kiro", "aidlc");
 const KIRO_IDE_MEMORY_SRC = join(REPO_ROOT, "dist", "kiro-ide", "aidlc");
 
+export function markdownH2Section(body: string, heading: string): string {
+  const lines = body.split(/\r?\n/);
+  const start = lines.findIndex((line) => line.trimEnd() === `## ${heading}`);
+  if (start < 0) return "";
+  const next = lines.findIndex(
+    (line, index) => index > start && /^##\s+\S/.test(line),
+  );
+  return lines.slice(start + 1, next < 0 ? undefined : next).join("\n");
+}
+
 export interface KiroNumberedProseAnswerState {
   guideModeChosen: boolean;
   answeredQuestions: Set<number>;
@@ -124,7 +134,9 @@ export function nextKiroNumberedProseAnswer(
 
   if (
     !state.guideModeChosen &&
-    /How would you like to answer[\s\S]*Guide me/i.test(screen)
+    /How would you like to\s+(?:answer|provide your answers|proceed)[\s\S]*Guide me/i.test(
+      screen,
+    )
   ) {
     state.guideModeChosen = true;
     return "1";
@@ -179,6 +191,18 @@ export function nextKiroNumberedProseAnswer(
     }
     state.approvalsAnswered += 1;
     return "Approve";
+  }
+
+  const assumptionMenuKey =
+    "Assumption Confirmation|Accept assumptions|Convert to follow-up questions";
+  if (
+    /Assumption Confirmation[\s\S]{0,2000}\bAccept assumptions\b[\s\S]{0,1000}\bConvert to follow-up questions\b/i.test(
+      screen,
+    ) &&
+    !state.answeredClarifications.has(assumptionMenuKey)
+  ) {
+    state.answeredClarifications.add(assumptionMenuKey);
+    return "Accept assumptions";
   }
 
   // Ad-hoc lettered clarification: a live hub that spots a contradiction
