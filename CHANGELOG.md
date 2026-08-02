@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.34] - 2026-08-02
+
+Installing the two prerequisites this project asks you to install - `bun` and `uv` - no longer requires piping a network script into a shell. Every documented step now uses a package manager (`brew install bun` / `npm install -g bun`, `brew install uv` / `pipx install uv`), with a link to the vendor's installation guide for anyone who wants the other methods. Many organisations prohibit the pipe-to-shell pattern outright, which previously left those users with no documented path. No behaviour, flag, or command changes.
+
+* `--doctor`'s bun fix hint now reads ``install via `brew install bun` or `npm install -g bun` ``.
+* Onboarding prerequisites updated for all five harnesses, so the generated `CLAUDE.md` / `AGENTS.md` carry it too.
+* README Quick Start, `docs/guide/01-getting-started.md`, `docs/guide/15-troubleshooting.md`, the Kiro CLI and Kiro IDE harness guides, `docs/reference/06-hooks-and-tools.md`, `docs/reference/11-contributing.md`, and `docs/reference/14-claude-features.md` all updated to match.
+* Claude Code's own installer instructions are unchanged: Anthropic documents the native installer as the recommended path and has deprecated npm installation, so this leaves that tool's guidance to its vendor.
+
 ## [2.5.33] - 2026-08-01
 
 Stage rules are now delivered deterministically instead of depending on the conductor choosing to read paths. The engine emits the active-space rule bundle as bounded `load-steering` directives before `run-stage`, and reviewer checklists are absorbed into reviewer agent bodies at build time - closing the observed skip where stages ran with none of their org/phase memory applied. **Upgrade:** re-copy your `dist/<harness>/` shell into the project so the updated engine, skills, agents, and hooks are installed.

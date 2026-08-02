@@ -19,7 +19,7 @@ hook wiring, activation) differs.
 
 - **Kiro IDE**, signed in
 - **Claude Opus 4.8** selected as the chat model (see the note above)
-- **bun** on your PATH (`curl -fsSL https://bun.sh/install | bash`)
+- **bun** on your PATH (`brew install bun` or `npm install -g bun`)
 
 > [!TIP]
 > bun must be on the PATH that *non-interactive* shells see — that's what the

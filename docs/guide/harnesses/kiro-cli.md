@@ -16,7 +16,7 @@ configs, hook wiring, activation) differs.
 ## Prerequisites
 
 - **Kiro CLI ≥ 2.6** (`kiro-cli --version`), logged in (`kiro-cli login`)
-- **bun** on your PATH (`curl -fsSL https://bun.sh/install | bash`)
+- **bun** on your PATH (`brew install bun` or `npm install -g bun`)
 
 ## Install
 

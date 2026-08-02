@@ -39,11 +39,10 @@ All 14 TypeScript hooks (`aidlc-mint-presence.ts`, `aidlc-dispatch-rules.ts`, `a
 
 ```bash
 # macOS / Linux
-curl -fsSL https://bun.sh/install | bash
+brew install bun
 
-# Windows
+# any platform with Node.js, including Windows
 npm install -g bun
-# or: powershell -c "irm bun.sh/install.ps1 | iex"
 
 # Verify
 bun --version

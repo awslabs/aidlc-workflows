@@ -5,7 +5,7 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
 ## Prerequisites
 
 - **Kiro IDE**: Sign in and select Claude Opus 4.8 as the chat model before starting a workflow.
-- **bun**: Required for the CLI tools and hook scripts (state management, audit logging, orchestration engine). Install via `curl -fsSL https://bun.sh/install | bash`. `bun` must be on your PATH for the non-interactive shells the harness spawns — these source `~/.zshenv` (zsh) or `~/.bashrc` (bash), NOT `~/.zshrc`.
+- **bun**: Required for the CLI tools and hook scripts (state management, audit logging, orchestration engine). Install via `brew install bun` or `npm install -g bun` (other methods: https://bun.com/docs/installation). `bun` must be on your PATH for the non-interactive shells the harness spawns — these source `~/.zshenv` (zsh) or `~/.bashrc` (bash), NOT `~/.zshrc`.
 - **Activation**: Open the project in Kiro IDE and invoke `/aidlc`; the command loads the shipped `skills/aidlc/SKILL.md` conductor. The `.kiro/hooks/aidlc-*.json` v2 hook files register in the IDE's Agent Hooks panel.
 - **Permissions**: delegation-target agent `.md` files receive the IDE-native read/write/shell grants they need. The conductor's approval gates and your IDE permission settings remain the control boundary.
 - **Locking**: Audit log file locking is handled portably using mkdir-based locking in the system temp directory (no external dependencies).

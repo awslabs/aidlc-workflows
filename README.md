@@ -11,7 +11,7 @@ A native implementation of the **AI-DLC methodology** (AI-Driven Development Lif
 
 The methodology lives once, in a harness-neutral `core/`; each harness adds a thin surface that decides how it shows up on that harness. So you edit the methodology in one place, and every harness distribution is generated from it — no harness gets special treatment. (See [Repository layout](#repository-layout) for how the pieces fit together.)
 
-![version](https://img.shields.io/badge/version-2.5.33-blue)
+![version](https://img.shields.io/badge/version-2.5.34-blue)
 ![license](https://img.shields.io/badge/license-MIT--0-green)
 ![Kiro IDE](https://img.shields.io/badge/harness-Kiro%20IDE-orange)
 ![Kiro CLI](https://img.shields.io/badge/harness-Kiro%20CLI-orange)
@@ -75,19 +75,16 @@ This release works better with `Claude Opus 4.8`. We are sharpening it for previ
 Every harness runs the same TypeScript hooks and CLI tools through **bun**, so install bun first — it's the one requirement they all share.
 
 ```bash
-# macOS / Linux
-curl -fsSL https://bun.sh/install | bash
+# macOS / Linux, with Homebrew
+brew install bun
 ```
 
-```powershell
-# Windows PowerShell
-irm bun.sh/install.ps1 | iex
+```bash
+# any platform that already has Node.js — including Windows PowerShell and CMD
+npm install -g bun
 ```
 
-```batch
-:: Windows Command Prompt (CMD) — bun ships only a PowerShell installer, so invoke it from CMD
-powershell -c "irm bun.sh/install.ps1 | iex"
-```
+Other installation methods are in the [bun installation guide](https://bun.com/docs/installation).
 
 On Windows, use *either* PowerShell *or* CMD, not both — your prompt shows `PS C:\` in PowerShell and `C:\` (no `PS`) in CMD. Everything runs on native Windows; WSL is not required. [Git for Windows](https://git-scm.com/downloads/win) is recommended so harnesses that use a Bash tool can find one.
 

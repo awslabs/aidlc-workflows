@@ -11,7 +11,7 @@ This implementation requires two tools on your system:
 | Prerequisite | Purpose | Install |
 |-------------|---------|---------|
 | **Claude Code** | This implementation runs as a Claude Code command. The orchestrator, agents, and hooks all execute within Claude Code. | Native install (recommended, auto-updates): macOS/Linux/WSL `curl -fsSL https://claude.ai/install.sh \| bash`; Windows PowerShell `irm https://claude.ai/install.ps1 \| iex`. Or `brew install --cask claude-code`. ([docs](https://code.claude.com/docs/en/quickstart)) |
-| **bun** | Required for all CLI tools and all 14 hooks (state management, audit logging, sensor dispatch, runtime-graph compile, loop enforcement, exact dispatch-rule delivery, state-transition and reviewer-scope enforcement, statusline, human-turn mint). Everything is TypeScript, run via bun (~20ms startup). No additional dependencies — works identically on macOS, Linux, and native Windows PowerShell. | `curl -fsSL https://bun.sh/install \| bash` ([docs](https://bun.sh)). On Windows: `npm install -g bun` or `powershell -c "irm bun.sh/install.ps1 \| iex"` |
+| **bun** | Required for all CLI tools and all 14 hooks (state management, audit logging, sensor dispatch, runtime-graph compile, loop enforcement, exact dispatch-rule delivery, state-transition and reviewer-scope enforcement, statusline, human-turn mint). Everything is TypeScript, run via bun (~20ms startup). No additional dependencies — works identically on macOS, Linux, and native Windows PowerShell. | `brew install bun` or `npm install -g bun` ([docs](https://bun.com/docs/installation)) |
 
 > **Important**: `bun` must be on your `PATH` for non-interactive shells. Claude Code runs your shell non-interactively, so it sources `~/.zshenv` (zsh) or `~/.bashrc` (bash) — NOT `~/.zshrc`. On Windows with Git Bash, `~/.bashrc` is the correct file. If `which bun` fails inside Claude Code, add the bun PATH export to the appropriate file.
 
@@ -108,8 +108,11 @@ This implementation declares its MCP servers in `.mcp.json` at the project root 
 The four AWS servers launch through `uvx`. Install `uv`/`uvx` once:
 
 ```bash
-curl -fsSL https://astral.sh/uv/install.sh | sh
+brew install uv     # macOS / Linux with Homebrew
+pipx install uv    # or any Python environment
 ```
+
+Other methods are in the [uv installation guide](https://docs.astral.sh/uv/getting-started/installation/).
 
 `context7` is an HTTP server and needs no local install. To use it, export an API key:
 
@@ -253,7 +256,7 @@ Run the health check to confirm everything is in place:
 
 | Failure | Fix |
 |---------|-----|
-| `bun` not installed | Install via `curl -fsSL https://bun.sh/install \| bash`. On Windows: `npm install -g bun` or `powershell -c "irm bun.sh/install.ps1 \| iex"`. Ensure it is on PATH for non-interactive shells. |
+| `bun` not installed | Install via `brew install bun` or `npm install -g bun`. Ensure it is on PATH for non-interactive shells. |
 | Hook not present | Re-copy the `.claude/` directory from the distribution |
 | `settings.json` missing | Re-copy from the distribution: `cp dist/claude/.claude/settings.json .claude/settings.json` |
 | Workspace shell missing | Re-copy the workspace shell from `dist/claude/` into your project root |
