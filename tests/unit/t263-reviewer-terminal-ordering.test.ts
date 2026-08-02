@@ -69,6 +69,13 @@ const ORDERING_PIN =
   "do not write to any `produces[]` artifact between recording it and gate approval";
 const SUGGESTION_PIN =
   "A suggestion is gate input, not a defect";
+// A READY-riding suggestion must not reorder the gate: a live control run
+// showed a conductor rendering "Request Changes (apply the reviewer's fix)"
+// as the FIRST option after a READY-with-suggestion review, steering
+// recommended-option drivers (and habituated humans) into rejecting a stage
+// the reviewer passed.
+const GATE_ORDER_PIN =
+  "keep the §1 approval question's standard option order (Approve first, Request Changes second)";
 const SKILL_PIN =
   "The terminal receipt ends artifact work";
 const ERROR_PIN = "Terminal ordering: apply any fixes FIRST";
@@ -95,6 +102,7 @@ describe("t263 reviewer terminal-receipt ordering (receipt-invalidation loop fix
       const src = readFileSync(path, "utf-8");
       expect(src).toContain(ORDERING_PIN);
       expect(src).toContain(SUGGESTION_PIN);
+      expect(src).toContain(GATE_ORDER_PIN);
     }
   });
 
