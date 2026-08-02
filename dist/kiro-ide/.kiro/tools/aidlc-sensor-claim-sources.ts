@@ -54,11 +54,13 @@ const SOURCE_TAG_RE =
 	/\[(desc|scope|assumption|Q\d+|memory:[A-Za-z0-9][A-Za-z0-9._-]*)\]/g;
 const SOURCE_ENTRY_RE =
 	/^ {0,3}[-*+]\s+\[(desc|scope|memory:[A-Za-z0-9][A-Za-z0-9._-]*)\]\s+(.+?)\s*$/;
+// A parenthesised title may not hold an unescaped `(` — CommonMark reads such a
+// line as prose, so accepting it here would let the line exempt its block.
 const REFERENCE_TITLE_RE =
-	/^ {0,3}(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^)\\])*\))[ \t]*$/;
+	/^ {0,3}(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^()\\])*\))[ \t]*$/;
 // The same title, when it trails the destination on the definition's own line.
 const REFERENCE_TITLE_BODY_RE =
-	/^(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^)\\])*\))$/;
+	/^(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^()\\])*\))$/;
 
 function parseFlags(argv: string[]): Flags {
 	const flags: Flags = {};
@@ -730,12 +732,55 @@ function visibleHtmlText(text: string): string {
 	return visible;
 }
 
-// A definition keeps its meaning inside a block quote or a list item, so the
-// container markers come off before the line is tested.
+// A definition keeps its meaning inside a block quote or a list item, and the
+// two nest in either order and to any depth. Taking one of each off would read
+// `> - [Q1]: url` and miss the equally valid `- > [Q1]: url`, so the markers
+// come off until the line stops changing. Five or more spaces after a list
+// marker start an indented code block inside the item rather than content, so
+// the marker only comes off for a run of one to four — and four spaces of
+// remaining indentation is an indented code block too, which the caller's
+// column test rejects.
 function withoutContainerMarkers(line: string): string {
-	let stripped = line.replace(/^ {0,3}(?:> ?)+/, "");
-	stripped = stripped.replace(/^ {0,3}(?:[-*+]|\d{1,9}[.)])[ \t]+/, "");
-	return stripped;
+	let stripped = line;
+	for (;;) {
+		const next = stripped
+			.replace(/^ {0,3}(?:> ?)+/, "")
+			.replace(/^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:\t| {1,4}(?! ))/, "");
+		if (next === stripped) return stripped;
+		stripped = next;
+	}
+}
+
+// CommonMark's link-destination grammar, which is what separates a definition
+// from a line that merely looks like one. A destination is either an
+// angle-bracket run that has to close on the same line and hold no unescaped
+// `<`, or a bare run that ends at the first space or control character and
+// keeps its parentheses balanced. Returns the index just past the destination,
+// or -1 when the text does not carry one.
+function referenceDestinationEnd(text: string, start: number): number {
+	if (text[start] === "<") {
+		for (let index = start + 1; index < text.length; index++) {
+			if (isEscaped(text, index)) continue;
+			if (text[index] === ">") return index + 1;
+			if (text[index] === "<") return -1;
+		}
+		return -1;
+	}
+
+	let depth = 0;
+	let index = start;
+	for (; index < text.length; index++) {
+		// Space and the ASCII control range both end a bare destination.
+		if ((text.codePointAt(index) ?? 0) <= 0x20) break;
+		if (isEscaped(text, index)) continue;
+		if (text[index] === "(") {
+			depth++;
+		} else if (text[index] === ")") {
+			depth--;
+			if (depth < 0) return -1;
+		}
+	}
+	return depth === 0 && index > start ? index : -1;
 }
 
 // Shape alone does not make a definition: `[label]: some prose` renders as the
@@ -752,10 +797,12 @@ function referenceDefinitionLabel(line: string): string | null {
 	const labelEnd = matchingDelimiter(text, start, "[", "]");
 	if (labelEnd < 0 || text[labelEnd + 1] !== ":") return null;
 
-	const rest = text.slice(labelEnd + 2).trim();
-	const destination = /^\S+/.exec(rest);
-	if (!destination) return null;
-	const trailing = rest.slice(destination[0].length).trim();
+	const rest = text.slice(labelEnd + 2);
+	const destinationStart = rest.search(/\S/);
+	if (destinationStart < 0) return null;
+	const destinationEnd = referenceDestinationEnd(rest, destinationStart);
+	if (destinationEnd < 0) return null;
+	const trailing = rest.slice(destinationEnd).trim();
 	if (trailing.length > 0 && !REFERENCE_TITLE_BODY_RE.test(trailing)) return null;
 
 	return text.slice(start + 1, labelEnd);

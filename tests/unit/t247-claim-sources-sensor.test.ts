@@ -544,25 +544,40 @@ describe("t247 claim-sources sensor", () => {
   // both directions. A line that only looks like a definition is prose the
   // reader sees, and a real definition stays real inside a container. Getting
   // either wrong lets unsourced or invisible-tag content through silently.
-  test("a definition-shaped line with an invalid destination is inspected as prose", () => {
-    const dir = makeStageDir();
-    replaceInFile(
-      dir,
-      "intent-statement.md",
-      "## Assumptions & Open Questions",
-      "[evidence]: this is an unsupported assertion\n\n## Assumptions & Open Questions",
-    );
+  for (const [label, line] of [
+    ["trailing prose", "[evidence]: this is an unsupported assertion"],
+    ["an unclosed angle-bracket destination", "[evidence]: <broken"],
+    ["an unbalanced bare destination", "[evidence]: /foo(bar"],
+    ["a bare destination closing a group it never opened", "[evidence]: /foo)bar"],
+    ["an unescaped angle bracket in the destination", "[evidence]: <a<b>"],
+    ["an unescaped parenthesis in the title", "[evidence]: /url (ti(tle)"],
+    [
+      "an indented code block after a list marker",
+      "-     [evidence]: https://example.invalid",
+    ],
+  ] as const) {
+    test(`a definition-shaped line with ${label} is inspected as prose`, () => {
+      const dir = makeStageDir();
+      replaceInFile(
+        dir,
+        "intent-statement.md",
+        "## Assumptions & Open Questions",
+        `${line}\n\n## Assumptions & Open Questions`,
+      );
 
-    const result = run(dir);
-    expect(result.pass).toBe(false);
-    expect(result.findings.join("\n")).toContain(
-      "claim block has no source tag",
-    );
-  });
+      const result = run(dir);
+      expect(result.pass).toBe(false);
+      expect(result.findings.join("\n")).toContain(
+        "claim block has no source tag",
+      );
+    });
+  }
 
   for (const [label, definition] of [
     ["a block quote", "> [Q1]: https://example.invalid"],
     ["a list item", "- [Q1]: https://example.invalid"],
+    ["a block quote inside a list item", "- > [Q1]: https://example.invalid"],
+    ["a list item inside a block quote", "> - [Q1]: https://example.invalid"],
   ] as const) {
     test(`a definition inside ${label} still turns its reference into a link`, () => {
       const dir = makeStageDir();
