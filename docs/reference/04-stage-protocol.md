@@ -950,6 +950,10 @@ learnings → gate.
    with iterations remaining below `reviewer_max_iterations` (default 2) → the lead
    agent re-runs to address the findings and the reviewer re-checks. NOT-READY with
    iterations exhausted → proceed to the gate with the unresolved findings noted.
+   The recorded receipt is terminal: any later write to a `produces[]` artifact
+   invalidates it and the engine refuses the gate, so fixes happen inside the
+   iteration loop, never after the terminal receipt. Suggestions riding on a READY
+   verdict are quoted at the gate for the human, not applied.
 
 The reviewer never blocks — the human always has final say at the gate — and does
 not fire for stages without a `reviewer` field. See the `reviewer` /

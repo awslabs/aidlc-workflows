@@ -1466,7 +1466,11 @@ function reviewerPreconditionError(slug: string, reviewer: string): never {
     `Refusing to complete "${slug}": it declares a reviewer (${reviewer}) but no ` +
       `fresh REVIEW_COMPLETED is recorded for it. Invoke the reviewer ` +
       `(stage-protocol §12a) and record the verdict with \`aidlc-log.ts review --stage ` +
-      `${slug} --reviewer ${reviewer} --verdict <READY|NOT-READY>\` before completing.`
+      `${slug} --reviewer ${reviewer} --verdict <READY|NOT-READY>\` before completing. ` +
+      `Terminal ordering: apply any fixes FIRST, then run the reviewer, record the ` +
+      `receipt, and stop editing produces[] artifacts - a later write to one ` +
+      `invalidates the receipt and re-opens this refusal. Do not apply suggestions ` +
+      `riding on a READY verdict; surface them at the gate instead.`
   );
 }
 

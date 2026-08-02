@@ -4900,6 +4900,10 @@
         {
           "file": "tests/unit/t205-gate-revision-backstop.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t263-reviewer-terminal-ordering.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
