@@ -45,6 +45,12 @@ The sensor excludes scaffolding, fenced code, HTML comments, and reviewer-added
 stage's adversarial reviewer judges whether the cited source actually supports
 the claim.
 
+A tag counts when the rendered document shows it as literal text. Bracket pairs
+resolve as Markdown links only against a link reference definition the document
+carries, so adjacent tags such as `[Q1][Q2]` remain two visible tags, while
+`[Q1]` in a document that also defines `[Q1]: <url>` is a link and grounds
+nothing.
+
 ## Failure mode
 
 Emits `SENSOR_FAILED` and writes detail listing missing sections, untagged

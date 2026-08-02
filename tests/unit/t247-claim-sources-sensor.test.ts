@@ -484,4 +484,73 @@ describe("t247 claim-sources sensor", () => {
     expect(result.pass).toBe(true);
     expect(result.findings).toEqual([]);
   });
+
+  // A reference link resolves only against a link reference definition that the
+  // document actually carries. Without one, CommonMark renders the brackets as
+  // literal text, so the tags stay visible and still ground the claim.
+  for (const [label, replacement] of [
+    ["two adjacent tags", "[desc][Q1]"],
+    ["three adjacent tags", "[desc][Q1][Q2]"],
+    ["a collapsed reference", "[desc][]"],
+    ["an adjacent pair inside a longer run", "[desc] [Q1][Q2] [Q3]"],
+  ] as const) {
+    test(`${label} without a matching definition still grounds a claim`, () => {
+      const dir = makeStageDir();
+      replaceInFile(
+        dir,
+        "intent-statement.md",
+        "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+        `The initiative provides a local command that echoes supplied text. ${replacement}`,
+      );
+
+      const result = run(dir);
+      expect(result.pass).toBe(true);
+      expect(result.findings).toEqual([]);
+    });
+  }
+
+  // The mirror of the rule above: once the document defines the label, the
+  // brackets really are a link, the reader sees link text rather than a tag,
+  // and the claim is no longer grounded by it.
+  for (const [label, replacement, definition] of [
+    ["a full reference", "[desc][evidence]", "[evidence]: https://example.invalid"],
+    ["a collapsed reference", "[desc][]", "[desc]: https://example.invalid"],
+    ["a shortcut reference", "[desc]", "[desc]: https://example.invalid"],
+  ] as const) {
+    test(`${label} with a matching definition does not ground a claim`, () => {
+      const dir = makeStageDir();
+      replaceInFile(
+        dir,
+        "intent-statement.md",
+        "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+        `The initiative provides a local command that echoes supplied text. ${replacement}`,
+      );
+      const statementPath = join(dir, "intent-statement.md");
+      writeFileSync(
+        statementPath,
+        `${readFileSync(statementPath, "utf-8")}\n${definition}\n`,
+        "utf-8",
+      );
+
+      const result = run(dir);
+      expect(result.pass).toBe(false);
+      expect(result.findings.join("\n")).toContain(
+        "claim block has no source tag",
+      );
+    });
+  }
+
+  test("a link reference definition is not itself a claim block", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "## Assumptions & Open Questions",
+      "[evidence]: https://example.invalid\n\n## Assumptions & Open Questions",
+    );
+
+    const result = run(dir);
+    expect(result.pass).toBe(true);
+    expect(result.findings).toEqual([]);
+  });
 });

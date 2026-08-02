@@ -389,6 +389,7 @@ function parseSourceUniverse(
 	}
 
 	const lines = visibleMarkdownLines(body);
+	const labels = referenceLabels(body);
 	const authority = loadRecordAuthority(stageDir);
 	findings.push(...authority.findings);
 	const registered = new Set<string>();
@@ -493,7 +494,7 @@ function parseSourceUniverse(
 	const acceptedAssumptions = new Set(
 		confirmation
 			.filter((line) => isListItem(line))
-			.filter((line) => sourceTags(line).includes("assumption"))
+			.filter((line) => sourceTags(line, labels).includes("assumption"))
 			.map(normalizedAssumption)
 			.filter((entry) => entry.length > 0),
 	);
@@ -726,6 +727,44 @@ function visibleHtmlText(text: string): string {
 	return visible;
 }
 
+function referenceDefinitionLabel(line: string): string | null {
+	const start = line.search(/\S/);
+	if (start < 0 || start > 3 || line[start] !== "[") return null;
+	const labelEnd = matchingDelimiter(line, start, "[", "]");
+	if (labelEnd < 0 || line[labelEnd + 1] !== ":") return null;
+	return line.slice(start + 1, labelEnd);
+}
+
+// CommonMark matches link labels case-insensitively with runs of whitespace
+// collapsed to a single space.
+function normalizedReferenceLabel(label: string): string {
+	return label.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+// The labels a document defines. A reference link resolves against the whole
+// document, so this is collected once per file and handed to every block.
+function referenceLabels(body: string): Set<string> {
+	const labels = new Set<string>();
+	let mayContinueDefinition = false;
+	for (const line of visibleMarkdownLines(body)) {
+		if (mayContinueDefinition && REFERENCE_TITLE_RE.test(line)) {
+			mayContinueDefinition = false;
+			continue;
+		}
+
+		const label = referenceDefinitionLabel(line);
+		if (label === null) {
+			mayContinueDefinition = false;
+			continue;
+		}
+
+		const normalized = normalizedReferenceLabel(label);
+		if (normalized.length > 0) labels.add(normalized);
+		mayContinueDefinition = true;
+	}
+	return labels;
+}
+
 function withoutReferenceDefinitions(text: string): string {
 	const visible: string[] = [];
 	let mayContinueDefinition = false;
@@ -736,14 +775,10 @@ function withoutReferenceDefinitions(text: string): string {
 			continue;
 		}
 
-		const start = line.search(/\S/);
-		if (start >= 0 && start <= 3 && line[start] === "[") {
-			const labelEnd = matchingDelimiter(line, start, "[", "]");
-			if (labelEnd >= 0 && line[labelEnd + 1] === ":") {
-				visible.push("");
-				mayContinueDefinition = true;
-				continue;
-			}
+		if (referenceDefinitionLabel(line) !== null) {
+			visible.push("");
+			mayContinueDefinition = true;
+			continue;
 		}
 
 		visible.push(line);
@@ -752,7 +787,13 @@ function withoutReferenceDefinitions(text: string): string {
 	return visible.join("\n");
 }
 
-function visibleMarkdownLinkText(text: string): string {
+// A block that carries nothing but link reference definitions renders as
+// nothing at all, so it states no claim to ground.
+function isReferenceDefinitionBlock(text: string): boolean {
+	return withoutReferenceDefinitions(text).trim().length === 0;
+}
+
+function visibleMarkdownLinkText(text: string, labels: Set<string>): string {
 	let visible = "";
 	for (let index = 0; index < text.length; index++) {
 		const image =
@@ -772,6 +813,7 @@ function visibleMarkdownLinkText(text: string): string {
 			continue;
 		}
 
+		const label = text.slice(labelStart + 1, labelEnd);
 		let syntaxEnd = labelEnd;
 		if (text[labelEnd + 1] === "(") {
 			const destinationEnd = matchingDelimiter(text, labelEnd + 1, "(", ")");
@@ -786,8 +828,18 @@ function visibleMarkdownLinkText(text: string): string {
 				visible += text[index];
 				continue;
 			}
+			// Full `[text][label]` and collapsed `[label][]` references. An empty
+			// second pair points back at the first, and neither is a link unless
+			// the document defines the label it names.
+			const reference = text.slice(labelEnd + 2, referenceEnd);
+			const named = reference.trim().length > 0 ? reference : label;
+			if (!labels.has(normalizedReferenceLabel(named))) {
+				visible += text[index];
+				continue;
+			}
 			syntaxEnd = referenceEnd;
-		} else if (!image) {
+		} else if (!labels.has(normalizedReferenceLabel(label))) {
+			// Shortcut `[label]` reference: also a link only once defined.
 			visible += text[index];
 			continue;
 		}
@@ -798,10 +850,11 @@ function visibleMarkdownLinkText(text: string): string {
 	return visible;
 }
 
-function sourceTags(text: string): string[] {
+function sourceTags(text: string, labels: Set<string>): string[] {
 	const withoutInlineCode = text.replace(/(`+)([\s\S]*?)\1/g, "");
 	const visibleText = visibleMarkdownLinkText(
 		withoutReferenceDefinitions(visibleHtmlText(withoutInlineCode)),
+		labels,
 	);
 	return [...visibleText.matchAll(SOURCE_TAG_RE)].map((match) => match[1]);
 }
@@ -837,10 +890,12 @@ function inspectDeliverable(
 		);
 	}
 
+	const labels = referenceLabels(body);
 	let hasAssumptions = false;
 	for (const block of parsed.blocks) {
+		if (isReferenceDefinitionBlock(block.text)) continue;
 		const location = `${basename(path)}${block.section ? ` ## ${block.section}` : ""}`;
-		const tags = sourceTags(block.text);
+		const tags = sourceTags(block.text, labels);
 
 		if (block.inAssumptions) {
 			if (isNoneBlock(block.text)) continue;

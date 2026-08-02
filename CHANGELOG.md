@@ -1,6 +1,32 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.58] - 2026-08-07
+
+The `claim-sources` sensor no longer loses source tags that are written next to
+each other. `[Q1][Q2]` is Markdown reference-link syntax only when the document
+defines the label it names; with no such definition CommonMark renders both
+tags as literal text, and the sensor now reads them the same way. Claims that
+cite two answers without a separator stop being reported as ungrounded.
+**Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* Fixed `claim block has no source tag` for claims carrying adjacent tags such
+  as `[Q1][Q2]` or a collapsed `[Q1][]`, which the sensor read as a link and
+  discarded. Inserting a space is no longer required.
+* A tag that the document really does define as a link reference, including the
+  shortcut `[Q1]` form, now correctly grounds nothing, matching what a reader
+  sees rendered.
+* A paragraph holding only link reference definitions is no longer reported as
+  a claim block missing a source tag.
+* A line that only looks like a link reference definition is inspected as the
+  prose it renders as. A malformed destination — unclosed `<...>`, unbalanced
+  parentheses, an unescaped `(` in a `(...)` title — no longer exempts its
+  paragraph from needing a source tag.
+* Definitions are read inside block quotes and list items nested in any order
+  and to any depth, so a tag that such a definition turns into a link no longer
+  grounds a claim. Five or more spaces after a list marker remain an indented
+  code block.
+
 ## [2.5.57] - 2026-08-07
 
 AI-DLC now speaks to you in your project's terms rather than its own. Three things a user reported all came from the same place: the assistant narrated its internals, hook names and messages described plumbing instead of purpose, and a new workflow opened with folders it was never going to use. Chat messages, approval gates, the composer's plan proposal, scope questions, error messages, and the onboarding doc are rewritten in plain developer terms; the sentences between steps are now written by the framework and relayed rather than improvised, with silence as the resting state; seven hooks and the intent-creation command are renamed to say what they do; and a record dir now contains only the phases your scope actually runs. Behavior is unchanged throughout: every stage, approval gate, audit event, and tool flag is identical, and the tests pinning those mechanics still pass.
