@@ -72,6 +72,12 @@ const VALID_EVENT_TYPES = new Set([
   // Reviewer read-scope enforcement (hook-emitted): a per-unit reviewer's
   // tool call was refused for reaching into sibling units' construction/ paths.
   "REVIEWER_SCOPE_BLOCKED",
+  // Terminal-receipt write-freeze enforcement (hook-emitted): a declared
+  // produces-artifact write was refused because it would invalidate a fresh
+  // READY review receipt before the gate (stage-protocol §12a terminal
+  // ordering). No bracket characters in this comment: t47 slices the array
+  // literal at the first closing bracket after the const name.
+  "REVIEW_FREEZE_BLOCKED",
   // Health/system
   "HEALTH_CHECKED",
   "SCOPE_DETECTED",
@@ -173,6 +179,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   ARTIFACT_REUSED: "Artifact Reused",
   SUBAGENT_COMPLETED: "Subagent Completed",
   REVIEWER_SCOPE_BLOCKED: "Reviewer Scope Blocked",
+  REVIEW_FREEZE_BLOCKED: "Review Freeze Blocked",
   HEALTH_CHECKED: "Health Check",
   SCOPE_DETECTED: "Scope Detection",
   SCOPE_CHANGED: "Scope Change",

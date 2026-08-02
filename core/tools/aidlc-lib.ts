@@ -2735,6 +2735,237 @@ export function worktreePath(projectDir: string, boltSlug: string): string {
   return join(projectDir, ".aidlc", "worktrees", `bolt-${boltSlug}`);
 }
 
+// --- Fresh review receipts (the §12a completion precondition's scan) -----------
+//
+// ONE implementation, TWO consumers with opposite polarities:
+//   - aidlc-state.ts verifyReviewerPrecondition (approve/advance/finalize/
+//     complete-workflow) REFUSES completion when no fresh terminal receipt
+//     covers the stage/unit;
+//   - hooks/aidlc-review-freeze.ts REFUSES a produces[] write while a fresh
+//     READY receipt covers it (the write would invalidate the receipt and
+//     re-open the completion refusal - the receipt-invalidation loop).
+// Sharing the scan is load-bearing: if the two ever diverged, the hook could
+// block writes the engine would accept, or miss writes the engine will refuse.
+
+// The codekb stages - their produces live in the space-level codekb dir, keyed
+// by repo, NOT under a per-intent record dir. reverse-engineering is the sole
+// member; a future codekb stage joins this set (aidlc-orchestrate.ts and
+// aidlc-sensor.ts keep local mirrors - not exported from here historically).
+export const KNOWN_CODEKB_STAGES: ReadonlySet<string> = new Set([
+  "reverse-engineering",
+]);
+
+// True when a written File path (from an ARTIFACT_CREATED/ARTIFACT_UPDATED audit
+// row, or a PreToolUse file_path) is one of the stage's declared produces[]
+// artifacts. Matches on the path SUFFIX `/<slug>/<name>.md` rather than
+// resolving one absolute dir, so it covers BOTH the standard
+// <record>/<phase>/<slug>/ layout AND the per-unit construction/<unit>/<slug>/
+// layout without needing to know the {unit} segment. Codekb stages get their
+// own arm: their produces live DIRECTLY under a per-repo dir beneath the space
+// codekb root (codekb/<repo>/<name>.md) with no <slug> segment anywhere, so the
+// suffix idiom matches the codekb marker + one repo segment instead. When the
+// active intent records repos, that segment must belong to the recorded set so
+// a write to one repo's durable codekb cannot revise an unrelated intent. The
+// audit File field is stored forward-slash-normalised (aidlc-audit-logger.ts),
+// so the forward-slash matching is harness-neutral; we still normalise
+// defensively in case a caller passes a raw OS path.
+export function producesArtifactFile(
+  stage: { slug: string; produces?: string[] },
+  file: string,
+  recordedRepos: ReadonlySet<string>
+): boolean {
+  const produces = stage.produces ?? [];
+  if (produces.length === 0) return false;
+  const norm = file.replace(/\\/g, "/");
+  if (KNOWN_CODEKB_STAGES.has(stage.slug)) {
+    return produces.some((name) => {
+      const idx = norm.lastIndexOf(`/${name}.md`);
+      if (idx === -1 || idx + `/${name}.md`.length !== norm.length) return false;
+      // Exactly one <repo> segment between /codekb/ and /<name>.md.
+      const head = norm.slice(0, idx);
+      const repoSlash = head.lastIndexOf("/");
+      if (repoSlash === -1 || !head.slice(0, repoSlash).endsWith("/codekb")) return false;
+      const repo = head.slice(repoSlash + 1);
+      if (repo.length === 0) return false;
+      // An empty registry is the legacy projectDir-is-the-repo case. Keep the
+      // historical any-repo match: codekbRepoName's basename is a write-path
+      // default, not ownership evidence for durable files that may predate repo
+      // recording or have been written with an explicit repo target.
+      return recordedRepos.size === 0 || recordedRepos.has(repo);
+    });
+  }
+  return produces.some((name) => norm.endsWith(`/${stage.slug}/${name}.md`));
+}
+
+// Resolve the unit targeted by a declared produces[] write. `undefined` means
+// the file does not belong to this stage, `null` means a matching stage-level
+// artifact (or an ambiguous per-unit path), and a string names the per-unit
+// Construction target.
+export function producesArtifactUnit(
+  stage: {
+    slug: string;
+    for_each?: string;
+    produces?: string[];
+    optional_produces?: string[];
+  },
+  file: string,
+  recordedRepos: ReadonlySet<string>,
+): string | null | undefined {
+  const reviewedArtifacts = [
+    ...(stage.produces ?? []),
+    ...(stage.optional_produces ?? []),
+  ];
+  if (
+    !producesArtifactFile(
+      { slug: stage.slug, produces: reviewedArtifacts },
+      file,
+      recordedRepos,
+    )
+  ) {
+    return undefined;
+  }
+  if (stage.for_each !== "unit-of-work") return null;
+
+  const norm = file.replace(/\\/g, "/");
+  for (const name of reviewedArtifacts) {
+    const suffix = `/${stage.slug}/${name}.md`;
+    if (!norm.endsWith(suffix)) continue;
+    const parent = norm.slice(0, -suffix.length);
+    const marker = "/construction/";
+    const markerIdx = parent.lastIndexOf(marker);
+    if (markerIdx === -1) return null;
+    const unit = parent.slice(markerIdx + marker.length);
+    return unit.length > 0 && !unit.includes("/") ? unit : null;
+  }
+  return null;
+}
+
+export type ReviewVerdict = "READY" | "NOT-READY";
+
+export interface FreshReviewReceipts {
+  /** Verdict of the last fresh terminal receipt for the stage (any receipt,
+   *  unit-scoped included), or null when none survives. For NON-per-unit
+   *  stages a later declared-artifact write clears it; for per-unit stages it
+   *  mirrors the historical sawStageReview flag and is NOT cleared by unit
+   *  writes (only the floor resets it) - per-unit freshness lives in
+   *  unitVerdicts. */
+  stageVerdict: ReviewVerdict | null;
+  /** Last fresh verdict per unit. A later write to that unit's declared
+   *  artifacts deletes the entry; an ambiguous matching path fails closed by
+   *  clearing every unit entry. */
+  unitVerdicts: Map<string, ReviewVerdict>;
+}
+
+// Collect the fresh terminal review receipts for a stage from the audit
+// ledger. Builds ONE position-tiebroken event stream (the same interleave
+// idiom unrecordedRevisionSinceGateOpen uses) - a timestamp-only floor is
+// unsafe because isoTimestamp() is second-precision, so a review and the
+// reject that should invalidate it can share a timestamp and a `<` compare
+// would keep the stale review. Ordering by (timestamp, buffer position)
+// breaks that tie.
+//
+// The attempt floor: WORKFLOW_STARTED and STAGE_JUMPED floor deliberately
+// stage-AGNOSTIC - any jump invalidates every stage's reviews, including
+// stages the jump never re-opens. That over-invalidation is harmless (a stage
+// that stays [x] never re-completes, so its stale floor is never consulted)
+// and it is what closes the redo-jump hole: a backward jump re-opens stages
+// WITHOUT emitting their GATE_REJECTED or (until re-entry) STAGE_STARTED, so
+// a stage-scoped floor would accept the prior attempt's reviews. Fail-closed
+// over precise. Unit-major construction may author a later stage's per-unit
+// artifacts before that stage's STAGE_STARTED row exists, so its floor
+// ignores STAGE_STARTED; stage-major and non-per-unit flows floor on it.
+export function freshReviewReceipts(
+  projectDir: string,
+  stateContent: string,
+  stage: {
+    slug: string;
+    for_each?: string;
+    reviewer?: string;
+    produces?: string[];
+    optional_produces?: string[];
+  },
+): FreshReviewReceipts {
+  const empty: FreshReviewReceipts = { stageVerdict: null, unitVerdicts: new Map() };
+  const reviewer = stage.reviewer;
+  if (!reviewer) return empty;
+  const audit = readAllAuditShards(projectDir);
+  if (audit.length === 0) return empty;
+
+  const RELEVANT = new Set([
+    "WORKFLOW_STARTED",
+    "STAGE_STARTED",
+    "STAGE_JUMPED",
+    "GATE_REJECTED",
+    "ARTIFACT_CREATED",
+    "ARTIFACT_UPDATED",
+    "REVIEW_COMPLETED",
+  ]);
+  const blocks = audit.replace(/\r\n/g, "\n").split(/\n---\n/);
+  const events: { pos: number; ts: string; event: string; block: string }[] = [];
+  for (let i = 0; i < blocks.length; i++) {
+    const ev = auditBlockField(blocks[i], "Event");
+    if (!ev || !RELEVANT.has(ev)) continue;
+    events.push({ pos: i, ts: auditBlockField(blocks[i], "Timestamp") ?? "", event: ev, block: blocks[i] });
+  }
+  events.sort((a, b) => (a.ts !== b.ts ? (a.ts < b.ts ? -1 : 1) : a.pos - b.pos));
+
+  const perUnit = stage.for_each === "unit-of-work";
+  const unitMajor =
+    perUnit && getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
+
+  let floorIdx = -1;
+  for (let i = 0; i < events.length; i++) {
+    const e = events[i];
+    if (e.event === "WORKFLOW_STARTED" || e.event === "STAGE_JUMPED") {
+      floorIdx = i;
+      continue;
+    }
+    if (auditBlockField(e.block, "Stage") !== stage.slug) continue;
+    if (e.event === "STAGE_STARTED" && !unitMajor) {
+      if (auditBlockField(e.block, "Workflow")?.startsWith("single-stage:")) continue;
+      floorIdx = i;
+    } else if (e.event === "GATE_REJECTED") {
+      floorIdx = i;
+    }
+  }
+
+  // Collect fresh matching terminal reviews after the attempt floor. A later
+  // declared-artifact write clears the matching receipt. For per-unit stages,
+  // the path's construction/<unit>/ segment scopes invalidation to that unit;
+  // an ambiguous matching path fails closed by clearing every unit receipt.
+  const recordedRepos = new Set(intentRepos(projectDir));
+  const unitVerdicts = new Map<string, ReviewVerdict>();
+  let stageVerdict: ReviewVerdict | null = null;
+  for (let i = floorIdx + 1; i < events.length; i++) {
+    const e = events[i];
+    if (e.event === "ARTIFACT_CREATED" || e.event === "ARTIFACT_UPDATED") {
+      const file = auditBlockField(e.block, "File");
+      if (!file) continue;
+      const targetUnit = producesArtifactUnit(stage, file, recordedRepos);
+      if (targetUnit === undefined) continue;
+      if (!perUnit) {
+        stageVerdict = null;
+      } else if (targetUnit === null) {
+        unitVerdicts.clear();
+      } else {
+        unitVerdicts.delete(targetUnit);
+      }
+      continue;
+    }
+    if (e.event !== "REVIEW_COMPLETED") continue;
+    if (auditBlockField(e.block, "Workflow")?.startsWith("single-stage:")) continue;
+    if (auditBlockField(e.block, "Stage") !== stage.slug) continue;
+    if (auditBlockField(e.block, "Reviewer") !== reviewer) continue;
+    const verdict = auditBlockField(e.block, "Verdict");
+    if (verdict !== "READY" && verdict !== "NOT-READY") continue;
+    stageVerdict = verdict;
+    const unit = auditBlockField(e.block, "Unit");
+    if (unit) unitVerdicts.set(unit, verdict);
+  }
+
+  return { stageVerdict, unitVerdicts };
+}
+
 // --- Multi-repo: repos are siblings of the workspace ----------------------------
 //
 // In the workspace model the projectDir is the WORKSPACE roof (`my-workspace/`),

@@ -123,6 +123,7 @@ const shippedAidlcEntrypoints: ReadonlySet<string> = new Set<string>(
     "hooks/aidlc-dispatch-rules.ts",
     "hooks/aidlc-log-subagent.ts",
     "hooks/aidlc-mint-presence.ts",
+    "hooks/aidlc-review-freeze.ts",
     "hooks/aidlc-reviewer-scope.ts",
     "hooks/aidlc-runtime-compile.ts",
     "hooks/aidlc-sensor-fire.ts",
@@ -466,6 +467,36 @@ export default async ({
             guard.stderr.trim() ||
               "direct aidlc-state.ts lifecycle transitions are engine-owned",
           );
+        }
+      }
+
+      // Review-freeze (§12a terminal-receipt write-freeze): runs for EVERY
+      // agent - unlike reviewer-scope there is no identity gate, because any
+      // produces[] write voids a fresh READY receipt regardless of who makes
+      // it. The core hook self-filters to write tools and fails open.
+      if (input.tool === "write" || input.tool === "edit" || input.tool === "apply_patch") {
+        const freezeTargets =
+          input.tool === "apply_patch"
+            ? applyPatchPaths(args)
+            : [(args.filePath as string) ?? (args.path as string) ?? ""];
+        for (const filePath of freezeTargets) {
+          if (!filePath) continue;
+          const freeze = await runCore(
+            "aidlc-review-freeze.ts",
+            {
+              hook_event_name: "PreToolUse",
+              tool_name: input.tool === "edit" ? "Edit" : "Write",
+              tool_input: { file_path: filePath },
+              cwd: directory,
+            },
+            directory,
+          );
+          if (freeze.code === 2) {
+            throw new Error(
+              freeze.stderr.trim() ||
+                "review-freeze: this write would invalidate a fresh READY review receipt",
+            );
+          }
         }
       }
 

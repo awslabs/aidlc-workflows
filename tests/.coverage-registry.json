@@ -20,22 +20,22 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 491,
+    "total": 497,
     "enumeratedByClass": {
-      "function": 256,
-      "audit": 75,
+      "function": 260,
+      "audit": 76,
       "scope": 9,
       "stage": 32,
-      "hook": 14,
+      "hook": 15,
       "subcommand": 98,
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 109,
-      "audit": 34,
+      "function": 112,
+      "audit": 35,
       "scope": 9,
       "stage": 9,
-      "hook": 14,
+      "hook": 15,
       "subcommand": 86,
       "render-surface": 7
     }
@@ -351,6 +351,18 @@
         },
         {
           "file": "tests/unit/t115.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "REVIEW_FREEZE_BLOCKED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t264-review-freeze-hook.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -1556,6 +1568,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:freshReviewReceipts",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t264-review-freeze-hook.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:frontmatterBlock",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1835,6 +1859,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:KNOWN_CODEKB_STAGES",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -2400,6 +2431,34 @@
         {
           "file": "tests/unit/t205-optional-produces-frontmatter.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:producesArtifactFile",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t205-gate-revision-backstop.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t264-review-freeze-hook.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:producesArtifactUnit",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t264-review-freeze-hook.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -3424,6 +3483,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t228-hook-run-exports.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "hook",
+      "unitId": "aidlc-review-freeze",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t264-review-freeze-hook.test.ts",
           "mechanism": "cli"
         }
       ],

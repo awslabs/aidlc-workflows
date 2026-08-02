@@ -28,7 +28,7 @@
 // where <target> ∈ session-start | audit-and-sensors | runtime-compile |
 //                  state-sync | log-subagent | stop | verb-intercept |
 //                  pretool-block | state-transition-guard | reviewer-scope
-//                  | dispatch-rules
+//                  | review-freeze | dispatch-rules
 
 import {
   existsSync,
@@ -550,6 +550,52 @@ if (target === "reviewer-scope") {
         ...(registeredAgent.length > 0
           ? { agent_type: registeredAgent }
           : { scoped_registration: true }),
+      }),
+      "utf-8",
+    ),
+    cwd: projectDir,
+    stdout: "pipe",
+    stderr: "pipe",
+    env: projectEnv,
+  });
+  const stderrText = r.stderr?.toString() ?? "";
+  if (r.exitCode === 2) {
+    process.stderr.write(stderrText);
+    return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
+  }
+  return 0;
+}
+
+// --- review-freeze: the §12a terminal-receipt write-freeze -------------------
+//
+// Registered on the CONDUCTOR's fs_write (aidlc.json) - the same registration
+// point as audit-and-sensors, which is what feeds the engine's receipt-
+// invalidation scan on this harness. That symmetry is deliberate: a write the
+// invalidation scan cannot see (a subagent's, which has no audit registration
+// here) is also a write this freeze does not police. The shim normalizes the
+// write payload to the core hook's Write shape (top-level path plus the
+// batched operations[] paths, mirroring reviewer-scope's write arm) and
+// forwards stderr + exit code verbatim - exit 2 + stderr is Kiro's reject
+// contract. Fail-open: an unspawnable core hook allows the call.
+if (target === "review-freeze") {
+  const tool = kiro.tool_name ?? "";
+  if (tool !== "write" && tool !== "fs_write") return 0;
+  const ti = kiro.tool_input ?? {};
+  const coreInput: Record<string, unknown> = {
+    file_path: (ti.path as string) ?? (ti.file_path as string) ?? "",
+  };
+  const wops = (ti.operations as Array<{ path?: string }>) ?? [];
+  coreInput.paths = wops.map((o) => o.path ?? "").filter((p) => p.length > 0);
+  const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+  const command = executable
+    ? [executable, "hook", "review-freeze"]
+    : [process.execPath, join(HOOKS_DIR, "aidlc-review-freeze.ts")];
+  const r = Bun.spawnSync(command, {
+    stdin: Buffer.from(
+      JSON.stringify({
+        hook_event_name: "PreToolUse",
+        tool_name: "Write",
+        tool_input: coreInput,
       }),
       "utf-8",
     ),

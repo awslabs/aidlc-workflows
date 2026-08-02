@@ -246,15 +246,15 @@ describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override
     expect(auditField(f, "PRACTICES_OVERRIDE", "Bolt slug")).toBe("t81-bolt-1");
   });
 
-  // --- Test 3: canonical event count includes summary confirmation ----------
-  test("3: framework event count pinned at 75", () => {
+  // --- Test 3: canonical event count includes both new receipts -------------
+  test("3: framework event count pinned at 76", () => {
     // The .sh read t28's pinned $TS_COUNT. Under milestone 4, t28 is now a
     // .test.ts (no `assert_eq N "$TS_COUNT"` line to grep), so pin the SAME
     // observable against the SOURCE OF TRUTH instead — VALID_EVENT_TYPES in
     // aidlc-audit.ts — which is stronger (it asserts the real count, not a
     // sibling test's transcription of it). bolt-plan-marker-conflict reuses
     // PRACTICES_OVERRIDE (discriminator-field disambiguation) and registers no
-    // new event. The framework total is 75: the v0.6.0 Wave 4 milestone 16
+    // new event. The framework total is 76: the v0.6.0 Wave 4 milestone 16
     // baseline of 67 (SWARM_DEGRADED was the last event born then), plus
     // WORKFLOW_PARKED + WORKFLOW_UNPARKED (the park/unpark lifecycle, +2),
     // less TEST_RUN_MODE_ENABLED (removed, -1), plus HUMAN_TURN (+1), plus
@@ -262,7 +262,8 @@ describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override
     // REVIEWER_SCOPE_BLOCKED (the reviewer-scope PreToolUse hook, +1), plus
     // PLUGIN_SELECTION_CHANGED (select-plugins set-mode, +1), plus
     // REVIEW_REQUESTED + REVIEW_COMPLETED (reviewer-enforcement RFC Track 1,
-    // +2), plus SUMMARY_CONFIRMATION_RECORDED (+1).
+    // +2), plus SUMMARY_CONFIRMATION_RECORDED (+1), plus
+    // REVIEW_FREEZE_BLOCKED (the review-freeze PreToolUse hook, +1).
     const auditSrc = readFileSync(
       join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-audit.ts"),
       "utf-8",
@@ -270,7 +271,7 @@ describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override
     const block = auditSrc.match(/const VALID_EVENT_TYPES = new Set\(\[([\s\S]*?)\]\)/);
     expect(block).not.toBeNull();
     const count = (block ? block[1].match(/"[A-Z0-9_]+"/g) : null)?.length ?? -1;
-    expect(count).toBe(75);
+    expect(count).toBe(76);
   });
 
   // --- Test 4: milestone 8 write-failure path coexists (different Reason value) ---

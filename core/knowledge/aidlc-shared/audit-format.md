@@ -13,7 +13,7 @@ commands a stage or conductor invokes directly.
 
 All event names follow `SUBJECT_PAST_VERB` — every event answers "what happened?"
 
-## Event Registry (75 events, 19 categories)
+## Event Registry (76 events, 19 categories)
 
 ### Workflow Lifecycle (4 events)
 
@@ -102,11 +102,12 @@ the active space's shared `codekb/<repo>/` tree.
 |-------|------|-----------------|---------|
 | `SUBAGENT_COMPLETED` | Subagent task finishes | Timestamp, Agent Type, optional Agent ID, optional Message | `hooks/aidlc-log-subagent.ts` (SubagentStop) |
 
-### Reviewer Scope Events (1 event — hook-emitted)
+### Reviewer Enforcement Events (2 events - hook-emitted)
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
 | `REVIEWER_SCOPE_BLOCKED` | A per-unit reviewer's tool call was refused for reaching into sibling units' `construction/` paths (the §12a read-scope bound) | Timestamp, Tool, Target, Stage, Unit | `hooks/aidlc-reviewer-scope.ts` (PreToolUse) |
+| `REVIEW_FREEZE_BLOCKED` | A `produces[]` write was refused because it would invalidate a fresh READY review receipt before the gate (the §12a terminal-receipt ordering) | Timestamp, Tool, Target, Stage, optional Unit | `hooks/aidlc-review-freeze.ts` (PreToolUse) |
 
 ### Utility Events (1 event)
 

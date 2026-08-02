@@ -7,7 +7,6 @@ import {
   activeIntent,
   appendSlug,
   appendUnderHeading,
-  auditBlockField,
   type CheckboxState,
   checkSummaryConfirmationEvidence,
   codekbDir,
@@ -19,6 +18,7 @@ import {
   findStageBySlug,
   findAllEvents,
   firstInScopeStageOfPhase,
+  freshReviewReceipts,
   getField,
   holdsAuditLock,
   humanActedSinceGate,
@@ -26,6 +26,7 @@ import {
   intentRepos,
   isAutonomousMode,
   isoTimestamp,
+  KNOWN_CODEKB_STAGES,
   loadScopeMapping,
   nextInScopeStage,
   PHASE_NUMBERS,
@@ -33,6 +34,7 @@ import {
   parseCheckboxes,
   parseRefsList,
   parseStateStageSuffixes,
+  producesArtifactFile,
   readAllAuditShards,
   readStateFile,
   recordDir,
@@ -94,15 +96,10 @@ const HARNESS_DOC_DIRS = new Set([
   ".git",
 ]);
 
-// The codekb stages - their produces live in the space-level codekb dir, keyed
-// by repo, NOT under a per-intent record dir. Mirrors KNOWN_CODEKB_STAGES in
-// aidlc-orchestrate.ts (kept local because that set is not exported and the
-// guard has no engine context at approve/advance time). reverse-engineering is
-// the sole member; a future codekb stage joins both sets. Declared at module
-// top (not beside verifyStageArtifacts) for the same TDZ reason as
-// HARNESS_DOC_DIRS: the command dispatch runs at top level, so a const declared
-// lower in the file would be in its temporal dead zone when the guard runs.
-const KNOWN_CODEKB_STAGES: ReadonlySet<string> = new Set(["reverse-engineering"]);
+// KNOWN_CODEKB_STAGES now lives in aidlc-lib.ts (imported above) beside the
+// shared produces-artifact matchers, so the review-freeze hook and this tool
+// agree on which stages use the codekb layout. Imports are hoisted, so the
+// TDZ concern that once kept a local copy here does not apply.
 
 // --- Audit emission helper ---
 // Uses the throw-on-error appendAuditEntry (not handleAppend which writes JSON to stdout).
@@ -242,90 +239,11 @@ function auditTailHasFields(
   );
 }
 
-// True when a written File path (from an ARTIFACT_CREATED/ARTIFACT_UPDATED audit
-// row) is one of the stage's declared produces[] artifacts. Matches on the path
-// SUFFIX `/<slug>/<name>.md` rather than resolving one absolute dir, so it
-// covers BOTH the standard <record>/<phase>/<slug>/ layout AND the per-unit
-// construction/<unit>/<slug>/ layout without needing to know the {unit}
-// segment. Codekb stages get their own arm: their produces live DIRECTLY under
-// a per-repo dir beneath the space codekb root (codekb/<repo>/<name>.md) with
-// no <slug> segment anywhere, so the suffix idiom matches the codekb marker +
-// one repo segment instead - the matcher analog of the placement split
-// producesDirsForStage handles for the artifact guard. When the active intent
-// records repos, that segment must belong to the recorded set so a write to one
-// repo's durable codekb cannot revise an unrelated intent. The audit File field
-// is stored forward-slash-normalised (aidlc-audit-logger.ts), so the
-// forward-slash matching is harness-neutral; we still normalise defensively in
-// case a caller passes a raw OS path.
-function producesArtifactFile(
-  stage: { slug: string; produces?: string[] },
-  file: string,
-  recordedRepos: ReadonlySet<string>
-): boolean {
-  const produces = stage.produces ?? [];
-  if (produces.length === 0) return false;
-  const norm = file.replace(/\\/g, "/");
-  if (KNOWN_CODEKB_STAGES.has(stage.slug)) {
-    return produces.some((name) => {
-      const idx = norm.lastIndexOf(`/${name}.md`);
-      if (idx === -1 || idx + `/${name}.md`.length !== norm.length) return false;
-      // Exactly one <repo> segment between /codekb/ and /<name>.md.
-      const head = norm.slice(0, idx);
-      const repoSlash = head.lastIndexOf("/");
-      if (repoSlash === -1 || !head.slice(0, repoSlash).endsWith("/codekb")) return false;
-      const repo = head.slice(repoSlash + 1);
-      if (repo.length === 0) return false;
-      // An empty registry is the legacy projectDir-is-the-repo case. Keep the
-      // historical any-repo match: codekbRepoName's basename is a write-path
-      // default, not ownership evidence for durable files that may predate repo
-      // recording or have been written with an explicit repo target.
-      return recordedRepos.size === 0 || recordedRepos.has(repo);
-    });
-  }
-  return produces.some((name) => norm.endsWith(`/${stage.slug}/${name}.md`));
-}
-
-// Resolve the unit targeted by a declared produces[] write. `undefined` means
-// the file does not belong to this stage, `null` means a matching stage-level
-// artifact, and a string names the per-unit Construction target.
-function producesArtifactUnit(
-  stage: {
-    slug: string;
-    for_each?: string;
-    produces?: string[];
-    optional_produces?: string[];
-  },
-  file: string,
-  recordedRepos: ReadonlySet<string>,
-): string | null | undefined {
-  const reviewedArtifacts = [
-    ...(stage.produces ?? []),
-    ...(stage.optional_produces ?? []),
-  ];
-  if (
-    !producesArtifactFile(
-      { slug: stage.slug, produces: reviewedArtifacts },
-      file,
-      recordedRepos,
-    )
-  ) {
-    return undefined;
-  }
-  if (stage.for_each !== "unit-of-work") return null;
-
-  const norm = file.replace(/\\/g, "/");
-  for (const name of reviewedArtifacts) {
-    const suffix = `/${stage.slug}/${name}.md`;
-    if (!norm.endsWith(suffix)) continue;
-    const parent = norm.slice(0, -suffix.length);
-    const marker = "/construction/";
-    const markerIdx = parent.lastIndexOf(marker);
-    if (markerIdx === -1) return null;
-    const unit = parent.slice(markerIdx + marker.length);
-    return unit.length > 0 && !unit.includes("/") ? unit : null;
-  }
-  return null;
-}
+// producesArtifactFile / producesArtifactUnit / freshReviewReceipts moved to
+// aidlc-lib.ts: the review-freeze PreToolUse hook shares the SAME scan so its
+// write-freeze window and this tool's completion precondition can never
+// diverge (a divergence would block writes the engine accepts, or miss writes
+// the engine refuses). Imported above.
 
 // The gate-revision backstop predicate (the reconciliation half of the
 // forwarding-reliability gap). TRUE when the human demonstrably revised the
@@ -1323,99 +1241,19 @@ function verifyReviewerPrecondition(
   if (!stage.reviewer) return; // stage declares no reviewer — nothing to enforce
 
   const reviewer = stage.reviewer;
-  const audit = readAllAuditShards(pd);
-  if (audit.length === 0) {
+  if (readAllAuditShards(pd).length === 0) {
     reviewerPreconditionError(stage.slug, reviewer);
   }
 
-  // Build ONE position-tiebroken event stream (the same interleave idiom
-  // unrecordedRevisionSinceGateOpen uses) — a timestamp-only floor is unsafe
-  // because isoTimestamp() is second-precision, so a review and the reject that
-  // should invalidate it can share a timestamp and a `<` compare would keep the
-  // stale review. Ordering by (timestamp, buffer position) breaks that tie.
-  const RELEVANT = new Set([
-    "WORKFLOW_STARTED",
-    "STAGE_STARTED",
-    "STAGE_JUMPED",
-    "GATE_REJECTED",
-    "ARTIFACT_CREATED",
-    "ARTIFACT_UPDATED",
-    "REVIEW_COMPLETED",
-  ]);
-  const blocks = audit.replace(/\r\n/g, "\n").split(/\n---\n/);
-  const events: { pos: number; ts: string; event: string; block: string }[] = [];
-  for (let i = 0; i < blocks.length; i++) {
-    const ev = auditBlockField(blocks[i], "Event");
-    if (!ev || !RELEVANT.has(ev)) continue;
-    events.push({ pos: i, ts: auditBlockField(blocks[i], "Timestamp") ?? "", event: ev, block: blocks[i] });
-  }
-  events.sort((a, b) => (a.ts !== b.ts ? (a.ts < b.ts ? -1 : 1) : a.pos - b.pos));
-
+  // The fresh-receipt scan lives in aidlc-lib.ts (freshReviewReceipts) so the
+  // review-freeze PreToolUse hook and this precondition read the SAME window:
+  // event interleave (timestamp, buffer-position tiebreak), the stage-agnostic
+  // WORKFLOW_STARTED/STAGE_JUMPED floor, the unit-major STAGE_STARTED skip,
+  // and per-unit write invalidation are all documented there.
+  const receipts = freshReviewReceipts(pd, content, stage);
   const perUnit = stage.for_each === "unit-of-work";
-  const unitMajor =
-    perUnit && getField(content, "Construction Iteration")?.trim() === "unit-major";
-
-  // Unit-major may author a later stage's per-unit artifacts before that
-  // stage's STAGE_STARTED row exists. Its attempt floor therefore uses the
-  // current workflow, jumps, and gate rejections but ignores STAGE_STARTED.
-  // Stage-major and non-per-unit flows additionally floor at STAGE_STARTED.
-  //
-  // WORKFLOW_STARTED and STAGE_JUMPED floor deliberately stage-AGNOSTIC: any
-  // jump invalidates every stage's reviews, including stages the jump never
-  // re-opens. That over-invalidation is harmless (a stage that stays [x] never
-  // re-completes, so its stale floor is never consulted) and it is what closes
-  // the redo-jump hole: a backward jump re-opens stages WITHOUT emitting their
-  // GATE_REJECTED or (until re-entry) STAGE_STARTED, so a stage-scoped floor
-  // would accept the prior attempt's reviews. Fail-closed over precise.
-  let floorIdx = -1;
-  for (let i = 0; i < events.length; i++) {
-    const e = events[i];
-    if (e.event === "WORKFLOW_STARTED" || e.event === "STAGE_JUMPED") {
-      floorIdx = i;
-      continue;
-    }
-    if (auditBlockField(e.block, "Stage") !== stage.slug) continue;
-    if (e.event === "STAGE_STARTED" && !unitMajor) {
-      if (auditBlockField(e.block, "Workflow")?.startsWith("single-stage:")) continue;
-      floorIdx = i;
-    } else if (e.event === "GATE_REJECTED") {
-      floorIdx = i;
-    }
-  }
-
-  // Collect fresh matching terminal reviews after the attempt floor. A later
-  // declared-artifact write clears the matching receipt. For per-unit stages,
-  // the path's construction/<unit>/ segment scopes invalidation to that unit;
-  // an ambiguous matching path fails closed by clearing every unit receipt.
-  const recordedRepos = new Set(intentRepos(pd));
-  const reviewedUnits = new Set<string>();
-  let sawStageReview = false;
-  for (let i = floorIdx + 1; i < events.length; i++) {
-    const e = events[i];
-    if (e.event === "ARTIFACT_CREATED" || e.event === "ARTIFACT_UPDATED") {
-      const file = auditBlockField(e.block, "File");
-      if (!file) continue;
-      const targetUnit = producesArtifactUnit(stage, file, recordedRepos);
-      if (targetUnit === undefined) continue;
-      if (!perUnit) {
-        sawStageReview = false;
-      } else if (targetUnit === null) {
-        reviewedUnits.clear();
-      } else {
-        reviewedUnits.delete(targetUnit);
-      }
-      continue;
-    }
-    if (e.event !== "REVIEW_COMPLETED") continue;
-    if (auditBlockField(e.block, "Workflow")?.startsWith("single-stage:")) continue;
-    if (auditBlockField(e.block, "Stage") !== stage.slug) continue;
-    if (auditBlockField(e.block, "Reviewer") !== reviewer) continue;
-    const verdict = auditBlockField(e.block, "Verdict");
-    if (verdict !== "READY" && verdict !== "NOT-READY") continue;
-    sawStageReview = true;
-    const unit = auditBlockField(e.block, "Unit");
-    if (unit) reviewedUnits.add(unit);
-  }
+  const sawStageReview = receipts.stageVerdict !== null;
+  const reviewedUnits = new Set(receipts.unitVerdicts.keys());
 
   if (!perUnit) {
     if (!sawStageReview) reviewerPreconditionError(stage.slug, reviewer);

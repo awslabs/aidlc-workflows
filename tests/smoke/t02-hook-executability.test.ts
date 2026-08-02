@@ -65,6 +65,8 @@ const HOOKS = [
   "aidlc-state-transition-guard.ts",
   // Enforces the per-unit reviewer read-scope bound on PreToolUse.
   "aidlc-reviewer-scope.ts",
+  // Enforces the §12a terminal-receipt write-freeze on PreToolUse.
+  "aidlc-review-freeze.ts",
 ] as const;
 
 describe("t02 hook presence — shipped dist/claude/.claude/hooks (migrated from t02-hook-executability.sh, plan 10)", () => {

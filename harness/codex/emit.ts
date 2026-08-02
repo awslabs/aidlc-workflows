@@ -39,6 +39,10 @@ const HOOK_WIRING: Array<{ event: string; matcher?: string; target: string }> = 
   // tool anyway. Verified on 0.142.5: subagent tool calls carry agent_type,
   // and a PreToolUse exit 2 + stderr blocks the call with the reason relayed.
   { event: "PreToolUse", target: "reviewer-scope" },
+  // No matcher for the same reason: the review-freeze target self-filters to
+  // apply_patch (Codex's only file-write surface; the core hook deliberately
+  // skips Bash - see aidlc-review-freeze.ts).
+  { event: "PreToolUse", target: "review-freeze" },
   { event: "PostToolUse", matcher: "apply_patch", target: "audit-and-sensors" },
   { event: "PostToolUse", matcher: "update_plan", target: "state-sync" },
   { event: "PostToolUse", matcher: "Bash", target: "runtime-compile" },

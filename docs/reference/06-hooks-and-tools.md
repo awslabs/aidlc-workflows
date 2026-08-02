@@ -1,6 +1,6 @@
 # Hooks and Tools
 
-This chapter documents the hook system architecture, all fourteen hook scripts, the audit event taxonomy, CLI tool configuration, and the deterministic utility tool.
+This chapter documents the hook system architecture, all fifteen hook scripts, the audit event taxonomy, CLI tool configuration, and the deterministic utility tool.
 
 > **Path convention.** State, audit, and artifacts live under the active intent's **record dir** — `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`, written `<record>/` below (a compact UTC date prefix plus a short kebab-case label so record dirs sort chronologically; the canonical id is the UUIDv7 in the `intents.json` registry row). The audit trail is a directory of per-clone shards under `<record>/audit/`, not a single file.
 
@@ -8,9 +8,9 @@ This chapter documents the hook system architecture, all fourteen hook scripts, 
 
 ## Hook System Architecture
 
-This implementation uses fourteen hook scripts in `.claude/hooks/`. All fourteen are TypeScript (run via `bun`). All fourteen are **project-wide** — registered in `settings.json` (the statusline via the top-level `statusLine` key, the other thirteen via the `hooks` block), they fire regardless of which skill is active. They were previously split (six declared in `aidlc/SKILL.md` frontmatter as skill-scoped, the rest project-wide); v0.6.0 moved the skill-scoped six into `settings.json` so every entry point — the orchestrator, each packaged scope/stage runner, and any hand-written customer runner — inherits the deterministic spine with no per-runner `hooks:` block.
+This implementation uses fifteen hook scripts in `.claude/hooks/`. All fifteen are TypeScript (run via `bun`). All fifteen are **project-wide** — registered in `settings.json` (the statusline via the top-level `statusLine` key, the other fourteen via the `hooks` block), they fire regardless of which skill is active. They were previously split (six declared in `aidlc/SKILL.md` frontmatter as skill-scoped, the rest project-wide); v0.6.0 moved the skill-scoped six into `settings.json` so every entry point — the orchestrator, each packaged scope/stage runner, and any hand-written customer runner — inherits the deterministic spine with no per-runner `hooks:` block.
 
-Ten of the fourteen are **non-blocking**. Four are **flow-altering**: the `Stop` hook keeps the forwarding loop running, the dispatch-rules hook attaches exact active-stage rules to subagent briefs where the harness supports input rewriting, the reviewer-scope hook refuses sibling-unit reviewer access, and the state-transition guard refuses direct lifecycle calls that bypass `aidlc-orchestrate.ts report`.
+Ten of the fifteen are **non-blocking**. Five are **flow-altering**: the `Stop` hook keeps the forwarding loop running, the dispatch-rules hook attaches exact active-stage rules to subagent briefs where the harness supports input rewriting, the reviewer-scope hook refuses sibling-unit reviewer access, the review-freeze hook refuses a produces[] write that would void a fresh READY review receipt before the gate, and the state-transition guard refuses direct lifecycle calls that bypass `aidlc-orchestrate.ts report`.
 
 ```
 .claude/hooks/
@@ -18,6 +18,7 @@ Ten of the fourteen are **non-blocking**. Four are **flow-altering**: the `Stop`
 +-- dispatch-rules.ts    # PreToolUse Task|Agent (project-wide, settings.json, TypeScript, flow-altering)
 +-- state-transition-guard.ts # PreToolUse Bash (project-wide, settings.json, TypeScript, flow-altering)
 +-- reviewer-scope.ts    # PreToolUse file/search/shell tools (project-wide, settings.json, TypeScript, flow-altering)
++-- review-freeze.ts     # PreToolUse file-write tools (project-wide, settings.json, TypeScript, flow-altering)
 +-- audit-logger.ts      # PostToolUse Write|Edit (project-wide, settings.json, TypeScript)
 +-- sensor-fire.ts       # PostToolUse Write|Edit (project-wide, settings.json, TypeScript)
 +-- sync-statusline.ts   # PostToolUse TaskUpdate (project-wide, settings.json, TypeScript)
@@ -38,6 +39,7 @@ Ten of the fourteen are **non-blocking**. Four are **flow-altering**: the `Stop`
 | `dispatch-rules.ts` | PreToolUse | Project-wide (settings.json) | `Task\|Agent` | **Flow-altering.** Resolve the dispatched stage's substantive active-space rules and append their exact bytes to every AI-DLC subagent brief. Rewrites Claude, Codex, and opencode inputs; Kiro CLI cannot rewrite tool arguments, so an incomplete brief proceeds with an advisory warning (Kiro CLI agents preload the active memory tree through `resources`; an unloadable required rule still blocks with repair guidance). Kiro IDE uses always-included workspace steering with live memory-file references. Idempotent when the exact bundle is already present |
 | `state-transition-guard.ts` | PreToolUse | Project-wide (settings.json) | `Bash` | **Flow-altering.** Refuse direct `aidlc-state.ts` lifecycle verbs and redirect the conductor to `aidlc-orchestrate.ts report`; read-only and specialized recovery/configuration verbs remain available |
 | `reviewer-scope.ts` | PreToolUse | Project-wide (settings.json) | `Read\|Edit\|Write\|Glob\|Grep\|Bash` | **Flow-altering.** Enforce the per-unit reviewer read-scope bound (stage-protocol §12a) deterministically: while the conductor's reviewer dispatch record (`<record>/.aidlc-reviewer-dispatch.json`) is fresh, the dispatched reviewer's tool calls that reach into sibling units' `construction/` paths — file reads/writes and grep/glob/shell patterns spanning siblings — are refused (exit 2 + a redirecting stderr reason) unless the target is on the record's exempt list. Each refusal emits `REVIEWER_SCOPE_BLOCKED`. Fail-open on every ambiguity; `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1` disables enforcement |
+| `review-freeze.ts` | PreToolUse | Project-wide (settings.json) | `Read\|Edit\|Write\|Glob\|Grep\|Bash` (self-filters to write tools) | **Flow-altering.** Enforce the §12a terminal-receipt ordering deterministically: a Write/Edit to a reviewer-bearing, not-yet-completed stage's declared `produces[]` artifact is refused (exit 2 + a redirecting stderr reason) while a fresh READY review receipt covers it: the write would invalidate the receipt and re-open the completion refusal (the receipt-invalidation loop). Shares the engine's exact receipt scan (`freshReviewReceipts` in `aidlc-lib.ts`), so a recorded gate rejection, jump, or workflow restart lifts the freeze automatically and a NOT-READY verdict never freezes. Bash is deliberately not inspected (symmetric with the audit-logger's Write/Edit-only invalidation feed). Each refusal emits `REVIEW_FREEZE_BLOCKED`. Fail-open on every ambiguity; `AIDLC_DISABLE_REVIEW_FREEZE_HOOK=1` disables enforcement |
 | `audit-logger.ts` | PostToolUse | Project-wide (settings.json) | `Write\|Edit` | Auto-log artifact writes to the `audit/` shards |
 | `sensor-fire.ts` | PostToolUse | Project-wide (settings.json) | `Write\|Edit` | Fire the active stage's resolved Sensors on matching writes (advisory; never blocks) |
 | `sync-statusline.ts` | PostToolUse | Project-wide (settings.json) | `TaskUpdate` | Auto-sync state file on stage task activation |
@@ -51,13 +53,13 @@ Ten of the fourteen are **non-blocking**. Four are **flow-altering**: the `Stop`
 
 ### Shared Characteristics
 
-All fourteen TypeScript hooks:
+All fifteen TypeScript hooks:
 
 - Written in TypeScript, run via `bun`
 - Do not need executable permissions — work identically on macOS, Linux, and native Windows PowerShell
 - Receive JSON on stdin from Claude Code
 - Use native JSON parsing (no `jq` dependency)
-- Exit with code 0 on success or when skipped (the `Stop` hook also exits 0 when it blocks — the block is signalled by a `{"decision":"block"}` JSON object on stdout; the three PreToolUse control hooks signal an unrecoverable or retryable refusal with exit 2 + the reason on stderr)
+- Exit with code 0 on success or when skipped (the `Stop` hook also exits 0 when it blocks — the block is signalled by a `{"decision":"block"}` JSON object on stdout; the four PreToolUse control hooks signal an unrecoverable or retryable refusal with exit 2 + the reason on stderr)
 - Resolve `$CLAUDE_PROJECT_DIR` with multiple fallback methods
 - Share locking and utility functions from `lib.ts`
 
@@ -225,7 +227,7 @@ Workspace detection (0.2) used to be a subagent; it now runs deterministically i
 **Trigger:** When the conductor tries to end its turn (matcher: empty = always, while `/aidlc` is active)
 **Purpose:** Enforce the interactive forwarding loop — keep it running until the engine reports the workflow is `done`
 
-This is one of the framework's four flow-altering hooks, alongside the three PreToolUse controls below. It may return `{"decision":"block"}` to stop the turn from ending; the other ten hooks observe and exit 0. On the gated, conversational path the conductor (the LLM) holds the loop because only it can ask the human a question — so if it forgets to consult the engine, the workflow drifts. This hook removes that dependency on the LLM's diligence: the loop is enforced by the harness.
+This is one of the framework's five flow-altering hooks, alongside the four PreToolUse controls below. It may return `{"decision":"block"}` to stop the turn from ending; the other ten hooks observe and exit 0. On the gated, conversational path the conductor (the LLM) holds the loop because only it can ask the human a question — so if it forgets to consult the engine, the workflow drifts. This hook removes that dependency on the LLM's diligence: the loop is enforced by the harness.
 
 **Processing steps:**
 
@@ -290,7 +292,7 @@ cannot expose the shell command.
 **Trigger:** Before file/search/shell tool calls (`Read`, `NotebookRead`, `Edit`, `MultiEdit`, `Write`, `NotebookEdit`, `LS`, `Glob`, `Grep`, or `Bash`; matcher: `"Read|NotebookRead|Edit|MultiEdit|Write|NotebookEdit|LS|Glob|Grep|Bash"`)
 **Purpose:** Enforce the per-unit reviewer read-scope bound (stage-protocol §12a) deterministically
 
-This is one of the framework's four flow-altering hooks and one of its three `PreToolUse` controls. The §12a prose bound says a reviewer dispatched for one unit must not read sibling units' `construction/<other-unit>/` content through any tool — field transcripts showed a diligent reviewer bypassing the prose with recursive greps carrying cross-unit globs (`construction/*/*/*.md`), growing per-unit review cost superlinearly with unit count. Per the framework's layering (determinism belongs in tools and hooks), this hook makes the bound self-enforcing.
+This is one of the framework's five flow-altering hooks and one of its four `PreToolUse` controls. The §12a prose bound says a reviewer dispatched for one unit must not read sibling units' `construction/<other-unit>/` content through any tool — field transcripts showed a diligent reviewer bypassing the prose with recursive greps carrying cross-unit globs (`construction/*/*/*.md`), growing per-unit review cost superlinearly with unit count. Per the framework's layering (determinism belongs in tools and hooks), this hook makes the bound self-enforcing.
 
 **How it learns the dispatch.** The conductor writes `<record>/.aidlc-reviewer-dispatch.json` at §12a step 1 (per-unit stages only) — `{reviewer, stage, unit, exempt[]}`, where `exempt` carries the resolved `consumes` contract paths, the stage file, the Q&A file, and (when the current unit's design explicitly names an integration point) that one owning sibling file — and deletes it at step 3 when the verdict is read. The record is the enforcement window; a record older than 6 hours is an orphan from a crashed review, ignored and janitored (the compose-marker staleness discipline).
 
@@ -299,6 +301,26 @@ This is one of the framework's four flow-altering hooks and one of its three `Pr
 **Decision.** The matcher (`evaluateReviewerScope`, an exported pure function pinned by `t220`) scans path fields and command/pattern text for `construction/<seg>` tokens: the dispatched unit passes, a wildcard or bare sweep root blocks, and a concrete sibling blocks unless the full token exactly matches an exempt entry's `construction/` suffix. A grep of the current unit, the shared inception contracts, and validation-tool runs are never touched. Blocks emit a `REVIEWER_SCOPE_BLOCKED` audit row (Tool, Target, Stage, Unit) and signal via **exit 2 + a redirecting stderr reason** — the harness PreToolUse reject contract — that names the scope and points the reviewer back to the passed contracts.
 
 **Fail-open everywhere.** No record, a stale or malformed record, a non-reviewer agent, an unknown tool, malformed stdin, or any internal error allows the call; a reviewer-agent sighting with no dispatch record records an advisory drop for `--doctor` (the conductor forgot the step-1 write). The deterministic off-switch `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1` disables enforcement entirely.
+
+---
+
+### PreToolUse: aidlc-review-freeze.ts
+
+**Source:** `.claude/hooks/aidlc-review-freeze.ts`
+**Trigger:** Before file-write tool calls (`Write`, `Edit`, `MultiEdit`, `NotebookEdit`; registered in the shared PreToolUse matcher group, self-filtering to write tools)
+**Purpose:** Enforce the §12a terminal-receipt ordering deterministically - the write-freeze between a READY review receipt and the gate
+
+This is one of the framework's five flow-altering hooks and one of its four `PreToolUse` controls. The engine's completion precondition invalidates a `REVIEW_COMPLETED` receipt when a declared `produces[]` artifact is written after it - a deliberate fail-closed floor (a receipt must cover the final artifact bytes). Field traces showed prose losing the ordering contest: a conductor applied reviewer suggestions AFTER recording the terminal receipt, voided its own receipt, re-reviewed, re-edited, and oscillated until the live session wedged at the gate. This hook refuses the write BEFORE the invalidation happens.
+
+**Decision.** For each write target the hook checks, against every reviewer-bearing stage that is not yet completed or skipped in the state file: does the path match a declared `produces[]`/`optional_produces[]` artifact (the engine's own suffix matcher, `producesArtifactUnit`), and does a fresh READY receipt currently cover it (`freshReviewReceipts` - the SAME scan the engine's completion precondition reads, shared in `aidlc-lib.ts` so the freeze window and the refusal window can never diverge)? Per-unit stages freeze only the reviewed unit's artifacts; an ambiguous per-unit path freezes if any unit holds a READY receipt (mirroring the engine's fail-closed clear-all). A NOT-READY verdict never freezes (the repair loop must edit), and a recorded gate rejection, jump, or workflow restart resets the shared scan's floor - so post-rejection revisions are never frozen and nothing needs manual release. Blocks emit a `REVIEW_FREEZE_BLOCKED` audit row (Tool, Target, Stage, optional Unit) and signal via **exit 2 + a redirecting stderr reason** that names the sanctioned routes: present the gate and quote suggestions there, or reject at the gate to reopen the artifact.
+
+**Deliberately not matched: Bash.** The audit-logger hook that feeds the engine's invalidation scan is itself a Write/Edit PostToolUse hook - a file write delivered as a shell command is invisible to BOTH the invalidation scan and this freeze, so blocking shell here would be strictly tighter than the invariant it protects. The freeze and the floor share one blind spot by construction: symmetric coverage over asymmetric strictness.
+
+**Identity: none.** Unlike reviewer-scope there is no agent gate - any produces[] write voids a fresh READY receipt regardless of who makes it (conductor applying suggestions, a re-dispatched lead, a stray subagent).
+
+**Fail-open everywhere.** No audit ledger (the common non-AIDLC case, decided before any state read), unreadable state or stage graph, an unknown tool, malformed stdin, or any internal error allows the call. The deterministic off-switch `AIDLC_DISABLE_REVIEW_FREEZE_HOOK=1` disables enforcement entirely.
+
+**Per harness.** Claude Code: `settings.json`, third entry in the shared PreToolUse matcher group. Codex: adapter target `review-freeze`, fanning `apply_patch` out per touched file (Delete File / Move to included - deleting or moving a produces[] artifact voids its receipt like editing it). Kiro CLI: registered on the conductor's `fs_write` in `aidlc.json` (the same surface that feeds audit-and-sensors, preserving the symmetry argument). opencode: the plugin's `tool.execute.before` for `write`/`edit`/`apply_patch`. Kiro IDE: no registration (PreToolUse tool inputs are not uniformly available there); the §12a prose ordering governs.
 
 ---
 
@@ -385,7 +407,7 @@ The audit trail (the intent's `audit/` shards) uses the event taxonomy defined i
 | **Interaction** | 7 | `DECISION_RECORDED`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `SUMMARY_CONFIRMATION_RECORDED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED` | `aidlc-log.ts`, `aidlc-state.ts` |
 | **Artifact** | 3 | `ARTIFACT_CREATED`, `ARTIFACT_UPDATED`, `ARTIFACT_REUSED` | audit-logger hook, `aidlc-state.ts reuse-artifact` |
 | **Subagent** | 1 | `SUBAGENT_COMPLETED` | log-subagent hook |
-| **Reviewer scope** | 1 | `REVIEWER_SCOPE_BLOCKED` | reviewer-scope hook |
+| **Reviewer enforcement** | 2 | `REVIEWER_SCOPE_BLOCKED`, `REVIEW_FREEZE_BLOCKED` | reviewer-scope hook, review-freeze hook |
 | **Utility** | 1 | `HEALTH_CHECKED` | `aidlc-utility.ts doctor` |
 | **Error/Recovery** | 2 | `ERROR_LOGGED`, `RECOVERY_COMPLETED` | `lib.ts emitError`, `aidlc-state.ts acknowledge-compaction` |
 | **Construction Bolt** | 4 | `BOLT_STARTED`, `BOLT_COMPLETED`, `BOLT_FAILED`, `AUTONOMY_MODE_SET` | `aidlc-bolt.ts` |
@@ -427,6 +449,7 @@ A stage reported as skipped emits `STAGE_SKIPPED` instead of
 | `audit-logger.ts` | `ARTIFACT_CREATED` / `ARTIFACT_UPDATED` | Every Write/Edit to the intent's record dir (except the `audit/` shards) |
 | `log-subagent.ts` | `SUBAGENT_COMPLETED` | Any subagent stop |
 | `reviewer-scope.ts` | `REVIEWER_SCOPE_BLOCKED` | A per-unit reviewer's tool call refused for sibling-unit access (PreToolUse) |
+| `review-freeze.ts` | `REVIEW_FREEZE_BLOCKED` | A `produces[]` write refused for voiding a fresh READY review receipt before the gate (PreToolUse) |
 | `session-start.ts` | `SESSION_STARTED` / `SESSION_RESUMED` | Per Claude Code SessionStart hook input `source` field |
 | `session-end.ts` | `SESSION_ENDED` | Claude Code SessionEnd hook |
 | `validate-state.ts` | `SESSION_COMPACTED` | Claude Code PreCompact hook |
@@ -562,7 +585,7 @@ Re-running `compile` against the same audit produces a byte-equivalent graph. It
 
 ## Prerequisites
 
-1. **bun** -- Required for all 14 hooks and every CLI tool (`aidlc-utility.ts`, `aidlc-state.ts`, `aidlc-jump.ts`, `aidlc-orchestrate.ts`, `aidlc-audit.ts`, `aidlc-validate.ts`, `aidlc-graph.ts`, `aidlc-sensor.ts`, `aidlc-learnings.ts`, `aidlc-runtime.ts`). Install via `curl -fsSL https://bun.sh/install | bash`. On Windows: `npm install -g bun` or `powershell -c "irm bun.sh/install.ps1 | iex"`. Must be on PATH for non-interactive shells.
+1. **bun** -- Required for all 15 hooks and every CLI tool (`aidlc-utility.ts`, `aidlc-state.ts`, `aidlc-jump.ts`, `aidlc-orchestrate.ts`, `aidlc-audit.ts`, `aidlc-validate.ts`, `aidlc-graph.ts`, `aidlc-sensor.ts`, `aidlc-learnings.ts`, `aidlc-runtime.ts`). Install via `curl -fsSL https://bun.sh/install | bash`. On Windows: `npm install -g bun` or `powershell -c "irm bun.sh/install.ps1 | iex"`. Must be on PATH for non-interactive shells.
 2. **$CLAUDE_PROJECT_DIR** -- Set by Claude Code to the project root. All hooks use it to locate the `aidlc/` workspace (and the active intent's record dir within it).
 
 No other prerequisites: every hook and tool is TypeScript run via bun, so no `jq`, `sed`, `awk`, Git Bash, or WSL is required on any platform.

@@ -51,6 +51,10 @@
           {
             "type": "command",
             "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-reviewer-scope.ts\""
+          },
+          {
+            "type": "command",
+            "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-review-freeze.ts\""
           }
         ]
       }
