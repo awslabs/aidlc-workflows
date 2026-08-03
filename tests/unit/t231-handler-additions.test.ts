@@ -25,8 +25,12 @@ const PACKAGE_TS = join(REPO_ROOT, "scripts", "package.ts");
 const STATE_FIXTURE = join(FIXTURES_DIR, "state-mid-ideation.md");
 const INIT_MESSAGE =
   "init now lays down the project data tree and is not yet available in this release. To start work, describe what to build: /aidlc \"build the auth service\".";
-const UPGRADE_MESSAGE =
-  "upgrade is not available in this install; it arrives with the packaged binary distribution.";
+// `upgrade` is wired to the real upgrader, so the transition-era placeholder
+// ("not available in this install") is gone. In a project with no harness dir
+// there is nothing to upgrade, so every entry point must still fail loudly and
+// identically — that consistency is what this file pins, not the wording. The
+// message embeds the probed project path, so match the stable prefix.
+const UPGRADE_NO_HARNESS = /^upgrade failed: No AI-DLC harness dir found in /;
 const NO_STATE_MESSAGE =
   "No state file found. Start a workflow first by describing what to build (/aidlc \"build the auth service\").";
 
@@ -279,8 +283,12 @@ describe("t231 init and upgrade transition handlers", () => {
 
     for (const result of [direct, routed, alias]) {
       expect(result.status).toBe(1);
-      expect(stderrError(result)).toBe(UPGRADE_MESSAGE);
+      expect(stderrError(result)).toMatch(UPGRADE_NO_HARNESS);
     }
+    // All three routes must report the SAME error — the alias and the
+    // dispatcher must not diverge from the utility they delegate to.
+    expect(stderrError(routed)).toBe(stderrError(direct));
+    expect(stderrError(alias)).toBe(stderrError(direct));
   });
 });
 
