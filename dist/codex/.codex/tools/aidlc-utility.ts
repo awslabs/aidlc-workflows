@@ -78,8 +78,10 @@ import {
   parseStageFrontmatter,
   parseStateStageSuffixes,
   readAllAuditShards,
+  recordHookDrop,
   readCurrentSessionId,
   readStateFile,
+  refreshActiveDirectiveMarker,
   resolveBirthRepoSet,
   resolveProjectDir,
   setActiveIntentCursor,
@@ -5232,7 +5234,8 @@ function handleSetStatus(projectDir: string, flags: Record<string, string>): voi
   const phase = (flags.phase || entry.phase).toUpperCase();
   const agent = flags.agent || entry.lead_agent;
 
-  let content = readStateFile(projectDir, flags.intent, flags.space);
+  const previousContent = readStateFile(projectDir, flags.intent, flags.space);
+  let content = previousContent;
   content = setField(content, "Lifecycle Phase", phase);
   content = setField(content, "Current Stage", stage);
   content = setField(content, "Active Agent", agent);
@@ -5241,6 +5244,11 @@ function handleSetStatus(projectDir: string, flags: Record<string, string>): voi
   content = setField(content, "Last Updated", isoTimestamp());
   content = setCheckbox(content, stage, "in-progress");
   writeStateFile(projectDir, content, flags.intent, flags.space);
+  try {
+    refreshActiveDirectiveMarker(projectDir, stage, previousContent, content);
+  } catch (e) {
+    recordHookDrop(projectDir, "active-directive", errorMessage(e));
+  }
 
   process.stdout.write(`${JSON.stringify({ updated: true, phase, stage, agent })}\n`);
 }

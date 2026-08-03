@@ -1,6 +1,16 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.56] - 2026-08-07
+
+Under `Construction Iteration: unit-major`, code-generation now joins the per-unit walk: each Unit of Work is designed (3.1-3.4) and then BUILT (3.5) before the next unit begins, so the first working code lands after one unit's design instead of after every unit's. This completes the unit-major increment shipped in 2.2.13, which deferred code-generation ("widening the walk's block filter"). The stage-major default is unchanged and byte-identical. **Behaviour change for existing unit-major users:** a workflow with the knob set resumes onto the widened walk, and the autonomous Construction swarm no longer fires while the knob is set (the walk owns the build, serially in Bolt build order; unset the knob or use stage-major for parallel batch swarms).
+
+* Unit-major walk block widened from the four inline design stages to every per-unit Construction stage in graph order, code-generation included; per-stage approval gates are unchanged in count and machinery, cascading once the whole (stage x unit) grid, code-generation included, is covered.
+* Code Generation's per-unit Step 3 Plan Approval still hard-stops before generation, including under an autonomous grant: the stop hook now follows the active unit-major directive's stage and unit instead of looking for the question under the earlier state cursor.
+* Final `run-stage` directives record a state-bound active-stage marker for path-only PostToolUse hooks, so linter/type-check results, audit rows, and `.aidlc-sensors/<stage>/` details from interleaved code generation are attributed to `code-generation`, not the earlier design stage.
+* Autonomous swarm emission is suppressed while `Construction Iteration: unit-major` is set: the walk's coverage signal is disk artifacts and the swarm's is convergence audit rows, and two owners would re-fan already-built units. The report-side settled-swarm approve exemption is untouched, so units a prior stage-major swarm built in worktrees still approve after the knob flips.
+* `delivery-planning` Step 7 classification, `stage-protocol.md`, the construction stage reference, and all five harness SKILL.md files updated to the widened semantics.
+
 ## [2.5.55] - 2026-08-07
 
 Hardens the human-authorization boundary and adds unit-of-work lifecycle receipts, closing the reliability and authorization gaps reported in the brownfield Codex evaluation (issue 681). **Upgrade:** re-copy your `dist/<harness>/` tree into the project; if your CI drives gates against bare fixtures via the audit CLI, set `AIDLC_ALLOW_DIRECT_AUDIT_EVENTS=1` in those runs (the test suite sets it automatically).

@@ -62,10 +62,11 @@
 //      conductor must write a `<slug>-questions.md` with blank [Answer]: tags
 //      before asking (stage-protocol.md §3); an unanswered tag is a positive
 //      signal that a question is pending, so we ALLOW the stop then too
-//      (isPendingQuestionStop below). Strictly gated: it never fires under
-//      autonomous Construction (the loop must keep running there), and any miss
-//      — no file, all answered, autonomous, or a read error — falls through to
-//      the cap-bounded block, so a genuine mid-stage quit is still nudged.
+//      (isPendingQuestionStop below). The active directive stage selects the
+//      questions file because a unit-major walk can run ahead of Current Stage.
+//      Autonomous Construction stays guarded except for unit-major
+//      code-generation's mandatory Plan Approval. Any miss falls through to the
+//      cap-bounded block, so a genuine mid-stage quit is still nudged.
 //   4. A CONVERSATIONAL turn ends with the human's last prompt answered and NO
 //      workflow-engine engagement (the conductor ran neither aidlc-orchestrate
 //      nor aidlc-state since that prompt). Issue #365's broader reading: a human
@@ -99,6 +100,7 @@ import {
   hooksHealthDir,
   isoTimestamp,
   parseCheckboxes,
+  readActiveDirectiveMarker,
   recordHookDrop,
   resolveProjectDirFromHook,
   stageDir,
@@ -378,15 +380,15 @@ function isHumanWaitStop(stateContent: string): boolean {
 // Two strict gates make this safe (it can still only ever ALLOW, never block
 // more):
 //   1. POSITIVE-CONFIRMATION — allow only when a `<slug>-questions.md` under the
-//      current stage's canonical dir, or the exact active-unit dir carried by a
-//      Construction directive, has at least one `[Answer]:` tag that is empty or
-//      underscores-only. No file, all answered, or any read error → false (fall
-//      through to the cap).
-//   2. AUTONOMY GUARD — never fires under autonomous Construction
-//      (`Construction Autonomy Mode: autonomous`). There the loop MUST keep
-//      running unattended (gates are skipped; a failure halt-and-asks via its
-//      own path), so a stray open question must not release the stop and strand
-//      the run waiting on a human who was told they weren't needed.
+//      active directive stage's canonical dir, or the exact active-unit dir
+//      carried by a Construction directive, has at least one `[Answer]:` tag
+//      that is empty or underscores-only. No file, all answered, or any read
+//      error → false (fall through to the cap).
+//   2. AUTONOMY GUARD — never fires under autonomous Construction except for
+//      unit-major code-generation. That mode suppresses the autonomous swarm
+//      and routes code-generation through the interactive per-unit walk, whose
+//      Plan Approval is mandatory. Every other autonomous path must keep running
+//      unattended, so a stray open question cannot strand the run.
 // Fail-open throughout: any error returns false and the cap-bounded block stands.
 
 // True when the `<slug>-questions.md` under the active stage dir has an
@@ -430,22 +432,34 @@ function hasPendingQuestion(
   return false;
 }
 
-// The tier-2 carve-out decision: the current stage is [-] in-progress, a
-// question is pending, and we are NOT in autonomous Construction.
+// The tier-2 carve-out decision: the state cursor is [-] in-progress and the
+// active directive stage has a pending question. Autonomous Construction is
+// excluded except when unit-major routes code-generation through its mandatory
+// interactive Plan Approval.
 function isPendingQuestionStop(
   projectDir: string,
   stateContent: string,
+  activeStage?: string,
   unit?: string,
 ): boolean {
   try {
-    if (getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous") {
+    const currentSlug = currentStageSlug(stateContent);
+    const slug = activeStage?.trim() || currentSlug;
+    const phase = getField(stateContent, "Lifecycle Phase") ?? "";
+    const unitMajorCodeGeneration =
+      slug === "code-generation" &&
+      unit !== undefined &&
+      phase.trim().toLowerCase() === "construction" &&
+      getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
+    if (
+      getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous" &&
+      !unitMajorCodeGeneration
+    ) {
       return false; // autonomy guard — keep the loop alive
     }
-    const slug = currentStageSlug(stateContent);
-    if (slug.length === 0) return false;
-    const row = parseCheckboxes(stateContent).find((c) => c.slug === slug);
+    if (currentSlug.length === 0 || slug.length === 0) return false;
+    const row = parseCheckboxes(stateContent).find((c) => c.slug === currentSlug);
     if (row?.state !== "in-progress") return false; // positive [-] only
-    const phase = getField(stateContent, "Lifecycle Phase") ?? "";
     return hasPendingQuestion(projectDir, slug, phase, unit);
   } catch {
     // Unparseable / odd content — fall through to decideBlock (never trap).
@@ -740,6 +754,7 @@ function isConversationalStop(
 //
 interface EngineDirective {
   kind: string;
+  stage?: string;
   unit?: string;
   continueToken?: string;
   rulesContent?: Array<{ path: string; text: string }>;
@@ -779,6 +794,10 @@ function runEngineNextDirective(projectDir: string): EngineDirective | null {
       typeof (parsed as { kind: unknown }).kind === "string"
     ) {
       const kind = (parsed as { kind: string }).kind;
+      const stage =
+        "stage" in parsed && typeof (parsed as { stage?: unknown }).stage === "string"
+          ? (parsed as { stage: string }).stage.trim()
+          : "";
       const unit =
         "unit" in parsed && typeof (parsed as { unit?: unknown }).unit === "string"
           ? (parsed as { unit: string }).unit.trim()
@@ -807,6 +826,7 @@ function runEngineNextDirective(projectDir: string): EngineDirective | null {
           : undefined;
       return {
         kind,
+        ...(stage.length > 0 ? { stage } : {}),
         ...(unit.length > 0 ? { unit } : {}),
         ...(continueToken.length > 0 ? { continueToken } : {}),
         ...(rulesContent ? { rulesContent } : {}),
@@ -958,6 +978,15 @@ if (directive === null) {
   return allowStop();
 }
 const kind = directive.kind;
+const activeMarker = readActiveDirectiveMarker(projectDir, stateContent);
+const activeStage = directive.stage ?? activeMarker?.stage;
+const activeUnit =
+  directive.unit ??
+  (
+    activeMarker && activeMarker.stage === activeStage
+      ? activeMarker.unit
+      : undefined
+  );
 
 // `done` → the workflow is complete; allow the turn to end and clear the guard
 // so a future stuck sequence starts fresh.
@@ -1019,19 +1048,16 @@ if (isHumanWaitStop(stateContent)) {
   return allowStop();
 }
 
-// Pending-question carve-out (tier 2): the current [-] stage has an unanswered
-// question in its `<slug>-questions.md`, and we are NOT in autonomous
-// Construction — so the conductor is parked on the human's answer to a
-// mid-stage clarifying question. Allow the stop instead of nudging. Strictly
-// gated and fail-open (see isPendingQuestionStop): any other state, no open
-// question, an autonomous run, or a read error falls through to the cap-bounded
-// block below, so a genuine mid-stage quit (and every autonomous run) is
-// unaffected.
-if (isPendingQuestionStop(projectDir, stateContent, directive.unit)) {
+// Pending-question carve-out (tier 2): the current [-] cursor has an unanswered
+// question for the active directive stage, so the conductor is parked on the
+// human's answer. The active stage can be later than Current Stage during the
+// unit-major walk. Strictly gated and fail-open (see isPendingQuestionStop).
+if (isPendingQuestionStop(projectDir, stateContent, activeStage, activeUnit)) {
+  const pendingStage = activeStage ?? currentStageSlug(stateContent);
   recordHookDrop(
     projectDir,
     HOOK_NAME,
-    `current stage ${currentStageSlug(stateContent)} has an unanswered question; allowing the stop (pending-question carve-out)`,
+    `active stage ${pendingStage} has an unanswered question; allowing the stop (pending-question carve-out)`,
   );
   return allowStop();
 }
@@ -1089,7 +1115,7 @@ if (!shouldBlock) {
 return blockStop(
   continuationReason(
     kind,
-    currentStageSlug(stateContent),
+    activeStage ?? currentStageSlug(stateContent),
     directive.continueToken,
     directive.rulesContent,
   ),

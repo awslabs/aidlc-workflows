@@ -101,6 +101,7 @@ import {
   auditBlockField,
   type CheckboxLine,
   checkSummaryConfirmationEvidence,
+  clearActiveDirectiveMarker,
   codekbRepoName,
   errorMessage,
   filterProducesByKind,
@@ -124,6 +125,7 @@ import {
   parseWorkspaceCommand,
   READ_ONLY_FLAGS,
   readAllAuditShards,
+  recordHookDrop,
   relativeCodekbDir,
   relativeRecordDir,
   relativeSpaceRecordPrefix,
@@ -142,6 +144,7 @@ import {
   validScopes,
   harnessDir,
   type WorkspaceCommand,
+  writeActiveDirectiveMarker,
   workspaceCommandUtilityArgv,
 } from "./aidlc-lib.ts";
 import {
@@ -200,9 +203,11 @@ const DEFAULT_SCOPE = "feature";
 // boundaries), never a silent miss — we exit non-zero so a wiring bug surfaces
 // loudly rather than emitting a lie the conductor would act on.
 function emit(directive: Directive): void {
+  const route =
+    directive.kind === "run-stage" ? runStageRoutes.get(directive) : undefined;
   const transported =
-    directive.kind === "run-stage" && runStageRoutes.has(directive)
-      ? transportRunStage(directive, runStageRoutes.get(directive)!)
+    directive.kind === "run-stage" && route
+      ? transportRunStage(directive, route)
       : directive;
   const result = validateDirective(transported);
   if (!result.valid) {
@@ -217,6 +222,36 @@ function emit(directive: Directive): void {
       `aidlc-orchestrate: refusing to emit a directive larger than ${DIRECTIVE_MAX_BYTES} bytes`,
     );
     process.exit(1);
+  }
+  // Persist only the final run-stage, after steering delivery and validation.
+  // PostToolUse hooks receive only the written path, so this per-intent marker
+  // is their source for the stage currently being executed. The state digest
+  // makes an old marker inert as soon as a report or other transition mutates
+  // the durable workflow cursor.
+  if (transported.kind === "run-stage" && route) {
+    try {
+      const markerStateHash =
+        route.stateHash ??
+        (
+          transported.single === true &&
+            existsSync(stateFilePath(route.codekbCtx.projectDir))
+            ? sha256(readFileSync(stateFilePath(route.codekbCtx.projectDir), "utf-8"))
+            : null
+        );
+      if (markerStateHash) {
+        writeActiveDirectiveMarker(route.codekbCtx.projectDir, {
+          stage: transported.stage,
+          ...(transported.unit ? { unit: transported.unit } : {}),
+          state_sha256: markerStateHash,
+        });
+      }
+    } catch (e) {
+      recordHookDrop(
+        route.codekbCtx.projectDir,
+        "active-directive",
+        errorMessage(e),
+      );
+    }
   }
   console.log(serialized);
 }
@@ -2696,6 +2731,18 @@ function eligibleAutonomousSwarmBatches(
   projectDir: string,
 ): string[][] | null {
   if (!isAutonomousSwarmCandidate(node, scope, stateContent)) return null;
+  // Under unit-major iteration the WALK owns code-generation: each unit's
+  // build is emitted inline in the walk and its coverage signal is DISK
+  // (unitCovered on the main record tree). The swarm's completion signal is
+  // SWARM_UNIT_CONVERGED audit rows, which walk-built units never write - an
+  // autonomous swarm firing mid-walk would re-fan units the walk already
+  // built. One owner and one coverage signal per stage, so unit-major
+  // suppresses swarm EMISSION. Deliberately here and not in
+  // isAutonomousSwarmCandidate: isSettledAutonomousSwarm must keep granting
+  // the report-side approve exemption for units a PRIOR stage-major swarm
+  // legitimately built in worktrees (their artifacts never reach the main
+  // tree), even if the knob was flipped afterwards.
+  if (readConstructionIteration(stateContent) === "unit-major") return null;
   const r = resolveBoltBatches(projectDir);
   if (r.state !== "ok" || r.batches.length === 0) return null;
   return r.batches;
@@ -3173,19 +3220,22 @@ function emitPerUnitRunStage(
   emit(directive);
 }
 
-// The in-scope, not-yet-settled INLINE per-unit Construction design stages, in
-// GRAPH order. This is the unit-major walk's inner list: functional-design,
-// nfr-requirements, nfr-design, infrastructure-design (each `for_each:
-// unit-of-work` + `mode: inline`), minus any this scope SKIPs or the state has
-// already completed/skipped. code-generation (`mode: subagent`) is excluded by
-// the mode filter, so the walk never touches the swarm path. Graph order is
-// preserved by filtering loadGraph() in place, and graph order respects
-// `requires_stage` by the compile-time edge-direction invariant
-// (aidlc-graph.ts), so a stage's per-unit dependency is honoured per unit by
-// construction. Effective action uses the same state-override-wins rule as
-// nextInScopeStage (state overrides beat scope-mapping); completed or skipped
-// checkboxes are dropped, the same fresh-clone carve-out the report guard makes.
-function constructionDesignBlock(
+// The in-scope, not-yet-settled per-unit Construction stages, in GRAPH order.
+// This is the unit-major walk's inner list: functional-design,
+// nfr-requirements, nfr-design, infrastructure-design, code-generation (each
+// `for_each: unit-of-work`), minus any this scope SKIPs or the state has
+// already completed/skipped. code-generation joins the walk (no mode filter):
+// graph order puts it last per unit because it requires all four design
+// stages, so each unit is designed and then BUILT before the next unit begins
+// - the walk owns the build and the autonomous swarm is suppressed under
+// unit-major (see eligibleAutonomousSwarmBatches). Graph order is preserved by
+// filtering loadGraph() in place, and graph order respects `requires_stage`
+// by the compile-time edge-direction invariant (aidlc-graph.ts), so a stage's
+// per-unit dependency is honoured per unit by construction. Effective action
+// uses the same state-override-wins rule as nextInScopeStage (state overrides
+// beat scope-mapping); completed or skipped checkboxes are dropped, the same
+// fresh-clone carve-out the report guard makes.
+function constructionUnitMajorBlock(
   scope: string,
   stateContent: string | null,
 ): GraphStage[] {
@@ -3198,7 +3248,6 @@ function constructionDesignBlock(
   return loadGraph().filter((n) => {
     if (n.phase !== "construction") return false;
     if (!isPerUnit(n)) return false;
-    if (n.mode !== "inline") return false;
     const cb = checkboxStates.find((c) => c.slug === n.slug);
     if (cb && (cb.state === "completed" || cb.state === "skipped")) return false;
     const effectiveAction = stateOverrides?.get(n.slug) ?? mapping.stages[n.slug];
@@ -3206,21 +3255,28 @@ function constructionDesignBlock(
   });
 }
 
-// Emit ONE iteration of the UNIT-MAJOR construction design walk (opt-in via the
+// Emit ONE iteration of the UNIT-MAJOR construction walk (opt-in via the
 // `Construction Iteration: unit-major` state field). Where emitPerUnitRunStage
 // is stage-outer / unit-inner (all units of the current stage before the next
 // stage), this is unit-outer / stage-inner: it walks the ordered unit list
-// (Bolt DAG topo order) OUTER and the design block (graph order) INNER, emitting
-// the first uncovered (stage, unit) pair with the gate suppressed. So a unit's
-// four design documents are authored consecutively before the next unit begins.
-// The four per-stage gates are UNCHANGED: they fire late, in stage order, once
-// the whole (stage x unit) grid is covered: the fully-covered walk delegates to
-// emitPerUnitRunStage for the CURRENT slug, whose pick === null branch presents
-// that stage's real gate on the last unit. `handleApprove` then advances Current
-// Stage to the next design stage; its `next` re-enters here, finds the grid
-// still fully covered, and presents ITS gate, so the four gates cascade at the
-// block's end, one per human turn (the presence guard enforces one resolution
-// per turn). No gate/approve/audit machinery changes.
+// (Bolt DAG topo order) OUTER and the per-unit construction block (graph
+// order: the four design stages then code-generation) INNER, emitting the
+// first uncovered (stage, unit) pair with the gate suppressed. So a unit's
+// four design documents are authored consecutively and the unit is BUILT
+// before the next unit begins - the first working code lands after ONE unit's
+// design, not after every unit's (the deferred half of the original
+// unit-major increment). code-generation's stage body still hard-stops at its
+// per-unit Plan Approval before generating, so a human sees each unit's
+// design -> plan -> code in sequence even though the stage-level gates come
+// later. The per-stage gates are UNCHANGED in count and machinery: they fire
+// late, in stage order, once the whole (stage x unit) grid is covered: the
+// fully-covered walk delegates to emitPerUnitRunStage for the CURRENT slug,
+// whose pick === null branch presents that stage's real gate on the last
+// unit. `handleApprove` then advances Current Stage to the next block stage;
+// its `next` re-enters here, finds the grid still fully covered, and presents
+// ITS gate, so the gates cascade at the block's end, one per human turn (the
+// presence guard enforces one resolution per turn). No gate/approve/audit
+// machinery changes.
 function emitUnitMajorRunStage(
   node: GraphStage,
   projectType: "brownfield" | "greenfield" | null,
@@ -3259,10 +3315,11 @@ function emitUnitMajorRunStage(
   }
   const units = resolution.batches.flat();
 
-  const block = constructionDesignBlock(scope, stateContent);
+  const block = constructionUnitMajorBlock(scope, stateContent);
   // Defensive: if the current node is not itself an active block stage (e.g. it
-  // was completed between the read and here, or a scope with no inline design
-  // block routed here), fall back to the stage-major path for this slug.
+  // was completed between the read and here, or a scope with no per-unit
+  // construction block routed here), fall back to the stage-major path for
+  // this slug.
   if (!block.some((n) => n.slug === node.slug)) {
     emitPerUnitRunStage(
       node,
@@ -3362,9 +3419,10 @@ function emitForSlug(
 ): void {
   const node = nodeForSlug(slug);
   if (node && isPerUnit(node)) {
-    // Unit-major iteration (opt-in) applies only to the INLINE design stages;
-    // mode:subagent (code-generation) is left to the swarm / stage-major path.
-    if (node.mode === "inline" && readConstructionIteration(stateContent) === "unit-major") {
+    // Unit-major iteration (opt-in) covers EVERY per-unit Construction stage,
+    // code-generation included (the swarm never fires under unit-major - see
+    // eligibleAutonomousSwarmBatches - so this branch owns the build too).
+    if (readConstructionIteration(stateContent) === "unit-major") {
       emitUnitMajorRunStage(node, projectType, scope, stateContent, recordPrefix, codekbCtx, projectDir);
       return;
     }
@@ -4288,6 +4346,11 @@ function handleSingleReport(
     return;
   }
 
+  try {
+    clearActiveDirectiveMarker(pd);
+  } catch (e) {
+    recordHookDrop(pd, "active-directive", errorMessage(e));
+  }
   emit({
     kind: "done",
     reason:

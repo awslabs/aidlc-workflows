@@ -71,6 +71,7 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -172,6 +173,23 @@ function makeProjectActive(slug = "requirements-analysis"): string {
   mkdirSync(auditDir, { recursive: true });
   writeFileSync(join(auditDir, pinnedShardName()), "audit fixture\n", "utf-8");
   return proj;
+}
+
+function seedActiveDirective(proj: string, stage: string, unit?: string): void {
+  const state = readFileSync(seededStateFile(proj), "utf-8");
+  writeFileSync(
+    join(seededRecordDir(proj), ".aidlc-active-directive.json"),
+    `${JSON.stringify(
+      {
+        version: 1,
+        stage,
+        ...(unit ? { unit } : {}),
+        state_sha256: createHash("sha256").update(state, "utf-8").digest("hex"),
+      },
+      null,
+      2,
+    )}\n`,
+  );
 }
 
 interface SynthSensor {
@@ -384,6 +402,19 @@ describe("t95 sensor-fire hook — multi-glob filtering at the stage level (mech
     expect(ids).toContain("type-check");
     expect(ids).not.toContain("required-sections");
     expect(ids).not.toContain("upstream-coverage");
+  }, 30000);
+
+  test("C3b-active-directive: unit-major TS writes use code-generation rather than stale Current Stage", () => {
+    const proj = makeProjectActive("functional-design");
+    seedActiveDirective(proj, "code-generation", "alpha");
+    runHook(proj, join(proj, "src", "foo.ts"));
+    const argvs = spawnArgvs(proj);
+    expect(argvs.length).toBe(2);
+    for (const argv of argvs) {
+      const stageFlag = argv.indexOf("--stage");
+      expect(stageFlag).toBeGreaterThan(-1);
+      expect(argv[stageFlag + 1]).toBe("code-generation");
+    }
   }, 30000);
 
   test("C3c: markdown write at the same stage -> only the 2 markdown sensors fire (code filtered) [.sh test 9]", () => {

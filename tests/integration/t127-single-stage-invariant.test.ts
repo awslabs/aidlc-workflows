@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, subcommand:aidlc-audit:append, subcommand:aidlc-audit:append-batch, function:emitSingleRunStage, function:handleSingleReport, function:refuseReservedCliEvent, function:refuseReservedCliBatch
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, subcommand:aidlc-audit:append, subcommand:aidlc-audit:append-batch, function:emitSingleRunStage, function:handleSingleReport, function:clearActiveDirectiveMarker, function:refuseReservedCliEvent, function:refuseReservedCliBatch
 //
 // t127 — the `--single` stage-runner invariant (v0.6.0 Wave 3 milestone 14).
 // Migrated from tests/integration/t127-single-stage-invariant.sh (TAP plan 16).
@@ -62,7 +62,8 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -82,6 +83,10 @@ const STATE_TOOL = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const AUDIT_TOOL = join(AIDLC_SRC, "tools", "aidlc-audit.ts");
 const LOG_TOOL = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const STATE_FIXTURE = "state-mid-ideation.md";
+
+function activeDirectiveMarkerPath(proj: string): string {
+  return join(seededRecordDir(proj), ".aidlc-active-directive.json");
+}
 
 const projects: string[] = [];
 
@@ -399,6 +404,30 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
     const proj = freshProject();
     seedStateFile(proj, STATE_FIXTURE);
     seedAuditFile(proj);
+    const state = readFileSync(join(seededRecordDir(proj), "aidlc-state.md"), "utf-8");
+    writeFileSync(
+      activeDirectiveMarkerPath(proj),
+      `${JSON.stringify({
+        version: 1,
+        stage: "feasibility",
+        state_sha256: createHash("sha256").update(state, "utf-8").digest("hex"),
+      })}\n`,
+    );
+    expect(
+      run(TOOL, [
+        "next",
+        "--stage",
+        "requirements-analysis",
+        "--single",
+        "--project-dir",
+        proj,
+      ]).out,
+    ).toContain('"stage":"requirements-analysis"');
+    expect(
+      JSON.parse(
+        readFileSync(activeDirectiveMarkerPath(proj), "utf-8"),
+      ) as { stage?: string },
+    ).toMatchObject({ stage: "requirements-analysis" });
     const stageDir = join(
       seededRecordDir(proj),
       "inception",
@@ -469,6 +498,7 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
     ]);
     expect(result.out).toContain('"kind":"done"');
     expect(countEvent(proj, "STAGE_COMPLETED")).toBe(1);
+    expect(existsSync(activeDirectiveMarkerPath(proj))).toBe(false);
   });
 
   test("12e: an isolated per-unit stage binds its receipt to the selected questions file", () => {

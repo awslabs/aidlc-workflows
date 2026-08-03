@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 528,
+    "total": 532,
     "enumeratedByClass": {
-      "function": 282,
+      "function": 286,
       "audit": 82,
       "scope": 9,
       "stage": 32,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 130,
+      "function": 134,
       "audit": 40,
       "scope": 9,
       "stage": 9,
@@ -1264,6 +1264,18 @@
         },
         {
           "file": "tests/unit/t229-workspace-parser.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:clearActiveDirectiveMarker",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t127-single-stage-invariant.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -2700,6 +2712,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:readActiveDirectiveMarker",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t94-sensor-fire-hook.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:readAllAuditShards",
       "minMechanism": "none",
       "coveredBy": [
@@ -2791,6 +2815,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:refreshActiveDirectiveMarker",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t121-stop-hook-enforce.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -3700,6 +3736,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:writeActiveDirectiveMarker",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t272-unit-major-code-gen.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",

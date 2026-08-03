@@ -1,4 +1,4 @@
-// covers: hook:aidlc-sensor-fire
+// covers: hook:aidlc-sensor-fire, function:readActiveDirectiveMarker
 //
 // t94 — unit-level behavioural contract for the PostToolUse sensor-fire hook:
 // every GUARD and EARLY-EXIT branch of its 12-step flow. Migrated from
@@ -82,6 +82,7 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -322,6 +323,46 @@ describe("t94 aidlc-sensor-fire hook — guards + early exits (migrated from t94
       "--output-path",
       filePath,
     ]);
+  });
+
+  test("malformed, stale, and unknown active-directive markers fall back to Current Stage", () => {
+    for (const marker of [
+      "{not json",
+      JSON.stringify({
+        version: 1,
+        stage: "code-generation",
+        state_sha256: "0".repeat(64),
+      }),
+      "UNKNOWN_STAGE",
+    ]) {
+      const proj = makeProjectActive();
+      const state = readFileSync(seededStateFile(proj), "utf-8");
+      const body =
+        marker === "UNKNOWN_STAGE"
+          ? JSON.stringify({
+            version: 1,
+            stage: "unknown-stage",
+            state_sha256: createHash("sha256").update(state, "utf-8").digest("hex"),
+          })
+          : marker;
+      writeFileSync(
+        join(seededRecordDir(proj), ".aidlc-active-directive.json"),
+        body,
+      );
+      const filePath = join(
+        proj,
+        "aidlc-docs",
+        "inception",
+        "requirements-analysis",
+        "intent.md",
+      );
+      expect(runHook(proj, filePath).status).toBe(0);
+      const argv = JSON.parse(
+        readFileSync(spawnLogPath(proj), "utf-8").split("\n")[0],
+      ) as string[];
+      const stageFlag = argv.indexOf("--stage");
+      expect(argv[stageFlag + 1]).toBe("requirements-analysis");
+    }
   });
 
   test("recursion guard skips writes under .aidlc-sensors/ [.sh case 4]", () => {

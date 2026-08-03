@@ -1,4 +1,4 @@
-// covers: hook:aidlc-stop
+// covers: hook:aidlc-stop, function:refreshActiveDirectiveMarker
 //
 // Behavioural contract for the Stop hook `aidlc-stop.ts` — the framework's
 // FIRST flow-altering hook. Migrated from tests/integration/t121-stop-hook-enforce.sh
@@ -85,6 +85,7 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   mkdirSync,
   mkdtempSync,
@@ -112,6 +113,14 @@ const HOOK_TS = join(
   ".claude",
   "hooks",
   "aidlc-stop.ts",
+);
+const UTILITY_TS = join(
+  REPO_ROOT,
+  "dist",
+  "claude",
+  ".claude",
+  "tools",
+  "aidlc-utility.ts",
 );
 
 // P9 per-intent layout: the stop hook reads state (stateFilePath), the audit
@@ -156,6 +165,19 @@ function seedShell(proj: string): void {
 // The stop-hook guard counter, re-rooted under the record (stopHookDir).
 function guardFilePath(proj: string): string {
   return join(seededRecordDir(proj), ".aidlc-stop-hook", "block-count.json");
+}
+
+function seedActiveDirectiveMarker(proj: string, stage: string, unit?: string): void {
+  const state = readFileSync(seededStateFile(proj), "utf-8");
+  writeFileSync(
+    join(seededRecordDir(proj), ".aidlc-active-directive.json"),
+    `${JSON.stringify({
+      version: 1,
+      stage,
+      ...(unit ? { unit } : {}),
+      state_sha256: createHash("sha256").update(state, "utf-8").digest("hex"),
+    })}\n`,
+  );
 }
 
 const tempDirs: string[] = [];
@@ -263,8 +285,11 @@ function seedActiveWithCheckbox(
  *   - `unit`: if given for Construction, writes under the per-unit
  *     `<record>/construction/<unit>/<slug>/` layout and must also be returned by
  *     the mock engine for the hook to select that exact directory.
+ *   - `currentSlug`: when set, keeps the state cursor on this different stage
+ *     while the questions file belongs to `slug` (the unit-major interleave).
  *   - `autonomy`: if given, writes `- **Construction Autonomy Mode**: <value>`
- *     into state — `"autonomous"` must suppress the carve-out (loop stays alive).
+ *     into state.
+ *   - `iteration`: if given, writes the Construction Iteration runtime field.
  * `phase` defaults to inception (requirements-analysis' real phase).
  */
 function seedInProgressWithQuestions(
@@ -274,19 +299,26 @@ function seedInProgressWithQuestions(
     phase?: string;
     questions?: string;
     autonomy?: string;
+    currentSlug?: string;
+    iteration?: string;
     unit?: string;
   } = {},
 ): void {
   const slug = opts.slug ?? "requirements-analysis";
+  const currentSlug = opts.currentSlug ?? slug;
   const phase = opts.phase ?? "inception";
   const autonomyLine = opts.autonomy
     ? `- **Construction Autonomy Mode**: ${opts.autonomy}\n`
     : "";
+  const iterationLine = opts.iteration
+    ? `- **Construction Iteration**: ${opts.iteration}\n`
+    : "";
   writeFileSync(
     seededStateFile(proj),
     `- **Workflow**: feature\n- **Scope**: feature\n- **Lifecycle Phase**: ${phase.toUpperCase()}\n` +
-      `- **Current Stage**: ${slug}\n${autonomyLine}` +
-      `\n## Stage Progress\n- [-] ${slug} — EXECUTE\n`,
+      `- **Current Stage**: ${currentSlug}\n${autonomyLine}${iterationLine}` +
+      `\n## Stage Progress\n- [-] ${currentSlug} — EXECUTE\n` +
+      (currentSlug === slug ? "" : `- [ ] ${slug} — EXECUTE\n`),
     "utf-8",
   );
   seedAuditShard(proj);
@@ -564,12 +596,14 @@ function runHook(
   kind = "run-stage",
   cap = "",
   unit = "",
+  stage = "requirements-analysis",
 ): HookResult {
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
     CLAUDE_PROJECT_DIR: proj,
     MOCK_KIND: kind,
     MOCK_UNIT: unit,
+    MOCK_STAGE: stage,
   };
   // The .sh always exported CLAUDE_CODE_STOP_HOOK_BLOCK_CAP (possibly empty).
   // An empty value is falsy in blockCap() (:69 `if (!raw)`), so it behaves
@@ -584,6 +618,21 @@ function runHook(
     timeout: 20_000,
   });
   return { rc: res.status ?? -1, out: (res.stdout ?? "").trim() };
+}
+
+function runStatusSync(proj: string, stage: string): number {
+  const res = spawnSync(
+    BUN,
+    [UTILITY_TS, "set-status", "--stage", stage, "--project-dir", proj],
+    {
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        AIDLC_STATUSLINE_OWNER: `statusline:${process.pid}`,
+      },
+    },
+  );
+  return res.status ?? -1;
 }
 
 /**
@@ -938,7 +987,14 @@ describe("t121 aidlc-stop hook — forwarding-loop enforcement (migrated from t1
       autonomy: "autonomous",
       questions: "# Questions\n\n## Q1\nEdge case?\n[Answer]:\n",
     });
-    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
+    const r = runHook(
+      proj,
+      '{"stop_hook_active":false}',
+      "run-stage",
+      "",
+      "",
+      "code-generation",
+    );
     expect(r.rc).toBe(0);
     expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
   }, 30000);
@@ -953,7 +1009,14 @@ describe("t121 aidlc-stop hook — forwarding-loop enforcement (migrated from t1
       autonomy: "gated",
       questions: "# Questions\n\n## Q1\nEdge case?\n[Answer]:\n",
     });
-    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
+    const r = runHook(
+      proj,
+      '{"stop_hook_active":false}',
+      "run-stage",
+      "",
+      "",
+      "code-generation",
+    );
     expect(r.rc).toBe(0);
     expect(r.out).toBe("");
   }, 30000);
@@ -973,6 +1036,7 @@ describe("t121 aidlc-stop hook — forwarding-loop enforcement (migrated from t1
       "run-stage",
       "",
       "checkout-api",
+      "code-generation",
     );
     expect(r.rc).toBe(0);
     expect(r.out).toBe("");
@@ -993,9 +1057,46 @@ describe("t121 aidlc-stop hook — forwarding-loop enforcement (migrated from t1
       "run-stage",
       "",
       "active-unit",
+      "code-generation",
     );
     expect(r.rc).toBe(0);
     expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, 30000);
+
+  test("(f) autonomous unit-major Plan Approval recovers the unit through load-steering and allows the stop", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj, {
+      slug: "code-generation",
+      currentSlug: "functional-design",
+      phase: "construction",
+      autonomy: "autonomous",
+      iteration: "unit-major",
+      unit: "alpha",
+      questions: "# Code Generation Questions\n\n## Plan Approval\nApprove this plan?\n[Answer]:\n",
+    });
+    seedActiveDirectiveMarker(proj, "code-generation", "alpha");
+    expect(runStatusSync(proj, "code-generation")).toBe(0);
+    const syncedState = readFileSync(seededStateFile(proj), "utf-8");
+    const syncedMarker = JSON.parse(
+      readFileSync(
+        join(seededRecordDir(proj), ".aidlc-active-directive.json"),
+        "utf-8",
+      ),
+    ) as { unit?: string; state_sha256?: string };
+    expect(syncedMarker.unit).toBe("alpha");
+    expect(syncedMarker.state_sha256).toBe(
+      createHash("sha256").update(syncedState, "utf-8").digest("hex"),
+    );
+    const r = runHook(
+      proj,
+      '{"stop_hook_active":false}',
+      "load-steering",
+      "",
+      "",
+      "code-generation",
+    );
+    expect(r.rc).toBe(0);
+    expect(r.out).toBe("");
   }, 30000);
 
   // =========================================================================

@@ -247,11 +247,14 @@ describe("t210 construction-iteration knob default (off / non-activating)", () =
     expect(unitMajor.unit).toBe("alpha");
   }, 30000);
 
-  // 4: swarm untouched. An autonomous code-generation fixture with a multi-batch
-  // DAG AND `Construction Iteration: unit-major` still emits invoke-swarm for
-  // batch 1: the unit-major walk only covers mode:inline design stages, and
-  // tryEmitSwarm has first refusal before emitForSlug is reached.
-  test("4: autonomous code-generation with unit-major set still swarms batch 1", () => {
+  // 4: the swarm is SUPPRESSED under unit-major. An autonomous code-generation
+  // fixture with a multi-batch DAG AND `Construction Iteration: unit-major`
+  // does NOT emit invoke-swarm: the walk owns code-generation (disk coverage),
+  // and a swarm firing mid-walk would re-fan units the walk already built
+  // (its coverage signal is SWARM_UNIT_CONVERGED audit rows, which walk-built
+  // units never write). The engine instead emits the walk's per-unit run-stage
+  // for the first uncovered unit in DAG order, gate suppressed.
+  test("4: autonomous code-generation with unit-major set does NOT swarm - the walk owns it", () => {
     const proj = seedProject({
       current: "code-generation",
       iteration: "unit-major",
@@ -260,6 +263,38 @@ describe("t210 construction-iteration knob default (off / non-activating)", () =
     // code-generation is not the skeleton-gate stage for feature scope, so no
     // stance is needed for it to swarm; mark the upstream design stages [x] and
     // code-generation [-] so the run lands cleanly on the construction stage.
+    const statePath = seededStateFile(proj);
+    let state = readFileSync(statePath, "utf-8");
+    for (const s of [
+      "functional-design",
+      "nfr-requirements",
+      "nfr-design",
+      "infrastructure-design",
+    ]) {
+      state = state.replace(`- [-] ${s} — EXECUTE`, `- [x] ${s} — EXECUTE`)
+        .replace(`- [ ] ${s} — EXECUTE`, `- [x] ${s} — EXECUTE`);
+    }
+    state = state.replace(
+      "- [ ] code-generation — EXECUTE",
+      "- [-] code-generation — EXECUTE",
+    );
+    writeFileSync(statePath, state);
+    seedBoltDagBatches(proj, [["alpha"], ["beta"]]);
+    const d = runNext(proj);
+    expect(d.kind).toBe("run-stage");
+    expect(d.stage).toBe("code-generation");
+    expect(d.unit).toBe("alpha");
+    expect(d.gate).toBe(false);
+  }, 30000);
+
+  // 4b: the negative control for case 4 - the SAME fixture minus the knob
+  // (stage-major default) still swarms batch 1, proving case 4's suppression
+  // is the knob's doing and the swarm path is otherwise untouched.
+  test("4b: autonomous code-generation WITHOUT the knob still swarms batch 1", () => {
+    const proj = seedProject({
+      current: "code-generation",
+      autonomy: "autonomous",
+    });
     const statePath = seededStateFile(proj);
     let state = readFileSync(statePath, "utf-8");
     for (const s of [

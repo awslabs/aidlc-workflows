@@ -908,6 +908,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t265-plan-approval-guard.test.ts",
     "unit/t266-review-class.test.ts",
     "unit/t271-review-iteration-ceiling.test.ts",
+    "unit/t272-unit-major-code-gen.test.ts",
     "unit/t248-steering-content-delivery.test.ts",
     "unit/t255-workspace-sync.test.ts",
     "unit/t27.test.ts",

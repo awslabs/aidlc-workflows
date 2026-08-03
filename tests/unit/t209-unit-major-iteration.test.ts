@@ -9,19 +9,20 @@
 // `Construction Iteration: unit-major` under `## Runtime State`, the engine
 // walks unit-major instead: for each unit in Bolt build order (outer), for each
 // design stage in graph order (inner), it emits the FIRST uncovered (stage, unit)
-// pair with the gate suppressed (false), so one unit's four design documents are
-// authored consecutively before the next unit begins. The four per-stage gates
-// are UNCHANGED: they fire late, in stage order, once the whole (stage x unit)
-// grid is covered (the fully-covered walk delegates to the stage-major
-// pick === null branch, presenting the current stage's real gate on the last
-// unit; handleApprove then advances to the next design stage, whose next re-emits
-// its gate, so the four gates cascade). code-generation (mode: subagent) is never
-// part of this walk. The early-approve per-unit coverage guard is unchanged.
+// pair with the gate suppressed (false), so one unit's design documents are
+// authored consecutively - and, since the walk's block was widened to include
+// code-generation, the unit is BUILT - before the next unit begins. The
+// per-stage gates are UNCHANGED: they fire late, in stage order, once the whole
+// (stage x unit) grid is covered (the fully-covered walk delegates to the
+// stage-major pick === null branch, presenting the current stage's real gate on
+// the last unit; handleApprove then advances to the next block stage, whose
+// next re-emits its gate, so the gates cascade). t272 pins the code-generation
+// half of the walk. The early-approve per-unit coverage guard is unchanged.
 //
 // SOURCE UNDER TEST (dist/claude/.claude/tools/aidlc-orchestrate.ts):
 //   - readConstructionIteration (strict read; only "unit-major" activates it),
-//     constructionDesignBlock, emitUnitMajorRunStage, and the emitForSlug routing
-//     branch (inline + unit-major -> emitUnitMajorRunStage).
+//     constructionUnitMajorBlock, emitUnitMajorRunStage, and the emitForSlug
+//     routing branch (unit-major -> emitUnitMajorRunStage).
 //   - aidlc-state.ts set-construction-iteration (the knob's write path).
 // NONE are exported (the tools have zero exports), so the behaviour is observable
 // only on the JSON directive the spawned engine emits, MECHANISM = cli: SPAWN
@@ -95,14 +96,20 @@ const PRODUCES: Record<string, string[]> = {
     "cicd-pipeline",
     "shared-infrastructure",
   ],
+  "code-generation": ["code-generation-plan", "code-summary"],
 };
-// The four inline design stages, in graph order (the walk's inner list).
+// The walk's inner list in graph order: the four inline design stages, then
+// code-generation (mode: subagent, in the walk since the block filter was
+// widened per the original increment's follow-up).
 const BLOCK = [
   "functional-design",
   "nfr-requirements",
   "nfr-design",
   "infrastructure-design",
+  "code-generation",
 ];
+// The design-only prefix, for cases that pin the design-block ordering.
+const DESIGN_BLOCK = BLOCK.slice(0, 4);
 
 const tempDirs: string[] = [];
 afterEach(() => {
@@ -360,9 +367,27 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     );
   }, 30000);
 
-  // 3: only after alpha is covered for ALL FOUR block stages does the walk move to
-  // the next unit: functional-design/beta.
-  test("3: alpha covered for all four block stages emits functional-design/beta", () => {
+  // 3: THE TIME-TO-FIRST-CODE ASSERTION. After alpha's four design stages, the
+  // walk emits code-generation/alpha - alpha is BUILT before beta's design
+  // begins. This is the widened block: the first code directive arrives after
+  // ONE unit's design documents, not after every unit's.
+  test("3: alpha's design covered emits code-generation/alpha (not functional-design/beta)", () => {
+    const proj = seedProject("unit-major");
+    seedBoltDag(proj, ["alpha", "beta"]);
+    for (const s of DESIGN_BLOCK) coverUnit(proj, "alpha", s);
+    const d = runNext(proj);
+    expect(d.kind).toBe("run-stage");
+    expect(d.stage).toBe("code-generation");
+    expect(d.unit).toBe("alpha");
+    expect(d.gate).toBe(false);
+    expect(d.produces).toContain(
+      `${RP}/construction/alpha/code-generation/code-generation-plan.md`,
+    );
+  }, 30000);
+
+  // 3b: only after alpha is covered for ALL FIVE block stages (design + build)
+  // does the walk move to the next unit: functional-design/beta.
+  test("3b: alpha fully covered incl. code-generation emits functional-design/beta", () => {
     const proj = seedProject("unit-major");
     seedBoltDag(proj, ["alpha", "beta"]);
     for (const s of BLOCK) coverUnit(proj, "alpha", s);

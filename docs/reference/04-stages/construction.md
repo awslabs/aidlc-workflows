@@ -67,19 +67,24 @@ Bolt execution. Only its Step 7 per-Unit completion approval gate is
 (or batch-level) completion gate replaces it. The per-Unit completion gate
 remains for direct-invocation use (e.g., `/aidlc --stage code-generation`).
 
-**Design-stage iteration order (opt-in).** By default the engine iterates the
-four inline design stages (3.1 through 3.4) stage-major: it runs 3.1 for every Unit,
-then 3.2 for every Unit, and so on. When the state file records
-`Construction Iteration: unit-major` under `## Runtime State` (set at
-delivery-planning via `aidlc-state.ts set-construction-iteration unit-major`, or
-by a human), the engine walks unit-major instead: for each Unit in Bolt build
-order, it authors that Unit's four design documents (3.1 through 3.4)
-consecutively before the next Unit begins. The four per-stage approval gates are
-unchanged in count and machinery; under unit-major they fire late, in stage
-order, once the whole (stage by Unit) design grid is covered, one human approval
-per stage.
-`code-generation` (3.5, `mode: subagent`) is never part of this walk. Only the
-exact value `unit-major` activates it; absent or `stage-major` is the default.
+**Construction iteration order (opt-in).** By default the engine iterates the
+per-unit construction stages stage-major: it runs 3.1 for every Unit, then 3.2
+for every Unit, and so on, with 3.5 Code Generation last for every Unit. When
+the state file records `Construction Iteration: unit-major` under
+`## Runtime State` (set at delivery-planning via
+`aidlc-state.ts set-construction-iteration unit-major`, or by a human), the
+engine walks unit-major instead: for each Unit in Bolt build order, it authors
+that Unit's four design documents (3.1 through 3.4) and then generates its code
+(3.5) before the next Unit begins — the first working code lands after one
+Unit's design, not after every Unit's. Code Generation's per-Unit Plan Approval
+(Step 3) still hard-stops before generation, and the autonomous Construction
+swarm never fires while the knob is set (the walk owns the build, serially in
+Bolt build order; parallel batch swarms are stage-major territory). The
+per-stage approval gates are unchanged in count and machinery; under unit-major
+they fire late, in stage order, once the whole (stage by Unit) grid — Code
+Generation included — is covered, one human approval per stage.
+Only the exact value `unit-major` activates it; absent or `stage-major` is the
+default.
 
 **Parallel batches.** When two or more Bolts share dependency-satisfaction
 and don't depend on each other, the conductor dispatches their Code

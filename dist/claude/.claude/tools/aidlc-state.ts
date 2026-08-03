@@ -723,8 +723,9 @@ function handleSetSkeletonStance(args: string[]): void {
   });
 }
 
-// set-construction-iteration <unit-major|stage-major>: record how construction
-// design stages iterate over units. `Construction Iteration` is runtime metadata
+// set-construction-iteration <unit-major|stage-major>: record how the per-unit
+// construction stages (design + code-generation) iterate over units.
+// `Construction Iteration` is runtime metadata
 // (like Skeleton Stance): it is NOT in the base state template, so we use
 // setOrInsertField to update-if-present / insert-under-`## Runtime State`-if-absent.
 // No audit row: the field is metadata the next `aidlc-orchestrate next` reads to

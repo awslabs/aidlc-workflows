@@ -137,18 +137,22 @@ Hand completion to `stage-protocol.md` via
 The engine owns all lifecycle transitions and advancement.
 
 **Construction iteration.** Classify how the approved `bolt-plan.md` wants the
-inline construction DESIGN stages (functional-design, nfr-requirements,
-nfr-design, infrastructure-design) to iterate over Units of Work. A
-unit-at-a-time or walking-skeleton-first plan typically calls for authoring one
-unit's four design documents consecutively before the next unit begins; a plan
+per-unit construction stages (functional-design, nfr-requirements, nfr-design,
+infrastructure-design, code-generation) to iterate over Units of Work. A
+unit-at-a-time or walking-skeleton-first plan typically calls for designing AND
+building one unit completely before the next unit begins — the first working
+code lands after one unit's design, honoring a skeleton-first sequence; a plan
 that reasons stage-by-stage across all units does not. Only when the plan calls
 for the unit-first order, record it:
 `bun .codex/tools/aidlc-state.ts set-construction-iteration unit-major`.
 The default is `stage-major` (each design stage runs for every unit, then the
-next stage), needs no write, and is byte-identical to prior behaviour. Under
-`unit-major` the same four per-stage design gates still fire, but late and in a
-cascade at the end of the design block (one human approval per stage), so opt in
-only when the plan justifies the per-unit design coherence.
+next stage, with code-generation last), needs no write, and is byte-identical
+to prior behaviour. Under `unit-major` the same per-stage gates still fire, but
+late and in a cascade at the end of the block (one human approval per stage),
+and the autonomous Construction swarm never fires (the walk owns
+code-generation serially, in Bolt build order), so opt in when the plan
+justifies per-unit coherence and early working code over parallel batch
+builds.
 
 ### Step 8: Present Completion & Request Approval
 

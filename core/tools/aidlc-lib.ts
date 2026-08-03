@@ -2198,6 +2198,103 @@ export function stateFilePath(projectDir: string, intent?: string, space?: strin
   return join(dir, "aidlc-state.md");
 }
 
+// The engine's final validated run-stage is the active execution cursor. Most
+// stages match aidlc-state.md's Current Stage, but unit-major Construction can
+// interleave later stages while the durable cursor stays on the first block
+// stage. Persist that transient fact per intent so path-only PostToolUse hooks
+// can attribute diagnostics to the directive the conductor is actually running.
+const ACTIVE_DIRECTIVE_MARKER = ".aidlc-active-directive.json";
+
+export interface ActiveDirectiveMarker {
+  version: 1;
+  stage: string;
+  unit?: string;
+  state_sha256: string;
+}
+
+function activeDirectiveMarkerPath(
+  projectDir: string,
+  intent?: string,
+  space?: string,
+): string {
+  return join(dirname(stateFilePath(projectDir, intent, space)), ACTIVE_DIRECTIVE_MARKER);
+}
+
+function stateContentSha256(stateContent: string): string {
+  return createHash("sha256").update(stateContent, "utf-8").digest("hex");
+}
+
+export function writeActiveDirectiveMarker(
+  projectDir: string,
+  marker: Omit<ActiveDirectiveMarker, "version">,
+): void {
+  if (!/^[a-z][a-z0-9-]*$/.test(marker.stage)) {
+    throw new Error(`Invalid active-directive stage: ${marker.stage}`);
+  }
+  if (marker.unit !== undefined && marker.unit.trim().length === 0) {
+    throw new Error("Invalid active-directive unit: empty");
+  }
+  if (!/^[0-9a-f]{64}$/.test(marker.state_sha256)) {
+    throw new Error("Invalid active-directive state digest");
+  }
+  const path = activeDirectiveMarkerPath(projectDir);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileAtomic(path, `${JSON.stringify({ version: 1, ...marker }, null, 2)}\n`);
+}
+
+export function clearActiveDirectiveMarker(projectDir: string): void {
+  rmSync(activeDirectiveMarkerPath(projectDir), { force: true });
+}
+
+export function refreshActiveDirectiveMarker(
+  projectDir: string,
+  stage: string,
+  previousStateContent: string,
+  nextStateContent: string,
+): boolean {
+  const marker = readActiveDirectiveMarker(projectDir, previousStateContent);
+  if (!marker || marker.stage !== stage) return false;
+  writeActiveDirectiveMarker(projectDir, {
+    stage: marker.stage,
+    ...(marker.unit ? { unit: marker.unit } : {}),
+    state_sha256: stateContentSha256(nextStateContent),
+  });
+  return true;
+}
+
+export function readActiveDirectiveMarker(
+  projectDir: string,
+  stateContent: string,
+): ActiveDirectiveMarker | null {
+  try {
+    const parsed: unknown = JSON.parse(
+      readFileSync(activeDirectiveMarkerPath(projectDir), "utf-8"),
+    );
+    if (!isPlainObject(parsed)) return null;
+    const stage = typeof parsed.stage === "string" ? parsed.stage.trim() : "";
+    const unit = typeof parsed.unit === "string" ? parsed.unit.trim() : undefined;
+    const stateSha256 =
+      typeof parsed.state_sha256 === "string" ? parsed.state_sha256 : "";
+    if (
+      parsed.version !== 1 ||
+      !/^[a-z][a-z0-9-]*$/.test(stage) ||
+      ("unit" in parsed && !unit) ||
+      !/^[0-9a-f]{64}$/.test(stateSha256) ||
+      stateSha256 !== stateContentSha256(stateContent)
+    ) {
+      return null;
+    }
+    return {
+      version: 1,
+      stage,
+      ...(unit ? { unit } : {}),
+      state_sha256: stateSha256,
+    };
+  } catch {
+    return null;
+  }
+}
+
 // Per-clone audit SHARD path: `…/intents/<slug>-<id8>/audit/<host>-<clone>.md`.
 // The audit trail is committed (vision §5.1) but each clone writes its OWN
 // shard so git never merge-conflicts concurrent appends (merge=union was proven

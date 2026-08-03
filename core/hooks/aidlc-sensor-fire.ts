@@ -28,6 +28,7 @@ import {
   hooksHealthDir,
   isClaudeCodeHookInput,
   isoTimestamp,
+  readActiveDirectiveMarker,
   readStateFile,
   recordHookDrop,
   resolveProjectDirFromHook,
@@ -152,10 +153,14 @@ if (!existsSync(firstFiredMarker)) {
 }
 
 // Step 9 — Active stage lookup (C3). The compile-resolved
-// `sensors_applicable` list is keyed on the stage slug; we read it
-// from state. Missing or "none" → no active stage → no-op.
+// `sensors_applicable` list is keyed on the stage slug. Prefer the engine's
+// state-bound active-directive marker because unit-major can execute a later
+// stage while Current Stage remains on the first block stage. Missing, malformed,
+// or stale markers fall back to Current Stage.
 const currentStage = getField(stateContent, "Current Stage") ?? "";
 if (!currentStage || currentStage === "none") return 0;
+const markedStage = readActiveDirectiveMarker(projectDir, stateContent)?.stage;
+let activeStage = markedStage ?? currentStage;
 
 // Step 10 — Stage-graph read (C4). loadGraph() returns GraphStage[]
 // which carries `sensors_applicable: SensorResolution[]`; goes through
@@ -163,7 +168,15 @@ if (!currentStage || currentStage === "none") return 0;
 // not hand-rolled JSON.parse).
 let stageNode: GraphStage | undefined;
 try {
-  stageNode = loadGraph().find((s) => s.slug === currentStage);
+  const graph = loadGraph();
+  stageNode = graph.find((s) => s.slug === activeStage);
+  // A schema-valid marker can still name a stage absent from a stale or
+  // plugin-filtered graph. Treat it as unusable and preserve the historical
+  // Current Stage behavior instead of suppressing all sensor dispatch.
+  if (!stageNode && markedStage) {
+    activeStage = currentStage;
+    stageNode = graph.find((s) => s.slug === activeStage);
+  }
 } catch {
   // pre-compile / missing graph / framework-not-installed
   return 0;
@@ -211,7 +224,7 @@ for (const entry of applicableSensors) {
         "fire",
         entry.id,
         "--stage",
-        currentStage,
+        activeStage,
         "--output-path",
         filePath,
       ],
