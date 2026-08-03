@@ -24,6 +24,7 @@ import {
   humanActedSinceGate,
   humanPresenceGuardDisabled,
   intentRepos,
+  UNBINDABLE_FINGERPRINT,
   workspaceSourceFingerprint,
   isAutonomousMode,
   isoTimestamp,
@@ -1405,7 +1406,21 @@ function verifyReviewerPrecondition(
   if (fingerprintedReceipts.length > 0) {
     const currentSourceFp = workspaceSourceFingerprint(pd);
     const newestFp = fingerprintedReceipts[fingerprintedReceipts.length - 1];
-    if (currentSourceFp !== null && currentSourceFp !== newestFp) {
+    // Three distinct ways a receipt fails to prove the current source is the
+    // reviewed source, and all three refuse (#646 review). Previously only the
+    // third did, so a receipt written while git was unreachable - or a
+    // workspace that stopped being bindable after a real receipt - satisfied
+    // the guard with nothing compared. A receipt carrying NO field at all is
+    // pre-#629 and keeps its documented fail-open; that is the migration.
+    const stale =
+      newestFp === UNBINDABLE_FINGERPRINT
+        ? // Recorded as unbindable, but the workspace can be fingerprinted now:
+          // the receipt was never bound to anything and cannot speak for this
+          // source. Still unbindable is the pre-existing documented behaviour.
+          currentSourceFp !== null
+        : // A real fingerprint that cannot be recomputed proves nothing either.
+          currentSourceFp === null || currentSourceFp !== newestFp;
+    if (stale) {
       staleSourceReceipts = true;
       reviewedUnits.clear();
       sawStageReview = false;
@@ -1604,6 +1619,16 @@ function handleAdvance(args: string[]): void {
     nextCbBefore?.state === "in-progress" ||
     nextCbBefore?.state === "awaiting-approval" ||
     nextCbBefore?.state === "revising";
+  // Source freshness runs on EVERY route into this transition, including the
+  // replay short-circuit below and the already-[x] path further down. "approve
+  // already ran it" is not an observable guarantee: an approve that aborted
+  // after persisting the checkbox, or one killed between the write and the
+  // route it delegates to, leaves exactly the state a completed approve leaves,
+  // and the checkbox then reads as a standing permission to skip the check
+  // (#646 review). The artifact guard (#366) stays gated below - it is the
+  // expensive half, and it is not what a stale receipt subverts.
+  verifyReviewerPrecondition(pd, content, completedStage);
+
   const isReplay =
     alreadyMarkedCompleted &&
     stageCompletedAlreadyAudited &&
@@ -1630,7 +1655,6 @@ function handleAdvance(args: string[]): void {
   if (!alreadyMarkedCompleted) {
     verifyStageArtifacts(pd, completedStage);
     verifySummaryConfirmationPrecondition(pd, content, completedStage);
-    verifyReviewerPrecondition(pd, content, completedStage);
   }
 
   // Detect phase boundary (for PHASE_COMPLETED/VERIFIED/STARTED emissions)
@@ -1743,10 +1767,11 @@ function handleFinalize(args: string[]): void {
   const alreadyMarkedCompleted =
     parseCheckboxes(content).find((c) => c.slug === completedSlug)?.state ===
     "completed";
+  // Freshness is not gated on the checkbox - see handleAdvance (#646 review).
+  verifyReviewerPrecondition(pd, content, completedStage);
   if (!alreadyMarkedCompleted) {
     verifyStageArtifacts(pd, completedStage);
     verifySummaryConfirmationPrecondition(pd, content, completedStage);
-    verifyReviewerPrecondition(pd, content, completedStage);
   }
 
   // 1. Mark completed
@@ -1863,10 +1888,11 @@ function handleCompleteWorkflow(args: string[]): void {
   // itself, so this skips the double-check on that path while still refusing a
   // direct `complete-workflow <active-slug>` that never produced artifacts. Runs
   // before any mutation so a refusal leaves state untouched.
+  // Freshness is not gated on the checkbox - see handleAdvance (#646 review).
+  verifyReviewerPrecondition(pd, content, completedStage);
   if (!alreadyMarkedCompleted) {
     verifyStageArtifacts(pd, completedStage);
     verifySummaryConfirmationPrecondition(pd, content, completedStage);
-    verifyReviewerPrecondition(pd, content, completedStage);
   }
 
   // 1. Mark completed
@@ -2153,6 +2179,25 @@ function handleApprove(args: string[]): void {
   verifySummaryConfirmationPrecondition(pd, content, stage);
   verifyReviewerPrecondition(pd, content, stage);
 
+  // Scope is required for next-stage derivation and is validated HERE, before
+  // anything is persisted. Validating it after the write left a state file
+  // carrying `[x]` for a stage whose approval had aborted, and every completion
+  // route reads that checkbox as "already done" and skips its guard - so the
+  // half-written approval became a permanent bypass of the freshness check
+  // (#646 review). Nothing below mutates Scope, so reading it early is
+  // equivalent.
+  const scope = getField(content, "Scope");
+  if (!scope) {
+    error(
+      `State file has no Scope field. Refusing to advance after approve — fix the state file first.`
+    );
+  }
+  if (!validScopes().has(scope)) {
+    error(
+      `State file has invalid Scope "${scope}". Valid scopes: ${[...validScopes()].join(", ")}.`
+    );
+  }
+
   const timestamp = isoTimestamp();
 
   content = setCheckbox(content, slug, "completed");
@@ -2181,19 +2226,7 @@ function handleApprove(args: string[]): void {
 
   writeStateFile(pd, content);
 
-  // Auto-advance or complete-workflow. Scope is required for next-stage
-  // derivation; refuse silent fallback (matches handleAdvance/handleCompleteWorkflow).
-  const scope = getField(content, "Scope");
-  if (!scope) {
-    error(
-      `State file has no Scope field. Refusing to advance after approve — fix the state file first.`
-    );
-  }
-  if (!validScopes().has(scope)) {
-    error(
-      `State file has invalid Scope "${scope}". Valid scopes: ${[...validScopes()].join(", ")}.`
-    );
-  }
+  // Auto-advance or complete-workflow, on the Scope validated above.
 
   // No explicit consume step (ledger-event design): the GATE_APPROVED
   // emitted by this commit IS the freshness boundary for the next gate. A second

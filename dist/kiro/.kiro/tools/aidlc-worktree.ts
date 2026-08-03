@@ -16,6 +16,7 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import {
+  auditBlockField,
   emitError,
   errorMessage,
   findAllEvents,
@@ -23,6 +24,8 @@ import {
   readAllAuditShards,
   resolveConstructionRepo,
   resolveProjectDir,
+  UNBINDABLE_FINGERPRINT,
+  workspaceSourceFingerprint,
   worktreePath,
   worktreeStateFilePath,
 } from "./aidlc-lib.js";
@@ -262,6 +265,42 @@ function handleCreate(args: string[]): void {
 //                        [--message <msg>] [--repo <name>] [--intent <dir>] [--space <name>]
 //
 // --repo (P7): the sibling repo the merge lands in — same resolution as `create`.
+// Refuse a source merge whose worktree no longer holds the bytes that
+// converged. Reads the newest SWARM_UNIT_CONVERGED for this unit; a Bolt that
+// never went through the swarm has none and passes straight through, and a
+// convergence row from before this field existed carries no fingerprint and
+// keeps the pre-existing behaviour. Off-switch: AIDLC_SKIP_SOURCE_FRESHNESS=1.
+function assertConvergedSourceUnchanged(
+  pd: string,
+  slug: string,
+  wtPath: string,
+): void {
+  if (process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1") return;
+  let recorded: string | undefined;
+  try {
+    for (const e of findAllEvents(readAllAuditShards(pd), "SWARM_UNIT_CONVERGED")) {
+      if (auditBlockField(e.block, "Unit name") !== slug) continue;
+      recorded = auditBlockField(e.block, "Source Fingerprint") ?? undefined;
+    }
+  } catch {
+    return; // unreadable audit is not evidence of tampering
+  }
+  if (!recorded) return;
+
+  const current = workspaceSourceFingerprint(wtPath);
+  const stale =
+    recorded === UNBINDABLE_FINGERPRINT
+      ? current !== null
+      : current === null || current !== recorded;
+  if (!stale) return;
+  errorWithSlug(
+    slug,
+    `refusing to merge: the worktree source no longer matches the state this unit ` +
+      `converged with (source-fingerprint mismatch). Re-run the swarm's convergence ` +
+      `check for "${slug}" against the current worktree, or discard the worktree.`,
+  );
+}
+
 function handleMerge(args: string[]): void {
   const flags = parseFlags(args);
   const slug = validateSlug(flags.slug);
@@ -297,6 +336,14 @@ function handleMerge(args: string[]): void {
 
   const wtPath = worktreePath(pd, slug);
   const branchName = `bolt-${slug}`;
+
+  // A swarm unit's convergence was verified against its worktree once, at
+  // finalize, and the source merge is a separate later act on a worktree that
+  // stayed writable in between. Re-verify HERE, immediately before the bytes
+  // move, against the fingerprint the convergence row recorded - otherwise the
+  // durable "converged" signal binds nothing across the gap (#646 review).
+  // Silent for an ordinary Bolt merge, which has no convergence row.
+  assertConvergedSourceUnchanged(pd, slug, wtPath);
 
   // Rebase requires a remote for <target>. The remote-existence check is
   // a pre-audit guard (no state change). The actual `git fetch` is post-

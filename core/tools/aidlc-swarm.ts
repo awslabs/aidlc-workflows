@@ -88,6 +88,7 @@ import {
   resolveConstructionRepo,
   resolveProjectDir,
   resolveStage,
+  UNBINDABLE_FINGERPRINT,
   workspaceSourceFingerprint,
   worktreePath,
 } from "./aidlc-lib.ts";
@@ -372,7 +373,15 @@ function reviewerReceiptError(
   const recordedFp = auditBlockField(latestTerminal, "Source Fingerprint");
   if (recordedFp && process.env.AIDLC_SKIP_SOURCE_FRESHNESS !== "1") {
     const currentFp = workspaceSourceFingerprint(worktreePath(projectDir, unit));
-    if (currentFp !== null && currentFp !== recordedFp) {
+    // Same three cases the completion guard now distinguishes (#646 review): a
+    // receipt recorded as unbindable proves nothing once the worktree CAN be
+    // fingerprinted, and a real fingerprint that cannot be recomputed proves
+    // nothing either. Only a receipt with no field at all stays fail-open.
+    const stale =
+      recordedFp === UNBINDABLE_FINGERPRINT
+        ? currentFp !== null
+        : currentFp === null || currentFp !== recordedFp;
+    if (stale) {
       return (
         `claimed converged but the reviewed source no longer matches its worktree's ` +
         `fingerprint for stage "${stage}", unit "${unit}" (source-fingerprint mismatch); ` +
@@ -443,6 +452,15 @@ function emitUnitConverged(pd: string, batch: string, unit: string): void {
     // Absent state degrades to unstamped rows, which every consumer rejects —
     // fail closed, never fail open.
   }
+  // Carry the worktree's source fingerprint on the convergence row itself. The
+  // convergence check above compares a receipt against the worktree once and
+  // then emits a durable "this unit converged" signal that named no source
+  // state at all, so nothing downstream - least of all the eventual source
+  // merge - could tell whether the bytes it is about to take are the bytes that
+  // converged (#646 review). Recorded as unbindable rather than omitted when it
+  // cannot be computed, for the same reason receipts are.
+  const convergedFp =
+    workspaceSourceFingerprint(worktreePath(pd, unit)) ?? UNBINDABLE_FINGERPRINT;
   appendAuditEntry(
     "SWARM_UNIT_CONVERGED",
     {
@@ -450,6 +468,7 @@ function emitUnitConverged(pd: string, batch: string, unit: string): void {
       "Unit name": unit,
       Stage: stage,
       "Run floor": floor,
+      "Source Fingerprint": convergedFp,
     },
     pd
   );

@@ -30,6 +30,7 @@ import {
   stateFilePath,
   toPosix,
   withAuditLock,
+  UNBINDABLE_FINGERPRINT,
   workspaceSourceFingerprint,
 } from "./aidlc-lib.js";
 
@@ -545,13 +546,20 @@ function handleReview(args: string[]): void {
     // reviewer inspected. Only `workspace_requires` stages (code-generation)
     // produce application source outside the record, so only their receipts
     // carry the binding; verifyReviewerPrecondition recomputes and compares at
-    // every completion route. A null fingerprint (not a git checkout, git
-    // unavailable) records no field - the guard then keeps today's fail-open
-    // behaviour rather than refusing on an unbindable receipt.
+    // every completion route.
+    //
+    // A fingerprint that cannot be computed (not a git checkout, git
+    // unavailable) records the field as UNBINDABLE_FINGERPRINT rather than
+    // omitting it. Omitting it made a new receipt indistinguishable from a
+    // pre-#629 one and inherited that row's fail-open (#646 review): a review
+    // recorded while git was unreachable satisfied the guard forever after.
+    // Recording the reason keeps the migration for genuinely old receipts - a
+    // missing field still passes - while letting the guard refuse a new receipt
+    // whose workspace has since become bindable.
     const entry = loadStageGraphAll().find((s) => s.slug === flags.stage);
     if (entry?.workspace_requires) {
-      const fp = workspaceSourceFingerprint(pd);
-      if (fp !== null) fields["Source Fingerprint"] = fp;
+      fields["Source Fingerprint"] =
+        workspaceSourceFingerprint(pd) ?? UNBINDABLE_FINGERPRINT;
     }
   } else {
     eventType = "REVIEW_REQUESTED";

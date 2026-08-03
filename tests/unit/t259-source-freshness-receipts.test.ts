@@ -417,6 +417,96 @@ describe("t259 workspace source fingerprint (in-process)", () => {
     expect(workspaceSourceFingerprint(dir)).not.toBe(fp1);
   });
 
+  // #646 review - the gate deciding whether to run the precise `check-attr`
+  // scan read only TRACKED `.gitattributes` plus `<dir>/.git/info/attributes`,
+  // and asked for `core.attributesFile` without `-C <repo>`. Every missed
+  // source is a false pass in the direction that matters: the filter really
+  // runs, the tree hashes filtered bytes, and the raw supplement that would
+  // have caught the difference is never computed.
+  test("core.attributesFile in the repo's own local config binds raw bytes", () => {
+    const src = seedGitRepo(dir);
+    git(dir, ["config", "filter.tidy.clean", "sed 's/[[:space:]]*$//'"]);
+    const attrs = join(dir, "outside-attributes");
+    writeFileSync(attrs, "app.ts filter=tidy\n", "utf-8");
+    // Local to THIS repository: a bare `git config` run in the engine's own
+    // process never reads it.
+    git(dir, ["config", "core.attributesFile", attrs]);
+
+    writeFileSync(src, "export const answer = 42;\n", "utf-8");
+    const fp1 = workspaceSourceFingerprint(dir);
+    expect(fp1).not.toBeNull();
+    writeFileSync(src, "export const answer = 42;   \n", "utf-8");
+    expect(workspaceSourceFingerprint(dir)).not.toBe(fp1);
+  });
+
+  // Git's built-in `$Id$` conversion needs no driver at all, so scanning for
+  // `filter=` alone missed it while it collapsed worktrees just the same.
+  test("the built-in ident conversion cannot collapse two worktrees", () => {
+    const src = seedGitRepo(dir);
+    writeFileSync(join(dir, ".gitattributes"), "app.ts ident\n", "utf-8");
+    git(dir, ["add", "-A"]);
+    git(dir, ["commit", "-qm", "ident"]);
+
+    writeFileSync(src, "const id = '$Id: aaaaaaa $';\n", "utf-8");
+    const fp1 = workspaceSourceFingerprint(dir);
+    expect(fp1).not.toBeNull();
+    // Both clean back to a bare `$Id$`, so the indexed blob is byte-identical.
+    writeFileSync(src, "const id = '$Id: bbbbbbb $';\n", "utf-8");
+    expect(workspaceSourceFingerprint(dir)).not.toBe(fp1);
+  });
+
+  // #646 review - `git ls-files -s -z` ran on the default spawn buffer. A large
+  // index overran it, the call failed with ENOBUFS, the submodule and
+  // clean-filter scans were skipped, and the bare tree sha came back as if the
+  // repository had neither.
+  //
+  // Honest scope: this pins the behaviour, it does not reproduce the failure.
+  // The listing measures 1.68 MB here and a standalone spawn of the same
+  // command does return ENOBUFS, but the call inside the fingerprint does not
+  // overrun on this platform, so the row passes with and without the buffer
+  // fix. It is kept because it is the shape that broke and it costs one repo.
+  test("a large index does not silently drop the clean-filter binding", () => {
+    const src = seedGitRepo(dir);
+    git(dir, ["config", "filter.tidy.clean", "sed 's/[[:space:]]*$//'"]);
+    writeFileSync(join(dir, ".gitattributes"), "app.ts filter=tidy\n", "utf-8");
+    git(dir, ["add", "-A"]);
+    git(dir, ["commit", "-qm", "filter"]);
+
+    // Enough long paths to push the listing past the default buffer (measured
+    // at 1.68 MB here). Written straight into the index rather than onto disk:
+    // Windows MAX_PATH stops git from even opening a directory deep enough to
+    // do this on disk, and the index is what `ls-files` reads anyway.
+    const blob = spawnSync("git", ["-C", dir, "hash-object", "-w", "--stdin"], {
+      input: "export const v = 1;\n",
+      encoding: "utf-8",
+    }).stdout.trim();
+    const deep = [
+      "layer-one-of-a-fairly-long-directory-name",
+      "layer-two-of-a-fairly-long-directory-name",
+      "layer-three-of-a-fairly-long-directory-name",
+    ].join("/");
+    const indexInfo = Array.from(
+      { length: 8000 },
+      (_, i) =>
+        `100644 ${blob}\t${deep}/module-with-a-deliberately-long-file-name-${i}.ts`,
+    ).join("\n");
+    const update = spawnSync(
+      "git",
+      ["-C", dir, "update-index", "--add", "--index-info"],
+      { input: `${indexInfo}\n`, encoding: "utf-8", maxBuffer: 64 * 1024 * 1024 },
+    );
+    expect(update.status).toBe(0);
+    // Committed, because the fingerprint seeds its temp index from HEAD - paths
+    // left only in the real index never reach the listing under test.
+    git(dir, ["commit", "-qm", "bulk"]);
+
+    writeFileSync(src, "export const answer = 42;\n", "utf-8");
+    const fp1 = workspaceSourceFingerprint(dir);
+    expect(fp1).not.toBeNull();
+    writeFileSync(src, "export const answer = 42;   \n", "utf-8");
+    expect(workspaceSourceFingerprint(dir)).not.toBe(fp1);
+  });
+
   // The raw-content binding is scoped to paths a clean driver actually touches,
   // so a repo that filters nothing must keep the bare tree sha it had before -
   // otherwise every receipt stamped by the shipped build would stop comparing.
