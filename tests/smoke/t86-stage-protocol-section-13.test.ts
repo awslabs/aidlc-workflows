@@ -196,7 +196,7 @@ describe("t86 stage-protocol §13 + MEMORY_EMPTY + SKILL.md gate wiring (migrate
     expect(body.includes('label: Request changes')).toBe(true);
     expect(body.includes("**Consolidated Summary Confirmation**")).toBe(true);
     expect(body.includes("blank `[Answer]:` tag")).toBe(true);
-    expect(body.includes("Fill that tag only after the user responds")).toBe(true);
+    expect(body.includes("Fill its tag only after the user responds")).toBe(true);
     expect(body.includes("Never ask for this confirmation as bare prose")).toBe(true);
     expect(
       body.includes(
