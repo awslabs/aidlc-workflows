@@ -12,7 +12,7 @@
 //   ------------------------------------------------------------------------
 //   chat.message (first per session)     → aidlc-session-start.ts  (SessionStart)
 //   chat.message (every human turn)      → aidlc-mint-presence.ts  (UserPromptSubmit)
-//   tool.execute.before task             → aidlc-dispatch-rules.ts (PreToolUse rewrite)
+//   tool.execute.before task             → dispatch-rules rewrite + plan-approval guard (PreToolUse)
 //   tool.execute.before other tools      → entrypoint boundary + aidlc-reviewer-scope.ts (PreToolUse)
 //   tool.execute.after write|edit|patch  → aidlc-audit-logger.ts + aidlc-sensor-fire.ts (PostToolUse Write|Edit)
 //   tool.execute.after bash              → aidlc-runtime-compile.ts (PostToolUse Bash)
@@ -455,6 +455,41 @@ export default async ({
             throw new Error(
               freeze.stderr.trim() ||
                 "review-freeze: this write would invalidate a fresh READY review receipt",
+            );
+          }
+        }
+      }
+
+      // Plan-approval guard, parallel to the Claude Task-matcher wiring:
+      // opencode's delegation surface is the task tool, whose args carry the
+      // target agent (subagent_type or agent) plus the prompt/description.
+      // Only developer-agent dispatches consult the core hook; it decides
+      // from workflow state whether code-generation's plan-before-generation
+      // ordering is satisfied, and a block surfaces as a thrown error (the
+      // plugin's reject contract).
+      if (input.tool === "task") {
+        const target =
+          (args.subagent_type as string) ?? (args.agent as string) ?? "";
+        if (target === "aidlc-developer-agent") {
+          const guard = await runCore(
+            "aidlc-plan-approval-guard.ts",
+            {
+              hook_event_name: "PreToolUse",
+              tool_name: "Task",
+              tool_input: {
+                subagent_type: target,
+                prompt: [(args.prompt as string) ?? "", (args.description as string) ?? ""]
+                  .filter((t) => t.length > 0)
+                  .join("\n"),
+              },
+              cwd: directory,
+            },
+            directory,
+          );
+          if (guard.code === 2) {
+            throw new Error(
+              guard.stderr.trim() ||
+                "code-generation requires an approved plan before dispatching the developer agent",
             );
           }
         }

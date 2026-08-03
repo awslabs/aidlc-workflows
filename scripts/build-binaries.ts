@@ -983,6 +983,121 @@ function hookGate(artifact: string, hook: string): GateResult {
   }
 }
 
+function seedUnapprovedPlanProject(project: string): void {
+  const recordDir = join(project, "aidlc", "spaces", "default", "intents");
+  mkdirSync(join(recordDir, "construction", "todo-core", "code-generation"), {
+    recursive: true,
+  });
+  writeFileSync(
+    join(recordDir, "aidlc-state.md"),
+    [
+      "# AI-DLC State Tracking",
+      "## Current Status",
+      "- **Lifecycle Phase**: CONSTRUCTION",
+      "- **Current Stage**: code-generation",
+      "",
+    ].join("\n"),
+    "utf-8",
+  );
+}
+
+function planApprovalHookGate(artifact: string): GateResult {
+  const project = mkdtempSync(join(tmpdir(), "aidlc-binary-plan-hook-"));
+  try {
+    seedUnapprovedPlanProject(project);
+    const input = JSON.stringify({
+      hook_event_name: "PreToolUse",
+      tool_name: "Task",
+      tool_input: {
+        subagent_type: "aidlc-developer-agent",
+        prompt: "AIDLC-UNIT: todo-core\nImplement todo-core",
+      },
+    });
+    const result = run(artifact, ["hook", "plan-approval-guard"], {
+      cwd: project,
+      env: pathlessEnv(project),
+      input,
+      timeoutMs: 30_000,
+    });
+    const output = `${result.stdout}\n${result.stderr}`;
+    return commandGate(
+      "hook-plan-approval-guard",
+      result,
+      result.status === 2 &&
+        result.stderr.includes("plan-approval guard") &&
+        !runtimeCrash(output) &&
+        !output.includes("does not export run(input)"),
+      {
+        expected: "compiled hook route blocks an unapproved developer dispatch",
+        actual: result.stderr.trim() || `exit ${result.status}`,
+      },
+    );
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+}
+
+function planApprovalAdapterGate(
+  artifact: string,
+  harness: "codex" | "kiro",
+): GateResult {
+  const project = mkdtempSync(join(tmpdir(), `aidlc-binary-plan-${harness}-`));
+  try {
+    cpSync(
+      join(REPO_ROOT, "dist", harness, harness === "codex" ? ".codex" : ".kiro"),
+      join(project, harness === "codex" ? ".codex" : ".kiro"),
+      { recursive: true },
+    );
+    seedUnapprovedPlanProject(project);
+    const input = harness === "codex"
+      ? {
+          hook_event_name: "PreToolUse",
+          cwd: project,
+          tool_name: "spawn_agent",
+          tool_input: {
+            agent_type: "aidlc-developer-agent",
+            message: "AIDLC-UNIT: todo-core\nImplement todo-core",
+          },
+        }
+      : {
+          hook_event_name: "preToolUse",
+          cwd: project,
+          tool_name: "subagent",
+          tool_input: {
+            task: "AIDLC-UNIT: todo-core\nImplement todo-core",
+            stages: [
+              {
+                name: "implement_todo_core",
+                role: "aidlc-developer-agent",
+                prompt_template: "AIDLC-UNIT: todo-core\nImplement todo-core",
+              },
+            ],
+          },
+        };
+    const result = run(artifact, ["adapter", harness, "plan-approval-guard"], {
+      cwd: project,
+      env: pathlessEnv(project),
+      input: JSON.stringify(input),
+      timeoutMs: 30_000,
+    });
+    const output = `${result.stdout}\n${result.stderr}`;
+    return commandGate(
+      `adapter-${harness}-plan-approval-guard`,
+      result,
+      result.status === 2 &&
+        result.stderr.includes("plan-approval guard") &&
+        !runtimeCrash(output) &&
+        !output.includes("does not export run(input)"),
+      {
+        expected: `compiled ${harness} adapter blocks an unapproved developer dispatch`,
+        actual: result.stderr.trim() || `exit ${result.status}`,
+      },
+    );
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+}
+
 function statuslineGate(artifact: string): GateResult {
   const project = mkdtempSync(join(tmpdir(), "aidlc-binary-statusline-"));
   try {
@@ -1446,8 +1561,11 @@ function buildTarget(target: TargetConfig): TargetResult {
     ));
     result.gates.push(hookGate(actual.artifact, "validate-state"));
     result.gates.push(hookGate(actual.artifact, "review-freeze"));
+    result.gates.push(planApprovalHookGate(actual.artifact));
     result.gates.push(statuslineGate(actual.artifact));
     result.gates.push(codexAdapterGate(actual.artifact));
+    result.gates.push(planApprovalAdapterGate(actual.artifact, "codex"));
+    result.gates.push(planApprovalAdapterGate(actual.artifact, "kiro"));
     result.gates.push(routedProjectDirGate(actual.artifact));
   } else {
     result.gates.push(sizeGate(result.bytes));

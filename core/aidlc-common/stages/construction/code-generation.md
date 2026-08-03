@@ -154,6 +154,10 @@ Delegate to Task tool with subagent_type="aidlc-developer-agent".
 The aidlc-developer-agent persona and its knowledge are loaded automatically by the named agent. Do NOT manually inject the persona in the prompt.
 
 Include in the delegation prompt:
+- As the first line, the exact target marker `AIDLC-UNIT: <directive.unit>` (or
+  the current unit name when the single-iteration directive has no `unit`
+  field). This marker identifies the one unit whose approved plan authorizes
+  the dispatch; do not repeat it for contextual dependencies.
 - Design artifacts for the CURRENT UNIT ONLY (not all units)
 - A 1-2 line summary of each inception-phase artifact with its file path (requirements summary, stories summary, app design summary) — the subagent can Read specific files if it needs full content
 - The approved code-generation-plan.md (full content)

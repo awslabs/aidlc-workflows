@@ -55,7 +55,6 @@ const VALID_EVENT_TYPES = new Set([
   "GATE_APPROVED",
   "GATE_REJECTED",
   "QUESTION_ANSWERED",
-  "SUMMARY_CONFIRMATION_RECORDED",
   // Reviewer step (§12a) — REVIEW_REQUESTED on dispatch, REVIEW_COMPLETED when
   // a verdict is read. Emitted by the tool actor `aidlc-log.ts review`. A
   // reviewer-bearing stage cannot complete without a terminal REVIEW_COMPLETED
@@ -72,12 +71,10 @@ const VALID_EVENT_TYPES = new Set([
   // Reviewer read-scope enforcement (hook-emitted): a per-unit reviewer's
   // tool call was refused for reaching into sibling units' construction/ paths.
   "REVIEWER_SCOPE_BLOCKED",
-  // Terminal-receipt write-freeze enforcement (hook-emitted): a declared
-  // produces-artifact write was refused because it would invalidate a fresh
-  // READY review receipt before the gate (stage-protocol §12a terminal
-  // ordering). No bracket characters in this comment: t47 slices the array
-  // literal at the first closing bracket after the const name.
-  "REVIEW_FREEZE_BLOCKED",
+  // Plan-approval ordering enforcement (hook-emitted): a code-generation
+  // developer-agent dispatch was refused because no unit had an approved
+  // code-generation plan on disk (stage Steps 2-3 must precede Step 4).
+  "PLAN_APPROVAL_BLOCKED",
   // Health/system
   "HEALTH_CHECKED",
   "SCOPE_DETECTED",
@@ -171,7 +168,6 @@ const EVENT_HEADINGS: Record<string, string> = {
   GATE_APPROVED: "Gate Approved",
   GATE_REJECTED: "Gate Rejected",
   QUESTION_ANSWERED: "Question Answered",
-  SUMMARY_CONFIRMATION_RECORDED: "Summary Confirmation Recorded",
   REVIEW_REQUESTED: "Review Requested",
   REVIEW_COMPLETED: "Review Completed",
   ARTIFACT_CREATED: "Artifact Created",
@@ -179,7 +175,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   ARTIFACT_REUSED: "Artifact Reused",
   SUBAGENT_COMPLETED: "Subagent Completed",
   REVIEWER_SCOPE_BLOCKED: "Reviewer Scope Blocked",
-  REVIEW_FREEZE_BLOCKED: "Review Freeze Blocked",
+  PLAN_APPROVAL_BLOCKED: "Plan Approval Blocked",
   HEALTH_CHECKED: "Health Check",
   SCOPE_DETECTED: "Scope Detection",
   SCOPE_CHANGED: "Scope Change",
@@ -244,40 +240,6 @@ function jsonSuccess(data: Record<string, unknown>): void {
 function jsonError(message: string): never {
   process.stderr.write(`${JSON.stringify({ error: message })}\n`);
   process.exit(1);
-}
-
-const CLI_RESERVED_EVENT_TYPES = new Set([
-  "HUMAN_TURN",
-  "SUMMARY_CONFIRMATION_RECORDED",
-  "ARTIFACT_CREATED",
-  "ARTIFACT_UPDATED",
-]);
-
-function refuseReservedCliEvent(eventType: string): void {
-  if (CLI_RESERVED_EVENT_TYPES.has(eventType)) {
-    jsonError(
-      `${eventType} is reserved for its owning hook/tool and cannot be appended through the public audit CLI.`,
-    );
-  }
-}
-
-function refuseReservedCliBatch(entriesJson: string): void {
-  try {
-    const entries = JSON.parse(entriesJson) as unknown;
-    if (!Array.isArray(entries)) return;
-    for (const entry of entries) {
-      if (
-        typeof entry === "object" &&
-        entry !== null &&
-        "eventType" in entry &&
-        typeof entry.eventType === "string"
-      ) {
-        refuseReservedCliEvent(entry.eventType);
-      }
-    }
-  } catch {
-    // The normal append-batch parser owns malformed-JSON diagnostics.
-  }
 }
 
 // --- Subcommand: append ---
@@ -896,7 +858,6 @@ export function main(argv: string[]): void {
       if (!eventType) {
         jsonError("Usage: aidlc-audit append <event-type> [--field key=value ...]");
       }
-      refuseReservedCliEvent(eventType);
       const fields = parseFieldArgs(rawArgs);
       handleAppend(eventType, fields, projectDir);
       break;
@@ -907,7 +868,6 @@ export function main(argv: string[]): void {
       if (!entries) {
         jsonError("Usage: aidlc-audit append-batch <entries-json>");
       }
-      refuseReservedCliBatch(entries);
       handleAppendBatch(entries, projectDir);
       break;
     }

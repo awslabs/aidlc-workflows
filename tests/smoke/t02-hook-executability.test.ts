@@ -69,6 +69,8 @@ const HOOKS = [
   "aidlc-review-freeze.ts",
   // Folds transcript token usage into the durable ledger on PreToolUse + PostToolUse.
   "aidlc-fold-usage.ts",
+  // Enforces code-generation's plan-before-generation ordering on PreToolUse.
+  "aidlc-plan-approval-guard.ts",
 ] as const;
 
 describe("t02 hook presence — shipped dist/claude/.claude/hooks (migrated from t02-hook-executability.sh, plan 10)", () => {

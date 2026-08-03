@@ -1,7 +1,7 @@
 // t149-codex-hook-adapter: the Codex stdin shim normalizes live-captured
 // payloads into the core hooks' contract.
 //
-// covers: file:hooks/aidlc-stop.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-sync-statusline.ts, file:hooks/aidlc-log-subagent.ts, file:hooks/aidlc-audit-logger.ts
+// covers: file:hooks/aidlc-stop.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-sync-statusline.ts, file:hooks/aidlc-log-subagent.ts, file:hooks/aidlc-audit-logger.ts, hook:aidlc-plan-approval-guard
 //
 // WHAT. Each case pipes a fixture from tests/fixtures/codex-hook-payloads/
 // (field-verbatim captures off Codex CLI 0.137.0 — the spike corpus at
@@ -142,6 +142,17 @@ function withCwd(payload: Record<string, unknown>, dir: string): Record<string, 
   return { ...payload, cwd: dir };
 }
 
+function seedUnapprovedCodeGeneration(dir: string, unit: string): void {
+  const state = readFileSync(seededStateFile(dir), "utf-8").replace(
+    /(- \*\*Current Stage\*\*:\s*)[^\n]+/,
+    `$1code-generation`,
+  );
+  writeFileSync(seededStateFile(dir), state, "utf-8");
+  mkdirSync(join(seededRecordDir(dir), "construction", unit, "code-generation"), {
+    recursive: true,
+  });
+}
+
 /** Remap a captured apply_patch payload's `aidlc-docs/` paths (a verbatim
  *  pre-workspace capture) to the active intent's record-relative prefix, so the
  *  per-intent audit-logger gate sees the write under the record root. Rewrites
@@ -265,6 +276,47 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       expect(message).toContain("first-class");
       expect(message).toContain("Given/When/Then");
       expect(message).toContain("AIDLC_DISPATCH_RULES_BEGIN");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("2b: plan-approval guard reads the spawn target from tool_input.agent_type", () => {
+    const dir = scratchProject(true);
+    try {
+      seedUnapprovedCodeGeneration(dir, "todo-core");
+      const r = runAdapter(dir, "plan-approval-guard", {
+        hook_event_name: "PreToolUse",
+        cwd: dir,
+        agent_type: "aidlc-quality-agent",
+        tool_name: "spawn_agent",
+        tool_input: {
+          agent_type: "aidlc-developer-agent",
+          message: "AIDLC-UNIT: todo-core\nImplement todo-core",
+        },
+      });
+      expect(r.code).toBe(2);
+      expect(r.stderr).toContain("plan-approval guard");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("2c: another spawn target is not blocked when its message mentions the developer agent", () => {
+    const dir = scratchProject(true);
+    try {
+      seedUnapprovedCodeGeneration(dir, "todo-core");
+      const r = runAdapter(dir, "plan-approval-guard", {
+        hook_event_name: "PreToolUse",
+        cwd: dir,
+        tool_name: "spawn_agent",
+        tool_input: {
+          agent_type: "aidlc-quality-agent",
+          message: "Review aidlc-developer-agent output for todo-core",
+        },
+      });
+      expect(r.code).toBe(0);
+      expect(r.stderr).toBe("");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

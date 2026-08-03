@@ -66,6 +66,15 @@
             "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-review-freeze.ts\""
           }
         ]
+      },
+      {
+        "matcher": "Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-plan-approval-guard.ts\""
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [

@@ -78,6 +78,10 @@ const VALID_EVENT_TYPES = new Set([
   // ordering). No bracket characters in this comment: t47 slices the array
   // literal at the first closing bracket after the const name.
   "REVIEW_FREEZE_BLOCKED",
+  // Plan-approval ordering enforcement (hook-emitted): a code-generation
+  // developer-agent dispatch was refused because no unit had an approved
+  // code-generation plan on disk (stage Steps 2-3 must precede Step 4).
+  "PLAN_APPROVAL_BLOCKED",
   // Health/system
   "HEALTH_CHECKED",
   "SCOPE_DETECTED",
@@ -180,6 +184,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   SUBAGENT_COMPLETED: "Subagent Completed",
   REVIEWER_SCOPE_BLOCKED: "Reviewer Scope Blocked",
   REVIEW_FREEZE_BLOCKED: "Review Freeze Blocked",
+  PLAN_APPROVAL_BLOCKED: "Plan Approval Blocked",
   HEALTH_CHECKED: "Health Check",
   SCOPE_DETECTED: "Scope Detection",
   SCOPE_CHANGED: "Scope Change",

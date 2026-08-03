@@ -40,8 +40,8 @@
 //   bun .codex/hooks/aidlc-codex-adapter.ts <target>
 // where <target> ∈ session-start | audit-and-sensors | state-sync |
 //                  runtime-compile | validate-state | log-subagent | stop |
-//                  mint | state-transition-guard | reviewer-scope
-//                  | dispatch-rules
+//                  mint | state-transition-guard | reviewer-scope |
+//                  dispatch-rules | plan-approval-guard
 
 import { createHash } from "node:crypto";
 import {
@@ -74,6 +74,26 @@ interface CodexHookInput {
   agent_type?: string;
   agent_id?: string;
   stop_hook_active?: boolean;
+}
+
+interface CodexSpawnAgentInput {
+  agent_type?: unknown;
+  message?: unknown;
+  items?: unknown;
+}
+
+function spawnAgentPrompt(input: CodexSpawnAgentInput): string {
+  const parts: string[] = [];
+  if (typeof input.message === "string") parts.push(input.message);
+  if (Array.isArray(input.items)) {
+    for (const item of input.items) {
+      if (item !== null && typeof item === "object") {
+        const text = (item as Record<string, unknown>).text;
+        if (typeof text === "string") parts.push(text);
+      }
+    }
+  }
+  return parts.join("\n");
 }
 
 export async function run(
@@ -501,6 +521,44 @@ switch (target) {
     const answeredCode = r.code === 2 ? 2 : 0;
     persistResponse(r.stdout, answeredCode, r.stderr);
     if (r.stdout) process.stdout.write(r.stdout);
+    if (r.code === 2) {
+      process.stderr.write(r.stderr);
+      return 2;
+    }
+    return 0;
+  }
+
+  case "plan-approval-guard": {
+    // PreToolUse: code-generation's plan-before-generation ordering. Codex's
+    // delegation surface is spawn_agent, whose arguments carry the target in
+    // tool_input.agent_type and task text in message/items. Top-level
+    // agent_type identifies the currently acting agent, so it must not select
+    // the spawn target. Anything else - other tools or other target roles -
+    // allows instantly. The block contract is exit 2 + stderr, cached like
+    // reviewer-scope so a duplicate delivery replays the block faithfully.
+    // Fail-open on any spawn failure.
+    const tool = codex.tool_name ?? "";
+    if (tool !== "spawn_agent") {
+      persistResponse("", 0);
+      return 0;
+    }
+    const spawnInput: CodexSpawnAgentInput = codex.tool_input ?? {};
+    const target =
+      typeof spawnInput.agent_type === "string" ? spawnInput.agent_type : "";
+    if (target !== "aidlc-developer-agent") {
+      persistResponse("", 0);
+      return 0;
+    }
+    const fwd = JSON.stringify({
+      hook_event_name: "PreToolUse",
+      tool_name: "Task",
+      tool_input: {
+        subagent_type: target,
+        prompt: spawnAgentPrompt(spawnInput),
+      },
+    });
+    const r = runCoreWithStderr("aidlc-plan-approval-guard.ts", fwd);
+    persistResponse(r.stdout, r.code === 2 ? 2 : 0, r.stderr);
     if (r.code === 2) {
       process.stderr.write(r.stderr);
       return 2;

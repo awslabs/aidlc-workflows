@@ -92,18 +92,19 @@ Wire the adapter to the harness's events the harness's own way: Kiro registers
 targets in `agents/aidlc.json`; Codex emits `hooks.json`. Register only events
 with a real core-hook consumer.
 
-Five hooks are flow-altering and need their control channels forwarded, not
+Six hooks are flow-altering and need their control channels forwarded, not
 just piped. The Stop hook answers with `{"decision":"block"}` on stdout;
 dispatch-rules rewrites the delegated prompt; and the PreToolUse
-reviewer-scope, review-freeze, and state-transition guards answer with exit 2 +
-a reason on stderr (the tool call must be refused when the adapter relays that
-exit code). If the new harness cannot hard-block a tool call from its pre-tool
-seam, leave the reviewer-scope and review-freeze registrations out and document
-the gap rather than wiring dead hooks - the prose bounds in stage-protocol
-§12a still govern there. When the harness's payloads carry no subagent
-identity, scope reviewer-scope registration to the reviewer agents themselves
-where the harness supports per-agent hooks (the Kiro CLI pattern: the adapter
-then asserts `scoped_registration` instead of matching `agent_type`).
+reviewer-scope, review-freeze, plan-approval, and state-transition guards
+answer with exit 2 + a reason on stderr (the tool call must be refused when
+the adapter relays that exit code). If the new harness cannot hard-block a
+tool call from its pre-tool seam, leave the reviewer-scope and review-freeze
+registrations out and document the gap rather than wiring dead hooks - the
+prose bounds in stage-protocol §12a still govern there. When the harness's
+payloads carry no subagent identity, scope reviewer-scope registration to the
+reviewer agents themselves where the harness supports per-agent hooks (the
+Kiro CLI pattern: the adapter then asserts `scoped_registration` instead of
+matching `agent_type`).
 
 > **The one sanctioned `core/` edit: the doctor arm.** `/aidlc --doctor`
 > (`core/tools/aidlc-utility.ts`) health-checks an installed tree, and a new

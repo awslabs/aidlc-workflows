@@ -33,10 +33,10 @@ const SUBJECTS = [
 const PROJECT_DIR = "$CLAUDE_PROJECT_DIR";
 const PROJECT_DIR_RE = /\$CLAUDE_PROJECT_DIR/g;
 const BUG_SHAPE_RE = /(^|[\s(])\$CLAUDE_PROJECT_DIR\b/;
-// Eighteen command registrations (mint-presence and fold-usage are each wired
-// to two events; review-freeze joined the shared PreToolUse group) plus the
-// executable permission glob.
-const EXPECTED_PROJECT_DIR_REFERENCES = 19;
+// Nineteen command registrations (mint-presence and fold-usage are each wired
+// to two events; review-freeze and the plan-approval guard joined the shared
+// PreToolUse group) plus the executable permission glob.
+const EXPECTED_PROJECT_DIR_REFERENCES = 20;
 const EXPECTED_PERMISSION_GLOB = 'Bash(bun "$CLAUDE_PROJECT_DIR/.claude/tools/"*)';
 
 interface Settings {

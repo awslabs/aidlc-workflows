@@ -42,6 +42,9 @@ const HOOK_WIRING: Array<{ event: string; matcher?: string; target: string }> = 
   // No matcher for the same reason: the review-freeze target self-filters to
   // apply_patch and mutation-capable Bash commands.
   { event: "PreToolUse", target: "review-freeze" },
+  // No matcher: the plan-approval-guard target self-filters (spawn_agent
+  // naming the developer agent; everything else exits 0 instantly).
+  { event: "PreToolUse", target: "plan-approval-guard" },
   { event: "PostToolUse", matcher: "apply_patch", target: "audit-and-sensors" },
   { event: "PostToolUse", matcher: "update_plan", target: "state-sync" },
   { event: "PostToolUse", matcher: "Bash", target: "runtime-compile" },

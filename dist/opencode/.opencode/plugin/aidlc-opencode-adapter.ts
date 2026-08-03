@@ -12,7 +12,7 @@
 //   ------------------------------------------------------------------------
 //   chat.message (first per session)     → aidlc-session-start.ts  (SessionStart)
 //   chat.message (every human turn)      → aidlc-mint-presence.ts  (UserPromptSubmit)
-//   tool.execute.before task             → aidlc-dispatch-rules.ts (PreToolUse rewrite)
+//   tool.execute.before task             → dispatch-rules rewrite + plan-approval guard (PreToolUse)
 //   tool.execute.before other tools      → entrypoint boundary + aidlc-reviewer-scope.ts (PreToolUse)
 //   tool.execute.after write|edit|patch  → aidlc-audit-logger.ts + aidlc-sensor-fire.ts (PostToolUse Write|Edit)
 //   tool.execute.after bash              → aidlc-runtime-compile.ts (PostToolUse Bash)
@@ -124,7 +124,7 @@ const shippedAidlcEntrypoints: ReadonlySet<string> = new Set<string>(
     "hooks/aidlc-fold-usage.ts",
     "hooks/aidlc-log-subagent.ts",
     "hooks/aidlc-mint-presence.ts",
-    "hooks/aidlc-review-freeze.ts",
+    "hooks/aidlc-plan-approval-guard.ts",
     "hooks/aidlc-reviewer-scope.ts",
     "hooks/aidlc-runtime-compile.ts",
     "hooks/aidlc-sensor-fire.ts",
@@ -473,42 +473,36 @@ export default async ({
         }
       }
 
-      // Review-freeze (§12a terminal-receipt write-freeze): runs for EVERY
-      // agent - unlike reviewer-scope there is no identity gate, because any
-      // produces[] write voids a fresh READY receipt regardless of who makes
-      // it. The core hook self-filters to write tools and fails open.
-      if (
-        input.tool === "bash" ||
-        input.tool === "write" ||
-        input.tool === "edit" ||
-        input.tool === "apply_patch"
-      ) {
-        const freezeCalls =
-          input.tool === "bash"
-            ? [{ toolName: "Bash", toolInput: { command: (args.command as string) ?? "" } }]
-            : (input.tool === "apply_patch" ? applyPatchPaths(args) : [
-                (args.filePath as string) ?? (args.path as string) ?? "",
-              ])
-                .filter((filePath) => filePath.length > 0)
-                .map((filePath) => ({
-                  toolName: input.tool === "edit" ? "Edit" : "Write",
-                  toolInput: { file_path: filePath },
-                }));
-        for (const call of freezeCalls) {
-          const freeze = await runCore(
-            "aidlc-review-freeze.ts",
+      // Plan-approval guard, parallel to the Claude Task-matcher wiring:
+      // opencode's delegation surface is the task tool, whose args carry the
+      // target agent (subagent_type or agent) plus the prompt/description.
+      // Only developer-agent dispatches consult the core hook; it decides
+      // from workflow state whether code-generation's plan-before-generation
+      // ordering is satisfied, and a block surfaces as a thrown error (the
+      // plugin's reject contract).
+      if (input.tool === "task") {
+        const target =
+          (args.subagent_type as string) ?? (args.agent as string) ?? "";
+        if (target === "aidlc-developer-agent") {
+          const guard = await runCore(
+            "aidlc-plan-approval-guard.ts",
             {
               hook_event_name: "PreToolUse",
-              tool_name: call.toolName,
-              tool_input: call.toolInput,
+              tool_name: "Task",
+              tool_input: {
+                subagent_type: target,
+                prompt: [(args.prompt as string) ?? "", (args.description as string) ?? ""]
+                  .filter((t) => t.length > 0)
+                  .join("\n"),
+              },
               cwd: directory,
             },
             directory,
           );
-          if (freeze.code === 2) {
+          if (guard.code === 2) {
             throw new Error(
-              freeze.stderr.trim() ||
-                "review-freeze: this write would invalidate a fresh READY review receipt",
+              guard.stderr.trim() ||
+                "code-generation requires an approved plan before dispatching the developer agent",
             );
           }
         }

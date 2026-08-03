@@ -686,6 +686,10 @@ This stage has a **two-part structure**: planning followed by generation.
    (subagent_type="aidlc-developer-agent").
 
    **Context passed to subagent:**
+   - As the first prompt line, the exact target marker
+     `AIDLC-UNIT: <directive.unit>` (or the current unit name for a
+     single-iteration directive without `unit`). Contextual dependencies do
+     not receive additional markers.
    - The lead agent's persona from `agents/aidlc-developer-agent.md` and knowledge
      from `.claude/knowledge/aidlc-developer-agent/` (included in the prompt
      since subagents cannot access conversation history)
