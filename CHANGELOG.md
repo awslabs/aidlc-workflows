@@ -26,6 +26,12 @@ cite two answers without a separator stop being reported as ungrounded.
   and to any depth, so a tag that such a definition turns into a link no longer
   grounds a claim. Five or more spaces after a list marker remain an indented
   code block.
+* Definition labels, destination boundaries, title separation, title
+  continuation, and source indentation now follow the same fail-closed rule;
+  malformed or code-indented definition-shaped prose cannot bypass inspection.
+  Definitions with a destination on the following line still resolve links
+  document-wide without making their block eligible for the definition-only
+  skip.
 
 ## [2.5.57] - 2026-08-07
 

@@ -550,7 +550,7 @@ function claimBlocks(body: string): {
 	let pending: string[] = [];
 
 	const flush = (): void => {
-		const text = pending.join("\n").trim();
+		const text = pending.join("\n").trimEnd();
 		if (text.length > 0) {
 			blocks.push({
 				section,
@@ -593,10 +593,10 @@ function claimBlocks(body: string): {
 		}
 		if (isListItem(line)) {
 			flush();
-			pending.push(line.trim());
+			pending.push(line);
 			continue;
 		}
-		pending.push(line.trim());
+		pending.push(line);
 	}
 	flush();
 
@@ -740,14 +740,30 @@ function visibleHtmlText(text: string): string {
 // the marker only comes off for a run of one to four — and four spaces of
 // remaining indentation is an indented code block too, which the caller's
 // column test rejects.
-function withoutContainerMarkers(line: string): string {
+interface ContainerLine {
+	text: string;
+	context: string;
+}
+
+function containerLine(line: string): ContainerLine {
 	let stripped = line;
+	const context: string[] = [];
 	for (;;) {
-		const next = stripped
-			.replace(/^ {0,3}(?:> ?)+/, "")
-			.replace(/^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:\t| {1,4}(?! ))/, "");
-		if (next === stripped) return stripped;
-		stripped = next;
+		const quote = /^ {0,3}> ?/.exec(stripped);
+		if (quote) {
+			stripped = stripped.slice(quote[0].length);
+			context.push("quote");
+			continue;
+		}
+		const list = /^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:\t| {1,4}(?! ))/.exec(
+			stripped,
+		);
+		if (list) {
+			stripped = stripped.slice(list[0].length);
+			context.push("list");
+			continue;
+		}
+		return { text: stripped, context: context.join("/") };
 	}
 }
 
@@ -770,8 +786,9 @@ function referenceDestinationEnd(text: string, start: number): number {
 	let depth = 0;
 	let index = start;
 	for (; index < text.length; index++) {
-		// Space and the ASCII control range both end a bare destination.
-		if ((text.codePointAt(index) ?? 0) <= 0x20) break;
+		// Space and every ASCII control character end a bare destination.
+		const codePoint = text.codePointAt(index) ?? 0;
+		if (codePoint <= 0x20 || codePoint === 0x7f) break;
 		if (isEscaped(text, index)) continue;
 		if (text[index] === "(") {
 			depth++;
@@ -786,15 +803,34 @@ function referenceDestinationEnd(text: string, start: number): number {
 // Shape alone does not make a definition: `[label]: some prose` renders as the
 // visible sentence it is. Requiring a well-formed destination keeps a line the
 // reader can see out of the definition set, which is what stops such a line
-// from exempting its block from inspection. Where this still diverges from
-// CommonMark it must diverge toward inspecting more, never less — so a
-// destination deferred to the next line reads as prose here rather than as a
-// definition that could skip a block.
-function referenceDefinitionLabel(line: string): string | null {
-	const text = withoutContainerMarkers(line);
+// from exempting its block from inspection. Multiline destinations are
+// collected separately for document-wide reference resolution, but stay as
+// prose here: when block removal cannot afford the complete grammar it must
+// inspect more, never less.
+interface ReferenceDefinition {
+	label: string;
+	context: string;
+	mayContinueTitle: boolean;
+}
+
+function referenceLabelEnd(text: string, start: number): number {
+	for (let index = start + 1; index < text.length; index++) {
+		if (isEscaped(text, index)) continue;
+		if (text[index] === "[") return -1;
+		if (text[index] === "]") {
+			const label = text.slice(start + 1, index);
+			return label.trim().length > 0 && label.length <= 999 ? index : -1;
+		}
+	}
+	return -1;
+}
+
+function referenceDefinition(line: string): ReferenceDefinition | null {
+	const container = containerLine(line);
+	const text = container.text;
 	const start = text.search(/\S/);
 	if (start < 0 || start > 3 || text[start] !== "[") return null;
-	const labelEnd = matchingDelimiter(text, start, "[", "]");
+	const labelEnd = referenceLabelEnd(text, start);
 	if (labelEnd < 0 || text[labelEnd + 1] !== ":") return null;
 
 	const rest = text.slice(labelEnd + 2);
@@ -802,10 +838,20 @@ function referenceDefinitionLabel(line: string): string | null {
 	if (destinationStart < 0) return null;
 	const destinationEnd = referenceDestinationEnd(rest, destinationStart);
 	if (destinationEnd < 0) return null;
-	const trailing = rest.slice(destinationEnd).trim();
-	if (trailing.length > 0 && !REFERENCE_TITLE_BODY_RE.test(trailing)) return null;
+	const rawTrailing = rest.slice(destinationEnd);
+	const trailing = rawTrailing.trim();
+	if (
+		trailing.length > 0 &&
+		(!/^[ \t]+/.test(rawTrailing) || !REFERENCE_TITLE_BODY_RE.test(trailing))
+	) {
+		return null;
+	}
 
-	return text.slice(start + 1, labelEnd);
+	return {
+		label: text.slice(start + 1, labelEnd),
+		context: container.context,
+		mayContinueTitle: trailing.length === 0,
+	};
 }
 
 // CommonMark matches link labels case-insensitively with runs of whitespace
@@ -818,44 +864,88 @@ function normalizedReferenceLabel(label: string): string {
 // document, so this is collected once per file and handed to every block.
 function referenceLabels(body: string): Set<string> {
 	const labels = new Set<string>();
-	let mayContinueDefinition = false;
-	for (const line of visibleMarkdownLines(body)) {
-		if (mayContinueDefinition && REFERENCE_TITLE_RE.test(line)) {
-			mayContinueDefinition = false;
+	const lines = visibleMarkdownLines(body);
+	let titleContinuationContext: string | null = null;
+	for (let index = 0; index < lines.length; index++) {
+		const line = lines[index];
+		const container = containerLine(line);
+		if (
+			titleContinuationContext !== null &&
+			container.context === titleContinuationContext &&
+			REFERENCE_TITLE_RE.test(container.text)
+		) {
+			titleContinuationContext = null;
 			continue;
 		}
 
-		const label = referenceDefinitionLabel(line);
-		if (label === null) {
-			mayContinueDefinition = false;
+		const definition = referenceDefinition(line);
+		if (definition !== null) {
+			labels.add(normalizedReferenceLabel(definition.label));
+			titleContinuationContext = definition.mayContinueTitle
+				? definition.context
+				: null;
 			continue;
 		}
 
-		const normalized = normalizedReferenceLabel(label);
-		if (normalized.length > 0) labels.add(normalized);
-		mayContinueDefinition = true;
+		titleContinuationContext = null;
+		const text = container.text;
+		const start = text.search(/\S/);
+		if (start < 0 || start > 3 || text[start] !== "[") continue;
+		const labelEnd = referenceLabelEnd(text, start);
+		if (labelEnd < 0 || text[labelEnd + 1] !== ":") continue;
+		if (text.slice(labelEnd + 2).trim().length > 0) continue;
+
+		const next = lines[index + 1];
+		if (next === undefined) continue;
+		const nextContainer = containerLine(next);
+		if (nextContainer.context !== container.context) continue;
+		const destinationStart = nextContainer.text.search(/\S/);
+		if (destinationStart < 0 || destinationStart > 3) continue;
+		const destinationEnd = referenceDestinationEnd(
+			nextContainer.text,
+			destinationStart,
+		);
+		if (destinationEnd < 0) continue;
+		const rawTrailing = nextContainer.text.slice(destinationEnd);
+		const trailing = rawTrailing.trim();
+		if (
+			trailing.length > 0 &&
+			(!/^[ \t]+/.test(rawTrailing) || !REFERENCE_TITLE_BODY_RE.test(trailing))
+		) {
+			continue;
+		}
+		labels.add(normalizedReferenceLabel(text.slice(start + 1, labelEnd)));
+		index++;
 	}
 	return labels;
 }
 
 function withoutReferenceDefinitions(text: string): string {
 	const visible: string[] = [];
-	let mayContinueDefinition = false;
+	let titleContinuationContext: string | null = null;
 	for (const line of text.split("\n")) {
-		if (mayContinueDefinition && REFERENCE_TITLE_RE.test(line)) {
+		const container = containerLine(line);
+		if (
+			titleContinuationContext !== null &&
+			container.context === titleContinuationContext &&
+			REFERENCE_TITLE_RE.test(container.text)
+		) {
 			visible.push("");
-			mayContinueDefinition = false;
+			titleContinuationContext = null;
 			continue;
 		}
 
-		if (referenceDefinitionLabel(line) !== null) {
+		const definition = referenceDefinition(line);
+		if (definition !== null) {
 			visible.push("");
-			mayContinueDefinition = true;
+			titleContinuationContext = definition.mayContinueTitle
+				? definition.context
+				: null;
 			continue;
 		}
 
 		visible.push(line);
-		mayContinueDefinition = false;
+		titleContinuationContext = null;
 	}
 	return visible.join("\n");
 }

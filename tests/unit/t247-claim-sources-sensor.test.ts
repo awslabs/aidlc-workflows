@@ -545,11 +545,17 @@ describe("t247 claim-sources sensor", () => {
   // reader sees, and a real definition stays real inside a container. Getting
   // either wrong lets unsourced or invisible-tag content through silently.
   for (const [label, line] of [
+    ["an empty label", "[]: /url"],
+    ["a whitespace-only label", "[   ]: /url"],
+    ["an unescaped bracket in the label", "[a[b]]: /url"],
     ["trailing prose", "[evidence]: this is an unsupported assertion"],
     ["an unclosed angle-bracket destination", "[evidence]: <broken"],
     ["an unbalanced bare destination", "[evidence]: /foo(bar"],
     ["a bare destination closing a group it never opened", "[evidence]: /foo)bar"],
     ["an unescaped angle bracket in the destination", "[evidence]: <a<b>"],
+    ["an inline title without separating whitespace", '[evidence]: <url>"title"'],
+    ["a DEL control character in the destination", "[evidence]: foo\u007fbar"],
+    ["top-level indentation that makes it code", "    [evidence]: /url"],
     ["an unescaped parenthesis in the title", "[evidence]: /url (ti(tle)"],
     [
       "an indented code block after a list marker",
@@ -572,6 +578,44 @@ describe("t247 claim-sources sensor", () => {
       );
     });
   }
+
+  test("an inline title leaves the following quoted assertion visible", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "## Assumptions & Open Questions",
+      '[evidence]: /url "title"\n"This is an unsupported assertion."\n\n## Assumptions & Open Questions',
+    );
+
+    const result = run(dir);
+    expect(result.pass).toBe(false);
+    expect(result.findings.join("\n")).toContain(
+      "claim block has no source tag",
+    );
+  });
+
+  test("a multiline definition resolves shortcut references document-wide", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      "The initiative provides a local command that echoes supplied text. [desc]",
+    );
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "## Review",
+      "## Review\n[desc]:\n/url",
+    );
+
+    const result = run(dir);
+    expect(result.pass).toBe(false);
+    expect(result.findings.join("\n")).toContain(
+      "claim block has no source tag",
+    );
+  });
 
   for (const [label, definition] of [
     ["a block quote", "> [Q1]: https://example.invalid"],

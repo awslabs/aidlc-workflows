@@ -49,10 +49,13 @@ A tag counts when the rendered document shows it as literal text. Bracket pairs
 resolve as Markdown links only against a link reference definition the document
 carries, so adjacent tags such as `[Q1][Q2]` remain two visible tags, while
 `[Q1]` in a document that also defines `[Q1]: <url>` is a link and grounds
-nothing. A definition is recognised by a well-formed destination, inside a
-block quote or list item as well as at the top level; a line that merely looks
-like one, such as `[note]: some prose`, is the visible sentence it renders as
-and is inspected like any other claim.
+nothing. A definition requires a non-empty CommonMark label, a well-formed
+destination, and a correctly separated optional title, inside a block quote or
+list item as well as at the top level. Multiline destinations still resolve
+references across the whole document. A line that merely looks like a
+definition, such as `[note]: some prose`, is the visible sentence it renders as
+and is inspected like any other claim; neither an inline title nor a different
+container can hide the following line as title continuation.
 
 Where this reading cannot afford full CommonMark, the divergence must land as a
 false failure and never as a false pass: the sensor may ask for a citation the
