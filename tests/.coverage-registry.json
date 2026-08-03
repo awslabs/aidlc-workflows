@@ -20,22 +20,22 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 481,
+    "total": 483,
     "enumeratedByClass": {
-      "function": 249,
+      "function": 250,
       "audit": 74,
       "scope": 9,
       "stage": 32,
-      "hook": 13,
+      "hook": 14,
       "subcommand": 97,
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 103,
+      "function": 104,
       "audit": 33,
       "scope": 9,
       "stage": 9,
-      "hook": 13,
+      "hook": 14,
       "subcommand": 84,
       "render-surface": 7
     }
@@ -1983,6 +1983,10 @@
         {
           "file": "tests/unit/t225-scope-name-decoupling.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t257-default-scope-resolver.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -2606,6 +2610,18 @@
         {
           "file": "tests/integration/t166-multi-repo-construction.test.ts",
           "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:resolveDefaultScope",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t257-default-scope-resolver.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -3281,6 +3297,22 @@
         },
         {
           "file": "tests/unit/t170-audit-logger-per-intent.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "hook",
+      "unitId": "aidlc-dispatch-rules",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t228-hook-run-exports.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t248-steering-content-delivery.test.ts",
           "mechanism": "cli"
         }
       ],

@@ -1,7 +1,7 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
-## [2.5.28] - 2026-07-30
+## [2.5.34] - 2026-08-03
 
 The plugin contribution seam now merges `adds.scopes`: a plugin can put an existing core stage under one of its OWN scopes, so a single plugin scope can carry a run through both the plugin's stages and the core stages it routes onto. Previously the surface was declared-but-deferred (drop-logged, never merged). **Upgrade:** re-copy your `dist/<harness>/` shell and re-install/re-sync your plugins so the updated compose hook and `select-plugins` strip are in place; already-installed plugins recompose automatically on the next session start.
 
