@@ -203,7 +203,7 @@ run, so running one stage on its own can never derail an in-flight workflow.
 ### The runner skill is optional packaging
 
 Every shipped runnable stage also gets a thin runner skill at `skills/aidlc-<slug>/SKILL.md`
-so it is typeable as `/aidlc-<slug>` (e.g. `/aidlc-application-design`). These are
+so it is typeable as `/aidlc-<slug>` (e.g. `/aidlc-domain-design`). These are
 **opt-in sugar over the `--single` flag** — a ~6-line shell that drives
 `next --stage <slug> --single`. They are not hand-written: a generator emits one
 per runnable compiled stage slug, so the set of runners can never drift from the

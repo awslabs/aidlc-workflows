@@ -27,12 +27,14 @@ produces_kinds:
   reliability-requirements: [service]
   observability-requirements: [service]
 consumes:
-  - artifact: business-logic-model
+  - artifact: functional-spec
     required: true
-  - artifact: business-rules
+  - artifact: rules
     required: true
   - artifact: requirements
     required: true
+  - artifact: contract-summary
+    required: false
   - artifact: technology-stack
     required: false
     conditional_on: brownfield
@@ -84,7 +86,7 @@ Load aidlc-architect-agent (lead) persona from `agents/aidlc-architect-agent.md`
 
 ### Step 2: Read Prior Artifacts
 
-Read functional design artifacts from `<record>/construction/{unit-name}/functional-design/` (if they exist). Read `<record>/inception/requirements-analysis/requirements.md` (if exists) and any reverse engineering artifacts from `aidlc/spaces/<active-space>/codekb/<repo>/` (the directory `codekb-path --repo <repo>` prints). Incremental scopes (infra) skip functional-design by design; when its artifacts are absent, derive the NFR context from the requirements and the code knowledge base instead — never invent the content of a missing artifact.
+Read functional design artifacts from `<record>/construction/{unit-name}/functional-design/` (if they exist). Read `<record>/inception/requirements-analysis/requirements.md` (if exists), the inter-unit contracts from `<record>/inception/contract-design/contract-summary.md` (if produced — its SLAs, retry/timeout, and integration-mechanism decisions constrain this unit's NFR targets), and any reverse engineering artifacts from `aidlc/spaces/<active-space>/codekb/<repo>/` (the directory `codekb-path --repo <repo>` prints). Incremental scopes (infra) skip functional-design by design; when its artifacts are absent, derive the NFR context from the requirements and the code knowledge base instead — never invent the content of a missing artifact.
 
 ### Step 3: Assess NFR Categories
 
@@ -169,7 +171,7 @@ This stage's outputs are markdown design artefacts under `<record>/construction/
 The imported sensors check those outputs:
 
 - **`required-sections`** verifies the output contains the registry default (≥2 H2 headings).
-- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter (this stage consumes `business-logic-model`, `business-rules`, `requirements`).
+- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter (this stage consumes `functional-spec`, `rules`, `requirements`, `contract-summary`).
 - **`linter`** runs against any TypeScript/JavaScript snippets the design includes (matches `**/*.{ts,js}`).
 - **`type-check`** runs against any TypeScript/TSX snippets the design includes (matches `**/*.{ts,tsx}`).
 - **`traceability`** validates that inception NFR IDs are declared and covered by per-Unit `NFRx.y` requirements.

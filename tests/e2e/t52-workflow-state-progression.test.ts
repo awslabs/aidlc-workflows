@@ -145,7 +145,7 @@ describe("t52 /aidlc --init --scope bugfix state-file integrity (sdk)", () => {
         expect(lastUpdated as string).toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
 
         // .sh test 10: State Version is exactly 7.
-        expect(readStateField(state, "State Version")).toBe("7");
+        expect(readStateField(state, "State Version")).toBe("8");
 
         // The .sh's tests 2-3 floor: the 3 init stages ARE [x] (the deterministic
         // completion the ">4 completed" / "advanced past init" assertions built

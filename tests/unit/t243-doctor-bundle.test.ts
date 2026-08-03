@@ -126,7 +126,7 @@ function seedCanaryIntent(proj: string): void {
     // The raw slug in an allowlisted field: forces it through emission so the
     // intent-id hashing must fire (a redaction miss would leak it here).
     `- **Next Stage**: ${INTENT_SLUG}`,
-    "- **State Version**: 7",
+    "- **State Version**: 8",
     "",
     "## Stage Progress",
     "### IDEATION PHASE",
@@ -609,7 +609,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
       "## Project Information",
       "- **Status**: InProgress",
       `- **Current Stage**: ${CUSTOM_SLUG}`,
-      "- **State Version**: 7",
+      "- **State Version**: 8",
       "",
       "## Stage Progress",
       "### CONSTRUCTION PHASE",

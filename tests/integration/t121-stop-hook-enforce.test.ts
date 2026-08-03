@@ -1938,14 +1938,14 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
   }, 30000);
 
   // --- (i.2) MISSED COMMANDS: jump / state-skip count as engagement; bolt --help does not ---
-  test("(i) engaged: `aidlc-jump.ts execute application-design` after the human prompt BLOCKS", () => {
+  test("(i) engaged: `aidlc-jump.ts execute domain-design` after the human prompt BLOCKS", () => {
     const proj = makeProject();
     seedActive(proj, "requirements-analysis");
     // aidlc-jump moves the pointer (state-mutating); pre-fix it was not in the
     // engagement set, so a jump-then-bail was misread as chat. Now it BLOCKS.
     const tp = seedTranscriptEntries(proj, "claude", [
       { kind: "human", text: "jump ahead" },
-      { kind: "bash", command: "bun .claude/tools/aidlc-jump.ts execute application-design" },
+      { kind: "bash", command: "bun .claude/tools/aidlc-jump.ts execute domain-design" },
     ]);
     const r = runHook(
       proj,

@@ -89,7 +89,7 @@ const DRIVE_TIMEOUT_MS = Math.max(120_000, TEST_TIMEOUT_MS - 15_000);
 // Known-answer literals from the SHIPPED handler / fixture (see header).
 const SCANNED_EVENT = "WORKSPACE_SCANNED"; // aidlc-utility.ts:1914
 const PROJECT_TYPE = "Greenfield"; // detectWorkspace :1666 for the bare-README stub
-const STATE_VERSION = "7"; // aidlc-utility.ts:2051 (hard literal)
+const STATE_VERSION = "8"; // aidlc-utility.ts state template (hard literal)
 const COMPLETED_INIT = "3"; // init-phase stage count (:2009 -> :2071)
 const INIT_STDOUT_TYPE_LINE = "Project type: Greenfield"; // verbatim init stdout :2151
 const STOP_AFTER_INIT = { toolName: "Bash", resultIncludes: INIT_STDOUT_TYPE_LINE } as const;

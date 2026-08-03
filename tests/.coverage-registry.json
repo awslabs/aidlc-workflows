@@ -20,12 +20,12 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 548,
+    "total": 549,
     "enumeratedByClass": {
       "function": 302,
       "audit": 82,
       "scope": 9,
-      "stage": 32,
+      "stage": 33,
       "hook": 17,
       "subcommand": 99,
       "render-surface": 7
@@ -34,7 +34,7 @@
       "function": 144,
       "audit": 40,
       "scope": 9,
-      "stage": 9,
+      "stage": 11,
       "hook": 17,
       "subcommand": 87,
       "render-surface": 7
@@ -4717,10 +4717,15 @@
     },
     {
       "unitClass": "stage",
-      "unitId": "inception/application-design",
+      "unitId": "inception/contract-design",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t280-contract-design-wiring.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "stage",
@@ -4728,6 +4733,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "stage",
+      "unitId": "inception/domain-design",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t116-directive-path-resolution.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "stage",
@@ -6023,6 +6040,10 @@
         },
         {
           "file": "tests/unit/t27.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t282-state-version-doctor.test.ts",
           "mechanism": "cli"
         },
         {

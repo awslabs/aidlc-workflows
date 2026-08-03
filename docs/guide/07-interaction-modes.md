@@ -196,7 +196,7 @@ See [Session Management](11-session-management.md) and [CLI Commands](12-cli-com
 After every approval, a progress line appears:
 
 ```
-Progress: 13/32 overall | 3/7 IDEATION stages complete. Next: Approval & Handoff
+Progress: 13/33 overall | 3/7 IDEATION stages complete. Next: Approval & Handoff
 ```
 
 This shows:

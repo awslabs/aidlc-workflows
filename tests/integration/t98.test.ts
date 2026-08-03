@@ -335,7 +335,7 @@ describe("t98 learnings_captured", () => {
   });
 
   test("14: pending stage learnings_captured = null", () => {
-    expect(stage(readGraph(PROJ_L), "application-design").learnings_captured).toBeNull();
+    expect(stage(readGraph(PROJ_L), "domain-design").learnings_captured).toBeNull();
   });
 
   test("15: instance-bearing parent (any-failed rollup) learnings_captured = null (invariant)", () => {

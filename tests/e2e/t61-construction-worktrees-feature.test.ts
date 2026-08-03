@@ -248,6 +248,6 @@ describe("t61 construction worktrees — feature (migrated from t61-construction
     expect(lines.some((l) => l.startsWith("- **Worktree Path**:"))).toBe(true);
     expect(lines.some((l) => l.startsWith("- **Bolt Refs**:"))).toBe(true);
     // State Version 7 is the template that introduced these fields.
-    expect(lines).toContain("- **State Version**: 7");
+    expect(lines).toContain("- **State Version**: 8");
   });
 });

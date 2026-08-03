@@ -127,8 +127,9 @@ describe("t266 review class", () => {
     "requirements-analysis",
     "user-stories",
     "refined-mockups",
-    "application-design",
+    "domain-design",
     "units-generation",
+    "contract-design",
   ];
   const ADVERSARIAL_STAGES = [
     "functional-design",

@@ -563,6 +563,31 @@ function errorDirective(message: string): ErrorDirective {
   return { kind: "error", message };
 }
 
+// The state-file schema version the current graph expects. v8 renamed the
+// Inception `application-design` stage to `domain-design` and inserted
+// `contract-design`, so a pre-v8 state file's stage rows no longer match the
+// compiled graph. `/aidlc --doctor` reports this, but a stale state must ALSO be
+// refused up front by runtime/mutating commands (next, report) rather than
+// silently advancing until it hits the missing/renamed row (which fails later,
+// deeper, and more confusingly). Fires only when the field is PRESENT and stale
+// — a state with no version field is left to the doctor's stricter check so this
+// runtime guard never over-fires on a minimal fixture.
+const CURRENT_STATE_VERSION = "8";
+function staleStateVersionError(stateContent: string): string | null {
+  const v = (getField(stateContent, "State Version") ?? "").trim();
+  if (v.length === 0 || v === CURRENT_STATE_VERSION) return null;
+  return (
+    `Incompatible workflow state: State Version ${v} predates the current ` +
+    `v${CURRENT_STATE_VERSION} stage graph. v8 renamed the Inception ` +
+    "`application-design` stage to `domain-design` and inserted " +
+    "`contract-design`, so this state's stage rows no longer match the graph " +
+    "and cannot be advanced safely. Archive your workspace " +
+    `('mv aidlc aidlc.v${v}-archive') and start a fresh workflow (describe what ` +
+    "to build), or finish this workflow on the prior shell. Run `/aidlc --doctor` " +
+    "for the full diagnosis."
+  );
+}
+
 function shellArg(value: string): string {
   if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
   return `'${value.replaceAll("'", "'\"'\"'")}'`;
@@ -2583,6 +2608,18 @@ function handleNext(args: string[], projectDir: string | undefined): void {
 
   const pd = resolveProjectDir(projectDir);
   const stateContent = loadStateFileIfPresent(pd);
+  // Runtime state-version guard (see staleStateVersionError): refuse to advance
+  // a pre-v8 state up front rather than silently routing until it hits the
+  // renamed/missing Inception rows. Fires after the workspace/plugin/compose
+  // branches above (those are version-independent) and before any branch that
+  // reads or advances the workflow cursor.
+  if (stateContent) {
+    const stale = staleStateVersionError(stateContent);
+    if (stale) {
+      emit(errorDirective(stale));
+      return;
+    }
+  }
   // The active intent's RELATIVE record-dir prefix (aidlc/spaces/<sp>/intents/
   // <slug>-<id8>), threaded into every run-stage directive so the conductor's
   // artifact/diary paths resolve under the active intent. null → the flat legacy
@@ -5158,6 +5195,22 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   // a transition), so it always disqualifies the turn from the Stop hook's
   // conversational carve-out. See touchEngineMarker.
   touchEngineMarker(projectDir);
+
+  // Runtime state-version guard (see staleStateVersionError): `report` commits a
+  // lifecycle transition, so a pre-v8 state must be refused here too — before any
+  // report sub-branch mutates it. Covers every report path (result, skeleton
+  // stance, single) via one early check.
+  {
+    const pd = resolveProjectDir(projectDir);
+    const sc = loadStateFileIfPresent(pd);
+    if (sc) {
+      const stale = staleStateVersionError(sc);
+      if (stale) {
+        emit(errorDirective(stale));
+        return;
+      }
+    }
+  }
 
   // Branch -1 — the --single stage-runner commit. A stage-runner reports
   // its lone stage via `report --single --stage <slug> --result <outcome>`; the

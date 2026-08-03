@@ -296,18 +296,18 @@ const STATE_COMPLETED_OVERLAY = [
 const SINGLE_STAGE_PAIR = `## Stage Start
 **Timestamp**: 2026-05-27T10:42:00Z
 **Event**: STAGE_STARTED
-**Stage**: application-design
+**Stage**: domain-design
 **Agent**: aidlc-architect-agent
-**Workflow**: single-stage:application-design
+**Workflow**: single-stage:domain-design
 
 ---
 
 ## Stage Completion
 **Timestamp**: 2026-05-27T10:45:00Z
 **Event**: STAGE_COMPLETED
-**Stage**: application-design
-**Details**: Single-stage run of application-design completed
-**Workflow**: single-stage:application-design
+**Stage**: domain-design
+**Details**: Single-stage run of domain-design completed
+**Workflow**: single-stage:domain-design
 
 ---
 `;
@@ -451,7 +451,7 @@ describe("t106 aidlc-runtime summary — CLI contract (migrated from t106-runtim
     expect(summary.stages.approved).toBe(2);
     expect(summary.stages.pending).toBe(1);
     expect(summary.by_phase.ideation.total).toBe(3);
-    // application-design is inception — its phase must not appear at all.
+    // domain-design is inception — its phase must not appear at all.
     expect(summary.by_phase.inception).toBeUndefined();
     // Duration still spans first start -> latest MAIN completed (10:40), not
     // the synthetic pair's 10:45.

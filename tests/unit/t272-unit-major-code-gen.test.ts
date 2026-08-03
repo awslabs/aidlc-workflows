@@ -66,9 +66,9 @@ const RP = `aidlc/spaces/${DEFAULT_SPACE}/intents/${DEFAULT_RECORD_DIR}`;
 // Each per-unit construction stage's produces[] (verified frontmatter).
 const PRODUCES: Record<string, string[]> = {
   "functional-design": [
-    "business-logic-model",
-    "business-rules",
-    "domain-entities",
+    "entities",
+    "rules",
+    "functional-spec",
     "frontend-components",
     "traceability",
   ],
@@ -91,11 +91,9 @@ const PRODUCES: Record<string, string[]> = {
     "traceability",
   ],
   "infrastructure-design": [
-    "deployment-architecture",
-    "infrastructure-services",
+    "infrastructure-specification",
     "monitoring-design",
     "cicd-pipeline",
-    "shared-infrastructure",
     "traceability",
   ],
   "code-generation": [
@@ -152,7 +150,7 @@ function constructionState(opts: {
 - **Project**: unit-major code-gen test
 - **Project Type**: Greenfield
 - **Scope**: feature
-- **State Version**: 7
+- **State Version**: 8
 - **Skeleton Stance**: on
 
 ## Runtime State
@@ -171,7 +169,7 @@ function constructionState(opts: {
 ${checkboxes}
 
 ### INCEPTION PHASE
-- [-] application-design — EXECUTE
+- [-] domain-design — EXECUTE
 
 ## Current Status
 - **Lifecycle Phase**: CONSTRUCTION

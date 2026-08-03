@@ -38,8 +38,10 @@ consumes:
     required: true
   - artifact: tech-stack-decisions
     required: true
-  - artifact: business-logic-model
+  - artifact: functional-spec
     required: true
+  - artifact: contract-summary
+    required: false
 requires_stage:
   - units-generation
   - nfr-requirements
@@ -91,7 +93,7 @@ Load aidlc-architect-agent (lead) persona from `agents/aidlc-architect-agent.md`
 
 ### Step 2: Read Prior Artifacts
 
-Read NFR requirements from `<record>/construction/{unit-name}/nfr-requirements/`. Read functional design artifacts from `<record>/construction/{unit-name}/functional-design/` (if they exist). Read application design from `<record>/inception/application-design/` (if exists) for architectural context; when the scope skipped those design stages, derive the architectural context from the NFR requirements and, on brownfield, the code knowledge base — never invent the content of a missing artifact.
+Read NFR requirements from `<record>/construction/{unit-name}/nfr-requirements/`. Read functional design artifacts from `<record>/construction/{unit-name}/functional-design/` (if they exist). Read the inter-unit contracts from `<record>/inception/contract-design/contract-summary.md` (if produced) — the integration mechanism and failure behaviour at each boundary drive the resilience and scalability patterns designed here. Read the domain-design component catalogue from `<record>/inception/domain-design/components.md` (if exists) for architectural context; when the scope skipped those design stages, derive the architectural context from the NFR requirements and, on brownfield, the code knowledge base — never invent the content of a missing artifact.
 
 ### Step 3: Generate Design Questions
 
@@ -180,7 +182,7 @@ This stage's outputs are markdown design artefacts under `<record>/construction/
 The imported sensors check those outputs:
 
 - **`required-sections`** verifies the output contains the registry default (≥2 H2 headings).
-- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter (this stage consumes `performance-requirements`, `security-requirements`, `scalability-requirements`, `reliability-requirements`, `observability-requirements`, `tech-stack-decisions`, `business-logic-model`).
+- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter (this stage consumes `performance-requirements`, `security-requirements`, `scalability-requirements`, `reliability-requirements`, `observability-requirements`, `tech-stack-decisions`, `functional-spec`, `contract-summary`).
 - **`linter`** runs against any TypeScript/JavaScript snippets the design includes (matches `**/*.{ts,js}`).
 - **`type-check`** runs against any TypeScript/TSX snippets the design includes (matches `**/*.{ts,tsx}`).
 - **`traceability`** validates that every detailed NFR requirement is declared and covered by a design solution.

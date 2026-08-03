@@ -41,18 +41,18 @@
 //            phase-heading emission shape)
 //   .sh 14    (**Lifecycle Phase**: present)        -> field block, sub-expect
 //   .sh 15    (**Current Stage**: present)          -> field block, sub-expect
-//   .sh 16    (**State Version**: 7)                -> field block, sub-expect (value-pinned)
+//   .sh 16    (**State Version**: 8)                -> field block, sub-expect (value-pinned)
 //   .sh 17    (**Worktree Path**: present)          -> field block, sub-expect
 //   .sh 18    (**Bolt Refs**: present)              -> field block, sub-expect
 //   .sh 19    (**Practices Affirmed Timestamp**:)   -> field block, sub-expect
 //        all six -> "mid-ideation carries the template bold-field format"
-//           (**State Version**: 7 is value-exact; the other five field-name-present;
+//           (**State Version**: 8 is value-exact; the other five field-name-present;
 //            each field name ALSO pinned in the template)
 //   .sh 20    (init-done: **Lifecycle Phase**: IDEATION)
 //        -> "init-done declares Lifecycle Phase IDEATION (the differentiator)"
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { AIDLC_SRC, FIXTURES_DIR } from "../harness/fixtures.ts";
 
@@ -117,10 +117,10 @@ describe("t12 state-fixture structural meta-test (migrated from t12-state-fixtur
     expect(MID.includes("**Current Stage**:")).toBe(true);
     expect(TEMPLATE.includes("**Current Stage**:")).toBe(true);
 
-    // .sh 16: **State Version**: 7 — value-pinned (the .sh grepped the literal
+    // .sh 16: **State Version**: 8 — value-pinned (the .sh grepped the literal
     // '\*\*State Version\*\*: 7').
-    expect(MID.includes("**State Version**: 7")).toBe(true);
-    expect(TEMPLATE.includes("**State Version**: 7")).toBe(true);
+    expect(MID.includes("**State Version**: 8")).toBe(true);
+    expect(TEMPLATE.includes("**State Version**: 8")).toBe(true);
 
     // .sh 17: **Worktree Path**: present.
     expect(MID.includes("**Worktree Path**:")).toBe(true);
@@ -144,4 +144,98 @@ describe("t12 state-fixture structural meta-test (migrated from t12-state-fixtur
     // value, so the fixture's value is a real template option, not a typo.
     expect(TEMPLATE.includes("IDEATION")).toBe(true);
   });
+});
+
+// ---------------------------------------------------------------------------
+// Graph-parity meta-test. The original t12 only pinned headings/version, so a
+// fixture's Stage Progress grid could silently drift from the compiled stage
+// graph (the exact defect that let the 32-stage grids survive the 33-stage
+// contract-design insertion). This block reads the COMPILED inception slugs
+// from the shipped stage-graph.json and asserts every full-grid fixture's
+// inception rows track it — specifically that contract-design was inserted
+// between units-generation and delivery-planning and the old application-design
+// slug is gone. Deriving the expected slugs from the graph (not a hardcoded
+// list) means this check follows future graph changes instead of pinning a
+// snapshot.
+
+interface StageGraphNode {
+  slug: string;
+  number: string;
+  phase: string;
+}
+
+// The compiled graph the shipped dist carries — the same tree the engine loads.
+const STAGE_GRAPH = JSON.parse(
+  readFileSync(join(AIDLC_SRC, "tools", "data", "stage-graph.json"), "utf-8"),
+) as StageGraphNode[];
+
+// Inception slugs in compiled order (filter phase, sort by dotted stage number).
+const COMPILED_INCEPTION_SLUGS = STAGE_GRAPH.filter(
+  (node) => node.phase === "inception",
+)
+  .sort((a, b) => {
+    const [amaj, amin] = a.number.split(".").map(Number);
+    const [bmaj, bmin] = b.number.split(".").map(Number);
+    return amaj - bmaj || amin - bmin;
+  })
+  .map((node) => node.slug);
+
+// Every shipped state-* fixture — the row-parity check applies to the ones that
+// actually enumerate the inception phase (see the units-generation guard below).
+const STATE_FIXTURES = readdirSync(FIXTURES_DIR).filter((f) =>
+  /^state-.*\.md$/.test(f),
+);
+
+/**
+ * Extract the ordered stage slugs listed under a fixture's `### INCEPTION PHASE`
+ * heading (the `- [x]/[ ]/[-]/[S] <slug> — ...` rows), stopping at the next
+ * `### ` phase heading. Returns [] when the fixture carries no inception grid.
+ */
+function inceptionSlugs(md: string): string[] {
+  const lines = md.split("\n");
+  const start = lines.findIndex((l) => l.trim() === "### INCEPTION PHASE");
+  if (start === -1) return [];
+  const slugs: string[] = [];
+  for (let i = start + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.startsWith("### ")) break;
+    const m = line.match(/^- \[.\]\s+(\S+)\s+—/);
+    if (m) slugs.push(m[1]);
+  }
+  return slugs;
+}
+
+describe("t12 stage-graph parity — fixture inception grids track the compiled graph", () => {
+  test("compiled graph inserts contract-design between units-generation and delivery-planning and drops application-design", () => {
+    expect(COMPILED_INCEPTION_SLUGS).toContain("contract-design");
+    expect(COMPILED_INCEPTION_SLUGS).not.toContain("application-design");
+    const ug = COMPILED_INCEPTION_SLUGS.indexOf("units-generation");
+    const cd = COMPILED_INCEPTION_SLUGS.indexOf("contract-design");
+    const dp = COMPILED_INCEPTION_SLUGS.indexOf("delivery-planning");
+    expect(ug).toBeGreaterThanOrEqual(0);
+    expect(cd).toBeGreaterThan(ug);
+    expect(dp).toBeGreaterThan(cd);
+  });
+
+  for (const fixture of STATE_FIXTURES) {
+    const slugs = inceptionSlugs(
+      readFileSync(join(FIXTURES_DIR, fixture), "utf-8"),
+    );
+    // Only fixtures that actually enumerate inception carry a full grid; skip
+    // phase-partial fixtures (no units-generation row) so we don't assert
+    // row-parity on grids that never listed the inception stages.
+    if (!slugs.includes("units-generation")) continue;
+
+    test(`${fixture} inception rows match the compiled inception slugs`, () => {
+      // Row-for-row parity with the compiled graph — tracks any future change.
+      expect(slugs).toEqual(COMPILED_INCEPTION_SLUGS);
+      // And the specific graph-move under test, stated explicitly:
+      const ug = slugs.indexOf("units-generation");
+      const cd = slugs.indexOf("contract-design");
+      const dp = slugs.indexOf("delivery-planning");
+      expect(cd).toBeGreaterThan(ug); // contract-design present, after units-generation
+      expect(dp).toBeGreaterThan(cd); // ...and before delivery-planning
+      expect(slugs).not.toContain("application-design"); // old slug renamed away
+    });
+  }
 });

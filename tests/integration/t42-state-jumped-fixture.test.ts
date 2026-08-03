@@ -35,7 +35,7 @@
 // state contract rather than a stage enumeration.
 //
 // STRONGER counts: the .sh asserted `S_COUNT > 0` (assert_gt). The twin pins
-// the EXACT count (17) — equal-or-stronger: it still proves "> 0" and also
+// the EXACT count (18) — equal-or-stronger: it still proves "> 0" and also
 // guards against accidental over/under-skip when the fixture is regenerated.
 //
 // Old TAP -> new test parity (1:1, every .sh `ok` -> a named test()):
@@ -47,7 +47,7 @@
 //   .sh 6  grep '\[-\]'                               -> "carries the [-] in-progress-stage marker"
 //   .sh 7  grep 'CONSTRUCTION'                         -> "current phase is CONSTRUCTION"
 //   .sh 8  grep 'code-generation'                      -> "current stage is code-generation"
-//   .sh 9  S_COUNT=grep -c '^- \[S\]'; assert_gt 0     -> "has > 0 [S] skipped stages (exact: 17)"
+//   .sh 9  S_COUNT=grep -c '^- \[S\]'; assert_gt 0     -> "has > 0 [S] skipped stages (exact: 18)"
 //   .sh 10 grep '\[x\] workspace-scaffold'             -> "init stage workspace-scaffold is [x] completed, not [S]"
 //   .sh 11 grep '\[x\] workspace-detection'            -> "init stage workspace-detection is [x] completed, not [S]"
 //   .sh 12 grep '\[x\] state-init'                     -> "init stage state-init is [x] completed, not [S]"
@@ -146,7 +146,7 @@ describe("t42 state-jumped fixture structural meta-test (migrated from t42-state
     expect(GRAPH.some((stage) => stage.slug === "code-generation")).toBe(true);
   });
 
-  test("has > 0 [S] skipped stages (exact: 17) [.sh 9]", () => {
+  test("has > 0 [S] skipped stages (exact: 18) [.sh 9]", () => {
     // The .sh: S_COUNT=$(grep -c '^- \[S\]' ...); assert_gt "$S_COUNT" 0.
     // Count lines beginning '- [S]' exactly as grep -c '^- \[S\]' did.
     const sCount = JUMPED.split("\n").filter((l) => /^- \[S\]/.test(l)).length;
@@ -154,8 +154,9 @@ describe("t42 state-jumped fixture structural meta-test (migrated from t42-state
     expect(sCount).toBeGreaterThan(0);
     // STRONGER: pin the exact count so a fixture regeneration that changes the
     // skip set is caught (the jumped fixture skips most of ideation/inception
-    // plus the early construction stages — 17 lines).
-    expect(sCount).toBe(17);
+    // plus the early construction stages — 18 lines after the contract-design
+    // stage was inserted into inception).
+    expect(sCount).toBe(18);
   });
 
   // .sh 10-12: every initialization stage must be [x] completed, NOT [S]

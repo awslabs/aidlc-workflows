@@ -69,7 +69,7 @@ The orchestrator writes the intent's `aidlc-state.md` (under its record dir) wit
 
 ```
 ─── Scope Detection ───────────────────────────────────────────────────────────
-Detected scope: feature (Standard depth, Standard test strategy, all 32 stages)
+Detected scope: feature (Standard depth, Standard test strategy, all 33 stages)
 ▸ Approve scope? [Yes / Change scope / Change depth / Change test strategy]
 > Yes
 ```
@@ -131,7 +131,7 @@ Choose **Approve** to continue, or **Request Changes** to provide feedback. See 
 After approval, a progress line appears:
 
 ```
-Progress: 4/32 overall | 1/7 IDEATION stages complete. Next: Market Research
+Progress: 4/33 overall | 1/7 IDEATION stages complete. Next: Market Research
 ```
 
 ### Remaining Ideation Stages
@@ -162,7 +162,7 @@ Remaining Inception stages (Requirements Analysis through Delivery Planning) run
 
 ## Construction Phase
 
-Construction builds the solution **Bolt by Bolt**. A [Bolt](glossary.md) is one pass through stages 3.1–3.5 for a Unit (or small group of dependency-linked Units). Each Bolt ships a reviewable slice; the 2.8 plan decides the sequence and marks the first Bolt as the **walking skeleton** — the smallest end-to-end slice that proves the architecture.
+Construction builds the solution **Bolt by Bolt**. A [Bolt](glossary.md) is one pass through stages 3.1–3.5 for a Unit (or small group of dependency-linked Units). Each Bolt ships a reviewable slice; the 2.9 plan decides the sequence and marks the first Bolt as the **walking skeleton** — the smallest end-to-end slice that proves the architecture.
 
 ```
 ─── Construction: Bolt 1 — notification-core (walking skeleton) ───────────
@@ -287,7 +287,7 @@ Throughout the workflow on Claude Code, the custom AI-DLC status line shows your
 ## Next Steps
 
 - [Spaces and Intents](03-spaces-and-intents.md) — how the workspace holds many runs, and how to start and switch between them
-- [Phases and Stages](04-phases-and-stages.md) — detailed breakdown of all 5 phases and 32 stages
+- [Phases and Stages](04-phases-and-stages.md) — detailed breakdown of all 5 phases and 33 stages
 - [Interaction Modes](07-interaction-modes.md) — Guide Me, Edit File, and Chat explained
 - [Session Management](11-session-management.md) — resuming, redoing, and jumping between stages
 - [Glossary](glossary.md) — terminology reference

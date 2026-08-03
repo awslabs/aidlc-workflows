@@ -671,7 +671,7 @@ describe("t242 state-transition ownership guard", () => {
   });
 
   test("non-initialization stages delegate lifecycle transitions and owned Learn writes", () => {
-    expect(NON_INITIALIZATION_STAGES).toHaveLength(29);
+    expect(NON_INITIALIZATION_STAGES).toHaveLength(30);
     for (const path of NON_INITIALIZATION_STAGES) {
       const body = readFileSync(path, "utf-8");
       const label = relative(REPO_ROOT, path);
@@ -719,7 +719,7 @@ describe("t242 state-transition ownership guard", () => {
     expect(stage("inception", "requirements-analysis")).toContain(
       "bun {{HARNESS_DIR}}/tools/aidlc-utility.ts recompose --add user-stories",
     );
-    expect(stage("inception", "application-design")).toContain(
+    expect(stage("inception", "domain-design")).toContain(
       "bun {{HARNESS_DIR}}/tools/aidlc-utility.ts recompose --add units-generation",
     );
   });

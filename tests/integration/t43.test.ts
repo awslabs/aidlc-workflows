@@ -116,7 +116,7 @@ const STAGE_ORDER = [
   "requirements-analysis",
   "user-stories",
   "refined-mockups",
-  "application-design",
+  "domain-design",
   "units-generation",
   "delivery-planning",
   "functional-design",
@@ -233,7 +233,7 @@ describe("inception stages declare their per-intent record dir in outputs", () =
   // (aidlc/spaces/<active-space>/codekb/<repo>/), so it is asserted separately
   // below; the other inception stages declare their own artifacts under the
   // engine-resolved record dir.
-  for (const slug of ["requirements-analysis", "application-design"]) {
+  for (const slug of ["requirements-analysis", "domain-design"]) {
     test(`${slug} outputs declare "under this stage's record dir, engine-resolved"`, () => {
       const v = out(slug);
       expect(v).not.toBeNull();
@@ -345,31 +345,31 @@ describe("scope-definition -> team-formation edge", () => {
 });
 
 // ============================================================
-// Test 17: application-design outputs -> units-generation inputs (.sh:192-205)
-// The .sh: ad_outputs grep -qi "application-design" AND ug_inputs grep -qi
-// "application-design\|design".
+// Test 17: domain-design outputs -> units-generation inputs (.sh:192-205)
+// The .sh: ad_outputs grep -qi "domain-design" AND ug_inputs grep -qi
+// "domain-design\|design".
 //
 // REROOT: the old `outputs:` carried the path root
-// aidlc-docs/inception/application-design/..., so the literal "application-design"
+// aidlc-docs/inception/domain-design/..., so the literal "domain-design"
 // appeared in the output scalar. With the reroot the path root left `outputs:` —
-// application-design's outputs now name the design artifacts directly
+// domain-design's outputs now name the design artifacts directly
 // (components.md, component-methods.md, services.md, component-dependency.md,
 // decisions.md ... engine-resolved). The downstream consumer still cites the
 // producer by name: units-generation `inputs:` reads
-// `<record>/inception/application-design/ (all design artifacts)`. So the
+// `<record>/inception/domain-design/ (all design artifacts)`. So the
 // edge-citation intent (producer emits the design artifacts, consumer reads
-// application-design's design output) is preserved: assert the producer names a
+// domain-design's design output) is preserved: assert the producer names a
 // design artifact (components.md is the keystone, also pinned by t44 test 5) and
-// the consumer cites application-design/design.
+// the consumer cites domain-design/design.
 // ============================================================
-describe("application-design -> units-generation edge", () => {
-  test("application-design outputs name the design artifacts; units-generation inputs cite the design", () => {
-    const adOut = out("application-design");
+describe("domain-design -> units-generation edge", () => {
+  test("domain-design outputs name the design artifacts; units-generation inputs cite the design", () => {
+    const adOut = out("domain-design");
     const ugIn = inp("units-generation");
     expect(adOut).not.toBeNull();
     expect(ugIn).not.toBeNull();
     expect(adOut!).toMatch(/components|design/i);
-    expect(ugIn!).toMatch(/application-design|design/i);
+    expect(ugIn!).toMatch(/domain-design|design/i);
   });
 });
 

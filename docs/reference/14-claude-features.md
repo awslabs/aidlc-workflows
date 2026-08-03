@@ -83,8 +83,8 @@ All framework hooks are registered project-wide in `settings.json` (the workflow
 
 SKILL.md references two companion file sets in `.claude/skills/aidlc/`:
 
-- **`stage-protocol.md`** -- Mandatory protocol for all 32 stages (approval gates, question formatting, audit logging rules, completion messages, phase-boundary verification).
-- **Stage files** in `stages/initialization/`, `stages/ideation/`, `stages/inception/`, `stages/construction/`, `stages/operation/` -- 32 individual stage definitions.
+- **`stage-protocol.md`** -- Mandatory protocol for all 33 stages (approval gates, question formatting, audit logging rules, completion messages, phase-boundary verification).
+- **Stage files** in `stages/initialization/`, `stages/ideation/`, `stages/inception/`, `stages/construction/`, `stages/operation/` -- 33 individual stage definitions.
 
 ---
 
@@ -100,7 +100,7 @@ For full agent system documentation, see [Agent System](05-agent-system.md).
 
 The conductor uses two modes of agent activation - persona adoption and Task dispatch - across the four stage topologies:
 
-**Inline execution (28 of 32 stages):**
+**Inline execution (29 of 33 stages):**
 The conductor reads the agent's `.md` file and adopts the persona directly within the main conversation. The user interacts with the agent in real time.
 
 **Dispatched execution (4 stages: 2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent):**
@@ -347,12 +347,12 @@ An MCP server appearing in the session is a function of `.mcp.json` plus availab
 | Rules | `aidlc/spaces/<active-space>/memory/*.md` (via `.claude/rules/aidlc.md` @-stub) | Every conversation | Minimal guardrails; self-learning corrections |
 | Skill | `.claude/skills/aidlc/SKILL.md` | On `/aidlc` invocation | Orchestrator: session, scope, stage graph, delegation |
 | Workflow-spine hooks | `.claude/settings.json` | Always on; self-gate when no workflow | PostToolUse, PreCompact, SubagentStop, Stop |
-| Agents (inline) | `.claude/agents/*.md` | Persona activation | 28 of 32 stages: conductor adopts agent persona |
+| Agents (inline) | `.claude/agents/*.md` | Persona activation | 29 of 33 stages: conductor adopts agent persona |
 | Agents (dispatched) | `.claude/agents/*.md` | Task tool delegation | 4 stages (2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent): isolated execution |
 | Knowledge (Tier 1) | `.claude/knowledge/` | Persona activation (steps 2-3) | 56 methodology reference files |
 | Knowledge (Tier 2) | space-level `aidlc/knowledge/` (sibling of `intents/`) | Persona activation (steps 4-5) | Team-managed customization |
 | Stage protocol | `stage-protocol.md` | Every stage execution | Mandatory behavioral contract |
-| Stage files | `stages/**/*.md` | Engine routing | 32 individual stage definitions |
+| Stage files | `stages/**/*.md` | Engine routing | 33 individual stage definitions |
 | State file | `aidlc-state.md` | Session start + throughout | Persistent workflow state |
 | Audit file | `audit.md` | Throughout execution | Append-only audit trail |
 

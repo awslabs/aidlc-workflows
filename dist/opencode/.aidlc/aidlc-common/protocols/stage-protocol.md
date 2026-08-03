@@ -274,13 +274,13 @@ After the user selects "Approve", display a progress line before proceeding.
 
 **When every compiled stage is in scope**:
 ```
-Progress: [N]/32 overall | [phase-N]/[phase-total] [Phase] stages complete. Next: [Next Stage Name]
+Progress: [N]/33 overall | [phase-N]/[phase-total] [Phase] stages complete. Next: [Next Stage Name]
 ```
 
 **When the active scope executes fewer stages than the compiled total**, show
 in-scope progress with overall shown parenthetically:
 ```
-Progress: [X]/[S] in-scope stages complete ([N]/32 overall) | [phase-N]/[phase-total] [Phase]. Next: [Next Stage Name]
+Progress: [X]/[S] in-scope stages complete ([N]/33 overall) | [phase-N]/[phase-total] [Phase]. Next: [Next Stage Name]
 ```
 Keep this format exactly as shown. `S` = the number of stages this workflow
 actually runs, read from the current scope's compiled totals. Use `bun
@@ -288,8 +288,8 @@ actually runs, read from the current scope's compiled totals. Use `bun
 totals; never carry a hand-maintained per-scope count table in this protocol,
 and never narrate where the number came from.
 
-Example (full-scope): "Progress: 13/32 overall | 3/7 IDEATION stages complete. Next: Approval & Handoff"
-Example (reduced-scope): "Progress: 5/8 in-scope stages complete (7/32 overall) | 2/3 CONSTRUCTION. Next: Build & Test"
+Example (full-scope): "Progress: 13/33 overall | 3/7 IDEATION stages complete. Next: Approval & Handoff"
+Example (reduced-scope): "Progress: 5/8 in-scope stages complete (7/33 overall) | 2/3 CONSTRUCTION. Next: Build & Test"
 
 Count only stages in the current phase (INITIALIZATION, IDEATION, INCEPTION, CONSTRUCTION, or OPERATION). Include both completed and skipped stages in the numerator.
 
@@ -321,7 +321,7 @@ Stage files list **topic areas and example questions** — they are guidance, no
 3. **Phase progression** — Questions naturally decrease as the lifecycle advances:
    - **Ideation**: Most questions. Business/strategic focus ("why?", "for whom?", "what market?")
    - **Inception**: Moderate questions. Design/architectural focus ("what requirements?", "which patterns?")
-   - **Construction**: Minimal questions. By this point, decisions should be made. Questions are **exceptional, not routine** — only when the agent detects genuine gaps that prior stages didn't cover (e.g., a unit-specific edge case not addressed in Application Design). Not a full Q&A session.
+   - **Construction**: Minimal questions. By this point, decisions should be made. Questions are **exceptional, not routine** — only when the agent detects genuine gaps that prior stages didn't cover (e.g., a unit-specific edge case not addressed in Domain Design). Not a full Q&A session.
    - **Operation**: Occasional targeted questions only where operational parameters weren't established earlier
 
 | Depth | Target Range | Guidance |
@@ -873,19 +873,22 @@ The orchestrator determines appropriate depth based on scope selection. Users ca
 **Minimal project** (e.g., bugfix, single-page internal tool):
 - Questions: ~2-4 per stage, essentials only, skip what's inferable from code/context
 - Requirements Analysis: 5-10 requirements, brief descriptions, minimal NFR coverage
-- Application Design: Single component diagram, basic data model, no ADRs needed
-- Functional Design: Brief business rules, simple domain entities, skip frontend-components.md
+- Domain Design: Single component diagram, basic data model, minimal ADR log (a one-line "no significant decisions" note is fine)
+- Contract Design: Usually skipped (single self-contained unit); a lone public API gets one lightweight contract spec
+- Functional Design: Brief business rules, simple entities, workflows only where behaviour is non-trivial, skip frontend-components.md
 
 **Standard project** (e.g., multi-page web application):
 - Questions: ~5-8 per stage, cover topic areas, follow up on ambiguities
 - Requirements Analysis: 15-30 requirements with acceptance criteria, moderate NFR coverage
-- Application Design: Component diagrams with interactions, data model with relationships, 2-3 ADRs
-- Functional Design: Detailed business logic models, comprehensive business rules, domain entity lifecycle
+- Domain Design: Component diagrams with interactions, data model with relationships, 2-3 ADRs in the decisions log
+- Contract Design: One spec per inter-unit boundary and per public API (OpenAPI/AsyncAPI/shared-schema)
+- Functional Design: Detailed workflows and state machines, comprehensive business rules, entity lifecycle
 
 **Comprehensive project** (e.g., distributed system with integrations):
 - Questions: ~8-12+ per stage, deep probing, generate questions beyond reference set
 - Requirements Analysis: 30+ requirements, detailed acceptance criteria, comprehensive NFR coverage across all categories
-- Application Design: Multi-layer component diagrams, detailed data flow, integration sequence diagrams, 5+ ADRs with alternatives analysis
+- Domain Design: Multi-layer component diagrams, detailed data flow, integration sequence diagrams, 5+ ADRs with alternatives analysis
+- Contract Design: Versioned specs per boundary, breaking-change policy, retry/timeout/error budgets, integration-mechanism rationale
 - Functional Design: Decision trees, state machines, concurrency handling, error recovery flows, cross-unit interaction patterns
 
 ### Test Strategy
@@ -1128,7 +1131,9 @@ Everything else in this section is silent. Nothing is said about invoking, handi
    - The stage definition file path (`directive.stage_file`)
    - The Q&A file path (e.g., `<record>/<phase>/<stage>/<stage>-questions.md`)
    - All artifact file paths produced by the stage (the `produces` artifacts)
-   - For a per-unit stage (`directive.unit` present), also the resolved paths in `directive.consumes` (all upstream artifacts the stage declares, including the shared inception contracts that pin cross-unit boundaries - `components.md`, `component-methods.md`, `services.md`, `unit-of-work.md` - paths only, per the context-budget rule)
+   - The resolved paths in `directive.consumes` — all upstream artifacts the stage declares — paths only, per the context-budget rule. This applies to **every** reviewer-bearing stage, not only per-unit ones:
+     - For a **per-unit** stage (`directive.unit` present) these include the shared inception contracts that pin cross-unit boundaries (`components.md`, `contract-summary.md`, `unit-of-work.md`).
+     - For a **workflow-level** stage with no `directive.unit` (e.g. `contract-design`), these are the upstream artifacts that justify the produced output — the unit DAG (`unit-of-work.md`, `unit-of-work-dependency.md`), the component catalogue (`components.md`), and `requirements.md` — so the reviewer can verify the contracts against the boundaries, entities, and NFRs they formalise rather than reviewing the summary in isolation.
    - The validation tools list from the stage definition's frontmatter (if any)
 
    Do NOT pass: `memory.md` (builder's diary) or any plan/reasoning files. The reviewer forms independent judgment.

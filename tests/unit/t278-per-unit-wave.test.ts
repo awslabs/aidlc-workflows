@@ -33,9 +33,9 @@ const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const RP = `aidlc/spaces/${DEFAULT_SPACE}/intents/${DEFAULT_RECORD_DIR}`;
 const SEP = "\u2014";
 const REQUIRED_FD = [
-  "business-logic-model",
-  "business-rules",
-  "domain-entities",
+  "entities",
+  "rules",
+  "functional-spec",
   "traceability",
 ];
 interface WaveEntry {
@@ -91,7 +91,7 @@ function constructionState(
 - **Project**: wave test
 - **Project Type**: Greenfield
 - **Scope**: feature
-- **State Version**: 7
+- **State Version**: 8
 - **Skeleton Stance**: on
 - **Construction Iteration**: ${iteration}
 ${reviewOverride ? `- **Review Override**: ${reviewOverride}\n` : ""}
@@ -105,7 +105,7 @@ ${reviewOverride ? `- **Review Override**: ${reviewOverride}\n` : ""}
 ## Stage Progress
 
 ### INCEPTION PHASE
-${row("x", "application-design")}
+${row("x", "domain-design")}
 ${row("x", "units-generation")}
 
 ### CONSTRUCTION PHASE
@@ -314,7 +314,7 @@ describe("t278 engine-emitted wave contract", () => {
     const web = directive.wave?.entries[1] as WaveEntry;
     expect(api.unit_kind).toBe("service");
     expect(api.completion_required).toBe(true);
-    expect(api.required_produces).toHaveLength(5);
+    expect(api.required_produces).toHaveLength(4);
     expect(
       api.required_produces.every((path) =>
         path.includes("/construction/api/infrastructure-design/")
@@ -322,16 +322,11 @@ describe("t278 engine-emitted wave contract", () => {
     ).toBe(true);
     expect(web.unit_kind).toBe("ui");
     expect(web.required_produces).toEqual([
-      `${RP}/construction/web/infrastructure-design/deployment-architecture.md`,
+      `${RP}/construction/web/infrastructure-design/infrastructure-specification.md`,
+      `${RP}/construction/web/infrastructure-design/monitoring-design.md`,
       `${RP}/construction/web/infrastructure-design/cicd-pipeline.md`,
       `${RP}/construction/web/infrastructure-design/traceability.json`,
     ]);
-    expect(web.produces).toContain(
-      `${RP}/construction/web/infrastructure-design/shared-infrastructure.md`,
-    );
-    expect(web.required_produces).not.toContain(
-      `${RP}/construction/web/infrastructure-design/shared-infrastructure.md`,
-    );
     expect(api.consumes_absent).toBeArray();
     expect(web.consumes_absent).toBeArray();
     expect(directive.memory_path).toBe(
@@ -376,7 +371,7 @@ describe("t278 engine-emitted wave contract", () => {
       "scalability-requirements",
       "reliability-requirements",
       "observability-requirements",
-      "business-logic-model",
+      "functional-spec",
     ]) {
       expect(consumePaths.some((path) => path.endsWith(`/${pruned}.md`))).toBe(
         false,
@@ -472,7 +467,7 @@ describe("t278 engine-emitted wave contract", () => {
         "construction",
         "beta",
         "functional-design",
-        "business-logic-model.md",
+        "functional-spec.md",
       ),
       "# repaired after iteration 1\n",
     );
@@ -517,7 +512,7 @@ describe("t278 engine-emitted wave contract", () => {
         "construction",
         "alpha",
         "functional-design",
-        "business-logic-model.md",
+        "functional-spec.md",
       ),
       "# changed after review\n",
     );

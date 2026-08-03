@@ -426,8 +426,8 @@ describe("t150 dist/codex packaging parity + drift guard", () => {
     const dirs = readdirSync(skillsDir).filter((d) =>
       statSync(join(skillsDir, d)).isDirectory(),
     );
-    // 39 skills: orchestrator + 29 stage runners + init + compose + 4 scope runners + 3 session.
-    expect(dirs.length).toBe(39);
+    // 40 skills: orchestrator + 30 stage runners + init + compose + 4 scope runners + 3 session.
+    expect(dirs.length).toBe(40);
     for (const d of dirs) {
       const guard = join(skillsDir, d, "agents", "openai.yaml");
       if (d === "aidlc") {
