@@ -57,6 +57,7 @@ export const TOOLS = {
   jump: "aidlc-jump.ts",
   learnings: "aidlc-learnings.ts",
   log: "aidlc-log.ts",
+  onboard: "aidlc-onboard.ts",
   orchestrate: "aidlc-orchestrate.ts",
   runnerGen: "aidlc-runner-gen.ts",
   runtime: "aidlc-runtime.ts",
@@ -284,8 +285,16 @@ export const ROUTES: readonly Route[] = [
     group: "learnings",
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: ["surface", "persist"],
+    verbs: ["surface", "persist", "persist-rule"],
     tool: TOOLS.learnings,
+  },
+  {
+    id: "onboard",
+    group: "onboard",
+    kind: "noun-passthrough",
+    classification: "passthrough",
+    verbs: ["capture", "list", "classify"],
+    tool: TOOLS.onboard,
   },
   {
     id: "validate",
@@ -861,6 +870,8 @@ async function loadDelegate(tool: string): Promise<DelegateModule | null> {
       return import("./aidlc-learnings.ts");
     case TOOLS.log:
       return import("./aidlc-log.ts");
+    case TOOLS.onboard:
+      return import("./aidlc-onboard.ts");
     case TOOLS.orchestrate:
       return import("./aidlc-orchestrate.ts");
     case TOOLS.runnerGen:

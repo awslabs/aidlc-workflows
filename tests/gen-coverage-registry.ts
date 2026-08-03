@@ -240,6 +240,7 @@ export interface RegistryRow {
 //   validate.ts:295 switch(subcommand)  learnings.ts:750 switch(cmd)
 //   sensor.ts:659 switch(cmd)           utility.ts:2814 switch(subcommand)
 //   graph.ts:1088 const COMMANDS = {}   runtime.ts:1024 const SUBCOMMANDS = {}
+//   onboard.ts switch(cmd) (added S1)
 // ---------------------------------------------------------------------------
 interface ToolDescriptor {
   file: string; // basename under TOOLS_DIR
@@ -256,6 +257,7 @@ export const TOOL_DESCRIPTORS: readonly ToolDescriptor[] = [
   { file: "aidlc-worktree.ts", kind: "switch", anchor: "subcommand" },
   { file: "aidlc-validate.ts", kind: "switch", anchor: "subcommand" },
   { file: "aidlc-learnings.ts", kind: "switch", anchor: "cmd" },
+  { file: "aidlc-onboard.ts", kind: "switch", anchor: "cmd" },
   { file: "aidlc-sensor.ts", kind: "switch", anchor: "cmd" },
   { file: "aidlc-utility.ts", kind: "switch", anchor: "subcommand" },
   { file: "aidlc-graph.ts", kind: "object", anchor: "COMMANDS" },

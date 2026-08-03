@@ -1017,6 +1017,66 @@ export function knowledgeDir(projectDir: string, space?: string): string {
   return join(workspaceRoot(projectDir), "spaces", sp, "knowledge");
 }
 
+// `aidlc/spaces/<space>/onboard` — the onboard capture ledger + captured
+// bytes (the /aidlc-onboard capture/list/classify ledger).
+// Space-level sibling of memory/knowledge/intents, same activeSpace()
+// fallback discipline (cursorless -> "default", NEVER errors) — onboard
+// never stands up a per-customer space. NOT the retired flat
+// aidlc-docs/onboard/ path (that no longer resolves on this tree).
+export function onboardDir(projectDir: string, space?: string): string {
+  const sp = space ?? activeSpace(projectDir);
+  return join(workspaceRoot(projectDir), "spaces", sp, "onboard");
+}
+
+// A `--space <name>` flag names an EXISTING space; it is a path segment, so it
+// must never reach a join() raw. `space-create` slugifies at the creation
+// chokepoint, and any tool that accepts the flag has to enforce the same shape
+// or `--space ../../../outside` escapes the project dir. Returns the validated
+// name, or null when it is not a bare slug (the caller decides the exit code).
+// The shape is slugify()'s own output shape — a name space-create could produce.
+const SPACE_NAME_REGEX = /^[a-z][a-z0-9-]*$/;
+
+export function validSpaceFlag(raw: string): string | null {
+  return SPACE_NAME_REGEX.test(raw) ? raw : null;
+}
+
+// The relative form of a captured file's location, `files/<sha256>-<basename>`,
+// as stored in the manifest ledger. The ledger is a COMMITTED file, so it must
+// not carry absolute machine-local paths: a teammate at a different checkout
+// path (or a clone/move/worktree) resolves the same row against their own
+// onboardDir. Mirrors the relative* resolver family + IntentRegistryEntry's
+// dirName-not-path discipline.
+export function onboardRelativeCapturedFile(sha256: string, basename: string): string {
+  return `files/${sha256}-${basename}`;
+}
+
+// Resolve a ledger row's relative captured path back to an absolute path under
+// this checkout's onboard dir. The inverse of onboardRelativeCapturedFile.
+export function onboardResolveCapturedPath(
+  projectDir: string,
+  relPath: string,
+  space?: string,
+): string {
+  return join(onboardDir(projectDir, space), ...relPath.split("/"));
+}
+
+// The onboard capture manifest ledger: `<onboardDir>/manifest.json`.
+export function onboardManifestPath(projectDir: string, space?: string): string {
+  return join(onboardDir(projectDir, space), "manifest.json");
+}
+
+// Where a captured file's bytes land: `<onboardDir>/files/<sha256>-<basename>`.
+// The sha256 prefix makes the ledger's dedup key visible on disk and keeps
+// two same-named captures from colliding.
+export function onboardCapturedFilePath(
+  projectDir: string,
+  sha256: string,
+  basename: string,
+  space?: string,
+): string {
+  return join(onboardDir(projectDir, space), "files", `${sha256}-${basename}`);
+}
+
 // Enumerate the intent RECORD directories in a space (each `<slug>-<id8>/`
 // holding an aidlc-state.md). Returns the bare directory names, sorted; [] when
 // the space has no intents dir or no records yet. The intents.json registry is
@@ -2313,6 +2373,60 @@ export function readAllAuditShards(projectDir: string, intent?: string, space?: 
   return parts.join("\n");
 }
 
+// The STABLE audit shard for a PRE-WORKFLOW event — always the bare SPACE
+// record root's `audit/`, never an intent's.
+//
+// A pre-workflow event (an onboard rule promoted before any workflow exists) is
+// a fact about the SPACE, not about whichever intent happens to be current. If
+// its shard is resolved through recordDir()/activeIntent() then its identity
+// moves every time the active-intent cursor moves: persist under intent A,
+// switch to B, replay the same candidate id, and the lookup no longer sees the
+// original row, so a second RULE_LEARNED is emitted for one practice line — the
+// self-contradicting `rule_learned: 1` WITH `already_present: true`. Pinning the
+// WRITE here is what makes the identity stable; readPreWorkflowAuditSurface
+// below covers the READ direction for rows earlier builds already scattered
+// into intent buckets.
+export function preWorkflowAuditFilePath(projectDir: string, space?: string): string {
+  return join(spaceRecordRoot(projectDir, space), "audit", auditShardName(projectDir));
+}
+
+// The audit surface for PRE-WORKFLOW events — the union of the bare space record
+// root's `audit/` and EVERY intent bucket in that space.
+//
+// New rows all land in the space-level bucket (preWorkflowAuditFilePath), but the
+// read cannot only look there. Rows written by an earlier build — or by any
+// caller that emitted while an intent cursor was set — live under
+// `intents/<slug>-<id8>/audit/`, and a lookup that misses them re-emits a
+// duplicate event even though the practice line stays correctly deduped. Scanning
+// every intent bucket in the space (not just the ACTIVE one, which is exactly the
+// cursor-dependence being removed) makes the read direction cursor-independent
+// too. Order is irrelevant: callers parse blocks and match on fields.
+export function readPreWorkflowAuditSurface(projectDir: string, space?: string): string {
+  const paths = new Set<string>();
+  const buckets = [join(spaceRecordRoot(projectDir, space), "audit")];
+  for (const dirName of listIntentDirs(projectDir, space)) {
+    buckets.push(join(intentsDir(projectDir, space), dirName, "audit"));
+  }
+  for (const bucket of buckets) {
+    try {
+      for (const f of readdirSync(bucket)) {
+        if (f.endsWith(".md")) paths.add(join(bucket, f));
+      }
+    } catch {
+      // bucket absent (fresh space, or an intent with no audit dir yet) — skip
+    }
+  }
+  const parts: string[] = [];
+  for (const path of [...paths].sort()) {
+    try {
+      parts.push(readFileSync(path, "utf-8"));
+    } catch {
+      // a shard vanished between enumerate and read — skip it
+    }
+  }
+  return parts.join("\n");
+}
+
 export function worktreePath(projectDir: string, boltSlug: string): string {
   return join(projectDir, ".aidlc", "worktrees", `bolt-${boltSlug}`);
 }
@@ -3164,6 +3278,10 @@ function lockStaleMs(): number {
 // given, the space is default-resolved (a per-intent lock is meaningless without
 // its space) but activeIntent() is NEVER consulted here.
 export function auditLockIdentity(projectDir: string, intent?: string, space?: string): string {
+  // CANONICALISE the workspace before it becomes a lock identity: `/p` and `/p/`,
+  // or a symlink alias and its real path, address the SAME files while producing
+  // two different raw strings, and a lock keyed on the raw string hands two
+  // concurrent writers two different locks over one ledger.
   let canonicalProjectDir = resolvePath(projectDir);
   try {
     canonicalProjectDir = realpathSync(canonicalProjectDir);
@@ -3513,10 +3631,38 @@ const AUDIT_LOCK_DEPTH = new Map<string, number>();
 // Sibling temp keeps the rename on the same filesystem so it's a true
 // atomic rename (cross-fs renames degrade to copy-then-unlink). Cleans
 // up the temp file on write failure.
+// The temp name carries the pid + a counter, so two processes writing the same
+// destination never share a scratch file. With a fixed `<path>.tmp`, concurrent
+// writers renamed or unlinked each other's temp and failed with a spurious
+// ENOENT — a lock is still what prevents lost UPDATES, but no writer should be
+// able to break another's write mechanically. Kept a sibling of the destination
+// so the rename stays same-filesystem (a true atomic rename).
+let ATOMIC_TMP_COUNTER = 0;
+
+function atomicTmpPath(path: string): string {
+  ATOMIC_TMP_COUNTER += 1;
+  return `${path}.${process.pid}-${ATOMIC_TMP_COUNTER}.tmp`;
+}
+
 export function writeFileAtomic(path: string, data: string): void {
-  const tmp = `${path}.tmp`;
+  const tmp = atomicTmpPath(path);
   try {
     writeFileSync(tmp, data, "utf-8");
+    renameSync(tmp, path);
+  } catch (err) {
+    try { unlinkSync(tmp); } catch { /* tmp may already be gone */ }
+    throw err;
+  }
+}
+
+// writeBufferAtomic — the byte-exact twin of writeFileAtomic for binary
+// payloads (captured onboard material: PDFs, images, any non-text source).
+// Same sibling-temp-then-rename discipline; no utf-8 coercion, so the
+// captured bytes round-trip identical to the source (sha256-verifiable).
+export function writeBufferAtomic(path: string, data: Buffer | Uint8Array): void {
+  const tmp = atomicTmpPath(path);
+  try {
+    writeFileSync(tmp, data);
     renameSync(tmp, path);
   } catch (err) {
     try { unlinkSync(tmp); } catch { /* tmp may already be gone */ }

@@ -33,9 +33,9 @@
 // comparison is knowledge (orchestrator-LLM); revise/skip/escalate is
 // judgement (user). No LLM call lives in this tool.
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
+import { appendAuditEntryUnlocked, appendPreWorkflowAuditEntryUnlocked } from "./aidlc-audit.ts";
 import { memoryDirFor } from "./aidlc-graph.ts";
 import {
   appendUnderHeading,
@@ -45,6 +45,7 @@ import {
   isoTimestamp,
   parseMemoryEntries,
   readAllAuditShards,
+  readPreWorkflowAuditSurface,
   readStateFile,
   resolveProjectDir,
   runtimeGraphPath,
@@ -346,16 +347,157 @@ function parseSelectionsFile(path: string): SelectionsFile {
 }
 
 // A prior RULE_LEARNED / SENSOR_PROPOSED row for this (Stage, Candidate-ID)?
+//
+// `destination` narrows the match to rows that landed in ONE practice file.
+// Without it the audit dedup is GLOBAL while the practice-line dedup checks only
+// the requested destination, so persisting one cid to `project` and then to
+// `team` writes both files but reports the second call as already-done and
+// leaves the team.md line with no audit row. Both checks have to be scoped the
+// same way, and per-destination is the scope that matches the question actually
+// being asked: "is this rule already in THIS file?"
+//
+// `destination` must be the PROJECT-RELATIVE path — an absolute one makes the key
+// machine-specific and a clone/move re-emits. A row written by an EARLIER build
+// stored an absolute Destination; those still dedup because
+// legacyDestinationMatches compares the workspace-relative TAIL of both sides, so
+// an upgrade does not double-emit even after the project moves.
 function priorAuditRow(
   auditContent: string,
   event: "RULE_LEARNED" | "SENSOR_PROPOSED",
   slug: string,
-  candidateId: string
-): boolean {
+  candidateId: string,
+  destination?: string
+): { found: boolean; exact: boolean; legacyOnly: boolean } {
   const rows = findAllEvents(auditContent, event);
   const stageRe = new RegExp(`^\\*\\*Stage\\*\\*:\\s*${escapeRegex(slug)}\\s*$`, "m");
   const cidRe = new RegExp(`^\\*\\*Candidate-ID\\*\\*:\\s*${escapeRegex(candidateId)}\\s*$`, "m");
-  return rows.some((r) => stageRe.test(r.block) && cidRe.test(r.block));
+  const destRes: RegExp[] = [];
+  if (destination !== undefined) {
+    destRes.push(new RegExp(`^\\*\\*Destination\\*\\*:\\s*${escapeRegex(destination)}\\s*$`, "m"));
+  }
+  // Report HOW the row matched, not just whether. An exact Destination match is
+  // certain; a legacy tail match is a heuristic (two unrelated projects share the
+  // same workspace-relative tail by construction), and the caller needs to know
+  // the difference before it decides that an event already exists.
+  let exact = false;
+  let legacyOnly = false;
+  for (const r of rows) {
+    if (!stageRe.test(r.block) || !cidRe.test(r.block)) continue;
+    if (destination === undefined || destRes.some((re) => re.test(r.block))) {
+      exact = true;
+      break;
+    }
+    if (legacyDestinationMatches(r.block, destination)) legacyOnly = true;
+  }
+  return { found: exact || legacyOnly, exact, legacyOnly: legacyOnly && !exact };
+}
+
+// Does this row's Destination denote the SAME FILE as `absPath`, allowing for a
+// legacy absolute value recorded under a different spelling of the same path?
+//
+// A raw string compare is not enough, and that is the whole bug this closes.
+// `resolveProjectDir` never canonicalises its input, so the same real project
+// reached through a symlink, a trailing slash, or another mount alias yields a
+// different absolute string — and an old row written under one spelling then
+// fails to match a recomputation under another, re-emitting the event and
+// reporting the contradiction `rule_learned: 1` with `already_present: true`.
+// So the comparison is made on the CANONICAL real path of both sides.
+function legacyDestinationMatches(
+  block: string,
+  relDestination: string | undefined
+): boolean {
+  if (relDestination === undefined) return false;
+  // An audit row's field is `**Destination**: <value>` with NO leading bullet, so
+  // getField() (which requires `- **Field**:`) does not apply to an audit block.
+  const m = block.match(/^\*\*Destination\*\*:[ \t]*(.*)$/m);
+  if (m === null) return false;
+  const stated = m[1].trim();
+  // Only absolute values are legacy rows; a relative one is handled by destRes.
+  //
+  // Absoluteness is judged CROSS-PLATFORM, not with the host's isAbsolute(). An
+  // audit ledger is committed, so a row written on Windows is read on Linux and
+  // vice versa. Host-native isAbsolute() called on the raw string says `false` for
+  // `C:\…\aidlc\…` on Linux (and for `/…/aidlc/…` on Windows), so the legacy row
+  // was rejected here — BEFORE the separator normalisation that would have made it
+  // comparable — and the event re-emitted a duplicate on the other platform.
+  if (stated.length === 0 || !isAbsoluteCrossPlatform(stated)) return false;
+  // Compare the PROJECT-RELATIVE TAIL, not the absolute path.
+  //
+  // Comparing canonical absolute paths only reconciles different SPELLINGS of the
+  // same physical location (a symlink alias, a trailing slash). It cannot survive
+  // the case this whole change exists for: the project genuinely COPIED or MOVED
+  // to a new path, where the old row's absolute prefix no longer exists anywhere.
+  // The invariant under a move is the workspace-relative tail
+  // (`aidlc/spaces/<space>/memory/<scope>.md`), so that is what is compared —
+  // anchored at the `aidlc/` workspace root so a suffix match cannot be satisfied
+  // by an unrelated path that merely ends in the same filename.
+  // NOTE: the tail alone cannot distinguish "this project at its old path" from "a
+  // different project entirely" — every AIDLC workspace ends in the same
+  // `aidlc/spaces/<space>/memory/<scope>.md`, so the tails are equal by
+  // construction, and no content of the row can tell a copied row from a planted
+  // one. Rather than guess at project identity here, the caller enforces the
+  // invariant that actually matters: a freshly WRITTEN practice line always gets an
+  // event (see writeRulePractice). That makes a false tail match unable to suppress
+  // a real emission, while keeping the backward-compatible dedup for a moved or
+  // copied project whose practice line is already present.
+  const statedTail = workspaceRelativeTail(stated);
+  return statedTail !== null && statedTail === workspaceRelativeTail(relDestination);
+}
+
+// The `aidlc/...` tail of a destination, or null when there is none. Anchored on
+// the LAST `aidlc/` segment boundary so a nested checkout still resolves to the
+// innermost workspace. Posix-normalised so a Windows-authored row compares equal.
+// Is this path absolute on EITHER platform? A POSIX root (`/…`), a Windows drive
+// (`C:\…` / `C:/…`), or a UNC / Windows-style rooted path (`\\server\share`,
+// `\dir`). Deliberately host-independent: the ledger it reads is committed and
+// travels between platforms, so the host's own path semantics are the wrong
+// question to ask of a stored value.
+function isAbsoluteCrossPlatform(p: string): boolean {
+  return /^([A-Za-z]:[\\/]|[\\/])/.test(p);
+}
+
+function workspaceRelativeTail(p: string): string | null {
+  const posix = p.split(sep).join("/").replace(/\\/g, "/");
+  const idx = posix.lastIndexOf("/aidlc/");
+  if (idx !== -1) return posix.slice(idx + 1);
+  return posix.startsWith("aidlc/") ? posix : null;
+}
+
+// realpath where possible, plain normalisation otherwise.
+//
+// A destination file — or any directory on its way down — may legitimately not
+// exist yet (a fresh practice file in a space that has no memory/ dir), and
+// realpathSync throws on the first missing component. So walk UP to the deepest
+// ancestor that does resolve and re-attach the remainder. Resolving only the
+// immediate parent is not enough: it silently fell back to resolvePath() for a
+// not-yet-created memory/ dir, which left the project dir canonicalised while the
+// destination was not, so relative() escaped and the "portable" Destination was
+// written absolute again.
+function canonicalPath(p: string): string {
+  const abs = resolvePath(p);
+  const tail: string[] = [];
+  let cur = abs;
+  for (;;) {
+    try {
+      return tail.length === 0 ? realpathSync(cur) : join(realpathSync(cur), ...tail);
+    } catch {
+      const parent = dirname(cur);
+      if (parent === cur) return abs; // reached the filesystem root, nothing resolved
+      tail.unshift(basename(cur));
+      cur = parent;
+    }
+  }
+}
+
+// The portable form of a destination for the audit row: relative to the project
+// dir, posix slashes. Falls back to the input when it is not under projectDir
+// (nothing in-tree should hit that, but a fabricated path must not throw).
+// Computed from the CANONICAL project dir so the recorded value does not vary
+// with the path spelling the caller happened to pass to --project-dir.
+function auditDestination(projectDir: string, absPath: string): string {
+  const rel = relative(canonicalPath(projectDir), canonicalPath(absPath));
+  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return absPath;
+  return rel.split(sep).join("/");
 }
 
 function escapeRegex(s: string): string {
@@ -409,6 +551,288 @@ function cidMarker(slug: string, candidateId: string): string {
   return `<!-- cid:${slug}:${candidateId} -->`;
 }
 
+// The full trailing annotation this writer appends: the cid marker with the
+// learned date carried INSIDE it.
+//
+// The date used to sit in the visible rule text as `(learned <date>)`, which meant
+// reading a stored rule back required guessing where this writer's bookkeeping
+// ended and the customer's rule began. Every guess lost, because a practice file is
+// hand-editable and a document can produce any shape:
+//   * matching our exact template missed hand-authored lines entirely;
+//   * stripping any trailing `(...)` ate real parentheticals;
+//   * stripping a date-SHAPED `(...)` still ate a rule that genuinely ends in a
+//     date in parentheses ("… retained for 90 days (learned 2025-01-15)") — a
+//     plausible line to copy out of a policy document.
+// Each iteration moved the trigger and kept the bug: a byte-identical replay
+// refused, and a genuinely narrower approved rule silently dropped.
+//
+// So the bookkeeping moves OUT of the rule text and into the HTML comment, which is
+// already this writer's private structure. `parsePracticeLine` then splits on the
+// marker's own `<!-- cid:` delimiter — a position, not a pattern — and the visible
+// rule text is never parsed, guessed at, or stripped. That removes the whole class
+// rather than narrowing the trigger again.
+function cidAnnotation(slug: string, candidateId: string, learnedDate: string): string {
+  return `<!-- cid:${slug}:${candidateId}; learned:${learnedDate} -->`;
+}
+
+// Read back the rule text stored on the practice line carrying `marker`.
+//
+// Marker PRESENCE is not the same question as "is this rule already recorded": two
+// different rules arriving under one candidate id look identical to a presence
+// check, and the second is then silently dropped at a human approval gate.
+//
+// PARSED BY POSITION, NEVER BY PATTERN. The rule text is everything between the
+// leading `- ` bullet and the start of this writer's own `<!-- cid:` comment. Both
+// are delimiters this writer controls, so the customer's rule text is never
+// stripped, guessed at, or shape-matched — see cidAnnotation for the three
+// successive pattern-matching attempts this replaces, each of which moved the bug
+// to a narrower input instead of removing it.
+//
+// `found: false` means no line carries the marker. `found: true` with `text: null`
+// means the line exists but has no readable rule text, which is NOT permission to
+// proceed (see the caller).
+function storedPracticeText(
+  content: string,
+  marker: string
+): { found: boolean; text: string | null } {
+  const markerStart = `<!-- cid:${markerBody(marker)}`;
+  const line = content
+    .split("\n")
+    .find((l) => l.includes(markerStart) && l.trimStart().startsWith("- "));
+  if (line === undefined) return { found: false, text: null };
+  const body = line
+    .slice(0, line.indexOf(markerStart))
+    .trimStart()
+    .replace(/^-\s*/, "")
+    .trim();
+
+  // A line in the CURRENT format carries `; learned:` inside the annotation, so its
+  // rule text is exactly `body` and is returned verbatim.
+  if (line.slice(line.indexOf(markerStart)).includes("; learned:")) {
+    return { found: true, text: body.length > 0 ? body : null };
+  }
+
+  // A line in the LEGACY format (bare `<!-- cid:… -->`) may carry a trailing
+  // `(learned <ISO date>)` that was this writer's bookkeeping — or a date in
+  // parentheses that is genuinely part of the rule. Nothing on the line distinguishes
+  // them: both are `… (learned 2026-07-01) <!-- cid:… -->` byte for byte. I tried
+  // stripping it, and that is precisely how the false no-op came back — a narrower
+  // approved rule compared equal to the stored one and was dropped.
+  //
+  // An ambiguity this guard cannot resolve is exactly what `text: null` is for. The
+  // caller refuses with the "could not be read" remedy, so the operator re-runs with
+  // a distinct id or repairs the line. A refusal costs one message; guessing costs an
+  // approved rule. Legacy lines WITHOUT a trailing date are unambiguous and compare
+  // normally, so this only affects the genuinely undecidable case.
+  if (/\s*\(learned \d{4}-\d{2}-\d{2}\)\s*$/.test(body)) {
+    return { found: true, text: null };
+  }
+  return { found: true, text: body.length > 0 ? body : null };
+}
+
+// The `<slug>:<id>` core of a marker, without the comment wrapper or any trailing
+// `; learned:<date>`. Lets a lookup match a line whichever annotation form wrote it.
+function markerBody(marker: string): string {
+  const m = marker.match(/<!-- cid:([^;]*?)\s*(?:;|-->)/);
+  return m === null ? marker : m[1].trim();
+}
+
+// The Gap-A stage-optional namespace: onboard has no workflow stage, so its
+// dedup marker + RULE_LEARNED "Stage" field use this fixed sentinel instead
+// of a real stage slug. No shipped stage file is named "aidlc-onboard"
+// (core/aidlc-common/stages/), so this can never collide with a genuine
+// per-stage learnings_captured aggregation (aidlc-runtime.ts compile groups
+// RULE_LEARNED rows by the Stage field verbatim — it never validates the
+// value against the stage graph).
+export const ONBOARD_RULE_NAMESPACE = "aidlc-onboard";
+
+interface RulePracticeInput {
+  // The stage slug for a learning-loop selection, or ONBOARD_RULE_NAMESPACE
+  // for a stage-optional onboard rule. Threads into the cid marker + the
+  // priorAuditRow lookup + the RULE_LEARNED "Stage" field — the SAME dedup
+  // mechanism (cidMarker + namespace), unchanged, per both call sites.
+  namespace: string;
+  candidateId: string;
+  scope: "project" | "team";
+  // True for a PRE-WORKFLOW write (onboard): the RULE_LEARNED row is emitted to
+  // the SPACE-level audit shard rather than through the active-intent cursor, so
+  // the event's identity does not move when the cursor does. See
+  // preWorkflowAuditFilePath.
+  preWorkflow?: boolean;
+  headingRaw: string | undefined;
+  text: string;
+  source: string;
+}
+
+// The Gap-A stage-optional persist CORE — extracted from handlePersist's
+// former inline loop body. Writes (or no-ops) one rule practice line into
+// practiceFilePath(scope) and emits RULE_LEARNED on a fresh write. Shared,
+// unweakened, by both the learning-loop's `persist` (namespace = the
+// required stage_slug) and onboard's `persist-rule` (namespace =
+// ONBOARD_RULE_NAMESPACE) — practiceFilePath()/cidMarker()/priorAuditRow()
+// are the SAME writer + dedup mechanism either way; only the namespace and
+// the caller's INPUT SHAPE (stage-coupled selections-json vs. stage-optional
+// flags) differ. Must run INSIDE the caller's withAuditLock body — reads
+// `auditContent` fresh, mutates the caller's `fileContent` accumulator, and
+// calls appendAuditEntryUnlocked (never re-acquires the lock).
+function writeRulePractice(
+  projectDir: string,
+  auditContent: string,
+  fileContent: Map<string, string>,
+  input: RulePracticeInput
+): { emitted: boolean; alreadyPresent: boolean; auditBackfilled: boolean; path: string; heading: string } {
+  const path = practiceFilePath(projectDir, input.scope);
+  let content = fileContent.get(path);
+  if (content === undefined) {
+    content = existsSync(path) ? readFileSync(path, "utf-8") : practiceFileTemplate(input.scope);
+  }
+  const marker = cidMarker(input.namespace, input.candidateId);
+  const today = isoTimestamp().slice(0, 10);
+  // The orchestrator (learning-loop) or the onboard gate (onboard) routes the
+  // rule to the fitting practice heading (KNOWLEDGE); normalise +
+  // ensure-exists it before the append.
+  const heading = practiceHeading(input.headingRaw);
+
+  // Scoped to THIS destination so the audit dedup and the practice-line dedup
+  // ask the same question — see priorAuditRow.
+  // Match on the PROJECT-RELATIVE destination. An absolute path makes the dedup
+  // key machine-specific, so a clone or move re-emits the event — the exact
+  // portability this feature is about. The committed fixture
+  // (tests/fixtures/v05-mr12-learnings/audit-learnings-captured.md) already
+  // records the relative form, so this is the established shape.
+  const relDestination = auditDestination(projectDir, path);
+  const priorRow = priorAuditRow(
+    auditContent,
+    "RULE_LEARNED",
+    input.namespace,
+    input.candidateId,
+    relDestination // also used to tail-match an older row's absolute Destination
+  );
+  // Presence is tested on the `<slug>:<id>` core, so a line written by EITHER
+  // annotation form counts — an older `<!-- cid:… -->` alongside a visible
+  // `(learned <date>)`, or the current `<!-- cid:…; learned:<date> -->`. Testing the
+  // full new annotation would read every previously-written line as absent and
+  // append a duplicate.
+  const hasLine = content.includes(`<!-- cid:${markerBody(marker)}`);
+
+  // A marker that already exists must carry the SAME rule text, or this write is
+  // not the idempotent re-run it looks like — it is a DIFFERENT rule arriving
+  // under a colliding id, and continuing would drop it.
+  //
+  // Candidate ids are assigned by the caller (onboard's recipe is
+  // `<manifest-id>-<n>`, an ordinal over an LLM-produced candidate list), so a
+  // rerun that reorders or revises candidates can legitimately reuse `-1` for a
+  // different rule. Checking only marker presence then reports `rule_learned: 0,
+  // already_present: true` — a success shape — while the approved rule is never
+  // written. That is silent data loss at a HUMAN APPROVAL gate: the operator saw
+  // the rule, approved it, and the tool said fine. Refusing loudly is the only
+  // safe answer; the caller re-runs with a distinct id.
+  //
+  // FAIL CLOSED WHEN THE STORED TEXT CANNOT BE ESTABLISHED. "I could not parse
+  // the existing line" is the same epistemic state as "the existing line says
+  // something else" — in both cases this write cannot be shown to be the
+  // idempotent re-run it would report itself as. Treating unparseable as
+  // permission-to-proceed reintroduced the exact drop this guard prevents, for
+  // every hand-edited or older-template line in a committed, human-editable file.
+  if (hasLine) {
+    const stored = storedPracticeText(content, marker);
+    if (stored.text === null) {
+      throw new Error(
+        `Candidate id "${input.candidateId}" already appears in ${auditDestination(projectDir, path)}, ` +
+          `but its existing rule text could not be read (the line may have been hand-edited).\n` +
+          `  incoming:  ${input.text}\n` +
+          `Refusing to write: this cannot be confirmed as a re-run of the same rule, and reporting ` +
+          `success would drop the incoming rule. Re-run with a candidate id unique to this rule text, ` +
+          `or repair that line in the practice file.`
+      );
+    }
+    // Compared TRIMMED. `storedPracticeText` already trims what it reads back, and
+    // the writer's own append is surrounded by literal spaces, so leading/trailing
+    // whitespace on the incoming text is a transport artefact (a `--text-file` ending
+    // in a space) rather than a different rule. Comparing untrimmed refused a replay
+    // that differed only by that. Interior whitespace is NOT normalised — "Rule  A"
+    // and "Rule A" are different text and are treated as such.
+    if (stored.text !== input.text.trim()) {
+      throw new Error(
+        `Candidate id "${input.candidateId}" is already recorded in ${auditDestination(projectDir, path)} ` +
+          `with DIFFERENT text.\n  stored:    ${stored.text}\n  incoming:  ${input.text}\n` +
+          `Refusing to write: continuing would report success while dropping the incoming rule. ` +
+          `Re-run with a candidate id that is unique to this rule text.`
+      );
+    }
+  }
+
+  // Write the line unless it is already present (recovery: row exists, line
+  // missing → write only; fresh: neither → write + emit; no-op: both present
+  // → the flush below re-writes byte-identical content).
+  if (!hasLine) {
+    content = ensureHeading(content, heading);
+    // Trimmed, matching the comparison above. Writing untrimmed text would store a
+    // line whose read-back (which trims) could never equal its own input on replay.
+    // The learned date rides INSIDE the annotation, so the visible rule text is
+    // exactly what was approved and nothing has to be stripped to read it back.
+    const line = `- ${input.text.trim()} ${cidAnnotation(input.namespace, input.candidateId, today)}\n`;
+    content = appendUnderHeading(content, heading, line);
+  }
+  fileContent.set(path, content);
+
+  let emitted = false;
+  // Emit when no prior row was found, OR when the only thing that matched was the
+  // LEGACY TAIL HEURISTIC and this call actually wrote a new line.
+  //
+  // The second clause closes a silent ledger gap. A legacy-destination match is
+  // necessarily a guess: every AIDLC workspace ends in the same
+  // `aidlc/spaces/<space>/memory/<scope>.md`, so an unrelated project's row matches
+  // this project's tail. When that false positive coincided with a genuinely NEW
+  // practice line, the line was written and NO event recorded — a rule missing from
+  // the audit trail, which is the one thing that trail exists to prevent. A
+  // duplicate row is recoverable; a missing row is not.
+  //
+  // Scoped to `legacyOnly` on purpose. An EXACT destination match plus a missing
+  // line is the legitimate RECOVERY case (the row is provably ours, the line was
+  // deleted): re-write the line, do NOT emit a second row. t97 pins that.
+  //
+  // The mirror case — line already present, NO audit row at all — is an audit
+  // BACKFILL: a hand-authored practice line carrying a cid marker that the ledger
+  // never recorded. Emitting is right (a rule with no ledger row is the
+  // unrecoverable direction), and it converges: the row exists from then on, so
+  // subsequent runs are clean no-ops. `audit_backfilled` below reports it as its
+  // own state so it is not confused with the collision bug, whose signature is the
+  // same two flags.
+  if (!priorRow.found || (priorRow.legacyOnly && !hasLine)) {
+    const fields = {
+      Stage: input.namespace,
+      "Candidate-ID": input.candidateId,
+      Destination: relDestination,
+      Heading: heading,
+      Source: input.source,
+    };
+    // A pre-workflow row is pinned to the space-level shard so its identity does
+    // not follow the active-intent cursor; a learning-loop row belongs to the
+    // stage's intent and resolves normally.
+    if (input.preWorkflow === true) {
+      appendPreWorkflowAuditEntryUnlocked("RULE_LEARNED", fields, projectDir);
+    } else {
+      appendAuditEntryUnlocked("RULE_LEARNED", fields, projectDir);
+    }
+    emitted = true;
+  }
+  // `alreadyPresent` lets a caller tell "this rule was already in this file" from
+  // "a fresh line was written" — a no-op that reports like a success is
+  // indistinguishable from silent data loss at the gate.
+  //
+  // `auditBackfilled` disambiguates the one combination that would otherwise read
+  // as that data-loss signature: an event emitted for a line that was ALREADY
+  // there. That is a ledger backfill for a hand-authored line, not a dropped rule.
+  return {
+    emitted,
+    alreadyPresent: hasLine,
+    auditBackfilled: emitted && hasLine,
+    path,
+    heading,
+  };
+}
+
 function handlePersist(args: string[], projectDir: string): void {
   const flags = parseFlags(args);
   const slug = flags.slug;
@@ -445,64 +869,21 @@ function handlePersist(args: string[], projectDir: string): void {
         (s): s is LearningSelection => s.type === "learning"
       );
 
-      // Bucket destination files; load (or template) each once. ensureFile
-      // returns { path, content } so callers never re-fetch from the Map.
+      // Bucket destination files; the SHARED Gap-A writer (writeRulePractice)
+      // loads (or templates) each destination once via this accumulator and
+      // flushes it below.
       const fileContent = new Map<string, string>();
-      const ensureFile = (scope: "project" | "team"): { path: string; content: string } => {
-        const path = practiceFilePath(projectDir, scope);
-        const existing = fileContent.get(path);
-        if (existing !== undefined) {
-          return { path, content: existing };
-        }
-        const initial = existsSync(path)
-          ? readFileSync(path, "utf-8")
-          : practiceFileTemplate(scope);
-        fileContent.set(path, initial);
-        return { path, content: initial };
-      };
 
       for (const sel of learnings) {
-        const bucket = ensureFile(sel.scope);
-        const path = bucket.path;
-        let content = bucket.content;
-        const marker = cidMarker(stageSlug, sel.candidate_id);
-        const today = isoTimestamp().slice(0, 10);
-        const source = sel.source ?? "orchestrator";
-        // The orchestrator routes the learning to the fitting practice heading
-        // (KNOWLEDGE); normalise + ensure-exists it before the append.
-        const heading = practiceHeading(sel.heading);
-
-        const hasRow = priorAuditRow(auditContent, "RULE_LEARNED", stageSlug, sel.candidate_id);
-        const hasLine = content.includes(marker);
-
-        // no-op: audit row AND line both present.
-        if (hasRow && hasLine) continue;
-
-        // Write the line unless it is already present (recovery: row exists,
-        // line missing → write only; fresh: neither → write + emit). Create the
-        // routed heading first when the method file doesn't carry it.
-        if (!hasLine) {
-          content = ensureHeading(content, heading);
-          const line = `- ${sel.text} (learned ${today}) ${marker}\n`;
-          content = appendUnderHeading(content, heading, line);
-          fileContent.set(path, content);
-        }
-
-        // Emit only when this is fresh (no prior audit row).
-        if (!hasRow) {
-          appendAuditEntryUnlocked(
-            "RULE_LEARNED",
-            {
-              Stage: stageSlug,
-              "Candidate-ID": sel.candidate_id,
-              Destination: path,
-              Heading: heading,
-              Source: source,
-            },
-            projectDir
-          );
-          ruleLearned++;
-        }
+        const { emitted } = writeRulePractice(projectDir, auditContent, fileContent, {
+          namespace: stageSlug,
+          candidateId: sel.candidate_id,
+          scope: sel.scope,
+          headingRaw: sel.heading,
+          text: sel.text,
+          source: sel.source ?? "orchestrator",
+        });
+        if (emitted) ruleLearned++;
       }
 
       // Flush each method file once (atomic).
@@ -525,7 +906,7 @@ function handlePersist(args: string[], projectDir: string): void {
           fail(`refusing to scaffold a sensor manifest under the framework distribution: ${manifestPath}`, 1);
         }
 
-        const hasRow = priorAuditRow(
+        const priorSensorRow = priorAuditRow(
           auditContent,
           "SENSOR_PROPOSED",
           stageSlug,
@@ -533,7 +914,7 @@ function handlePersist(args: string[], projectDir: string): void {
         );
         const hasManifest = existsSync(manifestPath);
 
-        if (hasRow && hasManifest) {
+        if (priorSensorRow.found && hasManifest) {
           // no-op
           boundStages.push(sel.origin_stage);
           continue;
@@ -550,7 +931,7 @@ function handlePersist(args: string[], projectDir: string): void {
         const bound = bindSensorToStage(projectDir, sel.origin_stage, sensorId);
         if (bound) boundStages.push(sel.origin_stage);
 
-        if (!hasRow) {
+        if (!priorSensorRow.found) {
           appendAuditEntryUnlocked(
             "SENSOR_PROPOSED",
             {
@@ -604,6 +985,271 @@ function handlePersist(args: string[], projectDir: string): void {
       rule_learned: lockResult.rule_learned,
       sensor_proposed: lockResult.sensor_proposed,
       notes,
+    })
+  );
+}
+
+// --- persist-rule (the stage-optional rule entry) -------------------------
+//
+// persist-rule --scope <project|team> --candidate-id <id> --text <text>
+//   [--heading <heading>] [--source <str>] [--project-dir <path>]
+//
+// The STAGE-OPTIONAL sibling of `persist`: no `stage_slug` anywhere on this
+// path (no selections-json, no --slug flag) — onboard is pre-workflow, so
+// there is no active stage to require. Reuses the SAME writer
+// (writeRulePractice → practiceFilePath()) and the SAME dedup mechanism
+// (cidMarker + priorAuditRow) as the learning loop, namespaced under
+// ONBOARD_RULE_NAMESPACE instead of a stage slug. Scope is project/team
+// ONLY — no org tier (stage-protocol.md "no org tier, no widen-to-org path");
+// an org (or any other) value is a hard argument-validation failure, not a
+// silent coercion.
+//
+// INPUT VALIDATION IS LOAD-BEARING HERE. The learning loop's `--text` comes
+// from the conductor; onboard's comes from a customer-supplied document, so this
+// entry point takes untrusted text even though it shares the writer. Both
+// injections below are validated at this boundary, not deeper:
+//   * a newline in --text splits one approved rule into two practice bullets,
+//     the first carrying no cid marker — invisible to dedup and not undoable by
+//     re-running;
+//   * document text containing a `<!-- cid:… -->` marker pre-suppresses that
+//     candidate id, so a later legitimate write emits its audit row and writes
+//     nothing.
+// A candidate id becomes part of that marker, so it is held to a bare
+// identifier shape.
+//
+// THE SHELL IS THE OTHER BOUNDARY, AND VALIDATION HERE CANNOT DEFEND IT. When a
+// harness runs `persist-rule --text "<document text>"`, the shell expands
+// `$(…)` and backticks in that text BEFORE this process starts — no check
+// inside the tool can see, let alone stop, that. `--text-file <path>` is the
+// answer: the caller writes the ONE approved rule line with its file-write tool
+// (never a shell heredoc) and passes only the PATH, so untrusted bytes reach
+// this tool through a file read, where they are inert. Same single-rule shape
+// either way — only the transport differs.
+const CANDIDATE_ID_REGEX = /^[A-Za-z0-9._-]+$/;
+const CID_MARKER_PREFIX = "<!-- cid:";
+
+// A practice heading is a short markdown title, optionally with a leading `## `.
+// SKILL.md routes it from what the customer's DOCUMENT "clearly names", so it is
+// document-influenced content and must be validated — but validated against what
+// can actually cause harm, which is narrower than it first appears:
+//
+//   * the value reaches this tool through `--heading-file`, so the shell never
+//     expands it;
+//   * ensureHeading()/appendUnderHeading() regex-ESCAPE it before it enters a
+//     pattern, so regex metacharacters are inert;
+//   * it is written into a markdown file, where the only structural hazards are a
+//     line break (which could forge a second heading or an untracked bullet) and
+//     the cid marker syntax (which would pre-suppress a candidate id).
+//
+// An ASCII allowlist over-rejected: it refused `Security: IAM` (a colon) and every
+// non-ASCII heading such as `Sécurité`, so a legitimate rule was filed under the
+// wrong heading or not at all. The replacement is a DENYLIST of the genuine
+// hazards plus a length cap — Unicode letters, marks and ordinary punctuation pass.
+//
+// SHELL-METACHARACTER PAYLOADS ARE STILL REFUSED, deliberately. File transport
+// means the shell never expands them here, so this is not the control that
+// prevents execution — but a heading is a short human title, and a value carrying
+// a command substitution is either an attack or a mistake. Both deserve a loud
+// refusal rather than a heading that quietly carries a payload into a COMMITTED
+// file that other tools read (defence in depth, not the primary boundary).
+const HEADING_MAX_LENGTH = 120;
+
+// The SUBSTITUTION/CHAINING metacharacters only — the ones that could turn a
+// heading into a command if some downstream consumer ever interpolated it. Kept
+// deliberately narrow: `&`, `()` and `/` are ordinary in real headings
+// (`Data & Privacy`, `Testing (CI)`, `CI/CD`) and cannot substitute or chain on
+// their own, and the old allowlist already permitted them. Refusing those was
+// the same over-rejection this change exists to remove.
+const HEADING_SHELL_METACHARS = /[`$\\|;<>"']/;
+
+function headingRejection(raw: string): string | null {
+  const body = raw.startsWith("## ") ? raw.slice(3) : raw;
+  if (body.trim() === "") return "must not be empty";
+  if (body.length > HEADING_MAX_LENGTH) {
+    return `must be at most ${HEADING_MAX_LENGTH} characters (got ${body.length})`;
+  }
+  // Control characters — a newline/CR would split one heading into two lines and
+  // let the second forge a heading or an untracked bullet.
+  // Tested by CODEPOINT rather than a character class: a regex holding literal
+  // control characters is both unreadable and a lint error.
+  for (let i = 0; i < body.length; i++) {
+    const code = body.charCodeAt(i);
+    if (code < 0x20 || code === 0x7f) {
+      return "must not contain control characters or line breaks";
+    }
+  }
+  if (body.includes(CID_MARKER_PREFIX)) {
+    return `must not contain "${CID_MARKER_PREFIX}" (the dedup marker syntax)`;
+  }
+  if (HEADING_SHELL_METACHARS.test(body)) {
+    return "must not contain the shell substitution characters ` $ \\ | ; < > \" '";
+  }
+  // A leading list marker would render the heading as a list item.
+  if (/^[-*+]/.test(body.trim())) return "must not begin with a markdown list marker";
+  return null;
+}
+
+// Read a single-line value from a file. Trailing newlines are stripped (a file
+// written by an editor or a file-write tool almost always ends in one, and that
+// is not the author asking for two bullets); an INTERIOR newline in rule text is
+// still rejected below, because it would split one approved rule into two.
+function readValueFile(flag: string, path: string): string {
+  if (!existsSync(path)) fail(`${flag} not found: ${path}`, 1);
+  try {
+    return readFileSync(path, "utf-8").replace(/\r?\n+$/, "");
+  } catch (e) {
+    fail(`could not read ${flag}: ${errorMessage(e)}`, 1);
+  }
+}
+
+function handlePersistRule(args: string[], projectDir: string): void {
+  const flags = parseFlags(args);
+  const scopeRaw = flags.scope;
+  // --candidate-id is built from the manifest's sha256 id, which is a
+  // committed, network-borne value. Same file-transport discipline as text/
+  // source/heading: if a value comes from a committed ledger, it does not go on
+  // a command line. CANDIDATE_ID_REGEX is defence in depth for the file path.
+  const cidFile = flags["candidate-id-file"];
+  if (flags["candidate-id"] !== undefined && cidFile !== undefined) {
+    fail("persist-rule takes EITHER --candidate-id OR --candidate-id-file, not both.", 2);
+  }
+  const candidateId = cidFile !== undefined ? readValueFile("--candidate-id-file", cidFile) : flags["candidate-id"];
+  const textFile = flags["text-file"];
+  if (flags.text !== undefined && textFile !== undefined) {
+    fail("persist-rule takes EITHER --text OR --text-file, not both.", 2);
+  }
+  const text = textFile !== undefined ? readValueFile("--text-file", textFile) : flags.text;
+  // `--source` is provenance for the audit row, and for onboard its value is a
+  // captured file's PATH — which is just as unsafe to interpolate as the text
+  // was. A POSIX filename may contain a single quote, so `--source '<path>'`
+  // is not escaped by the quotes: the quote closes and the rest of the filename
+  // becomes shell. `--source-file` gives paths the same file-borne transport
+  // `--text-file` gives text, so nothing untrusted reaches a command line.
+  const sourceFile = flags["source-file"];
+  if (flags.source !== undefined && sourceFile !== undefined) {
+    fail("persist-rule takes EITHER --source OR --source-file, not both.", 2);
+  }
+  // `--heading` is document-influenced too (SKILL.md routes it from the content),
+  // so it gets the same file transport as the text and the source path. Closing
+  // one flag at a time is what turned this into five review rounds — every value
+  // the skill derives from a document must have a way to travel that is not argv.
+  const headingFile = flags["heading-file"];
+  if (flags.heading !== undefined && headingFile !== undefined) {
+    fail("persist-rule takes EITHER --heading OR --heading-file, not both.", 2);
+  }
+  const heading =
+    headingFile !== undefined ? readValueFile("--heading-file", headingFile) : flags.heading;
+  if (heading !== undefined) {
+    const rejection = headingRejection(heading);
+    if (rejection !== null) {
+      fail(
+        `Invalid heading ${JSON.stringify(heading)}: a practice heading ${rejection}. ` +
+          `Pass a short markdown title, optionally prefixed "## ".`,
+        2
+      );
+    }
+  }
+  if (!scopeRaw || !candidateId || !text) {
+    fail(
+      "Usage: aidlc-learnings.ts persist-rule --scope <project|team> (--candidate-id <id> | --candidate-id-file <path>) (--text <text> | --text-file <path>) [--heading <h> | --heading-file <path>] [--source <str> | --source-file <path>] [--project-dir <path>]\n" +
+        "Use the *-file variants for any document-derived or ledger-derived value: none puts untrusted bytes on a shell command line.",
+      1
+    );
+  }
+  if (scopeRaw !== "project" && scopeRaw !== "team") {
+    fail(`Invalid --scope "${scopeRaw}": must be "project" or "team" (no org tier for onboard rules)`, 2);
+  }
+  if (!CANDIDATE_ID_REGEX.test(candidateId)) {
+    fail(
+      `Invalid --candidate-id "${candidateId}": must match ${CANDIDATE_ID_REGEX.source} (it becomes part of the dedup marker).`,
+      2
+    );
+  }
+  if (/[\r\n]/.test(text)) {
+    fail(
+      "Invalid rule text: a rule is ONE practice line, so it must not contain a newline (a newline would split it into two bullets, the second untracked by dedup).",
+      2
+    );
+  }
+  if (text.includes(CID_MARKER_PREFIX)) {
+    fail(
+      `Invalid rule text: must not contain "${CID_MARKER_PREFIX}" (the dedup marker syntax) — that would suppress a future candidate id.`,
+      2
+    );
+  }
+  // `--space` is not threaded on this path: the practice file follows the
+  // ACTIVE-SPACE cursor (practiceFilePath → memoryDirFor). Absorbing the flag
+  // silently would land an `--space acme` rule in `default`, so it is rejected
+  // with the remedy rather than ignored.
+  if (flags.space !== undefined) {
+    fail(
+      "persist-rule does not accept --space: the rule lands in the ACTIVE space (memoryDirFor follows the active-space cursor). Switch spaces first (/aidlc space <name>), then persist.",
+      2
+    );
+  }
+  const scope: "project" | "team" = scopeRaw;
+  const source =
+    sourceFile !== undefined
+      ? readValueFile("--source-file", sourceFile)
+      : (flags.source ?? "onboard");
+
+  let result: { emitted: boolean; alreadyPresent: boolean; auditBackfilled: boolean; path: string; heading: string };
+  try {
+    result = withAuditLock(projectDir, () => {
+      const auditContent = readPreWorkflowAuditSurface(projectDir);
+      const fileContent = new Map<string, string>();
+      const written = writeRulePractice(projectDir, auditContent, fileContent, {
+        namespace: ONBOARD_RULE_NAMESPACE,
+        candidateId,
+        scope,
+        preWorkflow: true,
+        headingRaw: heading,
+        text,
+        source,
+      });
+      for (const [path, content] of fileContent) {
+        mkdirSync(dirname(path), { recursive: true });
+        writeFileAtomic(path, content);
+      }
+      return written;
+    });
+  } catch (e) {
+    const msg = errorMessage(e);
+    if (/Failed to acquire audit lock/.test(msg)) {
+      fail(
+        `${msg}. The audit lock dir may be orphaned by a hard-killed run; ` +
+          `remove it manually (look under the system temp dir for the aidlc audit lock) and retry.`,
+        1
+      );
+    }
+    // A candidate-id collision is a caller-input problem with a specific remedy,
+    // so it reports as an argument failure (exit 2) with its own message intact
+    // rather than being flattened into the generic runtime wrapper.
+    if (
+      /is already recorded in .* with DIFFERENT text/s.test(msg) ||
+      /existing rule text could not be read/s.test(msg)
+    ) {
+      fail(msg, 2);
+    }
+    fail(`persist-rule failed: ${msg}`, 1);
+  }
+
+  console.log(
+    JSON.stringify({
+      scope,
+      candidate_id: candidateId,
+      destination: result.path,
+      heading: result.heading,
+      rule_learned: result.emitted ? 1 : 0,
+      // Distinguishes an idempotent re-run from a fresh write so the caller can
+      // report the difference instead of treating a no-op as a success.
+      already_present: result.alreadyPresent,
+      // True only for a ledger BACKFILL: the practice line already existed (a
+      // hand-authored rule carrying a cid marker) and this call recorded the
+      // missing RULE_LEARNED for it. Without this field, `rule_learned: 1` with
+      // `already_present: true` is indistinguishable from the candidate-id
+      // collision bug, whose signature is exactly those two flags.
+      audit_backfilled: result.auditBackfilled,
     })
   );
 }
@@ -751,6 +1397,18 @@ function printHelp(): void {
       "      {project,team}.md (the relocated method files) and/or scaffold + bind",
       "      a project-tier sensor manifest; emit RULE_LEARNED / SENSOR_PROPOSED",
       "      under one withAuditLock.",
+      "  persist-rule --scope <project|team>",
+      "      (--candidate-id <id> | --candidate-id-file <path>)",
+      "      (--text <text> | --text-file <path>)",
+      "      [--heading <h> | --heading-file <path>]",
+      "      [--source <str> | --source-file <path>]",
+      "      [--project-dir <path>]",
+      "      Stage-optional entry: write ONE rule practice line with no",
+      "      stage_slug (the /aidlc-onboard caller). Same writer + dedup as",
+      "      persist, namespaced under ONBOARD_RULE_NAMESPACE. project/team",
+      "      scope only — no org tier. Use the *-file variants for any",
+      "      document-derived value (text, source path, heading): only a path",
+      "      reaches the command line, so the shell never expands untrusted bytes.",
       "  --help",
       "",
     ].join("\n")
@@ -766,7 +1424,7 @@ export function main(argv: string[]): void {
     return;
   }
   if (cmd === undefined) {
-    fail("Usage: aidlc-learnings.ts <surface|persist|--help>", 2);
+    fail("Usage: aidlc-learnings.ts <surface|persist|persist-rule|--help>", 2);
   }
 
   const projectDir = resolveProjectDir(projectDirArg);
@@ -777,6 +1435,9 @@ export function main(argv: string[]): void {
       break;
     case "persist":
       handlePersist(subargs, projectDir);
+      break;
+    case "persist-rule":
+      handlePersistRule(subargs, projectDir);
       break;
     default:
       fail(`Unknown subcommand: ${cmd}. Run aidlc-learnings.ts --help for usage.`, 2);

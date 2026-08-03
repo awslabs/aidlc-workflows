@@ -186,10 +186,12 @@ Emitted by the deterministic-sensor system. The sensor dispatcher emits the four
 
 Emitted by stage-protocol §13 (Learnings Ritual). The runtime-graph compile emits `MEMORY_EMPTY` when a just-approved stage's memory.md has zero non-blank entries under the four standard headings. The learning-gate tool emits `RULE_LEARNED` when the user keeps a surfaced or free-text learning (a learning IS a practice — it lands as a practice line under the routed heading in `{project,team}.md`) and `SENSOR_PROPOSED` when a learning installs a sensor binding (manifest + originating stage `sensors:` frontmatter). Doctor reads `MEMORY_EMPTY` rows over time to detect systematic diary-skipping across stages.
 
+`RULE_LEARNED` has a second emitter: `persist-rule`, the stage-optional entry the `/aidlc-onboard` gate uses to promote an onboarded customer standard. A rule is a rule regardless of front door, so the event and its fields are identical — but onboard runs before any workflow, so its rows carry the fixed `aidlc-onboard` namespace in `Stage` rather than a stage slug. The per-stage learnings rollup in the workflow report and replay groups by stage slug, so those rows do not appear there; the rules themselves are fully live at the next compile.
+
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
 | `MEMORY_EMPTY` | A stage approval triggered a runtime-graph compile and the stage's memory.md had zero non-blank entries under any of the four §13 headings | Timestamp, Stage | `tools/aidlc-runtime.ts compile` |
-| `RULE_LEARNED` | The learning gate persisted a kept learning as a practice line under the routed heading in `{project,team}.md` | Timestamp, Stage, Candidate-ID, Destination, Heading, Source | `tools/aidlc-learnings.ts persist` |
+| `RULE_LEARNED` | The learning gate persisted a kept learning — or the `/aidlc-onboard` gate promoted an onboarded standard — as a practice line under the routed heading in `{project,team}.md` | Timestamp, Stage, Candidate-ID, Destination, Heading, Source | `tools/aidlc-learnings.ts persist` · `tools/aidlc-learnings.ts persist-rule` (onboard) |
 | `SENSOR_PROPOSED` | The learning gate scaffolded a project-tier sensor manifest and bound it to the originating stage's `sensors:` frontmatter | Timestamp, Stage, Candidate-ID, Sensor ID, Manifest path, Matches, Destinations, Source | `tools/aidlc-learnings.ts persist` |
 
 ### Swarm (6 events)

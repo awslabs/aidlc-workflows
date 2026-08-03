@@ -20,23 +20,23 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 487,
+    "total": 500,
     "enumeratedByClass": {
-      "function": 253,
+      "function": 262,
       "audit": 74,
       "scope": 9,
       "stage": 32,
       "hook": 14,
-      "subcommand": 98,
+      "subcommand": 102,
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 107,
+      "function": 115,
       "audit": 33,
       "scope": 9,
       "stage": 9,
       "hook": 14,
-      "subcommand": 85,
+      "subcommand": 89,
       "render-surface": 7
     }
   },
@@ -2166,6 +2166,61 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:onboardCapturedFilePath",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:onboardDir",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t263-onboard-capture-classify.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:onboardManifestPath",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t263-onboard-capture-classify.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:onboardRelativeCapturedFile",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t263-onboard-capture-classify.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:onboardResolveCapturedPath",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t263-onboard-capture-classify.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:parseArgs",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2366,6 +2421,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:preWorkflowAuditFilePath",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t263-onboard-capture-classify.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:producersOf",
       "minMechanism": "none",
       "coveredBy": [
@@ -2417,6 +2484,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readPreWorkflowAuditSurface",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t263-onboard-capture-classify.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -3188,6 +3267,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:validSpaceFlag",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t263-onboard-capture-classify.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:withAuditLock",
       "minMechanism": "none",
       "coveredBy": [
@@ -3276,6 +3367,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:writeBufferAtomic",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t263-onboard-capture-classify.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -4427,6 +4530,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/integration/t264-onboard-skill-flow.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t99-learnings-gate-flow.test.ts",
           "mechanism": "cli"
         },
@@ -4600,6 +4707,22 @@
     },
     {
       "unitClass": "subcommand",
+      "unitId": "aidlc-learnings persist-rule",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t264-onboard-skill-flow.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t263-onboard-capture-classify.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
       "unitId": "aidlc-learnings surface",
       "minMechanism": "cli",
       "coveredBy": [
@@ -4649,6 +4772,50 @@
       "coveredBy": [
         {
           "file": "tests/unit/t115.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-onboard capture",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t264-onboard-skill-flow.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t263-onboard-capture-classify.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-onboard classify",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t264-onboard-skill-flow.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t263-onboard-capture-classify.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-onboard list",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t263-onboard-capture-classify.test.ts",
           "mechanism": "cli"
         }
       ],

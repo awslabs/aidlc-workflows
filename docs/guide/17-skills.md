@@ -20,6 +20,7 @@ Every command this implementation ships is a skill under `.claude/skills/`. They
 - **Stage-runners** — `/aidlc-application-design`, `/aidlc-code-generation`, and 27 more. Run one stage in isolation, never touching your main workflow. Plugin-owned stages use their bare plugin-prefixed command name, such as `/test-pro-integration`.
 - **`/aidlc-init`** — birth the first intent (run the whole Initialization phase) in one step; opt-in packaging over the engine's auto-birth.
 - **Session skills** — `/aidlc-session-cost`, `/aidlc-replay`, `/aidlc-outcomes-pack`. Read-only views over a workflow; covered in [Session Management](11-session-management.md).
+- **`/aidlc-onboard`** — capture and classify a customer's material, and (for preventative standards) promote a rule through a human gate. A read-write capability skill, not a session view; covered in [CLI Commands](12-cli-commands.md#aidlc-onboard-onboard-a-customers-material) and [Rules and the Learning Loop](09-rules-and-the-learning-loop.md).
 
 Everything a runner does is reachable from `/aidlc` with a flag. The runners are packaging — typing `/aidlc-bugfix` and seeing it in your `/` menu is good ergonomics, nothing more. Delete every runner and the shortcuts go; the capability stays, reachable through `/aidlc` flags.
 

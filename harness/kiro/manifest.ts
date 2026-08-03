@@ -38,6 +38,9 @@ const manifest: HarnessManifest = {
     { src: "skills/aidlc-session-cost", dst: "skills/aidlc-session-cost" },
     { src: "skills/aidlc-replay", dst: "skills/aidlc-replay" },
     { src: "skills/aidlc-outcomes-pack", dst: "skills/aidlc-outcomes-pack" },
+    // The /aidlc-onboard capability skill — a
+    // user-invocable feature skill, harness-neutral like the session skills.
+    { src: "skills/aidlc-onboard", dst: "skills/aidlc-onboard" },
   ],
 
   // Authored Kiro shell surfaces. These carry literal `.kiro` (harness-specific

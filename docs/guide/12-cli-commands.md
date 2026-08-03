@@ -757,6 +757,28 @@ Three read-only skills surface what `aidlc-runtime summary` reports, wrapped in 
 
 All three are read-only — no stage advance, no audit emit — and source every number from `aidlc-runtime summary --json`. See [Session Management § Session Skills](11-session-management.md#session-skills) for the full walkthrough.
 
+### `/aidlc-onboard` — onboard a customer's material
+
+`/aidlc-onboard --source <path>` is the *bulk, up-front* door onto the same rule-write core the learning loop uses — a different front door for external material a human hands the engine, rather than a correction discovered mid-workflow. Point it at a file or a directory (any path, anywhere); it captures every file byte-exact, classifies each captured item, and — for the ones it finds **preventative** (a customer standard written as an imperative: "must", "shall", "never") — drafts a candidate rule you confirm at a human approval gate before anything is written.
+
+```
+/aidlc-onboard --source ./standards
+/aidlc-onboard --source standards.md
+```
+
+| Step | What happens |
+|------|--------------|
+| Capture | `aidlc-onboard.ts capture --source-file <path>` (the path itself written to a scratch file, never placed on a command line) copies the file (or every file under a walked directory) byte-exact, records its sha256, and append-merges it into a capture manifest at `aidlc/spaces/<active-space>/onboard/manifest.json`. Re-capturing identical bytes updates the existing ledger row instead of duplicating it. Symlinks and the engine's own `aidlc/` directory are skipped. The target space resolves from the active-space pointer and defaults to `default` — onboard never stands up a new space for this. |
+| Classify | `aidlc-onboard.ts classify --id-file <path>` (the manifest id written to a scratch file) reads a captured item's text and emits a `preventative` / `other-text` / `unsupported-binary` signal, plus the text itself (capped — a cap sets `truncated: true`). The signal is a keyword pre-filter the skill re-judges in both directions, so an `other-text` item that plainly is a standard still reaches the gate. This slice is **text only** — PDF and binary extraction ship in a later release; a binary source is still captured byte-exact, it just can't be classified yet. Text must be **valid UTF-8**: a latin-1 / Windows-1252 document classifies as `unsupported-binary` rather than being decoded to mojibake, so re-save it as UTF-8 if a prose file is unexpectedly quarantined. |
+| Gate | For each item judged preventative, you're asked to confirm or decline it, and — if you confirm — pick its scope: `team` or `project`. There is no org-scope option; org rules stay framework- or organization-authored, the same boundary the learning loop already draws. Nothing is written until you say yes. |
+| Promote | Each confirmed candidate's text **and** the item's `source_path` are written to scratch files and handed to `aidlc-learnings.ts persist-rule --text-file <path> --source-file <path> --heading-file <path>` — the text, the captured filename and the routed heading are all derived from the customer's document, so none of them ever reaches a command line. It writes the line into `aidlc/spaces/<active-space>/memory/{project,team}.md` — the exact same file the learning loop writes to — and emits `RULE_LEARNED` on a fresh write. A file rather than a `--text` argument because the text came from a customer document, and a shell would expand `$(…)` inside it before the tool could inspect it. The rules take effect on the *next* compile, same as a learning-loop rule. |
+
+Non-preventative material is classified and reported, but this release doesn't yet promote it anywhere — a domain glossary or brand guide surfaces as "captured, not promoted" until knowledge-document routing ships. See [Rules and the Learning Loop](09-rules-and-the-learning-loop.md) for the shared rule-write core both doors write through.
+
+Two things to know about the rules onboard writes. A standards document normally states several controls, so it normally yields several rules — each needs its own `--candidate-id`, because that id is the dedup key and two candidates sharing one would look like an idempotent re-run. And because onboard runs before any workflow, an onboarded rule has no stage: it is fully live at the next compile, but it does **not** appear in the per-stage learnings rollup `/aidlc-replay` and the workflow report render, since those group by stage.
+
+The capture ledger is committed, so it stores each captured file's path relative to the onboard directory — a teammate who pulls, or a clone at a different path, resolves the same rows.
+
 ---
 
 ## Environment Variables

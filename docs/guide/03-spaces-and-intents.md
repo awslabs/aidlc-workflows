@@ -52,6 +52,10 @@ my-project/
 │       │   ├── codekb/           CODE KNOWLEDGE — what each repo is (committed, per-repo)
 │       │   │   └── <repo>/          architecture, component inventory, freshness marker
 │       │   │
+│       │   ├── onboard/          ONBOARDED MATERIAL — /aidlc-onboard's capture ledger (committed)
+│       │   │   ├── manifest.json    one row per captured file + its disposition
+│       │   │   └── files/           the byte-exact copies, named <sha256>-<filename>
+│       │   │
 │       │   └── intents/          THE RECORD — one subdir per piece of work
 │       │       ├── active-intent   ← cursor: which intent is current (gitignored)
 │       │       ├── intents.json    the registry: every intent + its scope/repos/status
@@ -281,9 +285,13 @@ repo. Two kinds of file are deliberately **gitignored** instead:
 | `…/intents/<id>/runtime-graph.json`, `.aidlc-*`, `aidlc/.aidlc-sessions/` | Derived, machine-local runtime state. |
 
 Everything else under a space — `memory/**`, `knowledge/**`, `codekb/**`,
-`intents.json`, each record's `aidlc-state.md`, `audit/` shards, and artifacts — is
-committed. The rule of thumb: **cursors and runtime scratch are local; the shared
-work is committed.**
+`onboard/**`, `intents.json`, each record's `aidlc-state.md`, `audit/` shards, and
+artifacts — is committed. The rule of thumb: **cursors and runtime scratch are
+local; the shared work is committed.**
+
+Because `onboard/` is committed, its `manifest.json` stores each captured file's
+path **relative** to the onboard dir — a teammate who pulls, or a clone at a
+different path, resolves the same rows against their own checkout.
 
 ---
 

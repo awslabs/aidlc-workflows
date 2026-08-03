@@ -8,6 +8,7 @@ import {
   errorMessage,
   isoTimestamp,
   parseFieldArgs,
+  preWorkflowAuditFilePath,
   relativeRecordDir,
   releaseAuditLock,
   resolveProjectDir,
@@ -311,6 +312,32 @@ export function appendAuditEntryUnlocked(
   validateAuditEntry(entry);
   const ts = isoTimestamp();
   const path = ensureAuditFile(projectDir, intent, space);
+  appendFileSync(path, renderAuditBlock(entry, ts), "utf-8");
+
+  return { appended: true, event: eventType, timestamp: ts };
+}
+
+// PRE-WORKFLOW variant: appends to the SPACE-level shard
+// (preWorkflowAuditFilePath) instead of resolving a shard through the
+// active-intent cursor. Use this for events whose identity belongs to the space
+// rather than to any one intent — an onboard rule promoted before a workflow
+// exists. Resolving such an event's shard through the cursor makes its identity
+// move whenever the cursor moves, which re-emits a duplicate row for one already
+// deduped practice line (see preWorkflowAuditFilePath). Lock-already-held, same
+// contract as appendAuditEntryUnlocked.
+export function appendPreWorkflowAuditEntryUnlocked(
+  eventType: string,
+  fields: Record<string, string>,
+  projectDir: string,
+  space?: string
+): { appended: true; event: string; timestamp: string } {
+  const entry = { eventType, fields };
+  validateAuditEntry(entry);
+  const ts = isoTimestamp();
+  const path = preWorkflowAuditFilePath(projectDir, space);
+  const dir = dirname(path);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  if (!existsSync(path)) appendFileSync(path, "# AI-DLC Audit Log\n", "utf-8");
   appendFileSync(path, renderAuditBlock(entry, ts), "utf-8");
 
   return { appended: true, event: eventType, timestamp: ts };

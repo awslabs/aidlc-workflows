@@ -83,6 +83,8 @@ The default scope is **project**. A one-click "promote to team" affordance widen
 
 A confirmed learning *is* a practice: it lands in the same active-space memory files (`aidlc/spaces/<active-space>/memory/project.md`, `team.md`) that practices-discovery affirms — there is no separate rolling `*-learnings.md` surface. The two paths into those files differ by lifecycle: practices-discovery affirms a whole section deterministically, while the learning loop appends one dated, topically-headed entry at a time through the gate.
 
+There is a **third** door onto the same files: `/aidlc-onboard --source <path>`. Where the learning loop captures a correction discovered *while running a stage*, onboard is the *bulk, up-front* path for external material — a customer's standards doc, handed to the engine before any workflow starts. Onboard classifies preventative material and, after its own human-approval gate, writes through `aidlc-learnings.ts persist-rule` — the stage-optional sibling of the same write path this section describes, keyed by a fixed namespace instead of a stage slug. Same files, same `RULE_LEARNED` event, same next-compile timing; different front door. See [`/aidlc-onboard`](12-cli-commands.md#aidlc-onboard-onboard-a-customers-material) in CLI Commands.
+
 When a kept learning is a **sensor binding** rather than a rule (you want a new deterministic check to fire on a stage's output), the framework does a two-write install atomically: it scaffolds the sensor manifest and appends the new sensor's id to the originating stage's import list. The diary, the gate confirmation, and the resulting file write each leave an audit row (`RULE_LEARNED` or `SENSOR_PROPOSED`), so no rule is ever installed silently.
 
 ### Admission-time conflict checks

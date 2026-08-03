@@ -384,7 +384,7 @@ Pre-registered for v0.5.0 in milestone 4; `MEMORY_EMPTY` emitter lands in milest
 | Event | Emitter | Trigger |
 |---|---|---|
 | `MEMORY_EMPTY` | `tools/aidlc-runtime.ts` | Stage approval's runtime-graph compile found memory.md missing or with zero non-blank entries under §13's four headings |
-| `RULE_LEARNED` | `tools/aidlc-learnings.ts` | The learning gate persisted a kept learning as a dated practice entry to `aidlc/spaces/<active-space>/memory/{project,team}.md` |
+| `RULE_LEARNED` | `tools/aidlc-learnings.ts` (`persist`, and `persist-rule` for `/aidlc-onboard`) | The learning gate persisted a kept learning — or the onboard gate promoted an onboarded standard — as a dated practice entry to `aidlc/spaces/<active-space>/memory/{project,team}.md`. Onboard rows carry the `aidlc-onboard` namespace in `Stage`, so they are absent from the per-stage learnings rollup |
 | `SENSOR_PROPOSED` | `tools/aidlc-learnings.ts` | The learning gate scaffolded a project-tier sensor manifest and bound it to the originating stage's `sensors:` frontmatter |
 
 ### Swarm

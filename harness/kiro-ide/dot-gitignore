@@ -55,6 +55,9 @@ aidlc/diagnostics/
 #
 # COMMITTED (NOT ignored, listed here for the record — do NOT add ignore rules
 # for these): aidlc/spaces/*/memory/** · aidlc/spaces/*/codekb/** ·
+# aidlc/spaces/*/onboard/** (the /aidlc-onboard capture ledger + the byte-exact
+# copies: onboarded material is shared truth, and the manifest stores captured
+# paths RELATIVE to the onboard dir so a clone at another path still resolves) ·
 # aidlc/spaces/*/intents/intents.json · aidlc/spaces/*/intents/*/aidlc-state.md ·
 # aidlc/spaces/*/intents/*/audit/*.md (the audit trail, committed as PER-CLONE
 # SHARDS: each machine appends to audit/<host>-<clone>.md so git never merges

@@ -207,7 +207,10 @@ describe("t158 memory writer/reader round-trip (P6 closed the P5 seam)", () => {
     // The resolver surfaced the practice under `## Corrections`.
     const corrections = team?.headings.get("Corrections") ?? "";
     expect(corrections).toContain("Used Given/When/Then for AC; team standardised");
-    expect(corrections).toContain("(learned ");
+    // The learned date is still recorded, but inside the cid annotation rather than
+    // in the visible rule text — that is what lets a stored rule be read back by
+    // position instead of by pattern-matching a bookkeeping suffix out of it.
+    expect(corrections).toContain("; learned:");
 
     // Belt-and-braces: the raw team.md carries the cid idempotency marker.
     const teamMd = readFileSync(join(memoryDirFor(root), "team.md"), "utf-8");

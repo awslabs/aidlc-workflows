@@ -409,8 +409,12 @@ export default function emit(ctx: EmitContext): void {
     emissions.push({ path: join(dir, "SKILL.md"), content: () => rewriteProse(gen.renderRunner(scope, scopes[scope].description)) });
     emissions.push({ path: join(dir, "agents", "openai.yaml"), content: () => IMPLICIT_GUARD });
   }
-  // (d) session skills — byte-copy + prose rewrite from core/skills/
-  for (const skill of ["aidlc-session-cost", "aidlc-replay", "aidlc-outcomes-pack"]) {
+  // (d) session skills — byte-copy + prose rewrite from core/skills/. Also
+  // carries aidlc-onboard — a user-invocable feature
+  // skill in core/skills/, same as the three session skills; Codex does NOT
+  // enumerate core/skills/ (per the header comment above), so a skill added
+  // there needs an entry in this list or it never reaches .agents/skills/.
+  for (const skill of ["aidlc-session-cost", "aidlc-replay", "aidlc-outcomes-pack", "aidlc-onboard"]) {
     const srcDir = join(coreRoot, "skills", skill);
     if (!existsSync(srcDir)) continue;
     for (const file of walk(srcDir)) {
