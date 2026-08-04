@@ -279,6 +279,7 @@ describe("t148 dist/kiro file structure", () => {
       "execute_bash",
       "fs_write",
       "subagent",
+      "subagent",
     ]);
     expect(
       (hooks.preToolUse ?? []).find((h) => h.matcher === "fs_write")?.command,
@@ -287,9 +288,14 @@ describe("t148 dist/kiro file structure", () => {
       (hooks.preToolUse ?? []).filter((h) => h.matcher === "execute_bash")
         .some((h) => h.command.includes("aidlc-kiro-adapter.ts review-freeze")),
     ).toBe(true);
-    expect(
-      (hooks.preToolUse ?? []).find((h) => h.matcher === "subagent")?.command,
-    ).toContain("aidlc-kiro-adapter.ts dispatch-rules");
+    const subagentCommands = (hooks.preToolUse ?? [])
+      .filter((h) => h.matcher === "subagent")
+      .map((h) => h.command)
+      .sort();
+    expect(subagentCommands).toEqual([
+      "bun .kiro/hooks/aidlc-kiro-adapter.ts dispatch-rules",
+      "bun .kiro/hooks/aidlc-kiro-adapter.ts plan-approval-guard",
+    ]);
     const matchers = (hooks.postToolUse ?? []).map((h) => h.matcher).sort();
     expect(matchers).toEqual(["execute_bash", "fs_write", "subagent", "todo_list"]);
   });

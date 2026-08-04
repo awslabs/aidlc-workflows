@@ -32,18 +32,11 @@
 // guessing from arbitrary prompt prose. Other answered questions and a
 // "Request Changes" answer never count as approval.
 //
-// Deliberate carve-out: under an autonomous Construction swarm
-// (`Construction Autonomy Mode: autonomous`) the hook does not enforce. The
-// autonomy grant is the human's standing approval for the batch, the swarm
-// referee (aidlc-swarm.ts finalize) owns per-unit verification there, and a
-// deterministic block would deadlock a granted swarm on a question no one is
-// present to answer.
-//
 // Fail-open outside the guarded dispatch: a missing or unreadable state file,
 // a current stage other than code-generation, malformed stdin, an unknown
 // tool, a non-developer subagent target, or any throw allows the call. Once a
-// non-autonomous code-generation developer dispatch is identified, missing or
-// ambiguous target evidence blocks. The deterministic off-switch
+// code-generation developer dispatch is identified, missing or ambiguous
+// target evidence blocks. The deterministic off-switch
 // AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1 disables enforcement entirely (the
 // documented escape hatch for false-positive storms, mirroring the
 // reviewer-scope guard's off-switch). Every genuine block emits a
@@ -113,31 +106,122 @@ export function normalizeStageName(value: string): string {
 const MARKDOWN_HEADING_RE = /^(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$/;
 const ANSWER_TAG_RE = /^\[Answer\]:[ \t]*(.*)$/;
 const APPROVE_PLAN_RE = /^(?:[A-Z][.)][ \t]*)?["']?Approve Plan["']?$/i;
-const PLAN_APPROVAL_HEADING_RE =
-  /^(?:(?:q(?:uestion)?[ \t]*)?\d+[ \t]*[:.)-][ \t]*)?plan approval$/i;
+const QUESTION_PREFIX_RE = /^(?:(?:q(?:uestion)?[ \t]*)?\d+[ \t]*[:.)-][ \t]*)/i;
+const NUMBERED_QUESTION_HEADING_RE = /^(?:q(?:uestion)?[ \t]*)?\d+[ \t]*[.:)-]?[ \t]*$/i;
 const UNIT_MARKER_RE = /^[ \t]*AIDLC-UNIT[ \t]*:[ \t]*(.*?)[ \t]*$/;
+
+function isPlanApprovalLabel(value: string): boolean {
+  let normalized = value.trim().replace(/[?:][ \t]*$/, "").trim();
+  for (const marker of ["**", "__", "*", "_"]) {
+    if (
+      normalized.startsWith(marker) &&
+      normalized.endsWith(marker) &&
+      normalized.length > marker.length * 2
+    ) {
+      normalized = normalized.slice(marker.length, -marker.length).trim();
+      break;
+    }
+  }
+  return normalized.toLowerCase() === "plan approval";
+}
+
+// Approval evidence inside examples or scaffolding is not authoritative.
+// Preserve visible line boundaries while removing fenced code and HTML
+// comments so the section parser below cannot mistake either for a real
+// persisted question.
+function visibleMarkdownLines(body: string): string[] {
+  const lines = body.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").split("\n");
+  const visible: string[] = [];
+  let inComment = false;
+  let fence: { marker: "`" | "~"; length: number } | null = null;
+
+  for (const rawLine of lines) {
+    if (fence) {
+      const closing = /^ {0,3}([`~]+)[ \t]*$/.exec(rawLine);
+      if (
+        closing &&
+        closing[1][0] === fence.marker &&
+        closing[1].length >= fence.length
+      ) {
+        fence = null;
+      }
+      visible.push("");
+      continue;
+    }
+
+    let line = "";
+    let cursor = 0;
+    while (cursor < rawLine.length) {
+      if (inComment) {
+        const end = rawLine.indexOf("-->", cursor);
+        if (end < 0) {
+          cursor = rawLine.length;
+          break;
+        }
+        inComment = false;
+        cursor = end + 3;
+        continue;
+      }
+
+      const start = rawLine.indexOf("<!--", cursor);
+      if (start < 0) {
+        line += rawLine.slice(cursor);
+        break;
+      }
+      line += rawLine.slice(cursor, start);
+      inComment = true;
+      cursor = start + 4;
+    }
+
+    const opening = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+    if (opening) {
+      fence = {
+        marker: opening[1][0] as "`" | "~",
+        length: opening[1].length,
+      };
+      visible.push("");
+      continue;
+    }
+    visible.push(line);
+  }
+
+  return visible;
+}
 
 /**
  * True only when the latest Markdown section identified as "Plan Approval"
- * records the explicit "Approve Plan" response. The identifier may carry the
- * question-file's conventional numbering prefix (`Q1:` / `Question 1 -`).
- * Other answered questions, "Request Changes", and blank/reset tags do not
- * authorize generation.
+ * records the explicit "Approve Plan" response. The identifier may be in the
+ * heading (`Q1: Plan Approval`) or the first content line under a conventional
+ * numbered heading (`## Q1` followed by `Plan Approval`). Other answered
+ * questions, "Request Changes", blank/reset tags, and examples inside comments
+ * or code fences do not authorize generation.
  */
 export function questionsFileApproved(body: string): boolean {
   let inPlanApproval = false;
+  let awaitingNumberedQuestionText = false;
   let foundPlanApproval = false;
   let latestAnswer: string | null = null;
 
-  for (const line of body.split(/\r?\n/)) {
+  for (const line of visibleMarkdownLines(body)) {
     const heading = line.match(MARKDOWN_HEADING_RE);
     if (heading) {
-      inPlanApproval = PLAN_APPROVAL_HEADING_RE.test(heading[2].trim());
+      const headingText = heading[2].trim();
+      inPlanApproval = isPlanApprovalLabel(headingText.replace(QUESTION_PREFIX_RE, ""));
+      awaitingNumberedQuestionText =
+        !inPlanApproval && NUMBERED_QUESTION_HEADING_RE.test(headingText);
       if (inPlanApproval) {
         foundPlanApproval = true;
         latestAnswer = null;
       }
       continue;
+    }
+    if (awaitingNumberedQuestionText && line.trim().length > 0) {
+      awaitingNumberedQuestionText = false;
+      inPlanApproval = isPlanApprovalLabel(line);
+      if (inPlanApproval) {
+        foundPlanApproval = true;
+        latestAnswer = null;
+      }
     }
     if (!inPlanApproval) continue;
     const answer = line.match(ANSWER_TAG_RE);
@@ -175,7 +259,6 @@ export function evaluatePlanApprovalDispatch(
   promptText: string,
   ctx: {
     currentStage: string;
-    autonomyMode: string | null;
     units: UnitEvidence[];
   },
 ): PlanApprovalVerdict {
@@ -183,7 +266,6 @@ export function evaluatePlanApprovalDispatch(
   if (!DISPATCH_TOOLS.has(toolName)) return allow;
   if (subagentType !== GUARDED_AGENT) return allow;
   if (normalizeStageName(ctx.currentStage) !== GUARDED_STAGE) return allow;
-  if ((ctx.autonomyMode ?? "").trim().toLowerCase() === "autonomous") return allow;
 
   const approved = (u: UnitEvidence) => u.planExists && u.approved;
   const marked = promptUnitMarkers(promptText);
@@ -306,7 +388,6 @@ export async function run(input: string): Promise<number> {
     const state = readFileSync(statePath, "utf-8");
     const currentStage = getField(state, "Current Stage") ?? "";
     if (normalizeStageName(currentStage) !== GUARDED_STAGE) return 0;
-    const autonomyMode = getField(state, "Construction Autonomy Mode");
 
     const recordDir = docsRoot(projectDir);
     units = gatherUnitEvidence(recordDir, knownUnits(projectDir, recordDir));
@@ -315,7 +396,6 @@ export async function run(input: string): Promise<number> {
       .join("\n");
     verdict = evaluatePlanApprovalDispatch(toolName, subagentType, promptText, {
       currentStage,
-      autonomyMode,
       units,
     });
   } catch (e) {

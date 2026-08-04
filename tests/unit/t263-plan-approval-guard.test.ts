@@ -50,7 +50,6 @@ const SIBLING_APPROVED: UnitEvidence = { unit: "auth", planExists: true, approve
 
 const CTX = {
   currentStage: "code-generation",
-  autonomyMode: null as string | null,
 };
 
 describe("t263a plan-approval decision table", () => {
@@ -157,7 +156,7 @@ describe("t263a plan-approval decision table", () => {
     expect(v.block).toBe(true);
   });
 
-  test("out-of-scope calls always allow: other tools, other agents, other stages, autonomy", () => {
+  test("out-of-scope calls always allow: other tools, other agents, other stages", () => {
     const units = [BARE];
     expect(
       evaluatePlanApprovalDispatch("Bash", "aidlc-developer-agent", "x", { ...CTX, units }).block,
@@ -168,14 +167,6 @@ describe("t263a plan-approval decision table", () => {
     expect(
       evaluatePlanApprovalDispatch("Task", "aidlc-developer-agent", "x", {
         currentStage: "build-and-test",
-        autonomyMode: null,
-        units,
-      }).block,
-    ).toBe(false);
-    expect(
-      evaluatePlanApprovalDispatch("Task", "aidlc-developer-agent", "x", {
-        currentStage: "code-generation",
-        autonomyMode: "autonomous",
         units,
       }).block,
     ).toBe(false);
@@ -189,7 +180,6 @@ describe("t263a plan-approval decision table", () => {
       "AIDLC-UNIT: todo-core",
       {
         currentStage: "Code Generation",
-        autonomyMode: null,
         units: [BARE],
       },
     );
@@ -212,6 +202,17 @@ describe("t263a plan-approval decision table", () => {
     expect(
       questionsFileApproved("## Question 1 - Plan Approval\n[Answer]: A. Approve Plan\n"),
     ).toBe(true);
+    expect(
+      questionsFileApproved(
+        "## Q1\n\nPlan Approval\n\nA. Approve Plan\nB. Request Changes\n[Answer]: A. Approve Plan\n",
+      ),
+    ).toBe(true);
+    expect(
+      questionsFileApproved("## Question 1\n\n**Plan Approval**\n[Answer]: A. Approve Plan\n"),
+    ).toBe(true);
+    expect(
+      questionsFileApproved("## Q1\n\nPlan Approval\n[Answer]: B. Request Changes\n"),
+    ).toBe(false);
     expect(questionsFileApproved("## Plan Approval\n[Answer]: B. Request Changes\n")).toBe(false);
     expect(
       questionsFileApproved(
@@ -223,6 +224,31 @@ describe("t263a plan-approval decision table", () => {
         "## Plan Approval\n[Answer]: A. Approve Plan\n## Notes\n[Answer]: B. Request Changes\n",
       ),
     ).toBe(true);
+    expect(
+      questionsFileApproved(
+        "## Plan Approval\n[Answer]: A. Approve Plan\n## Q2\n\nPlan Approval\n[Answer]:\n",
+      ),
+    ).toBe(false);
+    expect(
+      questionsFileApproved(
+        "## Q1\n\nWhich checkpoint applies?\n\nA. Plan Approval\n[Answer]: A. Approve Plan\n",
+      ),
+    ).toBe(false);
+    expect(
+      questionsFileApproved(
+        "<!--\n## Plan Approval\n[Answer]: A. Approve Plan\n-->\n## Plan Approval\n[Answer]:\n",
+      ),
+    ).toBe(false);
+    expect(
+      questionsFileApproved(
+        "```markdown\n## Plan Approval\n[Answer]: A. Approve Plan\n```\n",
+      ),
+    ).toBe(false);
+    expect(
+      questionsFileApproved(
+        "~~~markdown\n## Q1\nPlan Approval\n[Answer]: A. Approve Plan\n~~~\n",
+      ),
+    ).toBe(false);
     expect(questionsFileApproved("")).toBe(false);
   });
 
@@ -279,7 +305,12 @@ ${autonomy}
 function seedUnit(
   proj: string,
   unit: string,
-  opts: { plan?: boolean | "empty"; answer?: string | null; heading?: string } = {},
+  opts: {
+    plan?: boolean | "empty";
+    answer?: string | null;
+    heading?: string;
+    questionText?: string;
+  } = {},
 ): void {
   const dir = join(proj, RECORD_REL, "construction", unit, "code-generation");
   mkdirSync(dir, { recursive: true });
@@ -293,7 +324,9 @@ function seedUnit(
   if (opts.answer !== undefined) {
     writeFileSync(
       join(dir, "code-generation-questions.md"),
-      `## ${opts.heading ?? "Plan Approval"}\n[Answer]:${
+      `## ${opts.heading ?? "Plan Approval"}\n${
+        opts.questionText === undefined ? "" : `\n${opts.questionText}\n`
+      }[Answer]:${
         opts.answer === null ? "" : ` ${opts.answer}`
       }\n`,
       "utf-8",
@@ -350,6 +383,13 @@ describe("t263b hook lifecycle", () => {
         heading: "Q1: Plan Approval",
       });
       expect(runHook(proj, DISPATCH("Implement todo-core")).code).toBe(0);
+      seedUnit(proj, "todo-core", {
+        plan: true,
+        answer: "A. Approve Plan",
+        heading: "Q1",
+        questionText: "Plan Approval",
+      });
+      expect(runHook(proj, DISPATCH("Implement todo-core")).code).toBe(0);
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }
@@ -366,7 +406,20 @@ describe("t263b hook lifecycle", () => {
     }
   });
 
-  test("fail-open: other stages, other agents, other tools, no state, autonomy, garbage stdin, off-switch", () => {
+  test("autonomous Construction still requires the mandatory per-unit approval", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj, { autonomy: "autonomous" });
+      seedUnit(proj, "todo-core", { plan: false });
+      expect(runHook(proj, DISPATCH("Implement todo-core")).code).toBe(2);
+      seedUnit(proj, "todo-core", { plan: true, answer: "A. Approve Plan" });
+      expect(runHook(proj, DISPATCH("Implement todo-core")).code).toBe(0);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("fail-open: other stages, other agents, other tools, no state, garbage stdin, off-switch", () => {
     const proj = scratchProject();
     try {
       // No state file at all.
@@ -392,9 +445,6 @@ describe("t263b hook lifecycle", () => {
       ).toBe(0);
       // Garbage stdin.
       expect(runHook(proj, "not json{{").code).toBe(0);
-      // Autonomy carve-out.
-      seedState(proj, { autonomy: "autonomous" });
-      expect(runHook(proj, DISPATCH("todo-core")).code).toBe(0);
       // Off-switch on an otherwise-blocking call.
       seedState(proj);
       expect(
