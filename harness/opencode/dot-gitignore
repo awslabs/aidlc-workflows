@@ -29,8 +29,8 @@ dist-ssr
 # method, registry, state, AUDIT (per-clone shards), artifacts — is committed.
 #
 # Per-user session cursors — ignored (two teammates legitimately point at
-# different spaces/intents at once; committing them would dirty the tree on
-# every /aidlc and have teammates fight over the cursor on each switch).
+# different spaces/intents at once; committing them would turn per-user
+# navigation into shared state and cause conflicts on births and switches).
 aidlc/active-space
 aidlc/spaces/*/intents/active-intent
 #
@@ -38,6 +38,8 @@ aidlc/spaces/*/intents/active-intent
 # The clone-id token names this clone's audit shard; it MUST stay machine-local
 # (gitignored) or every clone from a commit would share a shard and git-conflict.
 aidlc/.aidlc-clone-id
+# Atomic active-space create staging (normally unlinked immediately).
+aidlc/.aidlc-active-space-*.tmp
 # Per-conversation session→intent map (resume rebind, P8): per-user runtime
 # state keyed by Claude Code session_id, never shared truth.
 aidlc/.aidlc-sessions/

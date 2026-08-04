@@ -230,6 +230,9 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
       const lines = gi.split("\n").map((l) => l.trim());
       // The two session cursors (re-rooted under aidlc/).
       expect(lines, `${h}: ignores aidlc/active-space`).toContain("aidlc/active-space");
+      expect(lines, `${h}: ignores active-space create staging`).toContain(
+        "aidlc/.aidlc-active-space-*.tmp",
+      );
       expect(lines, `${h}: ignores active-intent`).toContain(
         "aidlc/spaces/*/intents/active-intent",
       );

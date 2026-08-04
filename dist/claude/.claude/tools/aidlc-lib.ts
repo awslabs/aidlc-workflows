@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { accessSync, appendFileSync, closeSync, constants as fsConstants, cpSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, appendFileSync, closeSync, constants as fsConstants, cpSync, existsSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1701,10 +1701,36 @@ export function listIntents(projectDir: string, space?: string): IntentInfo[] {
   return infos;
 }
 
+// Materialize the active-space cursor without overwriting a concurrent explicit
+// switch. A clone does not carry this gitignored file, so SessionStart and any
+// active-intent write recreate the resolved pointer on first use. Publish a
+// fully-written staged file with link(), whose no-replace install is atomic: if
+// a space switch wins the race, its value stays untouched.
+export function ensureActiveSpaceCursor(projectDir: string): void {
+  const space = activeSpace(projectDir);
+  const root = workspaceRoot(projectDir);
+  const cursor = join(root, ACTIVE_SPACE_POINTER);
+  const staged = join(root, `.aidlc-active-space-${process.pid}-${randomUUID()}.tmp`);
+  try {
+    mkdirSync(root, { recursive: true });
+    writeFileSync(staged, `${space}\n`, { encoding: "utf-8", flag: "wx" });
+    linkSync(staged, cursor);
+  } catch {
+    /* existing cursor won, or per-user state is unwritable */
+  } finally {
+    try {
+      unlinkSync(staged);
+    } catch {
+      /* staging file was never created or is already gone */
+    }
+  }
+}
+
 // Write the active-intent cursor for a space (gitignored per-user pointer).
-// Best-effort: the cursor dir is created if absent; a write failure is swallowed
-// (the cursor is per-user state, never the source of truth — the registry is).
+// Best-effort: the cursor dirs are created if absent; a write failure is
+// swallowed (the cursors are per-user state, never the source of truth).
 export function setActiveIntentCursor(projectDir: string, dirName: string, space?: string): void {
+  ensureActiveSpaceCursor(projectDir);
   const dir = intentsDir(projectDir, space);
   try {
     mkdirSync(dir, { recursive: true });
@@ -2085,11 +2111,7 @@ export function migrateFlatLayout(projectDir: string): FlatMigrationResult | nul
       { uuid, slug, dirName: intentDirName, scope: undefined, repos: undefined, status: "in-flight" },
       space,
     );
-    try {
-      writeFileSync(join(intentsRoot, ACTIVE_INTENT_POINTER), `${intentDirName}\n`, "utf-8");
-    } catch {
-      /* cursor is per-user/gitignored; best-effort */
-    }
+    setActiveIntentCursor(projectDir, intentDirName, space);
 
     // (5) Write the `.migrated` marker LAST (the sole idempotency key).
     mkdirSync(workspaceRoot(projectDir), { recursive: true });

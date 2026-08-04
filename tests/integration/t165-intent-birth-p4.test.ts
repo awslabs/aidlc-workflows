@@ -129,6 +129,17 @@ describe("t164 auto-birth (intent-birth) on an empty workspace", () => {
     expect(shards).toContain("**Event**: WORKFLOW_STARTED");
   });
 
+  test("birth materializes the active-space cursor missing from a fresh clone", () => {
+    const cursor = join(proj, "aidlc", "active-space");
+    rmSync(cursor, { force: true });
+    expect(existsSync(cursor)).toBe(false);
+
+    const r = util(["intent-birth", "--scope", "poc"]);
+    expect(r.status).toBe(0);
+    expect(readFileSync(cursor, "utf-8")).toBe("default\n");
+    expect(activeIntent(proj)).not.toBeNull();
+  });
+
   test("birth slugs the freeform --arguments description (SLUG_RE-valid)", () => {
     const r = util(["intent-birth", "--scope", "feature", "--arguments", "Build the Auth Service!!"]);
     expect(r.status).toBe(0);
@@ -527,9 +538,12 @@ describe("t164 migration wiring (flat → per-intent on first birth)", () => {
       "utf-8",
     );
     writeFileSync(join(flat, "audit.md"), "# AI-DLC Audit Log\n", "utf-8");
+    const cursor = join(proj, "aidlc", "active-space");
+    rmSync(cursor, { force: true });
 
     const r = util(["intent-birth", "--scope", "feature"]);
     expect(r.status).toBe(0);
+    expect(readFileSync(cursor, "utf-8")).toBe("default\n");
 
     // Migration moved the flat state into a per-intent record (NOT a second
     // freshly-minted intent on top).

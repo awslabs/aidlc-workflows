@@ -1,4 +1,4 @@
-// covers: function:activeSpace, function:activeIntent, function:recordDir, function:relativeRecordDir, function:stateFilePath, function:auditFilePath, function:uuidv7, function:slugify, function:migrateFlatLayout, function:knowledgeDir
+// covers: function:activeSpace, function:ensureActiveSpaceCursor, function:activeIntent, function:recordDir, function:relativeRecordDir, function:stateFilePath, function:auditFilePath, function:uuidv7, function:slugify, function:migrateFlatLayout, function:knowledgeDir
 //
 // t160 — P1 Step B re-root: the per-intent record-dir resolution + the flat
 // legacy fallback + the one-time crash-safe migration. Mechanism: in-process
@@ -23,6 +23,7 @@ import {
   auditFilePath,
   auditShardName,
   auditShards,
+  ensureActiveSpaceCursor,
   idSuffix,
   intentsDir,
   knowledgeDir,
@@ -115,6 +116,22 @@ describe("t160 selectors — space + intent resolution", () => {
     expect(activeSpace(proj)).toBe("default");
     seedShell(proj, "team-b");
     expect(activeSpace(proj)).toBe("team-b");
+  });
+
+  test("ensureActiveSpaceCursor creates the fallback only when the cursor is absent", () => {
+    const cursor = join(proj, "aidlc", "active-space");
+    rmSync(cursor, { force: true });
+    ensureActiveSpaceCursor(proj);
+    expect(readFileSync(cursor, "utf-8")).toBe("default\n");
+
+    writeFileSync(cursor, "team-b\n", "utf-8");
+    ensureActiveSpaceCursor(proj);
+    expect(readFileSync(cursor, "utf-8")).toBe("team-b\n");
+    expect(
+      readdirSync(join(proj, "aidlc")).filter((name) =>
+        name.startsWith(".aidlc-active-space-")
+      ),
+    ).toEqual([]);
   });
 
   test("knowledgeDir resolves the SPACE-level knowledge dir for the active (or explicit) space", () => {

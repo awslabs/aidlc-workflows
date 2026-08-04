@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.42] - 2026-08-06
+
+Restores the gitignored `aidlc/active-space` cursor after cloning a committed workspace. The cursor still defaults safely to `default` when absent, but SessionStart and active-intent writes now atomically materialize it without overwriting a concurrent explicit space switch. **Upgrade:** re-copy your `dist/<harness>/` shell so the updated library and SessionStart hook are installed; no repository migration or configuration change is required.
+
+* A fresh clone now recreates `aidlc/active-space` on SessionStart, even before an intent exists, so the shipped workspace model remains visible without committing per-user navigation state.
+* Intent birth, intent switching, and flat-layout migration recreate a missing space cursor through the same best-effort cursor primitive.
+* Cursor creation stages complete bytes and publishes them through an atomic no-replace link, so it cannot overwrite a concurrent `/aidlc space <name>` switch.
+
 ## [2.5.41] - 2026-08-05
 
 Code Generation's plan-before-generation ordering is now enforced deterministically. A field report showed the conductor generating code first and backfilling `code-generation-plan.md` beside `code-summary.md`, turning the plan into a retroactive summary; the new plan-approval PreToolUse guard refuses the developer-agent dispatch until the target unit's plan is on disk and the human has answered "Approve Plan". **Upgrade:** re-copy your `dist/<harness>/` shell into the project so the new hook and its registrations are installed.

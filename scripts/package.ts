@@ -374,10 +374,11 @@ const MEMORY_SEED_DST = join("tools", "data", "memory-seed");
 // NOTE: it is GITIGNORED in the user's workspace (a per-user session cursor,
 // vision 5.1 - teammates legitimately point at different spaces at once), yet
 // dist must SHIP it as part of the shell. The two reconcile: the dist
-// .gitignore ignores aidlc/active-space for the END USER (their first /aidlc
-// cursor-write stays untracked), while OUR repo commits the shipped pointer
-// once (git add -f on the seed commit) - after which it is tracked and the
-// gitignore is moot for that path here, exactly like a shipped default .env.
+// .gitignore ignores aidlc/active-space for the END USER; a clone's first
+// SessionStart or active-intent write atomically recreates the missing pointer
+// and keeps it untracked. OUR repo commits the shipped pointer once (git add -f
+// on the seed commit) - after which the gitignore is moot for that path here,
+// exactly like a shipped default .env.
 const ACTIVE_SPACE_REL = join("aidlc", "active-space");
 const ACTIVE_SPACE_VALUE = "default\n";
 

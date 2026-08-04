@@ -79,9 +79,11 @@
 //     JSON on the corrupted fixture (graceful, not just non-crashing).
 //   - test 1 asserts EMPTY stdout (the additionalContext JSON is the only thing
 //     the hook writes), strictly stronger than the .sh's `-z` on merged output.
+//   - one additional regression pins cursor materialization before the no-state
+//     early exit; it has no legacy .sh counterpart.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -185,6 +187,18 @@ describe("t10 session-start SessionStart hook (mechanism cli — spawned hook + 
     const r = fire(proj);
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toBe("");
+  });
+
+  test("materializes a missing active-space cursor before the no-state early exit", () => {
+    const cursor = join(proj, "aidlc", "active-space");
+    rmSync(cursor, { force: true });
+    expect(existsSync(statePath(proj))).toBe(false);
+    expect(existsSync(cursor)).toBe(false);
+
+    const r = fire(proj);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toBe("");
+    expect(readFileSync(cursor, "utf-8")).toBe("default\n");
   });
 
   test("no heartbeat when no state file [.sh test 2]", () => {

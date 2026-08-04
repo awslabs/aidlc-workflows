@@ -277,8 +277,8 @@ repo. Two kinds of file are deliberately **gitignored** instead:
 
 | Gitignored (per-user, machine-local) | Why |
 |---|---|
-| `aidlc/active-space`, `…/intents/active-intent` | Cursors — "where am I right now." Committing them would dirty the tree on every `/aidlc` and have teammates fight over the cursor on each switch. |
-| `…/intents/<id>/runtime-graph.json`, `.aidlc-*`, `aidlc/.aidlc-sessions/` | Derived, machine-local runtime state. |
+| `aidlc/active-space`, `…/intents/active-intent` | Cursors — "where am I right now." Committing them would turn per-user navigation into shared repository state and have teammates fight over intent births and cursor switches. |
+| `…/intents/<id>/runtime-graph.json`, `.aidlc-*`, `aidlc/.aidlc-sessions/`, `aidlc/.aidlc-active-space-*.tmp` | Derived, machine-local runtime state. |
 
 Everything else under a space — `memory/**`, `knowledge/**`, `codekb/**`,
 `intents.json`, each record's `aidlc-state.md`, `audit/` shards, and artifacts — is

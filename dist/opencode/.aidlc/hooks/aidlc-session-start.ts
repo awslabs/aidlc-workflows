@@ -18,7 +18,7 @@
 //   clear   → SESSION_STARTED
 //   compact → no emission (PreCompact already fired)
 //
-// The hook is a no-op if aidlc-state.md is absent in cwd (no active workflow).
+// With no aidlc-state.md, only cursor/include bootstrap runs; workflow work is a no-op.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
@@ -28,6 +28,7 @@ import {
   activeIntentUuid,
   activeSpace,
   clearSessionIntentUuid,
+  ensureActiveSpaceCursor,
   errorMessage,
   findIntentByUuid,
   getField,
@@ -48,12 +49,12 @@ import { writeCurrentTranscriptPath } from "../tools/aidlc-usage.ts";
 export async function run(input: string): Promise<number> {
 const projectDir = resolveProjectDirFromHook(import.meta.url);
 
-// Idempotent ensure-step (P0.1 robustness): align the harness-native includes
-// with the active space at session start, BEFORE the no-workflow early-exit, so
-// turn-1 on a fresh clone (no aidlc-state.md yet) still has the includes pointed
-// at the active space. A no-op at `default` (the common case) and whenever the
-// cursor + includes already agree — so it never dirties a single-team committed
-// tree. Best-effort: a failure here must never break session startup.
+// Idempotent ensure-step (P0.1 robustness): atomically materialize a clone's
+// missing gitignored cursor, then align the harness-native includes with that
+// space BEFORE the no-workflow early-exit. Cursor creation cannot overwrite a
+// concurrent explicit switch. Best-effort: a failure here must never break
+// session startup.
+ensureActiveSpaceCursor(projectDir);
 try {
   repointHarnessIncludes(projectDir, activeSpace(projectDir));
 } catch {
