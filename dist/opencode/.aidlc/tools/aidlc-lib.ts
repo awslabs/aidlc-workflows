@@ -3272,9 +3272,9 @@ export function repoDir(projectDir: string, repoName: string): string {
 //
 // Multi-repo: the intent's recorded repo set (intentRepos), each resolved via
 // repoDir(); no recorded repos = the legacy single-repo default (projectDir).
-// Returns null when ANY target dir is not a usable git checkout — callers
-// treat null as "no binding available" and keep today's behaviour (fail-open),
-// which also grandfathers receipts recorded before this shipped.
+// Returns null when ANY target dir is not a usable git checkout. New receipts
+// record that explicitly as `unbindable` and completion fails closed; only a
+// legacy receipt with no fingerprint field keeps the migration fail-open.
 
 // The record tree and the CLI/IDE workspace shell are anchored at the top level
 // of the dir that CARRIES the shell: the workspace roof, or a Bolt worktree
@@ -3318,90 +3318,6 @@ const AIDLC_SENSOR_CACHE_GLOBS = [
   ":(glob)**/aidlc/spaces/*/intents/**/.aidlc-sensors/**",
 ];
 
-// Does any attributes file in play assign a named filter driver? Sources, per
-// gitattributes(5): a `.gitattributes` at any level of the worktree, the
-// repo-local `.git/info/attributes`, and the `core.attributesFile` global.
-// Conservative by construction - it answers "could a filter be assigned", and
-// any doubt (an unreadable file, a global override configured) resolves to yes,
-// which only costs the precise `check-attr` scan.
-// `filter=<driver>` names a clean driver. `ident` is git's own built-in `$Id$`
-// conversion, which collapses two different worktree values onto one indexed
-// blob exactly the way a lossy driver does, so it has to force the same scan
-// (#646 review). A bare `filter` (or `-filter`/`!filter`/`-ident`) names no
-// driver and cannot run one.
-const CONVERTING_ATTRIBUTE_RE = /(^|\s)(filter=|ident(\s|$))/;
-
-function declaresFilterAttribute(repoDir: string, paths: string[]): boolean {
-  const files: string[] = [];
-  for (const p of paths) {
-    if (p === ".gitattributes" || p.endsWith("/.gitattributes")) files.push(join(repoDir, p));
-  }
-  // `.git` is a FILE in a linked worktree and in a submodule, so the info
-  // attributes do not sit under `<repoDir>/.git/` there. Ask git where the
-  // common git dir actually is (#646 review).
-  const info = infoAttributesPath(repoDir);
-  if (info !== null) files.push(info);
-  for (const f of files) {
-    let body: string;
-    try {
-      body = readFileSync(f, "utf-8");
-    } catch {
-      continue; // absent (the common case for info/attributes) or unreadable
-    }
-    if (CONVERTING_ATTRIBUTE_RE.test(body)) return true;
-  }
-  // An attributes file outside the worktree is invisible here and could assign
-  // a filter, so its mere presence forces the precise scan.
-  return attributesFileInPlay(repoDir);
-}
-
-// Cached per repo rather than per process: `core.attributesFile` can be set in
-// the target repository's own local config, and the git dir is per repo too.
-// Both are stable for a repo's lifetime, and this runs on every completion
-// route.
-const infoAttributesCache = new Map<string, string | null>();
-function infoAttributesPath(repoDir: string): string | null {
-  const cached = infoAttributesCache.get(repoDir);
-  if (cached !== undefined) return cached;
-  const r = spawnSync("git", ["-C", repoDir, "rev-parse", "--git-common-dir"], {
-    encoding: "utf-8",
-  });
-  const dir = r.status === 0 ? r.stdout.trim() : "";
-  const path =
-    dir.length === 0
-      ? null
-      : join(isAbsolute(dir) ? dir : join(repoDir, dir), "info", "attributes");
-  infoAttributesCache.set(repoDir, path);
-  return path;
-}
-
-const attributesFileCache = new Map<string, boolean>();
-function attributesFileInPlay(repoDir: string): boolean {
-  const cached = attributesFileCache.get(repoDir);
-  if (cached !== undefined) return cached;
-  // Queried THROUGH the repo. A bare `git config` reads the invoking process's
-  // configuration, never the target repository's local config (#646 review).
-  const r = spawnSync(
-    "git",
-    ["-C", repoDir, "config", "--get", "core.attributesFile"],
-    { encoding: "utf-8" },
-  );
-  let inPlay = r.status === 0 && r.stdout.trim().length > 0;
-  if (!inPlay) {
-    // With `core.attributesFile` unset, git still reads its DEFAULT global
-    // path, which the config query above reports as absent (#646 review -
-    // reproduced through `$XDG_CONFIG_HOME/git/attributes`).
-    const base = process.env.XDG_CONFIG_HOME
-      ? join(process.env.XDG_CONFIG_HOME, "git")
-      : process.env.HOME
-        ? join(process.env.HOME, ".config", "git")
-        : null;
-    inPlay = base !== null && existsSync(join(base, "attributes"));
-  }
-  attributesFileCache.set(repoDir, inPlay);
-  return inPlay;
-}
-
 // Git runs a configured `clean` filter as content enters the index, so the tree
 // written below hashes the FILTERED bytes - not the bytes sitting in the
 // worktree. A lossy filter therefore maps two different worktrees onto one
@@ -3426,23 +3342,24 @@ function cleanFilteredRawLines(
   repoDir: string,
   env: NodeJS.ProcessEnv,
   paths: string[],
-): string[] {
-  if (paths.length === 0) return [];
-  // Gate before spawning anything. `check-attr` measured +66% on this
-  // fingerprint's wall clock (694ms -> 1155ms on a 60-file repo), and it
-  // recomputes on every completion route, so the common workspace must not pay
-  // it. A `filter` attribute can only be ASSIGNED by an attributes file, and
-  // assigning a driver requires the `filter=<name>` form - bare `filter` sets
-  // the attribute without naming a driver, so nothing runs. Reading the
-  // attributes files that exist is plain file I/O and keeps a repo that
-  // declares no filter at its pre-existing cost.
-  if (!declaresFilterAttribute(repoDir, paths)) return [];
+): { lines: string[]; entries: { path: string; sha: string }[] } | null {
+  if (paths.length === 0) return { lines: [], entries: [] };
+  // Ask Git directly for the effective attributes of every indexed path. A
+  // filesystem pre-scan cannot be authoritative: `.gitattributes` may itself
+  // be ignored while still affecting the worktree, and info/global attributes
+  // live outside the indexed path list. The large buffer matches `ls-files`
+  // below; failure is unbindable, never "no filtered paths".
   const attr = spawnSync(
     "git",
     ["-C", repoDir, "check-attr", "-z", "--stdin", "filter", "ident"],
-    { env, input: paths.join("\0"), encoding: "utf-8" },
+    {
+      env,
+      input: paths.join("\0"),
+      encoding: "utf-8",
+      maxBuffer: 512 * 1024 * 1024,
+    },
   );
-  if (attr.status !== 0) return [];
+  if (attr.status !== 0) return null;
   // `-z` output is a flat NUL-separated stream of <path> <attr> <value> triples.
   const fields = attr.stdout.split("\0");
   const driverRuns = new Map<string, boolean>();
@@ -3463,50 +3380,93 @@ function cleanFilteredRawLines(
     if (value === "unspecified" || value === "unset" || value === "set") continue;
     let runs = driverRuns.get(value);
     if (runs === undefined) {
-      const cfg = spawnSync(
-        "git",
-        ["-C", repoDir, "config", "--get", `filter.${value}.clean`],
-        { env, encoding: "utf-8" },
-      );
-      runs = cfg.status === 0 && cfg.stdout.trim().length > 0;
+      const configured = (key: "clean" | "process"): boolean | null => {
+        const cfg = spawnSync(
+          "git",
+          ["-C", repoDir, "config", "--get", `filter.${value}.${key}`],
+          { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+        );
+        if (cfg.status === 0) return cfg.stdout.trim().length > 0;
+        if (cfg.status === 1) return false; // key is simply absent
+        return null;
+      };
+      const clean = configured("clean");
+      const processDriver = configured("process");
+      if (clean === null || processDriver === null) return null;
+      runs = clean || processDriver;
       driverRuns.set(value, runs);
     }
     if (runs) converted.add(path);
   }
   const filtered = [...converted];
-  if (filtered.length === 0) return [];
+  if (filtered.length === 0) return { lines: [], entries: [] };
   // `--stdin-paths` is newline-delimited with no `-z` counterpart, so a path
   // containing a newline cannot go through the batch. Those hash one at a time
   // rather than being dropped - dropping one would restore the very blind spot
   // this closes.
   const batch = filtered.filter((p) => !p.includes("\n"));
   const lines: string[] = [];
+  const entries: { path: string; sha: string }[] = [];
   if (batch.length > 0) {
     const raw = spawnSync(
       "git",
       ["-C", repoDir, "hash-object", "--no-filters", "--stdin-paths"],
-      { env, input: `${batch.join("\n")}\n`, encoding: "utf-8" },
+      {
+        env,
+        input: `${batch.join("\n")}\n`,
+        encoding: "utf-8",
+        maxBuffer: 512 * 1024 * 1024,
+      },
     );
-    if (raw.status !== 0) return [];
+    if (raw.status !== 0) return null;
     const shas = raw.stdout.split("\n").filter((l) => l.length > 0);
     // A short read means the pairing is ambiguous; binding the wrong sha to a
     // path is worse than the mismatch a null fingerprint produces.
-    if (shas.length !== batch.length) return [];
-    for (let i = 0; i < batch.length; i++) lines.push(`raw:${batch[i]}=${shas[i]}`);
+    if (shas.length !== batch.length) return null;
+    for (let i = 0; i < batch.length; i++) {
+      lines.push(`raw:${batch[i]}=${shas[i]}`);
+      entries.push({ path: batch[i], sha: shas[i] });
+    }
   }
   for (const p of filtered) {
     if (!p.includes("\n")) continue;
     const one = spawnSync(
       "git",
       ["-C", repoDir, "hash-object", "--no-filters", "--", p],
-      { env, encoding: "utf-8" },
+      { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
     );
-    if (one.status !== 0) return [];
+    if (one.status !== 0) return null;
     const sha = one.stdout.trim();
-    if (sha.length === 0) return [];
+    if (sha.length === 0) return null;
     lines.push(`raw:${p}=${sha}`);
+    entries.push({ path: p, sha });
   }
-  return lines;
+  return { lines, entries };
+}
+
+// Return the effective filtered paths and their raw worktree blob ids for a
+// caller-owned temporary index. The swarm snapshot uses this to replace the
+// filtered index blobs with the exact bytes the reviewer saw before creating
+// its immutable Source Commit.
+export function filteredRawIndexEntries(
+  repoDir: string,
+  indexFile: string,
+): { path: string; sha: string }[] | null {
+  const env = { ...process.env, GIT_INDEX_FILE: indexFile };
+  const listed = spawnSync("git", ["-C", repoDir, "ls-files", "-s", "-z"], {
+    env,
+    encoding: "utf-8",
+    maxBuffer: 512 * 1024 * 1024,
+  });
+  if (listed.status !== 0) return null;
+  const paths: string[] = [];
+  for (const record of listed.stdout.split("\0")) {
+    const tab = record.indexOf("\t");
+    if (tab === -1 || record.startsWith("160000 ")) continue;
+    const path = record.slice(tab + 1);
+    if (path) paths.push(path);
+  }
+  return cleanFilteredRawLines(repoDir, env, paths)?.entries ?? null;
 }
 
 // `carriesWorkspaceShell` is REQUIRED, never defaulted: a new call site must
@@ -3601,7 +3561,9 @@ function gitTreeFingerprint(repoDir: string, carriesWorkspaceShell: boolean): st
       if (subFp === null) return null;
       subLines.push(`${entryPath}=${subFp}`);
     }
-    const rawLines = cleanFilteredRawLines(repoDir, env, blobPaths);
+    const raw = cleanFilteredRawLines(repoDir, env, blobPaths);
+    if (raw === null) return null;
+    const rawLines = raw.lines;
     // A repo with neither submodules nor clean-filtered paths keeps returning
     // the bare tree sha, so the common workspace's fingerprint is unchanged by
     // this and receipts stamped before it stay comparable.

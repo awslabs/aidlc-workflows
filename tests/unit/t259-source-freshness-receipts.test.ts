@@ -74,6 +74,7 @@ const BUN = process.execPath;
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const SWARM_TOOL = join(AIDLC_SRC, "tools", "aidlc-swarm.ts");
+const WORKTREE_TOOL = join(AIDLC_SRC, "tools", "aidlc-worktree.ts");
 const REVIEWER = "aidlc-architecture-reviewer-agent"; // code-generation's declared reviewer
 
 function git(dir: string, args: string[]): void {
@@ -439,6 +440,66 @@ describe("t259 workspace source fingerprint (in-process)", () => {
     expect(workspaceSourceFingerprint(dir)).not.toBe(fp1);
   });
 
+  test("an ignored worktree .gitattributes file still binds raw bytes", () => {
+    const src = seedGitRepo(dir);
+    git(dir, ["config", "filter.tidy.clean", "sed 's/[[:space:]]*$//'"]);
+    writeFileSync(join(dir, ".git", "info", "exclude"), ".gitattributes\n", "utf-8");
+    writeFileSync(join(dir, ".gitattributes"), "app.ts filter=tidy\n", "utf-8");
+
+    writeFileSync(src, "export const answer = 42;\n", "utf-8");
+    const fp1 = workspaceSourceFingerprint(dir);
+    expect(fp1).not.toBeNull();
+    writeFileSync(src, "export const answer = 42;   \n", "utf-8");
+    expect(workspaceSourceFingerprint(dir)).not.toBe(fp1);
+  });
+
+  test("a process-only clean filter cannot collapse two worktrees", () => {
+    const src = seedGitRepo(dir);
+    const filter = join(dir, "filter-process.mjs");
+    writeFileSync(filter, String.raw`
+let input = Buffer.alloc(0);
+let phase = "hello";
+let content = [];
+const pkt = (s) => Buffer.concat([Buffer.from((Buffer.byteLength(s) + 4).toString(16).padStart(4, "0")), Buffer.from(s)]);
+const send = (...parts) => process.stdout.write(Buffer.concat(parts));
+process.stdin.on("data", (chunk) => {
+  input = Buffer.concat([input, chunk]);
+  while (input.length >= 4) {
+    const n = Number.parseInt(input.subarray(0, 4).toString(), 16);
+    if (n === 0) {
+      input = input.subarray(4);
+      if (phase === "hello") {
+        send(pkt("git-filter-server\n"), pkt("version=2\n"), pkt("capability=clean\n"), Buffer.from("0000"));
+        phase = "request";
+      } else if (phase === "request") {
+        phase = "content";
+      } else {
+        const cleaned = Buffer.concat(content).toString().replace(/[ \t]+$/gm, "");
+        send(pkt("status=success\n"), Buffer.from("0000"), pkt(cleaned), Buffer.from("00000000"));
+        content = [];
+        phase = "request";
+      }
+      continue;
+    }
+    if (!Number.isFinite(n) || n < 4 || input.length < n) break;
+    const payload = input.subarray(4, n);
+    input = input.subarray(n);
+    if (phase === "content") content.push(payload);
+  }
+});
+`, "utf-8");
+    git(dir, ["config", "filter.tidy.process", `"${process.execPath}" "${filter}"`]);
+    writeFileSync(join(dir, ".gitattributes"), "app.ts filter=tidy\n", "utf-8");
+    git(dir, ["add", "-A"]);
+    git(dir, ["commit", "-qm", "process filter"]);
+
+    writeFileSync(src, "export const answer = 42;\n", "utf-8");
+    const fp1 = workspaceSourceFingerprint(dir);
+    expect(fp1).not.toBeNull();
+    writeFileSync(src, "export const answer = 42;   \n", "utf-8");
+    expect(workspaceSourceFingerprint(dir)).not.toBe(fp1);
+  }, 20000);
+
   // Git's built-in `$Id$` conversion needs no driver at all, so scanning for
   // `filter=` alone missed it while it collapsed worktrees just the same.
   test("the built-in ident conversion cannot collapse two worktrees", () => {
@@ -460,44 +521,25 @@ describe("t259 workspace source fingerprint (in-process)", () => {
   // clean-filter scans were skipped, and the bare tree sha came back as if the
   // repository had neither.
   //
-  // Honest scope: this pins the behaviour, it does not reproduce the failure.
-  // The listing measures 1.68 MB here and a standalone spawn of the same
-  // command does return ENOBUFS, but the call inside the fingerprint does not
-  // overrun on this platform, so the row passes with and without the buffer
-  // fix. It is kept because it is the shape that broke and it costs one repo.
+  // This uses real worktree files so both the `ls-files` and `check-attr`
+  // subprocesses actually cross the default buffer boundary.
   test("a large index does not silently drop the clean-filter binding", () => {
     const src = seedGitRepo(dir);
+    git(dir, ["config", "core.autocrlf", "false"]);
     git(dir, ["config", "filter.tidy.clean", "sed 's/[[:space:]]*$//'"]);
     writeFileSync(join(dir, ".gitattributes"), "app.ts filter=tidy\n", "utf-8");
     git(dir, ["add", "-A"]);
     git(dir, ["commit", "-qm", "filter"]);
 
-    // Enough long paths to push the listing past the default buffer (measured
-    // at 1.68 MB here). Written straight into the index rather than onto disk:
-    // Windows MAX_PATH stops git from even opening a directory deep enough to
-    // do this on disk, and the index is what `ls-files` reads anyway.
-    const blob = spawnSync("git", ["-C", dir, "hash-object", "-w", "--stdin"], {
-      input: "export const v = 1;\n",
-      encoding: "utf-8",
-    }).stdout.trim();
-    const deep = [
-      "layer-one-of-a-fairly-long-directory-name",
-      "layer-two-of-a-fairly-long-directory-name",
-      "layer-three-of-a-fairly-long-directory-name",
-    ].join("/");
-    const indexInfo = Array.from(
-      { length: 8000 },
-      (_, i) =>
-        `100644 ${blob}\t${deep}/module-with-a-deliberately-long-file-name-${i}.ts`,
-    ).join("\n");
-    const update = spawnSync(
-      "git",
-      ["-C", dir, "update-index", "--add", "--index-info"],
-      { input: `${indexInfo}\n`, encoding: "utf-8", maxBuffer: 64 * 1024 * 1024 },
-    );
-    expect(update.status).toBe(0);
-    // Committed, because the fingerprint seeds its temp index from HEAD - paths
-    // left only in the real index never reach the listing under test.
+    // Real worktree paths are required: the temp index's `git add -A` removes
+    // synthetic index-only entries before `check-attr` runs. Repeating a long
+    // flat filename makes the two-attribute NUL stream exceed Node's default
+    // spawn buffer while staying below Windows MAX_PATH.
+    for (let i = 0; i < 4500; i++) {
+      const name = `module-${String(i).padStart(5, "0")}-${"x".repeat(150)}.ts`;
+      writeFileSync(join(dir, name), "export const v = 1;\n", "utf-8");
+    }
+    git(dir, ["add", "-A"]);
     git(dir, ["commit", "-qm", "bulk"]);
 
     writeFileSync(src, "export const answer = 42;\n", "utf-8");
@@ -505,7 +547,7 @@ describe("t259 workspace source fingerprint (in-process)", () => {
     expect(fp1).not.toBeNull();
     writeFileSync(src, "export const answer = 42;   \n", "utf-8");
     expect(workspaceSourceFingerprint(dir)).not.toBe(fp1);
-  });
+  }, 45000);
 
   // The raw-content binding is scoped to paths a clean driver actually touches,
   // so a repo that filters nothing must keep the bare tree sha it had before -
@@ -725,6 +767,37 @@ describe("t259 receipt stamping + completion guard (cli)", () => {
     writeFileSync(src, "export const answer = 8;\n", "utf-8");
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.rc).toBe(0);
+  });
+
+  test("a newly stamped unbindable receipt remains fail-closed while Git is still unavailable", () => {
+    recordReview(proj);
+    const shard = seededAuditShard(proj);
+    writeFileSync(
+      shard,
+      readFileSync(shard, "utf-8").replace(/^\*\*Source Fingerprint\*\*: .*$/gm, "**Source Fingerprint**: unbindable"),
+      "utf-8",
+    );
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.rc).not.toBe(0);
+    expect(r.out).toContain("source-fingerprint mismatch");
+  });
+
+  test("a true advance replay stays idempotent even if source later changes", () => {
+    recordReview(proj);
+    expect(guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]).rc).toBe(0);
+    writeFileSync(src, "export const answer = 99; // after completed transition\n", "utf-8");
+    const replay = guarded(proj, ["advance", "code-generation"]);
+    expect(replay.rc).toBe(0);
+    expect(replay.out).toContain('"replay":true');
+  });
+
+  test("a partial approval crash window still rechecks source freshness", () => {
+    recordReview(proj);
+    expect(guarded(proj, ["checkbox", "code-generation=completed"]).rc).toBe(0);
+    writeFileSync(src, "export const answer = 100; // after partial approval\n", "utf-8");
+    const recovery = guarded(proj, ["advance", "code-generation"]);
+    expect(recovery.rc).not.toBe(0);
+    expect(recovery.out).toContain("source-fingerprint mismatch");
   });
 });
 
@@ -1094,7 +1167,7 @@ describe("t259 swarm finalize source-fingerprint check (#646 review P1#3)", () =
       "--claimed",
       "foo",
       "--check-cmd",
-      "test -f foo.ts",
+      `"${process.execPath}" -e "require('fs').accessSync('foo.ts')"`,
     ]);
     expect(f.rc).toBe(2);
     const env = JSON.parse(f.out);
@@ -1107,7 +1180,9 @@ describe("t259 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     const proj = makeFixture();
     runSwarm(proj, ["prepare", "--batch", "1", "--units", "bar", "--base", "main"]);
     const wt = wtPath(proj, "bar");
-    writeFileSync(join(wt, "bar.ts"), "export const bar = 1;\n", "utf-8");
+    git(wt, ["config", "filter.tidy.clean", "sed 's/[[:space:]]*$//'"]);
+    writeFileSync(join(wt, ".gitattributes"), "bar.ts filter=tidy\n", "utf-8");
+    writeFileSync(join(wt, "bar.ts"), "export const bar = 1;   \n", "utf-8");
     recordReview(wt, "code-generation", REVIEWER, "bar");
     const f = runSwarm(proj, [
       "finalize",
@@ -1118,9 +1193,43 @@ describe("t259 swarm finalize source-fingerprint check (#646 review P1#3)", () =
       "--claimed",
       "bar",
       "--check-cmd",
-      "test -f bar.ts",
+      `"${process.execPath}" -e "require('fs').accessSync('bar.ts')"`,
     ]);
     expect(f.rc).toBe(0);
     expect(JSON.parse(f.out).converged).toBe(1);
+    const audit = readAllAuditShards(proj);
+    const reviewFp = /\*\*Event\*\*: REVIEW_COMPLETED[\s\S]*?\*\*Source Fingerprint\*\*: ([0-9a-f]+)/.exec(audit)?.[1];
+    const convergedFp = /\*\*Event\*\*: SWARM_UNIT_CONVERGED[\s\S]*?\*\*Source Fingerprint\*\*: ([0-9a-f]+)/.exec(audit)?.[1];
+    expect(convergedFp).toBe(reviewFp);
+    expect(audit).toMatch(/\*\*Source Commit\*\*: [0-9a-f]{40}/);
+
+    // Make another intent active with a hostile same-unit row. `--intent`
+    // must select the requested audit rather than silently reading this cursor.
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    const originalIntent = readFileSync(join(intents, "active-intent"), "utf-8").trim();
+    const decoyAudit = join(intents, "decoy-intent", "audit");
+    mkdirSync(decoyAudit, { recursive: true });
+    writeFileSync(
+      join(decoyAudit, "decoy.md"),
+      [
+        "## Swarm Unit Converged",
+        "**Timestamp**: 2099-01-01T00:00:00.000Z",
+        "**Event**: SWARM_UNIT_CONVERGED",
+        "**Unit name**: bar",
+        "**Source Fingerprint**: unbindable",
+        "",
+        "---",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(join(intents, "active-intent"), "decoy-intent\n", "utf-8");
+
+    const merge = spawnSync(BUN, [
+      WORKTREE_TOOL, "merge", "--slug", "bar", "--target", "main",
+      "--strategy", "squash", "--intent", originalIntent, "--project-dir", proj,
+    ], { cwd: proj, encoding: "utf-8" });
+    expect(merge.status).toBe(0);
+    expect(readFileSync(join(proj, "bar.ts"), "utf-8").replace(/\r\n/g, "\n"))
+      .toBe("export const bar = 1;   \n");
   }, 120000);
 });

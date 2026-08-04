@@ -1405,9 +1405,9 @@ function verifyReviewerPrecondition(
   // engine does not produce today; #629's acceptance criterion is met by
   // documenting this policy, not by guessing attribution from the diff shape.
   //
-  // Legacy receipts without the field (or an unbindable workspace - null
-  // fingerprint) keep today's fail-open behaviour, so in-flight upgrades do
-  // not brick. Off-switch: AIDLC_SKIP_SOURCE_FRESHNESS=1. Settled autonomous
+  // Legacy receipts without the field keep the migration fail-open. A new
+  // unbindable receipt and a real receipt that cannot be recomputed both fail
+  // closed. Off-switch: AIDLC_SKIP_SOURCE_FRESHNESS=1. Settled autonomous
   // swarm exempts this reconciliation entirely: receipts are stamped inside
   // per-unit Bolt worktrees, so a workspace-global fingerprint of the MAIN
   // checkout is the wrong comparison basis while the swarm's application
@@ -1461,10 +1461,10 @@ function verifyReviewerPrecondition(
     // pre-#629 and keeps its documented fail-open; that is the migration.
     const stale =
       newestFp === UNBINDABLE_FINGERPRINT
-        ? // Recorded as unbindable, but the workspace can be fingerprinted now:
-          // the receipt was never bound to anything and cannot speak for this
-          // source. Still unbindable is the pre-existing documented behaviour.
-          currentSourceFp !== null
+        ? // A newly stamped unbindable receipt proves nothing, regardless of
+          // whether Git remains unavailable. Only a legacy receipt with no
+          // Source Fingerprint field keeps the migration fail-open.
+          true
         : // A real fingerprint that cannot be recomputed proves nothing either.
           currentSourceFp === null || currentSourceFp !== newestFp;
     if (stale) {
@@ -1655,16 +1655,6 @@ function handleAdvance(args: string[]): void {
     nextCbBefore?.state === "in-progress" ||
     nextCbBefore?.state === "awaiting-approval" ||
     nextCbBefore?.state === "revising";
-  // Source freshness runs on EVERY route into this transition, including the
-  // replay short-circuit below and the already-[x] path further down. "approve
-  // already ran it" is not an observable guarantee: an approve that aborted
-  // after persisting the checkbox, or one killed between the write and the
-  // route it delegates to, leaves exactly the state a completed approve leaves,
-  // and the checkbox then reads as a standing permission to skip the check
-  // (#646 review). The artifact guard (#366) stays gated below - it is the
-  // expensive half, and it is not what a stale receipt subverts.
-  verifyReviewerPrecondition(pd, content, completedStage);
-
   const isReplay =
     alreadyMarkedCompleted &&
     stageCompletedAlreadyAudited &&
@@ -1681,6 +1671,12 @@ function handleAdvance(args: string[]): void {
     );
     return;
   }
+
+  // A true replay above is already fully applied and must remain idempotent.
+  // A crash-window partial approval does not satisfy all four replay predicates,
+  // so it still reaches this freshness check and cannot use the completed
+  // checkbox as standing permission to skip review validation.
+  verifyReviewerPrecondition(pd, content, completedStage);
 
   // Artifact guard (issue #366). Only enforce when THIS advance is the
   // transition that completes the stage - i.e. it was not already [x]. When

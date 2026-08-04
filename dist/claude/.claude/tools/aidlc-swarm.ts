@@ -72,13 +72,16 @@
 //     (BOLT_FAILED paired with the BOLT_STARTED that `start --worktree` emitted).
 
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import {
   auditBlockField,
+  filteredRawIndexEntries,
   getField,
   latestMainWorkflowStageStarted,
   parseArgs,
@@ -117,6 +120,16 @@ interface UnitResult {
   reason?: FailureReason;
   detail?: string;
   tampered?: boolean;
+}
+
+interface SourceBinding {
+  fingerprint: string;
+  commit: string;
+}
+
+interface ReceiptCheck {
+  error: string | null;
+  fingerprint?: string;
 }
 
 // --- Sibling-tool composition (synchronous; these calls are quick) ----------
@@ -281,10 +294,10 @@ function reviewerReceiptError(
   unit: string,
   stage: string,
   reviewer: string,
-): string | null {
+): ReceiptCheck {
   const audit = readAllAuditShards(worktreePath(projectDir, unit));
   if (!audit) {
-    return `claimed converged but worktree audit is missing; expected a terminal review by ${reviewer}`;
+    return { error: `claimed converged but worktree audit is missing; expected a terminal review by ${reviewer}` };
   }
 
   const relevant = new Set(["BOLT_STARTED", "REVIEW_COMPLETED"]);
@@ -313,7 +326,7 @@ function reviewerReceiptError(
     }
   }
   if (boltStart === -1) {
-    return `claimed converged but worktree audit has no BOLT_STARTED boundary for unit "${unit}"`;
+    return { error: `claimed converged but worktree audit has no BOLT_STARTED boundary for unit "${unit}"` };
   }
 
   let latestTerminal: string | null = null;
@@ -329,10 +342,10 @@ function reviewerReceiptError(
   }
 
   if (latestTerminal === null) {
-    return (
+    return { error: (
       `claimed converged but no terminal REVIEW_COMPLETED for stage "${stage}", ` +
       `unit "${unit}", reviewer "${reviewer}" exists after this Bolt started`
-    );
+    ) };
   }
 
   // #629/#646 - a workspace_requires stage's receipt carries the Source
@@ -346,10 +359,9 @@ function reviewerReceiptError(
   // --merge) carries only the AIDLC data (state/audit/runtime fragment),
   // never application source - so this is the only place a converged unit's
   // receipt is actually bound to the source it reviewed. An absent field
-  // (legacy receipt, or a stage that never stamps one) and a null current
-  // fingerprint (not a git checkout, git unavailable) both keep the existing
-  // fail-open behaviour rather than stranding a receipt on an unbindable
-  // worktree. Off-switch: AIDLC_SKIP_SOURCE_FRESHNESS=1.
+  // (legacy receipt, or a stage that never stamps one) keeps the migration
+  // behavior. A newly stamped unbindable value and a real value that cannot be
+  // recomputed both fail closed. Off-switch: AIDLC_SKIP_SOURCE_FRESHNESS=1.
   const recordedFp = auditBlockField(latestTerminal, "Source Fingerprint");
   if (recordedFp && process.env.AIDLC_SKIP_SOURCE_FRESHNESS !== "1") {
     const currentFp = workspaceSourceFingerprint(worktreePath(projectDir, unit));
@@ -359,19 +371,80 @@ function reviewerReceiptError(
     // nothing either. Only a receipt with no field at all stays fail-open.
     const stale =
       recordedFp === UNBINDABLE_FINGERPRINT
-        ? currentFp !== null
+        ? true
         : currentFp === null || currentFp !== recordedFp;
     if (stale) {
-      return (
+      return { error: (
         `claimed converged but the reviewed source no longer matches its worktree's ` +
         `fingerprint for stage "${stage}", unit "${unit}" (source-fingerprint mismatch); ` +
         `re-invoke the reviewer against the current worktree source and record a fresh ` +
         `verdict before finalizing`
-      );
+      ) };
     }
+    return { error: null, fingerprint: recordedFp };
   }
 
-  return null;
+  return { error: null };
+}
+
+// Materialize the reviewed application bytes as an immutable commit without
+// moving the Bolt branch. The temporary index starts from HEAD, overlays the
+// worktree, then restores framework-owned paths from HEAD so the later source
+// merge carries application source only. Recompute the fingerprint after the
+// object is written to close a concurrent-edit window; the validated value is
+// the one carried to the convergence row.
+function bindReviewedSource(
+  projectDir: string,
+  unit: string,
+  fingerprint: string,
+): { binding?: SourceBinding; error?: string } {
+  const wt = worktreePath(projectDir, unit);
+  const idx = join(tmpdir(), `aidlc-swarm-source-${process.pid}-${randomUUID().slice(0, 8)}`);
+  const env = { ...process.env, GIT_INDEX_FILE: idx };
+  const git = (args: string[]) => spawnSync("git", ["-C", wt, ...args], {
+    env,
+    encoding: "utf-8",
+    maxBuffer: 512 * 1024 * 1024,
+  });
+  try {
+    const head = git(["rev-parse", "HEAD^{commit}"]);
+    if (head.status !== 0 || !head.stdout.trim()) return { error: "cannot resolve the Bolt HEAD commit" };
+    if (git(["read-tree", "HEAD"]).status !== 0) return { error: "cannot seed the source snapshot index" };
+    if (git(["add", "-A"]).status !== 0) return { error: "cannot stage the reviewed source snapshot" };
+    const rawEntries = filteredRawIndexEntries(wt, idx);
+    if (rawEntries === null) return { error: "cannot bind raw bytes for filtered source paths" };
+    for (const entry of rawEntries) {
+      const indexed = git(["ls-files", "-s", "-z", "--", entry.path]);
+      const mode = indexed.status === 0 ? indexed.stdout.slice(0, indexed.stdout.indexOf(" ")) : "";
+      if (!/^100(?:644|755)$/.test(mode)) {
+        return { error: `cannot resolve the index mode for filtered path ${entry.path}` };
+      }
+      const raw = git(["hash-object", "-w", "--no-filters", "--", entry.path]);
+      if (raw.status !== 0 || raw.stdout.trim() !== entry.sha) {
+        return { error: `cannot materialize raw reviewed bytes for filtered path ${entry.path}` };
+      }
+      if (git(["update-index", "--cacheinfo", mode, entry.sha, entry.path]).status !== 0) {
+        return { error: `cannot bind raw reviewed bytes for filtered path ${entry.path}` };
+      }
+    }
+    const restore = git([
+      "reset", "-q", "HEAD", "--",
+      ":(top)aidlc/", ":(top).aidlc/",
+      ":(glob)**/aidlc/spaces/*/intents/**/.aidlc-sensors/**",
+    ]);
+    if (restore.status !== 0) return { error: "cannot exclude framework state from the source snapshot" };
+    const tree = git(["write-tree"]);
+    if (tree.status !== 0 || !tree.stdout.trim()) return { error: "cannot write the reviewed source tree" };
+    const commit = git(["commit-tree", tree.stdout.trim(), "-p", head.stdout.trim(), "-m", `Reviewed source for Bolt ${unit}`]);
+    if (commit.status !== 0 || !commit.stdout.trim()) return { error: "cannot create the immutable reviewed-source commit" };
+    const after = workspaceSourceFingerprint(wt);
+    if (after === null || after !== fingerprint) {
+      return { error: "source-fingerprint mismatch while binding the reviewed source; re-run the reviewer" };
+    }
+    return { binding: { fingerprint, commit: commit.stdout.trim() } };
+  } finally {
+    rmSync(idx, { force: true });
+  }
 }
 
 // --- Audit emission (this tool owns the whole swarm taxonomy) ---------------
@@ -422,7 +495,12 @@ function emitSwarmDegraded(pd: string, batch: string, requested: DriverName): vo
 // attempt's coverage. While a swarm is live the workflow cannot leave the
 // stage (the guards fail closed on unconverged units), so Current Stage is
 // reliable at finalize time.
-function emitUnitConverged(pd: string, batch: string, unit: string): void {
+function emitUnitConverged(
+  pd: string,
+  batch: string,
+  unit: string,
+  binding?: SourceBinding,
+): void {
   let stage = "";
   let floor = "";
   try {
@@ -432,15 +510,9 @@ function emitUnitConverged(pd: string, batch: string, unit: string): void {
     // Absent state degrades to unstamped rows, which every consumer rejects —
     // fail closed, never fail open.
   }
-  // Carry the worktree's source fingerprint on the convergence row itself. The
-  // convergence check above compares a receipt against the worktree once and
-  // then emits a durable "this unit converged" signal that named no source
-  // state at all, so nothing downstream - least of all the eventual source
-  // merge - could tell whether the bytes it is about to take are the bytes that
-  // converged (#646 review). Recorded as unbindable rather than omitted when it
-  // cannot be computed, for the same reason receipts are.
-  const convergedFp =
-    workspaceSourceFingerprint(worktreePath(pd, unit)) ?? UNBINDABLE_FINGERPRINT;
+  // Carry the exact binding returned by receipt validation. Recomputing here
+  // would create a gap in which an unreviewed edit could be stamped as the
+  // converged source. Legacy fieldless receipts omit both optional fields.
   appendAuditEntry(
     "SWARM_UNIT_CONVERGED",
     {
@@ -448,7 +520,9 @@ function emitUnitConverged(pd: string, batch: string, unit: string): void {
       "Unit name": unit,
       Stage: stage,
       "Run floor": floor,
-      "Source Fingerprint": convergedFp,
+      ...(binding
+        ? { "Source Fingerprint": binding.fingerprint, "Source Commit": binding.commit }
+        : {}),
     },
     pd
   );
@@ -719,6 +793,7 @@ function handleFinalize(rest: string[]): void {
   // declined unit the conductor did not claim.
   const results: UnitResult[] = [];
   const genuine: string[] = [];
+  const sourceBindings = new Map<string, SourceBinding>();
   for (const unit of allUnits) {
     if (claimedSet.has(unit)) {
       const verdict = verdictFor(unit, projectDir, checkCmd, testFile);
@@ -740,21 +815,31 @@ function handleFinalize(rest: string[]): void {
           tampered: true,
         });
       } else if (verdict.converged) {
-        const reviewError = review.error ?? (
+        const receipt = review.error
+          ? { error: review.error }
+          : (
           review.reviewer
             ? reviewerReceiptError(projectDir, unit, review.stage, review.reviewer)
-            : null
+            : { error: null }
         );
-        if (reviewError) {
+        if (receipt.error) {
           results.push({
             unit,
             status: "failed",
             reason: "error",
-            detail: reviewError,
+            detail: receipt.error,
           });
         } else {
-          genuine.push(unit);
-          results.push({ unit, status: "converged" });
+          const bound = receipt.fingerprint
+            ? bindReviewedSource(projectDir, unit, receipt.fingerprint)
+            : {};
+          if (bound.error) {
+            results.push({ unit, status: "failed", reason: "error", detail: bound.error });
+          } else {
+            if (bound.binding) sourceBindings.set(unit, bound.binding);
+            genuine.push(unit);
+            results.push({ unit, status: "converged" });
+          }
         }
       } else {
         // Claimed converged, but the check command does not pass on re-verify —
@@ -815,7 +900,9 @@ function handleFinalize(rest: string[]): void {
   const mergeFailed = new Set(mergeFailures.map((f) => f.unit));
   for (const r of results) {
     if (r.status === "converged") {
-      if (!mergeFailed.has(r.unit)) emitUnitConverged(projectDir, batch, r.unit);
+      if (!mergeFailed.has(r.unit)) {
+        emitUnitConverged(projectDir, batch, r.unit, sourceBindings.get(r.unit));
+      }
     } else {
       emitUnitFailed(projectDir, batch, r.unit, r.reason ?? "error");
       emitBoltFailed(projectDir, r.unit, r.detail ?? `unit "${r.unit}" failed: ${r.reason}`);

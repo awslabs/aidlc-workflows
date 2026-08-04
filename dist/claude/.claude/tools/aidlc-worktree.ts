@@ -270,35 +270,59 @@ function handleCreate(args: string[]): void {
 // never went through the swarm has none and passes straight through, and a
 // convergence row from before this field existed carries no fingerprint and
 // keeps the pre-existing behaviour. Off-switch: AIDLC_SKIP_SOURCE_FRESHNESS=1.
-function assertConvergedSourceUnchanged(
+interface ConvergedSourceRecord {
+  fingerprint: string;
+  commit: string;
+}
+
+function convergedSourceRecord(
   pd: string,
   slug: string,
-  wtPath: string,
-): void {
-  if (process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1") return;
-  let recorded: string | undefined;
+  intent?: string,
+  space?: string,
+): ConvergedSourceRecord | null {
+  if (process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1") return null;
+  let fingerprint: string | undefined;
+  let commit: string | undefined;
   try {
-    for (const e of findAllEvents(readAllAuditShards(pd), "SWARM_UNIT_CONVERGED")) {
+    for (const e of findAllEvents(readAllAuditShards(pd, intent, space), "SWARM_UNIT_CONVERGED")) {
       if (auditBlockField(e.block, "Unit name") !== slug) continue;
-      recorded = auditBlockField(e.block, "Source Fingerprint") ?? undefined;
+      fingerprint = auditBlockField(e.block, "Source Fingerprint") ?? undefined;
+      commit = auditBlockField(e.block, "Source Commit") ?? undefined;
     }
   } catch {
-    return; // unreadable audit is not evidence of tampering
+    return null; // unreadable audit is not evidence of a source-bound convergence
   }
-  if (!recorded) return;
+  if (!fingerprint) return null; // pre-binding convergence row
+  if (fingerprint === UNBINDABLE_FINGERPRINT) {
+    errorWithSlug(slug, "refusing to merge: this convergence receipt is unbindable; re-run review and finalize with Git available");
+  }
+  if (!commit) {
+    errorWithSlug(slug, "refusing to merge: the source-bound convergence row has no immutable Source Commit; re-run finalize");
+  }
+  return { fingerprint, commit };
+}
 
+function assertConvergedSourceUnchanged(
+  slug: string,
+  wtPath: string,
+  record: ConvergedSourceRecord | null,
+): string | null {
+  if (!record) return null;
   const current = workspaceSourceFingerprint(wtPath);
-  const stale =
-    recorded === UNBINDABLE_FINGERPRINT
-      ? current !== null
-      : current === null || current !== recorded;
-  if (!stale) return;
-  errorWithSlug(
-    slug,
-    `refusing to merge: the worktree source no longer matches the state this unit ` +
-      `converged with (source-fingerprint mismatch). Re-run the swarm's convergence ` +
-      `check for "${slug}" against the current worktree, or discard the worktree.`,
-  );
+  if (current === null || current !== record.fingerprint) {
+    errorWithSlug(
+      slug,
+      `refusing to merge: the worktree source no longer matches the state this unit ` +
+        `converged with (source-fingerprint mismatch). Re-run the swarm's convergence ` +
+        `check for "${slug}" against the current worktree, or discard the worktree.`,
+    );
+  }
+  const object = runGit(["cat-file", "-e", `${record.commit}^{commit}`], wtPath);
+  if (!object.ok) {
+    errorWithSlug(slug, `refusing to merge: reviewed Source Commit ${record.commit} is unavailable`);
+  }
+  return record.commit;
 }
 
 function handleMerge(args: string[]): void {
@@ -336,14 +360,13 @@ function handleMerge(args: string[]): void {
 
   const wtPath = worktreePath(pd, slug);
   const branchName = `bolt-${slug}`;
-
-  // A swarm unit's convergence was verified against its worktree once, at
-  // finalize, and the source merge is a separate later act on a worktree that
-  // stayed writable in between. Re-verify HERE, immediately before the bytes
-  // move, against the fingerprint the convergence row recorded - otherwise the
-  // durable "converged" signal binds nothing across the gap (#646 review).
-  // Silent for an ordinary Bolt merge, which has no convergence row.
-  assertConvergedSourceUnchanged(pd, slug, wtPath);
+  const sourceRecord = convergedSourceRecord(pd, slug, flags.intent, flags.space);
+  if (sourceRecord && strategy === "rebase") {
+    errorWithSlug(
+      slug,
+      "refusing to rebase a source-bound convergence: rebase before review/finalize, then merge the immutable reviewed commit",
+    );
+  }
 
   // Rebase requires a remote for <target>. The remote-existence check is
   // a pre-audit guard (no state change). The actual `git fetch` is post-
@@ -386,6 +409,11 @@ function handleMerge(args: string[]): void {
     }
   }
 
+  // This is the last guard before source mutation. The convergence selector is
+  // the requested intent/space, and the returned target is an immutable commit
+  // object rather than the movable bolt-<slug> branch.
+  const mergeTarget = assertConvergedSourceUnchanged(slug, wtPath, sourceRecord) ?? branchName;
+
   let commitSha = "";
   // conflictCwd records which checkout the conflicting state lives in:
   // squash/merge run in the target repo's main checkout (cwd = repoCwd), rebase
@@ -397,7 +425,7 @@ function handleMerge(args: string[]): void {
   let conflictHit = false;
   switch (strategy) {
     case "squash": {
-      const m = runGit(["merge", "--squash", branchName], repoCwd);
+      const m = runGit(["merge", "--squash", mergeTarget], repoCwd);
       if (!m.ok) {
         if (isConflict(m)) {
           conflictHit = true;
@@ -425,7 +453,7 @@ function handleMerge(args: string[]): void {
         "--no-edit",
         "-m",
         `Merge bolt ${slug}`,
-        branchName,
+        mergeTarget,
       ], repoCwd);
       if (!m.ok) {
         if (isConflict(m)) {
@@ -453,7 +481,7 @@ function handleMerge(args: string[]): void {
           `git rebase failed: ${r.stderr.trim() || `exit ${r.code}`}`
         );
       }
-      const ff = runGit(["merge", "--ff-only", branchName], repoCwd);
+      const ff = runGit(["merge", "--ff-only", mergeTarget], repoCwd);
       if (!ff.ok) {
         errorWithSlug(
           slug,
@@ -487,7 +515,30 @@ function handleMerge(args: string[]): void {
   // "merge failed entirely" from "merge landed, cleanup orphan remains"
   // — these need different recovery actions.
   const cleanupTag = `[merge-succeeded:${commitSha}]`;
-  const rm = runGit(["worktree", "remove", wtPath], repoCwd);
+  // A swarm snapshot does not move the Bolt branch, so reviewed application
+  // files may still be modified/untracked in this disposable checkout. Once
+  // that exact immutable commit has landed, align the checkout to it before
+  // the existing remove+delete cleanup.
+  if (sourceRecord) {
+    const align = runGit(["reset", "--hard", mergeTarget], wtPath);
+    if (!align.ok) {
+      errorWithSlug(
+        slug,
+        `${cleanupTag} reviewed-source cleanup reset failed: ${align.stderr.trim() || `exit ${align.code}`}`,
+      );
+    }
+  }
+  // A raw-byte snapshot can remain permanently "modified" under its own lossy
+  // clean filter even after reset (Git re-cleans the raw index blob for status).
+  // The successful hard reset to the already-merged immutable object above
+  // authorizes forced removal of this disposable swarm checkout; ordinary Bolt
+  // cleanup is unchanged.
+  const rm = runGit(
+    sourceRecord
+      ? ["worktree", "remove", "--force", wtPath]
+      : ["worktree", "remove", wtPath],
+    repoCwd,
+  );
   if (!rm.ok) {
     errorWithSlug(
       slug,
