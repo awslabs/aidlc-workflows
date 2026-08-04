@@ -42,11 +42,14 @@ import { afterAll, beforeEach, afterEach, describe, expect, test } from "bun:tes
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  readlinkSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -416,6 +419,29 @@ describe("t259 workspace source fingerprint (in-process)", () => {
     // the only thing being compared).
     writeFileSync(src, "export const answer = 43;\n", "utf-8");
     expect(workspaceSourceFingerprint(dir)).not.toBe(fp1);
+  });
+
+  test("a filtered tracked symlink never fingerprints bytes outside the repository", () => {
+    seedGitRepo(dir);
+    git(dir, ["config", "core.symlinks", "true"]);
+    git(dir, ["config", "filter.tidy.clean", "sed 's/[[:space:]]*$//'"]);
+    writeFileSync(join(dir, ".gitattributes"), "*.link filter=tidy\n", "utf-8");
+    const external = `${dir}-external-target.txt`;
+    try {
+      writeFileSync(external, "external v1\n", "utf-8");
+      symlinkSync(external, join(dir, "outside.link"), "file");
+      git(dir, ["add", "--", ".gitattributes", "outside.link"]);
+      git(dir, ["commit", "-qm", "tracked filtered symlink"]);
+      const fp = workspaceSourceFingerprint(dir);
+      expect(fp).not.toBeNull();
+
+      // The tracked source is the link text, which did not change. Following
+      // the destination here would bind arbitrary bytes outside the repo.
+      writeFileSync(external, "external v2\n", "utf-8");
+      expect(workspaceSourceFingerprint(dir)).toBe(fp);
+    } finally {
+      rmSync(external, { force: true });
+    }
   });
 
   // #646 review - the gate deciding whether to run the precise `check-attr`
@@ -1101,8 +1127,10 @@ describe("t259 settled-swarm exemption from fingerprint reconciliation (#646 rev
 // could merge a unit whose worktree source was edited after its review.
 describe("t259 swarm finalize source-fingerprint check (#646 review P1#3)", () => {
   const fixtures: string[] = [];
+  const extraDirs: string[] = [];
   afterAll(() => {
     for (const f of fixtures) cleanupWorktreeFixture(f);
+    for (const f of extraDirs) rmSync(f, { recursive: true, force: true });
   });
 
   // Mirrors t134's makeSwarmFixture, but seeded with Current Stage:
@@ -1140,10 +1168,15 @@ describe("t259 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     return join(proj, ".aidlc", "worktrees", `bolt-${unit}`);
   }
 
-  function runSwarm(proj: string, args: string[]): { rc: number; out: string } {
+  function runSwarm(
+    proj: string,
+    args: string[],
+    extraEnv?: Record<string, string>,
+  ): { rc: number; out: string } {
     const r = spawnSync(BUN, [SWARM_TOOL, "--project-dir", proj, ...args], {
       cwd: proj,
       encoding: "utf-8",
+      env: { ...process.env, ...extraEnv },
     });
     return { rc: r.status ?? -1, out: r.stdout ?? "" };
   }
@@ -1176,6 +1209,127 @@ describe("t259 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     expect(row?.detail).toContain("source-fingerprint mismatch");
   }, 120000);
 
+  test("finalize fails closed when reviewed bytes live only in a dirty initialized submodule", () => {
+    const proj = makeFixture();
+    const origin = mkdtempSync(join(tmpdir(), "aidlc-t259-submodule-"));
+    extraDirs.push(origin);
+    seedGitRepo(origin);
+    git(proj, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", origin, "vendor/sub"]);
+    git(proj, ["commit", "-qm", "add submodule"]);
+
+    runSwarm(proj, ["prepare", "--batch", "1", "--units", "subdirty", "--base", "main"]);
+    const wt = wtPath(proj, "subdirty");
+    git(wt, ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive"]);
+    writeFileSync(
+      join(wt, "vendor", "sub", "app.ts"),
+      "export const answer = 99; // reviewed but not committed in submodule\n",
+      "utf-8",
+    );
+    recordReview(wt, "code-generation", REVIEWER, "subdirty");
+
+    const f = runSwarm(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "subdirty",
+      "--claimed",
+      "subdirty",
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('vendor/sub/app.ts')"`,
+    ]);
+    expect(f.rc).toBe(2);
+    const row = JSON.parse(f.out).units.find((u: { unit: string }) => u.unit === "subdirty");
+    expect(row?.detail).toContain("cannot bind dirty initialized submodule vendor/sub");
+    expect(readAllAuditShards(proj)).not.toMatch(
+      /\*\*Event\*\*: SWARM_UNIT_CONVERGED[\s\S]*?\*\*Unit name\*\*: subdirty/,
+    );
+    const refs = spawnSync("git", ["-C", proj, "for-each-ref", "refs/aidlc/reviewed-source/subdirty/"], {
+      encoding: "utf-8",
+    });
+    expect(refs.status).toBe(0);
+    expect(refs.stdout.trim()).toBe("");
+  }, 120000);
+
+  test("a finalize-time bypass cannot become fieldless legacy evidence after the switch is unset", () => {
+    const proj = makeFixture();
+    runSwarm(proj, ["prepare", "--batch", "1", "--units", "bypass", "--base", "main"]);
+    const wt = wtPath(proj, "bypass");
+    writeFileSync(join(wt, "reviewed.ts"), "export const reviewed = true;\n", "utf-8");
+    git(wt, ["add", "--", "reviewed.ts"]);
+    git(wt, ["commit", "-qm", "reviewed source"]);
+    recordReview(wt, "code-generation", REVIEWER, "bypass");
+
+    const finalized = runSwarm(
+      proj,
+      [
+        "finalize",
+        "--batch",
+        "1",
+        "--units",
+        "bypass",
+        "--claimed",
+        "bypass",
+        "--check-cmd",
+        `"${process.execPath}" -e "require('fs').accessSync('reviewed.ts')"`,
+      ],
+      { AIDLC_SKIP_SOURCE_FRESHNESS: "1" },
+    );
+    expect(finalized.rc).toBe(0);
+    const convergence = readAllAuditShards(proj).split("## Swarm Unit Converged").at(-1) ?? "";
+    expect(convergence).toContain("**Unit name**: bypass");
+    expect(convergence).toContain("**Source Freshness Bypass**: true");
+    expect(convergence).not.toContain("**Source Commit**:");
+
+    writeFileSync(join(wt, "unreviewed.ts"), "export const unreviewed = true;\n", "utf-8");
+    git(wt, ["add", "--", "unreviewed.ts"]);
+    git(wt, ["commit", "-qm", "unreviewed branch advance"]);
+    const before = spawnSync("git", ["-C", proj, "rev-parse", "HEAD"], { encoding: "utf-8" }).stdout.trim();
+    const mergeEnv = { ...process.env };
+    delete mergeEnv.AIDLC_SKIP_SOURCE_FRESHNESS;
+    const merge = spawnSync(BUN, [
+      WORKTREE_TOOL, "merge", "--slug", "bypass", "--target", "main",
+      "--strategy", "squash", "--project-dir", proj,
+    ], { cwd: proj, encoding: "utf-8", env: mergeEnv });
+    expect(merge.status).not.toBe(0);
+    expect(`${merge.stdout}${merge.stderr}`).toContain("finalized with source freshness bypassed");
+    const after = spawnSync("git", ["-C", proj, "rev-parse", "HEAD"], { encoding: "utf-8" }).stdout.trim();
+    expect(after).toBe(before);
+    expect(existsSync(join(proj, "reviewed.ts"))).toBe(false);
+    expect(existsSync(join(proj, "unreviewed.ts"))).toBe(false);
+  }, 120000);
+
+  test("a tracked symlink matched by a broad clean filter stays a symlink through finalize and merge", () => {
+    const proj = makeFixture();
+    git(proj, ["config", "core.symlinks", "true"]);
+    runSwarm(proj, ["prepare", "--batch", "1", "--units", "link", "--base", "main"]);
+    const wt = wtPath(proj, "link");
+    git(wt, ["config", "filter.tidy.clean", "sed 's/[[:space:]]*$//'"]);
+    writeFileSync(join(wt, ".gitattributes"), "* filter=tidy\n", "utf-8");
+    writeFileSync(join(wt, "target.txt"), "reviewed target\n", "utf-8");
+    symlinkSync("target.txt", join(wt, "link.txt"), "file");
+    git(wt, ["add", "--", ".gitattributes", "target.txt", "link.txt"]);
+    git(wt, ["commit", "-qm", "tracked filtered symlink"]);
+    recordReview(wt, "code-generation", REVIEWER, "link");
+
+    const finalized = runSwarm(proj, [
+      "finalize", "--batch", "1", "--units", "link", "--claimed", "link",
+      "--check-cmd", `"${process.execPath}" -e "require('fs').lstatSync('link.txt').isSymbolicLink()||process.exit(1)"`,
+    ]);
+    expect(finalized.rc).toBe(0);
+    const merge = spawnSync(BUN, [
+      WORKTREE_TOOL, "merge", "--slug", "link", "--target", "main",
+      "--strategy", "squash", "--project-dir", proj,
+    ], { cwd: proj, encoding: "utf-8" });
+    if (merge.status !== 0) {
+      throw new Error(`filtered symlink merge failed: ${merge.stdout ?? ""}${merge.stderr ?? ""}`);
+    }
+    expect(lstatSync(join(proj, "link.txt")).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(join(proj, "link.txt"))).toBe("target.txt");
+    expect(readFileSync(join(proj, "target.txt"), "utf-8").replace(/\r\n/g, "\n"))
+      .toBe("reviewed target\n");
+  }, 120000);
+
   test("finalize merges a claimed unit whose worktree source is unchanged since its terminal review", () => {
     const proj = makeFixture();
     runSwarm(proj, ["prepare", "--batch", "1", "--units", "bar", "--base", "main"]);
@@ -1202,6 +1356,21 @@ describe("t259 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     const convergedFp = /\*\*Event\*\*: SWARM_UNIT_CONVERGED[\s\S]*?\*\*Source Fingerprint\*\*: ([0-9a-f]+)/.exec(audit)?.[1];
     expect(convergedFp).toBe(reviewFp);
     expect(audit).toMatch(/\*\*Source Commit\*\*: [0-9a-f]{40}/);
+    const sourceCommit = /\*\*Event\*\*: SWARM_UNIT_CONVERGED[\s\S]*?\*\*Source Commit\*\*: ([0-9a-f]{40})/.exec(audit)?.[1];
+    if (!sourceCommit) throw new Error("convergence row did not carry Source Commit");
+    const retainedRef = `refs/aidlc/reviewed-source/bar/${sourceCommit}`;
+    const retained = spawnSync("git", ["-C", proj, "rev-parse", "--verify", retainedRef], {
+      encoding: "utf-8",
+    });
+    expect(retained.status).toBe(0);
+    expect(retained.stdout.trim()).toBe(sourceCommit);
+
+    // commit-tree objects without a ref are pruned. The private per-commit ref
+    // must keep this delayed merge target alive through an aggressive GC.
+    git(proj, ["reflog", "expire", "--expire=now", "--all"]);
+    git(proj, ["gc", "--prune=now"]);
+    const afterGc = spawnSync("git", ["-C", proj, "cat-file", "-e", `${sourceCommit}^{commit}`]);
+    expect(afterGc.status).toBe(0);
 
     // Make another intent active with a hostile same-unit row. `--intent`
     // must select the requested audit rather than silently reading this cursor.
@@ -1231,5 +1400,31 @@ describe("t259 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     expect(merge.status).toBe(0);
     expect(readFileSync(join(proj, "bar.ts"), "utf-8").replace(/\r\n/g, "\n"))
       .toBe("export const bar = 1;   \n");
+    const afterMerge = spawnSync("git", ["-C", proj, "show-ref", "--verify", "--quiet", retainedRef]);
+    expect(afterMerge.status).toBe(1);
+  }, 120000);
+
+  test("discard removes the retained reviewed-source refs for that Bolt", () => {
+    const proj = makeFixture();
+    runSwarm(proj, ["prepare", "--batch", "1", "--units", "drop", "--base", "main"]);
+    const wt = wtPath(proj, "drop");
+    writeFileSync(join(wt, "drop.ts"), "export const drop = true;\n", "utf-8");
+    recordReview(wt, "code-generation", REVIEWER, "drop");
+    const finalized = runSwarm(proj, [
+      "finalize", "--batch", "1", "--units", "drop", "--claimed", "drop",
+      "--check-cmd", `"${process.execPath}" -e "require('fs').accessSync('drop.ts')"`,
+    ]);
+    expect(finalized.rc).toBe(0);
+    const audit = readAllAuditShards(proj);
+    const sourceCommit = /\*\*Event\*\*: SWARM_UNIT_CONVERGED[\s\S]*?\*\*Source Commit\*\*: ([0-9a-f]{40})/.exec(audit)?.[1];
+    if (!sourceCommit) throw new Error("convergence row did not carry Source Commit");
+    const retainedRef = `refs/aidlc/reviewed-source/drop/${sourceCommit}`;
+    expect(spawnSync("git", ["-C", proj, "show-ref", "--verify", "--quiet", retainedRef]).status).toBe(0);
+
+    const discarded = spawnSync(BUN, [
+      WORKTREE_TOOL, "discard", "--slug", "drop", "--project-dir", proj,
+    ], { cwd: proj, encoding: "utf-8" });
+    expect(discarded.status).toBe(0);
+    expect(spawnSync("git", ["-C", proj, "show-ref", "--verify", "--quiet", retainedRef]).status).toBe(1);
   }, 120000);
 });

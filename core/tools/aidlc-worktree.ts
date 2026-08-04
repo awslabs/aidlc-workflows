@@ -22,6 +22,7 @@ import {
   findAllEvents,
   getField,
   readAllAuditShards,
+  reviewedSourceRefPrefix,
   resolveConstructionRepo,
   resolveProjectDir,
   UNBINDABLE_FINGERPRINT,
@@ -97,6 +98,43 @@ function runGit(args: string[], cwd?: string): GitResult {
     stderr: (r.stderr ?? "").toString(),
     code: r.status ?? 1,
   };
+}
+
+interface RetainedSourceRef {
+  ref: string;
+  oid: string;
+}
+
+function retainedSourceRefs(repoCwd: string, slug: string): RetainedSourceRef[] | null {
+  const prefix = reviewedSourceRefPrefix(slug);
+  const listed = runGit(
+    ["for-each-ref", "--format=%(refname)%09%(objectname)", prefix],
+    repoCwd,
+  );
+  if (!listed.ok) return null;
+  const refs: RetainedSourceRef[] = [];
+  for (const line of listed.stdout.split(/\r?\n/)) {
+    if (!line) continue;
+    const tab = line.indexOf("\t");
+    if (tab === -1) return null;
+    const ref = line.slice(0, tab);
+    const oid = line.slice(tab + 1);
+    if (!ref.startsWith(prefix) || !/^[0-9a-f]{40,64}$/.test(oid)) return null;
+    refs.push({ ref, oid });
+  }
+  return refs;
+}
+
+// Compare-and-delete each ref: if another process moved one after enumeration,
+// preserve it and report a cleanup failure instead of deleting newer evidence.
+function deleteRetainedSourceRefs(repoCwd: string, refs: RetainedSourceRef[]): string | null {
+  for (const retained of refs) {
+    const deleted = runGit(["update-ref", "-d", retained.ref, retained.oid], repoCwd);
+    if (!deleted.ok) {
+      return deleted.stderr.trim() || deleted.stdout.trim() || `cannot delete ${retained.ref}`;
+    }
+  }
+  return null;
 }
 
 // --- Sibling-worktree detection ---
@@ -281,18 +319,35 @@ function convergedSourceRecord(
   intent?: string,
   space?: string,
 ): ConvergedSourceRecord | null {
-  if (process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1") return null;
-  let fingerprint: string | undefined;
-  let commit: string | undefined;
+  let latestBlock: string | undefined;
   try {
     for (const e of findAllEvents(readAllAuditShards(pd, intent, space), "SWARM_UNIT_CONVERGED")) {
       if (auditBlockField(e.block, "Unit name") !== slug) continue;
-      fingerprint = auditBlockField(e.block, "Source Fingerprint") ?? undefined;
-      commit = auditBlockField(e.block, "Source Commit") ?? undefined;
+      latestBlock = e.block;
     }
   } catch {
     return null; // unreadable audit is not evidence of a source-bound convergence
   }
+  const bypass = latestBlock
+    ? auditBlockField(latestBlock, "Source Freshness Bypass") ?? undefined
+    : undefined;
+  if (bypass !== undefined) {
+    if (bypass !== "true") {
+      errorWithSlug(slug, `refusing to merge: invalid Source Freshness Bypass marker "${bypass}"`);
+    }
+    if (process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1") return null;
+    errorWithSlug(
+      slug,
+      "refusing to merge: this convergence was finalized with source freshness bypassed; re-run review and finalize with source freshness enabled",
+    );
+  }
+  if (process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1") return null;
+  const fingerprint = latestBlock
+    ? auditBlockField(latestBlock, "Source Fingerprint") ?? undefined
+    : undefined;
+  const commit = latestBlock
+    ? auditBlockField(latestBlock, "Source Commit") ?? undefined
+    : undefined;
   if (!fingerprint) return null; // pre-binding convergence row
   if (fingerprint === UNBINDABLE_FINGERPRINT) {
     errorWithSlug(slug, "refusing to merge: this convergence receipt is unbindable; re-run review and finalize with Git available");
@@ -552,6 +607,14 @@ function handleMerge(args: string[]): void {
       `${cleanupTag} branch -D ${branchName} failed: ${del.stderr.trim() || `exit ${del.code}`}`
     );
   }
+  const retained = retainedSourceRefs(repoCwd, slug);
+  if (retained === null) {
+    errorWithSlug(slug, `${cleanupTag} reviewed-source ref enumeration failed`);
+  }
+  const refCleanupError = deleteRetainedSourceRefs(repoCwd, retained);
+  if (refCleanupError) {
+    errorWithSlug(slug, `${cleanupTag} reviewed-source ref cleanup failed: ${refCleanupError}`);
+  }
 
   console.log(
     JSON.stringify({
@@ -617,8 +680,12 @@ function handleDiscard(args: string[]): void {
     "--verify",
     `refs/heads/${branchName}`,
   ], repoCwd).ok;
+  const retained = retainedSourceRefs(repoCwd, slug);
+  if (retained === null) {
+    errorWithSlug(slug, "reviewed-source ref enumeration failed");
+  }
 
-  if (!dirExists && !branchExists) {
+  if (!dirExists && !branchExists && retained.length === 0) {
     console.log(
       JSON.stringify({
         emitted: null,
@@ -658,6 +725,10 @@ function handleDiscard(args: string[]): void {
         `branch -D ${branchName} failed: ${del.stderr.trim() || `exit ${del.code}`}`
       );
     }
+  }
+  const refCleanupError = deleteRetainedSourceRefs(repoCwd, retained);
+  if (refCleanupError) {
+    errorWithSlug(slug, `reviewed-source ref cleanup failed: ${refCleanupError}`);
   }
 
   console.log(

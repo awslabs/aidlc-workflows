@@ -87,6 +87,7 @@ import {
   parseArgs,
   readAllAuditShards,
   readStateFile,
+  reviewedSourceRef,
   resolveConstructionRepo,
   resolveProjectDir,
   resolveStage,
@@ -411,6 +412,37 @@ function bindReviewedSource(
     if (head.status !== 0 || !head.stdout.trim()) return { error: "cannot resolve the Bolt HEAD commit" };
     if (git(["read-tree", "HEAD"]).status !== 0) return { error: "cannot seed the source snapshot index" };
     if (git(["add", "-A"]).status !== 0) return { error: "cannot stage the reviewed source snapshot" };
+    // The parent tree can represent only a submodule's checked-out commit
+    // (mode 160000), never dirty bytes inside that checkout. The fingerprint
+    // deliberately includes those bytes, so accepting them here would produce
+    // a Source Commit different from what the reviewer inspected. Fail closed
+    // rather than silently retaining the old gitlink. A clean submodule checked
+    // out at another commit remains representable: `git add -A` staged its new
+    // gitlink above.
+    const submodules = git(["ls-files", "-s", "-z"]);
+    if (submodules.status !== 0) return { error: "cannot verify reviewed submodule state" };
+    for (const record of submodules.stdout.split("\0")) {
+      if (!record.startsWith("160000 ")) continue;
+      const tab = record.indexOf("\t");
+      if (tab === -1) return { error: "cannot parse a reviewed submodule gitlink" };
+      const path = record.slice(tab + 1);
+      const subDir = join(wt, path);
+      if (!existsSync(join(subDir, ".git"))) continue; // uninitialized: no reviewed bytes to carry
+      const status = spawnSync(
+        "git",
+        ["-C", subDir, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=none"],
+        { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+      );
+      if (status.status !== 0) return { error: `cannot verify reviewed submodule state for ${path}` };
+      if (status.stdout.length > 0) {
+        return {
+          error: (
+            `cannot bind dirty initialized submodule ${path}; commit or discard its reviewed ` +
+            `changes, then re-run the reviewer before finalizing`
+          ),
+        };
+      }
+    }
     const rawEntries = filteredRawIndexEntries(wt, idx);
     if (rawEntries === null) return { error: "cannot bind raw bytes for filtered source paths" };
     for (const entry of rawEntries) {
@@ -441,7 +473,12 @@ function bindReviewedSource(
     if (after === null || after !== fingerprint) {
       return { error: "source-fingerprint mismatch while binding the reviewed source; re-run the reviewer" };
     }
-    return { binding: { fingerprint, commit: commit.stdout.trim() } };
+    const commitSha = commit.stdout.trim();
+    const retained = git(["update-ref", reviewedSourceRef(unit, commitSha), commitSha]);
+    if (retained.status !== 0) {
+      return { error: "cannot retain the immutable reviewed-source commit" };
+    }
+    return { binding: { fingerprint, commit: commitSha } };
   } finally {
     rmSync(idx, { force: true });
   }
@@ -500,6 +537,7 @@ function emitUnitConverged(
   batch: string,
   unit: string,
   binding?: SourceBinding,
+  sourceFreshnessBypassed = false,
 ): void {
   let stage = "";
   let floor = "";
@@ -522,7 +560,9 @@ function emitUnitConverged(
       "Run floor": floor,
       ...(binding
         ? { "Source Fingerprint": binding.fingerprint, "Source Commit": binding.commit }
-        : {}),
+        : sourceFreshnessBypassed
+          ? { "Source Freshness Bypass": "true" }
+          : {}),
     },
     pd
   );
@@ -794,6 +834,7 @@ function handleFinalize(rest: string[]): void {
   const results: UnitResult[] = [];
   const genuine: string[] = [];
   const sourceBindings = new Map<string, SourceBinding>();
+  const sourceFreshnessBypassed = process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1";
   for (const unit of allUnits) {
     if (claimedSet.has(unit)) {
       const verdict = verdictFor(unit, projectDir, checkCmd, testFile);
@@ -901,7 +942,13 @@ function handleFinalize(rest: string[]): void {
   for (const r of results) {
     if (r.status === "converged") {
       if (!mergeFailed.has(r.unit)) {
-        emitUnitConverged(projectDir, batch, r.unit, sourceBindings.get(r.unit));
+        emitUnitConverged(
+          projectDir,
+          batch,
+          r.unit,
+          sourceBindings.get(r.unit),
+          sourceFreshnessBypassed,
+        );
       }
     } else {
       emitUnitFailed(projectDir, batch, r.unit, r.reason ?? "error");

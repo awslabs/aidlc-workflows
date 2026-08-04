@@ -3230,6 +3230,17 @@ export function freshReviewReceipts(
   return { stageVerdict, unitVerdicts };
 }
 
+// Private refs keep reviewed-source commits reachable until the Bolt is merged
+// or discarded. The commit suffix matters: a later finalize retry must not move
+// the only ref away from an earlier commit already named by an audit row.
+export function reviewedSourceRefPrefix(boltSlug: string): string {
+  return `refs/aidlc/reviewed-source/${boltSlug}/`;
+}
+
+export function reviewedSourceRef(boltSlug: string, commit: string): string {
+  return `${reviewedSourceRefPrefix(boltSlug)}${commit}`;
+}
+
 // --- Multi-repo: repos are siblings of the workspace ----------------------------
 //
 // In the workspace model the projectDir is the WORKSPACE roof (`my-workspace/`),
@@ -3462,7 +3473,11 @@ export function filteredRawIndexEntries(
   const paths: string[] = [];
   for (const record of listed.stdout.split("\0")) {
     const tab = record.indexOf("\t");
-    if (tab === -1 || record.startsWith("160000 ")) continue;
+    // Clean/process filters transform regular file content only. Passing a
+    // symlink through `hash-object --no-filters -- <path>` follows its target,
+    // replacing Git's mode-120000 link-text blob with the target file's bytes.
+    // Leave symlinks (and gitlinks) exactly as `git add -A` staged them.
+    if (tab === -1 || !/^100(?:644|755) /.test(record)) continue;
     const path = record.slice(tab + 1);
     if (path) paths.push(path);
   }
@@ -3551,7 +3566,10 @@ function gitTreeFingerprint(repoDir: string, carriesWorkspaceShell: boolean): st
       const entryPath = record.slice(tabIdx + 1);
       if (!entryPath) continue;
       if (!record.startsWith("160000 ")) {
-        blobPaths.push(entryPath);
+        // Attribute filters apply to regular blobs, not mode-120000 symlinks.
+        // Hashing a symlink path with `hash-object --no-filters` follows its
+        // destination, making external target bytes part of the fingerprint.
+        if (/^100(?:644|755) /.test(record)) blobPaths.push(entryPath);
         continue;
       }
       const subDir = join(repoDir, entryPath);
