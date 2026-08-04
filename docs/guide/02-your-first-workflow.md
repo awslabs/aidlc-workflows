@@ -4,10 +4,10 @@ This chapter walks through a complete AI-DLC workflow run, explaining what you s
 
 > **Note**: The transcripts in this chapter show **Claude Code**. On Kiro CLI,
 > Kiro IDE, Codex CLI, and opencode the workflow - stages, agents, gates,
-> artifacts - is identical, but two Claude-Code-only surfaces do not appear:
-> there is **no welcome banner** and **no statusline** (use `/aidlc --status`
-> and the progress line at each gate instead), and on Codex CLI you invoke
-> `$aidlc` rather than `/aidlc`. Your harness's chapter under
+> artifacts - is identical, but the Claude-only welcome banner and custom
+> AI-DLC statusline do not appear. Use `/aidlc --status` on Kiro and opencode;
+> Codex uses `$aidlc --status` and its built-in `update_plan` progress display.
+> Your harness's chapter under
 > [Running on other harnesses](harnesses/README.md) lists every difference.
 
 ---
@@ -79,7 +79,7 @@ After Initialization, the workflow enters Ideation. Each stage from here on runs
 
 ### Stage 1.1: Intent Capture (aidlc-product-agent)
 
-On Claude Code, the status line at the bottom of your terminal updates (the other harnesses render no statusline - use `/aidlc --status`):
+On Claude Code, the custom AI-DLC status line at the bottom of your terminal updates (Kiro and opencode use `/aidlc --status`; Codex uses `$aidlc --status` and its built-in `update_plan` progress display):
 
 ```
 [AIDLC] IDEATION > Intent Capture [▓▓▓▓▓░░░░░] 4/7 -- product
@@ -261,7 +261,7 @@ aidlc/spaces/<space>/intents/<YYMMDD>-<label>/
 
 ## Status Line
 
-Throughout the workflow on Claude Code, the terminal status line shows your current position (no other harness renders this statusline - use `/aidlc --status` and the progress line at each gate; Codex CLI additionally tracks position via its `update_plan` tool):
+Throughout the workflow on Claude Code, the custom AI-DLC status line shows your current position (Kiro and opencode use `/aidlc --status` and the progress line at each gate; Codex uses `$aidlc --status` and its built-in `update_plan` progress display):
 
 ```
 [AIDLC] IDEATION > Intent Capture [▓▓▓▓▓░░░░░] 4/7 -- product
