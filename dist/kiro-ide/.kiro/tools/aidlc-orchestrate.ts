@@ -2042,8 +2042,9 @@ function handleNext(args: string[], projectDir: string | undefined): void {
         const lr = JSON.parse(readFileSync(latchPath, "utf-8")) as { turn?: number; flag?: string; source?: string };
         if (typeof lr.turn === "number") latchTurn = lr.turn;
         if (typeof lr.flag === "string") {
-          // read-only flags render with a leading `--`; workspace verbs are bare.
-          label = lr.source === "workspace-verb" ? `\`${lr.flag}\`` : `--${lr.flag}`;
+          // Read-only flags render with `--`; noun commands render as typed.
+          const nounCommand = lr.source === "workspace-verb" || lr.source === "plugin-verb";
+          label = nounCommand ? `\`${lr.flag}\`` : `--${lr.flag}`;
         }
       }
       if (counter >= 0 && latchTurn === counter) {

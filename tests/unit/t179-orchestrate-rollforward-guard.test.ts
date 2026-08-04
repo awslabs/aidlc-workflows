@@ -69,13 +69,19 @@ function runNext(proj: string, args: string[]): RunResult {
 // Stamp the per-turn counter + the read-only latch the Kiro seam writes, at the
 // SAME paths the engine reads (resolveProjectDir(--project-dir)/aidlc/...). The
 // latch JSON shape matches aidlc-kiro-adapter.ts:137 ({turn,flag,source,ts}).
-function seedLatch(proj: string, counter: number, latchTurn: number): void {
+function seedLatch(
+  proj: string,
+  counter: number,
+  latchTurn: number,
+  flag = "status",
+  source = "read-only-flag",
+): void {
   const aidlc = join(proj, "aidlc");
   mkdirSync(aidlc, { recursive: true }); // already created by the fixture; idempotent
   writeFileSync(join(aidlc, ".aidlc-turn-counter"), `${counter}\n`, "utf-8");
   writeFileSync(
     join(aidlc, ".aidlc-readonly-latch"),
-    `${JSON.stringify({ turn: latchTurn, flag: "status", source: "read-only-flag", ts: Date.now() })}\n`,
+    `${JSON.stringify({ turn: latchTurn, flag, source, ts: Date.now() })}\n`,
     "utf-8",
   );
 }
@@ -109,6 +115,15 @@ describe("t179 Branch 0: fresh latch -> done", () => {
     expect(out).toContain("nothing to advance");
     // It MUST NOT have routed into the active stage.
     expect(out).not.toContain('"kind":"run-stage"');
+  });
+
+  test("1b: plugin latch renders the noun command without a leading --", () => {
+    proj = createTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    seedLatch(proj, 3, 3, "plugin list --json", "plugin-verb");
+    const out = runNext(proj, []).out;
+    expect(out).toContain("(`plugin list --json`)");
+    expect(out).not.toContain("--plugin list --json");
   });
 });
 

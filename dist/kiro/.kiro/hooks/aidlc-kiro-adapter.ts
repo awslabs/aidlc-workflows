@@ -300,6 +300,12 @@ if (target === "verb-intercept") {
   } else {
     const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
     const compiledArgs = (() => {
+      if (cmd.source === "plugin-verb") {
+        if (cmd.subcommand === "plugin-list") return ["plugin", "list", ...forwarded];
+        if (cmd.subcommand === "plugin-sync") return ["plugin", "sync", ...forwarded];
+        if (cmd.subcommand === "select-plugins") return ["plugin", "select", ...forwarded];
+        if (cmd.subcommand === "help") return ["plugin", "help"];
+      }
       if (cmd.subcommand === "space-create") return ["space", "create", ...forwarded];
       if (cmd.subcommand === "intent-birth") return ["intent", "birth", ...forwarded];
       return [cmd.subcommand, ...forwarded];

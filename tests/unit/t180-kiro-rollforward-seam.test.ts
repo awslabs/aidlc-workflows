@@ -28,7 +28,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -52,15 +52,27 @@ function runAdapter(
   projectDir: string,
   target: string,
   payload: unknown,
+  env: NodeJS.ProcessEnv = {},
 ): { stdout: string; code: number } {
   const r = spawnSync("bun", [join(projectDir, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), target], {
     cwd: projectDir,
     input: typeof payload === "string" ? payload : JSON.stringify(payload),
     encoding: "utf-8",
-    env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir },
+    env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir, ...env },
     timeout: 30_000,
   });
   return { stdout: r.stdout ?? "", code: r.status ?? -1 };
+}
+
+function fakeCompiledExecutable(projectDir: string): string {
+  const path = join(projectDir, process.platform === "win32" ? "fake-aidlc.cmd" : "fake-aidlc");
+  if (process.platform === "win32") {
+    writeFileSync(path, "@echo off\r\necho %*\r\n", "utf-8");
+  } else {
+    writeFileSync(path, "#!/bin/sh\nprintf '%s\\n' \"$*\"\n", "utf-8");
+    chmodSync(path, 0o755);
+  }
+  return path;
 }
 
 // Build an expanded-prompt body carrying the forwarding-loop anchor the seam
@@ -140,6 +152,30 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
       expect(latch.turn).toBe(1);
       expect(latch.source).toBe("plugin-verb");
       expect(latch.flag).toBe("plugin list --json");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("2c: compiled plugin dispatch translates internal utility names back to public argv", () => {
+    const dir = scratchProject();
+    try {
+      const executable = fakeCompiledExecutable(dir);
+      for (const command of [
+        "plugin list --json",
+        "plugin sync",
+        "plugin select test-pro another-plugin",
+      ]) {
+        const r = runAdapter(
+          dir,
+          "verb-intercept",
+          { prompt: promptWithNext(command), cwd: dir },
+          { AIDLC_COMPILED_EXECUTABLE: executable },
+        );
+        expect(r.code, command).toBe(0);
+        const relayed = r.stdout.match(/--- OUTPUT ---\n([\s\S]*?)\n--- END OUTPUT ---/)?.[1].trim();
+        expect(relayed, command).toBe(command);
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
