@@ -36,10 +36,12 @@ This applies to **every** structured-question site, including but not limited to
 - consolidated-summary confirmation before artifact generation;
 - the §13 learnings gate (keep / heading / promote-to-team).
 
-(The one place ` ```question ` fences legitimately appear as literal text is
-documentation like THIS file and the stage-protocol, where the fence is being
-described as an authoring spec, not presented to a user. Those illustrative
-examples stay; the prohibition is about live orchestration turns.)
+(Literal ` ```question ` fences legitimately remain in framework documentation
+like THIS file and the stage-protocol because they are authoring specs, not chat
+output. In the stage-protocol those specs are normative prompt templates: when
+the surrounding instruction requires a question, their content MUST be rendered
+through this annex. This annex's mapping examples are illustrative. The
+prohibition is about echoing raw fences in live orchestration turns.)
 
 ## Mechanism (two-track, D-3)
 

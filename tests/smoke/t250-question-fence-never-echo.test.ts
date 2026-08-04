@@ -17,9 +17,9 @@
 // directly; that is exactly why the optional runtime lint/hook was investigated
 // and DEFERRED. What a static test CAN pin (and what this guard exists to hold)
 // is that the strengthened prohibition does not silently regress OUT of the
-// source files, and that the self-reference carve-out (illustrative example
-// fences in the docs themselves) is preserved so the rule never forbids its own
-// examples. Zero LLM, zero tokens, zero subprocess.
+// source files, and that the source fences needed for illustrative annex
+// mappings and normative protocol templates are preserved so the rule never
+// forbids its own authoring specs. Zero LLM, zero tokens, zero subprocess.
 //
 // Assert against SOURCE (core/ + harness/), not dist/: source is the authored
 // contract; the dist projection is regenerated from it and guarded separately
@@ -91,8 +91,10 @@ describe("t250 (smoke) ```question fence is a SPEC to render, never echoed to ch
 
       test("lists representative structured-question sites the rule applies to", () => {
         const t = read(annexPath(harness));
+        // The sites are representative, never an exhaustive allowlist.
+        expect(/including but not limited to/i.test(t)).toBe(true);
         // Pin representative sites, including the consolidated-summary gate
-        // that was missed by the original exhaustive list.
+        // that was missed by the original list.
         expect(/approval gate/i.test(t)).toBe(true);
         expect(/interaction-mode/i.test(t)).toBe(true);
         expect(/ladder prompt/i.test(t)).toBe(true);
@@ -134,10 +136,20 @@ describe("t250 (smoke) ```question fence is a SPEC to render, never echoed to ch
       expect(/spec in, answerable prompt out/i.test(t)).toBe(true);
     });
 
-    test("preserves its own illustrative ```question example fences", () => {
+    test("keeps protocol fences normative while excluding only their raw syntax from chat", () => {
       const t = read(PROTOCOL);
-      // The protocol shows example specs throughout § "Structured questions"
-      // and § "Question Format". The prohibition must not have stripped them.
+      expect(/normative authoring specs/i.test(t)).toBe(true);
+      expect(/content\s+MUST\s+still\s+be\s+presented/i.test(t)).toBe(true);
+      expect(/not\s+literal\s+questions\s+to\s+paste\s+into\s+chat/i.test(t)).toBe(
+        true,
+      );
+    });
+
+    test("preserves its own normative ```question spec fences", () => {
+      const t = read(PROTOCOL);
+      // The protocol carries normative prompt specs throughout § "Structured
+      // questions" and § "Question Format". The prohibition must not strip
+      // those source fences while forbidding their raw syntax in chat.
       const fenceCount = t.match(OPENING_QUESTION_FENCE)?.length ?? 0;
       expect(fenceCount).toBeGreaterThanOrEqual(2);
     });

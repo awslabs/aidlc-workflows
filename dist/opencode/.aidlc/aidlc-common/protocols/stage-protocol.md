@@ -20,8 +20,10 @@ spec into the transcript is a protocol violation: it yields a non-interactive
 wall of text and drops the answerable options and "Other" escape supplied by
 the tool or numbered-prose format. The same "spec in, answerable prompt out;
 never echo the fence" rule holds for every harness. The ` ```question ` blocks
-that appear in THIS protocol are illustrative specs being documented, not
-questions to present.
+that appear in THIS protocol are normative authoring specs for the rendered
+prompts required by their surrounding instructions. They are not literal
+questions to paste into chat: at the required workflow point, their content
+MUST still be presented through the annex-defined mechanism.
 
 ### Critical Compliance Checklist (most commonly missed steps)
 Before and during EVERY stage, verify:
