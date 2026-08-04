@@ -19,7 +19,7 @@
 // Zero spawn, zero LLM, zero tokens.
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
@@ -119,6 +119,34 @@ describe("t151 onboarding skeleton — a new harness gets a complete doc for fre
       for (const section of REQUIRED_SECTIONS) {
         expect(rendered).toContain(section);
         expect(shipped, `${harness.name}: shipped ${section}`).toContain(section);
+      }
+    }
+  });
+
+  // The onboarding doc IS the agent-facing inventory: a user-invocable skill the
+  // skeleton never names is a skill the agent does not know exists — and it goes
+  // missing on every harness at once, because they all render from this one
+  // source. Shipping the skill directory is therefore not sufficient; the
+  // skeleton has to introduce it.
+  //
+  // Read from core/skills/ rather than a hand-kept list so a newly added
+  // standalone skill cannot land in the tree while the onboarding doc silently
+  // stays behind. (Per-stage runner skills are generated from the stage graph by
+  // aidlc-runner-gen.ts and are described as a family, not enumerated; only the
+  // hand-authored standalone skills live here.)
+  test("4: every standalone user-invocable skill is named in the rendered inventory", () => {
+    const standalone = readdirSync(join(REPO_ROOT, "core", "skills")).filter((d) =>
+      d.startsWith("aidlc-"),
+    );
+    expect(standalone.length).toBeGreaterThan(0);
+
+    for (const harness of HARNESS_MATRIX) {
+      const shipped = readFileSync(harness.onboardingDist, "utf-8");
+      for (const skill of standalone) {
+        expect(
+          shipped,
+          `${harness.name}: the onboarding doc never names the ${skill} skill`,
+        ).toContain(skill);
       }
     }
   });

@@ -59,6 +59,18 @@
 // `onboard/files/`, and the bytes' sha256 must still match the row's `sha256`.
 // Containment alone would still let one captured file impersonate another; the
 // digest is what pins a row to its own bytes.
+//
+// UNTRUSTED-DATA FRAMING (P2d) IS NOT SCOPED TO `content` ALONE. Every
+// manifest field this tool ever surfaces to a caller — `source_path`,
+// `captured_file`, a filename encountered while walking a directory — is
+// exactly as attacker-influenced as a captured document's TEXT is: a
+// customer-controlled directory can name a file anything, including a string
+// that reads like an instruction. `content_trust`/`content_handling` label
+// the classify body specifically because that is the only field with
+// enough length to carry a plausible instruction, but the underlying
+// declaration — "this is data the model reads and reports on, never obeys" —
+// covers the whole manifest row. SKILL.md restates this for every field, not
+// just `content`.
 
 import { createHash } from "node:crypto";
 import {
@@ -69,10 +81,9 @@ import {
   readdirSync,
   realpathSync,
 } from "node:fs";
-import { basename, dirname, isAbsolute, join, resolve as resolvePath, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import {
   errorMessage,
-  onboardDir,
   onboardManifestPath,
   onboardRelativeCapturedFile,
   onboardResolveCapturedPath,
@@ -97,7 +108,7 @@ type Disposition = "unclassified" | "preventative" | "other-text" | "unsupported
 interface ManifestRow {
   id: string; // stable id: the sha256 (dedup key, doubles as the row id)
   source_path: string; // provenance ONLY — the path this file was captured from
-  captured_file: string; // `files/<sha256>-<basename>`, RELATIVE to the onboard dir
+  captured_file: string; // `files/<sha256>` (hash-only, P2a), RELATIVE to the onboard dir
   sha256: string;
   size: number;
   captured_at: string;
@@ -109,7 +120,15 @@ interface Manifest {
   files: ManifestRow[];
 }
 
+// Reading the ledger is a read THROUGH the onboard workspace, so it needs the
+// same trust chain as a write — `list`, unlike `capture`/`classify`, has no
+// OTHER call into assertOnboardRootTrusted anywhere on its path, so without
+// this check here a symlinked `onboard/` pointing at an attacker-controlled
+// external directory holding its own crafted `manifest.json` is read straight
+// through at exit 0 (§10.1: "enumerate every entry point that resolves an
+// onboard path"). `mkdirParents=false`: a read must never create anything.
 function readManifest(projectDir: string, space?: string): Manifest {
+  assertOnboardRootTrusted(projectDir, space, false);
   const path = onboardManifestPath(projectDir, space);
   if (!existsSync(path)) return { schema_version: 1, files: [] };
   let parsed: unknown;
@@ -130,11 +149,15 @@ function readManifest(projectDir: string, space?: string): Manifest {
 
 // Writing the ledger is itself a write into the onboard workspace, so it is
 // anchored on the same chain — otherwise a redirected `onboard/` receives
-// manifest.json even when no captured bytes are copied (e.g. a classify-only run).
+// manifest.json even when no captured bytes are copied (e.g. a classify-only
+// run). Trust is checked (and, via mkdirParents, the chain created) BEFORE any
+// directory is created here — `assertOnboardRootTrusted`'s own mkdirSync of
+// `files/` creates `onboard/` (an ancestor of `files/`) along the way, so a
+// separate `mkdirSync(dirname(path))` run first would have planted `onboard/`
+// inside a redirected target before the refusal fired.
 function writeManifest(projectDir: string, manifest: Manifest, space?: string): void {
-  const path = onboardManifestPath(projectDir, space);
-  mkdirSync(dirname(path), { recursive: true });
   assertOnboardRootTrusted(projectDir, space, true);
+  const path = onboardManifestPath(projectDir, space);
   writeFileAtomic(path, `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
@@ -172,76 +195,104 @@ function resolveSpaceFlag(
   return valid;
 }
 
+// INVARIANT: no component of the trusted root — from the project dir down to
+// `onboard/files/` — is attacker-controlled, i.e. NONE of them is a symlink.
+// (Not "the root resolves inside the project": `realpath()` on a path with a
+// symlinked ancestor happily resolves INSIDE the project when the symlink's
+// TARGET is inside the project, which is exactly the redirect this closes.)
+//
+// Walk the LEXICAL path from `anchorReal` — a directory already known to be
+// real and non-symlink (the caller's own project dir, never derived from
+// ledger content) — down to `target`, refusing the instant ANY component
+// along the way is a symlink. `onboard/` itself, `files/` itself, and every
+// directory between them are each checked, not merely the leaf: taking
+// `realpath(target)` as the anchor (the bug this replaces) trusts wherever a
+// symlinked ANCESTOR points, so a redirected `onboard/` "contained inside the
+// project" by construction the moment its target happens to be inside the
+// project too.
+//
+// A component that does not exist yet is not a redirection risk (nothing to
+// follow), so the walk continues lexically rather than refusing — this is
+// what lets a first capture, where `files/` legitimately does not exist yet,
+// pass the check before `mkdirSync` creates it fresh (a real directory can
+// never itself be a symlink). Checked with `lstatSync`, not `existsSync`, so
+// a DANGLING symlink (target does not resolve) is still caught as a symlink
+// rather than silently read as "does not exist yet."
+// `rel` is computed by the CALLER from the un-canonicalised project dir (see
+// assertOnboardRootTrusted) rather than here from `anchorReal` — `projectDir`
+// itself may be reached through a benign OS-level symlink (`/tmp` ->
+// `/private/tmp` on macOS is the common case), which would otherwise make
+// `relative(anchorReal, target)` compute a bogus "not lexically under" path
+// with no attacker involved. `anchorReal` is used only as the WALK's
+// starting point, never to recompute `rel`.
+function assertNoSymlinkInChain(anchorReal: string, rel: string): string {
+  if (rel === "") return anchorReal;
+  if (rel.startsWith("..") || isAbsolute(rel)) {
+    fail(`internal error: path escapes the project dir lexically (${rel})`, 1);
+  }
+  let current = anchorReal;
+  for (const part of rel.split(sep)) {
+    if (part.length === 0) continue;
+    const child = join(current, part);
+    let isSymlink = false;
+    try {
+      isSymlink = lstatSync(child).isSymbolicLink();
+    } catch {
+      // does not exist yet — nothing to redirect through
+    }
+    if (isSymlink) {
+      fail(
+        `${child} is a symlink. Onboard refuses to read or write through any symlinked path ` +
+          `component under aidlc/spaces/<space>/onboard/ — a redirected onboard/ or files/ directory ` +
+          `itself is refused exactly like a symlink found INSIDE an already-trusted files/ dir.`,
+        1,
+      );
+    }
+    current = child;
+  }
+  return current;
+}
+
 // Prove the onboard workspace is really inside the project, and return the
-// trusted real `onboard/files` root.
-//
-// Taking `realpath(filesRoot)` as the anchor is circular: if `onboard/files` — or
-// `onboard/` itself, or any ancestor — is a symlink out of the project, the anchor
-// moves with the attacker and every descendant "contains" correctly. So the chain
-// is verified downward from the one directory ledger content cannot forge (the
-// project dir), each link required to be a real descendant of the previous.
-//
-// THIS GUARDS WRITES AS WELL AS READS. Anchoring only the read path (classify) let
-// `capture` create and write `manifest.json` plus the copied bytes under a
-// symlinked `onboard/`, outside the project, at exit 0 — securing one direction of
-// a boundary is not securing the boundary. Every entry point that resolves an
-// onboard path calls this first. `mkdirParents` exists because the write path must
-// be able to create `files/` on a first capture: the dirs are created, then the
-// chain is verified before anything is written into them.
+// trusted real `onboard/files` root (or its lexical form when it does not
+// exist yet — e.g. a read-only caller on a project that never captured
+// anything). Every entry point that resolves an onboard path calls this
+// FIRST — `capture`, `classify`, and `list` alike; a guard that only anchors
+// the read path (classify) let `capture` create and write `manifest.json`
+// plus the copied bytes under a symlinked `onboard/` at exit 0, and a guard
+// that only anchors the write path let `list` read straight through an
+// `onboard/` symlink to an external manifest. `mkdirParents` exists because
+// the write path must be able to create `files/` on a first capture: the
+// chain is verified BEFORE `mkdirSync` runs, not only after, so a redirected
+// `onboard/` never gets so much as an empty `files/` planted inside the
+// attacker's target directory before the refusal.
 function assertOnboardRootTrusted(
   projectDir: string,
   space: string | undefined,
   mkdirParents = false,
 ): string {
-  const onboard = onboardDir(projectDir, space);
   const filesRoot = resolvePath(onboardResolveCapturedPath(projectDir, "files", space));
+  // `rel` is computed LEXICALLY from `projectDir` (both sides built by the
+  // same join()-based resolver), not from `realProject` — see
+  // assertNoSymlinkInChain's comment on why a benign OS-level symlink on
+  // `projectDir` itself (`/tmp` -> `/private/tmp`) must not be mistaken for
+  // an escape.
+  const rel = relative(resolvePath(projectDir), filesRoot);
+  const realProject = realpathSync(projectDir);
+  assertNoSymlinkInChain(realProject, rel);
   if (mkdirParents) {
-    // Check BEFORE creating, not only after. The post-mkdir checks below already
-    // stop every read and write, so the security property does not depend on
-    // this — but creating first meant a redirected `onboard/` still got an empty
-    // `files/` planted inside the attacker's target directory before the refusal.
-    // A guard should not leave a footprint in the place it is refusing to touch.
-    // The deepest EXISTING ancestor is the only thing we can resolve yet (the
-    // leaf may legitimately not exist on a first capture), so that is what is
-    // proven to be inside the project.
-    let probe = filesRoot;
-    while (!existsSync(probe)) {
-      const parent = dirname(probe);
-      if (parent === probe) break;
-      probe = parent;
-    }
-    const realProbe = realpathSync(probe);
-    const realProjectPre = realpathSync(projectDir);
-    if (realProbe !== realProjectPre && !realProbe.startsWith(`${realProjectPre}${sep}`)) {
-      fail(
-        `the onboard dir resolves outside the project: ${realProbe}. ` +
-          `Refusing to read or write captured material through a redirected workspace.`,
-        1,
-      );
-    }
-    // Create through the *lexical* path only. If any component is a symlink out
-    // of the project the checks below still refuse, so this cannot be used to
-    // materialise a directory outside the tree that we then write into.
+    // The walk above proved every EXISTING component symlink-free, and
+    // mkdirSync can only ever create real directories, so nothing created
+    // here can itself be a symlink — no re-check needed after.
     mkdirSync(filesRoot, { recursive: true });
   }
-  const realProject = realpathSync(projectDir);
-  const realOnboard = realpathSync(onboard);
-  if (!realOnboard.startsWith(`${realProject}${sep}`)) {
-    fail(
-      `the onboard dir resolves outside the project: ${realOnboard}. ` +
-        `Refusing to read or write captured material through a redirected workspace.`,
-      1,
-    );
-  }
-  const realRoot = realpathSync(filesRoot);
-  if (!realRoot.startsWith(`${realOnboard}${sep}`)) {
-    fail(
-      `the onboard files dir resolves outside the onboard dir: ${realRoot}. ` +
-        `Refusing to read or write captured material through a redirected files root.`,
-      1,
-    );
-  }
-  return realRoot;
+  // The chain is proven symlink-free above, so realpathSync here just
+  // canonicalises (it cannot introduce a redirection — every component was
+  // already shown to be a genuine directory, not a link). Skipped when the
+  // path does not exist yet (a read-only caller before any capture) since
+  // realpathSync throws on a missing target; the lexical form is exact in
+  // that case anyway, having no symlink component to canonicalise away.
+  return existsSync(filesRoot) ? realpathSync(filesRoot) : filesRoot;
 }
 
 // Resolve a ledger row's captured path and prove it is safe to read. The
@@ -355,6 +406,47 @@ function sha256Of(buf: Buffer): string {
   return createHash("sha256").update(buf).digest("hex");
 }
 
+// realpath where possible, plain normalisation otherwise — mirrors
+// aidlc-learnings.ts's canonicalPath (same walk-up-to-the-deepest-resolvable-
+// ancestor technique; a source file legitimately may not exist by the time a
+// LATER read happens, though at capture time it always does since it was just
+// read).
+function canonicalPath(p: string): string {
+  const abs = resolvePath(p);
+  const tail: string[] = [];
+  let cur = abs;
+  for (;;) {
+    try {
+      return tail.length === 0 ? realpathSync(cur) : join(realpathSync(cur), ...tail);
+    } catch {
+      const parent = dirname(cur);
+      if (parent === cur) return abs;
+      tail.unshift(basename(cur));
+      cur = parent;
+    }
+  }
+}
+
+// The PORTABLE form of `source_path` for the committed manifest (P2d): relative
+// to the project dir, posix slashes, when the source is under the project;
+// falls back to the ABSOLUTE path only when the source genuinely lies outside
+// the project tree (a file captured from elsewhere on the operator's machine —
+// there is no portable relative form for that case, so the absolute path is
+// recorded as-is, same as it always was; only the WITHIN-PROJECT case, the
+// common one, changes).
+//
+// The manifest is COMMITTED (§10.2 "does this identity survive a clone/move/
+// worktree" — the same defect class already fixed for the audit ledger's
+// `Destination` field): an absolute machine-local path baked into a committed
+// file can expose the operator's username, a customer's on-disk directory
+// name, or other local structure to every future reader of the repo, and it
+// is meaningless to a teammate at a different checkout path regardless.
+function portableSourcePath(projectDir: string, absPath: string): string {
+  const rel = relative(canonicalPath(projectDir), canonicalPath(absPath));
+  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return absPath;
+  return rel.split(sep).join("/");
+}
+
 // Capture ONE file byte-exact: compute sha256, copy to the onboard files dir
 // (skip the copy if a row with this sha256 already exists — true content
 // dedup, not just a path-based skip), and append-merge the manifest row.
@@ -368,7 +460,10 @@ function captureOneFile(
 ): ManifestRow {
   const buf = readFileSync(absPath);
   const sha256 = sha256Of(buf);
-  const relative = onboardRelativeCapturedFile(sha256, basename(absPath));
+  // HASH-ONLY storage leaf (P2a) — see onboardRelativeCapturedFile. The
+  // ORIGINAL basename is preserved as provenance only, in `source_path`
+  // below, never encoded into the on-disk path.
+  const relative = onboardRelativeCapturedFile(sha256);
   // Anchor the workspace BEFORE writing anything. mkdirParents=true because a
   // first capture legitimately has to create `files/`; the chain is verified
   // after the mkdir and before any byte is written, so a redirected onboard/
@@ -376,28 +471,66 @@ function captureOneFile(
   assertOnboardRootTrusted(projectDir, space, true);
   const captured = onboardResolveCapturedPath(projectDir, relative, space);
 
-  // Match on EITHER identity field. A row's `id` and its `sha256` are both the
-  // content address and agree on a healthy row, so in the normal case this is the
-  // same lookup as before — but they can disagree after a hand edit, and keying
-  // only on `sha256` made the documented repair impossible:
+  // INVARIANT: a hand-edited manifest is repaired only when there is exactly
+  // ONE row whose identity can be reconciled with the true digest — never by
+  // taking the first of several candidates in array order.
+  //
+  // A row's `id` and its `sha256` are both the content address and agree on a
+  // healthy row, so in the normal case this is a single unambiguous lookup —
+  // but they can disagree after a hand edit, and keying only on `sha256` made
+  // the documented repair impossible:
   //
   //   tamper `sha256` -> re-capture computes the TRUE digest -> no row matches ->
   //   a SECOND row is appended carrying the same `id` -> classify's
   //   `find(r => r.id === id)` still selects the FIRST, still-broken row and fails
   //   with the very message that told the user to re-capture.
   //
-  // So the remedy printed by classify was a lie, and re-capturing actively made
-  // the ledger worse by duplicating the id. Matching on either field means the
-  // tampered row is FOUND, and the repair below rewrites both fields.
-  const existingIdx = manifest.files.findIndex(
-    (row) => row.id === sha256 || row.sha256 === sha256,
+  // Matching on EITHER field (the earlier fix) closed that — but a bare
+  // `findIndex` over either field takes the FIRST such row, and when a
+  // TAMPERED row's `sha256` happens to equal ANOTHER row's true digest (e.g.
+  // `A.sha256` overwritten to `B.sha256`), re-capturing B then finds BOTH A
+  // (a partial match: only `sha256` agrees) and B (a healthy EXACT match:
+  // both fields agree) — and array order can select A, silently rewriting A's
+  // identity fields to B's and leaving two rows that both claim to be B while
+  // A becomes permanently unclassifiable.
+  //
+  // So a healthy EXACT match (both `id` and `sha256` equal the true digest)
+  // always wins when one exists — it is unambiguously the row for THIS
+  // content, and no partial match (necessarily a hand-edited row about
+  // something else) should ever pre-empt it. Only when NO exact match exists
+  // does a partial match qualify for repair, and only when there is exactly
+  // ONE such candidate — two or more tampered rows both claiming this digest
+  // is a state the tool must not guess through.
+  const digest = sha256;
+  const exactIdx = manifest.files.findIndex(
+    (row) => row.id === digest && row.sha256 === digest,
   );
+  let existingIdx: number;
+  if (exactIdx !== -1) {
+    existingIdx = exactIdx;
+  } else {
+    const partialIdxs: number[] = [];
+    manifest.files.forEach((row, i) => {
+      if (row.id === digest || row.sha256 === digest) partialIdxs.push(i);
+    });
+    if (partialIdxs.length > 1) {
+      fail(
+        `${partialIdxs.length} manifest rows partially match digest ${digest} ` +
+          `(ids: ${partialIdxs.map((i) => manifest.files[i].id).join(", ")}), and none is a healthy ` +
+          `exact match. Refusing to guess which one to repair — inspect the manifest by hand ` +
+          `(aidlc/spaces/<space>/onboard/manifest.json) and resolve the conflicting id/sha256 fields, ` +
+          `then re-capture.`,
+        1,
+      );
+    }
+    existingIdx = partialIdxs.length === 1 ? partialIdxs[0] : -1;
+  }
   if (existingIdx === -1) {
     mkdirSync(dirname(captured), { recursive: true });
     writeBufferAtomic(captured, buf);
     const row: ManifestRow = {
       id: sha256,
-      source_path: absPath,
+      source_path: portableSourcePath(projectDir, absPath),
       captured_file: relative,
       sha256,
       size: buf.length,
@@ -419,7 +552,7 @@ function captureOneFile(
   // edit. So rewrite the bytes whenever what is on disk does not match the row,
   // and canonicalise the path field.
   const existing = manifest.files[existingIdx];
-  existing.source_path = absPath;
+  existing.source_path = portableSourcePath(projectDir, absPath);
   existing.captured_at = isoTimestamp();
   existing.size = buf.length;
   existing.captured_file = relative;
@@ -537,8 +670,15 @@ function handleList(args: string[], projectDir: string): void {
 // NONE of these is windowed. Signals 2-4 each read the full buffer, because a
 // prefix-only check guarantees only the prefix (a text-looking header followed
 // by binary payload defeated all three when they probed 8KiB).
-const BINARY_MAGICS: readonly (readonly number[])[] = [
-  [0x25, 0x50, 0x44, 0x46], // %PDF  — PDF
+// FIXED-OFFSET magics — every format here is required by its OWN spec to
+// start at byte 0 (zip's local-file-header signature, JPEG's SOI marker,
+// PNG's signature, GZIP's header), so window-searching these would risk a
+// FALSE POSITIVE: a text document that merely happens to CONTAIN the 2-4
+// byte sequence somewhere in its prose (most likely GZIP's short 2-byte
+// `\x1f\x8b`) would be misclassified as binary. Loosening every magic to a
+// window scan was explicitly the WRONG fix (P2b) — only the format whose own
+// spec permits a non-zero offset gets the window.
+const BINARY_MAGICS_FIXED_OFFSET: readonly (readonly number[])[] = [
   [0x50, 0x4b, 0x03, 0x04], // PK\x03\x04 — zip family (docx/xlsx/pptx/jar/…)
   [0x50, 0x4b, 0x05, 0x06], // PK\x05\x06 — empty zip archive
   [0xff, 0xd8, 0xff], // JPEG
@@ -546,8 +686,34 @@ const BINARY_MAGICS: readonly (readonly number[])[] = [
   [0x1f, 0x8b], // GZIP
 ];
 
+// PDF's `%PDF-` header magic — WINDOW-SEARCHED, not fixed-offset (P2b). The
+// PDF spec (ISO 32000) explicitly permits — and real-world generators
+// (ReportLab among them) sometimes produce — a header preceded by garbage
+// bytes (a leading newline/BOM, or bytes prepended by an intermediate tool),
+// as long as `%PDF-` appears within the file's INITIAL portion; PDF readers
+// are required to search for it there rather than only at offset zero. A
+// fixed-offset-only check let a shifted PDF slip past the quarantine and
+// classify as ordinary text, returning the compressed/binary PDF body as
+// model `content`. The search window below (1024 bytes) mirrors the
+// tolerance real PDF readers apply — generous enough for a shifted real PDF,
+// small enough that an unrelated text file containing the literal 5-byte
+// ASCII string "%PDF-" somewhere within its first KB (already an extremely
+// unlikely coincidence for legitimate prose) is the only false-positive
+// surface, and that surface existed at offset 0 already.
+const PDF_MAGIC = [0x25, 0x50, 0x44, 0x46, 0x2d]; // %PDF-
+const PDF_SEARCH_WINDOW = 1024;
+
+function hasPdfMagicInWindow(buf: Buffer): boolean {
+  const limit = Math.min(buf.length, PDF_SEARCH_WINDOW) - PDF_MAGIC.length;
+  for (let start = 0; start <= limit; start++) {
+    if (PDF_MAGIC.every((b, i) => buf[start + i] === b)) return true;
+  }
+  return false;
+}
+
 function hasBinaryMagic(buf: Buffer): boolean {
-  return BINARY_MAGICS.some(
+  if (hasPdfMagicInWindow(buf)) return true;
+  return BINARY_MAGICS_FIXED_OFFSET.some(
     (magic) => buf.length >= magic.length && magic.every((b, i) => buf[i] === b),
   );
 }

@@ -384,7 +384,7 @@ Pre-registered for v0.5.0 in milestone 4; `MEMORY_EMPTY` emitter lands in milest
 | Event | Emitter | Trigger |
 |---|---|---|
 | `MEMORY_EMPTY` | `tools/aidlc-runtime.ts` | Stage approval's runtime-graph compile found memory.md missing or with zero non-blank entries under §13's four headings |
-| `RULE_LEARNED` | `tools/aidlc-learnings.ts` (`persist`, and `persist-rule` for `/aidlc-onboard`) | The learning gate persisted a kept learning — or the onboard gate promoted an onboarded standard — as a dated practice entry to `aidlc/spaces/<active-space>/memory/{project,team}.md`. Onboard rows carry the `aidlc-onboard` namespace in `Stage`, so they are absent from the per-stage learnings rollup |
+| `RULE_LEARNED` | `tools/aidlc-learnings.ts` (`persist`, and `persist-rule` for `/aidlc-onboard`) | The learning gate persisted a kept learning — or the onboard gate promoted an onboarded standard — as a practice entry to `aidlc/spaces/<active-space>/memory/{project,team}.md`, dated inside its own dedup marker (`<!-- cid:<namespace>:<id>; learned:<date> -->`) so the visible rule text is exactly what was approved. Onboard rows carry the `aidlc-onboard` namespace in `Stage`, so they are absent from the per-stage learnings rollup. The row also carries a `Text-Digest` of the rule it was written for, so a later run can tell a genuine re-write of that rule from a different rule reusing the same candidate id |
 | `SENSOR_PROPOSED` | `tools/aidlc-learnings.ts` | The learning gate scaffolded a project-tier sensor manifest and bound it to the originating stage's `sensors:` frontmatter |
 
 ### Swarm

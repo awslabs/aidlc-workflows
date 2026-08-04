@@ -1040,14 +1040,32 @@ export function validSpaceFlag(raw: string): string | null {
   return SPACE_NAME_REGEX.test(raw) ? raw : null;
 }
 
-// The relative form of a captured file's location, `files/<sha256>-<basename>`,
-// as stored in the manifest ledger. The ledger is a COMMITTED file, so it must
-// not carry absolute machine-local paths: a teammate at a different checkout
-// path (or a clone/move/worktree) resolves the same row against their own
-// onboardDir. Mirrors the relative* resolver family + IntentRegistryEntry's
-// dirName-not-path discipline.
-export function onboardRelativeCapturedFile(sha256: string, basename: string): string {
-  return `files/${sha256}-${basename}`;
+// The relative form of a captured file's location, `files/<sha256>`, as
+// stored in the manifest ledger. HASH-ONLY (P2a): the storage leaf carries no
+// basename at all, only the sha256 that is already the row's dedup key. Three
+// symptoms of the earlier `files/<sha256>-<basename>` shape are all closed by
+// dropping the basename outright, not by sanitising it further:
+//   (1) DEDUP BREAKAGE — the same content captured under two different
+//       source filenames produced TWO on-disk copies (one per basename) even
+//       though sha256 dedup collapsed them to ONE manifest row, orphaning the
+//       first copy on disk with nothing in the ledger pointing at it.
+//   (2) ENAMETOOLONG — a legal, well-formed basename could push the combined
+//       `<64-hex-sha256>-<basename>` leaf past the filesystem's per-component
+//       length limit, so a valid capture failed outright.
+//   (3) MUTABLE-ROW AMBIGUITY (a directory capture with two different
+//       source files) — both entries mutated the SAME manifest row keyed
+//       only by sha256, so `captured_file`/`source_path` reflected whichever
+//       source happened to be processed last.
+// A bare 64-character hex string is always a valid, length-safe path
+// component on every target filesystem, so all three go away at once. The
+// ledger is COMMITTED, so it must not carry absolute machine-local paths
+// either way: a teammate at a different checkout path (or a clone/move/
+// worktree) resolves the same row against their own onboardDir. Mirrors the
+// relative* resolver family + IntentRegistryEntry's dirName-not-path
+// discipline. Provenance (the ORIGINAL filename) is recorded separately in
+// the row's `source_path` field — never encoded into the storage path.
+export function onboardRelativeCapturedFile(sha256: string): string {
+  return `files/${sha256}`;
 }
 
 // Resolve a ledger row's relative captured path back to an absolute path under
@@ -1065,16 +1083,14 @@ export function onboardManifestPath(projectDir: string, space?: string): string 
   return join(onboardDir(projectDir, space), "manifest.json");
 }
 
-// Where a captured file's bytes land: `<onboardDir>/files/<sha256>-<basename>`.
-// The sha256 prefix makes the ledger's dedup key visible on disk and keeps
-// two same-named captures from colliding.
+// Where a captured file's bytes land: `<onboardDir>/files/<sha256>` (see
+// onboardRelativeCapturedFile — HASH-ONLY, P2a).
 export function onboardCapturedFilePath(
   projectDir: string,
   sha256: string,
-  basename: string,
   space?: string,
 ): string {
-  return join(onboardDir(projectDir, space), "files", `${sha256}-${basename}`);
+  return join(onboardDir(projectDir, space), "files", sha256);
 }
 
 // Enumerate the intent RECORD directories in a space (each `<slug>-<id8>/`

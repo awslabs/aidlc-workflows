@@ -16,22 +16,44 @@
 //                       onboardRelativeCapturedFile / onboardResolveCapturedPath / validSpaceFlag / writeBufferAtomic
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AIDLC_SRC } from "../harness/fixtures.ts";
+import { AIDLC_SRC, REPO_ROOT } from "../harness/fixtures.ts";
 
 const BUN = process.execPath;
 const ONBOARD_TS = join(AIDLC_SRC, "tools", "aidlc-onboard.ts");
 const LEARNINGS_TS = join(AIDLC_SRC, "tools", "aidlc-learnings.ts");
+
+// The BASE (pre-upgrade) writer commit — the shipped shape BEFORE the
+// marker-annotation format changed (`- <text> (learned <date>) <!-- cid:… -->`
+// instead of today's `- <text> <!-- cid:…; learned:<date> -->`). Extracted via
+// `git archive` + `tar` into a scratch dir so P1b's legacy fixture is produced
+// by running the REAL base writer, not hand-typed to imitate its output —
+// hand-typing risks matching the CURRENT fix's expectations rather than what
+// an actual pre-upgrade installation has on disk.
+const BASE_WRITER_COMMIT = "6b264081";
+
+function extractBaseWriterTree(): string {
+  const dir = mkdtempSync(join(tmpdir(), "aidlc-t263-basetree-"));
+  const archive = execFileSync("git", ["archive", BASE_WRITER_COMMIT, "core/tools"], {
+    cwd: REPO_ROOT,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  spawnSync("tar", ["-x", "-C", dir], { input: archive });
+  return dir;
+}
 
 const projects: string[] = [];
 afterAll(() => {
@@ -121,7 +143,12 @@ describe("t263 /aidlc-onboard capture + list + classify (S1)", () => {
     // dir — never an absolute machine-local path a teammate's checkout can't
     // resolve. There is no captured_path field at all.
     expect(row.captured_path).toBeUndefined();
-    expect(row.captured_file).toBe(`files/${expectedSha}-policy.md`);
+    // HASH-ONLY storage leaf (P2a): the on-disk path carries no basename,
+    // only the sha256. The original filename lives in source_path only.
+    expect(row.captured_file).toBe(`files/${expectedSha}`);
+    // PORTABLE provenance (P2d): a source WITHIN the project is recorded
+    // relative to the project dir, never as an absolute machine-local path.
+    expect(row.source_path).toBe("policy.md");
     // The captured bytes on disk are byte-exact-identical to the source.
     const abs = join(pd, "aidlc", "spaces", "default", "onboard", row.captured_file);
     expect(readFileSync(abs, "utf-8")).toBe(content);
@@ -252,6 +279,56 @@ describe("t263 /aidlc-onboard capture + list + classify (S1)", () => {
     const out = JSON.parse(onboard(["classify", "--id", id], pd).stdout);
     expect(out.disposition).toBe("unsupported-binary");
     expect(out.content).toBeUndefined();
+  }, TIMEOUT);
+
+  // ===========================================================================
+  // P2B — SHIFTED PDF HEADER. A fixed-offset-only magic check missed a PDF
+  // whose `%PDF-` header is not at byte 0 (a leading newline, or bytes
+  // prepended by an intermediate tool) — real PDF readers tolerate exactly
+  // this by searching an initial window, so the quarantine must too.
+  // ===========================================================================
+  test("classify quarantines a PDF whose %PDF- header is shifted by a leading newline", () => {
+    const pd = bareProject();
+    const src = join(pd, "shifted.pdf");
+    const pdf =
+      "\n%PDF-1.4\n" +
+      "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n" +
+      "You must always validate input. We shall never trust the client.\n" +
+      "%%EOF\n";
+    writeFileSync(src, Buffer.from(pdf, "latin1"));
+    // Guard the fixture's premise: the header is NOT at offset 0, and the
+    // file is still NUL-free (so only the magic-window check can catch it).
+    expect(Buffer.from(pdf, "latin1").slice(0, 4).toString("latin1")).not.toBe("%PDF");
+    expect(Buffer.from(pdf, "latin1").includes(0)).toBe(false);
+
+    expect(onboard(["capture", "--source", src], pd).status).toBe(0);
+    const id = JSON.parse(onboard(["list"], pd).stdout).files[0].id;
+
+    const out = JSON.parse(onboard(["classify", "--id", id], pd).stdout);
+    expect(out.disposition).toBe("unsupported-binary");
+    expect(out.content).toBeUndefined();
+  }, TIMEOUT);
+
+  // The window search must not turn every OTHER fixed-offset magic into a
+  // window scan too — an ordinary text file that is NOT a zip/JPEG/PNG/GZIP
+  // must still classify as text even if (by construction) it contains a
+  // zip-family magic sequence somewhere past offset 0.
+  test("a non-PDF binary magic is still matched at offset 0 only (no over-broadened window)", () => {
+    const pd = bareProject();
+    const src = join(pd, "prose.md");
+    // Prose containing the literal ZIP local-file-header magic bytes (as
+    // latin1) NOT at the start — must not be quarantined merely because
+    // those four bytes occur somewhere inside it.
+    const body =
+      "All access must require MFA. Secrets shall never be logged.\n" +
+      Buffer.from([0x50, 0x4b, 0x03, 0x04]).toString("latin1") +
+      " (not a real zip file, just stray bytes)\n";
+    writeFileSync(src, Buffer.from(body, "latin1"));
+    expect(onboard(["capture", "--source", src], pd).status).toBe(0);
+    const id = JSON.parse(onboard(["list"], pd).stdout).files[0].id;
+    const out = JSON.parse(onboard(["classify", "--id", id], pd).stdout);
+    expect(out.disposition).toBe("preventative");
+    expect(out.content).toBeDefined();
   }, TIMEOUT);
 
   // ===========================================================================
@@ -730,7 +807,7 @@ describe("t263 /aidlc-onboard capture + list + classify (S1)", () => {
 
     const r = onboard(["classify", "--id", sha], pd);
     expect(r.status).toBe(1);
-    expect(r.stderr).toContain("outside the onboard dir");
+    expect(r.stderr).toContain("is a symlink");
     expect(r.stdout).not.toContain("T248-TRUST-ROOT-SECRET");
   }, TIMEOUT);
 
@@ -750,7 +827,7 @@ describe("t263 /aidlc-onboard capture + list + classify (S1)", () => {
 
     const r = onboard(["classify", "--id", sha], pd);
     expect(r.status).toBe(1);
-    expect(r.stderr).toContain("outside the project");
+    expect(r.stderr).toContain("is a symlink");
     expect(r.stdout).not.toContain("T248-ANCESTOR-SECRET");
   }, TIMEOUT);
 
@@ -776,7 +853,7 @@ describe("t263 /aidlc-onboard capture + list + classify (S1)", () => {
     const r = onboard(["capture", "--source", src], pd);
 
     expect(r.status).toBe(1);
-    expect(r.stderr).toContain("outside the project");
+    expect(r.stderr).toContain("is a symlink");
     // Nothing at all reached the attacker's directory — no manifest, no bytes,
     // and not even an empty `files/` scaffold created before the refusal.
     expect(readdirSync(external)).toEqual([]);
@@ -800,6 +877,71 @@ describe("t263 /aidlc-onboard capture + list + classify (S1)", () => {
     expect(r.status).toBe(1);
     expect(readdirSync(external)).toEqual([]);
     expect(existsSync(join(onboardAbs, "manifest.json"))).toBe(false);
+  }, TIMEOUT);
+
+  // ===========================================================================
+  // P1D (1) — a PROJECT-INTERNAL redirect. The invariant is "no component of
+  // the trusted root is attacker-controlled", not "the root resolves inside
+  // the project" — a symlink whose TARGET happens to be some other directory
+  // still inside the project satisfies the latter (weaker) test while still
+  // redirecting the lexical onboard/ root away from where the caller expects
+  // bytes to land.
+  // ===========================================================================
+  test("capture refuses an onboard/ symlink whose target is still INSIDE the project", () => {
+    const pd = bareProject();
+    const victim = join(pd, "victim");
+    mkdirSync(victim, { recursive: true });
+    mkdirSync(join(pd, "aidlc", "spaces", "default"), { recursive: true });
+    const { symlinkSync, readdirSync } = require("node:fs");
+    // A project-internal redirect: onboard/ -> ../../../victim (still under pd).
+    symlinkSync(join("..", "..", "..", "victim"), join(pd, "aidlc", "spaces", "default", "onboard"));
+
+    const src = join(pd, "standards.md");
+    writeFileSync(src, "All access must use MFA. Secrets shall never be logged.\n");
+    const r = onboard(["capture", "--source", src], pd);
+
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("is a symlink");
+    // Nothing was written into the redirected target.
+    expect(readdirSync(victim)).toEqual([]);
+  }, TIMEOUT);
+
+  // ===========================================================================
+  // P1D (2) — `list` must be anchored exactly like `capture`/`classify`. An
+  // onboard/ symlink to an EXTERNAL directory holding its own crafted
+  // manifest.json must be refused by `list` too, not just by classify/capture.
+  // ===========================================================================
+  test("list refuses an onboard/ symlink to an external directory with a crafted manifest", () => {
+    const pd = bareProject();
+    const external = join(pd, "..", `t263-list-ext-${Date.now()}`);
+    mkdirSync(external, { recursive: true });
+    projects.push(external);
+    writeFileSync(
+      join(external, "manifest.json"),
+      JSON.stringify({
+        schema_version: 1,
+        files: [
+          {
+            id: "planted",
+            source_path: "/attacker/planted",
+            captured_file: "files/planted.txt",
+            sha256: "planted",
+            size: 1,
+            captured_at: "2026-07-30T00:00:00Z",
+            disposition: "unclassified",
+          },
+        ],
+      }),
+    );
+
+    mkdirSync(join(pd, "aidlc", "spaces", "default"), { recursive: true });
+    const { symlinkSync } = require("node:fs");
+    symlinkSync(external, join(pd, "aidlc", "spaces", "default", "onboard"));
+
+    const r = onboard(["list"], pd);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("is a symlink");
+    expect(r.stdout).not.toContain("planted");
   }, TIMEOUT);
 
   // ===========================================================================
@@ -900,7 +1042,8 @@ describe("t263 /aidlc-onboard capture + list + classify (S1)", () => {
 
     expect(onboard(["capture", "--source", src], pd).status).toBe(0);
     const after = JSON.parse(onboard(["list"], pd).stdout).files[0];
-    expect(after.captured_file).toBe(`files/${id}-std.md`);
+    // HASH-ONLY storage leaf (P2a): the repaired path carries no basename.
+    expect(after.captured_file).toBe(`files/${id}`);
     expect(onboard(["classify", "--id", id], pd).status).toBe(0);
   }, TIMEOUT);
 
@@ -1169,10 +1312,11 @@ describe("t263 /aidlc-onboard capture + list + classify (S1)", () => {
     // The injected command must NOT have run, in the cwd or the project dir.
     expect(existsSync(join(pd, "pwned-marker"))).toBe(false);
     expect(existsSync(join(mat, "pwned-marker"))).toBe(false);
-    // And the hostile name is recorded verbatim as provenance.
+    // And the hostile name is recorded verbatim as provenance — PORTABLE
+    // (relative to the project dir, P2d), since the source is inside it.
     const row = JSON.parse(onboard(["list"], pd).stdout).files[0];
     expect(row.source_path).toContain("'");
-    expect(row.source_path).toBe(hostile);
+    expect(row.source_path).toBe(`material/${HOSTILE_NAME}`);
   }, TIMEOUT);
 
   // The heading is ALSO document-derived — SKILL.md Step 3 routes it from what the
@@ -2125,5 +2269,594 @@ describe("t263 /aidlc-onboard capture + list + classify (S1)", () => {
     const memory = join(pd, "aidlc", "spaces", "default", "memory");
     expect(readFileSync(join(memory, "project.md"), "utf-8")).toContain("cid:aidlc-onboard:onb-scope");
     expect(readFileSync(join(memory, "team.md"), "utf-8")).toContain("cid:aidlc-onboard:onb-scope");
+  }, TIMEOUT);
+
+  // ===========================================================================
+  // P2A — HASH-ONLY STORAGE LEAF. The prior `files/<sha256>-<basename>` shape
+  // broke dedup (two on-disk copies for one manifest row) whenever identical
+  // bytes arrived under two different source filenames. The storage leaf must
+  // carry the sha256 alone.
+  // ===========================================================================
+  test("identical bytes under two different basenames dedup to exactly ONE captured file on disk", () => {
+    const pd = bareProject();
+    const content = "All requests must use TLS. Secrets shall never be logged.\n";
+    const one = join(pd, "v-one.md");
+    const two = join(pd, "v-two.md");
+    writeFileSync(one, content);
+    writeFileSync(two, content);
+
+    expect(onboard(["capture", "--source", one], pd).status).toBe(0);
+    expect(onboard(["capture", "--source", two], pd).status).toBe(0);
+
+    const files = JSON.parse(onboard(["list"], pd).stdout).files;
+    expect(files.length).toBe(1);
+    const row = files[0];
+    // The storage leaf carries no basename — the SAME path regardless of which
+    // source name was captured last.
+    expect(row.captured_file).toBe(`files/${row.id}`);
+    // Exactly ONE file on disk under files/ — no orphaned copy from the first
+    // basename.
+    const { readdirSync } = require("node:fs");
+    const filesDir = join(pd, "aidlc", "spaces", "default", "onboard", "files");
+    expect(readdirSync(filesDir)).toEqual([row.id]);
+    // Re-capturing under the SECOND basename still resolves the SAME row, and
+    // provenance reflects whichever source was captured most recently
+    // (portable form, P2d — the source is inside the project).
+    expect(row.source_path).toBe("v-two.md");
+  }, TIMEOUT);
+
+  // A basename long enough to overflow a filesystem's per-component length
+  // limit when concatenated with a 64-hex-character sha256 prefix and a
+  // separator — but well within the limit on its own. Hash-only storage
+  // makes the basename's length irrelevant to the on-disk leaf.
+  test("a long but legal basename does not overflow the storage leaf (no ENAMETOOLONG)", () => {
+    const pd = bareProject();
+    const longName = `${"a".repeat(190)}.md`;
+    const src = join(pd, longName);
+    writeFileSync(src, "All deploys must be reviewed. Access shall require MFA.\n");
+
+    const r = onboard(["capture", "--source", src], pd);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.captured).toBe(1);
+    const row = JSON.parse(onboard(["list"], pd).stdout).files[0];
+    expect(row.captured_file).toBe(`files/${row.id}`);
+    expect(row.source_path).toBe(longName);
+  }, TIMEOUT);
+
+  // A directory capture with two DIFFERENT source files that happen to be
+  // byte-identical must not let the second overwrite the first's provenance
+  // silently as "the mutable row" — both point at the SAME dedup row (by
+  // construction, since dedup is keyed on content), and the row's
+  // source_path reflects whichever was processed last, deterministically —
+  // not an ambiguous shared mutable slot with undefined which-wins semantics.
+  test("a directory capture with two identical-content files leaves one row, not a duplicated/ambiguous entry", () => {
+    const pd = bareProject();
+    const dir = join(pd, "material");
+    mkdirSync(dir, { recursive: true });
+    const content = "Passwords must be at least 14 characters. Never reuse them.\n";
+    // Sorted walk order (walkFiles sorts entries) makes "b.md" processed after
+    // "a.md" deterministic.
+    writeFileSync(join(dir, "a.md"), content);
+    writeFileSync(join(dir, "b.md"), content);
+
+    expect(onboard(["capture", "--source", dir], pd).status).toBe(0);
+    const files = JSON.parse(onboard(["list"], pd).stdout).files;
+    expect(files.length).toBe(1);
+    expect(files[0].source_path).toBe("material/b.md");
+  }, TIMEOUT);
+
+  // ===========================================================================
+  // P2D — PORTABLE/SANITIZED PROVENANCE. The manifest is COMMITTED, so an
+  // absolute machine-local `source_path` exposes local directory structure
+  // (usernames, customer names) to every future reader of the repo, and is
+  // meaningless to a teammate at a different checkout path. A source WITHIN
+  // the project is now recorded relative to the project dir; a source
+  // genuinely OUTSIDE the project (nothing to make portable) still falls back
+  // to the absolute path, unchanged.
+  // ===========================================================================
+  test("source_path is recorded relative to the project dir for an in-project source", () => {
+    const pd = bareProject();
+    const src = join(pd, "docs", "standard.md");
+    mkdirSync(join(pd, "docs"), { recursive: true });
+    writeFileSync(src, "All requests must use TLS.\n");
+
+    expect(onboard(["capture", "--source", src], pd).status).toBe(0);
+    const row = JSON.parse(onboard(["list"], pd).stdout).files[0];
+    expect(row.source_path).toBe("docs/standard.md");
+    // No absolute machine-local path leaked anywhere in the row.
+    expect(row.source_path.startsWith("/")).toBe(false);
+    expect(row.source_path).not.toContain(pd);
+  }, TIMEOUT);
+
+  // A source genuinely outside the project has no portable relative form —
+  // the absolute path is recorded, same as always, since there is nothing to
+  // make relative to.
+  test("source_path stays absolute for a source genuinely outside the project", () => {
+    const pd = bareProject();
+    const outside = join(pd, "..", `t263-outside-src-${Date.now()}`);
+    mkdirSync(outside, { recursive: true });
+    projects.push(outside);
+    const src = join(outside, "standard.md");
+    writeFileSync(src, "All requests must use TLS.\n");
+
+    expect(onboard(["capture", "--source", src], pd).status).toBe(0);
+    const row = JSON.parse(onboard(["list"], pd).stdout).files[0];
+    expect(row.source_path).toBe(src);
+  }, TIMEOUT);
+
+  // ===========================================================================
+  // P2C — VALIDATE THE NORMALIZED VALUE, NOT THE RAW ONE. A whitespace-only
+  // --text-file passed the `!text` truthiness check (a non-empty string of
+  // spaces is truthy) and wrote an empty bullet that could then never replay
+  // (its read-back text is null, refused by the P1b/P1c guard as
+  // unparseable). A `--heading` of bare hashes with no title fell through
+  // the OLD prefix-only strip untouched and only emptied out once
+  // practiceHeading()'s OWN, different strip ran at write time.
+  // ===========================================================================
+  test("persist-rule rejects whitespace-only --text-file before any write", () => {
+    const pd = bareProject();
+    const tf = join(pd, "blank.txt");
+    writeFileSync(tf, "   \n");
+    const r = learnings(
+      ["persist-rule", "--scope", "project", "--candidate-id", "blank-1", "--text-file", tf],
+      pd,
+    );
+    expect(r.status).toBe(2);
+    expect(r.stderr).toContain("must not be empty");
+    expect(existsSync(join(pd, "aidlc", "spaces", "default", "memory", "project.md"))).toBe(false);
+  }, TIMEOUT);
+
+  test("persist-rule rejects an empty --text", () => {
+    const pd = bareProject();
+    const r = learnings(
+      ["persist-rule", "--scope", "project", "--candidate-id", "blank-2", "--text", ""],
+      pd,
+    );
+    // Falls through the !text usage check (an empty string is falsy) — still
+    // rejected, just via the usage message rather than the empty-text one.
+    expect(r.status).not.toBe(0);
+    expect(existsSync(join(pd, "aidlc", "spaces", "default", "memory", "project.md"))).toBe(false);
+  }, TIMEOUT);
+
+  test("persist-rule rejects a --heading of bare hashes with no title (normalises to empty)", () => {
+    const pd = bareProject();
+    const tf = join(pd, "rule.txt");
+    writeFileSync(tf, "Money math uses decimal\n");
+    for (const bad of ["###", "##", "#"]) {
+      const r = learnings(
+        ["persist-rule", "--scope", "project", "--candidate-id", `h-empty-${bad.length}`,
+         "--text-file", tf, "--heading", bad],
+        pd,
+      );
+      expect(r.status).toBe(2);
+      expect(r.stderr).toContain("Invalid heading");
+      expect(r.stderr).toContain("must not be empty");
+    }
+    expect(existsSync(join(pd, "aidlc", "spaces", "default", "memory", "project.md"))).toBe(false);
+  }, TIMEOUT);
+
+  // ===========================================================================
+  // P1F — BATCH ATOMICITY. The in-batch duplicate-id pre-check (already
+  // shipped) closes the DUPLICATE-WITHIN-ONE-BATCH route to this state. This
+  // covers the SEPARATE route the pre-check does not touch: a batch selection
+  // colliding against a PRE-EXISTING row from an EARLIER persist call, with a
+  // DIFFERENT, locally-unique-within-this-batch id ahead of it. Before the
+  // fix, the earlier selection's audit row landed on disk (appended inside
+  // the loop) while the later selection's throw meant the practice-file flush
+  // loop — which ran only after the WHOLE loop — never ran, stranding the
+  // row with no matching line.
+  // ===========================================================================
+  function writeSelectionsFile(pd: string, stageSlug: string, selections: unknown[]): string {
+    const p = join(pd, "sel.json");
+    writeFileSync(p, JSON.stringify({ stage_slug: stageSlug, selections }));
+    return p;
+  }
+
+  function countAuditRows(pd: string, event: string): number {
+    const { readdirSync } = require("node:fs");
+    const auditDir = join(pd, "aidlc", "spaces", "default", "intents", "audit");
+    let rows = 0;
+    let names: string[] = [];
+    try { names = readdirSync(auditDir); } catch { return 0; }
+    for (const f of names.filter((x: string) => x.endsWith(".md"))) {
+      rows += readFileSync(join(auditDir, f), "utf-8").split(`**Event**: ${event}`).length - 1;
+    }
+    return rows;
+  }
+
+  test("a later selection colliding with a PRE-EXISTING row does not strand an earlier selection's audit row", () => {
+    const pd = bareProject();
+    // Seed a pre-existing row under "old-1" via an earlier persist call.
+    const seedSel = writeSelectionsFile(pd, "user-stories", [
+      { candidate_id: "old-1", type: "learning", scope: "project", heading: "Corrections", text: "Original text", source: "orchestrator" },
+    ]);
+    expect(learnings(["persist", "--slug", "user-stories", "--selections-json", seedSel], pd).status).toBe(0);
+    expect(countAuditRows(pd, "RULE_LEARNED")).toBe(1);
+
+    // A batch: selection 1 is fresh+valid (new-1); selection 2 collides with
+    // old-1 using DIFFERENT text. Both ids are locally unique WITHIN this
+    // batch, so the in-batch duplicate pre-check does not fire — only
+    // writeRulePractice's own collision guard, on the SECOND selection, does.
+    const batchSel = writeSelectionsFile(pd, "user-stories", [
+      { candidate_id: "new-1", type: "learning", scope: "project", heading: "Corrections", text: "Brand new rule", source: "orchestrator" },
+      { candidate_id: "old-1", type: "learning", scope: "project", heading: "Corrections", text: "CONFLICTING different text", source: "orchestrator" },
+    ]);
+    const r = learnings(["persist", "--slug", "user-stories", "--selections-json", batchSel], pd);
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain("DIFFERENT text");
+
+    // INVARIANT: new-1's audit row and its practice line land TOGETHER or not
+    // at all. Before the fix: 0 practice lines, 1 stray audit row (2 total
+    // RULE_LEARNED rows counting the seed). After the fix: the whole batch is
+    // rolled back — new-1 gets NEITHER a line NOR a row, and the audit count
+    // stays exactly what the seed alone produced.
+    const projectMd = readFileSync(join(pd, "aidlc", "spaces", "default", "memory", "project.md"), "utf-8");
+    expect(projectMd).not.toContain("Brand new rule");
+    expect(projectMd).not.toContain("CONFLICTING different text");
+    expect(projectMd).toContain("Original text");
+    expect(countAuditRows(pd, "RULE_LEARNED")).toBe(1);
+  }, TIMEOUT);
+
+  // The identical-text sibling case: two selections sharing a (namespace,
+  // candidate id) key with IDENTICAL text is caught by the in-batch
+  // duplicate-id pre-check before either selection is even computed — no
+  // audit row, no practice line, for either.
+  test("an in-batch duplicate candidate id (identical text) is rejected before any write", () => {
+    const pd = bareProject();
+    const sel = writeSelectionsFile(pd, "user-stories", [
+      { candidate_id: "same-1", type: "learning", scope: "project", heading: "Corrections", text: "Dup rule", source: "orchestrator" },
+      { candidate_id: "same-1", type: "learning", scope: "project", heading: "Corrections", text: "Dup rule", source: "orchestrator" },
+    ]);
+    const r = learnings(["persist", "--slug", "user-stories", "--selections-json", sel], pd);
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain("more than once");
+    expect(existsSync(join(pd, "aidlc", "spaces", "default", "memory", "project.md"))).toBe(false);
+    expect(countAuditRows(pd, "RULE_LEARNED")).toBe(0);
+  }, TIMEOUT);
+
+  // A clean multi-selection batch (no collision at all) still commits BOTH
+  // practice lines and BOTH audit rows — the transaction must not become
+  // all-or-nothing in the wrong direction (refusing a batch that never throws).
+  test("a clean multi-selection batch commits every line and every row together", () => {
+    const pd = bareProject();
+    const sel = writeSelectionsFile(pd, "user-stories", [
+      { candidate_id: "clean-1", type: "learning", scope: "project", heading: "Corrections", text: "Rule one", source: "orchestrator" },
+      { candidate_id: "clean-2", type: "learning", scope: "project", heading: "Corrections", text: "Rule two", source: "orchestrator" },
+    ]);
+    const r = learnings(["persist", "--slug", "user-stories", "--selections-json", sel], pd);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout).rule_learned).toBe(2);
+    const projectMd = readFileSync(join(pd, "aidlc", "spaces", "default", "memory", "project.md"), "utf-8");
+    expect(projectMd).toContain("Rule one");
+    expect(projectMd).toContain("Rule two");
+    expect(countAuditRows(pd, "RULE_LEARNED")).toBe(2);
+  }, TIMEOUT);
+
+  // ===========================================================================
+  // P1A — EXACT DELIMITER MATCH. `doc-1` must not be silently dropped just
+  // because `doc-10` was persisted first (a plain substring/prefix match on
+  // the marker core matched the shorter id against the longer stored one).
+  // Pinned in BOTH directions: short-id-after-long-id and
+  // long-id-after-short-id.
+  // ===========================================================================
+  test("a shorter candidate id (doc-1) is not dropped after a longer one (doc-10) shares its prefix", () => {
+    const pd = bareProject();
+    const long = learnings(
+      ["persist-rule", "--scope", "project", "--candidate-id", "doc-10", "--text", "Rule from doc-10"],
+      pd,
+    );
+    expect(JSON.parse(long.stdout).rule_learned).toBe(1);
+
+    const short = learnings(
+      ["persist-rule", "--scope", "project", "--candidate-id", "doc-1", "--text", "Rule from doc-1"],
+      pd,
+    );
+    expect(JSON.parse(short.stdout).rule_learned).toBe(1);
+    expect(JSON.parse(short.stdout).already_present).toBe(false);
+
+    const projectMd = readFileSync(join(pd, "aidlc", "spaces", "default", "memory", "project.md"), "utf-8");
+    expect(projectMd).toContain("Rule from doc-10");
+    expect(projectMd).toContain("Rule from doc-1");
+    // Two distinct marker lines, not one collapsed by a prefix match.
+    expect(projectMd.split("cid:aidlc-onboard:doc-10;").length - 1).toBe(1);
+    expect(projectMd.split("cid:aidlc-onboard:doc-1;").length - 1).toBe(1);
+  }, TIMEOUT);
+
+  // The mirror direction: a LONG id persisted after a SHORT one whose marker
+  // is its prefix must not falsely report a collision or overwrite.
+  test("a longer candidate id (doc-10) is not confused with a prior shorter one (doc-1)", () => {
+    const pd = bareProject();
+    const short = learnings(
+      ["persist-rule", "--scope", "project", "--candidate-id", "doc-1", "--text", "Rule from doc-1"],
+      pd,
+    );
+    expect(JSON.parse(short.stdout).rule_learned).toBe(1);
+
+    const long = learnings(
+      ["persist-rule", "--scope", "project", "--candidate-id", "doc-10", "--text", "Rule from doc-10"],
+      pd,
+    );
+    expect(JSON.parse(long.stdout).rule_learned).toBe(1);
+    expect(JSON.parse(long.stdout).already_present).toBe(false);
+
+    const projectMd = readFileSync(join(pd, "aidlc", "spaces", "default", "memory", "project.md"), "utf-8");
+    expect(projectMd).toContain("Rule from doc-1");
+    expect(projectMd).toContain("Rule from doc-10");
+  }, TIMEOUT);
+
+  // ===========================================================================
+  // P1B — LEGACY REPLAY. The fixture is produced by the REAL base (pre-
+  // upgrade) writer via `git archive` + `tar`, then replayed against the
+  // CURRENT writer with byte-identical incoming text. Must no-op, not throw.
+  // ===========================================================================
+  test("replaying a legacy pre-upgrade practice line with identical text no-ops instead of refusing", () => {
+    const baseTreeDir = extractBaseWriterTree();
+    const baseLearnings = join(baseTreeDir, "core", "tools", "aidlc-learnings.ts");
+    const pd = bareProject();
+    const seedSel = join(pd, "seed-sel.json");
+    const legacyText = "All requests use TLS";
+    writeFileSync(
+      seedSel,
+      JSON.stringify({
+        stage_slug: "user-stories",
+        selections: [
+          { candidate_id: "leg-1", type: "learning", scope: "project", heading: "Corrections", text: legacyText, source: "orchestrator" },
+        ],
+      }),
+    );
+    // Write the legacy line with the REAL base writer.
+    const seed = spawnSync(BUN, [baseLearnings, "persist", "--slug", "user-stories", "--selections-json", seedSel, "--project-dir", pd], {
+      encoding: "utf-8",
+    });
+    expect(seed.status).toBe(0);
+    const projectMdBefore = readFileSync(join(pd, "aidlc", "spaces", "default", "memory", "project.md"), "utf-8");
+    // Confirm the legacy fixture's actual shape — visible date, wrapper marker.
+    expect(projectMdBefore).toMatch(/- All requests use TLS \(learned \d{4}-\d{2}-\d{2}\) <!-- cid:user-stories:leg-1 -->/);
+
+    // Replay the IDENTICAL selection with the CURRENT (upgraded) writer.
+    const replaySel = join(pd, "replay-sel.json");
+    writeFileSync(
+      replaySel,
+      JSON.stringify({
+        stage_slug: "user-stories",
+        selections: [
+          { candidate_id: "leg-1", type: "learning", scope: "project", heading: "Corrections", text: legacyText, source: "orchestrator" },
+        ],
+      }),
+    );
+    const replay = learnings(["persist", "--slug", "user-stories", "--selections-json", replaySel], pd);
+    expect(replay.status).toBe(0);
+    expect(JSON.parse(replay.stdout).rule_learned).toBe(0);
+
+    // The line is byte-identical after the replay — a no-op, not a rewrite.
+    const projectMdAfter = readFileSync(join(pd, "aidlc", "spaces", "default", "memory", "project.md"), "utf-8");
+    expect(projectMdAfter).toBe(projectMdBefore);
+  }, TIMEOUT);
+
+  // ===========================================================================
+  // P1C — DELETING A PRACTICE LINE MUST NOT BYPASS THE COLLISION GUARD. An
+  // exact prior RULE_LEARNED row survives; the practice line is deleted by
+  // hand; DIFFERENT text under the SAME candidate id must be refused, not
+  // silently written under the old identity with no new audit row.
+  // ===========================================================================
+  test("deleting a practice line does not let different text occupy its candidate id", () => {
+    const pd = bareProject();
+    const first = learnings(
+      ["persist-rule", "--scope", "project", "--candidate-id", "reused-1", "--text", "All requests use TLS"],
+      pd,
+    );
+    expect(JSON.parse(first.stdout).rule_learned).toBe(1);
+
+    // Delete the practice line by hand, keeping the audit row intact — the
+    // "belt-and-braces" hand-edit scenario.
+    const memPath = join(pd, "aidlc", "spaces", "default", "memory", "project.md");
+    const kept = readFileSync(memPath, "utf-8")
+      .split("\n")
+      .filter((l) => !l.includes("cid:aidlc-onboard:reused-1"))
+      .join("\n");
+    writeFileSync(memPath, kept);
+
+    const second = learnings(
+      ["persist-rule", "--scope", "project", "--candidate-id", "reused-1", "--text", "All production access requires MFA"],
+      pd,
+    );
+    // Refused, not silently written under the TLS identity with no new row.
+    expect(second.status).not.toBe(0);
+    const projectMd = readFileSync(memPath, "utf-8");
+    expect(projectMd).not.toContain("MFA");
+    expect(countAuditRows(pd, "RULE_LEARNED")).toBe(1);
+  }, TIMEOUT);
+
+  // ===========================================================================
+  // P1E — AMBIGUOUS DIGEST REPAIR must not overwrite the WRONG manifest row.
+  // Two healthy rows A and B; tamper A.sha256 to equal B's true digest;
+  // re-capturing B must not silently rewrite A's identity fields.
+  // ===========================================================================
+  test("re-capturing B does not overwrite row A when A.sha256 was tampered to equal B's digest", () => {
+    const pd = bareProject();
+    const srcA = join(pd, "a.md");
+    const srcB = join(pd, "b.md");
+    writeFileSync(srcA, "Passwords must be at least 14 characters.\n");
+    writeFileSync(srcB, "Secrets must be rotated every 90 days.\n");
+    expect(onboard(["capture", "--source", srcA], pd).status).toBe(0);
+    expect(onboard(["capture", "--source", srcB], pd).status).toBe(0);
+
+    const before = JSON.parse(onboard(["list"], pd).stdout).files;
+    const rowA = before.find((r: { source_path: string }) => r.source_path.endsWith("a.md"));
+    const rowB = before.find((r: { source_path: string }) => r.source_path.endsWith("b.md"));
+    expect(rowA).toBeDefined();
+    expect(rowB).toBeDefined();
+    const idA = rowA.id;
+    const idB = rowB.id;
+
+    // Tamper: A.sha256 = B.sha256 (A.id stays A's true digest — a partial
+    // match, not a healthy exact one).
+    const mp = join(pd, "aidlc", "spaces", "default", "onboard", "manifest.json");
+    const manifest = JSON.parse(readFileSync(mp, "utf-8"));
+    const mRowA = manifest.files.find((r: { id: string }) => r.id === idA);
+    mRowA.sha256 = idB;
+    writeFileSync(mp, JSON.stringify(manifest, null, 2));
+
+    // Re-capture B (the exact healthy match for idB) — must NOT rewrite A.
+    expect(onboard(["capture", "--source", srcB], pd).status).toBe(0);
+
+    const after = JSON.parse(onboard(["list"], pd).stdout).files;
+    // A's row must still exist under its ORIGINAL id — not silently rewritten
+    // INTO a second copy of B (the bug: array-order repair took the first
+    // partial match — A — and overwrote both its identity fields with B's,
+    // leaving two rows that both claim to be B while A vanishes).
+    const stillA = after.find((r: { id: string }) => r.id === idA);
+    expect(stillA).toBeDefined();
+    // No row was erased or duplicated: exactly the two original rows remain.
+    expect(after.length).toBe(2);
+    // A is NOT silently repaired by re-capturing B — only re-capturing A's OWN
+    // source fixes A. classify(A) gives an HONEST digest-mismatch error
+    // (the row's tampered sha256 no longer matches the file on disk) rather
+    // than either destroying the row or falsely reporting success.
+    const stillClassifyA = onboard(["classify", "--id", idA], pd);
+    expect(stillClassifyA.status).not.toBe(0);
+    expect(stillClassifyA.stderr).toContain("does not match its ledger digest");
+    // The prescribed remedy — re-capture A's OWN source — actually repairs it.
+    expect(onboard(["capture", "--source", srcA], pd).status).toBe(0);
+    const repaired = JSON.parse(onboard(["list"], pd).stdout).files;
+    expect(repaired.length).toBe(2);
+    expect(onboard(["classify", "--id", idA], pd).status).toBe(0);
+  }, TIMEOUT);
+
+  // ===========================================================================
+  // A dispositional signal the model can still act on. The prefilter is a
+  // keyword count, so a genuine one-line standard lands as `other-text`; the
+  // skill's contract is that a disposition is a SIGNAL, not a verdict, and that
+  // the model re-reads `content` and may override in BOTH directions. That
+  // re-judgement is only POSSIBLE if the text actually comes back — dropping
+  // `content` for `other-text` would make the disposition terminal in practice
+  // while every existing disposition assertion stayed green.
+  // ===========================================================================
+  test("an other-text item still carries its content so the model can override the signal", () => {
+    const pd = bareProject();
+    const src = join(pd, "password-policy.md");
+    // A real standard stated in ONE normative sentence: below the prefilter's
+    // repeated-imperative floor, so the tool reports `other-text`.
+    const body = "Passwords must contain at least 14 characters.\n";
+    writeFileSync(src, body);
+    onboard(["capture", "--source", src], pd);
+    const id = JSON.parse(onboard(["list"], pd).stdout).files[0].id;
+
+    const out = JSON.parse(onboard(["classify", "--id", id], pd).stdout);
+    expect(out.disposition).toBe("other-text");
+    // The load-bearing half: the text is present and verbatim, so the model
+    // can judge it a standard despite the disposition.
+    expect(out.content).toBe(body);
+    expect(out.truncated).toBe(false);
+  }, TIMEOUT);
+
+  // ===========================================================================
+  // A dangling symlink is skipped like any other symlink. walkFiles once used
+  // statSync, which FOLLOWS the link: a broken target died with a raw ENOENT
+  // stack trace instead of the clean stop the skill promises. lstatSync + skip
+  // covers the broken case and the loop case with one rule.
+  // ===========================================================================
+  test("a DANGLING symlink in the walked dir does not crash the capture", () => {
+    const pd = bareProject();
+    const dir = join(pd, "material");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "real.md"), "All input must be validated.\n");
+    // Target never exists — lstat succeeds where stat would throw ENOENT.
+    symlinkSync(join(pd, "no-such-target.md"), join(dir, "broken.md"));
+
+    const cap = onboard(["capture", "--source", dir], pd);
+    expect(cap.status).toBe(0);
+    expect(cap.stderr).not.toContain("ENOENT");
+    // The healthy sibling is captured; the broken link is neither captured nor
+    // fatal — one row, not two, and not zero.
+    const files = JSON.parse(cap.stdout).files;
+    expect(files.length).toBe(1);
+    expect(files[0].source_path).toBe("material/real.md");
+  }, TIMEOUT);
+
+  // ===========================================================================
+  // Relocation, the capture/classify half. The audit-Destination side of a move
+  // is covered above; this is the ledger side. `captured_file` is stored
+  // relative to the onboard dir precisely so a teammate who pulls — or a clone
+  // at a different path — resolves the same row. An absolute stored path passes
+  // every same-path test and fails only here.
+  // ===========================================================================
+  test("classify still resolves captured material after the whole project MOVES", () => {
+    const pd = bareProject();
+    const src = join(pd, "standards.md");
+    // Two DISTINCT imperatives, so the disposition is stable either side of the
+    // move — the subject here is path resolution, not the classifier.
+    const body = "All requests must be authenticated. Secrets shall be vaulted.\n";
+    writeFileSync(src, body);
+    expect(onboard(["capture", "--source", src], pd).status).toBe(0);
+    const id = JSON.parse(onboard(["list"], pd).stdout).files[0].id;
+    const before = JSON.parse(onboard(["classify", "--id", id], pd).stdout);
+    expect(before.disposition).toBe("preventative");
+
+    // A genuine relocation of the whole workspace, not a symlink alias.
+    const moved = `${pd}-moved`;
+    projects.push(moved);
+    renameSync(pd, moved);
+
+    // Same ledger, same id, new path: the row still resolves and the bytes
+    // still verify against the digest.
+    const after = onboard(["classify", "--id", id], moved);
+    expect(after.status).toBe(0);
+    const out = JSON.parse(after.stdout);
+    expect(out.disposition).toBe(before.disposition);
+    expect(out.content).toBe(body);
+    // No absolute pre-move path leaked into the committed ledger.
+    const manifest = readFileSync(
+      join(moved, "aidlc", "spaces", "default", "onboard", "manifest.json"),
+      "utf-8",
+    );
+    expect(manifest).not.toContain(pd);
+  }, TIMEOUT);
+
+  // ===========================================================================
+  // Two writers, one destination, NO lock. The manifest lock is what prevents
+  // lost updates, but it is not the only thing that has to hold: writers once
+  // shared a single `<path>.tmp`, so concurrent writes renamed or unlinked each
+  // other's scratch file and died on a spurious ENOENT. The parallel-capture
+  // tests above cannot see this — they run through the lock, which serialises
+  // the whole read-modify-write, so they stay green with a fixed tmp name.
+  // Reaching writeFileAtomic directly is the only way to isolate it.
+  // ===========================================================================
+  test("concurrent atomic writes to ONE destination do not collide on a shared tmp file", async () => {
+    const pd = bareProject();
+    const target = join(pd, "contended.json");
+    const W = 8;
+
+    // Each writer is its own process, so each has a distinct pid — exactly the
+    // shape a fixed `<path>.tmp` could not survive.
+    const writer = join(pd, "writer.ts");
+    writeFileSync(
+      writer,
+      `import { writeFileAtomic } from ${JSON.stringify(join(AIDLC_SRC, "tools", "aidlc-lib.ts"))};\n` +
+        `writeFileAtomic(${JSON.stringify(target)}, JSON.stringify({ by: process.pid }));\n`,
+    );
+
+    const results = await Promise.all(
+      Array.from({ length: W }, () =>
+        Bun.spawn([BUN, writer], { stdout: "ignore", stderr: "pipe" }),
+      ).map(async (proc) => ({
+        code: await proc.exited,
+        stderr: await new Response(proc.stderr).text(),
+      })),
+    );
+
+    // Every writer succeeded. A shared tmp name produced spurious ENOENT
+    // failures here while the lock-based tests above stayed green.
+    for (const r of results) {
+      expect(r.stderr).not.toContain("ENOENT");
+      expect(r.code).toBe(0);
+    }
+    // The destination is intact, complete JSON — never the half-written or
+    // zero-length file a stolen rename leaves behind.
+    expect(JSON.parse(readFileSync(target, "utf-8"))).toHaveProperty("by");
+    // No scratch file survived.
+    const strays = readdirSync(pd).filter((f: string) => f.includes(".tmp"));
+    expect(strays).toEqual([]);
   }, TIMEOUT);
 });

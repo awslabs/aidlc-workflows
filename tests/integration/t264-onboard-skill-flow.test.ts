@@ -85,6 +85,23 @@ describe("t264 /aidlc-onboard S1 skill flow end-to-end (capture -> classify -> g
   // Acceptance (real consumer): capture -> classify ->
   // (gate confirms) -> persist-rule -> the rule appears in rules_in_context on
   // the NEXT compile.
+  //
+  // SCOPE OF WHAT THIS TEST ACTUALLY ESTABLISHES (P2e correction): this is a
+  // `cli` mechanism test — it spawns tool processes, it does not drive an
+  // LLM. It CANNOT exercise the question-rendering annex (a prompt render
+  // consumed by an orchestrator-LLM, not by any of these tools) or turn
+  // termination (a property of the orchestrator's conversational loop, not
+  // of a spawned process's exit code). What it DOES establish, and all it
+  // claims to establish: given the human's "confirm, project scope" DECISION
+  // (represented here by simply calling persist-rule — that decision is the
+  // one thing outside this test's reach, exactly as SKILL.md Step 4 requires
+  // a real human turn to produce it), the documented Step 5 command shape —
+  // ALL FOUR file-transported values SKILL.md names (candidate id, text,
+  // source_path, heading; see "Four values must never appear on the command
+  // line" in SKILL.md Step 5) — produces a rule that is live in
+  // `rules_in_context` on the next compile. Previously this test omitted
+  // `--source-file`, so it never exercised the documented four-value shape
+  // it claimed to.
   // ===========================================================================
   test("a confirmed onboard rule appears in rules_in_context on the next compile", () => {
     const pd = bareProject();
@@ -106,7 +123,12 @@ describe("t264 /aidlc-onboard S1 skill flow end-to-end (capture -> classify -> g
       pd,
     );
     expect(capture.status).toBe(0);
-    const id = JSON.parse(capture.stdout).files[0].id;
+    const captureRow = JSON.parse(capture.stdout).files[0];
+    const id = captureRow.id;
+    // The captured item's own source_path — the value Step 5 must ALSO carry
+    // by file (SKILL.md: "the item's `source_path`" is one of the four values
+    // that must never appear on the command line).
+    const itemSourcePath: string = captureRow.source_path;
 
     // Step 2: classify — the id is a committed, network-borne value.
     const idFile = join(pd, "id.txt");
@@ -121,26 +143,47 @@ describe("t264 /aidlc-onboard S1 skill flow end-to-end (capture -> classify -> g
     // The body arrives framed as untrusted data — the boundary travels with it.
     expect(classified.content_trust).toBe("untrusted");
 
-    // Step 4/5: the human gate confirms (project scope) -> promote. Every
-    // document-derived value goes by file, the heading included.
+    // Step 4/5: the human gate confirms (project scope) -> promote. This test
+    // represents the human's "confirm, project scope" decision simply by
+    // calling persist-rule — it cannot itself render or answer the
+    // question-rendering annex (see the scope note above). Every
+    // document-derived value goes by file, ALL FOUR of them per SKILL.md
+    // Step 5: candidate id, text, source_path, heading.
     const cidFile = join(pd, "cid.txt");
     const textFile = join(pd, "text.txt");
+    const sourcePathFile = join(pd, "source-path.txt");
     const headingFile = join(pd, "heading.txt");
     writeFileSync(cidFile, `${id}-1\n`);
     writeFileSync(textFile, "All money math uses decimal, never float\n");
+    writeFileSync(sourcePathFile, `${itemSourcePath}\n`);
     writeFileSync(headingFile, "Corrections\n");
 
     const persist = runViaShell(
       `bun ${LEARNINGS_TS} persist-rule --scope project ` +
         `--candidate-id-file ${cidFile} --text-file ${textFile} ` +
-        `--heading-file ${headingFile} --project-dir ${pd}`,
+        `--source-file ${sourcePathFile} --heading-file ${headingFile} --project-dir ${pd}`,
       pd,
     );
     expect(persist.status).toBe(0);
     const persisted = JSON.parse(persist.stdout);
     expect(persisted.rule_learned).toBe(1);
+    // rule_written (P2e): a fresh write is 1 on BOTH fields, distinguishing
+    // it from a backfill/no-op which would report rule_learned:1 with
+    // rule_written:0 (or vice versa).
+    expect(persisted.rule_written).toBe(1);
     expect(persisted.candidate_id).toBe(`${id}-1`);
     expect(persisted.heading).toBe("## Corrections");
+
+    // The audit row records the item's OWN source_path as provenance — the
+    // fourth value Step 5 carries by file, not the harness's own source.txt.
+    const auditDir = join(pd, "aidlc", "spaces", "default", "intents", "audit");
+    const auditFiles = require("node:fs")
+      .readdirSync(auditDir)
+      .filter((f: string) => f.endsWith(".md"));
+    const auditText = auditFiles
+      .map((f: string) => readFileSync(join(auditDir, f), "utf-8"))
+      .join("\n");
+    expect(auditText).toContain(`**Source**: ${itemSourcePath}`);
 
     // The real consumer: the NEXT compile bakes the rule into rules_in_context.
     // rulesDir() (aidlc-graph.ts) always resolves aidlc/spaces/default/memory —

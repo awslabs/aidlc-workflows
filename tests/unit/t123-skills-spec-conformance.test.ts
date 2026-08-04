@@ -228,5 +228,32 @@ describe("t123 (unit) skills-spec conformance — per-skill SKILL.md invariants"
         expect(lines).toBeLessThanOrEqual(500);
       });
     }
+
+    // A cross-skill file reference must RESOLVE in the shipped layout, on every
+    // harness. A standalone skill loaded on its own still needs the harness's
+    // gate mechanism, which lives in a SIBLING skill dir (skills/aidlc/), not
+    // under the referring skill — so the reference has to be written relative
+    // and has to survive packaging.
+    //
+    // Asserted by resolving the path rather than string-matching it: the shipped
+    // roots differ per harness (Codex emits .agents/skills/, the others
+    // <harness-dir>/skills/), so an absolute or harness-shaped assertion would
+    // encode one layout and be wrong on Codex. Resolving from the referring
+    // file's own directory is the only form that is true everywhere.
+    test(`${harness.name}: aidlc-onboard's gate-annex reference resolves in the shipped layout`, () => {
+      const onboardSkill = join(harness.skillsRoot, "aidlc-onboard", "SKILL.md");
+      if (!existsSync(onboardSkill)) return;
+      const text = readFileSync(onboardSkill, "utf-8");
+
+      // The annex is named as a path relative to the referring SKILL.md.
+      const ref = text.match(/`(\.\.\/[^`]*question-rendering\.md)`/);
+      expect(ref, `${harness.name}: no relative gate-annex reference found`).not.toBeNull();
+
+      const resolved = join(harness.skillsRoot, "aidlc-onboard", ref![1]);
+      expect(
+        existsSync(resolved),
+        `${harness.name}: gate annex ${ref![1]} does not resolve to ${resolved}`,
+      ).toBe(true);
+    });
   }
 });

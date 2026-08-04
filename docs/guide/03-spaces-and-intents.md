@@ -291,7 +291,15 @@ local; the shared work is committed.**
 
 Because `onboard/` is committed, its `manifest.json` stores each captured file's
 path **relative** to the onboard dir — a teammate who pulls, or a clone at a
-different path, resolves the same rows against their own checkout.
+different path, resolves the same rows against their own checkout. The stored
+file is named by its content digest alone (`files/<sha256>`), so identical bytes
+captured under two different filenames are one committed copy and a long source
+filename cannot overflow the path limit. Provenance is kept separately in the
+row's `source_path`, recorded **relative to the project** when the source came
+from inside it — a committed file should not carry a username, a home directory,
+or a customer's private directory names. Every field in a manifest row is treated
+as untrusted data, since the file is committed and therefore arrives over the
+network and may have been edited by hand.
 
 ---
 
