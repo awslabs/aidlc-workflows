@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 501,
+    "total": 502,
     "enumeratedByClass": {
-      "function": 263,
+      "function": 264,
       "audit": 76,
       "scope": 9,
       "stage": 32,
@@ -31,11 +31,11 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 115,
+      "function": 117,
       "audit": 35,
       "scope": 9,
       "stage": 9,
-      "hook": 15,
+      "hook": 16,
       "subcommand": 86,
       "render-surface": 7
     }
@@ -1180,6 +1180,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:clearSessionIntentUuid",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t167-session-intent-helpers.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:CLONE_ID_FILE",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2184,7 +2196,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t267-usage.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -2948,7 +2960,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t267-usage.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -3430,8 +3442,13 @@
       "unitClass": "function",
       "unitId": "function:writeFileAtomic",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t270-metrics-transport.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -3500,8 +3517,13 @@
       "unitClass": "hook",
       "unitId": "aidlc-fold-usage",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t267-usage.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "hook",

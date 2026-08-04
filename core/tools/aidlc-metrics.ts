@@ -1,8 +1,8 @@
 // Metrics emission helper for AI-DLC audit events.
 //
-// Called from appendAuditEntryUnlocked in aidlc-audit.ts immediately after
-// every audit shard write, giving real-time coverage of every audit event type
-// from a single call site. OPT-IN and DISABLED by default: it emits ONLY when
+// Called from the shared metrics tap in aidlc-audit.ts immediately after
+// structured audit writes, giving real-time coverage of both single and batch
+// event appends. OPT-IN and DISABLED by default: it emits ONLY when
 // AIDLC_METRICS_ENDPOINT is set. No endpoint is shipped in any harness's
 // settings, so an untouched install emits nothing and the audit path is
 // byte-unchanged.
@@ -16,15 +16,16 @@
 // Always resolves (never throws). Metric loss is preferable to blocking or
 // breaking the audit write that called us.
 //
-import { userInfo, hostname } from "node:os";
-import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { hostname, userInfo } from "node:os";
+import { fileURLToPath } from "node:url";
 import {
   activeSpace,
   getField,
   harnessDir,
   stateFilePath,
 } from "./aidlc-lib.ts";
+import { compiledExecutable } from "./aidlc-runtime-paths.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 
 // ---------------------------------------------------------------------------
@@ -68,8 +69,8 @@ function readScope(projectDir: string): string | null {
 }
 
 // Strip StatsD-reserved characters and other problematic chars from tag values.
-// Strips |,#: (StatsD delimiters), + (SemVer build-metadata separator, invalid
-// in Datadog tags), / (Datadog tag normalisation), and whitespace.
+// Strips |,#: (StatsD delimiters), + (SemVer build-metadata separator), / (a
+// commonly normalised tag character), and whitespace.
 function sanitizeTag(v: string): string {
   return v.replace(/[|,#:+/\s]/g, "_");
 }
@@ -317,68 +318,125 @@ export function buildMagnitudeLines(
 }
 
 // ---------------------------------------------------------------------------
-// HTTP dispatch via curl
+// HTTP dispatch via an unreferenced Bun worker
 //
-// Why a detached `curl` subprocess and NOT an in-process fetch()/http.request:
+// Why a Bun subprocess and NOT an in-process fetch():
 //
-//  1. This runs under the audit lock. emitMetricForAuditEvent is called from
-//     appendAuditEntryUnlocked WHILE it holds the OS-level audit lock (a ~5s
-//     retry budget). The dispatch MUST return in microseconds or every audit
-//     write across the framework stalls behind network latency. spawn().unref()
-//     returns immediately - the child is handed the POST and fully detached.
+//  1. This runs under the audit lock. The structured append paths call
+//     emitMetricForAuditEvent WHILE holding the OS-level audit lock (a ~5s retry
+//     budget). The dispatch MUST return immediately or every audit write across
+//     the framework stalls behind network latency. Bun.spawn().unref() hands the
+//     request to a detached child without waiting for the network.
 //
 //  2. The tool process is short-lived. AI-DLC tools/hooks are per-invocation
 //     `bun aidlc-*.ts` processes that frequently exit within milliseconds of
-//     the audit write. An un-awaited in-process fetch() would be torn down when
-//     the process exits before the connection flushes; awaiting it would
-//     reintroduce the blocking-under-lock problem in (1). A DETACHED child
-//     (detached:true + unref) outlives the parent and completes independently.
+//     the audit write. Bun keeps an un-awaited fetch alive until its response,
+//     adding collector latency to the caller; forcing exit can drop the request.
+//     An unreferenced child outlives the parent and completes independently.
 //
-//  3. curl is ubiquitous on the macOS/Linux/WSL dev+CI environments AI-DLC
-//     targets, and a StatsD-over-HTTP POST is a trivial curl one-liner.
-//
-// Cost of the choice: curl must be on PATH. That is why postMetric() below
-// defensively swallows the spawn 'error' event (a missing curl no-ops a metric,
-// never crashes the tool).
+// In a source install the worker is this TypeScript module launched through Bun.
+// In a compiled install the same executable handles a private worker route.
+// Metrics therefore add no executable or package dependency beyond Bun itself.
 // ---------------------------------------------------------------------------
 
-const CURL_BASE_ARGS = [
-  "-H", "Content-Type: text/plain",
-  "--silent",
-  "--connect-timeout", "2",
-  "--max-time", "3",
-];
+const METRIC_WORKER_ARG = "--internal-metrics-send";
 
-// Optional extra HTTP headers from AIDLC_METRICS_HEADERS, a newline-separated
-// list of `Header-Name: value` lines (e.g. an Authorization bearer for a
-// gated collector). Each becomes a `-H` curl arg. Blank lines are skipped;
-// nothing is validated beyond non-emptiness (curl rejects a malformed header
-// itself, and the failure is swallowed like any other curl error). Pure.
-function extraHeaderArgs(): string[] {
+interface MetricDispatchEnvelope {
+  endpoint: string;
+  body: string;
+  headers: string[];
+}
+
+// Optional extra HTTP headers from AIDLC_METRICS_HEADERS. Header values must
+// not enter process argv or the child environment, where local process
+// inspection can expose them. Blank lines are skipped; malformed headers fail
+// best-effort in the worker's standard Headers parser.
+function extraHeaderLines(): string[] {
   const raw = process.env.AIDLC_METRICS_HEADERS;
   if (!raw) return [];
-  const args: string[] = [];
+  const lines: string[] = [];
   for (const line of raw.split("\n")) {
     const h = line.trim();
-    if (h) args.push("-H", h);
+    if (h) lines.push(h);
   }
-  return args;
+  return lines;
+}
+
+function isMetricDispatchEnvelope(value: unknown): value is MetricDispatchEnvelope {
+  if (value === null || typeof value !== "object") return false;
+  const obj = value as Record<string, unknown>;
+  return (
+    typeof obj.endpoint === "string" &&
+    obj.endpoint.length > 0 &&
+    typeof obj.body === "string" &&
+    Array.isArray(obj.headers) &&
+    obj.headers.every((header) => typeof header === "string")
+  );
+}
+
+export async function sendMetricFromStdin(): Promise<void> {
+  try {
+    const envelope: unknown = JSON.parse(await Bun.stdin.text());
+    if (!isMetricDispatchEnvelope(envelope)) return;
+    const headers = new Headers({ "Content-Type": "text/plain" });
+    for (const line of envelope.headers) {
+      const colon = line.indexOf(":");
+      if (colon <= 0) return;
+      headers.append(line.slice(0, colon).trim(), line.slice(colon + 1).trim());
+    }
+    const response = await fetch(envelope.endpoint, {
+      method: "POST",
+      headers,
+      body: envelope.body,
+      redirect: "manual",
+      signal: AbortSignal.timeout(3_000),
+    });
+    await response.body?.cancel();
+  } catch {
+    // Delivery is best-effort and never reports back into the audit caller.
+  }
+}
+
+function metricWorkerCommand(): string[] {
+  const executable = compiledExecutable();
+  return executable
+    ? [executable, METRIC_WORKER_ARG]
+    : [process.execPath, fileURLToPath(import.meta.url), METRIC_WORKER_ARG];
 }
 
 function postMetric(endpoint: string, body: string): void {
-  const args = ["-X", "POST", endpoint, ...CURL_BASE_ARGS, ...extraHeaderArgs(), "-d", body];
-  const child = spawn("curl", args, {
-    detached: true,
-    stdio: "ignore",
-  });
-  // Suppress the async 'error' event (e.g. ENOENT when curl is absent) so it
-  // doesn't become an uncaughtException and crash the tool process.
-  child.on("error", () => {});
-  child.unref();
+  try {
+    const envelope: MetricDispatchEnvelope = {
+      endpoint,
+      body,
+      headers: extraHeaderLines(),
+    };
+    const childEnv = { ...process.env };
+    for (const name of Object.keys(childEnv)) {
+      const normalized = name.toUpperCase();
+      if (
+        normalized === "AIDLC_METRICS_HEADERS" ||
+        normalized === "AIDLC_METRICS_ENDPOINT"
+      ) {
+        delete childEnv[name];
+      }
+    }
+    const child = Bun.spawn(metricWorkerCommand(), {
+      env: childEnv,
+      stdin: "pipe",
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    child.stdin.write(JSON.stringify(envelope));
+    child.stdin.end();
+    child.unref();
+  } catch {
+    // Transport setup is best-effort.
+  }
 }
 
 // ---------------------------------------------------------------------------
-// Public entry point - called from appendAuditEntryUnlocked
+// Public entry point - called from aidlc-audit's shared metrics tap
 // ---------------------------------------------------------------------------
 
 export function emitMetricForAuditEvent(
@@ -403,4 +461,8 @@ export function emitMetricForAuditEvent(
   } catch {
     // Never propagate - metric loss must not affect audit writes.
   }
+}
+
+if (import.meta.main && process.argv[2] === METRIC_WORKER_ARG) {
+  void sendMetricFromStdin();
 }

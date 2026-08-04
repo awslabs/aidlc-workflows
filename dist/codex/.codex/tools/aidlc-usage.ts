@@ -7,11 +7,11 @@
 // CONSUMES this module and never re-parses a transcript itself.
 //
 // HARNESS SCOPE. The transcript reader is Claude-Code-format-specific: only the
-// Claude harness wires a producer (the PostToolUse fold hook + the Stop-hook
-// flush). On Kiro / Codex / opencode no producer is wired, so the ledger is
-// never written and every consumer here degrades silently to no-data: the
-// statusline renders no cost segment, and the audit rollup adds no fields. See
-// docs/reference/06-hooks-and-tools.md.
+// Claude harness wires a producer (the PreToolUse + PostToolUse fold hook and
+// the Stop-hook flush). On Kiro / Codex / opencode no producer is wired, so the
+// ledger is never written and every consumer here degrades silently to no-data:
+// the statusline renders no cost segment, and the audit rollup adds no fields.
+// See docs/reference/06-hooks-and-tools.md.
 //
 // ROBUSTNESS CONTRACT. Nothing here throws on malformed or missing input. A
 // half-written last JSONL line is normal for a live transcript, so a bad line
@@ -36,7 +36,16 @@ import {
   readFileSync,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { modelRatesPath, sessionsDir, writeFileAtomic } from "./aidlc-lib.ts";
+import {
+  activeIntent,
+  activeIntentUuid,
+  activeSpace,
+  modelRatesPath,
+  readSessionIntentUuid,
+  sessionsDir,
+  withAuditLock,
+  writeFileAtomic,
+} from "./aidlc-lib.ts";
 
 // ===========================================================================
 // Task 1 - Rate table + pure cost math (no transcript I/O)
@@ -165,24 +174,6 @@ export function _resetRatesCacheForTest(): void {
   _rates = null;
 }
 
-// Generation matchers, checked as substrings of the stripped residual model
-// string (see normalizeModel). The generation tokens are mutually NON-colliding
-// on real residuals (`opus-5` is not a substring of `opus-4-8`/`-4-7`/`-4-6`,
-// `sonnet-4-6` does not contain `sonnet-5`, `haiku-4-5-...v1:0` contains only
-// `haiku-4-5`). Every needle maps to a DISCRETE default key - there is
-// deliberately NO bare-family substring fallback (`includes("opus")`), which
-// would silently misprice a new generation (opus-6) onto an old row.
-const GENERATION_MATCHERS: readonly (readonly [string, string])[] = [
-  ["opus-5", "opus-5"],
-  ["opus-4-8", "opus-4-8"],
-  ["opus-4-7", "opus-4-7"],
-  ["opus-4-6", "opus-4-6"],
-  ["sonnet-5", "sonnet-5"],
-  ["sonnet-4-6", "sonnet-4-6"],
-  ["haiku-4-5", "haiku-4-5"],
-  ["fable-5", "fable-5"],
-];
-
 // Bare family aliases with NO generation token. Matched only on an EXACT
 // residual equality (never as a substring), so `opus` resolves but `opus-6`
 // (a would-be new generation) does NOT match and stays null. These are a
@@ -210,29 +201,42 @@ const BARE_ALIASES: Record<string, string> = {
 // `null` => the caller records the tokens but withholds cost. An honest
 // "unknown" (made visible by the audit's `Cost USD: null`) beats a
 // confidently-wrong number from an old generation's rate. `<synthetic>`, empty,
-// and non-Claude models => null too. Note the return value is a rate-table KEY,
-// checked against loadRates() by the caller (an override file may add a key not
-// in DEFAULT_RATES, or DEFAULT_RATES may name one absent from a stripped-down
-// override - so normalizeModel resolving a key does NOT guarantee a priced row).
+// malformed provider/model shapes, and non-Claude models => null too. Generation
+// keys come from the EFFECTIVE rate table, so an AIDLC_MODEL_RATES override can
+// add a new generation without a source-code matcher change.
 export function normalizeModel(modelId: string): string | null {
   if (!modelId || typeof modelId !== "string") return null;
   let s = modelId.trim().toLowerCase();
+  if (BARE_ALIASES[s]) return BARE_ALIASES[s];
   // 1. Drop a leading `converse/` provider tag. MUST run before step 2 - the
   //    region wildcard is anchored at the string start.
-  s = s.replace(/^converse\//, "");
+  const hadConversePrefix = s.startsWith("converse/");
+  if (hadConversePrefix) s = s.slice("converse/".length);
   // 2. Drop an inference-profile region prefix + `anthropic.`. WILDCARDED:
   //    `<region>` is any `[a-z0-9-]+` token, so a new region (eu/apac/global/
   //    ... or one not yet seen) never silently breaks normalization. The
   //    `\.anthropic\.` anchor keeps the wildcard from eating a region-less model
   //    (bare `claude-opus-4-8` has no `.anthropic.`, so it is untouched here).
-  s = s.replace(/^[a-z0-9-]+\.anthropic\./, "");
-  // 3. Drop a bare `anthropic.` (no region) and a leading `claude-`.
-  s = s.replace(/^anthropic\./, "").replace(/^claude-/, "");
-  // 4. Exact bare-alias match first (so `opus` resolves but `opus-6` does not).
-  if (BARE_ALIASES[s]) return BARE_ALIASES[s];
-  // 5. Generation-token match - specific generation, never a bare family.
-  for (const [needle, key] of GENERATION_MATCHERS) {
-    if (s.includes(needle)) return key;
+  const provider = s.match(/^(?:[a-z0-9-]+\.)?anthropic\./);
+  if (provider) {
+    s = s.slice(provider[0].length);
+  } else if (hadConversePrefix) {
+    return null;
+  }
+  // 3. Accept only a real Anthropic/Claude shape or one of the documented bare
+  // family aliases handled above. Exact rate keys are not wire model IDs:
+  // accepting them after `converse/` or `anthropic.` would price malformed
+  // provider shapes such as `converse/opus-4-8`.
+  const rates = loadRates();
+  if (!s.startsWith("claude-")) return null;
+  s = s.slice("claude-".length);
+
+  // 4. Match a generation key only at a token boundary. Keys are longest-first
+  // so an override containing related keys resolves the most specific one.
+  for (const key of Object.keys(rates).sort((a, b) => b.length - a.length)) {
+    if (s === key || s.startsWith(`${key}-`) || s.startsWith(`${key}[`)) {
+      return key;
+    }
   }
   // Unknown generation / non-Claude => null (tokens recorded, cost withheld).
   return null;
@@ -658,14 +662,30 @@ export type StageBucket = {
   byAgent: Record<string, Totals>;
 };
 
+// One aggregate at a particular ownership boundary. The top-level ledger keeps
+// a workspace aggregate for diagnostics, while `workflows[workflow].sessions`
+// provides the authoritative workflow/session intersection.
+export type UsageAggregate = {
+  totals: Totals;
+  byStage: Record<string, StageBucket>;
+  byModel: Record<string, Totals>;
+  byAgent: Record<string, Totals>;
+};
+
+export type WorkflowUsage = UsageAggregate & {
+  sessions: Record<string, UsageAggregate>;
+};
+
 // The current on-disk ledger schema version. BUMP THIS whenever the token
 // COUNTING semantics change so old, differently-counted totals are discarded
 // rather than re-added onto. v2 is the first schema whose totals were produced
 // by the HOLDBACK fold (a group is counted once, when provably complete); every
 // pre-v2 ledger was produced by the buggy per-split-line counter (input ~2x,
 // output ~2.6x inflated), so its totals are unreliable and loadLedger resets
-// them (see the migration in loadLedger). New empty ledgers are stamped v2.
-const CURRENT_SCHEMA_VERSION = 2 as const;
+// them (see the migration in loadLedger). v3 adds session/intent ownership and
+// pending-group attribution; v2's workspace-only totals cannot be partitioned
+// retrospectively, so they are rebuilt too.
+const CURRENT_SCHEMA_VERSION = 3 as const;
 
 // The durable rollup. `cursors` is keyed by SOURCE FILE identity - the OFFSET
 // FOLD (foldFileIntoLedger) keys each cursor by the transcript FILE PATH (the
@@ -677,36 +697,35 @@ const CURRENT_SCHEMA_VERSION = 2 as const;
 // because a file path never equals `"main"`. Verified: uuids collide across
 // concurrent sub-agent files, so a global-uuid cursor would drop real turns or
 // count the 0-token broadcast copies - per-file cursors are the whole mechanism.
-// `byStage` carries stage-scoped sub-splits (StageBucket); `byModel`/`byAgent`
-// at the top level are whole-session totals (used by the statusline).
-export type Ledger = {
+// `byStage` carries stage-scoped sub-splits (StageBucket); top-level totals and
+// splits span the workspace and are diagnostic only.
+export type LedgerCursor = {
+  lastUuid: string;
+  lastTimestamp: string;
+  // Byte position in the source file already folded. The offset-aware fold
+  // reads only bytes `[byteOffset, size)` each call.
+  byteOffset?: number;
+  // The `message.id` of the last folded group (diagnostics only).
+  lastMessageId?: string;
+  // A non-flush fold retains the last message group. Its ownership is captured
+  // NOW, before a lifecycle tool can advance state, and reused when the group
+  // is eventually folded.
+  pending?: {
+    byteOffset: number;
+    messageId: string;
+    stageSlug: string | null;
+    sessionKey: string;
+    workflowKey: string;
+  };
+};
+
+export type Ledger = UsageAggregate & {
   // Schema version of the totals below. Absent/`< CURRENT_SCHEMA_VERSION` on
   // disk => produced by an older, differently-counted fold => loadLedger
   // discards it and rebuilds from the transcript.
   schemaVersion: number;
-  cursors: Record<
-    string,
-    {
-      lastUuid: string;
-      lastTimestamp: string;
-      // Byte position in the source file already folded. The offset-aware fold
-      // reads only bytes `[byteOffset, size)` each call, so a per-tool-call fold
-      // never re-parses the whole file. The HOLDBACK model sets this to the byte
-      // START of the last (possibly-incomplete) group so that group's lines are
-      // fully re-read next fold - never counted until provably complete. Present
-      // on every fold cursor; a v2 fold cursor ALWAYS carries it (its absence is
-      // treated as a pre-v2 ledger - see loadLedger).
-      byteOffset?: number;
-      // The `message.id` of the LAST group folded from this file. Retained for
-      // diagnostics only - the HOLDBACK fold's counting no longer depends on it.
-      // Absent on OLD ledgers => "".
-      lastMessageId?: string;
-    }
-  >;
-  totals: Totals;
-  byStage: Record<string, StageBucket>;
-  byModel: Record<string, Totals>;
-  byAgent: Record<string, Totals>;
+  cursors: Record<string, LedgerCursor>;
+  workflows: Record<string, WorkflowUsage>;
 };
 
 function emptyTokenCounts(): TokenCounts {
@@ -721,20 +740,61 @@ function emptyStageBucket(): StageBucket {
   return { totals: emptyTotals(), byModel: {}, byAgent: {} };
 }
 
+function emptyUsageAggregate(): UsageAggregate {
+  return { totals: emptyTotals(), byStage: {}, byModel: {}, byAgent: {} };
+}
+
 function emptyLedger(): Ledger {
   return {
     schemaVersion: CURRENT_SCHEMA_VERSION,
     cursors: {},
-    totals: emptyTotals(),
-    byStage: {},
-    byModel: {},
-    byAgent: {},
+    ...emptyUsageAggregate(),
+    workflows: {},
   };
 }
 
 // The gitignored runtime ledger path: `aidlc/.aidlc-sessions/usage-ledger.json`.
 export function ledgerPath(projectDir: string): string {
   return join(sessionsDir(projectDir), "usage-ledger.json");
+}
+
+export type UsageContext = {
+  sessionId?: string;
+  sessionKey?: string;
+  workflowKey?: string;
+};
+
+// The transcript path is the stable session identity available to both the fold
+// hook and statusline. A caller without a transcript can supply an explicit
+// session key (the row-based test/utility seam) or fall back to session_id.
+export function sessionUsageKey(
+  transcriptPath?: string,
+  sessionId?: string,
+): string {
+  const transcript = transcriptPath?.trim();
+  if (transcript) return `transcript:${transcript}`;
+  const session = safeSessionSegment(sessionId ?? "");
+  return session ? `session:${session}` : "session:unknown";
+}
+
+// Resolve the active intent to a stable UUID when possible. Legacy/orphan
+// records fall back to their space + record-dir identity.
+export function intentUsageKey(
+  projectDir: string,
+  sessionId?: string,
+): string {
+  try {
+    if (sessionId) {
+      const stamped = readSessionIntentUuid(projectDir, sessionId);
+      if (stamped) return `intent:${stamped}`;
+    }
+    const space = activeSpace(projectDir);
+    const uuid = activeIntentUuid(projectDir, space);
+    if (uuid) return `intent:${uuid}`;
+    return `record:${space}/${activeIntent(projectDir, space) ?? "legacy"}`;
+  } catch {
+    return "record:default/legacy";
+  }
 }
 
 // Coerce a possibly-old-shape byStage map into the StageBucket shape. An older
@@ -764,12 +824,55 @@ function normalizeByStage(
   return out;
 }
 
+function normalizeUsageAggregate(raw: unknown): UsageAggregate {
+  if (!raw || typeof raw !== "object") return emptyUsageAggregate();
+  const value = raw as Partial<UsageAggregate> & {
+    byStage?: Record<string, unknown>;
+  };
+  return {
+    totals: value.totals ?? emptyTotals(),
+    byStage: normalizeByStage(value.byStage),
+    byModel: value.byModel ?? {},
+    byAgent: value.byAgent ?? {},
+  };
+}
+
+function normalizeAggregateMap(
+  raw: Record<string, unknown> | undefined,
+): Record<string, UsageAggregate> {
+  const out: Record<string, UsageAggregate> = {};
+  if (!raw || typeof raw !== "object") return out;
+  for (const [key, value] of Object.entries(raw)) {
+    out[key] = normalizeUsageAggregate(value);
+  }
+  return out;
+}
+
+function normalizeWorkflowMap(
+  raw: Record<string, unknown> | undefined,
+): Record<string, WorkflowUsage> {
+  const out: Record<string, WorkflowUsage> = {};
+  if (!raw || typeof raw !== "object") return out;
+  for (const [key, value] of Object.entries(raw)) {
+    const aggregate = normalizeUsageAggregate(value);
+    const sessions =
+      value && typeof value === "object"
+        ? normalizeAggregateMap(
+            (value as { sessions?: Record<string, unknown> }).sessions,
+          )
+        : {};
+    out[key] = { ...aggregate, sessions };
+  }
+  return out;
+}
+
 // Whether an on-disk ledger's cursors are all pre-v2 shaped (belt-and-suspenders
-// migration signal). A v2 fold cursor ALWAYS carries a numeric `byteOffset`; a
+// migration signal). A current fold cursor ALWAYS carries a numeric
+// `byteOffset`; a
 // pre-v2 ledger's cursors carry only `lastUuid`/`lastMessageId`. If ANY cursor
 // lacks a byteOffset the totals below it were produced (at least partly) by the
 // legacy per-line counter, so we treat the whole ledger as pre-v2. An empty
-// cursors map is NOT a downgrade signal (a fresh v2 ledger has none yet); the
+// cursors map is NOT a downgrade signal (a fresh ledger has none yet); the
 // schemaVersion check is authoritative there.
 function cursorsLackByteOffset(
   cursors: Record<string, unknown> | undefined,
@@ -794,7 +897,7 @@ function cursorsLackByteOffset(
 // `< CURRENT_SCHEMA_VERSION` - or (belt-and-suspenders) whose cursors lack a
 // numeric byteOffset - had its totals produced by the buggy per-split-line
 // counter. Those totals are UNRELIABLE and must not be re-added onto, so we
-// DISCARD the whole file and return a fresh empty v2 ledger; the next fold
+// DISCARD the whole file and return a fresh current-schema ledger; the next fold
 // rebuilds totals/byStage/byModel/byAgent/cursors cleanly from the
 // transcript(s). This resets, rather than migrates, because the old numbers
 // cannot be corrected in place.
@@ -810,10 +913,11 @@ export function loadLedger(projectDir: string): Ledger {
       byStage?: Record<string, unknown>;
       schemaVersion?: unknown;
       cursors?: Record<string, unknown>;
+      workflows?: Record<string, unknown>;
     };
     if (!parsed || typeof parsed !== "object") return emptyLedger();
-    // Migration reset: a pre-v2 ledger's totals are the buggy per-line inflation
-    // - discard and rebuild from scratch rather than fold onto them.
+    // Migration reset: an older ledger cannot supply the current ownership and
+    // counting guarantees, so discard and rebuild rather than folding onto it.
     const onDiskVersion =
       typeof parsed.schemaVersion === "number" ? parsed.schemaVersion : 0;
     if (
@@ -825,11 +929,12 @@ export function loadLedger(projectDir: string): Ledger {
     // Merge onto an empty ledger so a partial/old file can't crash a consumer.
     return {
       schemaVersion: CURRENT_SCHEMA_VERSION,
-      cursors: parsed.cursors ?? {},
+      cursors: (parsed.cursors as Record<string, LedgerCursor>) ?? {},
       totals: parsed.totals ?? emptyTotals(),
       byStage: normalizeByStage(parsed.byStage),
       byModel: parsed.byModel ?? {},
       byAgent: parsed.byAgent ?? {},
+      workflows: normalizeWorkflowMap(parsed.workflows),
     };
   } catch {
     return emptyLedger();
@@ -853,29 +958,60 @@ function modelBucketKey(row: UsageRow): string {
   return normalizeModel(row.model) ?? row.model ?? "unknown";
 }
 
-// Fold ONE row into every accumulator of the ledger - totals, byModel, byAgent,
-// and (when a stage is supplied) the stage bucket's own totals/byModel/byAgent.
-// The single shared accumulation path used by BOTH the row-based updateLedger
-// and the offset-aware file fold, so pricing is never duplicated. Mutates.
+function foldRowIntoAggregate(
+  aggregate: UsageAggregate,
+  row: UsageRow,
+  stageSlug: string | null,
+): void {
+  addInto(aggregate.totals, row);
+  const mk = modelBucketKey(row);
+  const ak = row.agentType ?? "subagent";
+  aggregate.byModel[mk] = addInto(aggregate.byModel[mk] ?? emptyTotals(), row);
+  aggregate.byAgent[ak] = addInto(aggregate.byAgent[ak] ?? emptyTotals(), row);
+  if (stageSlug) {
+    const stage = aggregate.byStage[stageSlug] ?? emptyStageBucket();
+    addInto(stage.totals, row);
+    // Stage-scoped sub-splits mirror the aggregate folds so By Model / By Agent
+    // on STAGE_COMPLETED agree with the stage's own Cost USD.
+    stage.byModel[mk] = addInto(stage.byModel[mk] ?? emptyTotals(), row);
+    stage.byAgent[ak] = addInto(stage.byAgent[ak] ?? emptyTotals(), row);
+    aggregate.byStage[stageSlug] = stage;
+  }
+}
+
+// Fold one row into the workspace diagnostic aggregate and the authoritative
+// session + intent aggregates.
 function foldRowIntoLedger(
   ledger: Ledger,
   row: UsageRow,
   stageSlug: string | null,
+  sessionKey: string,
+  workflowKey: string,
 ): void {
-  addInto(ledger.totals, row);
-  const mk = modelBucketKey(row);
-  const ak = row.agentType ?? "subagent";
-  ledger.byModel[mk] = addInto(ledger.byModel[mk] ?? emptyTotals(), row);
-  ledger.byAgent[ak] = addInto(ledger.byAgent[ak] ?? emptyTotals(), row);
-  if (stageSlug) {
-    const stage = ledger.byStage[stageSlug] ?? emptyStageBucket();
-    addInto(stage.totals, row);
-    // Stage-scoped sub-splits - mirror the global folds so By Model / By Agent
-    // on STAGE_COMPLETED agree with the stage's own Cost USD.
-    stage.byModel[mk] = addInto(stage.byModel[mk] ?? emptyTotals(), row);
-    stage.byAgent[ak] = addInto(stage.byAgent[ak] ?? emptyTotals(), row);
-    ledger.byStage[stageSlug] = stage;
-  }
+  foldRowIntoAggregate(ledger, row, stageSlug);
+  const workflow = ledger.workflows[workflowKey] ?? {
+    ...emptyUsageAggregate(),
+    sessions: {},
+  };
+  foldRowIntoAggregate(workflow, row, stageSlug);
+  const session = workflow.sessions[sessionKey] ?? emptyUsageAggregate();
+  foldRowIntoAggregate(session, row, stageSlug);
+  workflow.sessions[sessionKey] = session;
+  ledger.workflows[workflowKey] = workflow;
+}
+
+const USAGE_LOCK_INTENT = "__usage-ledger__";
+const USAGE_LOCK_SPACE = "__runtime__";
+
+function withUsageLedgerLock(projectDir: string, fn: () => Ledger): Ledger {
+  return withAuditLock(
+    projectDir,
+    fn,
+    USAGE_LOCK_INTENT,
+    USAGE_LOCK_SPACE,
+    200,
+    25,
+  );
 }
 
 // Incrementally fold new rows into the ledger and advance the per-file cursors.
@@ -898,65 +1034,72 @@ export function updateLedger(
   projectDir: string,
   rows: UsageRow[],
   stageSlug: string | null,
+  context: UsageContext = {},
 ): Ledger {
-  const ledger = loadLedger(projectDir);
+  return withUsageLedgerLock(projectDir, () => {
+    const ledger = loadLedger(projectDir);
+    const sessionKey =
+      context.sessionKey ?? sessionUsageKey(undefined, context.sessionId);
+    const workflowKey =
+      context.workflowKey ?? intentUsageKey(projectDir, context.sessionId);
 
-  // 1. Group by sourceKey, preserving file order within each group.
-  const groups = new Map<string, UsageRow[]>();
-  for (const row of rows) {
-    const arr = groups.get(row.sourceKey) ?? [];
-    arr.push(row);
-    groups.set(row.sourceKey, arr);
-  }
-
-  for (const [sourceKey, rawGroupRows] of groups) {
-    // Collapse split-line overcount WITHIN this file's group (a caller may pass
-    // raw split rows). Per-group so the dedup never crosses files - a broadcast
-    // turn sharing an id across concurrent sub-agent files must still count once
-    // per file (the per-file-cursor invariant). Reuses the same pure helper the
-    // whole-file reader uses.
-    const groupRows = dedupeByMessageId(rawGroupRows);
-    const cursor = ledger.cursors[sourceKey];
-    let fresh = groupRows;
-    if (cursor?.lastUuid) {
-      const idx = groupRows.findIndex((r) => r.uuid === cursor.lastUuid);
-      // Everything AFTER the checkpoint row is new. If the checkpoint uuid isn't
-      // in this batch (e.g. the batch is entirely older, or the file was
-      // truncated), keep all rows - a re-fold is harmless per idempotency.
-      fresh = idx >= 0 ? groupRows.slice(idx + 1) : groupRows;
-    }
-    if (fresh.length === 0) continue;
-
-    for (const row of fresh) {
-      foldRowIntoLedger(ledger, row, stageSlug);
+    // 1. Group by sourceKey, preserving file order within each group.
+    const groups = new Map<string, UsageRow[]>();
+    for (const row of rows) {
+      const arr = groups.get(row.sourceKey) ?? [];
+      arr.push(row);
+      groups.set(row.sourceKey, arr);
     }
 
-    const last = fresh[fresh.length - 1];
-    // Preserve any byteOffset the file-fold layer set for this source - the
-    // row-based API advances uuid/timestamp/msgId but does not track bytes.
-    // ALWAYS write a numeric byteOffset (default 0) so a v2 ledger this API
-    // produces is cursor-complete and never trips loadLedger's pre-v2
-    // belt-and-suspenders reset. This is safe alongside the fold layer because
-    // the two keyspaces are disjoint: updateLedger keys by row.sourceKey
-    // (`"main"`/`"agent-<id>"`) while foldFileIntoLedger keys by FILE PATH, so a
-    // 0 here is never read by a fold (a fold never looks up a `"main"` key).
-    const prevOffset = ledger.cursors[sourceKey]?.byteOffset ?? 0;
-    ledger.cursors[sourceKey] = {
-      lastUuid: last.uuid,
-      lastTimestamp: last.timestamp,
-      lastMessageId: last.msgId || ledger.cursors[sourceKey]?.lastMessageId || "",
-      byteOffset: prevOffset,
-    };
-  }
+    for (const [sourceKey, rawGroupRows] of groups) {
+      // Collapse split-line overcount WITHIN this file's group (a caller may pass
+      // raw split rows). Per-group so the dedup never crosses files - a broadcast
+      // turn sharing an id across concurrent sub-agent files must still count once
+      // per file (the per-file-cursor invariant). Reuses the same pure helper the
+      // whole-file reader uses.
+      const groupRows = dedupeByMessageId(rawGroupRows);
+      const cursor = ledger.cursors[sourceKey];
+      let fresh = groupRows;
+      if (cursor?.lastUuid) {
+        const idx = groupRows.findIndex((r) => r.uuid === cursor.lastUuid);
+        // Everything AFTER the checkpoint row is new. If the checkpoint uuid isn't
+        // in this batch (e.g. the batch is entirely older, or the file was
+        // truncated), keep all rows - a re-fold is harmless per idempotency.
+        fresh = idx >= 0 ? groupRows.slice(idx + 1) : groupRows;
+      }
+      if (fresh.length === 0) continue;
 
-  // 6. Persist atomically (mkdir the sessions dir first).
-  try {
-    mkdirSync(sessionsDir(projectDir), { recursive: true });
-  } catch {
-    /* dir may already exist */
-  }
-  writeFileAtomic(ledgerPath(projectDir), JSON.stringify(ledger, null, 2));
-  return ledger;
+      for (const row of fresh) {
+        foldRowIntoLedger(ledger, row, stageSlug, sessionKey, workflowKey);
+      }
+
+      const last = fresh[fresh.length - 1];
+      // Preserve any byteOffset the file-fold layer set for this source - the
+      // row-based API advances uuid/timestamp/msgId but does not track bytes.
+      // ALWAYS write a numeric byteOffset (default 0) so this API produces a
+      // cursor-complete current-schema ledger. This is safe alongside the fold
+      // layer because the two keyspaces are disjoint: updateLedger keys by
+      // row.sourceKey (`"main"`/`"agent-<id>"`) while foldFileIntoLedger keys by
+      // FILE PATH, so a 0 here is never read by a fold.
+      const prevOffset = ledger.cursors[sourceKey]?.byteOffset ?? 0;
+      ledger.cursors[sourceKey] = {
+        lastUuid: last.uuid,
+        lastTimestamp: last.timestamp,
+        lastMessageId:
+          last.msgId || ledger.cursors[sourceKey]?.lastMessageId || "",
+        byteOffset: prevOffset,
+      };
+    }
+
+    // 6. Persist atomically (mkdir the sessions dir first).
+    try {
+      mkdirSync(sessionsDir(projectDir), { recursive: true });
+    } catch {
+      /* dir may already exist */
+    }
+    writeFileAtomic(ledgerPath(projectDir), JSON.stringify(ledger, null, 2));
+    return ledger;
+  });
 }
 
 // ===========================================================================
@@ -1044,9 +1187,8 @@ function hasAnyTokens(t: Totals): boolean {
   );
 }
 
-// Compact per-stage usage summary for STAGE_COMPLETED / WORKFLOW_COMPLETED,
-// read purely from `loadLedger(projectDir).byStage[stageSlug]` - no transcript
-// re-parse and no time-slicing. Returns audit field strings.
+// Compact usage summaries for STAGE_COMPLETED / WORKFLOW_COMPLETED, read from
+// the authoritative workflow aggregate - no transcript re-parse or time-slicing.
 //
 // THREE cost states are distinguished:
 //   (a) no usage data for the stage      => {} (no fields; caller stays clean)
@@ -1058,13 +1200,9 @@ function hasAnyTokens(t: Totals): boolean {
 // `Tokens By Model` / `Tokens By Agent` carry the four token counts
 // (in/out/cacheRead/cacheWrite) per model and per agent, so the breakdowns are
 // token-aware, not cost-only.
-export function stageUsageAuditFields(
-  projectDir: string,
-  stageSlug: string,
+function aggregateUsageAuditFields(
+  stage: Pick<UsageAggregate, "totals" | "byModel" | "byAgent">,
 ): Record<string, string> {
-  const ledger = loadLedger(projectDir);
-  const stage = ledger.byStage[stageSlug];
-  if (!stage) return {};
   const t = stage.totals;
   const fields: Record<string, string> = {
     "Tokens In": String(t.tokens.input),
@@ -1091,6 +1229,43 @@ export function stageUsageAuditFields(
   const tokAgent = formatByTokens(stage.byAgent);
   if (tokAgent) fields["Tokens By Agent"] = tokAgent;
   return fields;
+}
+
+export function stageUsageAuditFields(
+  projectDir: string,
+  stageSlug: string,
+  workflowKey: string = intentUsageKey(projectDir),
+): Record<string, string> {
+  const stage =
+    loadLedger(projectDir).workflows[workflowKey]?.byStage[stageSlug];
+  return stage ? aggregateUsageAuditFields(stage) : {};
+}
+
+export function workflowUsageAuditFields(
+  projectDir: string,
+  workflowKey: string = intentUsageKey(projectDir),
+): Record<string, string> {
+  const workflow = loadLedger(projectDir).workflows[workflowKey];
+  return workflow && hasAnyTokens(workflow.totals)
+    ? aggregateUsageAuditFields(workflow)
+    : {};
+}
+
+export function sessionUsageAggregate(
+  projectDir: string,
+  transcriptPath?: string,
+  workflowKey?: string,
+  sessionId?: string,
+): UsageAggregate | null {
+  const resolvedTranscript =
+    transcriptPath ?? (sessionId ? readCurrentTranscriptPath(projectDir, sessionId) : null);
+  const sessionKey = sessionUsageKey(resolvedTranscript ?? undefined, sessionId);
+  const resolvedWorkflowKey =
+    workflowKey ?? intentUsageKey(projectDir, sessionId);
+  return (
+    loadLedger(projectDir).workflows[resolvedWorkflowKey]?.sessions[sessionKey] ??
+    null
+  );
 }
 
 // ===========================================================================
@@ -1147,8 +1322,9 @@ export function readCurrentTranscriptPath(
   if (sessionId) {
     const seg = safeSessionSegment(sessionId);
     if (seg) candidates.push(join(sessionsDir(projectDir), `${seg}.transcript`));
+  } else {
+    candidates.push(join(sessionsDir(projectDir), "current.transcript"));
   }
-  candidates.push(join(sessionsDir(projectDir), "current.transcript"));
   for (const path of candidates) {
     try {
       const raw = readFileSync(path, "utf-8").trim();
@@ -1174,13 +1350,18 @@ type ChunkRead = {
   lineByteStarts: number[];
   newByteOffset: number;
   reset: boolean;
+  trailingPartial: boolean;
 };
 
 // Read only bytes `[byteOffset, size)` of a file, BYTE-accurately (UTF-8 multi-
 // byte safe - offsets are byte positions, never char indices). Returns the
 // complete lines in that window, each line's absolute byte start, and the
 // advanced byte offset. Never throws.
-function readChunkFromOffset(path: string, byteOffset: number): ChunkRead | null {
+function readChunkFromOffset(
+  path: string,
+  byteOffset: number,
+  flush: boolean,
+): ChunkRead | null {
   let fd: number;
   try {
     fd = openSync(path, "r");
@@ -1210,10 +1391,6 @@ function readChunkFromOffset(path: string, byteOffset: number): ChunkRead | null
     // is complete lines; any bytes after it are a partial trailing write we drop
     // until the next fold completes the line.
     const lastNl = chunk.lastIndexOf(0x0a); // '\n'
-    if (lastNl < 0) {
-      // No complete line yet in this window - advance nothing, keep the offset.
-      return { lines: [], lineByteStarts: [], newByteOffset: start, reset };
-    }
     // Split the complete region on newline bytes, recording each line's ABSOLUTE
     // byte start (start + relative offset). Byte-accurate: we scan the raw buffer
     // rather than string-splitting so a multi-byte char never skews an offset.
@@ -1227,8 +1404,24 @@ function readChunkFromOffset(path: string, byteOffset: number): ChunkRead | null
         lineStart = idx + 1;
       }
     }
-    const newByteOffset = start + lastNl + 1;
-    return { lines, lineByteStarts, newByteOffset, reset };
+    let newByteOffset = lastNl >= 0 ? start + lastNl + 1 : start;
+    let trailingPartial = lineStart < chunk.length;
+    // A final flush may observe a fully-written JSON object whose writer never
+    // appended `\n`. Parse only syntactically complete JSON at EOF; malformed
+    // trailing bytes keep the old offset so a later append can complete them.
+    if (flush && trailingPartial) {
+      const trailing = chunk.subarray(lineStart).toString("utf-8");
+      try {
+        JSON.parse(trailing);
+        lines.push(trailing);
+        lineByteStarts.push(start + lineStart);
+        newByteOffset = start + chunk.length;
+        trailingPartial = false;
+      } catch {
+        // partial final JSON - retain it for a later fold
+      }
+    }
+    return { lines, lineByteStarts, newByteOffset, reset, trailingPartial };
   } catch {
     return null;
   } finally {
@@ -1274,13 +1467,15 @@ function foldFileIntoLedger(
   fallbackAgentId: string | null,
   metaByAgentId: Record<string, string>,
   stageSlug: string | null,
+  sessionKey: string,
+  workflowKey: string,
   flush: boolean,
 ): void {
   // The cursor is keyed by FILE PATH, unique across sessions.
   const cursorKey = path;
   const cursor = ledger.cursors[cursorKey];
   const prevOffset = cursor?.byteOffset ?? 0;
-  const chunk = readChunkFromOffset(path, prevOffset);
+  const chunk = readChunkFromOffset(path, prevOffset, flush);
   if (chunk === null) return; // no new bytes / unreadable
 
   // Parse each complete line, keeping the parallel byte-start so a held-back
@@ -1320,10 +1515,12 @@ function foldFileIntoLedger(
 
   // HOLDBACK. Fold every complete group; on a non-flush fold the LAST group is
   // not provably complete => hold it back and rewind the offset to its start so
-  // it is re-read whole next time. On flush, every group is complete.
+  // it is re-read whole next time. A flush closes it only when EOF is clean: a
+  // malformed trailing fragment may be another split line for the same message.
+  const closeLastGroup = flush && !chunk.trailingPartial;
   let foldCount = groups.length;
   let newByteOffset = chunk.newByteOffset;
-  if (!flush && groups.length > 0) {
+  if (!closeLastGroup && groups.length > 0) {
     foldCount = groups.length - 1;
     newByteOffset = groups[groups.length - 1].byteStart;
   }
@@ -1338,10 +1535,25 @@ function foldFileIntoLedger(
     lastTimestamp: cursor?.lastTimestamp ?? "",
     lastMessageId: cursor?.lastMessageId ?? "",
     byteOffset: newByteOffset,
+    pending: chunk.reset ? undefined : cursor?.pending,
   };
 
-  for (const row of toFold) {
-    foldRowIntoLedger(ledger, row, stageSlug);
+  const priorPending = chunk.reset ? undefined : cursor?.pending;
+  for (let i = 0; i < toFold.length; i++) {
+    const group = groups[i];
+    const captured =
+      i === 0 &&
+      priorPending !== undefined &&
+      priorPending.byteOffset === group.byteStart
+        ? priorPending
+        : null;
+    foldRowIntoLedger(
+      ledger,
+      toFold[i],
+      captured?.stageSlug ?? stageSlug,
+      captured?.sessionKey ?? sessionKey,
+      captured?.workflowKey ?? workflowKey,
+    );
   }
   if (toFold.length > 0) {
     const last = toFold[toFold.length - 1];
@@ -1349,76 +1561,115 @@ function foldFileIntoLedger(
     newCursor.lastTimestamp = last.timestamp;
     if (last.msgId) newCursor.lastMessageId = last.msgId; // diagnostics only
   }
+  if (!closeLastGroup && groups.length > 0) {
+    const held = groups[groups.length - 1];
+    newCursor.pending =
+      priorPending?.byteOffset === held.byteStart
+        ? priorPending
+        : {
+            byteOffset: held.byteStart,
+            messageId: held.rep.msgId,
+            stageSlug,
+            sessionKey,
+            workflowKey,
+          };
+  } else if (closeLastGroup) {
+    newCursor.pending = undefined;
+  }
   ledger.cursors[cursorKey] = newCursor;
 }
 
 // The runtime ledger PRODUCER: read the transcript (main + sub-agents) and fold
 // its NEW bytes into the ledger under the current stage. This is the runtime
-// caller wired from the Stop and PostToolUse hooks (Claude harness only).
+// caller wired from the PreToolUse, PostToolUse, and Stop hooks (Claude only).
 // Offset-aware: each fold reads only bytes appended since the last fold per file
 // (main + each sub-agent sidecar), so a per-tool-call fold never re-parses whole
 // files. Fully guarded - never throws into a hook; on any failure returns the
 // existing ledger unchanged and persists nothing.
 //
-// FLUSH semantics. `flush=true` means the turn truly ended - the last group in
-// every file is complete, so fold it now. The Stop hook passes true.
-// `flush=false` (the default, and what the PostToolUse hook passes) means a
-// mid-turn fold - the last group per file may still be growing, so hold it back
-// until a later fold closes it (a new group appears) or a flush arrives. Holdback
-// is evaluated PER FILE: the main transcript and each sub-agent file each hold
-// back their own last group independently.
+// Fold modes. `holdback` retains every file's last group for PostToolUse;
+// `seal-main` closes only the main group; `flush-all` closes every complete
+// group at an engine boundary or Stop.
+export type FoldMode = "holdback" | "seal-main" | "flush-all";
+
 export function foldTranscriptIntoLedger(
   projectDir: string,
   transcriptPath: string,
   stageSlug: string | null,
-  flush: boolean = false,
+  modeOrFlush: FoldMode | boolean = "holdback",
+  context: UsageContext = {},
 ): Ledger {
   try {
-    const ledger = loadLedger(projectDir);
+    return withUsageLedgerLock(projectDir, () => {
+      const mode: FoldMode =
+        typeof modeOrFlush === "boolean"
+          ? modeOrFlush
+            ? "flush-all"
+            : "holdback"
+          : modeOrFlush;
+      const sessionKey =
+        context.sessionKey ??
+        sessionUsageKey(transcriptPath, context.sessionId);
+      const workflowKey =
+        context.workflowKey ?? intentUsageKey(projectDir, context.sessionId);
+      const ledger = loadLedger(projectDir);
 
-    // Main transcript.
-    foldFileIntoLedger(ledger, "main", transcriptPath, null, {}, stageSlug, flush);
-
-    // Each sibling sub-agent file, with its sidecar agentType map (rebuilt each
-    // fold - sidecars are tiny and the set can grow between folds).
-    const subDir = subagentDir(transcriptPath);
-    let entries: string[] = [];
-    try {
-      if (existsSync(subDir)) {
-        entries = readdirSync(subDir).filter(
-          (f) => f.startsWith("agent-") && f.endsWith(".jsonl"),
-        );
-      }
-    } catch {
-      entries = [];
-    }
-    for (const file of entries) {
-      const agentId = file.replace(/^agent-/, "").replace(/\.jsonl$/, "");
-      const full = join(subDir, file);
-      const metaByAgentId: Record<string, string> = {};
-      const meta = readMetaSidecar(full);
-      if (meta && typeof meta.agentType === "string" && meta.agentType) {
-        metaByAgentId[agentId] = meta.agentType;
-      }
+      // Main transcript.
       foldFileIntoLedger(
         ledger,
-        `agent-${agentId}`,
-        full,
-        agentId,
-        metaByAgentId,
+        "main",
+        transcriptPath,
+        null,
+        {},
         stageSlug,
-        flush,
+        sessionKey,
+        workflowKey,
+        mode !== "holdback",
       );
-    }
 
-    // Persist atomically (mkdir the sessions dir first).
-    try {
-      mkdirSync(sessionsDir(projectDir), { recursive: true });
-    } catch {
-      /* dir may already exist */
-    }
-    writeFileAtomic(ledgerPath(projectDir), JSON.stringify(ledger, null, 2));
-    return ledger;
+      // Each sibling sub-agent file, with its sidecar agentType map (rebuilt each
+      // fold - sidecars are tiny and the set can grow between folds).
+      const subDir = subagentDir(transcriptPath);
+      let entries: string[] = [];
+      try {
+        if (existsSync(subDir)) {
+          entries = readdirSync(subDir).filter(
+            (f) => f.startsWith("agent-") && f.endsWith(".jsonl"),
+          );
+        }
+      } catch {
+        entries = [];
+      }
+      for (const file of entries) {
+        const agentId = file.replace(/^agent-/, "").replace(/\.jsonl$/, "");
+        const full = join(subDir, file);
+        const metaByAgentId: Record<string, string> = {};
+        const meta = readMetaSidecar(full);
+        if (meta && typeof meta.agentType === "string" && meta.agentType) {
+          metaByAgentId[agentId] = meta.agentType;
+        }
+        foldFileIntoLedger(
+          ledger,
+          `agent-${agentId}`,
+          full,
+          agentId,
+          metaByAgentId,
+          stageSlug,
+          sessionKey,
+          workflowKey,
+          mode === "flush-all",
+        );
+      }
+
+      // Persist atomically (mkdir the sessions dir first).
+      try {
+        mkdirSync(sessionsDir(projectDir), { recursive: true });
+      } catch {
+        /* dir may already exist */
+      }
+      writeFileAtomic(ledgerPath(projectDir), JSON.stringify(ledger, null, 2));
+      return ledger;
+    });
   } catch {
     return loadLedger(projectDir);
   }

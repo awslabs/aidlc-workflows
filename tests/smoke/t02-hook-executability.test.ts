@@ -67,7 +67,7 @@ const HOOKS = [
   "aidlc-reviewer-scope.ts",
   // Enforces the §12a terminal-receipt write-freeze on PreToolUse.
   "aidlc-review-freeze.ts",
-  // Folds transcript token usage into the durable ledger on PostToolUse.
+  // Folds transcript token usage into the durable ledger on PreToolUse + PostToolUse.
   "aidlc-fold-usage.ts",
 ] as const;
 

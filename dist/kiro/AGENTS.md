@@ -9,7 +9,7 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
 - **Activation**: this install ships `.kiro/settings/cli.json` setting `chat.defaultAgent: "aidlc"`, so a plain `kiro-cli chat` in this project uses the AI-DLC agent and `/aidlc` just works. **Note: the workspace default takes precedence over any global default agent you have configured.** If you prefer your own default, delete that settings line and start sessions with `kiro-cli chat --agent aidlc` instead.
 - **Permissions**: the `aidlc` agent pre-approves ONLY project-relative `bun .kiro/tools/<tool>.ts` calls (including the `bun run` and quoted-path spellings), `date -u`, and its listed read-only native tools; everything else prompts. There is no blanket shell trust. Start Kiro from the project root so those relative tool paths resolve correctly. In `--no-interactive` runs, a command that would prompt is refused because no approver is present. `--trust-all-tools` bypasses the deny list too; use it only in a disposable sandbox.
 - **Locking**: Audit log file locking is handled portably using mkdir-based locking in the system temp directory (no external dependencies).
-- **Hook permissions**: All 15 hooks are TypeScript (`.ts`) and run via `bun`. No executable bits required — works identically on macOS, Linux, and native Windows PowerShell.
+- **Hook permissions**: All 16 hooks are TypeScript (`.ts`) and run via `bun`. No executable bits required — works identically on macOS, Linux, and native Windows PowerShell.
 
 ## AI-DLC Structure
 

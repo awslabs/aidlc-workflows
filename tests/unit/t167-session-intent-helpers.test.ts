@@ -1,4 +1,4 @@
-// covers: function:activeIntentUuid function:findIntentByUuid function:readSessionIntentUuid function:writeSessionIntentUuid
+// covers: function:activeIntentUuid function:findIntentByUuid function:readSessionIntentUuid function:writeSessionIntentUuid function:clearSessionIntentUuid
 //
 // t167 — the P8 session→intent helper layer behind the resume rebind (the
 // session-start hook composes these). Mechanism: none (pure in-process reads/
@@ -20,6 +20,7 @@ import { join } from "node:path";
 import {
   activeIntentUuid,
   birthIntent,
+  clearSessionIntentUuid,
   findIntentByUuid,
   readSessionIntentUuid,
   setActiveIntentCursor,
@@ -53,6 +54,12 @@ describe("t167 session→intent helpers (mechanism none — pure in-process)", (
   test("a blank uuid is a no-op (does not clear/create)", () => {
     writeSessionIntentUuid(proj, "S2", "");
     expect(readSessionIntentUuid(proj, "S2")).toBeNull();
+  });
+
+  test("clearSessionIntentUuid removes an existing stamp", () => {
+    writeSessionIntentUuid(proj, "S-clear", "uuid-old");
+    clearSessionIntentUuid(proj, "S-clear");
+    expect(readSessionIntentUuid(proj, "S-clear")).toBeNull();
   });
 
   test("activeIntentUuid returns the active (lone) intent's uuid", () => {

@@ -12,9 +12,10 @@ import {
   resolveProjectDirFromHook,
   stateFilePath,
 } from "../tools/aidlc-lib.ts";
-import { loadLedger } from "../tools/aidlc-usage.ts";
+import { sessionUsageAggregate } from "../tools/aidlc-usage.ts";
 
 type Input = {
+  session_id?: string;
   workspace?: { project_dir?: string };
   model?: { id?: string };
   context_window?: { used_percentage?: number };
@@ -182,9 +183,9 @@ export function fmtTokens(n: number): string {
 }
 
 // covers: function:costSegment
-// The cumulative cost/token segment: `up<in> down<out> $<usd>`. Reads the
-// rolled-up ledger via loadLedger (FAST - the fold hooks already parsed the
-// transcript; we never re-parse it here). When the total USD is
+// The current workflow/session cost segment: `up<in> down<out> $<usd>`. Reads
+// the rolled-up ledger (FAST - the fold hooks already parsed the transcript; we
+// never re-parse it here). When the total USD is
 // null/zero/unknown (e.g. only unknown models), render tokens only - NEVER a
 // fabricated "$0". Renders ONLY when the ledger exists and carries data: an
 // install without the Claude fold hook (Kiro/Codex/opencode, or an upstream
@@ -194,14 +195,21 @@ export function fmtTokens(n: number): string {
 // The ledger advances on each fold, so this segment reflects usage through the
 // last folded turn - it can lag the in-flight turn by up to one fold. That is
 // acceptable for a statusline. Returns "" on ANY failure - the statusline must
-// never error out of a cost read. `transcriptPath` is accepted for symmetry
-// with the hook input but intentionally unused: the ledger is the source of
-// truth, not the transcript.
-export function costSegment(projectDir: string, _transcriptPath?: string): string {
+// never error out of a cost read. `transcriptPath` selects the current session's
+// workflow-scoped aggregate; the transcript itself is never parsed here.
+export function costSegment(
+  projectDir: string,
+  transcriptPath?: string,
+  sessionId?: string,
+): string {
   try {
     if (!projectDir) return "";
-    const ledger = loadLedger(projectDir);
-    const t = ledger?.totals;
+    const t = sessionUsageAggregate(
+      projectDir,
+      transcriptPath,
+      undefined,
+      sessionId,
+    )?.totals;
     if (!t) return "";
     const input = t.tokens?.input ?? 0;
     const output = t.tokens?.output ?? 0;
@@ -295,7 +303,7 @@ async function main(stdinText: string): Promise<void> {
   const modelShort = abbreviateModel(input.model?.id ?? "");
   const ctxRaw = input.model?.id ? input.context_window?.used_percentage : undefined;
   const ctxInt = typeof ctxRaw === "number" ? Math.round(ctxRaw) : null;
-  const cost = costSegment(projectDir, input.transcript_path);
+  const cost = costSegment(projectDir, input.transcript_path, input.session_id);
   const right = buildRightSide(modelShort, ctxInt, cost);
 
   const stateFile = projectDir ? stateFilePath(projectDir) : "";

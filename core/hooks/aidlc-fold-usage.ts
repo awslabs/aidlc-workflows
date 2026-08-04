@@ -1,17 +1,21 @@
-// PostToolUse hook (every tool): fold the transcript's new turns into the
-// durable usage ledger on EVERY llm call, not just at turn-end.
+// PreToolUse + PostToolUse hook (every tool): fold the transcript's new turns
+// into the durable usage ledger on EVERY llm call, not just at turn-end.
 //
 // Why. A non-final llm call always ends in a tool_use, so PostToolUse fires
 // after every intermediate call; the final end_turn call has no tool_use and is
 // caught by the Stop hook. Folding on BOTH keeps the usage ledger (and the
 // statusline segment that reads it) current through the in-flight turn instead
-// of lagging by a whole turn. The fold is cheap: the offset-aware reader parses
+// of lagging by a whole turn. PreToolUse also seals the completing assistant
+// call before a lifecycle tool can advance Current Stage. The fold is cheap:
+// the offset-aware reader parses
 // only the bytes appended to each transcript file since the last fold, and its
 // per-file cursor + HOLDBACK model make repeated folds idempotent (the last,
 // not-yet-complete message-id group per file is held back - never counted until
 // a later fold closes it or the Stop hook flushes - so no split-line group is
-// double-counted or lost across a chunk boundary). This hook passes flush=false
-// (mid-turn); the Stop hook passes flush=true (turn-end) to count the final group.
+// double-counted or lost across a chunk boundary). Normal PreToolUse seals the
+// main transcript; an engine-boundary PreToolUse flushes every source so
+// completion rollups include final subagent calls; PostToolUse holds back; Stop
+// flushes every source file.
 //
 // HARNESS SCOPE. This is the Claude-Code usage producer: the transcript reader
 // in aidlc-usage.ts is Claude-Code-format-specific and this hook is wired only
@@ -26,9 +30,13 @@
 import { existsSync, readFileSync } from "node:fs";
 import {
   resolveProjectDirFromHook,
+  isEngineToolCall,
   stateFilePath,
+  writeCurrentSessionId,
 } from "../tools/aidlc-lib.ts";
+import { isLifecycleBoundaryCommand } from "./aidlc-state-transition-guard.ts";
 import {
+  type FoldMode,
   foldTranscriptIntoLedger,
   writeCurrentTranscriptPath,
 } from "../tools/aidlc-usage.ts";
@@ -41,6 +49,15 @@ function currentStageSlug(stateContent: string): string {
   return (stageMatch?.[1] ?? "").trim();
 }
 
+function isLifecycleBoundaryToolCall(name: string, input: unknown): boolean {
+  if (!/^(bash|shell|execute_bash)$/i.test(name)) {
+    return isEngineToolCall(name, input);
+  }
+  if (input === null || typeof input !== "object") return false;
+  const command = (input as Record<string, unknown>).command;
+  return typeof command === "string" && isLifecycleBoundaryCommand(command);
+}
+
 async function main(): Promise<void> {
   // TTY guard - no Claude Code JSON is coming on a terminal (tests/debug).
   if (process.stdin.isTTY) process.exit(0);
@@ -50,11 +67,18 @@ async function main(): Promise<void> {
   const input = await Bun.stdin.text();
   let sessionId = "";
   let transcriptPath: string | null = null;
+  let foldMode: FoldMode = "holdback";
   try {
     const raw: unknown = JSON.parse(input);
     if (raw !== null && typeof raw === "object") {
       const obj = raw as Record<string, unknown>;
       if (typeof obj.session_id === "string") sessionId = obj.session_id;
+      if (obj.hook_event_name === "PreToolUse") {
+        const toolName = typeof obj.tool_name === "string" ? obj.tool_name : "";
+        foldMode = isLifecycleBoundaryToolCall(toolName, obj.tool_input)
+          ? "flush-all"
+          : "seal-main";
+      }
       if (typeof obj.transcript_path === "string" && obj.transcript_path.length > 0) {
         transcriptPath = obj.transcript_path;
       }
@@ -77,13 +101,15 @@ async function main(): Promise<void> {
     currentStage = null;
   }
 
+  if (sessionId) writeCurrentSessionId(projectDir, sessionId);
   writeCurrentTranscriptPath(projectDir, sessionId, transcriptPath);
-  // flush=false: this is a MID-TURN fold (a non-final llm call ended in a
-  // tool_use). The last message-id group per file may still be growing - its
-  // real-usage line may not be written yet (new-style transcripts carry usage=0
-  // on leading split lines) - so hold it back and let a later fold (a new group
-  // closing it, or the Stop hook's flush=true) count it exactly once.
-  foldTranscriptIntoLedger(projectDir, transcriptPath, currentStage, false);
+  // PreToolUse seals the main assistant message. Before an engine call it also
+  // closes completed subagent groups so lifecycle rollups include their final
+  // calls; other PreToolUse events retain subagent holdback. PostToolUse is the
+  // normal delayed-write fallback.
+  foldTranscriptIntoLedger(projectDir, transcriptPath, currentStage, foldMode, {
+    sessionId,
+  });
 }
 
 // Fully guarded: nothing this hook does may throw into Claude Code or print to

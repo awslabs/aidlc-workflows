@@ -312,6 +312,30 @@ function renderAuditBlock(
   return `${block}\n---\n`;
 }
 
+// One best-effort metrics tap shared by every structured audit append path.
+// Lazy loading keeps metrics fully opt-in and lets audit-only fixtures omit the
+// module. Each call catches independently so one lost metric cannot block an
+// audit write or suppress later events in a batch.
+function tapAuditMetric(
+  eventType: string,
+  fields: Record<string, string>,
+  projectDir: string,
+): void {
+  if (!process.env.AIDLC_METRICS_ENDPOINT) return;
+  try {
+    const metrics = require("./aidlc-metrics.ts") as {
+      emitMetricForAuditEvent: (
+        eventType: string,
+        fields: Record<string, string>,
+        projectDir: string,
+      ) => void;
+    };
+    metrics.emitMetricForAuditEvent(eventType, fields, projectDir);
+  } catch {
+    // Metrics module missing or emit failed - never propagate.
+  }
+}
+
 // Core append logic — throws on error instead of exiting. Safe for library callers.
 // CLI caller (main) wraps this in try/catch and translates to jsonError.
 export function appendAuditEntry(
@@ -356,28 +380,7 @@ export function appendAuditEntryUnlocked(
   const path = ensureAuditFile(projectDir, intent, space);
   appendFileSync(path, renderAuditBlock(entry, ts), "utf-8");
 
-  // Metrics emission (opt-in). Lazily loaded and env-gated so aidlc-audit.ts
-  // carries no load-time dependency on aidlc-metrics.ts - the module only
-  // resolves when AIDLC_METRICS_ENDPOINT is set, keeping the audit path (and any
-  // test fixture that copies aidlc-audit.ts without the metrics module)
-  // byte-unchanged when metrics are off. Never throws: a metric failure must not
-  // break an audit write. All of this stays microsecond-cheap and under the
-  // audit lock (aidlc-metrics does only string parsing + a detached curl spawn,
-  // reading the pre-computed usage rollup fields aidlc-state.ts merged in).
-  if (process.env.AIDLC_METRICS_ENDPOINT) {
-    try {
-      const metrics = require("./aidlc-metrics.ts") as {
-        emitMetricForAuditEvent: (
-          eventType: string,
-          fields: Record<string, string>,
-          projectDir: string,
-        ) => void;
-      };
-      metrics.emitMetricForAuditEvent(eventType, fields, projectDir);
-    } catch {
-      // Metrics module missing or emit failed - never propagate.
-    }
-  }
+  tapAuditMetric(eventType, fields, projectDir);
 
   return { appended: true, event: eventType, timestamp: ts };
 }
@@ -411,6 +414,9 @@ export function appendAuditEntries(
       payload,
       "utf-8",
     );
+    for (const entry of entries) {
+      tapAuditMetric(entry.eventType, entry.fields, projectDir);
+    }
     return {
       appended: true,
       events: entries.map((entry) => entry.eventType),

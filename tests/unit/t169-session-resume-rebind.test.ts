@@ -25,11 +25,15 @@
 // (it writes a header-only state stub bound to the active cursor).
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   birthIntent,
+  intentsRegistryPath,
+  readIntentRegistry,
+  readSessionIntentUuid,
   setActiveIntentCursor,
+  setActiveSpaceCursor,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
@@ -99,7 +103,9 @@ describe("t169 session-start resume rebind (mechanism cli — spawned hook + cur
     // The offer names the cursor-correction command, not a session rebuild.
     expect(resumed.context).toContain("/aidlc intent auth-service");
     expect(resumed.context).toContain("never rebuilds the conversation");
-    void b;
+    // Until the user accepts the offered switch, a decline continues on the
+    // live intent and usage must not remain stamped to the old workflow.
+    expect(readSessionIntentUuid(proj, "S1")).toBe(b.uuid);
   });
 
   test("resume with the cursor UNCHANGED offers nothing (no false positive)", () => {
@@ -134,5 +140,48 @@ describe("t169 session-start resume rebind (mechanism cli — spawned hook + cur
     const resumed = fire(proj, "resume", "S3");
     expect(resumed.exitCode).toBe(0);
     expect(resumed.context).not.toContain("INTENT REBIND OFFER");
+  });
+
+  test("resume onto a UUID-less orphan clears the prior workflow stamp", () => {
+    const old = birthIntent(proj, "registered-work", "default", "feature");
+    setActiveIntentCursor(proj, old.dirName, "default");
+    fire(proj, "startup", "S4");
+    expect(readSessionIntentUuid(proj, "S4")).toBe(old.uuid);
+
+    // Keep the old intent registered so the hook can offer a rebind, but move
+    // the live cursor to an orphan record whose registry row no longer exists.
+    const orphan = birthIntent(proj, "orphan-work", "orphan-space", "feature");
+    setActiveIntentCursor(proj, orphan.dirName, "orphan-space");
+    setActiveSpaceCursor(proj, "orphan-space");
+    rmSync(intentsRegistryPath(proj, "orphan-space"));
+
+    const resumed = fire(proj, "resume", "S4");
+    expect(resumed.exitCode).toBe(0);
+    expect(resumed.context).toContain("INTENT REBIND OFFER");
+    expect(resumed.context).toContain("active intent is (none)");
+    expect(readSessionIntentUuid(proj, "S4")).toBeNull();
+  });
+
+  test("resume after the prior intent was deleted restamps the live workflow", () => {
+    const old = birthIntent(proj, "deleted-work", "default", "feature");
+    setActiveIntentCursor(proj, old.dirName, "default");
+    fire(proj, "startup", "S5");
+
+    const live = birthIntent(proj, "live-work", "default", "feature");
+    const registry = readIntentRegistry(proj, "default")
+      .filter((entry) => entry.uuid !== old.uuid);
+    writeFileSync(
+      intentsRegistryPath(proj, "default"),
+      `${JSON.stringify(registry, null, 2)}\n`,
+    );
+    rmSync(
+      join(proj, "aidlc", "spaces", "default", "intents", old.dirName),
+      { recursive: true },
+    );
+
+    const resumed = fire(proj, "resume", "S5");
+    expect(resumed.exitCode).toBe(0);
+    expect(resumed.context).not.toContain("INTENT REBIND OFFER");
+    expect(readSessionIntentUuid(proj, "S5")).toBe(live.uuid);
   });
 });

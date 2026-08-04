@@ -10,11 +10,15 @@
 //       under a configurable metric-name prefix.
 //   (3) an event WITHOUT usage fields emits NO magnitude lines ([]).
 //   (4) metricPrefix honours AIDLC_METRICS_PREFIX with a default of "aidlc".
+//   (5) the metrics transport has no built-in collector destination; the
+//       endpoint comes only from AIDLC_METRICS_ENDPOINT at runtime.
 //
 // MECHANISM: none. Pure functions imported in-process from the shipped dist
 // tree; deterministic, zero tokens, zero network.
 
 import { afterEach, describe, expect, test } from "bun:test";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
 import {
   buildMagnitudeLines,
   buildTagString,
@@ -22,6 +26,18 @@ import {
   type MetricContext,
 } from "../../dist/claude/.claude/tools/aidlc-metrics.ts";
 import { AIDLC_VERSION } from "../../dist/claude/.claude/tools/aidlc-version.ts";
+
+const REPO_ROOT = join(import.meta.dir, "..", "..");
+
+function filesUnder(dir: string): string[] {
+  const files: string[] = [];
+  for (const entry of readdirSync(dir)) {
+    const path = join(dir, entry);
+    if (statSync(path).isDirectory()) files.push(...filesUnder(path));
+    else files.push(path);
+  }
+  return files;
+}
 
 afterEach(() => {
   delete process.env.AIDLC_METRICS_PREFIX;
@@ -99,6 +115,29 @@ describe("buildTagString (counter-line regression)", () => {
   test("reserved characters in tag values are sanitised", () => {
     const c = ctx({ space: "a b:c,d" });
     expect(buildTagString(c)).toContain("space:a_b_c_d");
+  });
+});
+
+describe("metrics destination configuration", () => {
+  test("has no built-in collector URL and reads the destination only from the environment", () => {
+    const source = readFileSync(
+      join(REPO_ROOT, "core", "tools", "aidlc-metrics.ts"),
+      "utf-8",
+    );
+
+    expect(source).not.toMatch(/https?:\/\//i);
+    expect(source).toMatch(
+      /const metricsEndpoint = process\.env\.AIDLC_METRICS_ENDPOINT;\s+if \(!metricsEndpoint\) return;/,
+    );
+    expect(source).toContain('postMetric(metricsEndpoint, lines.join("\\n"));');
+    expect(source.match(/^\s*postMetric\(/gm)?.length).toBe(1);
+  });
+
+  test("ships no metrics endpoint in any authored harness surface", () => {
+    const configuredFiles = filesUnder(join(REPO_ROOT, "harness")).filter((path) =>
+      readFileSync(path, "utf-8").includes("AIDLC_METRICS_ENDPOINT"),
+    );
+    expect(configuredFiles).toEqual([]);
   });
 });
 

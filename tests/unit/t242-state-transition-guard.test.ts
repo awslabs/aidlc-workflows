@@ -10,6 +10,7 @@ import { basename, join, relative } from "node:path";
 import {
   BLOCKED_STATE_TRANSITIONS,
   directStateTransition,
+  isLifecycleBoundaryCommand,
 } from "../../dist/claude/.claude/hooks/aidlc-state-transition-guard.ts";
 import {
   cleanupTestProject,
@@ -135,6 +136,7 @@ describe("t242 state-transition ownership guard", () => {
       "echo bun .claude/tools/aidlc-state.ts approve feasibility",
       "rg bun .claude/tools/aidlc-state.ts reject docs/",
       "printf '%s' 'bun .claude/tools/aidlc-state.ts advance feasibility'",
+      "echo 'example; bun .claude/tools/aidlc-state.ts approve feasibility'",
       "rg 'aidlc-state\\.ts (approve|reject)' .",
       "cat <<'EOF'\nbun .claude/tools/aidlc-state.ts approve feasibility\nEOF",
       "payload='first line\nbun .claude/tools/aidlc-state.ts reject feasibility\nlast line'",
@@ -143,6 +145,19 @@ describe("t242 state-transition ownership guard", () => {
     ]) {
       expect(directStateTransition(command), command).toBeNull();
     }
+  });
+
+  test("lifecycle detection distinguishes quoted prose from executable command substitution", () => {
+    expect(
+      isLifecycleBoundaryCommand(
+        `echo "example; bun .claude/tools/aidlc-orchestrate.ts report --stage feasibility --result completed"`,
+      ),
+    ).toBe(false);
+    expect(
+      isLifecycleBoundaryCommand(
+        `result="$(bun .claude/tools/aidlc-orchestrate.ts report --stage feasibility --result completed)"`,
+      ),
+    ).toBe(true);
   });
 
   test("large heredoc writes stay fast (whitespace-quadratic regression pin)", () => {

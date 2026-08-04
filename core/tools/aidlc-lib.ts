@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { accessSync, appendFileSync, constants as fsConstants, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, appendFileSync, closeSync, constants as fsConstants, cpSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1778,6 +1778,20 @@ export function writeSessionIntentUuid(projectDir: string, sessionId: string, uu
     writeFileSync(path, `${uuid}\n`, "utf-8");
   } catch {
     /* per-user runtime state; best-effort */
+  }
+}
+
+// Clear a conversation's intent stamp when it deliberately continues on a
+// UUID-less legacy/orphan record. Without this, the old UUID keeps winning
+// usage ownership even though the live cursor no longer resolves to that
+// workflow.
+export function clearSessionIntentUuid(projectDir: string, sessionId: string): void {
+  const path = sessionRecordPath(projectDir, sessionId);
+  if (!path) return;
+  try {
+    unlinkSync(path);
+  } catch {
+    /* absent/unwritable per-user runtime state; best-effort */
   }
 }
 
@@ -4321,21 +4335,35 @@ const AUDIT_LOCK_EXIT_HANDLERS = new Map<string, () => void>();
 const AUDIT_LOCK_DEPTH = new Map<string, number>();
 
 // writeFileAtomic — non-corrupting variant of writeFileSync. Writes to a
-// sibling `<path>.tmp` then POSIX-renames into place atomically. Readers
+// writer-unique sibling temp then POSIX-renames into place atomically. Readers
 // of <path> see either the previous version or the new one — never a
 // half-written file. Pair with withAuditLock when concurrent writers
 // must serialise (rename alone defeats half-writes but not lost updates).
 //
 // Sibling temp keeps the rename on the same filesystem so it's a true
-// atomic rename (cross-fs renames degrade to copy-then-unlink). Cleans
-// up the temp file on write failure.
+// atomic rename (cross-fs renames degrade to copy-then-unlink). A unique,
+// exclusively-created temp prevents concurrent unlocked writers from
+// truncating or renaming each other's in-flight data. Cleans up only the temp
+// owned by this invocation on write/rename failure.
 export function writeFileAtomic(path: string, data: string): void {
-  const tmp = `${path}.tmp`;
+  const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  let fd: number | undefined;
+  let ownsTmp = false;
   try {
-    writeFileSync(tmp, data, "utf-8");
+    fd = openSync(tmp, "wx");
+    ownsTmp = true;
+    writeFileSync(fd, data, "utf-8");
+    closeSync(fd);
+    fd = undefined;
     renameSync(tmp, path);
+    ownsTmp = false;
   } catch (err) {
-    try { unlinkSync(tmp); } catch { /* tmp may already be gone */ }
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch { /* preserve the original error */ }
+    }
+    if (ownsTmp) {
+      try { unlinkSync(tmp); } catch { /* temp may already be gone */ }
+    }
     throw err;
   }
 }

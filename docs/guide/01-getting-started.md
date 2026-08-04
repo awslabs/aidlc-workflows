@@ -288,7 +288,7 @@ Run the health check to confirm everything is in place:
 | Check | What It Validates |
 |-------|-------------------|
 | Prerequisites | `bun` is installed and on `$PATH` |
-| Hook presence | Every hook `settings.json` wires (its `hooks` blocks + the `statusLine` command — all 15 framework hooks) exists in `.claude/hooks/`; a wired-but-missing hook fails loudly. Sourcing the expected roster from `settings.json` means adding a hook there auto-checks it |
+| Hook presence | Every hook `settings.json` wires (its `hooks` blocks + the `statusLine` command — all 16 framework hooks) exists in `.claude/hooks/`; a wired-but-missing hook fails loudly. Sourcing the expected roster from `settings.json` means adding a hook there auto-checks it |
 | Project structure | `.claude/settings.json` exists with expected configuration |
 | Workspace shell | `.claude/` + `aidlc/spaces/default/memory/` are present (the shipped shell) |
 | State file | the active intent's `aidlc-state.md` matches its audit trail (no drift) |

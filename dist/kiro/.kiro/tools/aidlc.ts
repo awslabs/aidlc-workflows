@@ -1114,6 +1114,11 @@ async function execute(action: Action): Promise<number> {
 
 export async function main(argv: string[]): Promise<void> {
   process.exitCode = 0;
+  if (argv.length === 1 && argv[0] === "--internal-metrics-send") {
+    const metrics = await import("./aidlc-metrics.ts");
+    await metrics.sendMetricFromStdin();
+    return;
+  }
   if (import.meta.url.includes("/$bunfs/") && !process.env.AIDLC_HARNESS_DIR) {
     // Compiled, no explicit harness: probe the project install (.claude /
     // .kiro / .codex by tools/data/harness.json) rather than assuming

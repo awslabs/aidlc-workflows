@@ -33,6 +33,15 @@
   "hooks": {
     "PreToolUse": [
       {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-fold-usage.ts\""
+          }
+        ]
+      },
+      {
         "matcher": "Task|Agent",
         "hooks": [
           {

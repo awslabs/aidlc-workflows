@@ -924,7 +924,7 @@ try {
 
 // Usage bookkeeping - persist the live transcript path and fold its new turns
 // into the durable usage ledger under the current stage. This is THE turn-end
-// producer of usage-ledger.json alongside the mid-turn PostToolUse fold hook:
+// producer of usage-ledger.json alongside the per-tool Pre/PostToolUse fold:
 // without it the statusline cost segment lags the final turn. Both calls are
 // cheap (the fold advances per-file cursors, so only new turns are read) and
 // BOTH are fully guarded - a usage failure must NEVER break or delay the Stop
@@ -936,10 +936,15 @@ if (transcriptPath && transcriptFormat === "claude") {
   try {
     writeCurrentTranscriptPath(projectDir, sessionId, transcriptPath);
     const currentStage = currentStageSlug(stateContent) || null;
-    // flush=true: the turn is ending, so every file's last message-id group is
-    // complete and must be counted now (the PostToolUse fold holds it back
-    // mid-turn; the Stop fold is the one that closes it).
-    foldTranscriptIntoLedger(projectDir, transcriptPath, currentStage, true);
+    // The turn is ending, so every file's last message-id group is complete and
+    // must be counted now (PostToolUse holds it back; Stop closes it).
+    foldTranscriptIntoLedger(
+      projectDir,
+      transcriptPath,
+      currentStage,
+      "flush-all",
+      { sessionId },
+    );
   } catch {
     // best-effort - usage never breaks the hook
   }

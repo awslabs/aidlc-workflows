@@ -27,6 +27,7 @@ import { repointHarnessIncludes } from "../tools/aidlc-includes.ts";
 import {
   activeIntentUuid,
   activeSpace,
+  clearSessionIntentUuid,
   errorMessage,
   findIntentByUuid,
   getField,
@@ -193,6 +194,19 @@ if (sessionId) {
           `INTENT REBIND OFFER: This conversation was working ${was.slug}, but the active intent is ${liveSlug}. ` +
           `Switch back to ${was.slug}? [Y/n] — on Yes, run \`${switchCmd}\` to move the cursor; ` +
           `on No, keep working ${liveSlug}. This corrects the per-user cursor only; it never rebuilds the conversation.\n`;
+        // Until the user accepts the offered switch, this resumed conversation
+        // is operating on the live intent. Stamp that ownership now so a
+        // decline cannot leave usage attached to the old workflow. A Yes path
+        // runs the switch command above, whose utility handler re-stamps the
+        // session back to `was`.
+      }
+      // Whether the previous intent still resolves or was deleted, this resumed
+      // conversation now operates on the live target. Normalize ownership even
+      // when no rebind offer can be shown for a stale/deleted prior UUID.
+      if (liveUuid) {
+        writeSessionIntentUuid(projectDir, sessionId, liveUuid);
+      } else {
+        clearSessionIntentUuid(projectDir, sessionId);
       }
     }
   }

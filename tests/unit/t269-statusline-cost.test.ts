@@ -27,9 +27,11 @@ import {
 import {
   updateLedger,
   computeCost,
+  writeCurrentTranscriptPath,
   type TokenCounts,
   type UsageRow,
 } from "../../dist/claude/.claude/tools/aidlc-usage.ts";
+import { writeSessionIntentUuid } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const tempDirs: string[] = [];
 function mkProject(): string {
@@ -94,17 +96,49 @@ describe("fmtTokens", () => {
 });
 
 describe("costSegment", () => {
-  test("known-model ledger => shows up-in down-out $usd (public list prices)", () => {
+  test("known-model ledger is isolated to the session-stamped workflow", () => {
     const dir = mkProject();
     // 1e6 input opus => $5.00; 2500 output => 2500x25/1e6 = $0.0625.
     // Total 5.0625 => "5.06" (toFixed(2)).
+    writeSessionIntentUuid(dir, "session-a", "workflow-a");
     updateLedger(
       dir,
       [row("m1", "converse/us.anthropic.claude-opus-4-8", { input: 1_000_000, output: 2500 })],
       null,
+      {
+        workflowKey: "intent:workflow-a",
+        sessionKey: "transcript:/some/transcript.jsonl",
+      },
     );
-    const seg = costSegment(dir, "/some/transcript.jsonl");
+    updateLedger(
+      dir,
+      [row("m2", "converse/us.anthropic.claude-opus-4-8", { input: 2_000_000 })],
+      null,
+      {
+        workflowKey: "intent:workflow-b",
+        sessionKey: "transcript:/other/transcript.jsonl",
+      },
+    );
+    const seg = costSegment(dir, "/some/transcript.jsonl", "session-a");
     expect(seg).toBe("↑1M ↓2.5k $5.06");
+  });
+
+  test("session_id selects the session when transcript_path is unavailable", () => {
+    const dir = mkProject();
+    const transcript = "/some/session-c.jsonl";
+    writeSessionIntentUuid(dir, "session-c", "workflow-c");
+    writeCurrentTranscriptPath(dir, "session-c", transcript);
+    updateLedger(
+      dir,
+      [row("m3", "converse/us.anthropic.claude-opus-4-8", { input: 1_000_000 })],
+      null,
+      {
+        workflowKey: "intent:workflow-c",
+        sessionKey: `transcript:${transcript}`,
+      },
+    );
+
+    expect(costSegment(dir, undefined, "session-c")).toBe("↑1M ↓0 $5.00");
   });
 
   test("tokens-only / unknown-model ledger => tokens, NEVER a fake $0", () => {

@@ -6,7 +6,9 @@
 // covers: function:attributeAgents, function:buildAgentTypeMapFromParent,
 // covers: function:ledgerPath, function:loadLedger, function:updateLedger,
 // covers: function:stageUsageAuditFields, function:writeCurrentTranscriptPath,
-// covers: function:readCurrentTranscriptPath, function:foldTranscriptIntoLedger
+// covers: function:readCurrentTranscriptPath, function:foldTranscriptIntoLedger,
+// covers: function:workflowUsageAuditFields, function:sessionUsageAggregate
+// covers: hook:aidlc-fold-usage
 //
 // t267-usage - the token-usage seam (aidlc-usage.ts): rate math (framework
 // public-list defaults + the AIDLC_MODEL_RATES override), transcript extraction
@@ -14,10 +16,11 @@
 // the audit-rollup field formatter, and the persisted-transcript-path + fold
 // helpers.
 //
-// Everything here is deterministic, in-process, fixture-based - zero tokens,
-// zero network. Fixtures are hand-authored minimal JSONL (no real transcript
-// content) written into a temp project tree whose ledger lands at
-// <tmp>/aidlc/.aidlc-sessions/usage-ledger.json.
+// Everything here is deterministic and fixture-based - zero tokens, zero
+// network. Most tests import the shipped modules in-process; the hook-routing and
+// cross-process lock regressions spawn local bun processes. Fixtures are
+// hand-authored minimal JSONL (no real transcript content) written into a temp
+// project tree whose ledger lands at <tmp>/aidlc/.aidlc-sessions/usage-ledger.json.
 //
 // MECHANISM. In-process imports from the shipped dist tree (the `none` floor for
 // pure lib fns). The lib re-exports this file exercises transitively -
@@ -51,8 +54,10 @@ import {
   readClaudeTranscript,
   readCurrentTranscriptPath,
   readTranscript,
+  sessionUsageAggregate,
   stageUsageAuditFields,
   updateLedger,
+  workflowUsageAuditFields,
   writeCurrentTranscriptPath,
   _resetRatesCacheForTest,
   type TokenCounts,
@@ -192,6 +197,14 @@ describe("Task 1 - normalizeModel + computeCost", () => {
     expect(normalizeModel("opus-6")).toBeNull(); // bare alias must not match opus
   });
 
+  test("normalizeModel requires Claude/provider and generation-token boundaries", () => {
+    expect(normalizeModel("claude-opus-4-80")).toBeNull();
+    expect(normalizeModel("claude-sonnet-4-60")).toBeNull();
+    expect(normalizeModel("notclaude-opus-4-8")).toBeNull();
+    expect(normalizeModel("converse/opus-4-8")).toBeNull();
+    expect(normalizeModel("anthropic.opus-4-8")).toBeNull();
+  });
+
   test("normalizeModel returns null for unknown / synthetic / empty", () => {
     expect(normalizeModel("<synthetic>")).toBeNull();
     expect(normalizeModel("gpt-4o")).toBeNull();
@@ -299,6 +312,7 @@ describe("Task 1 - normalizeModel + computeCost", () => {
         rates: {
           // Redefine opus-4-8 to a cheaper rate.
           "opus-4-8": { input: 1.0, output: 2.0, cacheWrite5m: 1.25, cacheWrite1h: 2.0, cacheRead: 0.1 },
+          "opus-6": { input: 7.0, output: 35.0, cacheWrite5m: 8.75, cacheWrite1h: 14.0, cacheRead: 0.7 },
         },
       }),
     );
@@ -315,6 +329,14 @@ describe("Task 1 - normalizeModel + computeCost", () => {
       "converse/us.anthropic.claude-opus-4-8",
     );
     expect(usd).toBeCloseTo(1.0, 6);
+    const next = computeCost(
+      { input: 1_000_000, output: 0, cacheCreate5m: 0, cacheCreate1h: 0, cacheRead: 0 },
+      "claude-opus-6",
+    );
+    expect(next.model).toBe("opus-6");
+    expect(next.usd).toBeCloseTo(7.0, 6);
+    // Override keys name Claude generations, not arbitrary provider/model IDs.
+    expect(normalizeModel("converse/opus-6")).toBeNull();
   });
 
   test("AIDLC_MODEL_RATES: a malformed override file leaves the defaults intact", () => {
@@ -684,6 +706,35 @@ describe("Task 3 - updateLedger per-file cursors", () => {
     expect(led.byModel["gpt-4o"].tokens.output).toBe(99);
     expect(led.byModel["gpt-4o"].usd).toBe(0);
   });
+
+  test("workflow and session aggregates stay isolated", () => {
+    const dir = mkProject();
+    updateLedger(
+      dir,
+      [row("a1", "main-a", "opus", { output: 10 })],
+      "intent-capture",
+      { workflowKey: "intent:a", sessionKey: "transcript:/a.jsonl" },
+    );
+    updateLedger(
+      dir,
+      [row("b1", "main-b", "opus", { output: 20 })],
+      "intent-capture",
+      { workflowKey: "intent:b", sessionKey: "transcript:/b.jsonl" },
+    );
+
+    expect(
+      stageUsageAuditFields(dir, "intent-capture", "intent:a")["Tokens Out"],
+    ).toBe("10");
+    expect(
+      stageUsageAuditFields(dir, "intent-capture", "intent:b")["Tokens Out"],
+    ).toBe("20");
+    expect(
+      sessionUsageAggregate(dir, "/a.jsonl", "intent:a")?.totals.tokens.output,
+    ).toBe(10);
+    expect(
+      sessionUsageAggregate(dir, "/b.jsonl", "intent:b")?.totals.tokens.output,
+    ).toBe(20);
+  });
 });
 
 // Helper: build a UsageRow with computed usd, for ledger tests. `msgId` defaults
@@ -840,24 +891,33 @@ describe("Task 5 - stageUsageAuditFields", () => {
   test("loadLedger tolerates a flat-Totals byStage entry (normalizeByStage coercion) without throwing", () => {
     // normalizeByStage must wrap a flat-Totals byStage[slug] into a StageBucket
     // (empty sub-maps) rather than crash a consumer. Tested on a CURRENT-schema
-    // ledger (schemaVersion:2 + a byteOffset cursor) so the migration reset does
+    // ledger (schemaVersion:3 + a byteOffset cursor) so the migration reset does
     // NOT discard it - the coercion path is what's under test here.
     const dir = mkProject();
     mkdirSync(join(dir, "aidlc", ".aidlc-sessions"), { recursive: true });
     writeFileSync(
       ledgerPath(dir),
       JSON.stringify({
-        schemaVersion: 2,
+        schemaVersion: 3,
         cursors: { "/x.jsonl": { lastUuid: "u", lastTimestamp: "t", byteOffset: 10 } },
         totals: { tokens: { input: 5, output: 6, cacheCreate5m: 0, cacheCreate1h: 0, cacheRead: 0 }, usd: 0 },
-        byStage: {
-          "old-stage": {
-            tokens: { input: 5, output: 6, cacheCreate5m: 0, cacheCreate1h: 0, cacheRead: 0 },
-            usd: 0,
-          },
-        },
+        byStage: {},
         byModel: {},
         byAgent: {},
+        workflows: {
+          "record:default/legacy": {
+            totals: { tokens: { input: 5, output: 6, cacheCreate5m: 0, cacheCreate1h: 0, cacheRead: 0 }, usd: 0 },
+            byStage: {
+              "old-stage": {
+                tokens: { input: 5, output: 6, cacheCreate5m: 0, cacheCreate1h: 0, cacheRead: 0 },
+                usd: 0,
+              },
+            },
+            byModel: {},
+            byAgent: {},
+            sessions: {},
+          },
+        },
       }),
     );
     const fields = stageUsageAuditFields(dir, "old-stage");
@@ -865,6 +925,32 @@ describe("Task 5 - stageUsageAuditFields", () => {
     expect(fields["Tokens Out"]).toBe("6");
     // No per-model history in the flat shape => By Model omitted, no throw.
     expect(fields["By Model"]).toBeUndefined();
+  });
+
+  test("workflow rollup includes all stages, not only the final stage", () => {
+    const dir = mkProject();
+    const context = {
+      workflowKey: "intent:workflow",
+      sessionKey: "transcript:/workflow.jsonl",
+    };
+    updateLedger(
+      dir,
+      [row("a", "stage-a", "opus", { output: 10 })],
+      "stage-a",
+      context,
+    );
+    updateLedger(
+      dir,
+      [row("b", "stage-b", "opus", { output: 20 })],
+      "stage-b",
+      context,
+    );
+    expect(
+      stageUsageAuditFields(dir, "stage-b", context.workflowKey)["Tokens Out"],
+    ).toBe("20");
+    expect(
+      workflowUsageAuditFields(dir, context.workflowKey)["Tokens Out"],
+    ).toBe("30");
   });
 });
 
@@ -913,7 +999,7 @@ describe("Task 6 - transcript path round-trip + foldTranscriptIntoLedger", () =>
     // On-disk matches, and the ledger is stamped with the current schema version.
     const onDisk = JSON.parse(readFileSync(ledgerPath(dir), "utf-8"));
     expect(onDisk.totals.tokens.output).toBe(150);
-    expect(onDisk.schemaVersion).toBe(2);
+    expect(onDisk.schemaVersion).toBe(3);
     // Second call => idempotent (per-file cursor, keyed by transcript path).
     const again = foldTranscriptIntoLedger(dir, transcript, "stage-z", true);
     expect(again.totals.tokens.output).toBe(150);
@@ -923,6 +1009,160 @@ describe("Task 6 - transcript path round-trip + foldTranscriptIntoLedger", () =>
     const dir = mkProject();
     const led = foldTranscriptIntoLedger(dir, "/no/such/transcript.jsonl", null);
     expect(led.totals.tokens.output).toBe(0);
+  });
+
+  test("PreToolUse hook seals the lifecycle call under the current stage", () => {
+    const dir = mkProject();
+    const stateDir = join(dir, "aidlc", "spaces", "default", "intents");
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(
+      join(stateDir, "aidlc-state.md"),
+      "- **Current Stage**: `stage-before-transition`\n",
+    );
+    const transcript = join(dir, "session.jsonl");
+    writeFileSync(
+      transcript,
+      assistantLine({
+        uuid: "pre-hook",
+        timestamp: "t",
+        model: "opus",
+        input: 100,
+        msgId: "lifecycle-call",
+      }),
+    );
+    const subDir = join(dir, "session", "subagents");
+    mkdirSync(subDir, { recursive: true });
+    writeFileSync(
+      join(subDir, "agent-review.jsonl"),
+      assistantLine({
+        uuid: "sub-hook",
+        timestamp: "t",
+        model: "haiku",
+        output: 50,
+        isSidechain: true,
+        agentId: "review",
+        msgId: "subagent-final-call",
+      }),
+    );
+    writeFileSync(
+      join(subDir, "agent-review.meta.json"),
+      JSON.stringify({ agentType: "code-reviewer" }),
+    );
+    const hook = join(
+      import.meta.dir,
+      "..",
+      "..",
+      "dist",
+      "claude",
+      ".claude",
+      "hooks",
+      "aidlc-fold-usage.ts",
+    );
+    const result = Bun.spawnSync([process.execPath, hook], {
+      env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
+      stdin: new TextEncoder().encode(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: {
+            command:
+              "bun .claude/tools/aidlc-orchestrate.ts report --stage stage-before-transition --result completed",
+          },
+          session_id: "session-pre",
+          transcript_path: transcript,
+        }),
+      ),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.toString()).toBe("");
+    const ledger = loadLedger(dir);
+    expect(
+      ledger.workflows["record:default/legacy"].byStage[
+        "stage-before-transition"
+      ].totals.tokens.input,
+    ).toBe(100);
+    expect(
+      ledger.workflows["record:default/legacy"].byStage[
+        "stage-before-transition"
+      ].byAgent["code-reviewer"].tokens.output,
+    ).toBe(50);
+  });
+
+  test("quoted lifecycle text does not flush an active subagent group", () => {
+    const dir = mkProject();
+    const stateDir = join(dir, "aidlc", "spaces", "default", "intents");
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(
+      join(stateDir, "aidlc-state.md"),
+      "- **Current Stage**: `stage-search`\n",
+    );
+    const transcript = join(dir, "session.jsonl");
+    writeFileSync(
+      transcript,
+      assistantLine({
+        uuid: "main-search",
+        timestamp: "t",
+        model: "opus",
+        input: 100,
+        msgId: "main-search-call",
+      }),
+    );
+    const subDir = join(dir, "session", "subagents");
+    mkdirSync(subDir, { recursive: true });
+    writeFileSync(
+      join(subDir, "agent-live.jsonl"),
+      assistantLine({
+        uuid: "sub-live",
+        timestamp: "t",
+        model: "haiku",
+        output: 50,
+        isSidechain: true,
+        agentId: "live",
+        msgId: "subagent-active-call",
+      }),
+    );
+    const hook = join(
+      import.meta.dir,
+      "..",
+      "..",
+      "dist",
+      "claude",
+      ".claude",
+      "hooks",
+      "aidlc-fold-usage.ts",
+    );
+    const fire = (command: string) =>
+      Bun.spawnSync([process.execPath, hook], {
+        env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
+        stdin: new TextEncoder().encode(
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            tool_name: "Bash",
+            tool_input: { command },
+            session_id: "session-search",
+            transcript_path: transcript,
+          }),
+        ),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+
+    const quoted = fire(
+      `echo "example; bun .claude/tools/aidlc-orchestrate.ts report --stage stage-search --result completed"`,
+    );
+    expect(quoted.exitCode).toBe(0);
+    const beforeBoundary = loadLedger(dir);
+    expect(beforeBoundary.totals.tokens.input).toBe(100);
+    expect(beforeBoundary.totals.tokens.output).toBe(0);
+
+    const executableSubstitution = fire(
+      `result="$(bun .claude/tools/aidlc-orchestrate.ts report --stage stage-search --result completed)"`,
+    );
+    expect(executableSubstitution.exitCode).toBe(0);
+    expect(loadLedger(dir).totals.tokens.output).toBe(50);
   });
 });
 
@@ -1185,19 +1425,119 @@ describe("offset-aware fold, holdback, byteOffset", () => {
     expect(led2.cursors[p].byteOffset).toBe(size);
   });
 
-  test("partial trailing line is NOT parsed until completed by the next fold", () => {
+  test("syntactically partial trailing line is retained until the next fold", () => {
     const dir = mkProject();
     const p = join(dir, "session.jsonl");
     const complete = assistantLine({ uuid: "u1", timestamp: "t", model: "opus", output: 10, msgId: "m1" });
-    const partial = assistantLine({ uuid: "u2", timestamp: "t", model: "opus", output: 99, msgId: "m2" });
-    writeFileSync(p, complete + "\n" + partial); // partial has no closing \n
+    const partial = assistantLine({
+      uuid: "u2",
+      timestamp: "t",
+      model: "opus",
+      output: 99,
+      msgId: "m2",
+    }).slice(0, -1);
+    writeFileSync(p, `${complete}\n${partial}`); // missing final `}` and newline
     const led1 = foldTranscriptIntoLedger(dir, p, null, true);
-    expect(led1.totals.tokens.output).toBe(10);
+    // The complete group before a malformed fragment is still held because the
+    // fragment may be another split line for that same message.
+    expect(led1.totals.tokens.output).toBe(0);
     const offsetAfter1 = led1.cursors[p].byteOffset;
-    expect(offsetAfter1).toBe(Buffer.byteLength(complete + "\n"));
-    appendFileSync(p, "\n");
+    expect(offsetAfter1).toBe(0);
+    appendFileSync(p, "}\n");
     const led2 = foldTranscriptIntoLedger(dir, p, null, true);
     expect(led2.totals.tokens.output).toBe(10 + 99);
+  });
+
+  test("partial EOF continuation with the same message id is counted once", () => {
+    const dir = mkProject();
+    const p = join(dir, "session.jsonl");
+    const complete = assistantLine({
+      uuid: "u1",
+      timestamp: "t",
+      model: "opus",
+      output: 10,
+      msgId: "shared-message",
+    });
+    const partial = assistantLine({
+      uuid: "u2",
+      timestamp: "t",
+      model: "opus",
+      output: 10,
+      msgId: "shared-message",
+    }).slice(0, -1);
+    writeFileSync(p, `${complete}\n${partial}`);
+
+    expect(foldTranscriptIntoLedger(dir, p, null, true).totals.tokens.output).toBe(0);
+    appendFileSync(p, "}\n");
+    expect(foldTranscriptIntoLedger(dir, p, null, true).totals.tokens.output).toBe(10);
+  });
+
+  test("flush parses a complete final JSON object without a trailing newline", () => {
+    const dir = mkProject();
+    const p = join(dir, "session.jsonl");
+    writeFileSync(
+      p,
+      assistantLine({
+        uuid: "eof",
+        timestamp: "t",
+        model: "opus",
+        output: 99,
+        msgId: "eof-message",
+      }),
+    );
+    const led = foldTranscriptIntoLedger(dir, p, "stage-eof", "flush-all");
+    expect(led.totals.tokens.output).toBe(99);
+    expect(led.cursors[p].byteOffset).toBe(statSync(p).size);
+  });
+
+  test("held-back group retains the stage captured before a transition", () => {
+    const dir = mkProject();
+    const p = join(dir, "session.jsonl");
+    writeFileSync(
+      p,
+      `${assistantLine({
+        uuid: "a",
+        timestamp: "t1",
+        model: "opus",
+        output: 10,
+        msgId: "message-a",
+      })}\n`,
+    );
+    foldTranscriptIntoLedger(dir, p, "stage-a", "holdback");
+    appendFileSync(
+      p,
+      `${assistantLine({
+        uuid: "b",
+        timestamp: "t2",
+        model: "opus",
+        output: 20,
+        msgId: "message-b",
+      })}\n`,
+    );
+    const led = foldTranscriptIntoLedger(dir, p, "stage-b", "flush-all");
+    const workflow = led.workflows["record:default/legacy"];
+    expect(workflow.byStage["stage-a"].totals.tokens.output).toBe(10);
+    expect(workflow.byStage["stage-b"].totals.tokens.output).toBe(20);
+  });
+
+  test("PreToolUse seal-main counts the completing call in its current stage", () => {
+    const dir = mkProject();
+    const p = join(dir, "session.jsonl");
+    writeFileSync(
+      p,
+      assistantLine({
+        uuid: "lifecycle",
+        timestamp: "t",
+        model: "opus",
+        input: 100,
+        msgId: "lifecycle-call",
+      }),
+    );
+    const led = foldTranscriptIntoLedger(dir, p, "stage-a", "seal-main");
+    expect(
+      led.workflows["record:default/legacy"].byStage["stage-a"].totals.tokens
+        .input,
+    ).toBe(100);
   });
 
   test("multi-stage scoping still correct under incremental fold", () => {
@@ -1338,7 +1678,7 @@ describe("offset-aware fold, holdback, byteOffset", () => {
     const loaded = loadLedger(dir);
     expect(loaded.totals.tokens.input).toBe(0);
     expect(loaded.totals.tokens.output).toBe(0);
-    expect(loaded.schemaVersion).toBe(2);
+    expect(loaded.schemaVersion).toBe(3);
 
     const led = foldTranscriptIntoLedger(dir, transcript, null, true);
     expect(led.totals.tokens.input).toBe(800); // 500 + 300
@@ -1351,23 +1691,67 @@ describe("offset-aware fold, holdback, byteOffset", () => {
     expect(led.totals.tokens).toEqual(clean.totals.tokens);
   });
 
-  test("migration: a v2 ledger with byteOffset cursors is PRESERVED (not reset)", () => {
+  test("migration: a v3 ledger with byteOffset cursors is PRESERVED (not reset)", () => {
     const dir = mkProject();
     mkdirSync(join(dir, "aidlc", ".aidlc-sessions"), { recursive: true });
     writeFileSync(
       ledgerPath(dir),
       JSON.stringify({
-        schemaVersion: 2,
+        schemaVersion: 3,
         cursors: { "/some/path.jsonl": { lastUuid: "u", lastTimestamp: "t", byteOffset: 42 } },
         totals: { tokens: { input: 111, output: 222, cacheCreate5m: 0, cacheCreate1h: 0, cacheRead: 0 }, usd: 1.5 },
         byStage: {},
         byModel: {},
         byAgent: {},
+        workflows: {},
       }),
     );
     const loaded = loadLedger(dir);
     expect(loaded.totals.tokens.input).toBe(111);
     expect(loaded.totals.tokens.output).toBe(222);
     expect(loaded.cursors["/some/path.jsonl"].byteOffset).toBe(42);
+  });
+
+  test("concurrent processes preserve every transcript fold", async () => {
+    const dir = mkProject();
+    const modulePath = join(
+      import.meta.dir,
+      "..",
+      "..",
+      "dist",
+      "claude",
+      ".claude",
+      "tools",
+      "aidlc-usage.ts",
+    );
+    const processes: ReturnType<typeof Bun.spawn>[] = [];
+    for (let i = 0; i < 24; i++) {
+      const transcript = join(dir, `session-${i}.jsonl`);
+      writeFileSync(
+        transcript,
+        `${assistantLine({
+          uuid: `u-${i}`,
+          timestamp: "t",
+          model: "opus",
+          output: 1,
+          msgId: `m-${i}`,
+        })}\n`,
+      );
+      const script =
+        `import { foldTranscriptIntoLedger } from ${JSON.stringify(modulePath)};` +
+        `foldTranscriptIntoLedger(${JSON.stringify(dir)}, ${JSON.stringify(transcript)}, ` +
+        `"stage-concurrent", "flush-all", { workflowKey: "intent:race" });`;
+      processes.push(
+        Bun.spawn([process.execPath, "-e", script], {
+          stdout: "pipe",
+          stderr: "pipe",
+        }),
+      );
+    }
+    const exits = await Promise.all(processes.map((child) => child.exited));
+    expect(exits.every((code) => code === 0)).toBe(true);
+    const ledger = loadLedger(dir);
+    expect(ledger.workflows["intent:race"].totals.tokens.output).toBe(24);
+    expect(Object.keys(ledger.cursors)).toHaveLength(24);
   });
 });
