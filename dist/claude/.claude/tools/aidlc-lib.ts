@@ -211,9 +211,10 @@ export function harnessDir(): string {
 // segment targets a directory that does not exist on a rename-rules harness.
 //
 // The rename is a fact only the harness MANIFEST knows, so the packager emits
-// it per-tree into tools/data/harness.json ({"rulesSubdir": "..."}) — the
-// open-set source of truth: a new harness ships its own harness.json and needs
-// no edit here. Resolution: AIDLC_RULES_SUBDIR env seam (fixtures) →
+// it per-tree into tools/data/harness.json (alongside the manifest name used
+// by runtime path resolution) — the open-set source of truth: a new harness
+// ships its own harness.json and needs no edit here. Resolution:
+// AIDLC_RULES_SUBDIR env seam (fixtures) →
 // AIDLC_HARNESS_DIR test-seam map (so "pretend to be .kiro" yields "steering"
 // without a .kiro tree on disk) → the shipped harness.json (the real-install
 // rung) → KNOWN_RULES_SUBDIR dev-fallback map → "rules". Returns the LAST path
@@ -2931,6 +2932,65 @@ export function auditBlockField(block: string, fieldName: string): string | null
     if (line.startsWith(prefix)) return line.slice(prefix.length).trim();
   }
   return null;
+}
+
+// A DECISION_RECORDED / QUESTION_ANSWERED pair is the durable handshake for a
+// non-gate question. Return true when the named stage has an open decision in
+// chronological audit order. `afterEvent` scopes the scan to the most recent
+// matching main-workflow boundary; synthetic `--single` rows do not reset that
+// window. This distinguishes questions opened in the current stage attempt or
+// after an approval gate from earlier interactions.
+export function hasPendingDecision(
+  projectDir: string,
+  stage: string,
+  afterEvent?: string,
+): boolean {
+  const audit = readAllAuditShards(projectDir);
+  if (audit.length === 0) return false;
+
+  const relevant = new Set([
+    "DECISION_RECORDED",
+    "QUESTION_ANSWERED",
+    ...(afterEvent ? [afterEvent] : []),
+  ]);
+  const events = audit
+    .replace(/\r\n/g, "\n")
+    .split(/\n---\n/)
+    .map((block, position) => ({
+      event: auditBlockField(block, "Event") ?? "",
+      stage: auditBlockField(block, "Stage"),
+      workflow: auditBlockField(block, "Workflow"),
+      timestamp: auditBlockField(block, "Timestamp") ?? "",
+      position,
+    }))
+    .filter((event) => relevant.has(event.event))
+    .sort((a, b) => {
+      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+      return a.position - b.position;
+    });
+
+  let start = 0;
+  if (afterEvent) {
+    const boundary = events.findLastIndex(
+      (event) =>
+        event.event === afterEvent &&
+        event.stage === stage &&
+        !event.workflow?.startsWith("single-stage:"),
+    );
+    if (boundary === -1) return false;
+    start = boundary + 1;
+  }
+
+  let pending = false;
+  for (const event of events.slice(start)) {
+    if (event.stage !== stage) continue;
+    if (event.event === "DECISION_RECORDED") {
+      pending = true;
+    } else if (event.event === "QUESTION_ANSWERED") {
+      pending = false;
+    }
+  }
+  return pending;
 }
 
 // This clone's audit shard filename: `<host>-<clone-id>.md`. The clone-id token

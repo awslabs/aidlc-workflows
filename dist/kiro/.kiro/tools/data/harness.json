@@ -1,4 +1,5 @@
 {
+  "name": "kiro",
   "harnessDir": ".kiro",
   "rulesSubdir": "steering"
 }

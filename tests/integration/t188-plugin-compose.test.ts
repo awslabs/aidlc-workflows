@@ -39,6 +39,7 @@ const TIMEOUT_MS = 60_000;
 const PLUGIN = "test-pro";
 const CLAUDE_DIST = join(REPO_ROOT, "dist", "claude", ".claude");
 const OPENCODE_DIST = join(REPO_ROOT, "dist", "opencode");
+const COPILOT_DIST = join(REPO_ROOT, "dist", "copilot");
 const KIRO_DIST = join(REPO_ROOT, "dist", "kiro", ".kiro");
 const CODEX_DIST = join(REPO_ROOT, "dist", "codex", ".codex");
 const STAGE_TABLE_BEGIN =
@@ -185,6 +186,9 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       expect(wiring, `${harness.name}: harness dir wiring`).toContain(
         `AIDLC_HARNESS_DIR=${harness.manifest.harnessDir}`,
       );
+      expect(wiring, `${harness.name}: harness name wiring`).toContain(
+        `AIDLC_HARNESS_NAME=${harness.name}`,
+      );
       expect(existsSync(join(built, "stages", "construction", "test-pro-integration.md"))).toBe(
         true,
       );
@@ -241,6 +245,56 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(body).not.toMatch(/^model: sonnet$/m);
     expect(body).not.toContain(".aidlc/rules/");
     expect(body).toContain("aidlc/spaces/default/memory/");
+  });
+
+  test("Copilot compose and selection use .github agent and skill surfaces", () => {
+    const pluginCopilot = pluginBuilds.get("copilot")!;
+    const copilotProject = mkdtempSync(join(tmp, "copilot-compose-"));
+    cpSync(COPILOT_DIST, copilotProject, { recursive: true });
+    const env = {
+      ...process.env,
+      PLUGIN_ROOT: pluginCopilot,
+      AIDLC_PROJECT_DIR: copilotProject,
+      AIDLC_HARNESS_DIR: ".aidlc",
+      AIDLC_HARNESS_NAME: "copilot",
+    };
+    const compose = spawnSync(BUN, [join(pluginCopilot, "hooks", "compose.ts")], {
+      cwd: copilotProject,
+      encoding: "utf-8",
+      timeout: TIMEOUT_MS - 5_000,
+      env,
+    });
+    if (compose.status !== 0) throw new Error(`copilot compose failed: ${compose.stderr}`);
+
+    const inline = join(copilotProject, ".aidlc", "agents", "test-pro-metrics-agent.md");
+    const native = join(copilotProject, ".github", "agents", "test-pro-metrics-agent.md");
+    const runner = join(copilotProject, ".github", "skills", "test-pro-integration", "SKILL.md");
+    expect(existsSync(inline)).toBe(true);
+    expect(existsSync(native)).toBe(true);
+    expect(existsSync(join(copilotProject, ".opencode", "agents", "test-pro-metrics-agent.md"))).toBe(
+      false,
+    );
+    expect(existsSync(runner)).toBe(true);
+    const body = readFileSync(native, "utf-8");
+    expect(body).toMatch(/^tools: \["read", "edit", "search", "execute", "web", "todo"\]$/m);
+    expect(body).not.toMatch(/^(model|tier|effort|disallowedTools):/m);
+    expect(body).toContain("aidlc/spaces/default/memory/");
+
+    const select = spawnSync(
+      BUN,
+      [join(copilotProject, ".aidlc", "tools", "aidlc-utility.ts"), "select-plugins", "aidlc"],
+      {
+        cwd: copilotProject,
+        encoding: "utf-8",
+        timeout: TIMEOUT_MS - 5_000,
+        env,
+      },
+    );
+    expect(select.status, select.stderr).toBe(0);
+    expect(select.stdout).toContain("Enabled plugins: aidlc");
+    expect(existsSync(join(copilotProject, ".aidlc", "skills"))).toBe(false);
+    expect(existsSync(join(copilotProject, ".github", "skills", "aidlc", "SKILL.md"))).toBe(true);
+    expect(existsSync(runner)).toBe(false);
   });
 
   // --- New stages compose + route ---

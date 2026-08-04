@@ -132,7 +132,8 @@ filled, append or update a `## Consolidated Summary Confirmation` entry in
 `<record>/inception/requirements-analysis/requirements-analysis-questions.md`.
 The entry MUST contain:
 
-- A clear list summarizing every answer
+- An unordered bullet list summarizing every answer (never number these summary
+  items; the following structured question starts its own response keys at 1)
 - `Does this all look correct before I generate the requirements artifact?`
 - `Looks correct` and `Request changes` options
 - A blank `[Answer]:` tag

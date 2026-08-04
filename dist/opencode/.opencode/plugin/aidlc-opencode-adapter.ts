@@ -448,6 +448,11 @@ export default async ({
           }
         }
       }
+      const namedAgent = sessionAgent.get(input.sessionID);
+      const delegatedAgent =
+        namedAgent?.startsWith("aidlc-") && namedAgent.endsWith("-agent")
+          ? namedAgent
+          : null;
       if (input.tool === "bash") {
         const command = (args.command as string) ?? "";
         const violation = aidlcBashBoundaryViolation(command, aidlcEntrypoints);
@@ -463,6 +468,7 @@ export default async ({
             tool_name: "Bash",
             tool_input: { command },
             cwd: directory,
+            ...(delegatedAgent ? { agent_type: delegatedAgent } : {}),
           },
           directory,
         );
@@ -553,7 +559,7 @@ export default async ({
       const calls = reviewerCalls(input.tool, args);
       if (calls.length === 0) return;
 
-      const agent = sessionAgent.get(input.sessionID);
+      const agent = namedAgent;
       const identity =
         agent
           ? { agent_type: agent }

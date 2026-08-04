@@ -9,6 +9,8 @@ import { readdirSync, readFileSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 import {
   BLOCKED_STATE_TRANSITIONS,
+  DELEGATED_STATE_MUTATIONS,
+  delegatedLifecycleCommand,
   directStateTransition,
   isLifecycleBoundaryCommand,
 } from "../../dist/claude/.claude/hooks/aidlc-state-transition-guard.ts";
@@ -158,6 +160,76 @@ describe("t242 state-transition ownership guard", () => {
         `result="$(bun .claude/tools/aidlc-orchestrate.ts report --stage feasibility --result completed)"`,
       ),
     ).toBe(true);
+  });
+
+  test("delegated agents cannot invoke workflow lifecycle or routing entrypoints", () => {
+    for (const [command, expected] of [
+      ["bun .claude/tools/aidlc-orchestrate.ts next --resume", "aidlc-orchestrate.ts next"],
+      [
+        "bun .claude/tools/aidlc-orchestrate.ts report --result resumed --user-input 1",
+        "aidlc-orchestrate.ts report",
+      ],
+      ["bun .claude/tools/aidlc-orchestrate.ts park", "aidlc-orchestrate.ts park"],
+      ["bun .claude/tools/aidlc-state.ts unpark", "aidlc-state.ts unpark"],
+      [
+        "bun .claude/tools/aidlc-jump.ts execute --target requirements-analysis",
+        "aidlc-jump.ts execute",
+      ],
+      [
+        "bun .claude/tools/aidlc-utility.ts recompose --add user-stories",
+        "aidlc-utility.ts recompose",
+      ],
+      ["aidlc next --resume", "aidlc next"],
+      ["aidlc report --result resumed --user-input 1", "aidlc report"],
+      ["aidlc state unpark", "aidlc state unpark"],
+      [
+        "cd project && aidlc jump execute --target requirements-analysis",
+        "aidlc jump execute",
+      ],
+      ["env AIDLC_TEST=1 aidlc config set --depth comprehensive", "aidlc config set"],
+    ] as const) {
+      expect(delegatedLifecycleCommand(command), command).toBe(expected);
+    }
+    expect(DELEGATED_STATE_MUTATIONS.has("unpark")).toBe(true);
+    expect(
+      delegatedLifecycleCommand("bun .claude/tools/aidlc-state.ts get 'Current Stage'"),
+    ).toBeNull();
+    expect(
+      delegatedLifecycleCommand("bun .claude/tools/aidlc-orchestrate.ts --help"),
+    ).toBeNull();
+    expect(
+      delegatedLifecycleCommand(
+        "echo 'bun .claude/tools/aidlc-orchestrate.ts next --resume'",
+      ),
+    ).toBeNull();
+  });
+
+  test("the hook blocks delegated lifecycle commands but permits the conductor", () => {
+    const command = "bun .claude/tools/aidlc-orchestrate.ts next --resume";
+    const delegated = spawnSync(process.execPath, [HOOK], {
+      input: JSON.stringify({
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command },
+        agent_type: "aidlc-product-lead-agent",
+      }),
+      encoding: "utf-8",
+      env: unownedEnv(),
+    });
+    expect(delegated.status).toBe(2);
+    expect(delegated.stderr).toContain("workflow lifecycle and routing are conductor-owned");
+
+    const conductor = spawnSync(process.execPath, [HOOK], {
+      input: JSON.stringify({
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command },
+      }),
+      encoding: "utf-8",
+      env: unownedEnv(),
+    });
+    expect(conductor.status).toBe(0);
+    expect(conductor.stderr).toBe("");
   });
 
   test("large heredoc writes stay fast (whitespace-quadratic regression pin)", () => {

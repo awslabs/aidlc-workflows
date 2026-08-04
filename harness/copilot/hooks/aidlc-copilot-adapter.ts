@@ -1,0 +1,789 @@
+#!/usr/bin/env bun
+// aidlc-copilot-adapter.ts — the GitHub Copilot hook shim (AUTHORED shell
+// file; the aidlc-*.ts hook bodies beside it are PACKAGED core, byte-shared
+// with the Claude Code harness). Modeled on codex's aidlc-codex-adapter.ts:
+// ONE shim normalizes the harness payload to the ClaudeCodeHookInput shape
+// and subprocess-pipes into the named core hook, forwarding the result.
+//
+// ONE dist serves BOTH Copilot surfaces (CLI 1.0.74+ and VS Code agent mode
+// 1.130+): the shipped .github/hooks/aidlc.json registers PascalCase event
+// names. The CLI delivers mostly Claude-shaped snake_case payloads; VS Code
+// uses its documented camelCase tool names/inputs plus snake_case agent ids.
+// The adapter accepts both dialects. The
+// load-bearing differences from Claude Code, all live-captured
+// (tmp/copilot-compat-spike/ in the framework repo):
+//   1. File-tool input keys differ: Copilot sends `path` + `file_text` /
+//      `old_str` / `new_str` where the core hooks read `file_path`. The shim
+//      re-keys. Tool NAMES already match (Bash/Write/Edit/Read).
+//   2. PreToolUse carries NO agent identity. SubagentStart/SubagentStop bracket
+//      each delegation, so the shim keeps a locked per-project ledger keyed by
+//      host session + subagent id. VS Code tool calls correlate through their
+//      ordinary session_id; CLI toolu_* calls use an exactly-one-active CLI
+//      fallback. Zero or several candidates forward no identity, so reviewer
+//      scope fails open rather than mis-attributing the call.
+//   3. SubagentStart arrives camelCase (agentName, sessionId — live-verified
+//      quirk) while every other PascalCase-registered event arrives
+//      snake_case. Field reads tolerate both casings.
+//   4. The pre-tool BLOCK channel is stdout JSON, not exit-2/stderr: the core
+//      guards answer exit 2 + reason on stderr, and the shim converts that
+//      into {"hookSpecificOutput": {"hookEventName": "PreToolUse",
+//      "permissionDecision": "deny", "permissionDecisionReason": ...}} — the
+//      one deny dialect BOTH surfaces honor (live-verified on the CLI:
+//      the call is refused and the reason is relayed to the model).
+//   5. CLI SessionStart/Stop consume Claude-shaped top-level fields, while VS
+//      Code requires the same fields inside hookSpecificOutput. The shim emits
+//      both representations so one registration remains valid on both.
+//   6. VS Code does not document SessionEnd, so the shared hook manifest omits
+//      it on both hosts. The next SessionStart reconciles the prior session
+//      (codex D-4 pattern) through the heartbeat file.
+//   7. Custom-agent dispatches use the shared PreToolUse updatedInput contract:
+//      the shim forwards the exact active-stage rule bundle rewrite and
+//      converts an unloadable-rule exit 2 into the Copilot deny envelope.
+//
+// Wiring (.github/hooks/aidlc.json, emitted by harness/copilot/emit.ts) is
+// matcher-FREE by design: VS Code parses but IGNORES matchers, so a matcher
+// registered for the CLI would silently broaden on the IDE. Every target
+// self-filters on tool_name instead.
+//
+// Usage: bun {{HARNESS_DIR}}/hooks/aidlc-copilot-adapter.ts <target>
+// where <target> ∈ session-start | mint | pre-tool |
+//                  post-tool | validate-state | subagent-start |
+//                  log-subagent | stop
+
+import { createHash } from "node:crypto";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+import { appendAuditEntry } from "../tools/aidlc-audit.ts";
+import { stateFilePath } from "../tools/aidlc-lib.ts";
+
+const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
+
+interface CopilotHookInput {
+  hook_event_name?: string;
+  session_id?: string;
+  sessionId?: string;
+  cwd?: string;
+  source?: string;
+  reason?: string;
+  tool_name?: string;
+  toolName?: string;
+  tool_input?: Record<string, unknown>;
+  toolInput?: Record<string, unknown>;
+  tool_result?: unknown;
+  toolResult?: unknown;
+  agent_name?: string;
+  agentName?: string;
+  agent_type?: string;
+  agent_id?: string;
+  agentId?: string;
+  agent_display_name?: string;
+  stop_reason?: string;
+  stop_hook_active?: boolean;
+}
+
+export async function run(
+  target: string,
+  input: string,
+  _extraArgs: string[] = [],
+): Promise<number> {
+  let copilot: CopilotHookInput = {};
+  if (input.length > 0) {
+    try {
+      copilot = JSON.parse(input) as CopilotHookInput;
+    } catch {
+      // Advisory and pre-tool hooks fail open. Stop is enforcement: its core
+      // hook deliberately tolerates malformed stdin and still checks state.
+      if (target !== "stop") return 0;
+    }
+  }
+
+  const projectDirRaw = process.env.AIDLC_PROJECT_DIR ?? copilot.cwd ?? process.cwd();
+  const projectDir = isAbsolute(projectDirRaw)
+    ? projectDirRaw
+    : resolve(process.cwd(), projectDirRaw);
+  const projectEnv = {
+    ...process.env,
+    AIDLC_PROJECT_DIR: projectDir,
+    CLAUDE_PROJECT_DIR: projectDir,
+  };
+
+  // Tolerant field reads: PascalCase-registered events arrive snake_case on
+  // both surfaces EXCEPT SubagentStart, which the CLI delivers camelCase
+  // (live-verified quirk #3 above).
+  const sessionId = copilot.session_id ?? copilot.sessionId ?? "";
+  const subagentName =
+    copilot.agent_type ?? copilot.agent_name ?? copilot.agentName ?? "";
+  const explicitSubagentId = copilot.agent_id ?? copilot.agentId ?? "";
+  const subagentId = explicitSubagentId || sessionId;
+  const nativeToolInput = copilot.tool_input ?? copilot.toolInput;
+
+  // Canonicalize the tool name across the two surfaces. The CLI sends
+  // Claude-style names (Bash/Write/Edit/Read — live-captured); VS Code agent
+  // mode uses its own snake_case execution ids (extracted from the shipped
+  // extension's equivalence sets — parser-verified, pending a live IDE run).
+  // Unknown names pass through unmapped and fall out of the self-filters,
+  // exactly like any foreign tool.
+  const TOOL_ALIAS: Record<string, string> = {
+    // shell
+    run_in_terminal: "Bash",
+    runTerminalCommand: "Bash",
+    bash: "Bash",
+    local_shell: "Bash",
+    // writes/creates
+    create_file: "Write",
+    createFile: "Write",
+    create_directory: "Write",
+    createDirectory: "Write",
+    // edits
+    apply_patch: "Edit",
+    applyPatch: "Edit",
+    editFiles: "Edit",
+    insert_edit_into_file: "Edit",
+    insertEditIntoFile: "Edit",
+    replace_string_in_file: "Edit",
+    replaceStringInFile: "Edit",
+    multi_replace_string_in_file: "Edit",
+    multiReplaceStringInFile: "Edit",
+    edit_notebook_file: "Edit",
+    editNotebookFile: "Edit",
+    str_replace: "Edit",
+    strReplace: "Edit",
+    str_replace_editor: "Edit",
+    // reads
+    read_file: "Read",
+    readFile: "Read",
+    view: "Read",
+    // read-scope sweep surfaces (VS Code names → core matcher arms)
+    list_dir: "LS",
+    listDir: "LS",
+    listDirectory: "LS",
+    file_search: "Glob",
+    fileSearch: "Glob",
+    glob: "Glob",
+    grep_search: "Grep",
+    grepSearch: "Grep",
+    semantic_search: "Grep",
+    semanticSearch: "Grep",
+  };
+  const toolName = (() => {
+    const raw = copilot.tool_name ?? copilot.toolName ?? "";
+    return TOOL_ALIAS[raw] ?? raw;
+  })();
+
+  // Re-serialize the payload with the canonical tool_name so verbatim pipes
+  // (Bash → guards, runtime-compile) carry the name the core hooks match on.
+  const canonicalInput = (() => {
+    const rawToolName = copilot.tool_name ?? copilot.toolName;
+    if (!rawToolName) return input;
+    try {
+      const parsed = JSON.parse(input) as Record<string, unknown>;
+      parsed.tool_name = toolName;
+      if (nativeToolInput) parsed.tool_input = nativeToolInput;
+      return JSON.stringify(parsed);
+    } catch {
+      return input;
+    }
+  })();
+
+  // Machine-local per-user runtime state, beside the P8 session map — NOT the
+  // per-intent health dir (the heartbeat outlives intents) and NOT the extinct
+  // flat aidlc-docs/ root (the codex adapter's stale path — review P1-3).
+  const heartbeatFile = join(
+    projectDir,
+    "aidlc",
+    ".aidlc-sessions",
+    "copilot-heartbeat.json",
+  );
+
+  // --- Core-hook subprocess plumbing -----------------------------------------
+
+  function runCore(hookFile: string, stdin: string): { stdout: string; code: number } {
+    const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+    const command = executable
+      ? [executable, "hook", hookFile.replace(/^aidlc-|\.ts$/g, "")]
+      : [process.execPath, join(HOOKS_DIR, hookFile)];
+    const r = Bun.spawnSync(command, {
+      stdin: Buffer.from(stdin, "utf-8"),
+      stdout: "pipe",
+      stderr: "ignore",
+      cwd: projectDir,
+      env: projectEnv,
+    });
+    return { stdout: r.stdout?.toString() ?? "", code: r.exitCode ?? 0 };
+  }
+
+  // Variant capturing stderr — the guard hooks' block channel (exit 2 + the
+  // reason on stderr) must survive the pipe so it can be converted to the
+  // Copilot deny JSON.
+  function runCoreWithStderr(
+    hookFile: string,
+    stdin: string,
+  ): { stdout: string; stderr: string; code: number } {
+    const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+    const command = executable
+      ? [executable, "hook", hookFile.replace(/^aidlc-|\.ts$/g, "")]
+      : [process.execPath, join(HOOKS_DIR, hookFile)];
+    const r = Bun.spawnSync(command, {
+      stdin: Buffer.from(stdin, "utf-8"),
+      stdout: "pipe",
+      stderr: "pipe",
+      cwd: projectDir,
+      env: projectEnv,
+    });
+    return {
+      stdout: r.stdout?.toString() ?? "",
+      stderr: r.stderr?.toString() ?? "",
+      code: r.exitCode ?? 0,
+    };
+  }
+
+  // The one deny dialect both surfaces honor (difference #4). stdout JSON,
+  // exit 0 — live-verified: the tool call is refused, the reason relayed.
+  function denyJson(reason: string): string {
+    return `${JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: reason.trim() || "Blocked by an AIDLC guard hook.",
+      },
+    })}\n`;
+  }
+
+  // Re-key Copilot file-tool inputs (`path`/`file_path`/`filePath`, plus VS
+  // Code's `files` lists) to the core hooks' `file_path` contract.
+  //
+  // The adapter is the trust boundary between the host and core hooks. Paths
+  // outside the project are treated as absent: the tool call still fails open,
+  // but no absolute host path crosses into audit, sensor, or guard hooks.
+  const PROJECT_ROOT_LEXICAL = resolve(projectDir);
+  const PROJECT_ROOT = (() => {
+    try {
+      return realpathSync(PROJECT_ROOT_LEXICAL);
+    } catch {
+      return null;
+    }
+  })();
+
+  function confinedPath(raw: string): string | null {
+    if (!PROJECT_ROOT) return null;
+    const candidate = isAbsolute(raw) ? resolve(raw) : resolve(PROJECT_ROOT_LEXICAL, raw);
+    const missingSegments: string[] = [];
+    let cursor = candidate;
+    let canonical: string | null = null;
+
+    // Existing targets are resolved directly. For a prospective write, walk
+    // to the nearest existing entry, resolve it, then append only the missing
+    // lexical suffix. lstat detects broken links so they fail closed instead
+    // of being mistaken for an ordinary missing path.
+    while (true) {
+      let exists = false;
+      try {
+        lstatSync(cursor);
+        exists = true;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "ENOENT" && code !== "ENOTDIR") return null;
+      }
+
+      if (exists) {
+        try {
+          canonical = resolve(realpathSync(cursor), ...missingSegments);
+        } catch {
+          return null;
+        }
+        break;
+      }
+
+      const parent = dirname(cursor);
+      if (parent === cursor) return null;
+      missingSegments.unshift(basename(cursor));
+      cursor = parent;
+    }
+
+    const rel = relative(PROJECT_ROOT, canonical);
+    if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return null;
+    return canonical;
+  }
+
+  function filePathsOf(toolInput: Record<string, unknown> | undefined): string[] {
+    if (!toolInput) return [];
+    const rawPaths: string[] = [];
+    const add = (value: unknown): void => {
+      if (typeof value === "string" && value.length > 0) {
+        rawPaths.push(value);
+        return;
+      }
+      if (!value || typeof value !== "object" || Array.isArray(value)) return;
+      const item = value as Record<string, unknown>;
+      add(item.path);
+      add(item.file_path);
+      add(item.filePath);
+    };
+    add(toolInput.path);
+    add(toolInput.file_path);
+    add(toolInput.filePath);
+    for (const key of ["files", "filePaths"] as const) {
+      const values = toolInput[key];
+      if (Array.isArray(values)) {
+        for (const value of values) add(value);
+      }
+    }
+    return [...new Set(rawPaths.map(confinedPath).filter((p): p is string => p !== null))];
+  }
+
+  function withoutPathFields(toolInput: Record<string, unknown>): Record<string, unknown> {
+    const {
+      path: _path,
+      file_path: _filePath,
+      filePath: _camelFilePath,
+      files: _files,
+      filePaths: _filePaths,
+      ...rest
+    } = toolInput;
+    return rest;
+  }
+
+  // --- Active-subagent ledger (difference #2) ---------------------------------
+  //
+  // VS Code carries a stable host session_id plus agent_id on SubagentStart /
+  // Stop, while ordinary PreToolUse carries only that host session_id. CLI
+  // lacks an explicit subagent id and identifies delegated tool calls with a
+  // toolu_* session id, so it retains a separate exactly-one-active fallback.
+  // Every entry is namespaced by host session plus subagent id; ambiguity
+  // always fails open rather than mis-attributing a reviewer.
+  const LEDGER = join(
+    tmpdir(),
+    `aidlc-copilot-subagents-${createHash("sha256").update(projectDir).digest("hex").slice(0, 16)}.json`,
+  );
+  const LEDGER_LOCK = `${LEDGER}.lock`;
+
+  interface LedgerEntry {
+    hostSessionId: string;
+    subagentId: string;
+    name: string;
+    hostCorrelated: boolean;
+    ts: number;
+  }
+
+  function acquireLedgerLock(): boolean {
+    for (let attempt = 0; attempt < 200; attempt++) {
+      try {
+        mkdirSync(LEDGER_LOCK);
+        return true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") return false;
+        Bun.sleepSync(10);
+      }
+    }
+    return false;
+  }
+
+  function releaseLedgerLock(): void {
+    try {
+      rmSync(LEDGER_LOCK, { recursive: true, force: true });
+    } catch {
+      // Identity correlation is best effort; never trap a host hook.
+    }
+  }
+
+  function readLedgerUnlocked(): LedgerEntry[] {
+    try {
+      const parsed = JSON.parse(readFileSync(LEDGER, "utf-8")) as unknown;
+      if (!Array.isArray(parsed)) return [];
+      const cutoff = Date.now() - 30 * 60 * 1000;
+      return parsed.filter(
+        (entry): entry is LedgerEntry =>
+          typeof entry === "object" &&
+          entry !== null &&
+          typeof entry.hostSessionId === "string" &&
+          typeof entry.subagentId === "string" &&
+          typeof entry.name === "string" &&
+          typeof entry.hostCorrelated === "boolean" &&
+          typeof entry.ts === "number" &&
+          entry.ts >= cutoff,
+      );
+    } catch {
+      return [];
+    }
+  }
+
+  function writeLedgerUnlocked(entries: LedgerEntry[]): void {
+    const temp = `${LEDGER}.${process.pid}.${Date.now()}.tmp`;
+    try {
+      writeFileSync(temp, JSON.stringify(entries), "utf-8");
+      renameSync(temp, LEDGER);
+    } catch {
+      // ledger is best-effort identity correlation — never block the turn
+    } finally {
+      try {
+        rmSync(temp, { force: true });
+      } catch {
+        // rename already consumed the temp file in the normal path
+      }
+    }
+  }
+
+  function readLedger(): LedgerEntry[] {
+    if (!acquireLedgerLock()) return [];
+    try {
+      return readLedgerUnlocked();
+    } finally {
+      releaseLedgerLock();
+    }
+  }
+
+  function updateLedger(update: (entries: LedgerEntry[]) => void): void {
+    if (!acquireLedgerLock()) return;
+    try {
+      const entries = readLedgerUnlocked();
+      update(entries);
+      writeLedgerUnlocked(entries);
+    } finally {
+      releaseLedgerLock();
+    }
+  }
+
+  function activeSubagentCandidates(): LedgerEntry[] {
+    const entries = readLedger();
+    return sessionId.startsWith("toolu_")
+      ? entries.filter((entry) => !entry.hostCorrelated)
+      : entries.filter(
+          (entry) => entry.hostCorrelated && entry.hostSessionId === sessionId,
+        );
+  }
+
+  function activeSubagentType(): string | null {
+    if (copilot.agent_type) return copilot.agent_type;
+    const candidates = activeSubagentCandidates();
+    return candidates.length === 1 ? candidates[0].name : null;
+  }
+
+  function delegatedAgentType(): string | null {
+    if (copilot.agent_type) return copilot.agent_type;
+    const candidates = activeSubagentCandidates();
+    if (candidates.length === 1) return candidates[0].name;
+    return candidates.length > 1 ? "aidlc-delegated-agent" : null;
+  }
+
+  // --- Targets ----------------------------------------------------------------
+
+  switch (target) {
+    case "session-start": {
+      reconcilePriorSession();
+      // Copilot delivers source "new" for a fresh session (live-captured);
+      // the core hook's emission map knows startup|clear|resume|compact —
+      // forward "new" as "startup" so SESSION_STARTED and the per-session
+      // intent stamp (P8 rebind) fire. Other values pass through (resume is
+      // shared vocabulary).
+      const rawSource = copilot.source ?? "startup";
+      const fwd = JSON.stringify({
+        hook_event_name: "SessionStart",
+        source: rawSource === "new" ? "startup" : rawSource,
+        ...(sessionId ? { session_id: sessionId } : {}),
+      });
+      const r = runCore("aidlc-session-start.ts", fwd);
+      if (r.stdout) {
+        try {
+          const parsed = JSON.parse(r.stdout) as Record<string, unknown>;
+          const additionalContext = parsed.additionalContext;
+          process.stdout.write(`${JSON.stringify({
+            ...parsed,
+            ...(typeof additionalContext === "string"
+              ? {
+                  hookSpecificOutput: {
+                    hookEventName: "SessionStart",
+                    additionalContext,
+                  },
+                }
+              : {}),
+          })}\n`);
+        } catch {
+          process.stdout.write(r.stdout);
+        }
+      }
+      return 0;
+    }
+
+    case "mint": {
+      // UserPromptSubmit: record HUMAN_TURN (human-presence gate). Same
+      // self-gate as the core mint hook: no workflow state, no scaffolding.
+      try {
+        if (existsSync(stateFilePath(projectDir))) {
+          appendAuditEntry("HUMAN_TURN", {}, projectDir);
+        }
+      } catch {
+        // best-effort presence record — advisory
+      }
+      return 0;
+    }
+
+    case "pre-tool": {
+      // ONE registration serves all matcher-free PreToolUse controls. Custom
+      // agent dispatches first receive the exact active-stage rule bundle.
+      // Copilot consumes the shared hookSpecificOutput.updatedInput envelope
+      // directly, so no adapter-specific reshaping is needed.
+      if (toolName.toLowerCase() === "agent") {
+        const dispatch = runCoreWithStderr(
+          "aidlc-dispatch-rules.ts",
+          canonicalInput,
+        );
+        if (dispatch.code === 2) {
+          process.stdout.write(denyJson(dispatch.stderr));
+          return 0;
+        }
+        if (dispatch.stdout) process.stdout.write(dispatch.stdout);
+        return 0;
+      }
+
+      // Shell calls run the state-transition guard first, then reviewer-scope.
+      // Either block converts to the deny JSON (difference #4).
+      if (toolName === "Bash") {
+        const guard = runCoreWithStderr(
+          "aidlc-state-transition-guard.ts",
+          withAgentType(canonicalInput, delegatedAgentType()),
+        );
+        if (guard.code === 2) {
+          process.stdout.write(denyJson(guard.stderr));
+          return 0;
+        }
+        const scope = runCoreWithStderr(
+          "aidlc-reviewer-scope.ts",
+          withAgentType(canonicalInput),
+        );
+        if (scope.code === 2) {
+          process.stdout.write(denyJson(scope.stderr));
+          return 0;
+        }
+        return 0;
+      }
+      // The full read/edit sweep surface the core matcher enforces on Claude
+      // (Read|Edit|Write plus LS/Glob/Grep — the sibling-sweep evasions).
+      if (["Write", "Edit", "Read", "LS", "Glob", "Grep"].includes(toolName)) {
+        const ti = nativeToolInput ?? {};
+        const filePaths = filePathsOf(nativeToolInput);
+        // Path-shaped tools re-key `path` → `file_path`; the search tools
+        // (LS/Glob/Grep) keep their native fields, which the core matcher
+        // reads directly (path/pattern/glob).
+        const toolInputs: Array<Record<string, unknown>> =
+          toolName === "LS" || toolName === "Glob" || toolName === "Grep"
+            ? [{
+                ...withoutPathFields(ti),
+                ...(filePaths[0] ? { path: filePaths[0] } : {}),
+              }]
+            : filePaths.map((filePath) => ({ file_path: filePath }));
+        for (const toolInput of toolInputs) {
+          if (Object.keys(toolInput).length === 0) continue;
+          const agentType = activeSubagentType();
+          const fwd = JSON.stringify({
+            hook_event_name: "PreToolUse",
+            tool_name: toolName,
+            tool_input: toolInput,
+            ...(agentType ? { agent_type: agentType } : {}),
+          });
+          const r = runCoreWithStderr("aidlc-reviewer-scope.ts", fwd);
+          if (r.code === 2) {
+            process.stdout.write(denyJson(r.stderr));
+            return 0;
+          }
+        }
+      }
+      return 0;
+    }
+
+    case "post-tool": {
+      // Matcher-free registration: self-filter on tool_name (the IDE ignores
+      // matchers — difference in the wiring header). Advisory targets only.
+      if (toolName === "Write" || toolName === "Edit") {
+        for (const filePath of filePathsOf(nativeToolInput)) {
+          const fwd = JSON.stringify({
+            hook_event_name: "PostToolUse",
+            tool_name: toolName,
+            tool_input: { file_path: filePath },
+          });
+          runCore("aidlc-audit-logger.ts", fwd);
+          runCore("aidlc-sensor-fire.ts", fwd);
+        }
+        return 0;
+      }
+      if (toolName === "Bash") {
+        // The shell tool with tool_input.command — the core hook's exact
+        // contract (canonicalized name for the IDE's run_in_terminal).
+        runCore("aidlc-runtime-compile.ts", canonicalInput);
+      }
+      return 0;
+    }
+
+    case "validate-state": {
+      // PreCompact: the core hook reads no stdin fields — self-contained.
+      runCore("aidlc-validate-state.ts", input);
+      return 0;
+    }
+
+    case "subagent-start": {
+      if (subagentName) {
+        const hostCorrelated = explicitSubagentId.length > 0;
+        const ledgerSubagentId =
+          explicitSubagentId || `cli-${process.pid}-${Date.now()}`;
+        const entry: LedgerEntry = {
+          hostSessionId: sessionId,
+          subagentId: ledgerSubagentId,
+          name: subagentName,
+          hostCorrelated,
+          ts: Date.now(),
+        };
+        updateLedger((entries) => {
+          if (hostCorrelated) {
+            const existing = entries.findIndex(
+              (candidate) =>
+                candidate.hostSessionId === sessionId &&
+                candidate.subagentId === ledgerSubagentId,
+            );
+            if (existing >= 0) {
+              entries[existing] = entry;
+              return;
+            }
+          }
+          entries.push(entry);
+        });
+      }
+      return 0;
+    }
+
+    case "log-subagent": {
+      // SubagentStop carries agent_name (+ display name); the core hook reads
+      // agent_type/agent_id. Pop the ledger entry, then forward.
+      if (subagentName) {
+        updateLedger((entries) => {
+          let idx = -1;
+          if (explicitSubagentId) {
+            idx = entries.findIndex(
+              (entry) =>
+                entry.hostCorrelated &&
+                entry.hostSessionId === sessionId &&
+                entry.subagentId === explicitSubagentId,
+            );
+          } else {
+            for (let i = entries.length - 1; i >= 0; i--) {
+              const entry = entries[i];
+              if (
+                !entry.hostCorrelated &&
+                entry.hostSessionId === sessionId &&
+                entry.name === subagentName
+              ) {
+                idx = i;
+                break;
+              }
+            }
+          }
+          if (idx >= 0) entries.splice(idx, 1);
+        });
+      }
+      runCore(
+        "aidlc-log-subagent.ts",
+        JSON.stringify({
+          hook_event_name: "SubagentStop",
+          agent_type: subagentName || "unknown",
+          agent_id: subagentId,
+        }),
+      );
+      return 0;
+    }
+
+    case "stop": {
+      // Emit both host dialects: CLI reads the top-level Claude fields; VS Code
+      // reads the same decision under hookSpecificOutput.
+      const r = runCore("aidlc-stop.ts", input);
+      if (r.stdout) {
+        try {
+          const parsed = JSON.parse(r.stdout) as Record<string, unknown>;
+          const decision = parsed.decision;
+          const reason = parsed.reason;
+          process.stdout.write(`${JSON.stringify({
+            ...parsed,
+            ...(typeof decision === "string"
+              ? {
+                  hookSpecificOutput: {
+                    hookEventName: "Stop",
+                    decision,
+                    ...(typeof reason === "string" ? { reason } : {}),
+                  },
+                }
+              : {}),
+          })}\n`);
+        } catch {
+          process.stdout.write(r.stdout);
+        }
+      }
+      return r.code;
+    }
+
+    default:
+      return 0;
+  }
+
+  // Inject the correlated agent identity into a verbatim payload when the
+  // ledger resolves one (Bash path — the file-tool path builds its own fwd).
+  function withAgentType(
+    raw: string,
+    resolvedAgentType: string | null = activeSubagentType(),
+  ): string {
+    const agentType = resolvedAgentType;
+    if (!agentType) return raw;
+    try {
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      parsed.agent_type = agentType;
+      return JSON.stringify(parsed);
+    } catch {
+      return raw;
+    }
+  }
+
+  // --- SESSION_ENDED reconcile-at-next-start (codex D-4 pattern) --------------
+  // The shared Copilot manifest omits unsupported SessionEnd (difference #6).
+  // The heartbeat file names the last live session; a session-start that finds
+  // a DIFFERENT prior session emits inferred SESSION_ENDED through the
+  // byte-shared core hook.
+  function reconcilePriorSession(): void {
+    // Only meaningful once the workspace shell exists (the aidlc/ root ships
+    // with the install and is scaffolded on first /aidlc).
+    if (!existsSync(join(projectDir, "aidlc"))) return;
+    try {
+      if (existsSync(heartbeatFile)) {
+        const prior = JSON.parse(readFileSync(heartbeatFile, "utf-8")) as {
+          session_id?: string;
+          ts?: string;
+        };
+        if (prior.session_id && prior.session_id !== sessionId) {
+          const reason =
+            `inferred — the shared Copilot hook manifest omits unsupported ` +
+            `SessionEnd; reconciled at next ` +
+            `SessionStart. Prior session ${prior.session_id} last seen ${prior.ts ?? "unknown"}.`;
+          runCore("aidlc-session-end.ts", JSON.stringify({ reason }));
+        }
+      }
+      mkdirSync(dirname(heartbeatFile), { recursive: true });
+      writeFileSync(
+        heartbeatFile,
+        JSON.stringify({ session_id: sessionId || "unknown", ts: new Date().toISOString() }),
+        "utf-8",
+      );
+    } catch {
+      // reconcile is observability — never block the session start
+    }
+  }
+}
+
+if (import.meta.main) {
+  process.exit(await run(process.argv[2] ?? "", await Bun.stdin.text(), process.argv.slice(3)));
+}

@@ -75,7 +75,7 @@ export type HarnessManifest = {
    * new harness picks its projection shape in its manifest - the packager
    * never infers it from the harness name.
    */
-  tierFlavor: "claude" | "codex" | "kiro" | "opencode";
+  tierFlavor: "claude" | "codex" | "kiro" | "opencode" | "copilot";
   /** core/<src> → <harnessDir>/<dst> projections. */
   coreDirs: DirMap[];
   /** harness/<name>/<src> → <harnessDir>/<dst> authored-file copies. */
@@ -125,7 +125,7 @@ export type HarnessManifest = {
    * no host plugin store (folder-drop + hook, like Kiro) sets kind "kiro".
    */
   plugin?: {
-    /** Host plugin-manifest dir name (".claude-plugin", ".codex-plugin", ".kiro-plugin"). */
+    /** Host plugin-manifest dir name (for example ".claude-plugin", ".plugin", ".kiro-plugin"). */
     manifestDir: string;
     /** "store" = host plugin store (Claude/Codex); "kiro" = folder-drop + .kiro.hook. */
     kind: "store" | "kiro";

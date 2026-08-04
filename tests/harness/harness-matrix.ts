@@ -9,6 +9,7 @@ const HARNESS_ROOT = join(REPO_ROOT, "harness");
 type ReviewerScopeRegistration =
   | "claude-settings"
   | "codex-hooks"
+  | "copilot-hooks"
   | "kiro-agent-json"
   | "opencode-plugin"
   | "unsupported";
@@ -30,6 +31,7 @@ type HarnessCapabilities = {
   memoryInclude:
     | "claude-import"
     | "codex-env"
+    | "copilot-agents-md"
     | "kiro-resources"
     | "kiro-steering"
     | "opencode-instructions";
@@ -79,6 +81,25 @@ const HARNESS_CAPABILITIES = {
     kiroAgentJson: false,
     ideAgentTools: false,
     reviewerScopeRegistration: "codex-hooks",
+  },
+  copilot: {
+    harnessDir: ".aidlc",
+    onboarding: {
+      mode: "manifest",
+      fills: "onboarding.fills.ts",
+      dist: "AGENTS.md",
+    },
+    rootFiles: [".gitignore", "AGENTS.md"],
+    skillsRoot: ".github/skills",
+    plugin: {
+      kind: "store",
+      manifestDir: ".plugin",
+      wiringFile: "hooks/hooks.json",
+    },
+    memoryInclude: "copilot-agents-md",
+    kiroAgentJson: false,
+    ideAgentTools: false,
+    reviewerScopeRegistration: "copilot-hooks",
   },
   "kiro-ide": {
     harnessDir: ".kiro",
@@ -233,7 +254,12 @@ function validateManifest(
     (capabilities.memoryInclude === "codex-env") !==
       (capabilities.onboarding.mode === "emit") ||
     (capabilities.memoryInclude === "opencode-instructions") !==
-      manifest.harnessFiles.some((file) => file.dst === "opencode.json")
+      manifest.harnessFiles.some((file) => file.dst === "opencode.json") ||
+    (capabilities.memoryInclude === "copilot-agents-md") !==
+      (manifest.onboarding?.projectRoot === true &&
+        manifest.onboarding.dst === "AGENTS.md" &&
+        manifest.harnessDir === ".aidlc" &&
+        manifest.skipRunnerGen === true)
   ) {
     fail(name, "memoryInclude does not agree with manifest-owned include surfaces");
   }

@@ -23,6 +23,7 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  appendFileSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -124,14 +125,34 @@ function readAudit(dir: string): string {
     .join("\n");
 }
 
+function appendInteractionEvent(
+  dir: string,
+  event: "DECISION_RECORDED" | "QUESTION_ANSWERED" | "STAGE_STARTED",
+  stage: string,
+): void {
+  appendFileSync(
+    join(seededAuditDir(dir), pinnedShardName()),
+    `\n## ${event}\n` +
+      `**Timestamp**: ${new Date().toISOString()}\n` +
+      `**Event**: ${event}\n` +
+      `**Stage**: ${stage}\n\n---\n`,
+    "utf-8",
+  );
+}
+
 function runAdapter(
   projectDir: string,
   target: string,
   payload: unknown,
+  extraArgs: string[] = [],
 ): { stdout: string; stderr: string; code: number } {
   const r = spawnSync(
     "bun",
-    [join(projectDir, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), target],
+    [
+      join(projectDir, ".kiro", "hooks", "aidlc-kiro-adapter.ts"),
+      target,
+      ...extraArgs,
+    ],
     {
       cwd: projectDir,
       input: typeof payload === "string" ? payload : JSON.stringify(payload),
@@ -226,6 +247,27 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       const r = runAdapter(dir, "continue-workflow", FIXTURES.stop);
       expect(r.code).toBe(0);
       expect(r.stdout.trim()).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("2a: stop stays silent for an open logged question and blocks after its answer", () => {
+    const dir = scratchProject(true);
+    try {
+      appendInteractionEvent(dir, "STAGE_STARTED", "requirements-analysis");
+      appendInteractionEvent(dir, "DECISION_RECORDED", "requirements-analysis");
+
+      const waiting = runAdapter(dir, "stop", FIXTURES.stop);
+      expect(waiting.code).toBe(0);
+      expect(waiting.stdout.trim()).toBe("");
+
+      appendInteractionEvent(dir, "QUESTION_ANSWERED", "requirements-analysis");
+      const resolved = runAdapter(dir, "stop", FIXTURES.stop);
+      expect(resolved.code).toBe(0);
+      expect(
+        (JSON.parse(resolved.stdout) as { decision?: string }).decision,
+      ).toBe("block");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -430,6 +472,59 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       expect(missing.stderr).toContain("Cannot load required stage rule");
     } finally {
       rmSync(missingDir, { recursive: true, force: true });
+    }
+  });
+
+  test("5d: every Kiro worker registers an identity-scoped lifecycle guard", () => {
+    const agentDir = join(KIRO_TREE, "agents");
+    const workerFiles = require("node:fs")
+      .readdirSync(agentDir)
+      .filter((name: string) => /^aidlc-.+-agent\.json$/.test(name))
+      .sort() as string[];
+    expect(workerFiles).toHaveLength(14);
+
+    for (const name of workerFiles) {
+      const config = JSON.parse(
+        readFileSync(join(agentDir, name), "utf-8"),
+      ) as {
+        name: string;
+        hooks?: {
+          preToolUse?: Array<{
+            matcher?: string;
+            command?: string;
+            timeout_ms?: number;
+          }>;
+        };
+      };
+      expect(config.hooks?.preToolUse ?? [], name).toContainEqual({
+        matcher: "execute_bash",
+        command:
+          `bun .kiro/hooks/aidlc-kiro-adapter.ts state-transition-guard ${config.name}`,
+        timeout_ms: 15000,
+      });
+    }
+  });
+
+  test("5e: a Kiro worker identity cannot invoke orchestrator lifecycle", () => {
+    const dir = scratchProject(false);
+    try {
+      const r = runAdapter(
+        dir,
+        "state-transition-guard",
+        {
+          cwd: dir,
+          tool_name: "execute_bash",
+          tool_input: {
+            command:
+              "bun .kiro/tools/aidlc-orchestrate.ts next --resume",
+          },
+        },
+        ["aidlc-design-agent"],
+      );
+      expect(r.code).toBe(2);
+      expect(r.stderr).toContain("workflow lifecycle and routing are conductor-owned");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 

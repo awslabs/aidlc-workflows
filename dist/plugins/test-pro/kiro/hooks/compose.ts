@@ -38,8 +38,30 @@ const PROJECT_DIR = resolve(
 );
 const HARNESS_LEAF = process.env.AIDLC_HARNESS_DIR || ".claude";
 const HARNESS_DIR = join(PROJECT_DIR, HARNESS_LEAF);
+const HARNESS_NAME = (() => {
+  const explicit = process.env.AIDLC_HARNESS_NAME?.trim();
+  if (explicit) return explicit;
+  try {
+    const parsed = JSON.parse(
+      readFileSync(join(HARNESS_DIR, "tools", "data", "harness.json"), "utf-8"),
+    ) as { name?: unknown };
+    if (typeof parsed.name === "string" && parsed.name.trim()) return parsed.name.trim();
+  } catch {
+    // Legacy installs did not record a distribution name.
+  }
+  if (HARNESS_LEAF === ".aidlc") {
+    return existsSync(join(PROJECT_DIR, ".github", "hooks", "aidlc.json"))
+      ? "copilot"
+      : "opencode";
+  }
+  return HARNESS_LEAF.replace(/^\./, "");
+})();
+const IS_COPILOT = HARNESS_NAME === "copilot";
+const IS_OPENCODE = HARNESS_NAME === "opencode";
 const STAGES_DIR = join(HARNESS_DIR, "aidlc-common", "stages");
-const SKILLS_DIR = join(HARNESS_DIR, "skills");
+const SKILLS_DIR = IS_COPILOT
+  ? join(PROJECT_DIR, ".github", "skills")
+  : join(HARNESS_DIR, "skills");
 const PHASES = ["initialization", "ideation", "inception", "construction", "operation"];
 const COMPOSE_LOCK_RETRIES = 600;
 const SCOPE_TABLE_BEGIN =
@@ -252,6 +274,7 @@ function installedToolEnv(): NodeJS.ProcessEnv {
     // AIDLC_PROJECT_DIR outranks CLAUDE_PROJECT_DIR in resolveProjectDir.
     AIDLC_PROJECT_DIR: PROJECT_DIR,
     AIDLC_HARNESS_DIR: HARNESS_LEAF,
+    AIDLC_HARNESS_NAME: HARNESS_NAME,
     AIDLC_STAGE_GRAPH: join(HARNESS_DIR, "tools", "data", "stage-graph.json"),
     AIDLC_SCOPE_GRID: join(HARNESS_DIR, "tools", "data", "scope-grid.json"),
     AIDLC_STAGES_DIR: STAGES_DIR,
@@ -595,6 +618,36 @@ function opencodeNativeAgentPrecheck(dst: string): CopyPrecheck {
   };
 }
 
+const COPILOT_WORKER_TOOLS = ["read", "edit", "search", "execute", "web", "todo"] as const;
+
+function copilotNativeAgentPrecheck(dst: string): CopyPrecheck {
+  const collision = installedNameCollisionPrecheck(dst, "agents");
+  return (ctx) => {
+    if (!collision(ctx)) return false;
+    if (!ctx.content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n/)) {
+      recordDrop(
+        `plugin "${PLUGIN_NAME}" agent file "${ctx.rel}" has no closed frontmatter block; not copied to Copilot's native roster`,
+      );
+      return false;
+    }
+    const fm = frontmatter(ctx.content);
+    const disallowed = fm.match(/^disallowedTools:\s*(.*?)\s*$/m)?.[1];
+    if (disallowed && !/^\s*Task\s*$/i.test(disallowed)) {
+      recordDrop(
+        `plugin "${PLUGIN_NAME}" agent file "${ctx.rel}" cannot project disallowedTools "${disallowed}" to Copilot; not copied`,
+      );
+      return false;
+    }
+    if (disallowed && /^tools:/m.test(fm)) {
+      recordDrop(
+        `plugin "${PLUGIN_NAME}" agent file "${ctx.rel}" declares both tools and disallowedTools; Copilot projection would be ambiguous`,
+      );
+      return false;
+    }
+    return true;
+  };
+}
+
 function emitOpencodeNativeAgent({ file, content }: CopyContext): string {
   const m = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
   if (!m) throw new Error(`${file}: plugin agent has no closed frontmatter block`);
@@ -621,6 +674,22 @@ function emitOpencodeNativeAgent({ file, content }: CopyContext): string {
     fm += "\npermission:\n  task: deny";
   }
   fm += "\nmode: subagent";
+  return content.replace(m[0], () => `---\n${fm}\n---\n`);
+}
+
+function emitCopilotNativeAgent({ file, content }: CopyContext): string {
+  const m = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
+  if (!m) throw new Error(`${file}: plugin agent has no closed frontmatter block`);
+  const fm = m[1]
+    .split(/\r?\n/)
+    .flatMap((line) => {
+      if (/^(tier|model|effort):/.test(line)) return [];
+      if (/^disallowedTools:/.test(line)) {
+        return [`tools: [${COPILOT_WORKER_TOOLS.map((tool) => `"${tool}"`).join(", ")}]`];
+      }
+      return [line];
+    })
+    .join("\n");
   return content.replace(m[0], () => `---\n${fm}\n---\n`);
 }
 
@@ -703,16 +772,14 @@ interface KiroPluginAgentPrechecks {
   agent: CopyPrecheck;
 }
 
-// OpenCode's dispatch surface is the native roster `.opencode/agents/<a>.md`.
-// Unlike Kiro/Codex surfaces (which a plugin can never ship), a plugin's own
-// Markdown persona IS the source of the native twin compose emits later in
-// this same pass — so a stage may reference an agent whose surface arrives
-// with the plugin. Accept that only when the shipped file would survive the
-// full opencodeNativeAgentPrecheck: closed frontmatter, no un-projectable
-// disallowedTools, AND no name collision with a different installed native
-// agent — a collision-dropped twin would leave the accepted stage without its
-// dispatch target.
-function pluginShipsViableOpencodeAgent(agent: string): boolean {
+// OpenCode and Copilot dispatch from native Markdown rosters outside .aidlc.
+// A plugin persona is the source for the native twin emitted later in this
+// pass, so accept a stage reference only when that twin survives projection.
+function nativeAgentsDir(): string {
+  return join(PROJECT_DIR, IS_COPILOT ? ".github" : ".opencode", "agents");
+}
+
+function pluginShipsViableNativeAgent(agent: string): boolean {
   const file = join(PLUGIN_ROOT, "agents", `${agent}.md`);
   if (!existsSync(file)) return false;
   let content = "";
@@ -726,20 +793,17 @@ function pluginShipsViableOpencodeAgent(agent: string): boolean {
   if (declaredPlugin?.startsWith("aidlc-")) return false;
   const disallowed = frontmatter(content).match(/^disallowedTools:\s*(.*?)\s*$/m)?.[1];
   if (disallowed && !/^\s*Task\s*$/i.test(disallowed)) return false;
-  const nativeAgentsDir = join(PROJECT_DIR, ".opencode", "agents");
+  if (IS_COPILOT && disallowed && /^tools:/m.test(frontmatter(content))) return false;
+  const rosterDir = nativeAgentsDir();
   const name = frontmatterName(content);
   if (!name) return true;
-  const collidingFile = installedNameRoster(nativeAgentsDir).get(name);
-  return !collidingFile || collidingFile === join(nativeAgentsDir, `${agent}.md`);
+  const collidingFile = installedNameRoster(rosterDir).get(name);
+  return !collidingFile || collidingFile === join(rosterDir, `${agent}.md`);
 }
 
-// Kiro, Codex, and OpenCode cannot dispatch a Markdown-only persona from the
-// engine roster. Kiro requires BOTH a hand-authored agent-v1 JSON and conductor
-// trustedAgents registration; Codex requires an agent config TOML; OpenCode
-// requires a native `.opencode/agents/<a>.md` subagent (installed, or viably
-// shipped by this plugin — see pluginShipsViableOpencodeAgent). Reject any
-// dispatched stage whose lead, support, or reviewer lacks that complete
-// surface. Markdown personas remain composable for accepted inline stages.
+// Kiro, Codex, OpenCode, and Copilot cannot dispatch a Markdown-only persona
+// from the engine roster. Reject any dispatched stage whose lead, support, or
+// reviewer lacks the harness-native surface.
 async function kiroPluginAgentPrechecks(): Promise<KiroPluginAgentPrechecks | null> {
   if (
     HARNESS_LEAF !== ".kiro" &&
@@ -754,7 +818,7 @@ async function kiroPluginAgentPrechecks(): Promise<KiroPluginAgentPrechecks | nu
       ? ".toml"
       : ".md";
   const surfaceDir = HARNESS_LEAF === ".aidlc"
-    ? join(PROJECT_DIR, ".opencode", "agents")
+    ? nativeAgentsDir()
     : join(HARNESS_DIR, "agents");
   const trustedAgents = new Set<string>();
   if (HARNESS_LEAF === ".kiro") {
@@ -787,7 +851,9 @@ async function kiroPluginAgentPrechecks(): Promise<KiroPluginAgentPrechecks | nu
           ? `author ${HARNESS_LEAF}/agents/${gap.agent}.json (agent-v1 JSON)`
           : HARNESS_LEAF === ".codex"
             ? `author ${HARNESS_LEAF}/agents/${gap.agent}.toml (the shipped aidlc-*-agent.toml shape)`
-            : `author .opencode/agents/${gap.agent}.md (an OpenCode subagent with closed frontmatter)`,
+            : IS_COPILOT
+              ? `author .github/agents/${gap.agent}.md (a Copilot custom agent with closed frontmatter)`
+              : `author .opencode/agents/${gap.agent}.md (an OpenCode subagent with closed frontmatter)`,
       );
     }
     if (gap.missingTrust) {
@@ -892,7 +958,7 @@ async function kiroPluginAgentPrechecks(): Promise<KiroPluginAgentPrechecks | nu
       const gap = {
         agent,
         missingSurface: !existsSync(join(surfaceDir, `${agent}${surfaceExt}`)) &&
-          !(HARNESS_LEAF === ".aidlc" && pluginShipsViableOpencodeAgent(agent)),
+          !(HARNESS_LEAF === ".aidlc" && pluginShipsViableNativeAgent(agent)),
         missingTrust: HARNESS_LEAF === ".kiro" && !trustedAgents.has(agent),
       };
       if (gap.missingSurface || gap.missingTrust) gaps.set(agent, gap);
@@ -1316,14 +1382,23 @@ try {
         ? ({ content }) => projectOpencodeAgentMemory(content)
         : undefined,
     ) || changed;
-    if (HARNESS_LEAF === ".aidlc") {
-      const nativeAgentsDir = join(PROJECT_DIR, ".opencode", "agents");
+    if (IS_OPENCODE) {
+      const rosterDir = nativeAgentsDir();
       changed = copyTreeNoClobber(
         join(PLUGIN_ROOT, "agents"),
-        nativeAgentsDir,
+        rosterDir,
         "OpenCode native agents",
-        opencodeNativeAgentPrecheck(nativeAgentsDir),
+        opencodeNativeAgentPrecheck(rosterDir),
         (ctx) => projectOpencodeAgentMemory(emitOpencodeNativeAgent(ctx)),
+      ) || changed;
+    } else if (IS_COPILOT) {
+      const rosterDir = nativeAgentsDir();
+      changed = copyTreeNoClobber(
+        join(PLUGIN_ROOT, "agents"),
+        rosterDir,
+        "Copilot native agents",
+        copilotNativeAgentPrecheck(rosterDir),
+        (ctx) => projectOpencodeAgentMemory(emitCopilotNativeAgent(ctx)),
       ) || changed;
     }
   }

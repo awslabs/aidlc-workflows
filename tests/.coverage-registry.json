@@ -1784,6 +1784,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:hasPendingDecision",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t121-stop-hook-enforce.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:hasUnsafeSingleLineCharacter",
       "minMechanism": "none",
       "coveredBy": [

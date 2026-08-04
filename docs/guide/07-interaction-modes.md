@@ -2,11 +2,13 @@
 
 AI-DLC provides three ways to interact with agents during stages, plus approval gates that keep you in control at every decision point.
 
-> **Harness note.** Gates and questions render differently per harness: Claude Code
-> uses the `AskUserQuestion` widget; the other harnesses render numbered-prose options
-> (answer with a number or free text), with the questions file the source of truth.
-> The *semantics* — when a gate fires, what it asks, that you stay in control — are
-> identical, since they live in the engine. See [Running on other harnesses](harnesses/README.md).
+> **Harness note.** Gates and questions render differently per harness. Claude
+> Code uses its native question picker; Codex uses its picker when enabled.
+> Kiro, opencode, and GitHub Copilot render numbered-prose options (Copilot's
+> picker results do not fire the trusted human-presence event). The questions
+> file remains the source of truth. The *semantics* — when a gate fires, what
+> it asks, that you stay in control — are identical, since they live in the
+> engine. See [Running on other harnesses](harnesses/README.md).
 
 ---
 
@@ -71,7 +73,7 @@ The default approval gate presents two options:
   `aidlc-state.md`, shows a progress line, and advances to the next stage
 - **Request Changes** lets you provide specific feedback; the agent revises its work and re-presents the approval gate
 
-The gate requires a real human acknowledgement: typing a prompt or answering an `AskUserQuestion` widget records a human turn (a `HUMAN_TURN` event) in the audit ledger, and the approve (and any clarifying-question answer) refuses unless one was recorded since the last gate resolution, so a model running on autopilot cannot fabricate an approval with no human having acted since. On a harness whose gate widget does not record a human turn, type a short message once (for example "approve") so one is on record. (On a harness whose ledger has no human turn yet, the gate fails open and does not require this.)
+The gate requires a real human acknowledgement: typing a prompt or answering a native question picker records a human turn (a `HUMAN_TURN` event) in the audit ledger, and the approve (and any clarifying-question answer) refuses unless one was recorded since the last gate resolution, so a model running on autopilot cannot fabricate an approval with no human having acted since. On a harness whose picker does not record a human turn, type a short message once (for example "approve") so one is on record. (On a harness whose ledger has no human turn yet, the gate fails open and does not require this.)
 
 ### Approval Gate Flow
 

@@ -1,4 +1,5 @@
 {
+  "name": "opencode",
   "harnessDir": ".aidlc",
   "rulesSubdir": "rules"
 }

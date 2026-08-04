@@ -116,6 +116,10 @@ Rules:
 - **Bold the header**, then the prompt, then the numbered options in spec
   order. When a question has a recommended option, list it FIRST and append
   "(Recommended)" to its label.
+- **Fresh local numbering**: start every question at `1`, independent of
+  numbered content earlier in the message or another question in the batch.
+  Use unordered bullets for immediately preceding summaries. Visible `1` maps
+  to the first source option label, `2` to the second, and so on.
 - **Always append an "Other" escape** as the final number — the spec's
   options never include one (on Claude Code the UI provides it; here you
   render it).

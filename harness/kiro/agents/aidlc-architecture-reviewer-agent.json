@@ -39,6 +39,11 @@
   "hooks": {
     "preToolUse": [
       {
+        "matcher": "execute_bash",
+        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts state-transition-guard aidlc-architecture-reviewer-agent",
+        "timeout_ms": 15000
+      },
+      {
         "matcher": "fs_read",
         "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts reviewer-scope aidlc-architecture-reviewer-agent",
         "timeout_ms": 15000

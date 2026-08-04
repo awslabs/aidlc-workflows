@@ -44,6 +44,7 @@ const distSurface = (h: string, ...parts: string[]): string =>
 
 const scratch: string[] = [];
 const savedHarness = process.env.AIDLC_HARNESS_DIR;
+const savedHarnessName = process.env.AIDLC_HARNESS_NAME;
 
 afterEach(() => {
   // AIDLC_HARNESS_DIR is read at call time + cached in lib via _harnessDir; but
@@ -51,6 +52,8 @@ afterEach(() => {
   // before consulting the cache), so restoring the env is sufficient here.
   if (savedHarness === undefined) delete process.env.AIDLC_HARNESS_DIR;
   else process.env.AIDLC_HARNESS_DIR = savedHarness;
+  if (savedHarnessName === undefined) delete process.env.AIDLC_HARNESS_NAME;
+  else process.env.AIDLC_HARNESS_NAME = savedHarnessName;
   for (const d of scratch.splice(0)) {
     try {
       rmSync(d, { recursive: true, force: true });
@@ -285,6 +288,7 @@ describe("t-active-space-includes: Codex config.toml AIDLC_RULES_DIR", () => {
 describe("t-active-space-includes: opencode opencode.json instructions glob", () => {
   beforeEach(() => {
     process.env.AIDLC_HARNESS_DIR = ".aidlc";
+    process.env.AIDLC_HARNESS_NAME = "opencode";
   });
 
   function setup(): string {
@@ -380,13 +384,22 @@ describe("t-active-space-includes: opencode opencode.json instructions glob", ()
         agent,
       );
       agents.push(agent);
+      const pluginAgent = join(dir, "test-pro-metrics-agent.md");
+      writeFileSync(
+        pluginAgent,
+        "---\nname: test-pro-metrics-agent\nplugin: test-pro\n---\nRead aidlc/spaces/default/memory/org.md\n",
+        "utf-8",
+      );
+      agents.push(pluginAgent);
     }
 
     const written = repointHarnessIncludes(root, "teamB");
     expect(written).toEqual([
       "opencode.json",
       ".aidlc/agents/aidlc-architect-agent.md",
+      ".aidlc/agents/test-pro-metrics-agent.md",
       ".opencode/agents/aidlc-architect-agent.md",
+      ".opencode/agents/test-pro-metrics-agent.md",
     ]);
     for (const agent of agents) {
       const body = readFileSync(agent, "utf-8");
@@ -401,5 +414,51 @@ describe("t-active-space-includes: opencode opencode.json instructions glob", ()
     const written = repointHarnessIncludes(root, "teamB");
     expect(written).toEqual([]);
     expect(readFileSync(join(root, "opencode.json"), "utf-8")).toBe("{ not json");
+  });
+});
+
+describe("t-active-space-includes: Copilot AGENTS.md and persona rosters", () => {
+  beforeEach(() => {
+    process.env.AIDLC_HARNESS_DIR = ".aidlc";
+    process.env.AIDLC_HARNESS_NAME = "copilot";
+  });
+
+  test("re-points core and plugin personas without touching user .github agents", () => {
+    const root = freshRoot();
+    seedSpaces(root);
+    cpSync(distSurface("copilot", "AGENTS.md"), join(root, "AGENTS.md"));
+
+    for (const base of [".aidlc", ".github"]) {
+      const dir = join(root, base, "agents");
+      mkdirSync(dir, { recursive: true });
+      cpSync(
+        distSurface("copilot", base, "agents", "aidlc-architect-agent.md"),
+        join(dir, "aidlc-architect-agent.md"),
+      );
+      writeFileSync(
+        join(dir, "test-pro-metrics-agent.md"),
+        "---\nname: test-pro-metrics-agent\nplugin: test-pro\n---\nRead aidlc/spaces/default/memory/org.md\n",
+        "utf-8",
+      );
+    }
+    const userAgent = join(root, ".github", "agents", "release-manager.md");
+    writeFileSync(
+      userAgent,
+      "---\nname: release-manager\n---\nRead aidlc/spaces/default/memory/org.md\n",
+      "utf-8",
+    );
+
+    const written = repointHarnessIncludes(root, "teamB");
+    expect(written).toEqual([
+      "AGENTS.md",
+      ".aidlc/agents/aidlc-architect-agent.md",
+      ".aidlc/agents/test-pro-metrics-agent.md",
+      ".github/agents/aidlc-architect-agent.md",
+      ".github/agents/test-pro-metrics-agent.md",
+    ]);
+    for (const rel of written) {
+      expect(readFileSync(join(root, rel), "utf-8")).toContain("aidlc/spaces/teamB/memory/");
+    }
+    expect(readFileSync(userAgent, "utf-8")).toContain("aidlc/spaces/default/memory/");
   });
 });

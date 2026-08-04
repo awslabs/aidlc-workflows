@@ -5,6 +5,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+  appendFileSync,
   cpSync,
   copyFileSync,
   mkdirSync,
@@ -68,6 +69,23 @@ function readAudit(root: string): string {
     .sort()
     .map((name) => readFileSync(join(auditDir, name), "utf-8"))
     .join("\n");
+}
+
+function appendInteractionEvent(
+  root: string,
+  event: "DECISION_RECORDED" | "QUESTION_ANSWERED" | "STAGE_STARTED",
+  stage: string,
+): void {
+  const shard = seededAuditShard(root);
+  mkdirSync(dirname(shard), { recursive: true });
+  appendFileSync(
+    shard,
+    `\n## ${event}\n` +
+      `**Timestamp**: ${new Date().toISOString()}\n` +
+      `**Event**: ${event}\n` +
+      `**Stage**: ${stage}\n\n---\n`,
+    "utf-8",
+  );
 }
 
 function writeHook(root: string, name: string, source: string): void {
@@ -274,6 +292,42 @@ describe("t241 OpenCode adapter state-transition guard", () => {
     ).resolves.toBeUndefined();
     await expect(
       invoke("engine", "bun .aidlc/tools/aidlc-orchestrate.ts next"),
+    ).resolves.toBeUndefined();
+  });
+
+  test("blocks lifecycle routing from a named AIDLC worker while preserving the main conductor", async () => {
+    const root = freshProject();
+    copyCore(root, "hooks/aidlc-state-transition-guard.ts");
+    copyCore(root, "tools/aidlc-lib.ts");
+    copyCore(root, "tools/aidlc-runtime-paths.ts");
+
+    const { client } = fakeClient({ worker: "main" });
+    const adapter = await createAdapter({
+      client,
+      directory: root,
+      aidlcEntrypoints: new Set([
+        ...TEST_ENTRYPOINTS,
+        "tools/aidlc-orchestrate.ts",
+      ]),
+    });
+    await adapter["chat.message"](
+      { sessionID: "worker", agent: "aidlc-design-agent" },
+      { parts: [{ type: "text", text: "contribute" }] },
+    );
+    const before = adapter["tool.execute.before"];
+    const command = "bun .aidlc/tools/aidlc-orchestrate.ts next --resume";
+
+    await expect(
+      before(
+        { tool: "bash", sessionID: "worker", callID: "worker-route" },
+        { args: { command } },
+      ),
+    ).rejects.toThrow(/conductor-owned/i);
+    await expect(
+      before(
+        { tool: "bash", sessionID: "main", callID: "main-route" },
+        { args: { command } },
+      ),
     ).resolves.toBeUndefined();
   });
 });
@@ -485,6 +539,33 @@ process.stdout.write(JSON.stringify({ decision: "block", reason: "continue" }) +
       },
     });
 
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0].text).toContain("[aidlc-forwarding-nudge]");
+  });
+
+  test("idle suppresses its nudge for an open logged question and restores it after the answer", async () => {
+    const root = freshInstalledProject();
+    seedStateFile(root, "state-brownfield-feature.md");
+    appendInteractionEvent(root, "STAGE_STARTED", "requirements-analysis");
+    appendInteractionEvent(root, "DECISION_RECORDED", "requirements-analysis");
+    const { client, prompts } = fakeClient();
+    const adapter = await createAdapter({ client, directory: root });
+
+    await adapter["chat.message"](
+      { sessionID: "main" },
+      { parts: [{ type: "text", text: "start" }] },
+    );
+    const idle = {
+      event: {
+        type: "session.idle",
+        properties: { sessionID: "main" },
+      },
+    };
+    await adapter.event(idle);
+    expect(prompts).toHaveLength(0);
+
+    appendInteractionEvent(root, "QUESTION_ANSWERED", "requirements-analysis");
+    await adapter.event(idle);
     expect(prompts).toHaveLength(1);
     expect(prompts[0].text).toContain("[aidlc-forwarding-nudge]");
   });

@@ -186,7 +186,7 @@ describe("t148 dist/kiro file structure", () => {
     }
   });
 
-  test("shared Kiro CLI and IDE agent JSON sources differ only by CLI hooks", () => {
+  test("Kiro CLI and IDE agent JSON stay equivalent outside host-capable hooks", () => {
     const cliDir = join(REPO_ROOT, "harness", "kiro", "agents");
     const ideDir = join(REPO_ROOT, "harness", "kiro-ide", "agents");
     const shared = readdirSync(cliDir)
@@ -202,7 +202,23 @@ describe("t148 dist/kiro file structure", () => {
       const ide = readJson(join(ideDir, name));
       delete cli.hooks;
       delete ide.hooks;
-      expect(cli).toEqual(ide);
+      expect(ide, name).toEqual(cli);
+    }
+  });
+
+  test("worker lifecycle hooks ship only where Kiro exposes command arguments", () => {
+    const cliDir = join(REPO_ROOT, "harness", "kiro", "agents");
+    const ideDir = join(REPO_ROOT, "harness", "kiro-ide", "agents");
+    const names = readdirSync(cliDir)
+      .filter((name) => name.endsWith("-agent.json"))
+      .sort();
+    for (const name of names) {
+      const cli = readJson(join(cliDir, name));
+      const ide = readJson(join(ideDir, name));
+      const cliHooks = JSON.stringify(cli.hooks ?? {});
+      const ideHooks = JSON.stringify(ide.hooks ?? {});
+      expect(cliHooks, name).toContain("state-transition-guard");
+      expect(ideHooks, name).not.toContain("state-transition-guard");
     }
   });
 

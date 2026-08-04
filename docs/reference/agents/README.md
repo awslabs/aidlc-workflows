@@ -86,7 +86,7 @@ under dense context, risk-based test strategy, threat prioritisation,
 regulatory edge-cases, and cloud architecture trade-offs all fall in this
 category. The two balanced reviewers evaluate novel input against explicit
 criteria — the checklist encodes the method, so a mid-size model at session
-effort suffices (on Claude Code, Codex, and opencode; on Kiro all tiers
+effort suffices (on Claude Code, Codex, and opencode; on Kiro and Copilot all tiers
 inherit the session model and effort). See the projection table and the
 `tier_cap` override in [Agent System](../05-agent-system.md).
 
@@ -131,7 +131,7 @@ that inherited tool; it does not grant or withhold access.
 
 **Observations:**
 - The aidlc-architect-agent has the broadest stage involvement (9 stages across 3 phases), reflecting its role as the central design authority.
-- Across the full 14-agent roster, nine agents carry the `judgment` tier and five step down on Claude Code, Codex, and opencode (the two `balanced` reviewers plus the three `templated` planners; on Kiro all tiers inherit the session model and effort, so no agent steps down there); the stepped-down agents produce reviews against explicit checklists or dominantly templated planning, CI/CD, and runbook work. The matrix above covers the 11 domain-expert agents.
+- Across the full 14-agent roster, nine agents carry the `judgment` tier and five step down on Claude Code, Codex, and opencode (the two `balanced` reviewers plus the three `templated` planners; on Kiro and Copilot all tiers inherit the session model and effort, so no agent steps down there); the stepped-down agents produce reviews against explicit checklists or dominantly templated planning, CI/CD, and runbook work. The matrix above covers the 11 domain-expert agents.
 - The aidlc-compliance-agent operates purely in an advisory capacity (4 support stages across Ideation, Construction, and Operation; no lead stages).
 - Six of 11 agents are expected to use Bash for CLI interaction (infrastructure, security, development, testing, deployment, operations).
 - Three agents are expected to use WebSearch for research tasks (product, design, compliance).

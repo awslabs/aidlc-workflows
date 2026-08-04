@@ -347,4 +347,22 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     }
     expect(missing).toEqual([]);
   });
+
+  test("every prose question renderer starts a fresh local numbering scope", () => {
+    const missing: string[] = [];
+    for (const harness of ["copilot", "codex", "kiro", "kiro-ide", "opencode"]) {
+      const rel = `harness/${harness}/skills/aidlc/question-rendering.md`;
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      if (!body.includes("start every question at `1`")) {
+        missing.push(`${rel}  missing fresh numbering`);
+      }
+      if (!/Use unordered\s+bullets/.test(body)) {
+        missing.push(`${rel}  missing summary-list separation`);
+      }
+      if (!/Visible `1`\s+maps/.test(body)) {
+        missing.push(`${rel}  missing visible-key mapping`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
 });

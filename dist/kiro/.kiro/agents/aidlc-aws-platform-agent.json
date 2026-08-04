@@ -40,6 +40,11 @@
   "hooks": {
     "preToolUse": [
       {
+        "matcher": "execute_bash",
+        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts state-transition-guard aidlc-aws-platform-agent",
+        "timeout_ms": 15000
+      },
+      {
         "matcher": "fs_write",
         "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts review-freeze",
         "timeout_ms": 15000

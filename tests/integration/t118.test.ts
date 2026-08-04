@@ -368,6 +368,31 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(readFileSync(statePath(p), "utf-8")).toBe(before);
   });
 
+  test("SP4d: exact numbered resume-menu answers map to the four semantic choices", () => {
+    const p = projWithState("state-jumped.md");
+    const before = readFileSync(statePath(p), "utf-8");
+    const report = (answer: string) =>
+      directive(run(ORCHESTRATE, [
+        "report",
+        "--result",
+        "resumed",
+        "--user-input",
+        answer,
+        "--project-dir",
+        p,
+      ]));
+
+    expect(report("1").message).toContain("Re-run `next`");
+    expect(report("2").message).toContain("--direction redo");
+    expect(report("3").message).toContain("next --stage");
+    expect(report("4").message).toContain("--new-intent");
+
+    const outOfRange = report("5");
+    expect(outOfRange.kind).toBe("error");
+    expect(outOfRange.message).toContain("Accepted choices: 1/resume");
+    expect(readFileSync(statePath(p), "utf-8")).toBe(before);
+  });
+
   // ============================================================
   // Special path 5: BIRTH (P4: --init retired) — (a) named scope on a clean
   // workspace prints the intent-create move + creates NO state; (b) a named scope

@@ -151,6 +151,10 @@ Rules (both tracks):
   `Complete workflow` when `next_stage` is null. Never guess the next stage.
 - **No emergent options**: render exactly the spec's options (+ the escape).
   The NO EMERGENT BEHAVIOR rule applies to the rendering, not just the spec.
+- **Prose response keys**: on Track 2, start every question at `1`, independent
+  of numbered content earlier in the message or another question in the batch.
+  Use unordered bullets for immediately preceding summaries. Visible `1` maps
+  to the first source option label, `2` to the second, and so on.
 - **multiSelect: true** → prose track says "Reply with all numbers that apply
   (e.g. 1, 3)."
 - A free-text reply that clearly matches an option counts as that option;

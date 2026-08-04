@@ -1,4 +1,4 @@
-// covers: hook:aidlc-continue-workflow, function:refreshActiveDirectiveMarker
+// covers: hook:aidlc-continue-workflow, function:refreshActiveDirectiveMarker, function:hasPendingDecision
 //
 // Behavioural contract for the Stop hook `aidlc-continue-workflow.ts` — the framework's
 // FIRST flow-altering hook. Migrated from tests/integration/t121-stop-hook-enforce.sh
@@ -262,6 +262,29 @@ function makeProject(): string {
 function seedAuditShard(proj: string, body = "audit row 1\n"): void {
   mkdirSync(seededAuditDir(proj), { recursive: true });
   writeFileSync(pinnedShardPath(proj), body, "utf-8");
+}
+
+function seedInteractionAudit(
+  proj: string,
+  events: Array<{
+    event: "DECISION_RECORDED" | "QUESTION_ANSWERED" | "STAGE_STARTED";
+    stage: string;
+    workflow?: string;
+  }>,
+): void {
+  const timestamp = "2026-08-03T18:57:53Z";
+  const body = events
+    .map(
+      ({ event, stage, workflow }) =>
+        `## ${event}\n` +
+        `**Timestamp**: ${timestamp}\n` +
+        `**Event**: ${event}\n` +
+        `**Stage**: ${stage}\n` +
+        (workflow ? `**Workflow**: ${workflow}\n` : "") +
+        "\n---\n",
+    )
+    .join("");
+  seedAuditShard(proj, body);
 }
 
 /** Seed an active mid-stage workflow so the hook reaches the engine call. */
@@ -1179,6 +1202,100 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
       "",
       "code-generation",
     );
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, 30000);
+
+  // =========================================================================
+  // (f2) LOGGED-QUESTION CARVE-OUT — prose-rendered structured questions use
+  // the audit protocol's DECISION_RECORDED / QUESTION_ANSWERED handshake as
+  // their positive human-wait signal. This covers prompts outside the canonical
+  // questions file, notably the §13 learning selection and final learning note.
+  // =========================================================================
+  test("(f2) [-] with an unresolved current-stage DECISION_RECORDED allows the stop", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj);
+    seedInteractionAudit(proj, [
+      { event: "STAGE_STARTED", stage: "requirements-analysis" },
+      { event: "DECISION_RECORDED", stage: "requirements-analysis" },
+    ]);
+
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
+    expect(r.rc).toBe(0);
+    expect(r.out).toBe("");
+  }, 30000);
+
+  test("(f2) a later QUESTION_ANSWERED closes the logged-question carve-out", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj);
+    seedInteractionAudit(proj, [
+      { event: "STAGE_STARTED", stage: "requirements-analysis" },
+      { event: "DECISION_RECORDED", stage: "requirements-analysis" },
+      { event: "QUESTION_ANSWERED", stage: "requirements-analysis" },
+    ]);
+
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, 30000);
+
+  test("(f2) a different stage's unresolved decision does not release the stop", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj);
+    seedInteractionAudit(proj, [
+      { event: "STAGE_STARTED", stage: "requirements-analysis" },
+      { event: "DECISION_RECORDED", stage: "team-formation" },
+    ]);
+
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, 30000);
+
+  test("(f2) a new stage attempt closes a prior attempt's unresolved decision", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj);
+    seedInteractionAudit(proj, [
+      { event: "DECISION_RECORDED", stage: "requirements-analysis" },
+      { event: "STAGE_STARTED", stage: "requirements-analysis" },
+    ]);
+
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, 30000);
+
+  test("(f2) a synthetic single-stage start does not close the main attempt's decision", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj);
+    seedInteractionAudit(proj, [
+      { event: "STAGE_STARTED", stage: "requirements-analysis" },
+      { event: "DECISION_RECORDED", stage: "requirements-analysis" },
+      {
+        event: "STAGE_STARTED",
+        stage: "requirements-analysis",
+        workflow: "single-stage:requirements-analysis",
+      },
+    ]);
+
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
+    expect(r.rc).toBe(0);
+    expect(r.out).toBe("");
+  }, 30000);
+
+  test("(f2) autonomous Construction ignores an unresolved logged decision", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj, {
+      slug: "code-generation",
+      phase: "construction",
+      autonomy: "autonomous",
+    });
+    seedInteractionAudit(proj, [
+      { event: "STAGE_STARTED", stage: "code-generation" },
+      { event: "DECISION_RECORDED", stage: "code-generation" },
+    ]);
+
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
     expect(r.rc).toBe(0);
     expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
   }, 30000);

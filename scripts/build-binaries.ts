@@ -78,7 +78,14 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_ENTRY = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc.ts");
 const DEFAULT_OUT_DIR = join(REPO_ROOT, "build", "binaries");
 const RUNTIME_ASSET_ROOT = join(REPO_ROOT, "dist", "claude", ".claude");
-const RUNTIME_DISTRIBUTIONS = ["claude", "codex", "kiro", "kiro-ide"] as const;
+const RUNTIME_DISTRIBUTIONS = [
+  "claude",
+  "codex",
+  "kiro",
+  "kiro-ide",
+  "copilot",
+  "opencode",
+] as const;
 const MIN_CROSS_BYTES = 10 * 1024 * 1024;
 const DEV_SPAWN_MARKER = "/* dev-mode bun spawn */";
 
@@ -467,28 +474,39 @@ function harnessRuntimeGate(
   );
 }
 
-function harnessProbeGate(artifact: string): GateResult {
-  const project = mkdtempSync(join(tmpdir(), "aidlc-binary-probe-"));
+function harnessProbeGate(
+  artifact: string,
+  distribution: string,
+  expectedText: string,
+): GateResult {
+  const project = mkdtempSync(join(tmpdir(), `aidlc-binary-probe-${distribution}-`));
   try {
-    cpSync(join(REPO_ROOT, "dist", "kiro"), project, { recursive: true });
-    const env = pathlessEnv(project);
+    cpSync(join(REPO_ROOT, "dist", distribution), project, { recursive: true });
+    const env = pathlessEnv();
     delete env.AIDLC_HARNESS_DIR;
+    delete env.AIDLC_HARNESS_NAME;
+    delete env.AIDLC_PROJECT_DIR;
+    delete env.CLAUDE_PROJECT_DIR;
+    delete env.AIDLC_RUNTIME_HARNESS_ROOT;
+    delete env.AIDLC_RUNTIME_ROOT;
     const result = run(
       artifact,
-      ["sensor", "describe", "linter", "--project-dir", project],
+      ["doctor", "--project-dir", project],
       { cwd: project, env, timeoutMs: 30_000 },
     );
     const output = `${result.stdout}\n${result.stderr}`;
     return commandGate(
-      "harness-probe-kiro",
+      `harness-probe-${distribution}`,
       result,
-      result.status === 0 &&
-        result.stdout.includes(".kiro/tools/aidlc-sensor-linter.ts") &&
+      (result.status === 0 || result.status === 1) &&
+        result.stdout.includes(expectedText) &&
         !runtimeCrash(output),
       {
-        expected: "unset AIDLC_HARNESS_DIR probes the install and reads .kiro data",
+        expected:
+          `unset harness/project/runtime overrides select the ${distribution} doctor checks`,
         actual: output.trim(),
-        detail: "kiro-only install; env harness pin removed so only the probe can resolve it",
+        detail:
+          `${distribution}-only install; --project-dir is the sole routing input`,
       },
     );
   } finally {
@@ -1424,7 +1442,7 @@ function runtimeAssetsGate(artifact: string): GateResult {
     expected: assets.length,
     actual: assets.length - missing.length,
     detail: missing.length === 0
-      ? "complete claude, codex, kiro, and kiro-ide distributions staged"
+      ? `complete ${RUNTIME_DISTRIBUTIONS.join(", ")} distributions staged`
       : `missing destinations: ${missing.join(", ")}`,
   };
 }
@@ -1524,7 +1542,23 @@ function buildTarget(target: TargetConfig): TargetResult {
     result.gates.push(harnessRuntimeGate(actual.artifact, "codex", ".codex"));
     result.gates.push(harnessRuntimeGate(actual.artifact, "kiro", ".kiro"));
     result.gates.push(harnessRuntimeGate(actual.artifact, "kiro-ide", ".kiro"));
-    result.gates.push(harnessProbeGate(actual.artifact));
+    result.gates.push(harnessRuntimeGate(actual.artifact, "copilot", ".aidlc"));
+    result.gates.push(harnessRuntimeGate(actual.artifact, "opencode", ".aidlc"));
+    result.gates.push(harnessProbeGate(
+      actual.artifact,
+      "kiro",
+      "agents/aidlc.json present (hook + permission wiring)",
+    ));
+    result.gates.push(harnessProbeGate(
+      actual.artifact,
+      "copilot",
+      ".github/hooks/aidlc.json present (hook wiring)",
+    ));
+    result.gates.push(harnessProbeGate(
+      actual.artifact,
+      "opencode",
+      "opencode.json or opencode.jsonc present",
+    ));
     result.gates.push(pluginSelectGate(actual.artifact));
     result.gates.push(delegatePluginSyncGate(actual.artifact));
     result.gates.push(realPluginSyncGate(actual.artifact));

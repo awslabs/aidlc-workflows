@@ -53,6 +53,7 @@ import type { HarnessManifest } from "./manifest-types.ts";
 import { absorbReviewerKnowledge, agentNameFromPath } from "./agent-knowledge.ts";
 import { renderOnboarding } from "./onboarding.ts";
 import {
+  type Harness,
   kiroModelDefaults,
   projectTier,
   readEnvCap,
@@ -160,7 +161,7 @@ function agentTierFromMd(s: string, srcPath: string): string {
 function projectTierFrontmatter(
   s: string,
   srcPath: string,
-  harness: "claude" | "codex" | "kiro" | "opencode",
+  harness: Harness,
 ): string {
   // Only apply to files under agents/. Guard on the POSIX-normalized path
   // (srcPath carries the platform separator on Windows) because a stage .md
@@ -241,7 +242,7 @@ function transform(
   content: Buffer,
   harnessDir: string,
   rulesRename: string | null,
-  harness?: "claude" | "codex" | "kiro" | "opencode",
+  harness?: Harness,
 ): Buffer {
   if (srcPath.endsWith(".md")) {
     // Reviewer knowledge absorption runs FIRST (on the raw core text) so the
@@ -382,12 +383,15 @@ const MEMORY_SEED_DST = join("tools", "data", "memory-seed");
 const ACTIVE_SPACE_REL = join("aidlc", "active-space");
 const ACTIVE_SPACE_VALUE = "default\n";
 
-// Write tools/data/harness.json from manifest data. Today it carries just the
-// rules-subdir (the one rename the runtime must know per-tree); the object shape
-// leaves room for future per-harness runtime facts. Pretty-printed + trailing
-// newline so the committed file is diff-friendly and stable under --check.
+// Write tools/data/harness.json from manifest data. `name` disambiguates
+// distributions that share an engine directory (Copilot and OpenCode both use
+// .aidlc); rulesSubdir carries the manifest-owned rename.
 function writeHarnessData(treeRoot: string, m: HarnessManifest): void {
-  const data = { harnessDir: m.harnessDir, rulesSubdir: m.rulesRename ?? "rules" };
+  const data = {
+    name: m.name,
+    harnessDir: m.harnessDir,
+    rulesSubdir: m.rulesRename ?? "rules",
+  };
   const dst = join(treeRoot, HARNESS_DATA);
   mkdirSync(dirname(dst), { recursive: true });
   writeFileSync(dst, `${JSON.stringify(data, null, 2)}\n`);
@@ -403,7 +407,7 @@ function emitMemory(
   outRoot: string,
   harnessDir: string,
   rulesRename: string | null,
-  harness: "claude" | "codex" | "kiro" | "opencode",
+  harness: Harness,
 ): void {
   const srcDir = join(CORE_ROOT, MEMORY_SRC);
   if (!existsSync(srcDir)) return;
@@ -426,7 +430,7 @@ function emitMemorySeed(
   treeRoot: string,
   harnessDir: string,
   rulesRename: string | null,
-  harness: "claude" | "codex" | "kiro" | "opencode",
+  harness: Harness,
 ): void {
   const srcDir = join(CORE_ROOT, MEMORY_SRC);
   if (!existsSync(srcDir)) return;
@@ -833,14 +837,19 @@ function discoverPluginNames(): string[] {
 // of being silently skipped (the omission class that lost kiro-ide in round 1).
 // harnessLeaf = manifest.harnessDir; manifestDir + kind come from the manifest's
 // optional `plugin` block, defaulting to "<harnessDir>-plugin" + "store".
-type PluginTarget = { manifestDir: string; harnessLeaf: string; kind: "store" | "kiro" };
+type PluginTarget = {
+  harnessName: string;
+  manifestDir: string;
+  harnessLeaf: string;
+  kind: "store" | "kiro";
+};
 function pluginTargetFor(harnessName: string): PluginTarget | null {
   if (!existsSync(join(HARNESS_ROOT, harnessName, "manifest.ts"))) return null;
   const m = loadManifest(harnessName);
   const harnessLeaf = m.harnessDir;
   const manifestDir = m.plugin?.manifestDir ?? `${harnessLeaf}-plugin`;
   const kind = m.plugin?.kind ?? "store";
-  return { manifestDir, harnessLeaf, kind };
+  return { harnessName: m.name, manifestDir, harnessLeaf, kind };
 }
 
 // Render ONE plugin's projection for ONE harness into `outDir`. Pure builder —
@@ -864,7 +873,7 @@ function buildPluginProjection(pluginName: string, harnessName: string, outDir: 
   const description = manifest.description || "";
   const target = pluginTargetFor(harnessName);
   if (!target) throw new Error(`no plugin target for harness "${harnessName}" (missing manifest)`);
-  const { manifestDir, harnessLeaf, kind } = target;
+  const { harnessName: targetHarnessName, manifestDir, harnessLeaf, kind } = target;
   const templateHooks = join(REPO_ROOT, "scripts", "plugin-hooks-template");
   // Primitive content copied verbatim into the host plugin projection. Core
   // scope files keep the `aidlc-` prefix; plugin scope files use
@@ -876,7 +885,7 @@ function buildPluginProjection(pluginName: string, harnessName: string, outDir: 
   if (existsSync(outDir)) rmSync(outDir, { recursive: true, force: true });
   mkdirSync(outDir, { recursive: true });
 
-  // 1. Host-native manifest (.claude-plugin / .codex-plugin / .kiro-plugin).
+  // 1. Host-native manifest (for example .claude-plugin / .plugin / .kiro-plugin).
   const hostManifestDir = join(outDir, manifestDir);
   mkdirSync(hostManifestDir, { recursive: true });
   writeFileSync(
@@ -909,12 +918,12 @@ function buildPluginProjection(pluginName: string, harnessName: string, outDir: 
   // executable, exit 0 with a note rather than running a non-existent binary.
   const aidlcExpr =
     'AIDLC=$(command -v aidlc 2>/dev/null || true); ' +
-    `[ -n "$AIDLC" ] && { AIDLC_HARNESS_DIR=${harnessLeaf} "$AIDLC" plugin sync && exit 0; }; `;
+    `[ -n "$AIDLC" ] && { AIDLC_HARNESS_DIR=${harnessLeaf} AIDLC_HARNESS_NAME=${targetHarnessName} "$AIDLC" plugin sync && exit 0; }; `;
   const bunExpr =
     'BUN=$(command -v bun 2>/dev/null || true); ' +
     '[ -z "$BUN" ] && [ -x "$HOME/.bun/bin/bun" ] && BUN="$HOME/.bun/bin/bun"; ' +
     '[ -z "$BUN" ] && { echo "aidlc plugin compose: aidlc and bun not found, skipping" >&2; exit 0; }';
-  const command = `sh -c '${aidlcExpr}${bunExpr}; AIDLC_HARNESS_DIR=${harnessLeaf} "$BUN" "${rootExpr}/hooks/compose.ts"'`;
+  const command = `sh -c '${aidlcExpr}${bunExpr}; AIDLC_HARNESS_DIR=${harnessLeaf} AIDLC_HARNESS_NAME=${targetHarnessName} "$BUN" "${rootExpr}/hooks/compose.ts"'`;
 
   if (kind === "kiro") {
     writeFileSync(

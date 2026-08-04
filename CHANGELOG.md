@@ -1,6 +1,18 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.60] - 2026-08-08
+
+Adds GitHub Copilot as a first-class harness for both Copilot CLI and VS Code agent mode, with native skills, custom agents, normalized hooks, plugin composition, and deterministic workflow safeguards. **Upgrade:** copy `dist/copilot/.aidlc/`, `dist/copilot/aidlc/`, and merge `dist/copilot/.github/` plus `AGENTS.md` into the project; trust the folder in `~/.copilot/config.json`, and set `GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1` for headless `copilot -p` runs.
+
+* `/aidlc`, stage runners, and scope runners ship under `.github/skills/`; the 14 base personas ship as `.github/agents/aidlc-*-agent.md` custom agents and inherit the session model.
+* Approval gates and structured questions use fresh numbered prose so the human's next chat message mints presence; fixed resume choices accept exact numeric aliases `1` through `4`, and unresolved question waits no longer trigger Stop-hook continuation text that Copilot can mistake for an answer.
+* The Copilot adapter normalizes CLI and VS Code hook payloads, tool names, file lists, and response envelopes. Reviewer scope, workflow-transition ownership, malformed-input Stop enforcement, project path confinement, and locked per-session subagent attribution are enforced across both surfaces.
+* Copilot loads the engine's bounded `load-steering` directives before stage work and injects the exact active-stage rule bundle into delegated custom-agent briefs through the shared deliver-stage-rules guard.
+* Copilot plugin composition and selection emit agents and runners under `.github/{agents,skills}`; `/aidlc --doctor`, compiled runtime probing, binary assets, space switching, and release tests now cover Copilot alongside the existing harnesses.
+* The shared Copilot hook manifest omits VS Code's unsupported `SessionEnd`; both hosts reconcile the prior session on the next `SessionStart`.
+* New deterministic coverage includes Copilot packaging, adapter, security, plugin, doctor, and cross-harness regression tests plus the `AIDLC_COPILOT_EXEC_LIVE=1`-gated status journey.
+
 ## [2.5.59] - 2026-08-08
 
 Gives the Stop hook's conversational carve-out a second evidence source, so it stops counting a purely conversational turn mid-stage as a no-progress block on harnesses that deliver no transcript. Asking why an earlier decision was made, or reading code without advancing the workflow, previously fell through to the cap-bounded block on Kiro IDE, Kiro CLI, and opencode: the carve-out read its answer off the harness transcript, and only Claude Code and Codex deliver `transcript_path`. What that costs the user depends on the host — see the second bullet, because it is not the same everywhere. **Upgrade:** copy the tree CONTENTS for your harness, e.g. `mkdir -p your-project/.kiro && cp -R dist/kiro-ide/.kiro/. your-project/.kiro/` into your project.
@@ -42,7 +54,6 @@ cite two answers without a separator stop being reported as ungrounded.
   Definitions with a destination on the following line still resolve links
   document-wide without making their block eligible for the definition-only
   skip.
-
 ## [2.5.57] - 2026-08-07
 
 AI-DLC now speaks to you in your project's terms rather than its own. Three things a user reported all came from the same place: the assistant narrated its internals, hook names and messages described plumbing instead of purpose, and a new workflow opened with folders it was never going to use. Chat messages, approval gates, the composer's plan proposal, scope questions, error messages, and the onboarding doc are rewritten in plain developer terms; the sentences between steps are now written by the framework and relayed rather than improvised, with silence as the resting state; seven hooks and the intent-creation command are renamed to say what they do; and a record dir now contains only the phases your scope actually runs. Behavior is unchanged throughout: every stage, approval gate, audit event, and tool flag is identical, and the tests pinning those mechanics still pass.

@@ -83,6 +83,13 @@ prompts required by their surrounding instructions. They are not literal
 questions to paste into chat: at the required workflow point, their content
 MUST still be presented through the annex-defined mechanism.
 
+For any harness that renders options as prose, every question creates a fresh
+response-key scope: the first visible option is `1`, the second is `2`, and so
+on, regardless of numbered content earlier in the message or other questions
+in the batch. A visible number maps only to the source option label at that
+question-local index. Context or summary lists immediately before a prose
+question MUST use unordered bullets, never numbered items.
+
 ### Critical Compliance Checklist (most commonly missed steps)
 Before and during EVERY stage, verify:
 1. [ ] **Use the engine for every lifecycle transition** — before the prompt, `aidlc-orchestrate.ts report --stage <slug> --result awaiting-approval`; after the response, report `approved` or `rejected`; after revision work, report `revised`. When the active stage's own condition proves it does not apply, report `skipped --reason "<reason>"`. Never call lifecycle verbs on `aidlc-state.ts` directly. The engine emits the correct audit events and routes only on approval, completion, or a justified skip. Do NOT call `aidlc-audit.ts append` separately. (§2)
@@ -356,7 +363,7 @@ Log the user's mode choice to `<record>/audit/<host>-<clone>.md` using the Quest
 - Log each batch to `<record>/audit/<host>-<clone>.md` using the Question interaction log format. Generate a fresh ISO timestamp for each batch entry.
   CRITICAL: Each batch entry requires its own `date -u` Bash call. Do NOT reuse the timestamp from the mode choice or prior batch.
 - Continue until all questions are answered
-- **Consolidated summary before generation**: After all questions have been answered, present a consolidated summary of all answers in a clear list, then present this structured question:
+- **Consolidated summary before generation**: After all questions have been answered, present a consolidated summary of all answers as unordered bullets (never a numbered list), then present this structured question:
   ```question
   prompt: "Does this all look correct before I generate the artifact?"
   header: Confirm
@@ -560,6 +567,12 @@ At each non-gate question interaction:
 1. BEFORE presenting the question: `bun {{HARNESS_DIR}}/tools/aidlc-log.ts decision --stage <slug> --decision "<summary>" --options "<A,B,C>"` (emits `DECISION_RECORDED`).
 2. AFTER response: `bun {{HARNESS_DIR}}/tools/aidlc-log.ts answer --stage <slug> --details "<summary of answers>"` (emits `QUESTION_ANSWERED`).
 
+This pair is also a deterministic human-wait signal for the forwarding-loop Stop
+hook, including learning prompts that do not add a blank tag to the stage
+questions file. Once `decision` succeeds, render that question and END THE TURN.
+Never interpret hook feedback, a continuation reminder, or silence as its
+answer; only the human's next interaction may be followed by `answer`.
+
 ### Stage progress notation
 - `[ ]` — Not started
 - `[-]` — In progress (current stage, not yet approved)
@@ -758,6 +771,12 @@ Each stage specifies its lead and supporting agents. To load a persona:
 1. Dispatch the agent named by the stage metadata; its harness agent config loads the persona automatically (reviewer checklists are baked into the reviewer agents' own bodies at build time).
 2. Paste the accumulated `load-steering` rule bundle into every agent brief verbatim. Artifact references stay exact paths; never copy persona or knowledge prose into a brief.
 3. Keep support briefs topology-correct (mutually blind for hub-and-spoke and first-round mob work).
+4. Every delegated lead, support, and reviewer is artifact-scoped, never a
+   workflow conductor. It MUST NOT call `aidlc-orchestrate.ts next`, `report`,
+   or `park`; mutate lifecycle state (including `aidlc-state.ts unpark`); route
+   with a jump/configuration tool; or present approval gates or resume menus.
+   It returns its artifact, contribution, or review verdict to the conductor,
+   which alone performs lifecycle and routing actions.
 
 ### Multi-agent stages (ensemble topologies):
 

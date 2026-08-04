@@ -44,7 +44,7 @@
 //      nudge, not eight. When the workflow advances, the signature changes and
 //      the counter resets to 0, so a healthy loop is never throttled.
 //
-// Four human-wait carve-outs keep the hook from punishing a turn that ended
+// Five human-wait carve-outs keep the hook from punishing a turn that ended
 // *because* it is waiting on the human (or is simply conversational):
 //   1. The Esc interrupt is FREE: Stop hooks do not fire on user interrupt, so
 //      an Esc can never be trapped — no code needed for that case.
@@ -67,7 +67,13 @@
 //      Autonomous Construction stays guarded except for unit-major
 //      code-generation's mandatory Plan Approval. Any miss falls through to the
 //      cap-bounded block, so a genuine mid-stage quit is still nudged.
-//   4. A CONVERSATIONAL turn ends with the human's last prompt answered and NO
+//   4. A LOGGED NON-GATE QUESTION has a current-stage DECISION_RECORDED with no
+//      later QUESTION_ANSWERED. This is the positive signal for structured
+//      questions that do not live in the stage questions file (notably the
+//      learnings ritual), and for harnesses that render questions as prose.
+//      Like the pending-file carve-out, it is limited to [-] and suppressed
+//      under autonomous Construction.
+//   5. A CONVERSATIONAL turn ends with the human's last prompt answered and NO
 //      workflow-engine engagement (the conductor ran neither aidlc-orchestrate
 //      nor aidlc-state since that prompt). Issue #365's broader reading: a human
 //      who just wants to CHAT mid-workflow should not be nudged at all. We ALLOW
@@ -108,6 +114,7 @@ import {
   docsRoot,
   errorMessage,
   getField,
+  hasPendingDecision,
   isEngineToolCall,
   hooksHealthDir,
   isoTimestamp,
@@ -492,6 +499,26 @@ function isPendingQuestionStop(
     );
   } catch {
     // Unparseable / odd content — fall through to decideBlock (never trap).
+    return false;
+  }
+}
+
+// A structured non-gate question is logged before it is rendered and answered
+// afterward. That audit handshake is the positive human-wait signal for prompts
+// that are not represented by a blank tag in `<slug>-questions.md`, such as the
+// §13 learning selection and "Anything to add?" prompts. Keep the same strict
+// stage-state and autonomy gates as the question-file carve-out.
+function isPendingDecisionStop(projectDir: string, stateContent: string): boolean {
+  try {
+    if (getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous") {
+      return false;
+    }
+    const slug = currentStageSlug(stateContent);
+    if (slug.length === 0) return false;
+    const row = parseCheckboxes(stateContent).find((c) => c.slug === slug);
+    if (row?.state !== "in-progress") return false;
+    return hasPendingDecision(projectDir, slug, "STAGE_STARTED");
+  } catch {
     return false;
   }
 }
@@ -1129,6 +1156,19 @@ if (isPendingQuestionStop(projectDir, stateContent, activeStage, activeUnit)) {
     projectDir,
     HOOK_NAME,
     `active stage ${pendingStage} has an unanswered question; allowing the stop (pending-question carve-out)`,
+  );
+  return allowStop();
+}
+
+// Logged-question carve-out: a DECISION_RECORDED for the current [-] stage has
+// no later QUESTION_ANSWERED. Copilot's numbered-prose questions end the turn
+// without a native picker, so this signal keeps the Stop hook from injecting a
+// continuation that the model could mistake for the answer.
+if (isPendingDecisionStop(projectDir, stateContent)) {
+  recordHookDrop(
+    projectDir,
+    HOOK_NAME,
+    `current stage ${currentStageSlug(stateContent)} has an unanswered logged decision; allowing the stop (pending-decision carve-out)`,
   );
   return allowStop();
 }
