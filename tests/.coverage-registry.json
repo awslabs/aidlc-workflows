@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 504,
+    "total": 505,
     "enumeratedByClass": {
-      "function": 264,
+      "function": 265,
       "audit": 77,
       "scope": 9,
       "stage": 32,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 117,
+      "function": 118,
       "audit": 36,
       "scope": 9,
       "stage": 9,
@@ -1441,6 +1441,18 @@
         },
         {
           "file": "tests/unit/t64.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:ensureActiveSpaceCursor",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t160-workspace-record-resolution.test.ts",
           "mechanism": "none"
         }
       ],
