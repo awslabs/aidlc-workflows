@@ -45,6 +45,26 @@ const LEARNINGS_TS = join(AIDLC_SRC, "tools", "aidlc-learnings.ts");
 // an actual pre-upgrade installation has on disk.
 const BASE_WRITER_COMMIT = "6b264081";
 
+// CI clones shallow (`fetch-depth: 1`), so a commit that is reachable from v2 in
+// a full clone is still absent here — `git archive` fails with "not a valid
+// object name". Deepen on demand before using it, and skip rather than fail if
+// the network is unavailable: the fixture's VALUE is that a real pre-upgrade
+// writer produces the legacy line, so falling back to a hand-typed imitation
+// would silently swap that guarantee for a weaker one.
+function baseWriterCommitAvailable(): boolean {
+  const has = () =>
+    spawnSync("git", ["cat-file", "-e", `${BASE_WRITER_COMMIT}^{commit}`], {
+      cwd: REPO_ROOT,
+    }).status === 0;
+  if (has()) return true;
+  spawnSync("git", ["fetch", "--depth", "200", "origin", BASE_WRITER_COMMIT], {
+    cwd: REPO_ROOT,
+  });
+  if (has()) return true;
+  spawnSync("git", ["fetch", "--unshallow"], { cwd: REPO_ROOT });
+  return has();
+}
+
 function extractBaseWriterTree(): string {
   const dir = mkdtempSync(join(tmpdir(), "aidlc-t263-basetree-"));
   const archive = execFileSync("git", ["archive", BASE_WRITER_COMMIT, "core/tools"], {
@@ -2591,6 +2611,15 @@ describe("t263 /aidlc-onboard capture + list + classify (S1)", () => {
   // CURRENT writer with byte-identical incoming text. Must no-op, not throw.
   // ===========================================================================
   test("replaying a legacy pre-upgrade practice line with identical text no-ops instead of refusing", () => {
+    if (!baseWriterCommitAvailable()) {
+      // A shallow clone with no network cannot produce the real base writer.
+      // Skipping is honest; substituting a hand-typed legacy line would look
+      // like coverage while testing my imitation of the old format instead.
+      console.warn(
+        `t263: skipping legacy-replay — base writer ${BASE_WRITER_COMMIT} not fetchable`,
+      );
+      return;
+    }
     const baseTreeDir = extractBaseWriterTree();
     const baseLearnings = join(baseTreeDir, "core", "tools", "aidlc-learnings.ts");
     const pd = bareProject();
