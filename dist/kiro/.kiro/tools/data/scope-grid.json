@@ -287,6 +287,42 @@
       "feedback-optimization": "SKIP"
     }
   },
+  "tutorial": {
+    "stages": {
+      "workspace-scaffold": "EXECUTE",
+      "workspace-detection": "EXECUTE",
+      "state-init": "EXECUTE",
+      "intent-capture": "EXECUTE",
+      "market-research": "SKIP",
+      "feasibility": "SKIP",
+      "scope-definition": "EXECUTE",
+      "team-formation": "SKIP",
+      "rough-mockups": "EXECUTE",
+      "approval-handoff": "SKIP",
+      "reverse-engineering": "SKIP",
+      "practices-discovery": "SKIP",
+      "requirements-analysis": "EXECUTE",
+      "user-stories": "SKIP",
+      "refined-mockups": "SKIP",
+      "application-design": "EXECUTE",
+      "units-generation": "EXECUTE",
+      "delivery-planning": "EXECUTE",
+      "functional-design": "SKIP",
+      "nfr-requirements": "SKIP",
+      "nfr-design": "SKIP",
+      "infrastructure-design": "SKIP",
+      "code-generation": "EXECUTE",
+      "build-and-test": "EXECUTE",
+      "ci-pipeline": "SKIP",
+      "deployment-pipeline": "SKIP",
+      "environment-provisioning": "SKIP",
+      "deployment-execution": "SKIP",
+      "observability-setup": "SKIP",
+      "incident-response": "SKIP",
+      "performance-validation": "SKIP",
+      "feedback-optimization": "SKIP"
+    }
+  },
   "workshop": {
     "stages": {
       "workspace-scaffold": "EXECUTE",

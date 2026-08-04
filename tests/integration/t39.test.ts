@@ -5,7 +5,9 @@
 // data-driven sweep over all 9 canonical scopes (enterprise, feature, mvp,
 // poc, bugfix, refactor, infra, security-patch, workshop), running `bun
 // aidlc-utility.ts init --scope <s> --project-dir <p>` once per
-// scope and asserting 3 observables per scope (27 total). Every one of those
+// scope and asserting 3 observables per scope (27 total). This port sweeps the
+// shipped scope set, so it grew with `tutorial` (10 scopes, 30 observables).
+// Every one of those
 // observables is preserved here by SPAWNING the real CLI via
 // node:child_process spawnSync (BUN + the tool .ts path) and asserting on the
 // audit.md PHASE_STARTED/PHASE_SKIPPED rows the tool writes + the
@@ -213,6 +215,7 @@ const EXPECTED_SKIPPED: Record<string, string[]> = {
   refactor: ["ideation", "operation"],
   infra: ["ideation"],
   "security-patch": ["ideation"],
+  tutorial: ["operation"],
   workshop: ["ideation"],
 };
 
@@ -225,6 +228,7 @@ const SCOPES = [
   "refactor",
   "infra",
   "security-patch",
+  "tutorial",
   "workshop",
 ] as const;
 

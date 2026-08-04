@@ -23,7 +23,8 @@
         "refactor",
         "infra",
         "security-patch",
-        "workshop"
+        "workshop",
+        "tutorial"
       ],
       "inputs": "none (first stage after session start)",
       "outputs": "the per-intent record tree (stage artifact dirs + verification dir) and the space-level knowledge/ dir",
@@ -68,7 +69,8 @@
         "refactor",
         "infra",
         "security-patch",
-        "workshop"
+        "workshop",
+        "tutorial"
       ],
       "inputs": "none (scans filesystem)",
       "outputs": "workspace classification (greenfield/brownfield), technology stack detection",
@@ -113,7 +115,8 @@
         "refactor",
         "infra",
         "security-patch",
-        "workshop"
+        "workshop",
+        "tutorial"
       ],
       "inputs": "workspace classification from workspace-detection, scope from orchestrator",
       "outputs": "<record>/aidlc-state.md (full populated version, engine-resolved)",
@@ -161,7 +164,8 @@
         "enterprise",
         "feature",
         "mvp",
-        "poc"
+        "poc",
+        "tutorial"
       ],
       "reviewer": "aidlc-product-lead-agent",
       "reviewer_max_iterations": 2,
@@ -394,7 +398,8 @@
       "scopes": [
         "enterprise",
         "feature",
-        "mvp"
+        "mvp",
+        "tutorial"
       ],
       "inputs": "Intent statement, feasibility assessment, constraint register",
       "outputs": "scope-document.md, intent-backlog.md, scope-definition-questions.md (under this stage's record dir, engine-resolved)",
@@ -545,7 +550,8 @@
       "scopes": [
         "enterprise",
         "feature",
-        "mvp"
+        "mvp",
+        "tutorial"
       ],
       "reviewer": "aidlc-product-lead-agent",
       "reviewer_max_iterations": 2,
@@ -919,7 +925,8 @@
         "refactor",
         "infra",
         "security-patch",
-        "workshop"
+        "workshop",
+        "tutorial"
       ],
       "reviewer": "aidlc-product-lead-agent",
       "reviewer_max_iterations": 2,
@@ -1188,7 +1195,8 @@
         "enterprise",
         "feature",
         "mvp",
-        "workshop"
+        "workshop",
+        "tutorial"
       ],
       "reviewer": "aidlc-architecture-reviewer-agent",
       "reviewer_max_iterations": 2,
@@ -1283,7 +1291,8 @@
         "enterprise",
         "feature",
         "mvp",
-        "workshop"
+        "workshop",
+        "tutorial"
       ],
       "reviewer": "aidlc-architecture-reviewer-agent",
       "reviewer_max_iterations": 2,
@@ -1384,7 +1393,8 @@
         "enterprise",
         "feature",
         "mvp",
-        "workshop"
+        "workshop",
+        "tutorial"
       ],
       "inputs": "All Inception artifacts (requirements, stories, mockups, architecture, units)",
       "outputs": "bolt-plan.md, team-allocation.md, risk-and-sequencing-rationale.md, external-dependency-map.md, delivery-planning-questions.md (under this stage's record dir, engine-resolved)",
@@ -1997,7 +2007,8 @@
         "bugfix",
         "refactor",
         "security-patch",
-        "workshop"
+        "workshop",
+        "tutorial"
       ],
       "reviewer": "aidlc-architecture-reviewer-agent",
       "reviewer_max_iterations": 2,
@@ -2081,7 +2092,8 @@
         "bugfix",
         "refactor",
         "security-patch",
-        "workshop"
+        "workshop",
+        "tutorial"
       ],
       "inputs": "ALL code generation outputs across all units",
       "outputs": "build-instructions.md, unit-test-instructions.md, integration-test-instructions.md, performance-test-instructions.md, security-test-instructions.md, build-and-test-summary.md, test-results.md (under this stage's record dir, engine-resolved)",
@@ -3154,6 +3166,47 @@
       "description": "CVE response",
       "runner": true,
       "skeleton": false
+    },
+    "tutorial": {
+      "depth": "Minimal",
+      "stages": {
+        "workspace-scaffold": "EXECUTE",
+        "workspace-detection": "EXECUTE",
+        "state-init": "EXECUTE",
+        "intent-capture": "EXECUTE",
+        "market-research": "SKIP",
+        "feasibility": "SKIP",
+        "scope-definition": "EXECUTE",
+        "team-formation": "SKIP",
+        "rough-mockups": "EXECUTE",
+        "approval-handoff": "SKIP",
+        "reverse-engineering": "SKIP",
+        "practices-discovery": "SKIP",
+        "requirements-analysis": "EXECUTE",
+        "user-stories": "SKIP",
+        "refined-mockups": "SKIP",
+        "application-design": "EXECUTE",
+        "units-generation": "EXECUTE",
+        "delivery-planning": "EXECUTE",
+        "functional-design": "SKIP",
+        "nfr-requirements": "SKIP",
+        "nfr-design": "SKIP",
+        "infrastructure-design": "SKIP",
+        "code-generation": "EXECUTE",
+        "build-and-test": "EXECUTE",
+        "ci-pipeline": "SKIP",
+        "deployment-pipeline": "SKIP",
+        "environment-provisioning": "SKIP",
+        "deployment-execution": "SKIP",
+        "observability-setup": "SKIP",
+        "incident-response": "SKIP",
+        "performance-validation": "SKIP",
+        "feedback-optimization": "SKIP"
+      },
+      "keywords": [],
+      "description": "Teach the full arc in one sitting, design stages kept",
+      "testStrategy": "Minimal",
+      "skeleton": true
     },
     "workshop": {
       "depth": "Standard",

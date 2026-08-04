@@ -30,6 +30,7 @@ scopes:
   - enterprise
   - feature
   - mvp
+  - tutorial
 inputs: Intent statement, scope definition, intent backlog
 outputs: wireframes.md, user-flow.md, rough-mockups-questions.md (under this stage's record dir, engine-resolved)
 ---

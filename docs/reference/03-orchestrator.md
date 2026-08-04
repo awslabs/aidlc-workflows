@@ -37,7 +37,7 @@ The conductor passes `$ARGUMENTS` to the engine's first `next` verbatim — it n
 
 ### `/aidlc [scope]` -- Explicit Scope
 
-When the argument matches one of the 9 known scopes (`enterprise`, `feature`, `mvp`, `poc`, `bugfix`, `refactor`, `infra`, `security-patch`, `workshop`):
+When the argument matches one of the 10 known scopes (`enterprise`, `feature`, `mvp`, `poc`, `bugfix`, `refactor`, `infra`, `security-patch`, `tutorial`, `workshop`):
 
 An explicitly named scope on a fresh workspace (no intent yet — no `aidlc-state.md` under `aidlc/spaces/*/intents/*/`) **births the first intent**: the engine's `next` emits a run-then-continue `print` directive naming `aidlc-utility.ts intent-birth --scope <scope>` (threading any `--depth` / `--test-strategy` flags onto the named command); the conductor runs it and re-runs `next` to land on the first stage. Both naming shapes — the bare positional (`/aidlc bugfix`) and the explicit flag (`/aidlc --scope bugfix`) — emit the identical birth print. Describing what to build (`/aidlc "build the auth service"`) also births. A bare `/aidlc` with no explicitly named scope and no description does NOT birth (an env- or default-resolved scope is not a birth signal); it emits the no-state error directing the user to describe what to build or name a scope.
 
@@ -277,6 +277,7 @@ Authoritative data lives in the `.claude/scopes/aidlc-<name>.md` files plus each
 | `refactor` | 0.1-0.3, 2.1 (always), 2.3 (minimal), 3.1 (refactoring plan), 3.5, 3.6 | 8 / 32 | Minimal | Minimal |
 | `infra` | 0.1-0.3, 2.2, 2.3 (infra requirements), 3.2, 3.3, 3.4, 3.7, 4.1, 4.2, 4.3, 4.4 | 13 / 32 | Standard | Standard |
 | `security-patch` | 0.1-0.3, 2.1 (find vulnerability context), 2.3 (minimal), 3.2, 3.5, 3.6, 4.1, 4.3 | 10 / 32 | Minimal | Minimal |
+| `tutorial` | 0.1-0.3, 1.1, 1.4, 1.6, 2.3, 2.6, 2.7, 2.8, 3.5, 3.6 (skips 2.4 user-stories, 2.5 refined-mockups, 2.9 functional-design, all NFR/infra, all operation) | 12 / 32 | Minimal | Minimal |
 | `workshop` | 0.1-0.3, 2.1-2.8, 3.1-3.7, 4.1-4.7 (skips all ideation 1.1-1.7) | 25 / 32 | Standard | **Minimal** |
 
 ### Detailed Scope Breakdown
@@ -289,17 +290,18 @@ Authoritative data lives in the `.claude/scopes/aidlc-<name>.md` files plus each
 - **refactor** -- No Ideation. Same Inception start as bugfix. Adds Functional Design (as refactoring plan).
 - **infra** -- No Ideation. Infra-focused Requirements Analysis. NFR stages + Infrastructure Design + CI Pipeline from Construction. Deployment and Observability from Operation.
 - **security-patch** -- No Ideation. Reverse Engineering to find vulnerability context plus minimal Requirements Analysis (the auditable statement of the vulnerability and its remediation criteria). NFR Requirements, Code Generation, Build and Test. Deployment Pipeline and Deployment Execution from Operation.
+- **tutorial** -- Ideation kept to Intent Capture, Scope Definition, and Rough Mockups. All of the Inception design spine (Requirements Analysis, Application Design, Units Generation, Delivery Planning) plus Code Generation and Build and Test. Skips the three most expensive stages whose artifacts are optional downstream (User Stories, Refined Mockups, Functional Design) and all of NFR, infrastructure, CI, and Operation. Default depth Minimal with an explicit Minimal test strategy. For a taught, single-sitting run that reaches working code with the design stages still visible; not keyword-inferred, so it must be selected with `--scope tutorial`.
 - **workshop** -- No Ideation (project is pre-decided by the facilitator). All Inception, Construction, and Operation stages execute. Default depth: Standard (full artifact detail for learning). Default test strategy: Minimal (Nyquist testing to keep workshop pace fast). Designed for multi-day AI-DLC workshops where participants work through the full lifecycle as a mob.
 
 ### Depth Levels
 
 | Depth | Scopes | Characteristics |
 |---|---|---|
-| Minimal | poc, bugfix, refactor, security-patch | Minimal artifacts, brief analysis, optional stages skipped |
+| Minimal | poc, bugfix, refactor, security-patch, tutorial | Minimal artifacts, brief analysis, optional stages skipped |
 | Standard | feature, mvp, infra, workshop | Full artifacts at moderate detail |
 | Comprehensive | enterprise | Comprehensive artifacts with deep analysis, all stages execute |
 
-**Note:** Workshop is unique in having independent depth and test strategy defaults. It uses Standard depth (full artifacts for learning) but Minimal test strategy (Nyquist testing for pace). All other scopes default their test strategy to match their depth level. Override with `--test-strategy`.
+**Note:** Workshop is unique in having depth and test strategy defaults that *diverge*. It uses Standard depth (full artifacts for learning) but Minimal test strategy (Nyquist testing for pace). Tutorial also declares `testStrategy` explicitly, but at the same level as its depth (both Minimal), so the declaration pins the value rather than diverging from it. Every other scope leaves `testStrategy` unset and inherits its depth level. Override with `--test-strategy`.
 
 ---
 

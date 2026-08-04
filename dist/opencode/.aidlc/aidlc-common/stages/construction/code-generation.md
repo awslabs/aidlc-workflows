@@ -48,6 +48,7 @@ scopes:
   - refactor
   - security-patch
   - workshop
+  - tutorial
 inputs: ALL prior design artifacts for this unit
 outputs: application code + code-generation-plan.md, code-generation-questions.md, code-summary.md (under this stage's per-unit record dir, engine-resolved)
 ---

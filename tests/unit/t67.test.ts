@@ -282,7 +282,7 @@ function rowNames(tableOut: string): string[] {
 }
 
 const EXPECTED_ROW_ORDER =
-  "bugfix enterprise feature infra mvp poc refactor security-patch workshop";
+  "bugfix enterprise feature infra mvp poc refactor security-patch tutorial workshop";
 
 // ============================================================
 // scope-table — emission shape (.sh §1)
@@ -345,7 +345,7 @@ describe("t67 scope-table emission (migrated from t67-scope-table.sh §1-3)", ()
     expect(gridCount).toBe(mdCount);
     expect(rowCount).toBe(gridCount);
     // … and the concrete count is pinned.
-    expect(rowCount).toBe(9);
+    expect(rowCount).toBe(10);
   });
 });
 

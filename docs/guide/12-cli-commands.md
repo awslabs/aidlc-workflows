@@ -86,7 +86,7 @@ flowchart TD
 
 ### `/aidlc [scope]` — Start with explicit scope
 
-Start a new workflow with one of the enabled scopes. Core ships 9 named scopes; plugins can add more, and `select-plugins` can hide disabled plugin/core scopes from runtime.
+Start a new workflow with one of the enabled scopes. Core ships 10 named scopes; plugins can add more, and `select-plugins` can hide disabled plugin/core scopes from runtime.
 
 **Syntax:**
 
@@ -303,7 +303,7 @@ When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** sect
 ✓ Orphan stage files: 32 graph entries all have files
 ✓ Uncompiled stage files: 0 stage files missing from the compiled graph
 ✓ Enabled plugins: all enabled (no selection); enabled stage counts: aidlc=32
-✓ Scope validation: 9 scopes valid (29 advisories)
+✓ Scope validation: 10 scopes valid (29 advisories)
 ✓ Schema validation: 32/32 stages valid
 ✓ Graph references: 122 artifacts + edges resolved
 ✓ Keyword overlap: no conflicts

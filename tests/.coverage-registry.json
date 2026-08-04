@@ -20,11 +20,11 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 487,
+    "total": 488,
     "enumeratedByClass": {
       "function": 253,
       "audit": 74,
-      "scope": 9,
+      "scope": 10,
       "stage": 32,
       "hook": 14,
       "subcommand": 98,
@@ -3865,6 +3865,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "scope",
+      "unitId": "tutorial",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "scope",

@@ -80,7 +80,8 @@ const STAGE_GRAPH_PATH = join(AIDLC_SRC, "tools", "data", "stage-graph.json");
 const BEGIN = "<!-- BEGIN: compiled scope grid";
 const END = "<!-- END: compiled scope grid -->";
 
-// The nine scopes the .sh iterated, in the SAME alphabetical order.
+// The scopes the .sh iterated, in the SAME alphabetical order, plus `tutorial`
+// which joined the shipped set later.
 const SCOPES = [
   "bugfix",
   "enterprise",
@@ -90,6 +91,7 @@ const SCOPES = [
   "poc",
   "refactor",
   "security-patch",
+  "tutorial",
   "workshop",
 ] as const;
 
@@ -168,7 +170,7 @@ describe("t30 Section B — table row count matches scope-grid.json", () => {
       .filter((l) => /^\| [a-z-]+ /.test(l)).length;
     const jsonCount = Object.keys(readGrid()).length;
     expect(rowCount).toBe(jsonCount);
-    // Cross-check: the data rows are exactly the nine scopes we iterate below.
+    // Cross-check: the data rows are exactly the scopes we iterate below.
     expect(jsonCount).toBe(SCOPES.length);
   });
 });

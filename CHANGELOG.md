@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.38] - 2026-08-04
+
+Adds a tenth core scope, `tutorial`, for a taught single-sitting run that reaches working code without dropping the design stages. The two teaching-adjacent scopes could not cover this: `poc` skips `application-design`, `units-generation`, and `delivery-planning` on the premise that a spike is throwaway, and `workshop` skips all of Ideation and opens at `reverse-engineering`, so it assumes a facilitator-framed project and an existing codebase. `tutorial` keeps the design spine and instead drops the three stages that cost the most while producing artifacts that are optional downstream — `user-stories` (`mode=mob`), `refined-mockups` (duplicates `rough-mockups`, which also produces `mockup-visual-ref`), and `functional-design` (`for_each=unit-of-work`) — landing at 12 EXECUTE of 32 behind 9 approval gates. **Upgrade:** re-copy your `dist/<harness>/` shell to pick up the new scope file and the recompiled grid; nothing changes for the nine existing scopes.
+
+* New scope `tutorial` (`--scope tutorial`): `depth: Minimal` with `testStrategy: Minimal` pinned in frontmatter, so no `--depth`/`--test-strategy` flag is needed. `skeleton: on`, so Construction opens with the walking-skeleton ceremony when practices resolve to scope-dependent.
+* `keywords` is empty by design: the scope is never inferred from freeform text, so a taught session always starts from the same grid. Freeform intents mentioning "tutorial" still route to `feature`; the scope must be selected explicitly.
+* EXECUTE (12): the 3 initialization stages, `intent-capture`, `scope-definition`, `rough-mockups`, `requirements-analysis`, `application-design`, `units-generation`, `delivery-planning`, `code-generation`, `build-and-test`. `operation` is the only phase skipped in full, so `init` emits one `PHASE_SKIPPED`.
+* User Guide gains a `tutorial` section, a routing-table row, a use-case row, and a `tutorial` column in the Stage-by-Scope Matrix; the orchestrator reference gains the scope-to-stage row and breakdown. Doctor now reports `10 scopes valid`.
+
 ## [2.5.37] - 2026-08-03
 
 The orchestrator must never echo a fenced ` ```question ` block as literal chat text: the fence is an authoring spec rendered through each harness's question mechanism, never printed verbatim. Dumping the raw fence yields a non-interactive wall of text and drops the answerable options and "Other" escape supplied by the harness's native tool or numbered-prose fallback. This tightens the harness-neutral stage protocol and every per-harness question-rendering annex (Claude, Codex, Kiro CLI, Kiro IDE, opencode). Literal fences remain in framework documentation, but the stage protocol's fences are normative prompt specs whose contents must still be rendered when their surrounding instructions require them; only raw fence syntax is excluded from live chat. **Upgrade:** re-copy your `dist/<harness>/` shell into the project so the updated protocol and question-rendering annex are installed. Behavior is a documentation and contract change only; no command, flag, or state format changes.

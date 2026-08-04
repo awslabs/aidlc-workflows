@@ -22,7 +22,8 @@
       "refactor",
       "infra",
       "security-patch",
-      "workshop"
+      "workshop",
+      "tutorial"
     ],
     "inputs": "none (first stage after session start)",
     "outputs": "the per-intent record tree (stage artifact dirs + verification dir) and the space-level knowledge/ dir",
@@ -67,7 +68,8 @@
       "refactor",
       "infra",
       "security-patch",
-      "workshop"
+      "workshop",
+      "tutorial"
     ],
     "inputs": "none (scans filesystem)",
     "outputs": "workspace classification (greenfield/brownfield), technology stack detection",
@@ -112,7 +114,8 @@
       "refactor",
       "infra",
       "security-patch",
-      "workshop"
+      "workshop",
+      "tutorial"
     ],
     "inputs": "workspace classification from workspace-detection, scope from orchestrator",
     "outputs": "<record>/aidlc-state.md (full populated version, engine-resolved)",
@@ -160,7 +163,8 @@
       "enterprise",
       "feature",
       "mvp",
-      "poc"
+      "poc",
+      "tutorial"
     ],
     "reviewer": "aidlc-product-lead-agent",
     "reviewer_max_iterations": 2,
@@ -393,7 +397,8 @@
     "scopes": [
       "enterprise",
       "feature",
-      "mvp"
+      "mvp",
+      "tutorial"
     ],
     "inputs": "Intent statement, feasibility assessment, constraint register",
     "outputs": "scope-document.md, intent-backlog.md, scope-definition-questions.md (under this stage's record dir, engine-resolved)",
@@ -544,7 +549,8 @@
     "scopes": [
       "enterprise",
       "feature",
-      "mvp"
+      "mvp",
+      "tutorial"
     ],
     "reviewer": "aidlc-product-lead-agent",
     "reviewer_max_iterations": 2,
@@ -918,7 +924,8 @@
       "refactor",
       "infra",
       "security-patch",
-      "workshop"
+      "workshop",
+      "tutorial"
     ],
     "reviewer": "aidlc-product-lead-agent",
     "reviewer_max_iterations": 2,
@@ -1187,7 +1194,8 @@
       "enterprise",
       "feature",
       "mvp",
-      "workshop"
+      "workshop",
+      "tutorial"
     ],
     "reviewer": "aidlc-architecture-reviewer-agent",
     "reviewer_max_iterations": 2,
@@ -1282,7 +1290,8 @@
       "enterprise",
       "feature",
       "mvp",
-      "workshop"
+      "workshop",
+      "tutorial"
     ],
     "reviewer": "aidlc-architecture-reviewer-agent",
     "reviewer_max_iterations": 2,
@@ -1383,7 +1392,8 @@
       "enterprise",
       "feature",
       "mvp",
-      "workshop"
+      "workshop",
+      "tutorial"
     ],
     "inputs": "All Inception artifacts (requirements, stories, mockups, architecture, units)",
     "outputs": "bolt-plan.md, team-allocation.md, risk-and-sequencing-rationale.md, external-dependency-map.md, delivery-planning-questions.md (under this stage's record dir, engine-resolved)",
@@ -1996,7 +2006,8 @@
       "bugfix",
       "refactor",
       "security-patch",
-      "workshop"
+      "workshop",
+      "tutorial"
     ],
     "reviewer": "aidlc-architecture-reviewer-agent",
     "reviewer_max_iterations": 2,
@@ -2080,7 +2091,8 @@
       "bugfix",
       "refactor",
       "security-patch",
-      "workshop"
+      "workshop",
+      "tutorial"
     ],
     "inputs": "ALL code generation outputs across all units",
     "outputs": "build-instructions.md, unit-test-instructions.md, integration-test-instructions.md, performance-test-instructions.md, security-test-instructions.md, build-and-test-summary.md, test-results.md (under this stage's record dir, engine-resolved)",

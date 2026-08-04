@@ -4,9 +4,9 @@ Scopes control **which stages execute**. Depth controls **how much detail** each
 
 ---
 
-## The 9 Core Scopes
+## The 10 Core Scopes
 
-Core ships 9 named scopes. Each scope defines a stage set and a default depth level. Plugin installs can add more scopes, and an install can narrow which plugin scopes are visible with `bun .claude/tools/aidlc-utility.ts select-plugins <names>`. When a `plugins` selection disables core (`aidlc` omitted), the core scope files remain installed but are not valid runtime scopes until core is re-enabled; the Initialization stages still run for every enabled scope.
+Core ships 10 named scopes. Each scope defines a stage set and a default depth level. Plugin installs can add more scopes, and an install can narrow which plugin scopes are visible with `bun .claude/tools/aidlc-utility.ts select-plugins <names>`. When a `plugins` selection disables core (`aidlc` omitted), the core scope files remain installed but are not valid runtime scopes until core is re-enabled; the Initialization stages still run for every enabled scope.
 
 ### enterprise
 
@@ -72,6 +72,16 @@ Core ships 9 named scopes. Each scope defines a stage set and a default depth le
 - **Default depth:** Minimal
 - **Skips:** Market Research, Team Formation, Mockups, non-security design stages
 
+### tutorial
+
+**Use when:** Teaching AI-DLC in a single sitting, from a blank directory to working code, with the design stages still on screen. Complements `workshop`: that scope assumes a facilitator who has already framed the project and an existing codebase to reverse-engineer, while `tutorial` starts at Intent Capture and builds from nothing.
+
+- **Stages:** 12 of 32 (9 approval gates)
+- **Default depth:** Minimal
+- **Default test strategy:** Minimal — pinned explicitly so no flag is needed
+- **Skips:** The three most expensive stages whose artifacts are optional downstream (User Stories, Refined Mockups, Functional Design), plus all NFR, infrastructure, CI, and Operation stages
+- **Not keyword-inferred:** `keywords` is empty, so a taught session always starts from the same grid; select it with `--scope tutorial`
+
 ### workshop
 
 **Use when:** Running an AI-DLC workshop or training session. The project is pre-decided by the facilitator; participants work through inception, construction, and operation as a mob.
@@ -99,6 +109,7 @@ Authoritative data lives in the `.claude/scopes/aidlc-<name>.md` files (scope id
 | `refactor` | 8 / 32 | Minimal | Minimal | Clean up existing code |
 | `infra` | 13 / 32 | Standard | Standard | Infrastructure change |
 | `security-patch` | 10 / 32 | Minimal | Minimal | CVE response |
+| `tutorial` | 12 / 32 | Minimal | **Minimal** | Taught single-sitting run, design stages kept |
 | `workshop` | 25 / 32 | Standard | **Minimal** | AI-DLC workshop or training session |
 | (auto-detect) | Varies | Varies | Varies | AI determines from freeform intent |
 
@@ -114,39 +125,39 @@ The routing table above gives the counts; this matrix shows exactly **which** st
 
 <!-- BEGIN scope-stage-matrix: derived from each stage's `scopes:` frontmatter via the compiled scope-grid.json — kept in sync by tests/unit/t244-scope-matrix-doc-sync.test.ts; do not hand-edit cells without re-checking that test -->
 
-| # | Stage | `enterprise` | `feature` | `mvp` | `poc` | `bugfix` | `refactor` | `infra` | `security-patch` | `workshop` |
-|---|-------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| 0.1–0.3 | Initialization (all 3 stages) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| 1.1 | Intent Capture & Framing | ✓ | ✓ | ✓ | ✓ |  |  |  |  |  |
-| 1.2 | Market Research | ✓ | ✓ |  |  |  |  |  |  |  |
-| 1.3 | Feasibility & Constraints | ✓ | ✓ | ✓ |  |  |  |  |  |  |
-| 1.4 | Scope Definition | ✓ | ✓ | ✓ |  |  |  |  |  |  |
-| 1.5 | Team Formation | ✓ | ✓ |  |  |  |  |  |  |  |
-| 1.6 | Rough Mockups | ✓ | ✓ | ✓ |  |  |  |  |  |  |
-| 1.7 | Approval & Handoff | ✓ | ✓ |  |  |  |  |  |  |  |
-| 2.1 | Reverse Engineering | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  | ✓ | ✓ |
-| 2.2 | Practices Discovery | ✓ | ✓ | ✓ |  |  |  | ✓ |  | ✓ |
-| 2.3 | Requirements Analysis | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| 2.4 | User Stories | ✓ | ✓ | ✓ |  |  |  |  |  | ✓ |
-| 2.5 | Refined Mockups | ✓ | ✓ | ✓ |  |  |  |  |  | ✓ |
-| 2.6 | Application Design | ✓ | ✓ | ✓ |  |  |  |  |  | ✓ |
-| 2.7 | Units Generation | ✓ | ✓ | ✓ |  |  |  |  |  | ✓ |
-| 2.8 | Delivery Planning | ✓ | ✓ | ✓ |  |  |  |  |  | ✓ |
-| 3.1 | Functional Design | ✓ | ✓ | ✓ |  |  | ✓ |  |  | ✓ |
-| 3.2 | NFR Requirements | ✓ | ✓ | ✓ |  |  |  | ✓ | ✓ | ✓ |
-| 3.3 | NFR Design | ✓ | ✓ | ✓ |  |  |  | ✓ |  | ✓ |
-| 3.4 | Infrastructure Design | ✓ | ✓ | ✓ |  |  |  | ✓ |  | ✓ |
-| 3.5 | Code Generation | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  | ✓ | ✓ |
-| 3.6 | Build and Test | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  | ✓ | ✓ |
-| 3.7 | CI Pipeline | ✓ | ✓ | ✓ |  |  |  | ✓ |  | ✓ |
-| 4.1 | Deployment Pipeline | ✓ | ✓ |  |  |  |  | ✓ | ✓ | ✓ |
-| 4.2 | Environment Provisioning | ✓ | ✓ |  |  |  |  | ✓ |  | ✓ |
-| 4.3 | Deployment Execution | ✓ | ✓ |  |  |  |  | ✓ | ✓ | ✓ |
-| 4.4 | Observability Setup | ✓ | ✓ |  |  |  |  | ✓ |  | ✓ |
-| 4.5 | Incident Response | ✓ | ✓ |  |  |  |  |  |  | ✓ |
-| 4.6 | Performance Validation | ✓ | ✓ |  |  |  |  |  |  | ✓ |
-| 4.7 | Feedback & Optimization | ✓ | ✓ |  |  |  |  |  |  | ✓ |
-| | **Total stages** | **32** | **32** | **22** | **8** | **7** | **8** | **13** | **10** | **25** |
+| # | Stage | `enterprise` | `feature` | `mvp` | `poc` | `bugfix` | `refactor` | `infra` | `security-patch` | `tutorial` | `workshop` |
+|---|-------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| 0.1–0.3 | Initialization (all 3 stages) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| 1.1 | Intent Capture & Framing | ✓ | ✓ | ✓ | ✓ |  |  |  |  | ✓ |  |
+| 1.2 | Market Research | ✓ | ✓ |  |  |  |  |  |  |  |  |
+| 1.3 | Feasibility & Constraints | ✓ | ✓ | ✓ |  |  |  |  |  |  |  |
+| 1.4 | Scope Definition | ✓ | ✓ | ✓ |  |  |  |  |  | ✓ |  |
+| 1.5 | Team Formation | ✓ | ✓ |  |  |  |  |  |  |  |  |
+| 1.6 | Rough Mockups | ✓ | ✓ | ✓ |  |  |  |  |  | ✓ |  |
+| 1.7 | Approval & Handoff | ✓ | ✓ |  |  |  |  |  |  |  |  |
+| 2.1 | Reverse Engineering | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  | ✓ |  | ✓ |
+| 2.2 | Practices Discovery | ✓ | ✓ | ✓ |  |  |  | ✓ |  |  | ✓ |
+| 2.3 | Requirements Analysis | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| 2.4 | User Stories | ✓ | ✓ | ✓ |  |  |  |  |  |  | ✓ |
+| 2.5 | Refined Mockups | ✓ | ✓ | ✓ |  |  |  |  |  |  | ✓ |
+| 2.6 | Application Design | ✓ | ✓ | ✓ |  |  |  |  |  | ✓ | ✓ |
+| 2.7 | Units Generation | ✓ | ✓ | ✓ |  |  |  |  |  | ✓ | ✓ |
+| 2.8 | Delivery Planning | ✓ | ✓ | ✓ |  |  |  |  |  | ✓ | ✓ |
+| 3.1 | Functional Design | ✓ | ✓ | ✓ |  |  | ✓ |  |  |  | ✓ |
+| 3.2 | NFR Requirements | ✓ | ✓ | ✓ |  |  |  | ✓ | ✓ |  | ✓ |
+| 3.3 | NFR Design | ✓ | ✓ | ✓ |  |  |  | ✓ |  |  | ✓ |
+| 3.4 | Infrastructure Design | ✓ | ✓ | ✓ |  |  |  | ✓ |  |  | ✓ |
+| 3.5 | Code Generation | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  | ✓ | ✓ | ✓ |
+| 3.6 | Build and Test | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  | ✓ | ✓ | ✓ |
+| 3.7 | CI Pipeline | ✓ | ✓ | ✓ |  |  |  | ✓ |  |  | ✓ |
+| 4.1 | Deployment Pipeline | ✓ | ✓ |  |  |  |  | ✓ | ✓ |  | ✓ |
+| 4.2 | Environment Provisioning | ✓ | ✓ |  |  |  |  | ✓ |  |  | ✓ |
+| 4.3 | Deployment Execution | ✓ | ✓ |  |  |  |  | ✓ | ✓ |  | ✓ |
+| 4.4 | Observability Setup | ✓ | ✓ |  |  |  |  | ✓ |  |  | ✓ |
+| 4.5 | Incident Response | ✓ | ✓ |  |  |  |  |  |  |  | ✓ |
+| 4.6 | Performance Validation | ✓ | ✓ |  |  |  |  |  |  |  | ✓ |
+| 4.7 | Feedback & Optimization | ✓ | ✓ |  |  |  |  |  |  |  | ✓ |
+| | **Total stages** | **32** | **32** | **22** | **8** | **7** | **8** | **13** | **10** | **12** | **25** |
 
 <!-- END scope-stage-matrix -->
 
@@ -393,6 +404,7 @@ You can change the test strategy at three points:
 | CVE or security vulnerability response | `security-patch` |
 | Regulated feature requiring compliance | `enterprise` |
 | AI-DLC workshop or training lab | `workshop` |
+| Teaching AI-DLC end to end in one sitting, from scratch | `tutorial` |
 
 When in doubt, start with `feature` — it includes all 32 stages, and CONDITIONAL stages will self-skip when their conditions do not apply to your project.
 

@@ -152,6 +152,7 @@ Source of truth: one file per scope under `.codex/scopes/aidlc-<name>.md` (ident
 | poc            | Minimal       | (default)    | 8 / 32          |
 | refactor       | Minimal       | (default)    | 8 / 32          |
 | security-patch | Minimal       | (default)    | 10 / 32         |
+| tutorial       | Minimal       | Minimal      | 12 / 32         |
 | workshop       | Standard      | Minimal      | 25 / 32         |
 
 <!-- END: compiled scope grid -->

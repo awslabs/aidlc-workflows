@@ -42,6 +42,7 @@ const CORE_SCOPE_NAMES = [
   "bugfix",
   "security-patch",
   "refactor",
+  "tutorial",
 ] as const;
 
 const SKELETON_ON_CORE_SCOPES = [
@@ -50,6 +51,7 @@ const SKELETON_ON_CORE_SCOPES = [
   "infra",
   "mvp",
   "poc",
+  "tutorial",
   "workshop",
 ];
 
@@ -271,7 +273,7 @@ describe("t225 skeleton scope metadata", () => {
     ).toThrow(new RegExp(`${join(invalidDir, "bad-skeleton.md").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}.*maybe`));
   });
 
-  test("core skeleton defaults match the previous six-scope behavior", () => {
+  test("core skeleton defaults match the opted-in scope set", () => {
     withEnvAndFreshCaches({ AIDLC_SCOPES_DIR: CORE_SCOPES }, () => {
       const metadata = loadScopeMetadata();
       const skeletonOn = Object.values(metadata)

@@ -21,6 +21,7 @@ scopes:
   - infra
   - security-patch
   - workshop
+  - tutorial
 inputs: workspace classification from workspace-detection, scope from orchestrator
 outputs: <record>/aidlc-state.md (full populated version, engine-resolved)
 ---
