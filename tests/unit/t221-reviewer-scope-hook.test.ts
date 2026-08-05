@@ -563,10 +563,11 @@ describe("t221 (c) harness registration and protocol prose", () => {
           readFileSync(join(harness.engineRoot, "agents", `${agent}.json`), "utf-8"),
         ) as { hooks?: { preToolUse?: Array<{ matcher?: string; command?: string }> } };
         const entries = a.hooks?.preToolUse ?? [];
-        expect(entries.length, `${harness.name}/${agent}`).toBeGreaterThanOrEqual(3);
-        const matchers = entries.map((e) => e.matcher).sort();
+        const scopeEntries = entries.filter((e) => e.command?.includes("reviewer-scope"));
+        expect(scopeEntries.length, `${harness.name}/${agent}`).toBe(3);
+        const matchers = scopeEntries.map((e) => e.matcher).sort();
         expect(matchers).toEqual(["execute_bash", "fs_read", "fs_write"]);
-        for (const e of entries) {
+        for (const e of scopeEntries) {
           // The registration passes its own agent name so the adapter forwards
           // a real identity instead of a bare scoped_registration.
           expect(e.command).toContain(`aidlc-kiro-adapter.ts reviewer-scope ${agent}`);
