@@ -20,10 +20,10 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 506,
+    "total": 509,
     "enumeratedByClass": {
-      "function": 266,
-      "audit": 77,
+      "function": 268,
+      "audit": 78,
       "scope": 9,
       "stage": 32,
       "hook": 17,
@@ -351,6 +351,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "REVIEW_CLASS_CHANGED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "audit",
@@ -2821,6 +2828,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:resolveReviewClass",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:resolveRulesForStage",
       "minMechanism": "none",
       "coveredBy": [
@@ -2853,6 +2867,13 @@
     {
       "unitClass": "function",
       "unitId": "function:resolveUniqueIntentDir",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:REVIEW_CLASSES",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
