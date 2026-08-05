@@ -80,6 +80,10 @@ export interface StageFrontmatter {
   // reviewer_max_iterations — review-cycle cap before escalating to the human.
   // Defaults to 2 when reviewer is present.
   reviewer_max_iterations?: number;
+  // review_class — "adversarial" (refute + fix loop) or "advisory" (single
+  // pass, findings to the human gate). Defaults to "adversarial" when a
+  // reviewer is present. Requires a reviewer.
+  review_class?: "adversarial" | "advisory";
   // summary_confirmation — deterministic pre-generation checkpoint policy.
   // `required` means every run must create the questions file and record the
   // human's consolidated-summary choice; `if-present` is for conditional Q&A.
@@ -169,7 +173,7 @@ const REQUIRED_FIELDS = [
   "outputs",
 ] as const;
 
-const OPTIONAL_FIELDS = ["number", "name", "plugin", "for_each", "workspace_requires", "optional_produces", "produces_kinds", "sensors", "scopes", "reviewer", "reviewer_max_iterations", "summary_confirmation", "when", "required_sections"] as const;
+const OPTIONAL_FIELDS = ["number", "name", "plugin", "for_each", "workspace_requires", "optional_produces", "produces_kinds", "sensors", "scopes", "reviewer", "reviewer_max_iterations", "review_class", "summary_confirmation", "when", "required_sections"] as const;
 
 const KNOWN_FIELDS = new Set<string>([...REQUIRED_FIELDS, ...OPTIONAL_FIELDS]);
 
@@ -340,6 +344,21 @@ export function validateStageFrontmatter(
     !("reviewer" in o && o.reviewer !== undefined)
   ) {
     errors.push("reviewer_max_iterations requires a reviewer");
+  }
+
+  // review_class — optional. When present, must be "adversarial" or
+  // "advisory" and requires a reviewer (same coupling rationale as the cap:
+  // the compiler guards the whole reviewer block on `reviewer`). "none" is
+  // deliberately NOT a stage value — a stage that wants no review deletes its
+  // `reviewer:` line; "none" exists only on the scope cap and the run
+  // override, which can silence a declared reviewer without editing stages.
+  if ("review_class" in o && o.review_class !== undefined) {
+    if (o.review_class !== "adversarial" && o.review_class !== "advisory") {
+      errors.push('review_class must be "adversarial" or "advisory"');
+    }
+    if (!("reviewer" in o && o.reviewer !== undefined)) {
+      errors.push("review_class requires a reviewer");
+    }
   }
 
   // required_sections — optional list of non-empty section names (plugin

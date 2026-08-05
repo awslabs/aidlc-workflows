@@ -151,13 +151,17 @@ describe("t231 config get/list/set handlers", () => {
 
     const human = utility(["config-list"], project);
     expect(human.status).toBe(0);
-    expect(human.stdout).toBe("depth: Standard\ntest-strategy: Standard\n");
+    // review is empty on a fixture with no per-run override set (2.5.40).
+    expect(human.stdout).toBe("depth: Standard\ntest-strategy: Standard\nreview: \n");
 
     const json = utility(["config-list", "--json"], project);
     expect(json.status).toBe(0);
-    expect(parseJson<{ depth: string; "test-strategy": string }>(json.stdout)).toEqual({
+    expect(
+      parseJson<{ depth: string; "test-strategy": string; review: string }>(json.stdout)
+    ).toEqual({
       depth: "Standard",
       "test-strategy": "Standard",
+      review: "",
     });
   });
 

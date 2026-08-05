@@ -1004,6 +1004,11 @@ If a Task tool call fails (timeout, error, or returns truncated/incomplete outpu
 
 If the `run-stage` directive includes a `reviewer` field (non-null), the orchestrator MUST invoke the reviewer as a **separate sub-agent** after the stage body produces its artifacts and before the §13 learnings ritual.
 
+The directive's `review_class` field tells you HOW the review runs - the engine has already resolved it (stage declaration, lowered by the scope's `review_cap` and any per-run `--review` override; a `none` resolution omits the reviewer block entirely, so a directive that carries a reviewer always carries a class):
+
+- **`adversarial`** - the refute-and-repair loop below, up to `reviewer_max_iterations` passes with lead fixes between them. The default for Construction stages, where findings are machine-checkable and fix loops converge.
+- **`advisory`** - ONE review pass as decision support for the human gate (`reviewer_max_iterations` is 1). Whatever the verdict, do NOT re-invoke the lead and do NOT re-run the reviewer: record the terminal receipt, proceed to §13, and quote the reviewer's findings VERBATIM at the approval gate for the human to triage. The default for the human-gated ideation/inception prose stages, where readiness is a judgment call that belongs to the human at the gate.
+
 ### Flow
 
 1. **Invoke reviewer sub-agent.** Delegate to the reviewer agent named in `directive.reviewer`. Pass:
@@ -1029,10 +1034,12 @@ If the `run-stage` directive includes a `reviewer` field (non-null), the orchest
    Immediately before every reviewer dispatch, record the request:
    `bun .codex/tools/aidlc-log.ts review --stage "<directive.stage>" --reviewer "<directive.reviewer>" --iteration <n>`; add `--unit "<directive.unit>"` on a per-unit stage and `--single` on an isolated stage run.
 
-2. **Reviewer executes.** The review runs under the **adversarial review contract**:
+2. **Reviewer executes.** An `adversarial` review runs under the **adversarial review contract**:
 
    - **Refute, don't confirm.** The reviewer's job is to refute the artifact, not to confirm it. It assumes defects exist and hunts for them; READY is the verdict it fails to reach after trying to break the artifact, not the default it starts from.
    - **Ground findings in machine-checkable evidence where it exists.** The reviewer runs the validation tools the invocation lists (via shell) and checks the artifact against its acceptance criteria, its stage definition, and the consumed upstream contracts. A finding backed only by opinion is a suggestion, not grounds for NOT-READY.
+
+   An `advisory` review keeps the evidence-grounding rule but not the refute-until-READY posture: tell the reviewer in the dispatch brief that this is a SINGLE advisory pass whose findings go to the human at the approval gate - report only findings the human should weigh before approving, ranked by severity, with no fix-and-re-review loop behind it.
 
    The reviewer sub-agent:
    - Reads the stage definition to understand what SHOULD have been produced
@@ -1045,8 +1052,14 @@ If the `run-stage` directive includes a `reviewer` field (non-null), the orchest
      (`**Reviewer:** <reviewer-agent-name>`), so the `SUBAGENT_COMPLETED` audit
      event records which reviewer ran. The reviewer's persona owns this contract.
 
-3. **Read verdict.** After the reviewer returns, delete `<record>/.aidlc-reviewer-dispatch.json` if one was written (the enforcement window closes with the review; a leftover record would keep refusing sibling access for later, unrelated work), then read the `## Review` section from the primary artifact. Record the terminal receipt with the same `aidlc-log.ts review` command plus `--verdict <READY|NOT-READY>` (and the same `--unit` / `--single` fields), then branch on the verdict:
-   - **READY** → proceed to §13 learnings ritual then the approval gate. The receipt just recorded is TERMINAL: do not write to any `produces[]` artifact between recording it and gate approval (a later write invalidates the receipt and the engine refuses the gate). A READY verdict may arrive with optional suggestions riding along; do NOT apply them - quote them verbatim in the completion summary for the human to weigh at the gate. A suggestion is gate input, not a defect (step 2: it is not grounds for NOT-READY, so it is not grounds for editing past the terminal receipt either). Riding suggestions also never change the gate itself: keep the §1 approval question's standard option order (Approve first, Request Changes second) - READY means the artifact stands on its own, so do not present Request Changes as the recommended or first option because a suggestion exists. On harnesses with PreToolUse enforcement the review-freeze hook refuses such a write deterministically (`REVIEW_FREEZE_BLOCKED`); a recorded gate rejection lifts the freeze for the revision path.
+3. **Read verdict.** After the reviewer returns, delete `<record>/.aidlc-reviewer-dispatch.json` if one was written (the enforcement window closes with the review; a leftover record would keep refusing sibling access for later, unrelated work), then read the `## Review` section from the primary artifact. Record the terminal receipt with the same `aidlc-log.ts review` command plus `--verdict <READY|NOT-READY>` (and the same `--unit` / `--single` fields).
+
+   The recorded receipt is TERMINAL whenever no further review pass follows it: do not write to any `produces[]` artifact between recording it and gate approval (a later write invalidates the receipt and the engine refuses the gate). A verdict may arrive with optional suggestions riding along; do NOT apply them - quote them verbatim in the completion summary for the human to weigh at the gate. A suggestion is gate input, not a defect (step 2: it is not grounds for NOT-READY, so it is not grounds for editing past the terminal receipt either). Riding suggestions also never change the gate itself: keep the §1 approval question's standard option order (Approve first, Request Changes second) - do not present Request Changes as the recommended or first option because a suggestion exists. On harnesses with PreToolUse enforcement the review-freeze hook refuses such a write deterministically (`REVIEW_FREEZE_BLOCKED`); a recorded gate rejection lifts the freeze for the revision path.
+
+   **On an `advisory` review, both verdicts are terminal here.** Do not re-invoke the lead or the reviewer (the engine refuses a REVIEW_REQUESTED beyond the single pass); proceed to §13, then present the approval gate with the reviewer's findings quoted verbatim - severity, location, and recommendation - as decision support: "The reviewer flagged N findings for your review before approving." The human triages; a Request Changes at the gate is how an advisory finding becomes a revision.
+
+   **On an `adversarial` review**, branch on the verdict:
+   - **READY** → the receipt is terminal (above); proceed to §13 learnings ritual then the approval gate
    - **NOT-READY** and `reviewIterations < reviewer_max_iterations` (default 2):
      - Increment review iteration counter
      - Re-invoke the stage's lead agent ALONE, dispatched per `directive.mode` (inline in your context, or as a subagent on the dispatched modes). On an ensemble stage (pipeline/mob) the room or chain is NOT re-convened - review findings are artifact defects and the lead owns the artifacts; the repair loop is lead-reviewer ping-pong (§5). The builder addresses the findings and updates the artifact.
@@ -1058,8 +1071,10 @@ If the `run-stage` directive includes a `reviewer` field (non-null), the orchest
 The reviewer also re-runs on the Part 0 revision path: when a human rejection
 leads to a revision that changes a `produces[]` artifact, re-run this step
 before reporting `revised` — the stale `## Review` verdict predates the
-revised content and must be replaced, with the same lead-alone loop and
-iteration budget as at first entry.
+revised content and must be replaced. An `adversarial` review re-enters with
+the same lead-alone loop and iteration budget as at first entry; an
+`advisory` review re-runs as one fresh advisory pass (its findings ride the
+re-presented gate).
 
 > **Completion precondition (enforced by the engine).** Every completion path
 > (`approve`, `advance`, `finalize`, and `complete-workflow`) refuses a stage

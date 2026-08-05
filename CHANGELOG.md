@@ -1,6 +1,18 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.54] - 2026-08-07
+
+Stage reviews now run under a review class, cutting the dominant latency cost of the human-gated prose stages. Live A/B runs against the real harness showed the adversarial refute-fix-re-review loop spending 12+ minutes per inception stage on review choreography alone (the shape behind reports of 30-minute Requirements Analysis waits); the 7 human-gated ideation/inception prose stages now default to a single advisory pass whose findings are quoted verbatim at the approval gate for the human to triage, while the 5 Construction design/build stages keep the full adversarial loop. The iteration cap is now engine-enforced rather than prose-only, and the reviewer tier runs at medium effort (measured at ~half the review wall-clock with no finding-quality loss). **Upgrade:** re-copy your `dist/<harness>/` shell into the project; existing workflows pick the classes up on the next stage directive.
+
+* New stage frontmatter field `review_class: adversarial | advisory` (requires `reviewer`; defaults to `adversarial` when a reviewer is declared). The 7 prose stages (intent-capture, rough-mockups, requirements-analysis, user-stories, refined-mockups, application-design, units-generation) ship `advisory`; the 5 Construction stages (functional-design, nfr-requirements, nfr-design, infrastructure-design, code-generation) stay `adversarial`.
+* Advisory contract: one review pass, both verdicts terminal, `reviewer_max_iterations` pinned to 1, findings ranked by severity and quoted verbatim at the approval gate; a Request Changes at the gate is how a finding becomes a revision. Evidence-grounding still applies; the reviewer personas carry the advisory stance.
+* Scope ceiling: scopes may declare `review_cap: adversarial | advisory | none`; the shipped `bugfix`, `poc`, and `workshop` scopes cap to `advisory`. Invalid values fail scope metadata loading loudly.
+* New per-run override `/aidlc --review <adversarial|advisory|none>`: lowers the effective class for the active workflow (low-wins against stage declaration and scope cap; `adversarial` clears the override and can never raise a class). Updates the `Review Override` state field, emits the new `REVIEW_CLASS_CHANGED` audit event (78-event taxonomy), and shows in `config list` / `config get review`.
+* Engine-enforced iteration ceiling: `aidlc-log.ts review` now refuses a `REVIEW_REQUESTED` whose `--iteration` exceeds the stage's effective budget (advisory 1, adversarial `reviewer_max_iterations`, override `none` 0), with refusal text that teaches the terminal path. `REVIEW_COMPLETED` receipts are never refused. Fail-open on resolution errors.
+* Autonomous swarm (Bolt) reviews are exempt from scope caps and run overrides: inside a Bolt the reviewer is the only pre-merge verification, so the declared class always applies.
+* The reviewer tier (`balanced`: product-lead + architecture-reviewer) now pins `medium` reasoning effort on Claude, Codex, and opencode instead of inheriting the session effort.
+
 ## [2.5.53] - 2026-08-06
 
 Adds a kill switch for the Claude Code token-usage and cost tracking introduced in 2.5.40. Local tracking (the usage ledger, the statusline `up/down/$` segment, and the completion-event cost rollups) remains on by default; set `AIDLC_DISABLE_USAGE_TRACKING=1` to turn all of it off. **Upgrade:** re-copy your `dist/<harness>/` shell into the project; no action is needed to keep the default behavior.

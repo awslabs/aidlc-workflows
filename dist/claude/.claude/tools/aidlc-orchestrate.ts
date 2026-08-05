@@ -110,6 +110,7 @@ import {
   listIntents,
   loadScopeMetadata,
   loadScopeMetadataAll,
+  resolveReviewClass,
   loadScopeMapping,
   nextInScopeStage,
   parseCheckboxes,
@@ -338,6 +339,7 @@ interface ParsedFlags {
   phase?: string;
   depth?: string;
   testStrategy?: string;
+  review?: string; // --review <adversarial|advisory|none>: per-run review-class override
   readOnly?: string; // the matched read-only flag, if any
   readOnlyArgs?: string[]; // allowlisted trailing args for the read-only flag (e.g. --doctor --export --output <dir>)
   resume?: boolean; // --resume: re-enter an existing workflow (resume choice)
@@ -438,6 +440,9 @@ function parseNextFlags(args: string[]): ParsedFlags {
       i++;
     } else if (a === "--test-strategy" && i + 1 < args.length) {
       flags.testStrategy = args[i + 1];
+      i++;
+    } else if (a === "--review" && i + 1 < args.length) {
+      flags.review = args[i + 1];
       i++;
     } else if (a === "--new-scope") {
       flags.newScope = true;
@@ -1586,10 +1591,25 @@ function buildRunStageDirective(
   // the final in-scope stage (the conductor renders "Complete workflow").
   const nextStage = nextInScopeStage(node.slug, scope, stateContent ?? undefined);
   directive.next_stage = nextStage ? nextStage.name : null;
-  // Reviewer — include if the stage declares one (§12a).
+  // Reviewer — include if the stage declares one (§12a) AND the effective
+  // review class is not "none". The engine resolves the class here (stage
+  // declaration, lowered by the scope's review_cap and any per-run Review
+  // Override, low-wins) so the conductor never re-derives it: a "none"
+  // resolution omits the whole reviewer block and the stage runs reviewless,
+  // exactly like a stage that never declared a reviewer. Advisory pins the
+  // iteration cap to 1 - a single pass is the contract, not a budget.
   if (node.reviewer) {
-    directive.reviewer = node.reviewer;
-    directive.reviewer_max_iterations = node.reviewer_max_iterations ?? 2;
+    const reviewClass = resolveReviewClass(
+      node.review_class,
+      scope,
+      stateContent
+    );
+    if (reviewClass !== "none") {
+      directive.reviewer = node.reviewer;
+      directive.review_class = reviewClass;
+      directive.reviewer_max_iterations =
+        reviewClass === "advisory" ? 1 : node.reviewer_max_iterations ?? 2;
+    }
   }
   // Decision D-E: bake the conductor persona into the FIRST run-stage of the
   // workflow. The optional field is omitted on every later directive (the
@@ -2025,7 +2045,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // open to the normal `next`.
   if (!flags.readOnly && !flags.workspaceCommand && !flags.pluginCommand && !flags.stage && !flags.phase &&
       !flags.scope && !flags.positionalScope && !flags.intent && !flags.resume &&
-      !flags.depth && !flags.testStrategy &&
+      !flags.depth && !flags.testStrategy && !flags.review &&
       !flags.single && !flags.compose && !flags.newScope && !flags.report) {
     try {
       const pdLatch = resolveProjectDir(projectDir);
@@ -2376,13 +2396,15 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       ));
       return;
     }
-    // A depth / test-strategy modifier with no scope change is a config-change.
-    // Gate it on the absence of a scope flag so a `--scope X --depth Y` combo
-    // routes through scope-change above (which carries the depth), not here.
-    if (!flags.scope && (flags.depth || flags.testStrategy)) {
+    // A depth / test-strategy / review modifier with no scope change is a
+    // config-change. Gate it on the absence of a scope flag so a
+    // `--scope X --depth Y` combo routes through scope-change above (which
+    // carries the depth), not here.
+    if (!flags.scope && (flags.depth || flags.testStrategy || flags.review)) {
       const parts = ["config-change"];
       if (flags.depth) parts.push(`--depth ${flags.depth}`);
       if (flags.testStrategy) parts.push(`--test-strategy ${flags.testStrategy}`);
+      if (flags.review) parts.push(`--review ${flags.review}`);
       emit(printDirective(
         `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${parts.join(" ")}\` to update the configuration, then print its output verbatim and stop.`,
       ));
@@ -2772,11 +2794,19 @@ function tryEmitSwarm(
   //     from the intent's recorded set; `prepare` errors without it on a multi-repo
   //     intent, surfacing the choice rather than guessing.
   const repos = intentRepos(projectDir);
+  // Autonomous swarm reviews are NOT subject to the scope review_cap or the
+  // per-run Review Override: inside an invoke-swarm the reviewer is the ONLY
+  // verification between a unit's convergence and its merge - there is no
+  // downstream human gate for advisory findings to flow to, so lowering the
+  // class here would remove the sole check rather than rebalance it. The
+  // declared class (adversarial for every shipped construction stage) rides
+  // along verbatim; review_class is emitted for observability.
   const reviewerFields = node.reviewer
     ? {
         stage: node.slug,
         stage_file: stageFileFor(node.phase, node.slug),
         reviewer: node.reviewer,
+        review_class: node.review_class ?? "adversarial",
         reviewer_max_iterations: node.reviewer_max_iterations ?? 2,
       }
     : {};

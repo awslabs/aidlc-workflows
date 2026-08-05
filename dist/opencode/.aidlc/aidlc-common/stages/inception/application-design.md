@@ -11,6 +11,7 @@ mode: inline
 summary_confirmation: required
 reviewer: aidlc-architecture-reviewer-agent
 reviewer_max_iterations: 2
+review_class: advisory
 produces:
   - components
   - component-methods

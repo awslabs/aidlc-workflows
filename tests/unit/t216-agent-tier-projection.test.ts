@@ -17,7 +17,9 @@
 //                effort win - an omitted effort key inherits the session
 //                effort, and a pinned one would override it in both
 //                directions, so ABSENCE is the contract)
-//   balanced  -> model: sonnet,  NO effort: line (same inherit reasoning)
+//   balanced  -> model: sonnet,  effort: medium (the reviewer tier; pinned
+//                in 2.5.40 after live A/B showed medium reviews at ~half the
+//                xhigh wall-clock with no finding-quality loss)
 //   templated -> model: sonnet,  effort: medium (the one deliberate,
 //                cost-saving downgrade)
 //
@@ -59,7 +61,7 @@ type Agent = (typeof AGENTS)[number];
 // policy rather than echoing either. effort: null = the line must be ABSENT.
 const EXPECTED: Record<Agent, { model: "inherit" | "sonnet"; effort: "medium" | null }> = {
   architect: { model: "inherit", effort: null },
-  "architecture-reviewer": { model: "sonnet", effort: null },
+  "architecture-reviewer": { model: "sonnet", effort: "medium" },
   "aws-platform": { model: "inherit", effort: null },
   compliance: { model: "inherit", effort: null },
   composer: { model: "inherit", effort: null },
@@ -70,7 +72,7 @@ const EXPECTED: Record<Agent, { model: "inherit" | "sonnet"; effort: "medium" | 
   operations: { model: "sonnet", effort: "medium" },
   "pipeline-deploy": { model: "sonnet", effort: "medium" },
   product: { model: "inherit", effort: null },
-  "product-lead": { model: "sonnet", effort: null },
+  "product-lead": { model: "sonnet", effort: "medium" },
   quality: { model: "inherit", effort: null },
 };
 

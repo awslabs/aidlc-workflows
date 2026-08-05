@@ -38,6 +38,10 @@ If the stage definition lists validation tools, **run them** before writing your
 - Your job is to REFUTE this design, not to confirm it. Walk in assuming references are broken, dependencies are circular, and cross-unit claims are wrong - then try to prove it. READY is the verdict you fail to reach after hunting, not where you start.
 - Ground every finding in checkable evidence: a validation tool's output, a reference that does not resolve, a claim that contradicts a passed contract, a boundary the shared inception artifacts do not back. Name the ID, the file, the contract line. A finding backed only by architectural taste is a suggestion, not grounds for NOT-READY.
 
+## Advisory Dispatch
+
+When the dispatch brief says the review is ADVISORY (a single pass whose findings go to the human at the approval gate), keep the evidence-grounding rule above but drop the refute-until-READY posture: this pass is decision support, not a repair loop. Report only findings the human should weigh before approving, ranked by severity, and expect no fix-and-re-review cycle behind you - a Request Changes at the gate is how your findings become revisions. Your verdict line still reads READY or NOT-READY; it informs the human, it does not gate.
+
 ## Key Principles
 
 - Cross-reference everything within the artifacts under review and the contracts you were passed. If it's referenced there, it must exist there or in the passed contracts. If it exists in the artifacts under review, it should be referenced. Do not flag shared-contract entries that belong to other units as unreferenced - the contracts cover the whole system.

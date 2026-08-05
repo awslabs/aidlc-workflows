@@ -276,11 +276,21 @@ learnings ritual and approval gate, the conductor invokes the named reviewer as 
 **separate sub-agent**. The reviewer reads the stage definition, the Q&A, and the
 artifacts (never the builder's `memory.md` or plan — it forms independent
 judgment), then appends a `## Review` section with a verdict: **READY** or
-**NOT-READY**. On NOT-READY the builder re-runs to address the findings and the
-reviewer re-checks, looping up to `reviewer_max_iterations` times (default 2). If
-findings remain after the cap, the workflow proceeds to the approval gate with the
-unresolved findings noted — the reviewer never blocks, the human always has final
-say.
+**NOT-READY**. How the verdict is handled depends on the stage's review class:
+
+- **Advisory** (the human-gated ideation/inception prose stages): one review
+  pass, whatever the verdict. The findings are quoted verbatim at the approval
+  gate, ranked by severity, as decision support — you triage them, and a
+  Request Changes at the gate is how a finding becomes a revision.
+- **Adversarial** (the Construction design/build stages): on NOT-READY the
+  builder re-runs to address the findings and the reviewer re-checks, looping
+  up to `reviewer_max_iterations` times (default 2, engine-enforced). If
+  findings remain after the cap, the workflow proceeds to the approval gate
+  with the unresolved findings noted.
+
+The scope can cap the class (`bugfix`, `poc`, and `workshop` cap every stage to
+advisory) and `/aidlc --review <class>` caps it per run. Either way the
+reviewer never blocks — the human always has final say.
 
 (IMPORTANT: use plain agent names in backticks as shown — do NOT make them markdown links; per-agent reviewer doc pages do not exist yet.)
 

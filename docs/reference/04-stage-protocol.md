@@ -936,28 +936,45 @@ learnings → gate.
 
 *(Protocol Section 12a)*
 
+The directive's `review_class` field selects the contract, resolved by the
+engine from three inputs (low-wins): the stage's declared class, the active
+scope's `review_cap`, and any per-run `--review` override. A `none` resolution
+omits the reviewer block entirely and the stage runs reviewless.
+
 1. **Invoke.** Delegate to the agent named in `directive.reviewer`, passing the
    stage definition path, the Q&A file, the produced artifact paths, and any
    validation tools from frontmatter — never the builder's `memory.md` or plan, so
    the reviewer forms independent judgment.
-2. **Review.** The review runs under the adversarial review contract: the
-   reviewer tries to refute the artifact rather than confirm it, grounding
+2. **Review.** An `adversarial` review runs under the adversarial review contract:
+   the reviewer tries to refute the artifact rather than confirm it, grounding
    findings in machine-checkable evidence where it exists (READY is the verdict
-   it fails to reach, not the default). The reviewer reads the definition, Q&A,
-   and artifacts, runs any listed validation tools, and appends a `## Review`
-   section to the primary artifact with a **READY** or **NOT-READY** verdict.
-3. **Verdict.** READY → proceed to the learnings ritual then the gate. NOT-READY
-   with iterations remaining below `reviewer_max_iterations` (default 2) → the lead
-   agent re-runs to address the findings and the reviewer re-checks. NOT-READY with
-   iterations exhausted → proceed to the gate with the unresolved findings noted.
-   The recorded receipt is terminal: any later write to a `produces[]` artifact
-   invalidates it and the engine refuses the gate, so fixes happen inside the
-   iteration loop, never after the terminal receipt. Suggestions riding on a READY
-   verdict are quoted at the gate for the human, not applied.
+   it fails to reach, not the default). An `advisory` review keeps the
+   evidence-grounding rule but is a single decision-support pass: findings are
+   ranked by severity for the human at the gate, with no repair loop behind
+   them. Either way the reviewer reads the definition, Q&A, and artifacts, runs
+   any listed validation tools, and appends a `## Review` section to the primary
+   artifact with a **READY** or **NOT-READY** verdict.
+3. **Verdict.** On `advisory`, both verdicts are terminal: the workflow proceeds
+   to the learnings ritual and the gate, where the findings are quoted verbatim
+   for the human to triage (`reviewer_max_iterations` is 1, engine-enforced).
+   On `adversarial`: READY → proceed to the learnings ritual then the gate.
+   NOT-READY with iterations remaining below `reviewer_max_iterations` (default
+   2) → the lead agent re-runs to address the findings and the reviewer
+   re-checks. NOT-READY with iterations exhausted → proceed to the gate with the
+   unresolved findings noted.
+   The recorded receipt is terminal whenever no further review pass follows it:
+   any later write to a `produces[]` artifact invalidates it and the engine
+   refuses the gate, so fixes happen inside the iteration loop, never after the
+   terminal receipt. Suggestions riding on a verdict are quoted at the gate for
+   the human, not applied.
 
-The reviewer never blocks — the human always has final say at the gate — and does
-not fire for stages without a `reviewer` field. See the `reviewer` /
-`reviewer_max_iterations` frontmatter fields in [Stage Definition](15-stage-definition.md).
+The iteration budget is engine-enforced: `aidlc-log.ts review` refuses a
+`REVIEW_REQUESTED` whose `--iteration` exceeds the stage's effective budget, so
+a conductor that loses count cannot run unbounded review passes. The reviewer
+never blocks — the human always has final say at the gate — and does not fire
+for stages without a `reviewer` field. See the `reviewer` /
+`reviewer_max_iterations` / `review_class` frontmatter fields in
+[Stage Definition](15-stage-definition.md).
 
 ---
 

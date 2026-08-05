@@ -15,15 +15,19 @@ import {
   emitError,
   errorMessage,
   extractMarkdownSection,
+  getField,
   holdsAuditLock,
   humanActedSinceLastAnswer,
   humanPresenceGuardDisabled,
   isAutonomousMode,
+  loadStageGraphAll,
   parseCheckboxes,
   readAllAuditShards,
+  readStateFile,
   recordDir,
   reviewArtifactFingerprint,
   resolveProjectDir,
+  resolveReviewClass,
   resolveStage,
   SUMMARY_CONFIRMATION_CHECKPOINT,
   stateFilePath,
@@ -519,6 +523,56 @@ function handleReview(args: string[]): void {
   if (flags.unit) fields.Unit = flags.unit;
   if (flags.iteration) fields.Iteration = flags.iteration;
   if (flags.single === "true") fields.Workflow = `single-stage:${flags.stage}`;
+
+  // Engine-enforced iteration ceiling (deterministic half of the §12a cap;
+  // the prose cap alone let a looping conductor run unbounded reviews). A
+  // REVIEW_REQUESTED whose --iteration exceeds the stage's effective budget
+  // is refused before any audit row lands. The budget mirrors directive
+  // emission exactly: advisory = 1 (single pass is the contract), else the
+  // stage's declared reviewer_max_iterations (default 2). Swarm/per-unit
+  // reviews (--unit) use the DECLARED class - same exemption as invoke-swarm
+  // emission, where scope caps and run overrides do not apply. Fail-open on
+  // a missing graph/state read (a broken lookup must not block a legitimate
+  // review), fail-closed only on a positive over-budget signal. Requests
+  // with no --iteration are exempt (older callers; the receipt precondition
+  // still holds them to a terminal verdict).
+  if (flags.verdict === undefined && flags.iteration) {
+    const iteration = Number(flags.iteration);
+    if (Number.isInteger(iteration) && iteration >= 1) {
+      let budget: number | null = null;
+      try {
+        const node = loadStageGraphAll().find((s) => s.slug === flags.stage);
+        if (node?.reviewer) {
+          const declared = node.review_class ?? "adversarial";
+          let effective: string = declared;
+          if (!flags.unit) {
+            const state = readStateFile(pd, flags.intent, flags.space);
+            effective = resolveReviewClass(
+              declared,
+              getField(state, "Scope") ?? "",
+              state
+            );
+          }
+          if (effective === "none") budget = 0;
+          else if (effective === "advisory") budget = 1;
+          else budget = node.reviewer_max_iterations ?? 2;
+        }
+      } catch {
+        budget = null; // resolution failed - do not block the review
+      }
+      if (budget !== null && iteration > budget) {
+        error(
+          `Refusing REVIEW_REQUESTED for "${flags.stage}": iteration ${iteration} exceeds ` +
+            `this stage's review budget (${budget}). ` +
+            (budget === 1
+              ? "This review runs as a single advisory pass - do not re-invoke the reviewer; " +
+                "quote its findings at the approval gate for the human to triage."
+              : "The review loop is exhausted - present the gate with the unresolved findings " +
+                "for the human's decision instead of another review pass.")
+        );
+      }
+    }
+  }
 
   let eventType: "REVIEW_REQUESTED" | "REVIEW_COMPLETED";
   if (flags.verdict !== undefined) {

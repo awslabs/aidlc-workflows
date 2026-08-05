@@ -13,7 +13,7 @@ commands a stage or conductor invokes directly.
 
 All event names follow `SUBJECT_PAST_VERB` — every event answers "what happened?"
 
-## Event Registry (77 events, 20 categories)
+## Event Registry (78 events, 20 categories)
 
 ### Workflow Lifecycle (4 events)
 
@@ -62,7 +62,7 @@ All event names follow `SUBJECT_PAST_VERB` — every event answers "what happene
 | `WORKSPACE_SCANNED` | Workspace detection done | Timestamp, Project type, Details | `tools/aidlc-utility.ts` handleInit |
 | `WORKSPACE_INITIALISED` | State file created | Timestamp, Details | `tools/aidlc-utility.ts` handleInit |
 
-### Navigation Events (6 events)
+### Navigation Events (7 events)
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
@@ -70,6 +70,7 @@ All event names follow `SUBJECT_PAST_VERB` — every event answers "what happene
 | `PLUGIN_SELECTION_CHANGED` | `select-plugins` changed enabled plugins | Timestamp, Previous Selection, New Selection | `tools/aidlc-utility.ts select-plugins` |
 | `DEPTH_CHANGED` | `--depth` changed depth level | Timestamp, Old depth, New depth | `tools/aidlc-utility.ts` |
 | `TEST_STRATEGY_CHANGED` | `--test-strategy` changed test strategy | Timestamp, Old strategy, New strategy | `tools/aidlc-utility.ts` |
+| `REVIEW_CLASS_CHANGED` | `--review` changed the per-run review override | Timestamp, Old Override, New Override | `tools/aidlc-utility.ts` |
 | `SCOPE_DETECTED` | Auto-detected from freeform text | Timestamp, Detected scope, Input text, Source, Matched keywords (optional; present when `Source=keyword`) | `tools/aidlc-utility.ts detect-scope` |
 | `RECOMPOSED` | The adaptive composer re-shaped a running workflow's pending stages (suffix flips via `recompose`) | Timestamp, Scope, Stages skipped, Stages added, Stages in Scope | `tools/aidlc-utility.ts recompose` |
 

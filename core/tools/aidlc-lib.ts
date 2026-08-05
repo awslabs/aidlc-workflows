@@ -36,6 +36,7 @@ export interface StageEntry {
   condition?: string;
   reviewer?: string;
   reviewer_max_iterations?: number;
+  review_class?: "adversarial" | "advisory";
   // Summary-confirmation policy for stages using the unified question flow.
   // `required` means every execution owes a questions file and receipt;
   // `if-present` enforces a receipt only when the conditional flow created one.
@@ -4855,6 +4856,12 @@ interface ScopeMetadata {
   testStrategy?: string;
   runner?: boolean;
   skeleton: boolean;
+  /** Ceiling on how heavyweight stage reviews run under this scope:
+   *  "adversarial" (no cap - stages run as declared), "advisory" (adversarial
+   *  stages degrade to a single advisory pass), or "none" (no reviewer
+   *  dispatch at all). Absent = adversarial (no cap). Resolution lives in
+   *  resolveReviewClass. */
+  reviewCap?: "adversarial" | "advisory" | "none";
   /** When true, this scope is the enabled plugin's freeform/default fallback
    *  (plugin-only installs where the core `feature`/`poc` defaults are
    *  deselected). At most one enabled scope should set this. */
@@ -4953,10 +4960,71 @@ export function loadScopeMetadataAll(): Record<string, ScopeMetadata> {
       meta.skeleton = skeleton === "on";
     }
     if (scalarField(fm, "freeform_default") === "true") meta.freeformDefault = true;
+    const reviewCap = scalarField(fm, "review_cap");
+    if (reviewCap) {
+      if (
+        reviewCap !== "adversarial" &&
+        reviewCap !== "advisory" &&
+        reviewCap !== "none"
+      ) {
+        throw new Error(
+          `Scope file ${filePath} has invalid review_cap value "${reviewCap}". Expected "adversarial", "advisory", or "none".`
+        );
+      }
+      meta.reviewCap = reviewCap;
+    }
     out[name] = meta;
   }
   _scopeMetadataAll = out;
   return out;
+}
+
+// --- Review-class resolution (stage-protocol §12a) ---
+//
+// Three inputs, one effective class, resolved LOW-WINS along the same
+// precedence idea as the tier cap (aidlc-tiers.ts): the stage declares its
+// default, the scope may cap it, and a per-run override (state field
+// `Review Override`, written by `aidlc-utility config-change --review`)
+// beats both. Ordering: none < advisory < adversarial. A stage with no
+// reviewer is always "none" - no cap or override can conjure a reviewer.
+export const REVIEW_CLASSES = ["none", "advisory", "adversarial"] as const;
+export type ReviewClass = (typeof REVIEW_CLASSES)[number];
+
+const REVIEW_RANK: Record<ReviewClass, number> = {
+  none: 0,
+  advisory: 1,
+  adversarial: 2,
+};
+
+function asReviewClass(v: string | null | undefined): ReviewClass | null {
+  return v === "none" || v === "advisory" || v === "adversarial" ? v : null;
+}
+
+/** The effective review class for one stage run. `stageClass` is the compiled
+ *  node's review_class (undefined when the stage declares no reviewer -
+ *  resolves to "none"). `scope` names the active scope (its review_cap is
+ *  read from scope metadata; unknown scope or absent cap = no cap).
+ *  `stateContent` supplies the per-run `Review Override` field when present.
+ *  An override or cap can only LOWER the stage's declared class, never raise
+ *  it: min() everywhere, so `--review adversarial` on an advisory stage keeps
+ *  advisory, and neither can revive a reviewer the stage never declared. */
+export function resolveReviewClass(
+  stageClass: string | undefined,
+  scope: string,
+  stateContent?: string | null
+): ReviewClass {
+  const declared = asReviewClass(stageClass);
+  if (declared === null) return "none"; // no reviewer on the stage
+  let effective: ReviewClass = declared;
+  const cap = loadScopeMetadata()[scope]?.reviewCap;
+  if (cap && REVIEW_RANK[cap] < REVIEW_RANK[effective]) effective = cap;
+  const override = asReviewClass(
+    stateContent ? getField(stateContent, "Review Override") : null
+  );
+  if (override && REVIEW_RANK[override] < REVIEW_RANK[effective]) {
+    effective = override;
+  }
+  return effective;
 }
 
 export function loadScopeMetadata(): Record<string, ScopeMetadata> {
@@ -5647,6 +5715,7 @@ export function emitStageFrontmatter(obj: Record<string, unknown>): string {
     "summary_confirmation",
     "reviewer",
     "reviewer_max_iterations",
+    "review_class",
     "for_each",
     "workspace_requires",
     "produces",

@@ -90,6 +90,9 @@ const VALID_EVENT_TYPES = new Set([
   "PLUGIN_SELECTION_CHANGED",
   "DEPTH_CHANGED",
   "TEST_STRATEGY_CHANGED",
+  // Per-run review-class override changed (config-change --review). The
+  // effective class each stage runs at is resolved at directive emission.
+  "REVIEW_CLASS_CHANGED",
   // Adaptive composer: an in-flight plan re-shape (pending-stage suffix flips
   // via the recompose verb). Emitted by aidlc-utility.ts handleRecompose.
   "RECOMPOSED",
@@ -191,6 +194,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   PLUGIN_SELECTION_CHANGED: "Plugin Selection Change",
   DEPTH_CHANGED: "Depth Change",
   TEST_STRATEGY_CHANGED: "Test Strategy Change",
+  REVIEW_CLASS_CHANGED: "Review Class Change",
   RECOMPOSED: "Plan Recomposed",
   ERROR_LOGGED: "Error Logged",
   RECOVERY_COMPLETED: "Recovery Completed",

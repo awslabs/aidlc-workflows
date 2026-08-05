@@ -188,6 +188,13 @@ export interface GraphStage extends StageEntry {
   // reviewer_max_iterations — review cycle cap before escalating to human.
   // Defaults to 2 when reviewer is present.
   reviewer_max_iterations?: number;
+  // review_class — how the review runs: "adversarial" (refute + fix loop up
+  // to the cap, §12a classic) or "advisory" (single pass, findings quoted at
+  // the human gate, no fix loop). Defaults to "adversarial" when a reviewer
+  // is present (the pre-class behavior). Absent when no reviewer. The
+  // EFFECTIVE class at runtime may be lowered by the scope's review_cap or a
+  // run override — resolveReviewClass in aidlc-lib.ts owns that resolution.
+  review_class?: "adversarial" | "advisory";
   // Deterministic pre-generation consolidated-summary checkpoint policy.
   summary_confirmation?: "required" | "if-present";
 }
@@ -454,6 +461,7 @@ const FIELD_ORDER = [
   "scopes",
   "reviewer",
   "reviewer_max_iterations",
+  "review_class",
   "summary_confirmation",
   "inputs",
   "outputs",
@@ -1981,6 +1989,12 @@ function buildGraphStage(
       cap >= 1
         ? cap
         : 2;
+    // Default the class to "adversarial" (the pre-class behavior) when a
+    // reviewer is declared without one. Schema (V2) rejects any value other
+    // than adversarial/advisory upstream; keep the coercion defensive so a
+    // bad value degrades to the strict default rather than leaking through.
+    stage.review_class =
+      parsed.review_class === "advisory" ? "advisory" : "adversarial";
   }
   if (parsed.summary_confirmation !== undefined) {
     stage.summary_confirmation = parsed.summary_confirmation;

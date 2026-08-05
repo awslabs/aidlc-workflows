@@ -8,6 +8,7 @@ keywords:
   - spike
 description: Prove feasibility fast
 skeleton: on
+review_cap: advisory
 ---
 
 # poc scope

@@ -109,10 +109,15 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
     opencode: { model: null, variant: null },
   },
   balanced: {
-    claude: { model: "sonnet", effort: null },
-    codex: { model: "openai.gpt-5.4", effort: null },
+    // Effort pinned to medium (was: inherit the session effort). Balanced is
+    // the reviewer tier - both review-only agents carry it, nothing else does
+    // - and live A/B runs showed a medium review pass at ~half the wall-clock
+    // of an xhigh-inheriting one with no verdict/finding quality loss. A
+    // session pinned to xhigh was silently doubling every review's cost.
+    claude: { model: "sonnet", effort: "medium" },
+    codex: { model: "openai.gpt-5.4", effort: "medium" },
     kiro: { model: null },
-    opencode: { model: "amazon-bedrock/global.anthropic.claude-sonnet-4-6", variant: null },
+    opencode: { model: "amazon-bedrock/global.anthropic.claude-sonnet-4-6", variant: "medium" },
   },
   templated: {
     // The one deliberate downgrade: a smaller model at reduced effort for

@@ -140,7 +140,7 @@ const VALID_TEST_STRATEGIES: Record<string, string> = {
   comprehensive: "Comprehensive",
 };
 
-const CONFIG_KEYS = ["depth", "test-strategy"] as const;
+const CONFIG_KEYS = ["depth", "test-strategy", "review"] as const;
 // These workspace transactions can legitimately queue behind a full plugin
 // compose (compile + runner regeneration), so they share its ~60s lock budget.
 const WORKSPACE_MUTATION_LOCK_RETRIES = 600;
@@ -228,6 +228,7 @@ Utilities:
   --scope <scope>   Set or change scope (standalone or with --stage/--phase)
   --depth <level>   Override depth (minimal, standard, comprehensive)
   --test-strategy <level>  Override test strategy (minimal, standard, comprehensive)
+  --review <class>  Cap stage reviews for this run (adversarial, advisory, none)
   --version         Show the framework version
   --help            Show this help message
 
@@ -239,14 +240,15 @@ Examples:
   /aidlc feature                                Start a feature workflow
   /aidlc Fix the login timeout bug              Auto-detected as bugfix scope
   /aidlc compose "harden the deploy pipeline"   Composer proposes a tailored plan
-  /aidlc config list                         Show depth and test strategy
+  /aidlc config list                         Show depth, test strategy, and review override
   /aidlc plugin list                         Show installed plugin selection
   /aidlc                                        Resume or begin
   /aidlc --stage code-generation                Jump to code-generation stage
   /aidlc --phase construction --scope bugfix    Jump to construction with bugfix scope
   /aidlc --scope bugfix --depth comprehensive  Bugfix with comprehensive depth
   /aidlc --depth minimal                       Change depth of active workflow
-  /aidlc --depth standard --test-strategy minimal  Full artifacts, minimal tests`;
+  /aidlc --depth standard --test-strategy minimal  Full artifacts, minimal tests
+  /aidlc --review advisory                     Single-pass reviews, findings at the gate`;
 
 /** Exported for t67 unit tests. */
 export function renderHelpText(): string {
@@ -3889,6 +3891,7 @@ function handleIntentBirthStateBuild(
 - **Stages to Skip**: ${skipStages.length > 0 ? skipStages.join(", ") : "none"}
 - **Depth**: ${effectiveDepth}
 - **Test Strategy**: ${effectiveTestStrategy}
+- **Review Override**:
 
 ## Workspace State
 - **Project Root**: ${projectDir}
@@ -4980,13 +4983,14 @@ function handleRecompose(projectDir: string, flags: Record<string, string>): voi
 // config get/list/set - read or update active workflow config
 // ---------------------------------------------------------------------------
 
-function configFieldForKey(key: string): "Depth" | "Test Strategy" | null {
+function configFieldForKey(key: string): "Depth" | "Test Strategy" | "Review Override" | null {
   if (key === "depth") return "Depth";
   if (key === "test-strategy") return "Test Strategy";
+  if (key === "review") return "Review Override";
   return null;
 }
 
-function readConfigField(projectDir: string, flags: Record<string, string>, field: "Depth" | "Test Strategy"): string {
+function readConfigField(projectDir: string, flags: Record<string, string>, field: "Depth" | "Test Strategy" | "Review Override"): string {
   const sp = stateFilePath(projectDir, flags.intent, flags.space);
   if (!existsSync(sp)) die(NO_STATE_FILE_MESSAGE);
   const content = readStateFile(projectDir, flags.intent, flags.space);
@@ -5003,19 +5007,21 @@ function handleConfigGet(projectDir: string, positional: string[], flags: Record
 function handleConfigList(projectDir: string, flags: Record<string, string>): void {
   const depth = readConfigField(projectDir, flags, "Depth");
   const testStrategy = readConfigField(projectDir, flags, "Test Strategy");
+  const review = readConfigField(projectDir, flags, "Review Override");
   if (flags.json === "true") {
-    process.stdout.write(`${JSON.stringify({ depth, "test-strategy": testStrategy })}\n`);
+    process.stdout.write(`${JSON.stringify({ depth, "test-strategy": testStrategy, review })}\n`);
     return;
   }
-  process.stdout.write(`depth: ${depth}\ntest-strategy: ${testStrategy}\n`);
+  process.stdout.write(`depth: ${depth}\ntest-strategy: ${testStrategy}\nreview: ${review}\n`);
 }
 
 function handleConfigChange(projectDir: string, flags: Record<string, string>): void {
   const rawDepth = flags.depth;
   const rawStrategy = flags["test-strategy"];
+  const rawReview = flags.review;
 
-  if (!rawDepth && !rawStrategy) {
-    die("config-change requires --depth and/or --test-strategy");
+  if (!rawDepth && !rawStrategy && !rawReview) {
+    die("config-change requires --depth, --test-strategy, and/or --review");
   }
 
   let newDepth: string | undefined;
@@ -5028,6 +5034,19 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
   if (rawStrategy) {
     newStrategy = VALID_TEST_STRATEGIES[rawStrategy.toLowerCase()];
     if (!newStrategy) die(`Unknown test strategy: "${rawStrategy}". Valid: minimal, standard, comprehensive.`);
+  }
+
+  // --review sets the per-run Review Override (a CEILING on the effective
+  // review class, low-wins against stage declaration and scope review_cap;
+  // see resolveReviewClass). "adversarial" here means "no override" and
+  // clears the field - it cannot RAISE a class the scope capped.
+  let newReview: string | undefined;
+  if (rawReview) {
+    const v = rawReview.toLowerCase();
+    if (v !== "adversarial" && v !== "advisory" && v !== "none") {
+      die(`Unknown review class: "${rawReview}". Valid: adversarial, advisory, none.`);
+    }
+    newReview = v;
   }
 
   const sp = stateFilePath(projectDir, flags.intent, flags.space);
@@ -5045,10 +5064,29 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
   if (newStrategy !== undefined && newStrategy !== oldStrategy) {
     content = setField(content, "Test Strategy", newStrategy);
   }
+  const oldReview = getField(content, "Review Override");
+  // "adversarial" = no override; store it as an empty field so the resolver's
+  // absent-field path applies (the stage's declared class + scope cap stand).
+  const storedReview =
+    newReview === undefined ? undefined : newReview === "adversarial" ? "" : newReview;
+  if (storedReview !== undefined && storedReview !== (oldReview ?? "")) {
+    // setField silently no-ops on a state file that predates the field (every
+    // pre-2.5.40 workflow). Seed the line under the Test Strategy row first so
+    // the write always lands.
+    if (oldReview === null) {
+      content = content.replace(
+        /^(- \*\*Test Strategy\*\*:[^\n]*)$/m,
+        "$1\n- **Review Override**:"
+      );
+    }
+    content = setField(content, "Review Override", storedReview);
+  }
   const depthChanging = newDepth !== undefined && newDepth !== oldDepth;
   const strategyChanging =
     newStrategy !== undefined && newStrategy !== oldStrategy;
-  if (depthChanging || strategyChanging) {
+  const reviewChanging =
+    storedReview !== undefined && storedReview !== (oldReview ?? "");
+  if (depthChanging || strategyChanging || reviewChanging) {
     content = setField(content, "Last Updated", isoTimestamp());
     writeStateFile(projectDir, content, flags.intent, flags.space);
   }
@@ -5065,6 +5103,12 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
       "New Strategy": newStrategy,
     });
   }
+  if (reviewChanging) {
+    appendAuditEvent(projectDir, "REVIEW_CLASS_CHANGED", {
+      "Old Override": oldReview || "none set",
+      "New Override": storedReview || "cleared (stage defaults apply)",
+    });
+  }
 
   if (newDepth !== undefined) {
     process.stdout.write(
@@ -5078,6 +5122,14 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
       strategyChanging
         ? `Test strategy changed: ${oldStrategy} → ${newStrategy}\n`
         : `Test strategy is already ${newStrategy}\n`
+    );
+  }
+  if (newReview !== undefined) {
+    const display = storedReview === "" ? "adversarial (stage defaults)" : storedReview;
+    process.stdout.write(
+      reviewChanging
+        ? `Review override changed: ${oldReview || "none"} → ${display}\n`
+        : `Review override is already ${display}\n`
     );
   }
 }
