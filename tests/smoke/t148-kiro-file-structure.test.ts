@@ -186,27 +186,23 @@ describe("t148 dist/kiro file structure", () => {
     }
   });
 
-  test("shared Kiro CLI and IDE agent JSON sources remain byte-identical", () => {
+  test("shared Kiro CLI and IDE agent JSON sources differ only by CLI hooks", () => {
     const cliDir = join(REPO_ROOT, "harness", "kiro", "agents");
     const ideDir = join(REPO_ROOT, "harness", "kiro-ide", "agents");
-    const intentionalReviewerDifferences = new Set([
-      "aidlc-architecture-reviewer-agent.json",
-      "aidlc-product-lead-agent.json",
-    ]);
     const shared = readdirSync(cliDir)
       .filter((name) => name.endsWith("-agent.json"))
-      .filter((name) => !intentionalReviewerDifferences.has(name))
       .sort();
     expect(
       readdirSync(ideDir)
         .filter((name) => name.endsWith("-agent.json"))
-        .filter((name) => !intentionalReviewerDifferences.has(name))
         .sort(),
     ).toEqual(shared);
     for (const name of shared) {
-      expect(readFileSync(join(ideDir, name), "utf-8")).toBe(
-        readFileSync(join(cliDir, name), "utf-8"),
-      );
+      const cli = readJson(join(cliDir, name));
+      const ide = readJson(join(ideDir, name));
+      delete cli.hooks;
+      delete ide.hooks;
+      expect(cli).toEqual(ide);
     }
   });
 
@@ -277,10 +273,20 @@ describe("t148 dist/kiro file structure", () => {
       expect(h.command).toContain("aidlc-kiro-adapter.ts");
     }
     const preMatchers = (hooks.preToolUse ?? []).map((h) => h.matcher).sort();
-    expect(preMatchers).toEqual(["execute_bash", "execute_bash", "fs_write", "subagent"]);
+    expect(preMatchers).toEqual([
+      "execute_bash",
+      "execute_bash",
+      "execute_bash",
+      "fs_write",
+      "subagent",
+    ]);
     expect(
       (hooks.preToolUse ?? []).find((h) => h.matcher === "fs_write")?.command,
     ).toContain("aidlc-kiro-adapter.ts review-freeze");
+    expect(
+      (hooks.preToolUse ?? []).filter((h) => h.matcher === "execute_bash")
+        .some((h) => h.command.includes("aidlc-kiro-adapter.ts review-freeze")),
+    ).toBe(true);
     expect(
       (hooks.preToolUse ?? []).find((h) => h.matcher === "subagent")?.command,
     ).toContain("aidlc-kiro-adapter.ts dispatch-rules");

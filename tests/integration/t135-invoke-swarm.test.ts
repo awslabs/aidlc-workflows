@@ -180,12 +180,20 @@ function runNext(proj: string): { directive: Directive; raw: string } {
 
 let wtproj: string | undefined;
 let reviewRefusalProj: string | undefined;
+let staleReviewProj: string | undefined;
+let missingArtifactsProj: string | undefined;
 let finalizeStatus = -1;
 let finalizeOut = "";
 let auditBody = "";
 let reviewRefusalStatus = -1;
 let reviewRefusalOut = "";
 let reviewRefusalAudit = "";
+let staleReviewStatus = -1;
+let staleReviewOut = "";
+let staleReviewAudit = "";
+let missingArtifactsStatus = -1;
+let missingArtifactsOut = "";
+let missingArtifactsAudit = "";
 
 function seedRefereeProject(): string {
   const proj = setupWorktreeFixture();
@@ -225,8 +233,16 @@ function seedRefereeProject(): string {
   return proj;
 }
 
-function logWorktreeReview(proj: string, unit: string): void {
+function logWorktreeReview(proj: string, unit: string, seedArtifacts = true): void {
   const wt = join(proj, ".aidlc", "worktrees", `bolt-${unit}`);
+  if (seedArtifacts) {
+    const dir = join(seededRecordDir(wt), "construction", unit, "code-generation");
+    mkdirSync(dir, { recursive: true });
+    for (const name of ["code-generation-plan", "code-summary"]) {
+      const artifact = join(dir, `${name}.md`);
+      if (!existsSync(artifact)) writeFileSync(artifact, `# ${name}\n`);
+    }
+  }
   for (const terminal of [false, true]) {
     const args = [
       LOG_TOOL,
@@ -311,6 +327,66 @@ function setupReviewRefusal(): void {
   reviewRefusalAudit = readAllShards(seededAuditDir(proj));
 }
 
+function setupStaleReviewRefusal(): void {
+  if (staleReviewProj !== undefined) return;
+  const proj = seedRefereeProject();
+  staleReviewProj = proj;
+  spawnSync(
+    BUN,
+    [SWARM_TOOL, "--project-dir", proj, "prepare", "--batch", "1", "--units", "stale", "--base", "main"],
+    { encoding: "utf-8" },
+  );
+  const wt = join(proj, ".aidlc", "worktrees", "bolt-stale");
+  const artifact = join(
+    seededRecordDir(wt),
+    "construction",
+    "stale",
+    "code-generation",
+    "code-summary.md",
+  );
+  mkdirSync(join(artifact, ".."), { recursive: true });
+  writeFileSync(artifact, "reviewed bytes\n");
+  logWorktreeReview(proj, "stale");
+  writeFileSync(artifact, "changed after review\n");
+
+  const fin = spawnSync(
+    BUN,
+    [
+      SWARM_TOOL, "--project-dir", proj, "finalize",
+      "--batch", "1", "--units", "stale", "--claimed", "stale",
+      "--check-cmd", "true",
+    ],
+    { encoding: "utf-8" },
+  );
+  staleReviewStatus = fin.status ?? -1;
+  staleReviewOut = fin.stdout ?? "";
+  staleReviewAudit = readAllShards(seededAuditDir(proj));
+}
+
+function setupMissingArtifactsRefusal(): void {
+  if (missingArtifactsProj !== undefined) return;
+  const proj = seedRefereeProject();
+  missingArtifactsProj = proj;
+  spawnSync(
+    BUN,
+    [SWARM_TOOL, "--project-dir", proj, "prepare", "--batch", "1", "--units", "missing", "--base", "main"],
+    { encoding: "utf-8" },
+  );
+  logWorktreeReview(proj, "missing", false);
+  const fin = spawnSync(
+    BUN,
+    [
+      SWARM_TOOL, "--project-dir", proj, "finalize",
+      "--batch", "1", "--units", "missing", "--claimed", "missing",
+      "--check-cmd", "true",
+    ],
+    { encoding: "utf-8" },
+  );
+  missingArtifactsStatus = fin.status ?? -1;
+  missingArtifactsOut = fin.stdout ?? "";
+  missingArtifactsAudit = readAllShards(seededAuditDir(proj));
+}
+
 /** Concatenate every audit shard (audit/*.md), sorted by filename. */
 function readAllShards(dir: string): string {
   let names: string[];
@@ -331,6 +407,14 @@ afterAll(() => {
   if (reviewRefusalProj !== undefined) {
     spawnSync("chmod", ["-R", "u+w", reviewRefusalProj]);
     cleanupWorktreeFixture(reviewRefusalProj);
+  }
+  if (staleReviewProj !== undefined) {
+    spawnSync("chmod", ["-R", "u+w", staleReviewProj]);
+    cleanupWorktreeFixture(staleReviewProj);
+  }
+  if (missingArtifactsProj !== undefined) {
+    spawnSync("chmod", ["-R", "u+w", missingArtifactsProj]);
+    cleanupWorktreeFixture(missingArtifactsProj);
   }
 });
 
@@ -435,5 +519,23 @@ describe("t135 referee - autonomous reviewer receipt is a finalize precondition"
     expect(reviewRefusalOut).toContain('"converged": 0');
     expect(reviewRefusalOut).toContain('"failed": 1');
     expect(reviewRefusalAudit).not.toContain("**Event**: SWARM_UNIT_CONVERGED");
+  }, 60000);
+
+  test("9: a claimed unit whose artifact changed after review is refused before merge", () => {
+    setupStaleReviewRefusal();
+    expect(staleReviewStatus).toBe(2);
+    expect(staleReviewOut).toContain("current artifact fingerprint");
+    expect(staleReviewOut).toContain('"converged": 0');
+    expect(staleReviewOut).toContain('"failed": 1');
+    expect(staleReviewAudit).not.toContain("**Event**: SWARM_UNIT_CONVERGED");
+  }, 60000);
+
+  test("10: a matching receipt cannot certify missing required artifacts", () => {
+    setupMissingArtifactsRefusal();
+    expect(missingArtifactsStatus).toBe(2);
+    expect(missingArtifactsOut).toContain("current artifact fingerprint");
+    expect(missingArtifactsOut).toContain('"converged": 0');
+    expect(missingArtifactsOut).toContain('"failed": 1');
+    expect(missingArtifactsAudit).not.toContain("**Event**: SWARM_UNIT_CONVERGED");
   }, 60000);
 });

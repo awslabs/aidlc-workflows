@@ -948,10 +948,10 @@ function pathlessOrchestrateGate(
   }
 }
 
-function hookGate(artifact: string): GateResult {
+function hookGate(artifact: string, hook: string): GateResult {
   const project = mkdtempSync(join(tmpdir(), "aidlc-binary-hook-"));
   try {
-    const result = run(artifact, ["hook", "validate-state"], {
+    const result = run(artifact, ["hook", hook], {
       cwd: project,
       env: { ...process.env, PATH: "", CLAUDE_PROJECT_DIR: project },
       input: "{}",
@@ -965,16 +965,16 @@ function hookGate(artifact: string): GateResult {
       "default",
       "intents",
       ".aidlc-hooks-health",
-      "validate-state.last",
+      `${hook}.last`,
     );
     return commandGate(
-      "hook-validate-state",
+      `hook-${hook}`,
       result,
       result.status === 0 &&
         existsSync(heartbeat) &&
         !/not available|Cannot find module|\/\$bunfs\/|unknown command/.test(output),
       {
-        expected: "compiled hook route writes validate-state heartbeat",
+        expected: `compiled hook route writes ${hook} heartbeat`,
         actual: existsSync(heartbeat) ? "heartbeat written" : result.stderr.trim(),
       },
     );
@@ -1444,7 +1444,8 @@ function buildTarget(target: TargetConfig): TargetResult {
       "done",
       "committed under synthetic workflow",
     ));
-    result.gates.push(hookGate(actual.artifact));
+    result.gates.push(hookGate(actual.artifact, "validate-state"));
+    result.gates.push(hookGate(actual.artifact, "review-freeze"));
     result.gates.push(statuslineGate(actual.artifact));
     result.gates.push(codexAdapterGate(actual.artifact));
     result.gates.push(routedProjectDirGate(actual.artifact));

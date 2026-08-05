@@ -2856,6 +2856,158 @@ export interface FreshReviewReceipts {
   unitVerdicts: Map<string, ReviewVerdict>;
 }
 
+interface ReviewFingerprintStage {
+  slug: string;
+  phase: string;
+  for_each?: string;
+  produces?: string[];
+  optional_produces?: string[];
+  produces_kinds?: Record<string, string[]>;
+}
+
+interface ReviewArtifactEntry {
+  logicalPath: string;
+  path: string | null;
+  required: boolean;
+}
+
+function reviewArtifactEntries(
+  projectDir: string,
+  stage: ReviewFingerprintStage,
+  unit?: string,
+): ReviewArtifactEntry[] | null {
+  const artifactsForKind = (kind: string | null) => [
+    ...filterProducesByKind(stage.produces_kinds, stage.produces ?? [], kind).map(
+      (name) => ({ name, required: true }),
+    ),
+    ...filterProducesByKind(
+      stage.produces_kinds,
+      stage.optional_produces ?? [],
+      kind,
+    ).map((name) => ({ name, required: false })),
+  ];
+  const allArtifacts = artifactsForKind(null);
+
+  if (KNOWN_CODEKB_STAGES.has(stage.slug)) {
+    const root = dirname(codekbDir(projectDir, "_"));
+    let repos = intentRepos(projectDir);
+    if (repos.length === 0 && existsSync(root)) {
+      repos = readdirSync(root).filter((name) => {
+        try {
+          return statSync(join(root, name)).isDirectory();
+        } catch {
+          return false;
+        }
+      });
+    }
+    if (repos.length === 0) {
+      return allArtifacts.map((artifact) => ({
+        logicalPath: `codekb/*/${artifact.name}.md`,
+        path: null,
+        required: artifact.required,
+      }));
+    }
+    return repos.flatMap((repo) =>
+      allArtifacts.map((artifact) => ({
+        logicalPath: `codekb/${repo}/${artifact.name}.md`,
+        path: join(codekbDir(projectDir, repo), `${artifact.name}.md`),
+        required: artifact.required,
+      })),
+    );
+  }
+
+  const record = recordDir(projectDir);
+  if (record === null) return null;
+  if (stage.for_each !== "unit-of-work") {
+    return allArtifacts.map((artifact) => ({
+      logicalPath: `${stage.phase}/${stage.slug}/${artifact.name}.md`,
+      path: join(record, stage.phase, stage.slug, `${artifact.name}.md`),
+      required: artifact.required,
+    }));
+  }
+
+  let units: string[];
+  let unitKinds = new Map<string, string>();
+  const resolution = resolveBoltDag(projectDir);
+  if (unit) {
+    units = [unit];
+    if (resolution.state === "ok" && resolution.unitKinds !== null) {
+      unitKinds = resolution.unitKinds;
+    }
+  } else if (resolution.state === "ok") {
+    units = resolution.units;
+    unitKinds = resolution.unitKinds ?? new Map();
+  } else {
+    const construction = join(record, "construction");
+    units = existsSync(construction)
+      ? readdirSync(construction).filter((name) => {
+          try {
+            return statSync(join(construction, name)).isDirectory();
+          } catch {
+            return false;
+          }
+        })
+      : [];
+  }
+  if (units.length === 0) {
+    return allArtifacts.map((artifact) => ({
+      logicalPath: `construction/*/${stage.slug}/${artifact.name}.md`,
+      path: null,
+      required: artifact.required,
+    }));
+  }
+  return units.flatMap((name) =>
+    artifactsForKind(unitKinds.get(name) ?? null).map((artifact) => ({
+      logicalPath: `construction/${name}/${stage.slug}/${artifact.name}.md`,
+      path: join(record, "construction", name, stage.slug, `${artifact.name}.md`),
+      required: artifact.required,
+    })),
+  );
+}
+
+/**
+ * Content identity covered by a terminal review receipt. Paths are logical
+ * record-relative names, so an identical Bolt worktree survives merge/re-root;
+ * missing declared artifacts are explicit manifest entries, so creating one
+ * after review also invalidates the receipt.
+ */
+export function reviewArtifactFingerprint(
+  projectDir: string,
+  stage: ReviewFingerprintStage,
+  unit?: string,
+  options: { requireRequiredArtifacts?: boolean } = {},
+): string | null {
+  let entries: ReviewArtifactEntry[] | null;
+  try {
+    entries = reviewArtifactEntries(projectDir, stage, unit);
+  } catch {
+    return null;
+  }
+  if (entries === null) return null;
+
+  const manifest: Array<[string, string]> = [];
+  for (const entry of entries.sort((a, b) => a.logicalPath.localeCompare(b.logicalPath))) {
+    if (entry.path === null || !existsSync(entry.path)) {
+      if (entry.required && options.requireRequiredArtifacts === true) return null;
+      manifest.push([entry.logicalPath, "missing"]);
+      continue;
+    }
+    try {
+      const stat = statSync(entry.path);
+      if (!stat.isFile()) {
+        if (entry.required && options.requireRequiredArtifacts === true) return null;
+        manifest.push([entry.logicalPath, "not-file"]);
+        continue;
+      }
+      const digest = createHash("sha256").update(readFileSync(entry.path)).digest("hex");
+      manifest.push([entry.logicalPath, `sha256:${digest}`]);
+    } catch {
+      return null;
+    }
+  }
+  return `sha256:${createHash("sha256").update(JSON.stringify(manifest)).digest("hex")}`;
+}
+
 // Collect the fresh terminal review receipts for a stage from the audit
 // ledger. Builds ONE position-tiebroken event stream (the same interleave
 // idiom unrecordedRevisionSinceGateOpen uses) - a timestamp-only floor is
@@ -2879,10 +3031,12 @@ export function freshReviewReceipts(
   stateContent: string,
   stage: {
     slug: string;
+    phase: string;
     for_each?: string;
     reviewer?: string;
     produces?: string[];
     optional_produces?: string[];
+    produces_kinds?: Record<string, string[]>;
   },
 ): FreshReviewReceipts {
   const empty: FreshReviewReceipts = { stageVerdict: null, unitVerdicts: new Map() };
@@ -2958,8 +3112,18 @@ export function freshReviewReceipts(
     if (auditBlockField(e.block, "Reviewer") !== reviewer) continue;
     const verdict = auditBlockField(e.block, "Verdict");
     if (verdict !== "READY" && verdict !== "NOT-READY") continue;
+    const unit = auditBlockField(e.block, "Unit") || undefined;
+    const recordedFingerprint = auditBlockField(e.block, "Artifact Fingerprint");
+    const currentFingerprint = reviewArtifactFingerprint(projectDir, stage, unit);
+    if (
+      recordedFingerprint === null ||
+      !/^sha256:[0-9a-f]{64}$/.test(recordedFingerprint) ||
+      currentFingerprint === null ||
+      recordedFingerprint !== currentFingerprint
+    ) {
+      continue;
+    }
     stageVerdict = verdict;
-    const unit = auditBlockField(e.block, "Unit");
     if (unit) unitVerdicts.set(unit, verdict);
   }
 

@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-state:approve, subcommand:aidlc-log:review, audit:REVIEW_REQUESTED, audit:REVIEW_COMPLETED, function:verifyReviewerPrecondition
+// covers: subcommand:aidlc-state:approve, subcommand:aidlc-log:review, audit:REVIEW_REQUESTED, audit:REVIEW_COMPLETED, function:verifyReviewerPrecondition, function:reviewArtifactFingerprint
 //
 // CLI-contract port of tests/unit/t115-orchestrate-report.sh (TAP plan 22),
 // mechanism = cli. The .sh drives `aidlc-orchestrate.ts report` — the
@@ -76,7 +76,7 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   auditLockDir,
@@ -1021,6 +1021,9 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
       p,
     );
     expect(rev.stdout).toContain('"emitted":"REVIEW_COMPLETED"');
+    expect(auditBlocksFor(p, "REVIEW_COMPLETED")[0]).toMatch(
+      /\*\*Artifact Fingerprint\*\*: sha256:[0-9a-f]{64}/,
+    );
 
     const r = orchestrate(
       ["report", "--stage", "requirements-analysis", "--result", "approved", "--user-input", "Approve"],
@@ -1294,6 +1297,49 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
       expect(refused.status).not.toBe(0);
       expect(refused.out).toContain("fresh REVIEW_COMPLETED");
       expect(countEvent(p, "GATE_APPROVED")).toBe(0);
+    }
+  }, 30000);
+
+  test("R15: an unaudited artifact create or update invalidates the receipt", () => {
+    for (const existedAtReview of [false, true]) {
+      const p = projWithState("state-mid-inception.md");
+      expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
+      const artifact = join(
+        seededRecordDir(p),
+        "inception",
+        "requirements-analysis",
+        "requirements.md",
+      );
+      mkdirSync(join(artifact, ".."), { recursive: true });
+      if (existedAtReview) {
+        writeFileSync(artifact, "reviewed bytes\n", "utf-8");
+      }
+      expect(log([
+        "review",
+        "--stage",
+        "requirements-analysis",
+        "--reviewer",
+        "aidlc-product-lead-agent",
+        "--verdict",
+        "READY",
+      ], p).status).toBe(0);
+
+      writeFileSync(artifact, "changed outside Write/Edit hooks\n", "utf-8");
+
+      const refused = state(["approve", "requirements-analysis"], p);
+      expect(refused.status).not.toBe(0);
+      expect(refused.out).toContain("fresh REVIEW_COMPLETED");
+
+      expect(log([
+        "review",
+        "--stage",
+        "requirements-analysis",
+        "--reviewer",
+        "aidlc-product-lead-agent",
+        "--verdict",
+        "READY",
+      ], p).status).toBe(0);
+      expect(state(["approve", "requirements-analysis"], p).status).toBe(0);
     }
   }, 30000);
 });

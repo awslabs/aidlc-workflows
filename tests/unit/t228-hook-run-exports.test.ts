@@ -1,4 +1,4 @@
-// covers: hook:aidlc-stop, hook:aidlc-session-start, hook:aidlc-statusline, hook:aidlc-mint-presence, hook:aidlc-dispatch-rules
+// covers: hook:aidlc-stop, hook:aidlc-session-start, hook:aidlc-statusline, hook:aidlc-mint-presence, hook:aidlc-dispatch-rules, hook:aidlc-review-freeze
 import { afterAll, describe, expect, test } from "bun:test";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -22,6 +22,7 @@ const CORE_HOOKS = [
   "aidlc-dispatch-rules.ts",
   "aidlc-log-subagent.ts",
   "aidlc-mint-presence.ts",
+  "aidlc-review-freeze.ts",
   "aidlc-runtime-compile.ts",
   "aidlc-sensor-fire.ts",
   "aidlc-session-end.ts",

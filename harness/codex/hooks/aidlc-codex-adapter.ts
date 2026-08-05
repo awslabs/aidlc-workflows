@@ -454,15 +454,21 @@ switch (target) {
   }
 
   case "review-freeze": {
-    // PreToolUse: the §12a terminal-receipt write-freeze. apply_patch is
-    // Codex's file-write surface; fan out one Write per touched path (the
-    // same envelope walk as reviewer-scope, including Delete File / Move to -
-    // deleting or moving a produces[] artifact voids its receipt exactly like
-    // editing it). The core hook deliberately skips Bash (symmetric with the
-    // audit-logger blind spot - see aidlc-review-freeze.ts), so everything
-    // that is not apply_patch allows instantly. Block contract: exit 2 +
+    // PreToolUse: the §12a terminal-receipt write-freeze. Bash already carries
+    // the core hook's command shape, while apply_patch fans out one Write per
+    // touched path (Delete File / Move to included). Block contract: exit 2 +
     // stderr; the response cache replays the block on duplicate delivery.
-    if ((codex.tool_name ?? "") === "apply_patch") {
+    const tool = codex.tool_name ?? "";
+    if (tool === "Bash") {
+      const r = runCoreWithStderr("aidlc-review-freeze.ts", rawInput);
+      persistResponse(r.stdout, r.code === 2 ? 2 : 0, r.stderr);
+      if (r.code === 2) {
+        process.stderr.write(r.stderr);
+        return 2;
+      }
+      return 0;
+    }
+    if (tool === "apply_patch") {
       const command = (codex.tool_input?.command as string) ?? "";
       const targets: Array<{ path: string; tool: string }> = patchedFiles(command);
       for (const m of command.matchAll(/^\*\*\* (?:Delete File|Move to): (.+)$/gm)) {

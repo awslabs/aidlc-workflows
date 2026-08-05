@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:report
+// covers: subcommand:aidlc-orchestrate:report, function:reviewArtifactFingerprint
 //
 // t236 — the ensemble evidence gate (2.5.0). On a mob stage (or a
 // hub-and-spoke subagent stage with declared support_agents), the
@@ -32,6 +32,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import {
+  reviewArtifactFingerprint,
+  resolveStage,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -280,7 +284,20 @@ function appendAuditEvent(
   writeFileSync(shard, lines.join("\n"), { flag: "a" });
 }
 
-function recordReview(proj: string, unit?: string): void {
+function recordReview(proj: string, unit?: string, graphPath?: string): void {
+  const stage = graphPath
+    ? (JSON.parse(readFileSync(graphPath, "utf-8")) as Array<{
+        slug: string;
+        phase: string;
+        for_each?: string;
+        produces?: string[];
+        optional_produces?: string[];
+        produces_kinds?: Record<string, string[]>;
+      }>).find((entry) => entry.slug === "user-stories")
+    : resolveStage("user-stories");
+  if (!stage) throw new Error("user-stories missing from shipped graph");
+  const fingerprint = reviewArtifactFingerprint(proj, stage, unit);
+  if (!fingerprint) throw new Error("could not fingerprint user-stories fixture");
   appendAuditEvent(
     proj,
     "REVIEW_COMPLETED",
@@ -289,6 +306,7 @@ function recordReview(proj: string, unit?: string): void {
       Stage: "user-stories",
       Reviewer: "aidlc-product-lead-agent",
       Verdict: "READY",
+      "Artifact Fingerprint": fingerprint,
       ...(unit ? { Unit: unit } : {}),
     },
   );
@@ -615,8 +633,8 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     writeUnitArtifact(completeProj, "beta");
     writeUnitContribution(completeProj, "alpha", "aidlc-design-agent");
     writeUnitContribution(completeProj, "beta", "aidlc-design-agent");
-    recordReview(completeProj, "alpha");
-    recordReview(completeProj, "beta");
+    recordReview(completeProj, "alpha", completeGraph);
+    recordReview(completeProj, "beta", completeGraph);
     const before = mutationSnapshot(completeProj);
     const complete = report(completeProj, { AIDLC_STAGE_GRAPH: completeGraph });
     expectApprovalCommitted(completeProj, complete, before);
@@ -635,7 +653,7 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     ]);
     writeUnitArtifact(proj, "svc");
     writeUnitContribution(proj, "svc", "aidlc-design-agent");
-    recordReview(proj, "svc");
+    recordReview(proj, "svc", graph);
 
     const before = mutationSnapshot(proj);
     const d = report(proj, { AIDLC_STAGE_GRAPH: graph });
@@ -656,7 +674,7 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     const completeProj = seedProject();
     const completeGraph = perUnitEnsembleGraph(completeProj);
     writeFallbackContribution(completeProj, "aidlc-design-agent");
-    recordReview(completeProj);
+    recordReview(completeProj, undefined, completeGraph);
     const before = mutationSnapshot(completeProj);
     const complete = report(completeProj, {
       AIDLC_STAGE_GRAPH: completeGraph,
@@ -1031,9 +1049,9 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     setAutonomous(proj);
     seedBoltDag(proj, ["unit-a", "unit-b"]);
     seedSwarmConverged(proj, ["unit-a", "unit-b"]);
-    recordReview(proj, "unit-a");
-    recordReview(proj, "unit-b");
     const graph = nonSkeletonSwarmGraph(proj);
+    recordReview(proj, "unit-a", graph);
+    recordReview(proj, "unit-b", graph);
     const before = mutationSnapshot(proj);
     const d = report(proj, { AIDLC_STAGE_GRAPH: graph });
     expectApprovalCommitted(proj, d, before);

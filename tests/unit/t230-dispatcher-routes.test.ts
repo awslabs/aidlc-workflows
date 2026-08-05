@@ -1,4 +1,4 @@
-// covers: tool:aidlc, tool:aidlc-sensor, tool:aidlc-swarm, hook:aidlc-validate-state, hook:aidlc-statusline
+// covers: tool:aidlc, tool:aidlc-sensor, tool:aidlc-swarm, hook:aidlc-validate-state, hook:aidlc-review-freeze, hook:aidlc-statusline
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -702,6 +702,19 @@ describe("t230 dispatcher hook routing", () => {
     expect(res.exitCode).toBe(0);
     expect(res.stderr.toString("utf-8")).toBe("");
     const heartbeat = "validate-state.last";
+    expect(
+      existsSync(join(seededRecordDir(projectDir), ".aidlc-hooks-health", heartbeat)) ||
+        existsSync(join(dirname(seededRecordDir(projectDir)), ".aidlc-hooks-health", heartbeat)),
+    ).toBe(true);
+  });
+
+  test("hook review-freeze dispatches to run(input) and writes heartbeat", () => {
+    const projectDir = makeProject();
+    const res = viaDispatcher(["hook", "review-freeze"], projectDir, {}, "{}");
+
+    expect(res.exitCode).toBe(0);
+    expect(res.stderr.toString("utf-8")).toBe("");
+    const heartbeat = "review-freeze.last";
     expect(
       existsSync(join(seededRecordDir(projectDir), ".aidlc-hooks-health", heartbeat)) ||
         existsSync(join(dirname(seededRecordDir(projectDir)), ".aidlc-hooks-health", heartbeat)),

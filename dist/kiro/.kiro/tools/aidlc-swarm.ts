@@ -84,6 +84,7 @@ import {
   parseArgs,
   readAllAuditShards,
   readStateFile,
+  reviewArtifactFingerprint,
   resolveConstructionRepo,
   resolveProjectDir,
   resolveStage,
@@ -322,12 +323,29 @@ function reviewerReceiptError(
     if (auditBlockField(event.block, "Reviewer") !== reviewer) continue;
     if (auditBlockField(event.block, "Unit") !== unit) continue;
     const verdict = auditBlockField(event.block, "Verdict");
-    if (verdict === "READY" || verdict === "NOT-READY") return null;
+    if (verdict !== "READY" && verdict !== "NOT-READY") continue;
+    const definition = resolveStage(stage);
+    if (!definition) continue;
+    const recordedFingerprint = auditBlockField(event.block, "Artifact Fingerprint");
+    const currentFingerprint = reviewArtifactFingerprint(
+      worktreePath(projectDir, unit),
+      definition,
+      unit,
+      { requireRequiredArtifacts: true },
+    );
+    if (
+      recordedFingerprint !== null &&
+      /^sha256:[0-9a-f]{64}$/.test(recordedFingerprint) &&
+      currentFingerprint !== null &&
+      recordedFingerprint === currentFingerprint
+    ) {
+      return null;
+    }
   }
 
   return (
     `claimed converged but no terminal REVIEW_COMPLETED for stage "${stage}", ` +
-    `unit "${unit}", reviewer "${reviewer}" exists after this Bolt started`
+    `unit "${unit}", reviewer "${reviewer}" with a current artifact fingerprint exists after this Bolt started`
   );
 }
 

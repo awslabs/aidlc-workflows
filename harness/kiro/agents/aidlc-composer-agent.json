@@ -38,5 +38,25 @@
     "file://.kiro/knowledge/aidlc-shared/*.md",
     "file://aidlc/spaces/default/memory/**/*.md"
   ],
-  "hooks": {}
+  "hooks": {
+    "preToolUse": [
+      {
+        "matcher": "fs_write",
+        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts review-freeze",
+        "timeout_ms": 15000
+      },
+      {
+        "matcher": "execute_bash",
+        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts review-freeze",
+        "timeout_ms": 15000
+      }
+    ],
+    "postToolUse": [
+      {
+        "matcher": "fs_write",
+        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts audit-and-sensors",
+        "timeout_ms": 120000
+      }
+    ]
+  }
 }

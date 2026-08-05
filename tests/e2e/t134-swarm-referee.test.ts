@@ -86,6 +86,7 @@ import {
   FIXTURES_DIR,
   cleanupWorktreeFixture,
   seededAuditDir,
+  seededRecordDir,
   seededStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
@@ -175,6 +176,12 @@ function runRef(proj: string, args: string[]): RefResult {
 
 function logWorktreeReview(proj: string, unit: string): void {
   const worktree = wtPath(proj, unit);
+  const dir = join(seededRecordDir(worktree), "construction", unit, "functional-design");
+  mkdirSync(dir, { recursive: true });
+  for (const name of ["business-logic-model", "business-rules", "domain-entities"]) {
+    const artifact = join(dir, `${name}.md`);
+    if (!existsSync(artifact)) writeFileSync(artifact, `# ${name}\n`);
+  }
   for (const terminal of [false, true]) {
     const args = [
       LOG_TOOL,

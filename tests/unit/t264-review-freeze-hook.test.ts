@@ -27,8 +27,8 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 import {
   blockReason,
   judgeFreeze,
@@ -118,11 +118,55 @@ describe("t264 (a) judgeFreeze decision table", () => {
     expect(judgeFreeze(NFR, u3, NONE, receipts).block).toBe(false);
   });
 
-  test("writeTargets: write tools contribute paths, read tools contribute none", () => {
+  test("writeTargets: file tools and mutation-capable Bash contribute paths", () => {
     expect(writeTargets("Write", { file_path: "/a/b.md" })).toEqual(["/a/b.md"]);
     expect(writeTargets("Edit", { file_path: "/a/b.md" })).toEqual(["/a/b.md"]);
     expect(writeTargets("Read", { file_path: "/a/b.md" })).toEqual([]);
-    expect(writeTargets("Bash", { command: "echo x > /a/b.md" })).toEqual([]);
+    expect(writeTargets("Bash", { command: "printf x >> /a/b.md" })).toEqual(["/a/b.md"]);
+    expect(writeTargets("Bash", { command: "printf x>>/a/b.md" })).toEqual(["/a/b.md"]);
+    expect(writeTargets("Bash", { command: 'printf x > "$PWD/a/b.md"' }, "/p")).toEqual([
+      "/p/a/b.md",
+    ]);
+    expect(writeTargets("Bash", { command: "rm /a/b.md" })).toEqual(["/a/b.md"]);
+    expect(writeTargets("Bash", { command: "cp /a/b.md /tmp/copy" })).not.toContain(
+      "/a/b.md",
+    );
+    expect(
+      writeTargets("Bash", { command: "cp --target-directory=/tmp /a/b.md" }),
+    ).toEqual(["/tmp", "/tmp/b.md"]);
+    expect(writeTargets("Bash", { command: "cp -t /tmp /a/b.md" })).toEqual([
+      "/tmp",
+      "/tmp/b.md",
+    ]);
+    expect(
+      writeTargets("Bash", {
+        command: "cp /tmp/requirements.md /not-present/inception/requirements-analysis",
+      }),
+    ).toEqual(["/not-present/inception/requirements-analysis"]);
+    expect(writeTargets("Bash", { command: "mv /a/b.md /tmp/moved" })).toEqual(
+      expect.arrayContaining(["/a/b.md", "/tmp/moved"]),
+    );
+    expect(writeTargets("Bash", { command: "install -dv /a/b /tmp/c" })).toEqual([
+      "/a/b",
+      "/tmp/c",
+    ]);
+    expect(writeTargets("Bash", { command: "truncate -s 1 -o /a/b.md" })).toEqual([
+      "/a/b.md",
+    ]);
+    expect(writeTargets("Bash", { command: "truncate -r /a/b.md /tmp/out" })).toEqual([
+      "/tmp/out",
+    ]);
+    expect(
+      writeTargets("Bash", { command: "sed -i 's/x/y/' /a/b.md /tmp/c.md" }),
+    ).toEqual(["/a/b.md", "/tmp/c.md"]);
+    expect(
+      writeTargets("Bash", { command: "perl -pi -e 's/x/y/' /a/b.md /tmp/c.md" }),
+    ).toEqual(["/a/b.md", "/tmp/c.md"]);
+    expect(writeTargets("Bash", { command: "sed -n '1p' /a/b.md" })).toEqual([]);
+    expect(
+      writeTargets("Bash", { command: "sed --version; cat /a/b.md" }),
+    ).toEqual([]);
+    expect(writeTargets("Bash", { command: "cat /a/b.md" })).toEqual([]);
   });
 });
 
@@ -250,6 +294,55 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
     ).toBe(0);
   });
 
+  test("shell redirections to produces[] block without false-positive read operands", () => {
+    const p = projWithGate();
+    const file = raArtifact(p);
+    recordReview(p, "READY");
+    const rel = relative(p, file).replace(/\\/g, "/");
+    for (const command of [
+      `printf "change" >> ${JSON.stringify(file)}`,
+      `printf "change">>${JSON.stringify(file)}`,
+      `printf "change" >> "$PWD/${rel}"`,
+      `cp --target-directory=${JSON.stringify(dirname(file))} /tmp/requirements.md`,
+      `mv ${JSON.stringify(file)} /tmp/review-freeze-moved`,
+      `install -dv ${JSON.stringify(file)} /tmp/review-freeze-directory`,
+      `truncate -s 1 -o ${JSON.stringify(file)}`,
+      `sed -i 's/change/changed/' ${JSON.stringify(file)} /tmp/review-freeze-other`,
+      `perl -pi -e 's/change/changed/' ${JSON.stringify(file)} /tmp/review-freeze-other`,
+    ]) {
+      const blocked = runHook(p, {
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command },
+        cwd: p,
+      });
+      expect(blocked.code, command).toBe(2);
+      expect(blocked.stderr, command).toContain(file);
+    }
+
+    for (const command of [
+      `cat ${JSON.stringify(file)}`,
+      `sed -n '1p' ${JSON.stringify(file)}`,
+      `cp ${JSON.stringify(file)} /tmp/review-freeze-copy`,
+      `cp --target-directory=/tmp ${JSON.stringify(file)}`,
+      `cp /tmp/requirements.md ${JSON.stringify(
+        join(p, "unrelated", "inception", "requirements-analysis"),
+      )}`,
+      `truncate -r ${JSON.stringify(file)} /tmp/review-freeze-output`,
+      `sed --version; cat ${JSON.stringify(file)}`,
+    ]) {
+      expect(
+        runHook(p, {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command },
+          cwd: p,
+        }).code,
+        command,
+      ).toBe(0);
+    }
+  });
+
   test("fail-open: empty ledger, malformed stdin, and the off-switch all allow", () => {
     const empty = createTestProject();
     tempDirs.push(empty);
@@ -305,9 +398,10 @@ describe("t264 (c) harness registration", () => {
       );
       expect(group, root).toBeDefined();
       // Shares the state-transition-guard/reviewer-scope matcher group, so the
-      // hook self-filters to write tools.
+      // hook can inspect both file writes and mutation-capable shell commands.
       expect(group?.matcher).toContain("Write");
       expect(group?.matcher).toContain("Edit");
+      expect(group?.matcher).toContain("Bash");
     }
   });
 
@@ -324,15 +418,37 @@ describe("t264 (c) harness registration", () => {
     expect(adapter.split('case "review-freeze"')[1]).toContain("Delete File|Move to");
   });
 
-  test("Kiro CLI registers review-freeze on the conductor's fs_write", () => {
-    const conductor = JSON.parse(
-      readFileSync(join(REPO_ROOT, "harness", "kiro", "agents", "aidlc.json"), "utf-8"),
-    ) as { hooks?: { preToolUse?: Array<{ matcher?: string; command?: string }> } };
-    const entry = (conductor.hooks?.preToolUse ?? []).find((h) =>
-      (h.command ?? "").includes("review-freeze"),
-    );
-    expect(entry).toBeDefined();
-    expect(entry?.matcher).toBe("fs_write");
+  test("Kiro CLI registers freeze and invalidation on every writable agent", () => {
+    for (const root of [
+      join(REPO_ROOT, "harness", "kiro", "agents"),
+      join(REPO_ROOT, "dist", "kiro", ".kiro", "agents"),
+    ]) {
+      const configs = readdirSync(root).filter((name) => name.endsWith(".json"));
+      for (const name of configs) {
+        const agent = JSON.parse(readFileSync(join(root, name), "utf-8")) as {
+          tools?: string[];
+          hooks?: {
+            preToolUse?: Array<{ matcher?: string; command?: string }>;
+            postToolUse?: Array<{ matcher?: string; command?: string }>;
+          };
+        };
+        if (!(agent.tools ?? []).includes("fs_write")) continue;
+        const pre = agent.hooks?.preToolUse ?? [];
+        const post = agent.hooks?.postToolUse ?? [];
+        expect(
+          pre.some((h) => h.matcher === "fs_write" && h.command?.includes("review-freeze")),
+          `${root}/${name}: fs_write freeze`,
+        ).toBe(true);
+        expect(
+          pre.some((h) => h.matcher === "execute_bash" && h.command?.includes("review-freeze")),
+          `${root}/${name}: execute_bash freeze`,
+        ).toBe(true);
+        expect(
+          post.some((h) => h.matcher === "fs_write" && h.command?.includes("audit-and-sensors")),
+          `${root}/${name}: fs_write invalidation feed`,
+        ).toBe(true);
+      }
+    }
     const adapter = readFileSync(
       join(REPO_ROOT, "harness", "kiro", "hooks", "aidlc-kiro-adapter.ts"),
       "utf-8",
@@ -361,5 +477,12 @@ describe("t264 (c) harness registration", () => {
       "utf-8",
     );
     expect(ideConductor).not.toContain("review-freeze");
+    for (const name of readdirSync(join(REPO_ROOT, "harness", "kiro-ide", "agents"))) {
+      if (!name.endsWith("-agent.json")) continue;
+      expect(
+        readFileSync(join(REPO_ROOT, "harness", "kiro-ide", "agents", name), "utf-8"),
+        name,
+      ).not.toContain("review-freeze");
+    }
   });
 });

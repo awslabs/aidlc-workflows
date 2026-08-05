@@ -40,8 +40,7 @@ const HOOK_WIRING: Array<{ event: string; matcher?: string; target: string }> = 
   // and a PreToolUse exit 2 + stderr blocks the call with the reason relayed.
   { event: "PreToolUse", target: "reviewer-scope" },
   // No matcher for the same reason: the review-freeze target self-filters to
-  // apply_patch (Codex's only file-write surface; the core hook deliberately
-  // skips Bash - see aidlc-review-freeze.ts).
+  // apply_patch and mutation-capable Bash commands.
   { event: "PreToolUse", target: "review-freeze" },
   { event: "PostToolUse", matcher: "apply_patch", target: "audit-and-sensors" },
   { event: "PostToolUse", matcher: "update_plan", target: "state-sync" },

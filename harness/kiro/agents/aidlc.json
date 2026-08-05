@@ -88,6 +88,11 @@
         "timeout_ms": 15000
       },
       {
+        "matcher": "execute_bash",
+        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts review-freeze",
+        "timeout_ms": 15000
+      },
+      {
         "matcher": "subagent",
         "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts dispatch-rules",
         "timeout_ms": 15000

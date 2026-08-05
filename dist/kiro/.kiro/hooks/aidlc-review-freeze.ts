@@ -40,15 +40,14 @@
 // reviewer-scope hook's off-switch). Every genuine block emits a
 // REVIEW_FREEZE_BLOCKED audit event; audit failures never change the decision.
 //
-// Deliberately NOT matched: Bash. The audit-logger hook that feeds the
-// engine's invalidation scan is itself a Write/Edit PostToolUse hook - a file
-// write the harness delivers as a shell command is invisible to BOTH the
-// invalidation scan and this freeze, so blocking shell here would be strictly
-// tighter than the invariant it protects. The freeze and the floor share one
-// blind spot by construction; symmetric coverage over asymmetric strictness.
+// Bash is inspected before execution too. Shell writes do not pass through the
+// Write/Edit PostToolUse audit feed, so allowing one after READY would leave the
+// old receipt fresh over different bytes. The matcher extracts output
+// redirections and operands of common mutation commands; read-only shell calls
+// do not produce targets and remain untouched.
 
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
+import { basename, isAbsolute, join, resolve } from "node:path";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import {
   acquireAuditLock,
@@ -74,14 +73,394 @@ import {
 const HOOK_NAME = "review-freeze";
 
 // The file-writing tools whose targets the freeze inspects. Read-only tools
-// never invalidate a receipt; Bash is excluded by the symmetry argument above.
+// never invalidate a receipt.
 const WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
+
+function shellWords(command: string): string[] {
+  const words: string[] = [];
+  let word = "";
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  const push = () => {
+    if (word.length > 0) words.push(word);
+    word = "";
+  };
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (escaped) {
+      word += ch;
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\" && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote !== null) {
+      if (ch === quote) quote = null;
+      else word += ch;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (/\s/.test(ch) || ";|&()<>".includes(ch)) {
+      push();
+      continue;
+    }
+    word += ch;
+  }
+  push();
+  return words;
+}
+
+function shellCommandSegments(command: string): string[] {
+  const segments: string[] = [];
+  let start = 0;
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\" && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote !== null) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (ch !== ";" && ch !== "\n" && ch !== "|" && ch !== "&") continue;
+    segments.push(command.slice(start, i));
+    if ((ch === "|" || ch === "&") && command[i + 1] === ch) i++;
+    start = i + 1;
+  }
+  segments.push(command.slice(start));
+  return segments;
+}
+
+function shellWordAt(command: string, start: number): { word: string; end: number } | null {
+  let word = "";
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  let i = start;
+  for (; i < command.length; i++) {
+    const ch = command[i];
+    if (escaped) {
+      word += ch;
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\" && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote !== null) {
+      if (ch === quote) quote = null;
+      else word += ch;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (/\s/.test(ch) || ";|&()<>".includes(ch)) break;
+    word += ch;
+  }
+  return quote === null && word.length > 0 ? { word, end: i } : null;
+}
+
+function normalizeShellTarget(target: string, cwd: string): string {
+  const bracedPwd = "$" + "{PWD}";
+  let cleaned = target
+    .replace(/^of=/, "")
+    .replace(/^[,:[\]{}()]+|[,:[\]{}()]+$/g, "");
+  if (cleaned === "$PWD" || cleaned === bracedPwd) {
+    cleaned = cwd;
+  } else if (cleaned.startsWith("$PWD/")) {
+    cleaned = join(cwd, cleaned.slice("$PWD/".length));
+  } else if (cleaned.startsWith(`${bracedPwd}/`)) {
+    cleaned = join(cwd, cleaned.slice(`${bracedPwd}/`.length));
+  }
+  if (cleaned.length === 0 || /[$`*?]/.test(cleaned)) return "";
+  return isAbsolute(cleaned) ? resolve(cleaned) : resolve(cwd, cleaned);
+}
+
+interface ParsedShellArgs {
+  operands: string[];
+  options: Set<string>;
+  optionValues: Map<string, string[]>;
+}
+
+function parseShellArgs(
+  args: string[],
+  shortValueOptions = new Set<string>(),
+  longValueOptions = new Set<string>(),
+): ParsedShellArgs {
+  const operands: string[] = [];
+  const options = new Set<string>();
+  const optionValues = new Map<string, string[]>();
+  let optionsEnded = false;
+  const record = (name: string, value: string | undefined) => {
+    if (value === undefined) return;
+    const values = optionValues.get(name) ?? [];
+    values.push(value);
+    optionValues.set(name, values);
+  };
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (!optionsEnded && arg === "--") {
+      optionsEnded = true;
+      continue;
+    }
+    if (optionsEnded || arg === "-" || !arg.startsWith("-")) {
+      operands.push(arg);
+      continue;
+    }
+    if (arg.startsWith("--")) {
+      const equals = arg.indexOf("=");
+      const name = equals === -1 ? arg : arg.slice(0, equals);
+      options.add(name);
+      if (!longValueOptions.has(name)) continue;
+      if (equals !== -1) record(name, arg.slice(equals + 1));
+      else record(name, args[++i]);
+      continue;
+    }
+
+    // Short options may be clustered. A value-taking option consumes the
+    // cluster remainder (`-t/tmp`) or the next word (`-t /tmp`).
+    for (let j = 1; j < arg.length; j++) {
+      const name = `-${arg[j]}`;
+      options.add(name);
+      if (!shortValueOptions.has(name)) continue;
+      const attached = arg.slice(j + 1);
+      record(name, attached.length > 0 ? attached : args[++i]);
+      break;
+    }
+  }
+
+  return { operands, options, optionValues };
+}
+
+/** Concrete filesystem targets of a mutation-capable shell command. */
+export function shellWriteTargets(command: string, cwd = process.cwd()): string[] {
+  const out: string[] = [];
+  const add = (raw: string | undefined) => {
+    if (!raw) return;
+    const target = normalizeShellTarget(raw, cwd);
+    if (target) out.push(target);
+  };
+  const isDirectory = (raw: string | undefined): boolean => {
+    if (!raw) return false;
+    const target = normalizeShellTarget(raw, cwd);
+    if (!target) return false;
+    try {
+      return statSync(target).isDirectory();
+    } catch {
+      return false;
+    }
+  };
+  const addDestination = (
+    rawDestination: string | undefined,
+    rawSources: string[],
+    directoryDestination: boolean,
+  ) => {
+    add(rawDestination);
+    if (!rawDestination || !directoryDestination) return;
+    const destination = normalizeShellTarget(rawDestination, cwd);
+    if (!destination) return;
+    // cp/install/mv accept a directory destination. Add each concrete child
+    // candidate as well as the destination itself without consulting the
+    // pre-command filesystem, which may not contain the directory yet.
+    for (const rawSource of rawSources) {
+      const source = normalizeShellTarget(rawSource, cwd);
+      if (source) add(join(destination, basename(source)));
+    }
+  };
+
+  // Scan output redirections outside quotes. This catches compact forms such
+  // as `printf x>>file` as well as quoted targets and $PWD-relative paths.
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\" && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote !== null) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (ch !== ">") continue;
+
+    let targetStart = i + 1;
+    if (command[targetStart] === ">" || command[targetStart] === "|") targetStart++;
+    while (/\s/.test(command[targetStart] ?? "")) targetStart++;
+    // `2>&1` and `2>&-` duplicate/close descriptors; `>&file` writes a file.
+    if (command[targetStart] === "&") {
+      const fd = shellWordAt(command, targetStart + 1);
+      if (!fd || /^\d+$|^-$/.test(fd.word)) continue;
+      add(fd.word);
+      i = fd.end - 1;
+      continue;
+    }
+    const parsed = shellWordAt(command, targetStart);
+    if (!parsed) continue;
+    add(parsed.word);
+    i = parsed.end - 1;
+  }
+
+  // Parse each command segment independently so a mutator never claims a
+  // later read-only command's operands. Only destination/in-place operands are
+  // candidates for commands that also have read-only source operands.
+  for (const segment of shellCommandSegments(command)) {
+    const words = shellWords(segment);
+    if (words.length === 0) continue;
+    let commandIndex = 0;
+    while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[commandIndex] ?? "")) {
+      commandIndex++;
+    }
+    const commandName = (words[commandIndex] ?? "").split("/").pop() ?? "";
+    const args = words.slice(commandIndex + 1);
+    if (commandName === "dd") {
+      for (const arg of args) if (arg.startsWith("of=")) add(arg);
+      continue;
+    }
+
+    const basic = parseShellArgs(args);
+    const { operands } = basic;
+    if (operands.length === 0) continue;
+
+    if (commandName === "cp") {
+      const parsed = parseShellArgs(
+        args,
+        new Set(["-S", "-t"]),
+        new Set(["--suffix", "--target-directory"]),
+      );
+      const targetDirectory = [
+        ...(parsed.optionValues.get("-t") ?? []),
+        ...(parsed.optionValues.get("--target-directory") ?? []),
+      ].at(-1);
+      const destination = targetDirectory ?? parsed.operands.at(-1);
+      const hasTargetDirectory = targetDirectory !== undefined;
+      const sources = hasTargetDirectory ? parsed.operands : parsed.operands.slice(0, -1);
+      addDestination(
+        destination,
+        sources,
+        hasTargetDirectory || sources.length > 1 || isDirectory(destination),
+      );
+    } else if (commandName === "install") {
+      const parsed = parseShellArgs(
+        args,
+        new Set(["-g", "-m", "-o", "-S", "-t"]),
+        new Set(["--group", "--mode", "--owner", "--suffix", "--target-directory"]),
+      );
+      const targetDirectory = [
+        ...(parsed.optionValues.get("-t") ?? []),
+        ...(parsed.optionValues.get("--target-directory") ?? []),
+      ].at(-1);
+      if (parsed.options.has("-d") || parsed.options.has("--directory")) {
+        for (const operand of parsed.operands) add(operand);
+      } else {
+        const destination = targetDirectory ?? parsed.operands.at(-1);
+        const hasTargetDirectory = targetDirectory !== undefined;
+        const sources = hasTargetDirectory ? parsed.operands : parsed.operands.slice(0, -1);
+        addDestination(
+          destination,
+          sources,
+          hasTargetDirectory || sources.length > 1 || isDirectory(destination),
+        );
+      }
+    } else if (commandName === "mv") {
+      const parsed = parseShellArgs(
+        args,
+        new Set(["-S", "-t"]),
+        new Set(["--suffix", "--target-directory"]),
+      );
+      const targetDirectory = [
+        ...(parsed.optionValues.get("-t") ?? []),
+        ...(parsed.optionValues.get("--target-directory") ?? []),
+      ].at(-1);
+      const destination = targetDirectory ?? parsed.operands.at(-1);
+      const hasTargetDirectory = targetDirectory !== undefined;
+      const sources = hasTargetDirectory ? parsed.operands : parsed.operands.slice(0, -1);
+      for (const source of sources) add(source);
+      addDestination(
+        destination,
+        sources,
+        hasTargetDirectory || sources.length > 1 || isDirectory(destination),
+      );
+    } else if (["rm", "tee", "touch", "truncate", "unlink"].includes(commandName)) {
+      const parsed =
+        commandName === "touch"
+          ? parseShellArgs(
+              args,
+              new Set(["-d", "-r", "-t"]),
+              new Set(["--date", "--reference", "--time"]),
+            )
+          : commandName === "truncate"
+            ? parseShellArgs(
+                args,
+                new Set(["-r", "-s"]),
+                new Set(["--reference", "--size"]),
+              )
+            : basic;
+      for (const operand of parsed.operands) add(operand);
+    } else if (commandName === "sed") {
+      const parsed = parseShellArgs(
+        args,
+        new Set(["-e", "-f", "-l"]),
+        new Set(["--expression", "--file", "--line-length"]),
+      );
+      if (!parsed.options.has("-i") && !parsed.options.has("--in-place")) continue;
+      const programFromOption =
+        parsed.optionValues.has("-e") ||
+        parsed.optionValues.has("-f") ||
+        parsed.optionValues.has("--expression") ||
+        parsed.optionValues.has("--file");
+      for (const operand of parsed.operands.slice(programFromOption ? 0 : 1)) add(operand);
+    } else if (commandName === "perl") {
+      const parsed = parseShellArgs(
+        args,
+        new Set(["-E", "-F", "-I", "-M", "-e", "-m"]),
+      );
+      if (!parsed.options.has("-i") && !parsed.options.has("--in-place")) continue;
+      const programFromOption = parsed.optionValues.has("-e") || parsed.optionValues.has("-E");
+      for (const operand of parsed.operands.slice(programFromOption ? 0 : 1)) add(operand);
+    }
+  }
+
+  return [...new Set(out)];
+}
 
 /** Target paths of a write-tool call. */
 export function writeTargets(
   toolName: string,
   toolInput: Record<string, unknown> | undefined,
+  cwd = process.cwd(),
 ): string[] {
+  if (toolName === "Bash") {
+    const command = toolInput?.command;
+    return typeof command === "string" ? shellWriteTargets(command, cwd) : [];
+  }
   if (!WRITE_TOOLS.has(toolName)) return [];
   const ti = toolInput ?? {};
   const out: string[] = [];
@@ -161,9 +540,9 @@ export function blockReason(v: FreezeVerdict): string {
 
 // --- Main ---------------------------------------------------------------------
 
-if (import.meta.main) {
+export async function run(input: string): Promise<number> {
   // Deterministic off-switch: enforcement disabled entirely.
-  if (process.env.AIDLC_DISABLE_REVIEW_FREEZE_HOOK === "1") process.exit(0);
+  if (process.env.AIDLC_DISABLE_REVIEW_FREEZE_HOOK === "1") return 0;
 
   const projectDir = resolveProjectDirFromHook(import.meta.url);
 
@@ -175,29 +554,27 @@ if (import.meta.main) {
     // Heartbeat failure is non-fatal - never let it affect the decision.
   }
 
-  // A TTY means no harness JSON is coming (test / debug contexts) - allow.
-  if (process.stdin.isTTY) process.exit(0);
-
   let parsed: ClaudeCodeHookInput;
   try {
-    const raw: unknown = JSON.parse(await Bun.stdin.text());
-    if (!isClaudeCodeHookInput(raw)) process.exit(0);
+    const raw: unknown = JSON.parse(input);
+    if (!isClaudeCodeHookInput(raw)) return 0;
     parsed = raw;
   } catch {
-    process.exit(0); // malformed stdin - fail open
+    return 0; // malformed stdin - fail open
   }
 
   const toolName = parsed.tool_name ?? "";
-  const targets = writeTargets(toolName, parsed.tool_input);
-  if (targets.length === 0) process.exit(0);
+  const cwd = typeof parsed.cwd === "string" ? parsed.cwd : projectDir;
+  const targets = writeTargets(toolName, parsed.tool_input, cwd);
+  if (targets.length === 0) return 0;
 
   // No audit ledger means no receipts to protect - the common non-AIDLC case,
   // decided before any state/graph read so the hook stays near-free outside a
   // workflow.
   try {
-    if (readAllAuditShards(projectDir).length === 0) process.exit(0);
+    if (readAllAuditShards(projectDir).length === 0) return 0;
   } catch {
-    process.exit(0);
+    return 0;
   }
 
   let verdict: FreezeVerdict = { block: false };
@@ -230,9 +607,9 @@ if (import.meta.main) {
     }
   } catch (e) {
     recordHookDrop(projectDir, HOOK_NAME, errorMessage(e));
-    process.exit(0); // state/graph unreadable or matcher failure - fail open
+    return 0; // state/graph unreadable or matcher failure - fail open
   }
-  if (!verdict.block) process.exit(0);
+  if (!verdict.block) return 0;
 
   // Audit the refusal so the run's record shows when the freeze bit.
   // Best-effort: an audit failure never changes the block decision. The lock
@@ -266,5 +643,10 @@ if (import.meta.main) {
   }
 
   process.stderr.write(`${blockReason(verdict)}\n`);
-  process.exit(2); // harness PreToolUse reject contract: exit 2 + stderr blocks
+  return 2; // harness PreToolUse reject contract: exit 2 + stderr blocks
+}
+
+if (import.meta.main) {
+  const input = process.stdin.isTTY ? "" : await Bun.stdin.text();
+  process.exit(await run(input));
 }

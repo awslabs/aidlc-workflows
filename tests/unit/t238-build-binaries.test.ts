@@ -1,4 +1,4 @@
-// covers: file:scripts/build-binaries.ts, tool:aidlc, subcommand:aidlc-utility:version
+// covers: file:scripts/build-binaries.ts, tool:aidlc, subcommand:aidlc-utility:version, hook:aidlc-review-freeze
 // covers: subcommand:aidlc-utility:plugin-sync
 // covers: subcommand:aidlc-utility:doctor
 //
@@ -147,6 +147,7 @@ describe("t238 build-binaries release builder", () => {
       "pathless-park",
       "pathless-single-audit",
       "hook-validate-state",
+      "hook-review-freeze",
       "statusline",
       "adapter-codex-validate-state",
       "routed-project-dir",

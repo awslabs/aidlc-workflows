@@ -23,7 +23,7 @@
 //   - stop emits {"decision":"block","reason":"..."} — Kiro's stop contract
 //     is IDENTICAL (verified live), so it passes through verbatim.
 //
-// Usage (registered in .kiro/agents/aidlc.json):
+// Usage (registered in the conductor and delegated .kiro/agents/*.json configs):
 //   bun .kiro/hooks/aidlc-kiro-adapter.ts <target>
 // where <target> ∈ session-start | audit-and-sensors | runtime-compile |
 //                  state-sync | log-subagent | stop | verb-intercept |
@@ -568,24 +568,23 @@ if (target === "reviewer-scope") {
 
 // --- review-freeze: the §12a terminal-receipt write-freeze -------------------
 //
-// Registered on the CONDUCTOR's fs_write (aidlc.json) - the same registration
-// point as audit-and-sensors, which is what feeds the engine's receipt-
-// invalidation scan on this harness. That symmetry is deliberate: a write the
-// invalidation scan cannot see (a subagent's, which has no audit registration
-// here) is also a write this freeze does not police. The shim normalizes the
-// write payload to the core hook's Write shape (top-level path plus the
-// batched operations[] paths, mirroring reviewer-scope's write arm) and
-// forwards stderr + exit code verbatim - exit 2 + stderr is Kiro's reject
-// contract. Fail-open: an unspawnable core hook allows the call.
+// Registered on every mutation-capable conductor/delegate fs_write and
+// execute_bash surface. The shim normalizes writes to the core hook's Write
+// shape (top-level path plus batched operations[] paths) and shell calls to its
+// Bash shape, then forwards stderr + exit code verbatim. Fail-open: an
+// unspawnable core hook allows the call.
 if (target === "review-freeze") {
   const tool = kiro.tool_name ?? "";
-  if (tool !== "write" && tool !== "fs_write") return 0;
+  if (!["write", "fs_write", "shell", "execute_bash"].includes(tool)) return 0;
   const ti = kiro.tool_input ?? {};
-  const coreInput: Record<string, unknown> = {
-    file_path: (ti.path as string) ?? (ti.file_path as string) ?? "",
-  };
-  const wops = (ti.operations as Array<{ path?: string }>) ?? [];
-  coreInput.paths = wops.map((o) => o.path ?? "").filter((p) => p.length > 0);
+  const shell = tool === "shell" || tool === "execute_bash";
+  const coreInput: Record<string, unknown> = shell
+    ? { command: (ti.command as string) ?? "" }
+    : { file_path: (ti.path as string) ?? (ti.file_path as string) ?? "" };
+  if (!shell) {
+    const wops = (ti.operations as Array<{ path?: string }>) ?? [];
+    coreInput.paths = wops.map((o) => o.path ?? "").filter((p) => p.length > 0);
+  }
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
   const command = executable
     ? [executable, "hook", "review-freeze"]
@@ -594,8 +593,9 @@ if (target === "review-freeze") {
     stdin: Buffer.from(
       JSON.stringify({
         hook_event_name: "PreToolUse",
-        tool_name: "Write",
+        tool_name: shell ? "Bash" : "Write",
         tool_input: coreInput,
+        cwd: projectDir,
       }),
       "utf-8",
     ),
