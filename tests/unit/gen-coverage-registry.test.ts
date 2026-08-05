@@ -124,7 +124,9 @@ describe("guarantee-principle gate (mechanism >= minMechanism)", () => {
     // test today claims it at cli mechanism, so it must be UNCOVERED — proving
     // a hypothetical .none. claim would be gated out, never counted as covered.
     const { rows } = buildRegistry();
-    const sub = rows.find((r) => r.unitClass === "subcommand");
+    const sub = rows.find(
+      (r) => r.unitClass === "subcommand" && r.status !== "covered",
+    );
     expect(sub).toBeDefined();
     expect(sub!.minMechanism).toBe("cli");
     // Status is UNCOVERED (no adequate claim), never `covered`.

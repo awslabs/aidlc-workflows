@@ -6,6 +6,7 @@ condition: Execute when team composition, capacity, or mob planning is relevant.
 lead_agent: aidlc-delivery-agent
 support_agents: []
 mode: inline
+summary_confirmation: required
 produces:
   - team-assessment
   - skill-matrix

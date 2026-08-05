@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, subcommand:aidlc-audit:append-batch, function:emitSingleRunStage, function:handleSingleReport
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, subcommand:aidlc-audit:append, subcommand:aidlc-audit:append-batch, function:emitSingleRunStage, function:handleSingleReport, function:refuseReservedCliEvent, function:refuseReservedCliBatch
 //
 // t127 — the `--single` stage-runner invariant (v0.6.0 Wave 3 milestone 14).
 // Migrated from tests/integration/t127-single-stage-invariant.sh (TAP plan 16).
@@ -62,7 +62,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -71,13 +71,16 @@ import {
   runOrchestrateNext,
   seedAuditFile,
   seededAuditShard,
+  seededRecordDir,
   seedStateFile,
 } from "../harness/fixtures.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 
 const BUN = process.execPath; // the bun running this test
 const TOOL = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const STATE_TOOL = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const AUDIT_TOOL = join(AIDLC_SRC, "tools", "aidlc-audit.ts");
+const LOG_TOOL = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const STATE_FIXTURE = "state-mid-ideation.md";
 
 const projects: string[] = [];
@@ -106,6 +109,20 @@ function run(tool: string, args: string[]): { out: string; status: number } {
     return { out: result.out, status: result.status };
   }
   const res = spawnSync(BUN, [tool, ...args], { encoding: "utf-8" });
+  return {
+    out: `${res.stdout ?? ""}${res.stderr ?? ""}`,
+    status: res.status ?? -1,
+  };
+}
+
+function runSummaryGuarded(
+  tool: string,
+  args: string[],
+): { out: string; status: number } {
+  const env = { ...process.env };
+  delete env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD;
+  delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+  const res = spawnSync(BUN, [tool, ...args], { encoding: "utf-8", env });
   return {
     out: `${res.stdout ?? ""}${res.stderr ?? ""}`,
     status: res.status ?? -1,
@@ -293,6 +310,24 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
     expect(readFileSync(seededAuditShard(proj), "utf-8")).toBe(before);
   });
 
+  test("10c: public audit append cannot forge a summary-confirmation receipt", () => {
+    const proj = freshProject();
+    seedStateFile(proj, STATE_FIXTURE);
+    seedAuditFile(proj);
+    const before = readFileSync(seededAuditShard(proj), "utf-8");
+    const result = run(AUDIT_TOOL, [
+      "append",
+      "SUMMARY_CONFIRMATION_RECORDED",
+      "--field",
+      "Stage=requirements-analysis",
+      "--project-dir",
+      proj,
+    ]);
+    expect(result.status).not.toBe(0);
+    expect(result.out).toContain("reserved for its owning hook/tool");
+    expect(readFileSync(seededAuditShard(proj), "utf-8")).toBe(before);
+  });
+
   // =========================================================================
   // Tests 11-12: report --single with NO --stage is an attempt to advance the
   // main workflow -> error (tool-enforced refusal), committing nothing.
@@ -339,6 +374,181 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
     expect(countEvent(proj, "STAGE_STARTED")).toBe(0);
     expect(countEvent(proj, "STAGE_COMPLETED")).toBe(0);
     expect(countEvent(proj, "STAGE_SKIPPED")).toBe(0);
+  });
+
+  test("12c: report --single refuses a question-bearing stage without summary confirmation", () => {
+    const proj = freshProject();
+    seedStateFile(proj, STATE_FIXTURE);
+    seedAuditFile(proj);
+    const result = runSummaryGuarded(TOOL, [
+      "report",
+      "--single",
+      "--stage",
+      "requirements-analysis",
+      "--result",
+      "completed",
+      "--project-dir",
+      proj,
+    ]);
+    expect(result.out).toContain('"kind":"error"');
+    expect(result.out).toContain("has no requirements-analysis-questions.md");
+    expect(countEvent(proj, "STAGE_COMPLETED")).toBe(0);
+  });
+
+  test("12d: report --single accepts a human-backed receipt and post-confirmation artifact", () => {
+    const proj = freshProject();
+    seedStateFile(proj, STATE_FIXTURE);
+    seedAuditFile(proj);
+    const stageDir = join(
+      seededRecordDir(proj),
+      "inception",
+      "requirements-analysis",
+    );
+    mkdirSync(stageDir, { recursive: true });
+    const questions = join(stageDir, "requirements-analysis-questions.md");
+    writeFileSync(
+      questions,
+      "# Questions\n\n## Consolidated Summary Confirmation\n\n- Looks correct\n- Request changes\n\n[Answer]: \n",
+    );
+
+    expect(
+      runSummaryGuarded(LOG_TOOL, [
+        "decision",
+        "--stage",
+        "requirements-analysis",
+        "--checkpoint",
+        "summary-confirmation",
+        "--questions-file",
+        questions,
+        "--single",
+        "--decision",
+        "Does this all look correct?",
+        "--project-dir",
+        proj,
+      ]).status,
+    ).toBe(0);
+    appendAuditEntry("HUMAN_TURN", {}, proj);
+    writeFileSync(
+      questions,
+      "# Questions\n\n## Consolidated Summary Confirmation\n\n- Looks correct\n- Request changes\n\n[Answer]: Looks correct\n",
+    );
+    expect(
+      runSummaryGuarded(LOG_TOOL, [
+        "answer",
+        "--stage",
+        "requirements-analysis",
+        "--checkpoint",
+        "summary-confirmation",
+        "--questions-file",
+        questions,
+        "--single",
+        "--details",
+        "Looks correct",
+        "--project-dir",
+        proj,
+      ]).status,
+    ).toBe(0);
+
+    const artifact = join(stageDir, "requirements.md");
+    writeFileSync(artifact, "# Requirements\n");
+    appendAuditEntry(
+      "ARTIFACT_CREATED",
+      { File: artifact, Tool: "Write" },
+      proj,
+    );
+
+    const result = runSummaryGuarded(TOOL, [
+      "report",
+      "--single",
+      "--stage",
+      "requirements-analysis",
+      "--result",
+      "completed",
+      "--project-dir",
+      proj,
+    ]);
+    expect(result.out).toContain('"kind":"done"');
+    expect(countEvent(proj, "STAGE_COMPLETED")).toBe(1);
+  });
+
+  test("12e: an isolated per-unit stage binds its receipt to the selected questions file", () => {
+    const proj = freshProject();
+    seedStateFile(proj, STATE_FIXTURE);
+    seedAuditFile(proj);
+    const stageDir = join(
+      seededRecordDir(proj),
+      "construction",
+      "api",
+      "functional-design",
+    );
+    mkdirSync(stageDir, { recursive: true });
+    const questions = join(stageDir, "functional-design-questions.md");
+    writeFileSync(
+      questions,
+      "# Questions\n\n## Consolidated Summary Confirmation\n\n- Looks correct\n- Request changes\n\n[Answer]: \n",
+    );
+    expect(
+      runSummaryGuarded(LOG_TOOL, [
+        "decision",
+        "--stage",
+        "functional-design",
+        "--checkpoint",
+        "summary-confirmation",
+        "--questions-file",
+        questions,
+        "--single",
+        "--decision",
+        "Does this all look correct?",
+        "--project-dir",
+        proj,
+      ]).status,
+    ).toBe(0);
+    appendAuditEntry("HUMAN_TURN", {}, proj);
+    writeFileSync(
+      questions,
+      "# Questions\n\n## Consolidated Summary Confirmation\n\n- Looks correct\n- Request changes\n\n[Answer]: Looks correct\n",
+    );
+    expect(
+      runSummaryGuarded(LOG_TOOL, [
+        "answer",
+        "--stage",
+        "functional-design",
+        "--checkpoint",
+        "summary-confirmation",
+        "--questions-file",
+        questions,
+        "--single",
+        "--details",
+        "Looks correct",
+        "--project-dir",
+        proj,
+      ]).status,
+    ).toBe(0);
+    for (const name of [
+      "business-logic-model",
+      "business-rules",
+      "domain-entities",
+    ]) {
+      const artifact = join(stageDir, `${name}.md`);
+      writeFileSync(artifact, `# ${name}\n`);
+      appendAuditEntry(
+        "ARTIFACT_CREATED",
+        { File: artifact, Tool: "Write" },
+        proj,
+      );
+    }
+
+    const result = runSummaryGuarded(TOOL, [
+      "report",
+      "--single",
+      "--stage",
+      "functional-design",
+      "--result",
+      "completed",
+      "--project-dir",
+      proj,
+    ]);
+    expect(result.out).toContain('"kind":"done"');
   });
 
   // =========================================================================

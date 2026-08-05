@@ -82,6 +82,7 @@ import {
   auditLockDir,
   readAllAuditShards,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   cleanupTestProject,
   createTestProject,
@@ -977,6 +978,10 @@ function log(args: string[], p: string): CliResult {
 }
 
 function appendAudit(event: string, fields: Record<string, string>, p: string): CliResult {
+  if (event === "ARTIFACT_CREATED" || event === "ARTIFACT_UPDATED") {
+    appendAuditEntry(event, fields, p);
+    return { status: 0, out: "", stdout: "" };
+  }
   const fieldArgs = Object.entries(fields).flatMap(([key, value]) => [
     "--field",
     `${key}=${value}`,

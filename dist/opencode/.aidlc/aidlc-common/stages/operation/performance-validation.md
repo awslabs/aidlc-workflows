@@ -6,6 +6,7 @@ condition: Execute when NFR performance targets need validation under load
 lead_agent: aidlc-quality-agent
 support_agents: []
 mode: inline
+summary_confirmation: required
 produces:
   - load-test-plan
   - load-test-results

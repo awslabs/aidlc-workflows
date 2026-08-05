@@ -188,6 +188,8 @@ export interface GraphStage extends StageEntry {
   // reviewer_max_iterations — review cycle cap before escalating to human.
   // Defaults to 2 when reviewer is present.
   reviewer_max_iterations?: number;
+  // Deterministic pre-generation consolidated-summary checkpoint policy.
+  summary_confirmation?: "required" | "if-present";
 }
 
 export interface ScopeValidation {
@@ -452,6 +454,7 @@ const FIELD_ORDER = [
   "scopes",
   "reviewer",
   "reviewer_max_iterations",
+  "summary_confirmation",
   "inputs",
   "outputs",
   "rules_in_context",
@@ -1978,6 +1981,9 @@ function buildGraphStage(
       cap >= 1
         ? cap
         : 2;
+  }
+  if (parsed.summary_confirmation !== undefined) {
+    stage.summary_confirmation = parsed.summary_confirmation;
   }
   return stage;
 }

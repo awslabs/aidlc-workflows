@@ -6,6 +6,7 @@ condition: Execute when operational runbooks and incident response procedures ar
 lead_agent: aidlc-operations-agent
 support_agents: []
 mode: inline
+summary_confirmation: required
 produces:
   - runbooks
   - incident-plan

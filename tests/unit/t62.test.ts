@@ -89,6 +89,29 @@ describe("t62 stage-schema — validateStageFrontmatter (migrated from t62-stage
     expect(data.slug).toBe("scope-definition");
   });
 
+  test("summary_confirmation accepts required and if-present", () => {
+    expect(
+      validateStageFrontmatter({
+        ...fixture(),
+        summary_confirmation: "required",
+      }).valid,
+    ).toBe(true);
+    expect(
+      validateStageFrontmatter({
+        ...fixture(),
+        summary_confirmation: "if-present",
+      }).valid,
+    ).toBe(true);
+  });
+
+  test("summary_confirmation rejects unknown policies", () => {
+    expect(
+      errs({ ...fixture(), summary_confirmation: "sometimes" }),
+    ).toContain(
+      "summary_confirmation must be one of required, if-present",
+    );
+  });
+
   // ============================================================
   // Shape failures — non-object inputs (5 assertions)
   // ============================================================

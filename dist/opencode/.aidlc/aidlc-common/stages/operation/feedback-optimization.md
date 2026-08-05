@@ -7,6 +7,7 @@ lead_agent: aidlc-operations-agent
 support_agents:
   - aidlc-aws-platform-agent
 mode: inline
+summary_confirmation: required
 produces:
   - slo-report
   - cost-analysis

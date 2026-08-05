@@ -331,6 +331,23 @@ outputs: b
 ---
 `;
 
+const SUMMARY_CONFIRMATION = `---
+slug: test
+phase: ideation
+execution: ALWAYS
+condition: x
+lead_agent: aidlc-product-agent
+support_agents: []
+mode: inline
+summary_confirmation: required
+produces: []
+consumes: []
+requires_stage: []
+inputs: a
+outputs: b
+---
+`;
+
 const FULL = `---
 slug: test
 phase: construction
@@ -747,6 +764,13 @@ describe("optional for_each", () => {
     const obj = parseStageFrontmatter(ALL_ABSENT) as Record<string, unknown>;
     expect("for_each" in obj).toBe(false);
   });
+
+  test("summary_confirmation parses as a scalar policy", () => {
+    const obj = parseStageFrontmatter(
+      SUMMARY_CONFIRMATION,
+    ) as Record<string, unknown>;
+    expect(obj.summary_confirmation).toBe("required");
+  });
 });
 
 // ============================================================
@@ -776,6 +800,10 @@ describe("round-trip parse -> emit -> parse", () => {
   // V1: reviewer-bearing stage round-trips with the cap as a NUMBER.
   test("reviewer + numeric cap -> EQ", () => {
     expect(roundtrip(REVIEWER)).toBe("EQ");
+  });
+
+  test("summary confirmation policy -> EQ", () => {
+    expect(roundtrip(SUMMARY_CONFIRMATION)).toBe("EQ");
   });
 });
 

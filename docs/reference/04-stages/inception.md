@@ -421,7 +421,7 @@ large scope with significant unknowns.
    all six dimensions. Create
    `<record>/inception/requirements-analysis/requirements-analysis-questions.md`
    using the `[Answer]:` tag format. Include context-appropriate questions with
-   A-E options. Every question must end with `X. Other (please specify)` as
+   A-E options. Every ordinary clarifying question must end with `X. Other (please specify)` as
    the final option. All `[Answer]:` tags left blank.
 
    Offer the tri-mode question flow: Guide Me / Edit File / Chat.

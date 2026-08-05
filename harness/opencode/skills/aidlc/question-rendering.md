@@ -91,18 +91,21 @@ the prompt, both options without A/B file-letter prefixes, and a blank
 Reply with a number (or just tell me).
 ```
 
-This is a mandatory human checkpoint, not the stage approval gate. END THE TURN
-after presenting it and wait for the user's response. Map the response back to
-the exact option label and persist `[Answer]: Looks correct` or
-`[Answer]: Request changes`. Strip any source letter, numbered-prose index,
-punctuation, and option description before writing:
-`[Answer]: A. Looks correct`, `[Answer]: 1. Looks correct`, `[Answer]: A`,
-`[Answer]: 1`, and a self-selected answer are invalid. On Request changes,
-update the affected answers, reset this tag to blank, and present the
-consolidated summary again. Do not generate the artifact until the file
-contains the human's explicit
-`[Answer]: Looks correct`. Never merge this checkpoint with the later reviewer,
-learnings, or approval steps.
+This is a mandatory human checkpoint, not the stage approval gate. Before
+rendering it, run the checkpoint-specific `aidlc-log.ts decision` command from
+`SKILL.md`, including the exact `--questions-file` and any `--unit` / `--single`
+identity. END THE TURN after presenting it and wait for the user's response.
+Then map the response back to the exact option label, persist `[Answer]: Looks
+correct` or `[Answer]: Request changes`, and run the matching checkpoint-specific `aidlc-log.ts answer`
+command. Strip any source letter, numbered-prose index, punctuation, and option
+description before writing. `[Answer]: A. Looks correct`, `[Answer]: 1. Looks correct`,
+and a self-selected answer are invalid. On Request changes, ask
+**"What should change?"** and END THE TURN again; do not update any answer
+until that feedback arrives. Then record the feedback, update the affected
+answers, reset this tag to blank, and present the consolidated summary again.
+Do not generate the artifact until the file contains the human's explicit
+`[Answer]: Looks correct` and the receipt command succeeds. Never merge this
+checkpoint with the later reviewer, learnings, or approval steps.
 
 Rules:
 

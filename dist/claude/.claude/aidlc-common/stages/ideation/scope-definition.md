@@ -7,6 +7,7 @@ lead_agent: aidlc-product-agent
 support_agents:
   - aidlc-delivery-agent
 mode: inline
+summary_confirmation: required
 produces:
   - scope-document
   - intent-backlog

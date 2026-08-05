@@ -7,6 +7,7 @@ lead_agent: aidlc-pipeline-deploy-agent
 support_agents:
   - aidlc-developer-agent
 mode: inline
+summary_confirmation: required
 produces:
   - deployment-log
   - smoke-test-results

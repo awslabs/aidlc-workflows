@@ -8,6 +8,7 @@ support_agents:
   - aidlc-devsecops-agent
   - aidlc-compliance-agent
 mode: inline
+summary_confirmation: required
 produces:
   - environment-inventory
   - validation-report

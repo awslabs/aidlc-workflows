@@ -9,6 +9,7 @@ import {
   appendUnderHeading,
   auditBlockField,
   type CheckboxState,
+  checkSummaryConfirmationEvidence,
   codekbDir,
   countCheckboxes,
   emitError,
@@ -1262,6 +1263,27 @@ function verifyStageArtifacts(
   }
 }
 
+function verifySummaryConfirmationPrecondition(
+  pd: string,
+  content: string,
+  stage: {
+    slug: string;
+    name: string;
+    phase: string;
+    outputs?: string;
+    produces?: string[];
+    optional_produces?: string[];
+    produces_kinds?: Record<string, string[]>;
+    for_each?: string;
+    summary_confirmation?: "required" | "if-present";
+  },
+): void {
+  const evidence = checkSummaryConfirmationEvidence(pd, stage, {
+    stateContent: content,
+  });
+  if (!evidence.ok) error(evidence.message);
+}
+
 // --- Reviewer precondition (§12a / RFC Track 1) -----------------------------
 //
 // A stage that declares a `reviewer` cannot be approved until the reviewer step
@@ -1583,6 +1605,7 @@ function handleAdvance(args: string[]): void {
   // guarded. Runs before any mutation; error() exits leaving state untouched.
   if (!alreadyMarkedCompleted) {
     verifyStageArtifacts(pd, completedStage);
+    verifySummaryConfirmationPrecondition(pd, content, completedStage);
     verifyReviewerPrecondition(pd, content, completedStage);
   }
 
@@ -1697,6 +1720,7 @@ function handleFinalize(args: string[]): void {
     "completed";
   if (!alreadyMarkedCompleted) {
     verifyStageArtifacts(pd, completedStage);
+    verifySummaryConfirmationPrecondition(pd, content, completedStage);
     verifyReviewerPrecondition(pd, content, completedStage);
   }
 
@@ -1814,6 +1838,7 @@ function handleCompleteWorkflow(args: string[]): void {
   // before any mutation so a refusal leaves state untouched.
   if (!alreadyMarkedCompleted) {
     verifyStageArtifacts(pd, completedStage);
+    verifySummaryConfirmationPrecondition(pd, content, completedStage);
     verifyReviewerPrecondition(pd, content, completedStage);
   }
 
@@ -1944,6 +1969,7 @@ function handleGateStart(args: string[]): void {
   if (!stage) error(`Unknown stage: ${slug}`);
   validateSlugInState(content, slug, "in-progress");
   verifyStageArtifacts(pd, stage);
+  verifySummaryConfirmationPrecondition(pd, content, stage);
 
   content = setCheckbox(content, slug, "awaiting-approval");
   const timestamp = isoTimestamp();
@@ -2010,6 +2036,7 @@ function handleApprove(args: string[]): void {
   // Covers per-unit Construction stages (globs the record's
   // construction/<unit>/<slug>/) and code-producing stages (workspace_requires).
   verifyStageArtifacts(pd, stage);
+  verifySummaryConfirmationPrecondition(pd, content, stage);
 
   // Human-presence guard: a gate cannot be approved unless a real
   // human acted at THIS gate since the last gate resolution. Runs BEFORE any
@@ -2089,6 +2116,7 @@ function handleApprove(args: string[]): void {
   // rows and revision count remain as the consistent reopened-gate state if
   // this check refuses.
   if (recoveredRevision) writeStateFile(pd, content);
+  verifySummaryConfirmationPrecondition(pd, content, stage);
   verifyReviewerPrecondition(pd, content, stage);
 
   const timestamp = isoTimestamp();
@@ -2262,6 +2290,7 @@ function handleRevise(args: string[]): void {
   if (!stage) error(`Unknown stage: ${slug}`);
   validateSlugInState(content, slug, "revising");
   verifyStageArtifacts(pd, stage);
+  verifySummaryConfirmationPrecondition(pd, content, stage);
 
   content = setCheckbox(content, slug, "awaiting-approval");
   const timestamp = isoTimestamp();

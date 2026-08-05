@@ -281,10 +281,12 @@ and ambiguity detection.
 ### Tri-Mode System
 
 **Step 1: Create the questions file** in the appropriate `<record>/`
-directory using `[Answer]:` tag format with options A-E. Every question must
-end with `X. Other (please specify)` -- no exceptions. All `[Answer]:` tags
-start blank. Multi-select questions add "(select all that apply)" to the
-question text; answer format: `[Answer]: A, B, E`.
+directory using `[Answer]:` tag format with options A-E. Every ordinary
+question must end with `X. Other (please specify)`. The dedicated Consolidated
+Summary Confirmation is the sole exception: its **Looks correct / Request
+changes** options are unlettered. All `[Answer]:` tags start blank.
+Multi-select questions add "(select all that apply)" to the question text;
+answer format: `[Answer]: A, B, E`.
 
 **Step 2: Present mode choice:**
 
@@ -319,14 +321,21 @@ Log the mode choice to the `audit/` shards. Users can switch modes mid-stage.
   **Looks correct** and **Request changes** options. Do not ask for confirmation
   as bare prose. Before presenting it, append or reset a dedicated
   **Consolidated Summary Confirmation** entry in the stage questions file with
-  both options and a blank `[Answer]:`; fill it only from the human's response.
-  A request for changes resets that confirmation to blank before re-prompting.
+  both options and a blank `[Answer]:`. Record the prompt with
+  `aidlc-log.ts decision --checkpoint summary-confirmation --questions-file
+  <path>`, stop for the human, write the exact choice, then record it with the
+  matching `aidlc-log.ts answer` command. The receipt binds the human turn to
+  the exact questions-file digest. On **Request changes**, ask **"What should
+  change?"** and stop again before editing any answer; after feedback and
+  revision, reset the confirmation to blank before re-prompting.
 
 #### Edit File (Self-Guided Mode)
 
 - Tell user: "Edit the file at `[file path]`. When done, send **done** or
   **ready** and I'll continue."
 - WAIT for completion signal. Do not read file or proceed until signaled.
+- Present the consolidated summary and use the same persisted, receipt-backed
+  confirmation as Guide Me. Self-guided editing does not waive confirmation.
 
 #### Chat (Freeform Mode)
 

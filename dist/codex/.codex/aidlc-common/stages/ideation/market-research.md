@@ -6,6 +6,7 @@ condition: Execute when initiative has external market positioning or build-vs-b
 lead_agent: aidlc-product-agent
 support_agents: []
 mode: inline
+summary_confirmation: required
 produces:
   - competitive-analysis
   - market-trends

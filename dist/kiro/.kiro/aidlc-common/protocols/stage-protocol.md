@@ -322,17 +322,40 @@ Log the user's mode choice to `<record>/audit/<host>-<clone>.md` using the Quest
   `[Answer]: Looks correct` or `[Answer]: Request changes`. Strip any source
   letter, chat number, punctuation, or option description before writing;
   `[Answer]: A. Looks correct` and `[Answer]: 1. Looks correct` are invalid.
-  Never ask for this confirmation as bare prose: the harness must render an
-  answerable structured question before the turn ends. If the user requests
-  changes, record that response, update the relevant answer tags, reset the
-  confirmation entry to a blank `[Answer]:`, and re-present the summary. Only
-  proceed to artifact generation after the user explicitly chooses **Looks
-  correct**.
+  Before presenting it, record the checkpoint prompt:
+  `bun .kiro/tools/aidlc-log.ts decision --stage <slug>
+  --checkpoint summary-confirmation --questions-file "<questions-path>"
+  --decision "Does this all look correct before I generate the artifact?"
+  --options "Looks correct,Request changes"`; add `--unit "<directive.unit>"`
+  for a per-unit stage and `--single` for an isolated run. Never ask for this confirmation as bare prose: the harness must render an answerable structured
+  question before the turn ends.
+
+  After the human responds, first write the exact choice to the confirmation
+  `[Answer]:` tag, then record the human-backed receipt with
+  `bun .kiro/tools/aidlc-log.ts answer --stage <slug>
+  --checkpoint summary-confirmation --questions-file "<questions-path>"
+  --details "<exact choice>"` using the same `--unit` / `--single` identity.
+  The tool refuses a self-selected answer, a response without a matching prompt
+  record and later human turn, or a questions file whose stored choice differs.
+
+  If the choice is **Request changes**, append a sibling
+  `## Requested Changes Feedback` question with a blank `[Answer]:`, ask the
+  direct free-text question
+  **"What should change?"**, and END THE TURN. Do not revise anything until the
+  human provides that feedback. Record the feedback through the ordinary
+  `aidlc-log.ts decision` / `answer` pair, write it to the follow-up tag, update
+  the relevant answer tags, reset the confirmation entry to a blank `[Answer]:`,
+  and re-present the summary. Only proceed to artifact generation after the
+  human explicitly chooses **Looks correct** and the receipt command succeeds.
 
 **Step 3b: If "I'll edit the file" (self-guided mode):**
 - Tell the user: "Edit the file at `[file path]`. When you're done, send **done** or **ready** and I'll continue."
 - WAIT for the user to send a completion signal (any message like "done", "ready", "finished", "continue", etc.)
 - Do NOT read the file or proceed until the user sends a completion signal
+- After the completion signal, read the answers, present their consolidated
+  summary, and run the same persisted **Looks correct / Request changes**
+  checkpoint from Step 3a. Editing the source file does not waive the separate
+  pre-generation confirmation.
 
 **Step 3c: If "Chat" (freeform mode):**
 - Engage in open-ended conversation about the stage's topic

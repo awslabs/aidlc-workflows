@@ -9,6 +9,7 @@ support_agents:
   - aidlc-developer-agent
   - aidlc-quality-agent
 mode: mob
+summary_confirmation: required
 reviewer: aidlc-product-lead-agent
 reviewer_max_iterations: 2
 produces:

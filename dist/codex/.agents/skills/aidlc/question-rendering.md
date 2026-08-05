@@ -126,16 +126,21 @@ tool supplies its own escape. On the numbered-prose floor, render:
 Reply with a number (or just tell me).
 ```
 
-This is a mandatory human checkpoint, not the stage approval gate. END THE TURN
-after presenting it and wait for the user's response. Persist
-`[Answer]: Looks correct` or `[Answer]: Request changes` exactly, regardless of
-which track rendered the question. Strip any source letter, numbered-prose
-index, punctuation, and option description before writing:
+This is a mandatory human checkpoint, not the stage approval gate. Before
+rendering it, run the checkpoint-specific `aidlc-log.ts decision` command from
+`SKILL.md`, including the exact `--questions-file` and any `--unit` / `--single`
+identity. END THE TURN after presenting it and wait for the user's response.
+Then persist `[Answer]: Looks correct` or `[Answer]: Request changes` exactly,
+regardless of which track rendered the question, and run the matching
+checkpoint-specific `aidlc-log.ts answer` command. Strip any source letter,
+numbered-prose index, punctuation, and option description before writing:
 `[Answer]: A. Looks correct`, `[Answer]: 1. Looks correct`, `[Answer]: A`,
-`[Answer]: 1`, and a self-selected answer are invalid. On Request changes,
-update the affected answers, reset this tag to blank, and present the
-consolidated summary again. Do not generate the artifact until the file
-contains the human's explicit `[Answer]: Looks correct`. Never merge this
+`[Answer]: 1`, and a self-selected answer are invalid. On Request changes, ask
+**"What should change?"** and END THE TURN again; do not update any answer
+until that feedback arrives. Then record the feedback, update the affected
+answers, reset this tag to blank, and present the consolidated summary again.
+Do not generate the artifact until the file contains the human's explicit
+`[Answer]: Looks correct` and the receipt command succeeds. Never merge this
 checkpoint with the later reviewer, learnings, or approval steps.
 
 Rules (both tracks):

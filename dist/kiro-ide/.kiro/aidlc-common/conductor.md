@@ -99,7 +99,8 @@ stage that does not apply reports
 
 ## Asking good questions
 
-- Questions go in markdown files using `[Answer]:` tags with A-E + X (Other)
+- Ordinary questions go in markdown files using `[Answer]:` tags with A-E + X
+  (Other); the consolidated-summary checkpoint is the unlettered exception
   options — the file is always the source of truth. Use a structured question for
   1-3 simple options where the structured UI is clearer (rendering per the harness question-rendering annex).
 - Offer the tri-mode flow per `stage-protocol.md` §3: guided (interactive

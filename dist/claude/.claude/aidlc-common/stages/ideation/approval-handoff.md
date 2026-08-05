@@ -7,6 +7,7 @@ lead_agent: aidlc-delivery-agent
 support_agents:
   - aidlc-product-agent
 mode: inline
+summary_confirmation: required
 produces:
   - initiative-brief
   - decision-log

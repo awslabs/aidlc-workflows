@@ -55,6 +55,7 @@ const VALID_EVENT_TYPES = new Set([
   "GATE_APPROVED",
   "GATE_REJECTED",
   "QUESTION_ANSWERED",
+  "SUMMARY_CONFIRMATION_RECORDED",
   // Reviewer step (§12a) — REVIEW_REQUESTED on dispatch, REVIEW_COMPLETED when
   // a verdict is read. Emitted by the tool actor `aidlc-log.ts review`. A
   // reviewer-bearing stage cannot complete without a terminal REVIEW_COMPLETED
@@ -164,6 +165,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   GATE_APPROVED: "Gate Approved",
   GATE_REJECTED: "Gate Rejected",
   QUESTION_ANSWERED: "Question Answered",
+  SUMMARY_CONFIRMATION_RECORDED: "Summary Confirmation Recorded",
   REVIEW_REQUESTED: "Review Requested",
   REVIEW_COMPLETED: "Review Completed",
   ARTIFACT_CREATED: "Artifact Created",
@@ -235,6 +237,40 @@ function jsonSuccess(data: Record<string, unknown>): void {
 function jsonError(message: string): never {
   process.stderr.write(`${JSON.stringify({ error: message })}\n`);
   process.exit(1);
+}
+
+const CLI_RESERVED_EVENT_TYPES = new Set([
+  "HUMAN_TURN",
+  "SUMMARY_CONFIRMATION_RECORDED",
+  "ARTIFACT_CREATED",
+  "ARTIFACT_UPDATED",
+]);
+
+function refuseReservedCliEvent(eventType: string): void {
+  if (CLI_RESERVED_EVENT_TYPES.has(eventType)) {
+    jsonError(
+      `${eventType} is reserved for its owning hook/tool and cannot be appended through the public audit CLI.`,
+    );
+  }
+}
+
+function refuseReservedCliBatch(entriesJson: string): void {
+  try {
+    const entries = JSON.parse(entriesJson) as unknown;
+    if (!Array.isArray(entries)) return;
+    for (const entry of entries) {
+      if (
+        typeof entry === "object" &&
+        entry !== null &&
+        "eventType" in entry &&
+        typeof entry.eventType === "string"
+      ) {
+        refuseReservedCliEvent(entry.eventType);
+      }
+    }
+  } catch {
+    // The normal append-batch parser owns malformed-JSON diagnostics.
+  }
 }
 
 // --- Subcommand: append ---
@@ -824,6 +860,7 @@ export function main(argv: string[]): void {
       if (!eventType) {
         jsonError("Usage: aidlc-audit append <event-type> [--field key=value ...]");
       }
+      refuseReservedCliEvent(eventType);
       const fields = parseFieldArgs(rawArgs);
       handleAppend(eventType, fields, projectDir);
       break;
@@ -834,6 +871,7 @@ export function main(argv: string[]): void {
       if (!entries) {
         jsonError("Usage: aidlc-audit append-batch <entries-json>");
       }
+      refuseReservedCliBatch(entries);
       handleAppendBatch(entries, projectDir);
       break;
     }

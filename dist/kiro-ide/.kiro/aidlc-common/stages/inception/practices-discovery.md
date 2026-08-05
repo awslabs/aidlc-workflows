@@ -9,6 +9,7 @@ support_agents:
   - aidlc-developer-agent
   - aidlc-devsecops-agent
 mode: subagent
+summary_confirmation: required
 produces:
   - team-practices
   - discovered-rules

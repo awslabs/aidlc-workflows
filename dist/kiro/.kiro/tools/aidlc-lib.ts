@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { accessSync, appendFileSync, constants as fsConstants, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve as resolvePath, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   resolveHarnessPath,
@@ -36,6 +36,10 @@ export interface StageEntry {
   condition?: string;
   reviewer?: string;
   reviewer_max_iterations?: number;
+  // Summary-confirmation policy for stages using the unified question flow.
+  // `required` means every execution owes a questions file and receipt;
+  // `if-present` enforces a receipt only when the conditional flow created one.
+  summary_confirmation?: "required" | "if-present";
   produces?: string[];
   // Artifacts the stage MAY write per unit; exempt from the per-unit
   // coverage check in aidlc-orchestrate.ts unitCovered. See GraphStage in
@@ -2189,7 +2193,12 @@ function cloneId(projectDir: string): string {
 // The resolution boundary is workflow-global (the most recent commit of ANY
 // gate), which is what makes a same-turn cascade across DIFFERENT stages refuse
 // correctly; there is no per-stage scoping.
-const GATE_RESOLUTION_EVENTS = new Set(["GATE_APPROVED", "GATE_REJECTED", "QUESTION_ANSWERED"]);
+const GATE_RESOLUTION_EVENTS = new Set([
+  "GATE_APPROVED",
+  "GATE_REJECTED",
+  "QUESTION_ANSWERED",
+  "SUMMARY_CONFIRMATION_RECORDED",
+]);
 export function humanActedSinceGate(projectDir: string): boolean {
   const audit = readAllAuditShards(projectDir);
   if (audit.length === 0) return true; // no ledger → no presence tracking → fail open
@@ -2236,6 +2245,415 @@ export function hasOpenGate(stateContent: string | null): boolean {
 // readability; both paths share one definition so the predicate cannot drift.
 export function humanActedSinceLastAnswer(projectDir: string): boolean {
   return humanActedSinceGate(projectDir);
+}
+
+// --- Consolidated-summary confirmation evidence ---
+//
+// The summary checkpoint is a human judgement that authorizes artifact
+// generation. Its markdown answer is useful context, but is not evidence by
+// itself: the conductor can write that text. The durable evidence is a
+// SUMMARY_CONFIRMATION_RECORDED row carrying this canonical Checkpoint field,
+// emitted by `aidlc-log.ts answer --checkpoint summary-confirmation` only after
+// a matching prompt record and a fresh HUMAN_TURN. The public audit CLI reserves
+// this event, so the conductor cannot mint it through `aidlc-audit append`.
+export const SUMMARY_CONFIRMATION_CHECKPOINT =
+  "Consolidated Summary Confirmation";
+
+export function summaryConfirmationGuardDisabled(): boolean {
+  return process.env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD === "1";
+}
+
+type SummaryConfirmationStage = Pick<
+  StageEntry,
+  | "slug"
+  | "name"
+  | "phase"
+  | "outputs"
+  | "produces"
+  | "optional_produces"
+  | "produces_kinds"
+  | "for_each"
+  | "summary_confirmation"
+>;
+
+export type SummaryConfirmationEvidence =
+  | { ok: true; required: boolean }
+  | { ok: false; message: string };
+
+interface SummaryQuestionFile {
+  path: string;
+  dir: string;
+  unit: string | null;
+}
+
+function stageDeclaresSummaryQuestions(
+  stage: SummaryConfirmationStage,
+): boolean {
+  return stage.summary_confirmation === "required";
+}
+
+function questionFilesInDir(
+  dir: string,
+  unit: string | null,
+): SummaryQuestionFile[] {
+  if (!existsSync(dir)) return [];
+  try {
+    return readdirSync(dir)
+      .filter((name) => name.endsWith("-questions.md"))
+      .sort()
+      .map((name) => ({ path: join(dir, name), dir, unit }));
+  } catch {
+    return [];
+  }
+}
+
+function summaryQuestionFiles(
+  projectDir: string,
+  stage: SummaryConfirmationStage,
+): SummaryQuestionFile[] {
+  const rec = recordDir(projectDir);
+  if (rec === null) return [];
+  if (!isPerUnitStage(stage)) {
+    return questionFilesInDir(join(rec, stage.phase, stage.slug), null);
+  }
+
+  const constructionDir = join(rec, "construction");
+  if (!existsSync(constructionDir)) return [];
+  const files: SummaryQuestionFile[] = [];
+  try {
+    for (const unit of readdirSync(constructionDir).sort()) {
+      files.push(
+        ...questionFilesInDir(
+          join(constructionDir, unit, stage.slug),
+          unit,
+        ),
+      );
+    }
+  } catch {
+    return [];
+  }
+  return files;
+}
+
+function summaryAnswerFromFile(path: string): string | null {
+  let body: string;
+  try {
+    body = readFileSync(path, "utf-8");
+  } catch {
+    return null;
+  }
+  const section = extractMarkdownSection(
+    body,
+    `## ${SUMMARY_CONFIRMATION_CHECKPOINT}`,
+  );
+  if (!section) return null;
+  const answers = [...section.matchAll(/^\[Answer\]:[ \t]*(.*)$/gm)];
+  if (answers.length !== 1) return null;
+  return answers[0][1].trim();
+}
+
+function summaryArtifactPaths(
+  stage: SummaryConfirmationStage,
+  question: SummaryQuestionFile,
+): string[] {
+  const names = [
+    ...(stage.produces ?? []),
+    ...(stage.optional_produces ?? []),
+  ].filter((name) => !name.endsWith("-questions"));
+  return names
+    .map((name) => join(question.dir, `${name}.md`))
+    .filter((path) => existsSync(path));
+}
+
+// Verify that every question-bearing iteration has a fresh human-backed
+// consolidated-summary receipt and that generated artifacts postdate it.
+// `workflow` identifies an isolated run; main-workflow callers omit it.
+export function checkSummaryConfirmationEvidence(
+  projectDir: string,
+  stage: SummaryConfirmationStage,
+  options: {
+    workflow?: string;
+    stateContent?: string | null;
+    unit?: string;
+  } = {},
+): SummaryConfirmationEvidence {
+  if (summaryConfirmationGuardDisabled()) {
+    return { ok: true, required: false };
+  }
+  if (
+    stage.phase === "initialization" ||
+    (
+      stage.phase === "construction" &&
+      options.stateContent &&
+      isAutonomousMode(options.stateContent)
+    )
+  ) {
+    return { ok: true, required: false };
+  }
+  if (stage.summary_confirmation === undefined) {
+    return { ok: true, required: false };
+  }
+
+  let questions = summaryQuestionFiles(projectDir, stage);
+  if (options.unit !== undefined) {
+    questions = questions.filter(
+      (question) => question.unit === options.unit,
+    );
+  }
+  const declared = stageDeclaresSummaryQuestions(stage);
+  if (questions.length === 0) {
+    if (!declared) return { ok: true, required: false };
+    const unitText = options.unit ? ` for unit "${options.unit}"` : "";
+    return {
+      ok: false,
+      message:
+        `Refusing to complete "${stage.slug}"${unitText}: its question flow has no ` +
+        `${stage.slug}-questions.md file. Create and answer the stage questions, ` +
+        `then record the consolidated summary checkpoint before generating artifacts.`,
+    };
+  }
+  if (
+    declared &&
+    isPerUnitStage(stage) &&
+    options.workflow === undefined &&
+    options.unit === undefined
+  ) {
+    const resolution = resolveBoltDag(projectDir);
+    if (resolution.state === "malformed") {
+      return {
+        ok: false,
+        message:
+          `Refusing to complete "${stage.slug}": its summary-confirmation unit ` +
+          `set cannot be resolved because unit-of-work-dependency.md is ${resolution.reason} ` +
+          `(${resolution.detail}).`,
+      };
+    }
+    if (resolution.state === "ok") {
+      const requiredUnits = resolution.units.filter((unit) =>
+        filterProducesByKind(
+          stage.produces_kinds,
+          stage.produces ?? [],
+          resolution.unitKinds?.get(unit) ?? null,
+        ).length > 0
+      );
+      const presentUnits = new Set(
+        questions
+          .map((question) => question.unit)
+          .filter((unit): unit is string => unit !== null),
+      );
+      const missing = requiredUnits.filter((unit) => !presentUnits.has(unit));
+      if (missing.length > 0) {
+        return {
+          ok: false,
+          message:
+            `Refusing to complete "${stage.slug}": ${missing.length} applicable ` +
+          `units have no questions file or summary confirmation (${missing.join(", ")}).`,
+        };
+      }
+      const requiredUnitSet = new Set(requiredUnits);
+      questions = questions.filter(
+        (question) =>
+          question.unit !== null && requiredUnitSet.has(question.unit),
+      );
+    }
+  }
+
+  const audit = readAllAuditShards(projectDir);
+  if (audit.length === 0) {
+    return {
+      ok: false,
+      message:
+        `Refusing to complete "${stage.slug}": no human-backed consolidated ` +
+        "summary confirmation receipt is recorded.",
+    };
+  }
+
+  const relevant = new Set([
+    "WORKFLOW_STARTED",
+    "STAGE_STARTED",
+    "STAGE_JUMPED",
+    "STAGE_COMPLETED",
+    "SUMMARY_CONFIRMATION_RECORDED",
+    "ARTIFACT_CREATED",
+    "ARTIFACT_UPDATED",
+  ]);
+  const events = audit
+    .replace(/\r\n/g, "\n")
+    .split(/\n---\n/)
+    .map((block, position) => ({
+      block,
+      position,
+      event: auditBlockField(block, "Event") ?? "",
+      timestamp: auditBlockField(block, "Timestamp") ?? "",
+    }))
+    .filter((entry) => relevant.has(entry.event))
+    .sort((a, b) =>
+      a.timestamp !== b.timestamp
+        ? (a.timestamp < b.timestamp ? -1 : 1)
+        : a.position - b.position
+    );
+
+  const workflow = options.workflow;
+  const unitMajor =
+    isPerUnitStage(stage) &&
+    getField(options.stateContent ?? "", "Construction Iteration")?.trim() ===
+      "unit-major";
+  let floor = -1;
+  for (let i = 0; i < events.length; i++) {
+    const entry = events[i];
+    const eventWorkflow = auditBlockField(entry.block, "Workflow");
+    if (workflow !== undefined) {
+      if (
+        entry.event === "STAGE_COMPLETED" &&
+        eventWorkflow === workflow &&
+        auditBlockField(entry.block, "Stage") === stage.slug
+      ) {
+        floor = i;
+      }
+      continue;
+    }
+    if (eventWorkflow?.startsWith("single-stage:")) continue;
+    if (
+      entry.event === "WORKFLOW_STARTED" ||
+      entry.event === "STAGE_JUMPED"
+    ) {
+      floor = i;
+      continue;
+    }
+    if (auditBlockField(entry.block, "Stage") !== stage.slug) continue;
+    if (entry.event === "STAGE_STARTED" && !unitMajor) {
+      floor = i;
+    }
+  }
+
+  if (workflow !== undefined && isPerUnitStage(stage)) {
+    let receiptFile: string | null = null;
+    for (let i = floor + 1; i < events.length; i++) {
+      const entry = events[i];
+      if (entry.event !== "SUMMARY_CONFIRMATION_RECORDED") continue;
+      if (auditBlockField(entry.block, "Stage") !== stage.slug) continue;
+      if (auditBlockField(entry.block, "Workflow") !== workflow) continue;
+      receiptFile = auditBlockField(entry.block, "Questions File");
+    }
+    if (receiptFile !== null) {
+      const matched = questions.find(
+        (question) =>
+          toPosix(relative(projectDir, question.path)) === receiptFile,
+      );
+      if (matched) questions = [{ ...matched, unit: null }];
+    } else if (questions.length === 1) {
+      questions = [{ ...questions[0], unit: null }];
+    }
+  }
+
+  for (const question of questions) {
+    const fileAnswer = summaryAnswerFromFile(question.path);
+    if (fileAnswer !== "Looks correct") {
+      return {
+        ok: false,
+        message:
+          `Refusing to complete "${stage.slug}": ${question.path} must contain ` +
+          "exactly one `[Answer]: Looks correct` in its Consolidated Summary " +
+          "Confirmation section.",
+      };
+    }
+
+    let receipt: (typeof events)[number] | null = null;
+    const questionRelative = toPosix(relative(projectDir, question.path));
+    for (let i = floor + 1; i < events.length; i++) {
+      const entry = events[i];
+      if (entry.event !== "SUMMARY_CONFIRMATION_RECORDED") continue;
+      if (auditBlockField(entry.block, "Stage") !== stage.slug) continue;
+      if (
+        auditBlockField(entry.block, "Checkpoint") !==
+          SUMMARY_CONFIRMATION_CHECKPOINT
+      ) {
+        continue;
+      }
+      const eventWorkflow = auditBlockField(entry.block, "Workflow");
+      if (workflow !== undefined) {
+        if (eventWorkflow !== workflow) continue;
+      } else if (eventWorkflow?.startsWith("single-stage:")) {
+        continue;
+      }
+      const eventUnit = auditBlockField(entry.block, "Unit");
+      if ((eventUnit ?? null) !== question.unit) continue;
+      if (
+        auditBlockField(entry.block, "Questions File") !== questionRelative
+      ) {
+        continue;
+      }
+      receipt = entry;
+    }
+    if (
+      receipt === null ||
+      auditBlockField(receipt.block, "Details") !== "Looks correct"
+    ) {
+      const unitText = question.unit ? ` for unit "${question.unit}"` : "";
+      return {
+        ok: false,
+        message:
+          `Refusing to complete "${stage.slug}"${unitText}: no fresh human-backed ` +
+          "consolidated summary confirmation is recorded. Present the summary, " +
+          "then run `aidlc-log.ts answer --checkpoint summary-confirmation " +
+          `--stage ${stage.slug}${question.unit ? ` --unit "${question.unit}"` : ""}` +
+          `${workflow ? " --single" : ""} --details "Looks correct"` +
+          " after the human responds.",
+      };
+    }
+
+    let currentHash: string;
+    try {
+      currentHash = createHash("sha256")
+        .update(readFileSync(question.path))
+        .digest("hex");
+    } catch {
+      currentHash = "";
+    }
+    if (
+      !currentHash ||
+      auditBlockField(receipt.block, "Questions SHA-256") !== currentHash
+    ) {
+      return {
+        ok: false,
+        message:
+          `Refusing to complete "${stage.slug}": ${question.path} changed after ` +
+          "the human confirmed its summary. Reset the confirmation, present the " +
+          "updated summary, and record a new response.",
+      };
+    }
+
+    const receiptIndex = events.indexOf(receipt);
+    for (const artifact of summaryArtifactPaths(stage, question)) {
+      const artifactAbs = resolvePath(artifact);
+      let lastWrite = -1;
+      for (let i = floor + 1; i < events.length; i++) {
+        const entry = events[i];
+        if (
+          entry.event !== "ARTIFACT_CREATED" &&
+          entry.event !== "ARTIFACT_UPDATED"
+        ) {
+          continue;
+        }
+        const file = auditBlockField(entry.block, "File");
+        if (!file) continue;
+        const resolved = resolvePath(projectDir, file);
+        if (resolved === artifactAbs) lastWrite = i;
+      }
+      if (lastWrite <= receiptIndex) {
+        return {
+          ok: false,
+          message:
+            `Refusing to complete "${stage.slug}": artifact ${artifact} has no ` +
+            "recorded native-tool write after the human's consolidated summary " +
+            "confirmation. Regenerate or re-save it after confirmation, then " +
+            "report completion again.",
+        };
+      }
+    }
+  }
+
+  return { ok: true, required: true };
 }
 
 // Read a `**Field**: value` line from one audit block (tolerates an optional
@@ -4706,6 +5124,7 @@ export function emitStageFrontmatter(obj: Record<string, unknown>): string {
     "lead_agent",
     "support_agents",
     "mode",
+    "summary_confirmation",
     "reviewer",
     "reviewer_max_iterations",
     "for_each",

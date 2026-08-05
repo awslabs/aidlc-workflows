@@ -6,6 +6,7 @@ condition: Execute when CD pipeline needs creation or significant modification
 lead_agent: aidlc-pipeline-deploy-agent
 support_agents: []
 mode: inline
+summary_confirmation: required
 produces:
   - cd-config
   - deployment-strategy

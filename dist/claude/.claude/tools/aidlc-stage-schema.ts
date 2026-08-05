@@ -80,6 +80,10 @@ export interface StageFrontmatter {
   // reviewer_max_iterations — review-cycle cap before escalating to the human.
   // Defaults to 2 when reviewer is present.
   reviewer_max_iterations?: number;
+  // summary_confirmation — deterministic pre-generation checkpoint policy.
+  // `required` means every run must create the questions file and record the
+  // human's consolidated-summary choice; `if-present` is for conditional Q&A.
+  summary_confirmation?: "required" | "if-present";
   // when — structured activation predicate (plugin mechanism, Layer 4). A
   // single-key map; the one predicate is `producer-in-plan: <artifact-slug>`.
   // Accepted for shape here; the compile-time grid evaluation is separate.
@@ -165,7 +169,7 @@ const REQUIRED_FIELDS = [
   "outputs",
 ] as const;
 
-const OPTIONAL_FIELDS = ["number", "name", "plugin", "for_each", "workspace_requires", "optional_produces", "produces_kinds", "sensors", "scopes", "reviewer", "reviewer_max_iterations", "when", "required_sections"] as const;
+const OPTIONAL_FIELDS = ["number", "name", "plugin", "for_each", "workspace_requires", "optional_produces", "produces_kinds", "sensors", "scopes", "reviewer", "reviewer_max_iterations", "summary_confirmation", "when", "required_sections"] as const;
 
 const KNOWN_FIELDS = new Set<string>([...REQUIRED_FIELDS, ...OPTIONAL_FIELDS]);
 
@@ -314,6 +318,16 @@ export function validateStageFrontmatter(
   // literal; a non-integer literal stays a string and is rejected here as a
   // type error rather than silently coercing to NaN at compile.
   checkPositiveInteger(o, "reviewer_max_iterations", errors);
+  if (
+    "summary_confirmation" in o &&
+    o.summary_confirmation !== undefined &&
+    o.summary_confirmation !== "required" &&
+    o.summary_confirmation !== "if-present"
+  ) {
+    errors.push(
+      `summary_confirmation must be one of required, if-present, got ${describe(o.summary_confirmation)}`,
+    );
+  }
 
   // Coupling — a cap with no reviewer is silently dropped at compile
   // (aidlc-graph.ts guards the whole reviewer block on `reviewer` being

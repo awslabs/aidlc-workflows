@@ -6,6 +6,7 @@ condition: Execute when monitoring, dashboards, alarms, or tracing need configur
 lead_agent: aidlc-operations-agent
 support_agents: []
 mode: inline
+summary_confirmation: required
 produces:
   - dashboards
   - alarms

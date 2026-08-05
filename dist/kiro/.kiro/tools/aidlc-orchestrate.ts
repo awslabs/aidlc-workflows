@@ -99,6 +99,7 @@ import {
   activeSpace,
   auditBlockField,
   type CheckboxLine,
+  checkSummaryConfirmationEvidence,
   codekbRepoName,
   errorMessage,
   filterProducesByKind,
@@ -2864,10 +2865,29 @@ function nextUncoveredUnit(
   recordPrefix: string | null,
   codekbCtx: CodekbCtx,
   kinds: Map<string, string> | null,
-): { unit: string; uncovered: string[] } | null {
-  const uncovered = units.filter(
-    (u) => !unitCovered(projectDir, node, u, recordPrefix, codekbCtx, kinds?.get(u) ?? null),
-  );
+  stateContent: string | null,
+): { unit: string; uncovered: string[] } | { error: string } | null {
+  const uncovered: string[] = [];
+  for (const unit of units) {
+    if (
+      !unitCovered(
+        projectDir,
+        node,
+        unit,
+        recordPrefix,
+        codekbCtx,
+        kinds?.get(unit) ?? null,
+      )
+    ) {
+      uncovered.push(unit);
+      continue;
+    }
+    const confirmation = checkSummaryConfirmationEvidence(projectDir, node, {
+      stateContent,
+      unit,
+    });
+    if (!confirmation.ok) return { error: confirmation.message };
+  }
   if (uncovered.length === 0) return null;
   return { unit: uncovered[0], uncovered };
 }
@@ -2923,7 +2943,19 @@ function emitPerUnitRunStage(
   // The resolution carries batches + kinds from one graph snapshot. null =
   // no kinds known = every unit on the full matrix.
   const kinds = r.unitKinds;
-  const pick = nextUncoveredUnit(projectDir, node, units, recordPrefix, codekbCtx, kinds);
+  const pick = nextUncoveredUnit(
+    projectDir,
+    node,
+    units,
+    recordPrefix,
+    codekbCtx,
+    kinds,
+    stateContent,
+  );
+  if (pick !== null && "error" in pick) {
+    emit(errorDirective(pick.error));
+    return;
+  }
   if (pick === null) {
     // Every unit is already covered, but the checkbox is still in-flight: the
     // conductor wrote the LAST unit's artifacts and re-ran `next` to settle the
@@ -3083,6 +3115,14 @@ function emitUnitMajorRunStage(
         directive.gate = false;
         directive.unit = u;
         emit(directive);
+        return;
+      }
+      const confirmation = checkSummaryConfirmationEvidence(projectDir, k, {
+        stateContent,
+        unit: u,
+      });
+      if (!confirmation.ok) {
+        emit(errorDirective(confirmation.message));
         return;
       }
     }
@@ -3881,7 +3921,11 @@ function checkStageCompletionEvidence(
         recordPrefix,
         codekbCtxFor(pd),
         unitKinds,
+        stateContent,
       );
+      if (pick !== null && "error" in pick) {
+        return { ok: false, message: pick.error };
+      }
       if (pick !== null) {
         return {
           ok: false,
@@ -3977,6 +4021,15 @@ function handleSingleReport(
   }
 
   const pd = resolveProjectDir(projectDir);
+  const wfId = syntheticWorkflowId(node.slug);
+  const summaryEvidence = checkSummaryConfirmationEvidence(pd, node, {
+    workflow: wfId,
+    stateContent: null,
+  });
+  if (!summaryEvidence.ok) {
+    emit(errorDirective(summaryEvidence.message));
+    return;
+  }
   // Isolated reports never inherit the main workflow's scope, autonomy, or DAG.
   // Only an ensemble stage needs its record prefix for contribution evidence;
   // ordinary stages go straight to the synthetic audit pair.
@@ -3992,8 +4045,6 @@ function handleSingleReport(
     emit(errorDirective(evidence.message));
     return;
   }
-  const wfId = syntheticWorkflowId(node.slug);
-
   const pair = spawnAuditAppendBatch(pd, [
     {
       eventType: "STAGE_STARTED",

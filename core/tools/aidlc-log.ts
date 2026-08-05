@@ -1,24 +1,31 @@
 // aidlc-log.ts — Interaction audit helper
 //
 // Records DECISION_RECORDED (before AskUserQuestion), QUESTION_ANSWERED
-// (after the user answers), and REVIEW_REQUESTED / REVIEW_COMPLETED (the §12a
-// reviewer step). Orchestrator-callable; state tool doesn't own these because
-// they fire per-question / per-review, not per state transition.
+// (after ordinary answers), SUMMARY_CONFIRMATION_RECORDED (the reserved,
+// human-backed pre-generation receipt), and REVIEW_REQUESTED / REVIEW_COMPLETED
+// (the §12a reviewer step). Orchestrator-callable; state tool doesn't own these
+// because they fire per-question / per-review, not per state transition.
 
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
+import { relative, resolve, sep } from "node:path";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   auditBlockField,
   emitError,
   errorMessage,
+  extractMarkdownSection,
   holdsAuditLock,
   humanActedSinceLastAnswer,
   humanPresenceGuardDisabled,
   isAutonomousMode,
   parseCheckboxes,
   readAllAuditShards,
+  recordDir,
   resolveProjectDir,
+  SUMMARY_CONFIRMATION_CHECKPOINT,
   stateFilePath,
+  toPosix,
   withAuditLock,
 } from "./aidlc-lib.js";
 
@@ -93,22 +100,87 @@ function parseFlags(
   return { positional, flags };
 }
 
+function summaryQuestionEvidence(
+  pd: string,
+  flags: Record<string, string>,
+  expectedAnswer: string,
+): { relativePath: string; sha256: string } {
+  const supplied = flags["questions-file"];
+  if (!supplied) {
+    error(
+      "Summary confirmation requires --questions-file <path> so the receipt can bind to the reviewed answers.",
+    );
+  }
+  const absolute = resolve(pd, supplied);
+  const root = recordDir(pd);
+  if (
+    root === null ||
+    (absolute !== root && !absolute.startsWith(`${root}${sep}`))
+  ) {
+    error(
+      `Summary confirmation questions file must be inside the active intent record: ${supplied}`,
+    );
+  }
+  if (!absolute.endsWith("-questions.md") || !existsSync(absolute)) {
+    error(`Summary confirmation questions file does not exist: ${supplied}`);
+  }
+
+  const body = readFileSync(absolute, "utf-8");
+  const section = extractMarkdownSection(
+    body,
+    `## ${SUMMARY_CONFIRMATION_CHECKPOINT}`,
+  );
+  const answers = [...section.matchAll(/^\[Answer\]:[ \t]*(.*)$/gm)];
+  if (answers.length !== 1 || answers[0][1].trim() !== expectedAnswer) {
+    const rendered = expectedAnswer || "a blank value";
+    error(
+      `Summary confirmation section in ${supplied} must contain exactly one ` +
+      `\`[Answer]:\` line with ${rendered} before this command runs.`,
+    );
+  }
+
+  return {
+    relativePath: toPosix(relative(pd, absolute)),
+    sha256: createHash("sha256").update(body).digest("hex"),
+  };
+}
+
 // --- Subcommand: decision ---
-// Usage: aidlc-log decision --stage <slug> --decision <text> [--options <csv>] [--rationale <text>]
+// Usage: aidlc-log decision --stage <slug> --decision <text> [--options <csv>]
+//   [--rationale <text>] [--checkpoint summary-confirmation
+//   --questions-file <path> [--unit <unit>] [--single]]
 //
 // Fires BEFORE AskUserQuestion, recording what options will be shown.
 function handleDecision(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
   if (!flags.decision) error("Missing --decision <text>");
+  if (
+    flags.checkpoint !== undefined &&
+    flags.checkpoint !== "summary-confirmation"
+  ) {
+    error(
+      `Unknown --checkpoint "${flags.checkpoint}". Accepted: summary-confirmation`,
+    );
+  }
 
   const pd = resolveActiveProjectDir(projectDir);
+  const summaryEvidence =
+    flags.checkpoint === "summary-confirmation"
+      ? summaryQuestionEvidence(pd, flags, "")
+      : null;
   const fields: Record<string, string> = {
     Stage: flags.stage,
     Decision: flags.decision,
   };
   if (flags.options) fields.Options = flags.options;
   if (flags.rationale) fields.Rationale = flags.rationale;
+  if (flags.checkpoint === "summary-confirmation") {
+    fields.Checkpoint = SUMMARY_CONFIRMATION_CHECKPOINT;
+    fields["Questions File"] = summaryEvidence!.relativePath;
+  }
+  if (flags.unit) fields.Unit = flags.unit;
+  if (flags.single === "true") fields.Workflow = `single-stage:${flags.stage}`;
 
   try {
     emitAudit(pd, "DECISION_RECORDED", fields);
@@ -123,6 +195,8 @@ function handleDecision(args: string[]): void {
 
 // --- Subcommand: answer ---
 // Usage: aidlc-log answer --stage <slug> --details <text>
+//   [--checkpoint summary-confirmation --questions-file <path>
+//   [--unit <unit>] [--single]]
 //
 // Fires AFTER the user answers a question.
 
@@ -140,6 +214,7 @@ function hasPendingDecisionAtGate(pd: string, stage: string): boolean {
     "STAGE_AWAITING_APPROVAL",
     "DECISION_RECORDED",
     "QUESTION_ANSWERED",
+    "SUMMARY_CONFIRMATION_RECORDED",
   ]);
   const events = audit
     .replace(/\r\n/g, "\n")
@@ -169,23 +244,132 @@ function hasPendingDecisionAtGate(pd: string, stage: string): boolean {
     if (event.stage !== stage) continue;
     if (event.event === "DECISION_RECORDED") {
       pending = true;
-    } else if (event.event === "QUESTION_ANSWERED") {
+    } else if (
+      event.event === "QUESTION_ANSWERED" ||
+      event.event === "SUMMARY_CONFIRMATION_RECORDED"
+    ) {
       pending = false;
     }
   }
   return pending;
 }
 
+function pendingSummaryDecision(
+  pd: string,
+  stage: string,
+  unit: string | undefined,
+  workflow: string | undefined,
+  questionsFile: string,
+): { pending: boolean; humanAfterDecision: boolean } {
+  const audit = readAllAuditShards(pd);
+  if (audit.length === 0) {
+    return { pending: false, humanAfterDecision: false };
+  }
+
+  const entries = audit
+    .replace(/\r\n/g, "\n")
+    .split(/\n---\n/)
+    .map((block, position) => ({
+      block,
+      position,
+      event: auditBlockField(block, "Event") ?? "",
+      timestamp: auditBlockField(block, "Timestamp") ?? "",
+    }))
+    .filter((entry) =>
+      entry.event === "DECISION_RECORDED" ||
+      entry.event === "SUMMARY_CONFIRMATION_RECORDED" ||
+      entry.event === "STAGE_COMPLETED" ||
+      entry.event === "HUMAN_TURN"
+    )
+    .sort((a, b) =>
+      a.timestamp !== b.timestamp
+        ? (a.timestamp < b.timestamp ? -1 : 1)
+        : a.position - b.position
+    );
+
+  let decision = -1;
+  let answer = -1;
+  let human = -1;
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    if (
+      entry.event === "STAGE_COMPLETED" &&
+      auditBlockField(entry.block, "Stage") === stage &&
+      auditBlockField(entry.block, "Workflow") === workflow
+    ) {
+      decision = -1;
+      answer = -1;
+      human = -1;
+      continue;
+    }
+    if (entry.event === "HUMAN_TURN") {
+      human = i;
+      continue;
+    }
+    if (auditBlockField(entry.block, "Stage") !== stage) continue;
+    if (
+      auditBlockField(entry.block, "Checkpoint") !==
+        SUMMARY_CONFIRMATION_CHECKPOINT
+    ) {
+      continue;
+    }
+    if ((auditBlockField(entry.block, "Unit") ?? undefined) !== unit) continue;
+    if (
+      (auditBlockField(entry.block, "Workflow") ?? undefined) !== workflow
+    ) {
+      continue;
+    }
+    if (auditBlockField(entry.block, "Questions File") !== questionsFile) {
+      continue;
+    }
+    if (entry.event === "DECISION_RECORDED") decision = i;
+    if (entry.event === "SUMMARY_CONFIRMATION_RECORDED") answer = i;
+  }
+
+  return {
+    pending: decision > answer,
+    humanAfterDecision: human > decision && decision >= 0,
+  };
+}
+
 function handleAnswer(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
   if (!flags.details) error("Missing --details <text>");
+  if (
+    flags.checkpoint !== undefined &&
+    flags.checkpoint !== "summary-confirmation"
+  ) {
+    error(
+      `Unknown --checkpoint "${flags.checkpoint}". Accepted: summary-confirmation`,
+    );
+  }
+  const summaryCheckpoint = flags.checkpoint === "summary-confirmation";
+  if (
+    summaryCheckpoint &&
+    flags.details !== "Looks correct" &&
+    flags.details !== "Request changes"
+  ) {
+    error(
+      'Summary confirmation --details must be exactly "Looks correct" or "Request changes".',
+    );
+  }
 
   const pd = resolveActiveProjectDir(projectDir);
+  const summaryEvidence = summaryCheckpoint
+    ? summaryQuestionEvidence(pd, flags, flags.details)
+    : null;
   const fields: Record<string, string> = {
     Stage: flags.stage,
     Details: flags.details,
   };
+  if (summaryCheckpoint) {
+    fields.Checkpoint = SUMMARY_CONFIRMATION_CHECKPOINT;
+    fields["Questions File"] = summaryEvidence!.relativePath;
+    fields["Questions SHA-256"] = summaryEvidence!.sha256;
+  }
+  if (flags.unit) fields.Unit = flags.unit;
+  if (flags.single === "true") fields.Workflow = `single-stage:${flags.stage}`;
 
   // Classification and emission run under ONE audit lock: a concurrent
   // gate-start (itself locked) cannot flip the stage to [?] between the
@@ -203,6 +387,48 @@ function handleAnswer(args: string[]): void {
     const content = existsSync(stateFilePath(pd))
       ? readFileSync(stateFilePath(pd), "utf-8")
       : null;
+    const workflow =
+      flags.single === "true" ? `single-stage:${flags.stage}` : undefined;
+
+    if (summaryCheckpoint) {
+      const pending = pendingSummaryDecision(
+        pd,
+        flags.stage,
+        flags.unit,
+        workflow,
+        summaryEvidence!.relativePath,
+      );
+      if (!pending.pending) {
+        error(
+          "Refusing to record summary confirmation: no matching unanswered " +
+          "summary-confirmation decision is recorded for this stage, unit, and run. " +
+          "Record the decision before presenting the summary prompt.",
+        );
+      }
+      if (
+        !humanPresenceGuardDisabled() &&
+        !pending.humanAfterDecision
+      ) {
+        error(
+          "Refusing to record summary confirmation: a real human has not responded " +
+          "after this summary prompt. End the turn, wait for the human's choice, " +
+          "then record it.",
+        );
+      }
+      try {
+        emitAudit(pd, "SUMMARY_CONFIRMATION_RECORDED", fields);
+      } catch (e) {
+        error(`Audit emission failed: ${errorMessage(e)}`);
+      }
+      console.log(
+        JSON.stringify({
+          emitted: "SUMMARY_CONFIRMATION_RECORDED",
+          checkpoint: "summary-confirmation",
+          stage: flags.stage,
+        }),
+      );
+      return;
+    }
 
     // Approval choices are lifecycle transitions, not interview answers. A
     // conductor may nevertheless route an approval through `answer` before

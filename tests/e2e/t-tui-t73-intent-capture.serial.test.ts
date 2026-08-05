@@ -385,6 +385,12 @@ describe("t-tui-t73-intent-capture (answering the stage gate produces artifacts 
         const auditMd = readAllAuditShards(sandbox);
         expect(auditMd).toMatch(/STAGE_COMPLETED/);
         expect(auditMd.toLowerCase()).toContain("intent-capture");
+        const summaryConfirmedAt = auditMd.lastIndexOf(
+          "**Event**: SUMMARY_CONFIRMATION_RECORDED",
+        );
+        const firstArtifactAt = auditMd.indexOf("**Event**: ARTIFACT_CREATED");
+        expect(summaryConfirmedAt).toBeGreaterThan(-1);
+        expect(firstArtifactAt).toBeGreaterThan(summaryConfirmedAt);
 
         // --- learnings-before-gate ordering (guards the §13 turn binding) ------
         // The learnings ritual is its own logged human interaction BEFORE the

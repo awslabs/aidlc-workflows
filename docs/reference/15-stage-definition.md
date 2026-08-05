@@ -118,6 +118,24 @@ it runs once after all five Construction `for_each` stages have iterated
 across Units, consuming their aggregated outputs. No explicit `fan_in` or
 aggregation field — graph traversal figures it out.
 
+### `summary_confirmation`
+
+Optional enum controlling the deterministic pre-generation checkpoint for a
+stage's question flow:
+
+- `required` means every execution must create a questions file and obtain the
+  consolidated **Looks correct** confirmation before artifact generation.
+- `if-present` applies the same enforcement only when a conditional question
+  flow created a questions file.
+
+The receipt is not inferred from markdown alone. `aidlc-log.ts` records the
+reserved `SUMMARY_CONFIRMATION_RECORDED` event after a matching prompt record
+and a later human turn, binding it to the questions-file SHA-256. Completion refuses
+a missing or stale receipt, a changed questions file, or a declared artifact
+without a native write after the receipt. Per-unit stages require one
+unit-scoped receipt per applicable Unit; isolated runs use the same check with
+their `single-stage:<slug>` workflow identity.
+
 ### `workspace_requires`
 
 Boolean, default `false`. Set `true` on stages that must write **source code to

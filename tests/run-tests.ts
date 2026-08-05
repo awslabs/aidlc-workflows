@@ -609,6 +609,10 @@ async function runBunTestFile(file: string, parallelMode = false): Promise<void>
   // (t188-human-presence-gate) clears this var in its own tool spawns to
   // exercise real enforcement.
   //
+  // Disable the consolidated-summary receipt guard for synthetic transition
+  // fixtures. Focused summary-confirmation tests clear this variable and create
+  // the real prompt, human-turn, answer, digest, and artifact-write evidence.
+  //
   // Disable the approve-time gate-revision backstop for the suite by default,
   // for the same reason: many approve tests drive a revision-shaped ledger
   // against bare fixtures and must not have their Revision Count / audit trail
@@ -624,6 +628,7 @@ async function runBunTestFile(file: string, parallelMode = false): Promise<void>
     AIDLC_TEST_NAME: base,
     AIDLC_SKIP_ARTIFACT_GUARD: "1",
     AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
+    AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
     AIDLC_SKIP_REVISION_BACKSTOP: "1",
   };
   // Command-scope config outranks the isolated global file. Preserve its safety

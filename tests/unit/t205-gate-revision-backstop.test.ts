@@ -62,6 +62,7 @@ import {
   seedStateFile,
 } from "../harness/fixtures.ts";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 
 const BUN = process.execPath;
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
@@ -120,13 +121,7 @@ function guardedNoBackstop(proj: string, args: string[]): { rc: number; out: str
 // Record a HUMAN_TURN via the real audit-append CLI (what the per-harness mint
 // hook does on a real prompt) - appends to the active-intent shard in ledger order.
 function recordHumanTurn(proj: string): void {
-  const r = spawnSync(BUN, [AUDIT, "append", "HUMAN_TURN", "--project-dir", proj], {
-    encoding: "utf-8",
-    env: process.env,
-  });
-  if ((r.status ?? -1) !== 0) {
-    throw new Error(`recordHumanTurn failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
-  }
+  appendAuditEntry("HUMAN_TURN", {}, proj);
 }
 
 // Record a STAGE_STARTED for the slug via the real audit-append CLI - the same

@@ -95,10 +95,14 @@ const KIRO_SUBAGENT_TOKEN =
 
 const SUMMARY_STOP_SKILL_TOKENS = [
   "before running the stage body or writing `produces`",
-  "the isolated path does not bypass summary confirmation",
-  "Only after that separate human turn may the stage body produce artifacts",
+  "checkpoint-specific `aidlc-log.ts decision` / `answer` pair with `--single`",
+  "only after that separate human turn and receipt",
   "PRE-GENERATION SUMMARY STOP",
   "before artifact generation, reviewer, learnings, or approval",
+  "--checkpoint summary-confirmation --questions-file",
+  '`--unit "<directive.unit>"`',
+  "`--single`",
+  '**"What should change?"**',
 ];
 
 const SUMMARY_STOP_ANNEX_TOKENS = [
@@ -109,7 +113,10 @@ const SUMMARY_STOP_ANNEX_TOKENS = [
   "`[Answer]: Looks correct`",
   "`[Answer]: A. Looks correct`, `[Answer]: 1. Looks correct`",
   "a self-selected answer",
-  "Do not generate the artifact until",
+  "receipt command succeeds",
+  "checkpoint-specific `aidlc-log.ts decision`",
+  "checkpoint-specific `aidlc-log.ts answer`",
+  '**"What should change?"**',
 ];
 
 function stageTableRows(body: string): string[] {

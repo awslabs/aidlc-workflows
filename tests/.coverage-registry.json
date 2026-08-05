@@ -20,10 +20,10 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 487,
+    "total": 491,
     "enumeratedByClass": {
-      "function": 253,
-      "audit": 74,
+      "function": 256,
+      "audit": 75,
       "scope": 9,
       "stage": 32,
       "hook": 14,
@@ -31,12 +31,12 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 107,
-      "audit": 33,
+      "function": 109,
+      "audit": 34,
       "scope": 9,
       "stage": 9,
       "hook": 14,
-      "subcommand": 85,
+      "subcommand": 86,
       "render-surface": 7
     }
   },
@@ -567,6 +567,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "SUMMARY_CONFIRMATION_RECORDED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t188-human-presence-gate.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "audit",
@@ -1114,6 +1126,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:checkSummaryConfirmationEvidence",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t188-human-presence-gate.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -3036,6 +3060,25 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:SUMMARY_CONFIRMATION_CHECKPOINT",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:summaryConfirmationGuardDisabled",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t188-human-presence-gate.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:swarmConvergedUnits",
       "minMechanism": "none",
       "coveredBy": [
@@ -4179,8 +4222,13 @@
       "unitClass": "subcommand",
       "unitId": "aidlc-audit append",
       "minMechanism": "cli",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t127-single-stage-invariant.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "subcommand",

@@ -7,6 +7,7 @@ lead_agent: aidlc-design-agent
 support_agents:
   - aidlc-product-agent
 mode: inline
+summary_confirmation: required
 reviewer: aidlc-product-lead-agent
 reviewer_max_iterations: 2
 produces:

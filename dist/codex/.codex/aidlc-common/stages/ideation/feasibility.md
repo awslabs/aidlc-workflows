@@ -8,6 +8,7 @@ support_agents:
   - aidlc-aws-platform-agent
   - aidlc-compliance-agent
 mode: inline
+summary_confirmation: required
 produces:
   - feasibility-assessment
   - constraint-register
