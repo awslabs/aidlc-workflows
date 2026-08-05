@@ -137,7 +137,7 @@ On **Claude Code**, this implementation displays a statusline in the terminal st
 [AIDLC] IDEATION [▓▓▓▓▓░░░░░] 4/7 > Intent Capture -- Product Agent
 ```
 
-This shows, in order: current phase, phase progress (as a bar and a ratio — both scoped to the current phase), stage display name, and lead agent. Context usage appears on the right (e.g., `ctx:15%`), color-coded as the remaining context drops. When the Claude usage ledger has data, `↑<in> ↓<out> $<usd>` follows for the active workflow and current transcript/session only; prior workflows and sessions are excluded.
+This shows, in order: current phase, phase progress (as a bar and a ratio — both scoped to the current phase), stage display name, and lead agent. Context usage appears on the right (e.g., `ctx:15%`), color-coded as the remaining context drops. When the Claude usage ledger has data, `↑<in> ↓<out> $<usd>` follows for the active workflow and current transcript/session only; prior workflows and sessions are excluded. Setting `AIDLC_DISABLE_USAGE_TRACKING=1` turns usage tracking off entirely and removes this segment.
 
 ### Configuration
 

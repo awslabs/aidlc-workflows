@@ -85,7 +85,7 @@ On Claude Code, the custom AI-DLC status line at the bottom of your terminal upd
 [AIDLC] IDEATION > Intent Capture [▓▓▓▓▓░░░░░] 4/7 -- product
 ```
 
-This shows: current phase, stage display name, phase progress bar, phase progress ratio, and lead agent. The bar and the ratio share the same scope — both count `[x]` stages within the current phase, so the bar advances every time the ratio does. Remaining context (`ctx:N%`) is always shown on the right, color-coded as it drops. On Claude Code, `↑<in> ↓<out> $<usd>` also appears after the first usage fold and covers only the active workflow and current transcript/session, not earlier workspace activity.
+This shows: current phase, stage display name, phase progress bar, phase progress ratio, and lead agent. The bar and the ratio share the same scope — both count `[x]` stages within the current phase, so the bar advances every time the ratio does. Remaining context (`ctx:N%`) is always shown on the right, color-coded as it drops. On Claude Code, `↑<in> ↓<out> $<usd>` also appears after the first usage fold and covers only the active workflow and current transcript/session, not earlier workspace activity. Set `AIDLC_DISABLE_USAGE_TRACKING=1` to turn usage tracking (and this segment) off.
 
 The aidlc-product-agent asks you to choose an interaction mode:
 
@@ -275,7 +275,7 @@ Throughout the workflow on Claude Code, the custom AI-DLC status line shows your
 | `4/7` | Stage progress within the phase |
 | `-- product` | Lead agent for this stage |
 | `ctx:N%` | Remaining context (always shown, color-coded as it drops) |
-| `↑<in> ↓<out> $<usd>` | Token usage and priceable cost for the active workflow and current transcript/session (Claude Code only; omitted before usage is available) |
+| `↑<in> ↓<out> $<usd>` | Token usage and priceable cost for the active workflow and current transcript/session (Claude Code only; omitted before usage is available; disabled by `AIDLC_DISABLE_USAGE_TRACKING=1`) |
 
 ---
 

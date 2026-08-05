@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.53] - 2026-08-06
+
+Adds a kill switch for the Claude Code token-usage and cost tracking introduced in 2.5.40. Local tracking (the usage ledger, the statusline `up/down/$` segment, and the completion-event cost rollups) remains on by default; set `AIDLC_DISABLE_USAGE_TRACKING=1` to turn all of it off. **Upgrade:** re-copy your `dist/<harness>/` shell into the project; no action is needed to keep the default behavior.
+
+* New `AIDLC_DISABLE_USAGE_TRACKING=1` disables the whole usage seam: the fold hooks and Stop-hook flush write nothing, the statusline renders no cost segment, and `STAGE_COMPLETED` / `WORKFLOW_COMPLETED` add no rollup fields. Any other value (or unset) leaves tracking on, matching the `AIDLC_DISABLE_*` hook-flag convention.
+* An already-recorded ledger is left on disk untouched while the flag is set, so unsetting it resumes history rather than restarting it; delete `aidlc/.aidlc-sessions/usage-ledger.json` manually if the history should go too.
+
 ## [2.5.45] - 2026-08-06
 
 Plugin management commands now route deterministically through every `/aidlc` slash-command harness instead of being misread as freeform workflow requests. **Upgrade:** re-copy your `dist/<harness>/` shell into the project so the shared plugin parser and harness routing updates are installed.

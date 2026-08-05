@@ -38,6 +38,7 @@ import { isLifecycleBoundaryCommand } from "./aidlc-state-transition-guard.ts";
 import {
   type FoldMode,
   foldTranscriptIntoLedger,
+  usageTrackingDisabled,
   writeCurrentTranscriptPath,
 } from "../tools/aidlc-usage.ts";
 
@@ -61,6 +62,11 @@ function isLifecycleBoundaryToolCall(name: string, input: unknown): boolean {
 async function main(): Promise<void> {
   // TTY guard - no Claude Code JSON is coming on a terminal (tests/debug).
   if (process.stdin.isTTY) process.exit(0);
+
+  // Kill switch - this hook fires around EVERY tool call, so exit before
+  // reading stdin or touching the ledger. AIDLC_DISABLE_USAGE_TRACKING=1
+  // silences the producer entirely (fold, pointers, session-id capture here).
+  if (usageTrackingDisabled()) process.exit(0);
 
   const projectDir = resolveProjectDirFromHook(import.meta.url);
 
