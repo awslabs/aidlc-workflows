@@ -477,3 +477,35 @@ Specifically:
 - [Stage Protocol](04-stage-protocol.md) — the stage-level behavioral contract, including the approval-gate UX that drives `[?]` / `[R]` transitions.
 - [Hooks and Tools](06-hooks-and-tools.md) — hook lifecycle, CLI tool reference, and the audit-event catalog.
 - [Testing](09-testing.md) — how the drift test works and when to run it.
+
+## Stage result validity projection
+
+A completed checkbox records that a stage ran successfully at a point in time.
+It does not by itself prove that the result still matches the stage's current
+inputs. Execution state and result validity are therefore separate concepts.
+
+When a main-workflow `STAGE_COMPLETED` event is emitted, the state tool adds an
+optional `Validation Basis` field containing a versioned JSON value. It
+fingerprints the stage's validity contract, applicable project type, consumed
+artifacts, and produced artifacts. The audit ledger is immutable completion
+evidence; no second mutable stale-state field is introduced.
+
+Before normal `next` routing, the orchestrator compares the latest basis for
+every completed stage with the current artifact tree. A direct mismatch projects
+that stage as `stale`. Staleness is propagated through authored
+`produces`/`optional_produces` to `consumes` edges, projecting completed
+consumers as `needs-revalidation`. Stages skipped by the active plan and
+project-type-inapplicable conditional consumes are excluded from propagation.
+`requires_stage` is intentionally excluded: execution ordering does not
+necessarily imply a data-validity dependency.
+
+`next` remains read-only and refuses to route past stale completed results. The
+existing explicit stage jump (`/aidlc --stage <slug>`) is the recovery path. It
+re-enters the earliest affected stage while preserving the historical audit
+receipt that explains why the old completion became stale.
+
+Older completion events without a validation basis fail open for compatibility
+and are reported as untracked. They become tracked after a normal re-completion.
+This first implementation fingerprints AI-DLC Markdown artifacts. Arbitrary
+source-code, CI, deployment, and external-system validity need separate
+ownership and observation contracts.

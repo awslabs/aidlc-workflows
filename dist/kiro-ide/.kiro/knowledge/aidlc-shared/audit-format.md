@@ -284,3 +284,18 @@ The public `aidlc-audit.ts append` CLI is a diagnostic escape hatch, not the can
 
 ---
 ```
+
+## Validation basis on `STAGE_COMPLETED`
+
+Main-workflow `STAGE_COMPLETED` entries may include:
+
+```text
+**Validation Basis**: {"schema":1,"definition":"sha256:...","projectType":"brownfield","inputs":{...},"outputs":{...}}
+```
+
+The field is optional so existing ledgers remain readable. It is immutable proof
+of the artifact versions used by that completion. The orchestrator projects
+`stale` and `needs-revalidation` by comparing this proof with the current
+artifact tree; no second mutable validity field is required. A later
+`STAGE_STARTED` begins a new attempt and supersedes the previous receipt for
+routing purposes.

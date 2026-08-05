@@ -834,3 +834,22 @@ Construction and Operation stages MUST use standardized 2-option completion mess
 - [Hooks and Tools](06-hooks-and-tools.md) -- hook system, audit event taxonomy
 - [Knowledge System](10-knowledge-system.md) -- 6-step knowledge loading order
 - [Diagrams](diagrams.md) -- all Mermaid diagrams consolidated
+
+## Completed-stage validity barrier
+
+`next` performs a read-only validity inspection immediately before the normal
+happy-path routing branch. It compares completed-stage audit evidence with the
+current artifact tree and propagates mismatches through active,
+project-type-applicable artifact-consumer edges.
+If a completed result is stale, the engine emits one error directive and does
+not route a later stage.
+
+Recovery uses the existing explicit jump path:
+
+```text
+/aidlc --stage <earliest-stale-stage>
+```
+
+The stage's next successful completion records a fresh validation basis. Older
+workflows whose completion events predate validation-basis support remain
+fail-open until those stages complete again.
