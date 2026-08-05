@@ -32,6 +32,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   cleanupTestProject,
   createTestProject,
@@ -46,7 +47,6 @@ const BUN = process.execPath;
 const TOOLS_DIR = join(REPO_ROOT, "dist", "claude", ".claude", "tools");
 const STATE_TOOL = join(TOOLS_DIR, "aidlc-state.ts");
 const LOG_TOOL = join(TOOLS_DIR, "aidlc-log.ts");
-const AUDIT_TOOL = join(TOOLS_DIR, "aidlc-audit.ts");
 
 const CORE_PROTOCOL = join(
   REPO_ROOT,
@@ -136,18 +136,16 @@ describe("t263 reviewer terminal-receipt ordering (receipt-invalidation loop fix
       ], p).status,
     ).toBe(0);
     // The loop's trigger: a declared produces[] write AFTER the terminal receipt.
-    expect(
-      run(AUDIT_TOOL, [
-        "append",
-        "ARTIFACT_UPDATED",
-        "--field",
-        `File=${join(seededRecordDir(p), "inception", "requirements-analysis", "requirements.md")}`,
-        "--field",
-        "Tool=Edit",
-        "--field",
-        "Context=inception > requirements-analysis > requirements.md",
-      ], p).status,
-    ).toBe(0);
+    appendAuditEntry("ARTIFACT_UPDATED", {
+      File: join(
+        seededRecordDir(p),
+        "inception",
+        "requirements-analysis",
+        "requirements.md",
+      ),
+      Tool: "Edit",
+      Context: "inception > requirements-analysis > requirements.md",
+    }, p);
 
     const refused = run(STATE_TOOL, ["approve", "requirements-analysis"], p, env);
     expect(refused.status).not.toBe(0);

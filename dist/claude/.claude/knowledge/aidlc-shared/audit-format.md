@@ -13,7 +13,7 @@ commands a stage or conductor invokes directly.
 
 All event names follow `SUBJECT_PAST_VERB` — every event answers "what happened?"
 
-## Event Registry (75 events, 19 categories)
+## Event Registry (76 events, 19 categories)
 
 ### Workflow Lifecycle (4 events)
 

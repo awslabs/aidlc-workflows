@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.39] - 2026-08-05
+
+Fixes a live-session wedge at reviewer-bearing approval gates. A conductor that applied reviewer recommendations after recording the terminal review receipt invalidated its own receipt, then re-reviewed, re-edited, and oscillated instead of reaching the gate. The protocol now states the terminal ordering explicitly, and deterministic enforcement covers direct file tools, shell writes, compiled dispatch, and delegated Kiro writers. **Upgrade:** re-copy your selected `dist/<harness>/` shell into the project so the updated protocol, skills, hooks, tools, and agent configs are installed.
+
+* Stage protocol section 12a makes a READY receipt terminal: fixes stay inside the reviewer iteration loop, no declared `produces[]` artifact is written between the receipt and gate approval, suggestions riding on READY are quoted for the human instead of applied, and Approve remains the first gate option.
+* New `aidlc-review-freeze.ts` PreToolUse hook, the 15th framework hook, refuses file-tool, apply-patch, and mutation-capable shell writes that would invalidate a fresh READY receipt. It exports the compiled dispatcher's `run(input)` contract, covers every writable Kiro CLI conductor and delegate surface, emits `REVIEW_FREEZE_BLOCKED` as the 76th audit event, and can be disabled with `AIDLC_DISABLE_REVIEW_FREEZE_HOOK=1`.
+* Every `REVIEW_COMPLETED` receipt records a SHA-256 fingerprint of the declared artifact paths and bytes. Approval and swarm finalization require that fingerprint to remain current, so an unobserved interpreter, shell, or delegated write cannot leave stale reviewed content certified.
+
 ## [2.5.38] - 2026-08-05
 
 Every harness now treats the consolidated answer review as a mandatory, separate human checkpoint before artifact generation. The checkpoint is backed by a prompt-specific human receipt, the exact questions-file digest, and post-confirmation artifact-write evidence, so a conductor cannot satisfy it by writing `Looks correct` itself. **Upgrade:** re-copy the selected `dist/<harness>/` into the project so the updated conductor skill, tools, stage metadata, and question-rendering annex are installed.

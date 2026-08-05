@@ -20,7 +20,7 @@
 // WHY SUBPROCESS for (1). Same idiom as t141/t150: the packager is a CLI; we
 // pin its observable behavior, not its internals.
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -31,6 +31,7 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
+  rmdirSync,
   rmSync,
   statSync,
 } from "node:fs";
@@ -44,6 +45,25 @@ const CLAUDE_SRC = join(REPO_ROOT, "dist", "claude", ".claude");
 const OPENCODE_ROOT = join(REPO_ROOT, "dist", "opencode");
 const ENGINE = join(OPENCODE_ROOT, ".aidlc");
 const SHELL = join(OPENCODE_ROOT, ".opencode");
+const OPENCODE_INTENTS = join(
+  OPENCODE_ROOT,
+  "aidlc",
+  "spaces",
+  "default",
+  "intents",
+);
+
+afterEach(() => {
+  rmSync(join(OPENCODE_INTENTS, ".aidlc-hooks-health"), {
+    recursive: true,
+    force: true,
+  });
+  try {
+    rmdirSync(OPENCODE_INTENTS);
+  } catch {
+    // Keep a non-empty generated intents directory intact.
+  }
+});
 
 function* walk(dir: string): Generator<string> {
   for (const entry of readdirSync(dir).sort()) {
