@@ -1,6 +1,6 @@
 // covers: hook:aidlc-plan-approval-guard, audit:PLAN_APPROVAL_BLOCKED
 //
-// t263 - code-generation's plan-before-generation ordering, enforced
+// t265 - code-generation's plan-before-generation ordering, enforced
 // deterministically (issue: the plan was generated AFTER the code, beside
 // code-summary.md, making it a retroactive summary instead of the input).
 //
@@ -52,7 +52,7 @@ const CTX = {
   currentStage: "code-generation",
 };
 
-describe("t263a plan-approval decision table", () => {
+describe("t265a plan-approval decision table", () => {
   test("blocks the developer dispatch when no unit has any plan", () => {
     const v = evaluatePlanApprovalDispatch(
       "Task",
@@ -267,7 +267,7 @@ describe("t263a plan-approval decision table", () => {
 const RECORD_REL = join("aidlc", "spaces", "default", "intents");
 
 function scratchProject(): string {
-  const dir = mkdtempSync(join(tmpdir(), "t263-"));
+  const dir = mkdtempSync(join(tmpdir(), "t265-"));
   mkdirSync(join(dir, ".claude", "hooks"), { recursive: true });
   mkdirSync(join(dir, ".claude", "tools"), { recursive: true });
   cpSync(
@@ -291,7 +291,7 @@ function seedState(proj: string, fields: { stage?: string; autonomy?: string } =
     `# AI-DLC State Tracking
 
 ## Project Information
-- **Project**: t263 fixture
+- **Project**: t265 fixture
 - **Scope**: poc
 ${autonomy}
 ## Current Status
@@ -356,7 +356,7 @@ function runHook(
   return { code: r.status ?? -1, stderr: r.stderr ?? "" };
 }
 
-describe("t263b hook lifecycle", () => {
+describe("t265b hook lifecycle", () => {
   test("blocks the unplanned dispatch with exit 2 + a redirecting reason", () => {
     const proj = scratchProject();
     try {
@@ -490,7 +490,7 @@ describe("t263b hook lifecycle", () => {
 // (c) Registration pins.
 // ---------------------------------------------------------------------------
 
-describe("t263c registrations", () => {
+describe("t265c registrations", () => {
   test("code-generation stage requires the explicit dispatch unit marker", () => {
     const stage = readFileSync(
       join(

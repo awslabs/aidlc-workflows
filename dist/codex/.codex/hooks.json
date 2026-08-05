@@ -50,6 +50,14 @@
         "hooks": [
           {
             "type": "command",
+            "command": "bun .codex/hooks/aidlc-codex-adapter.ts review-freeze"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
             "command": "bun .codex/hooks/aidlc-codex-adapter.ts plan-approval-guard"
           }
         ]

@@ -20,7 +20,7 @@
 // STRONGER than the .sh, which only existence-checked each path individually):
 //   .sh L12  SKILL.md exists                          -> "ships skills/aidlc/SKILL.md"
 //   .sh L15-17  3 stage-protocol files                -> "ships the 3 stage-protocol spine files" (each asserted)
-//   .sh L20-29  11 hooks (each)                        -> "ships each of the 15 framework hooks" + exact-set strengthening
+//   .sh L20-29  11 hooks (each)                        -> "ships each of the 16 framework hooks" + exact-set strengthening
 //   .sh L32-34  11 agents (loop)                       -> "ships each of the 14 agent personas" + "ships EXACTLY 14 aidlc-*-agent.md files" (count strengthening; roster grew to 13 with the two reviewer personas, then 14 with the composer)
 //   .sh L38-40  3 initialization stages (loop)         -> "ships the 3 initialization stages"
 //   .sh L43-45  7 ideation stages (loop)               -> "ships the 7 ideation stages"
