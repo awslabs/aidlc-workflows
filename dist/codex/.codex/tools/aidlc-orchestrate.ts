@@ -136,6 +136,7 @@ import {
   stateFilePath,
   swarmConvergedUnits,
   unitCompletedReceipts,
+  unitLifecycleReceiptsInUse,
   toPosix,
   validScopes,
   harnessDir,
@@ -893,9 +894,9 @@ function readConstructionIteration(
 //
 // The read lives in aidlc-lib.ts (swarmConvergedUnits), shared with the
 // state-tool consumer and the emitter: a row counts only when its Stage names
-// this slug AND its Run floor equals the stage's current attempt floor (the
-// latest main-workflow STAGE_STARTED), so a prior attempt's late finalize
-// retry or another swarm stage's rows can never satisfy the current run. The
+// this slug AND its Run floor equals the stage's exact current-attempt token,
+// so a prior attempt's late finalize retry or another swarm stage's rows can
+// never satisfy the current run. The
 // audit is append-only and per-intent, and the stage CAN legitimately re-run
 // within the same intent with the same unit names: a backward/redo jump
 // resets completed stages to pending without touching the ledger (and without
@@ -2950,13 +2951,13 @@ function unitCovered(
 }
 
 // The per-stage unit-receipt ledger: the current attempt's UNIT_COMPLETED
-// receipts plus whether the unit lifecycle is IN USE for this stage (any
-// receipt or an active checkpoint exists). When in use, receipts become the
+// receipts plus whether the unit lifecycle has EVER been used for this stage.
+// When in use, receipts become the
 // completion authority and artifact existence degrades to evidence — a paused
 // or partially-written unit has artifacts but no receipt and stays uncovered
 // (issue: artifact presence was mistaken for completion). When NOT in use
-// (legacy ledger-free flow, pre-receipt workflows mid-flight), coverage stays
-// artifact-driven, so nothing breaks on upgrade.
+// (a genuinely ledger-free legacy flow), coverage stays artifact-driven, so
+// in-flight upgrades do not break until the stage adopts lifecycle receipts.
 type UnitLedger = {
   receipts: Set<string>;
   checkpoint: ReturnType<typeof activeUnitCheckpoint>;
@@ -2965,7 +2966,11 @@ type UnitLedger = {
 function unitLedgerFor(projectDir: string, slug: string): UnitLedger {
   const receipts = unitCompletedReceipts(projectDir, slug);
   const checkpoint = activeUnitCheckpoint(projectDir, slug);
-  return { receipts, checkpoint, inUse: receipts.size > 0 || checkpoint !== null };
+  return {
+    receipts,
+    checkpoint,
+    inUse: unitLifecycleReceiptsInUse(projectDir, slug),
+  };
 }
 
 // A unit is SETTLED when its artifacts exist AND, when the receipt ledger is

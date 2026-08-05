@@ -373,7 +373,7 @@ function perUnitEnsembleGraph(
 function seedSwarmConverged(proj: string, units: string[]): void {
   // Rows carry the attempt-identity stamp (Stage + Run floor) the consumers
   // require; the fixture audit has no STAGE_STARTED for the stage, so the
-  // matching floor is "".
+  // matching floor is the exact no-boundary sentinel.
   const shard = seededAuditShard(proj);
   mkdirSync(dirname(shard), { recursive: true });
   const blocks = units.map((unit, index) =>
@@ -383,7 +383,7 @@ function seedSwarmConverged(proj: string, units: string[]): void {
       "**Event**: SWARM_UNIT_CONVERGED",
       `**Unit name**: ${unit}`,
       "**Stage**: user-stories",
-      "**Run floor**: ",
+      "**Run floor**: unstarted#0",
       "",
       "---",
       "",

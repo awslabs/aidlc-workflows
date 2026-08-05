@@ -40,11 +40,12 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { appendAuditEntry } from "./aidlc-audit.ts";
+import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   emitError,
   errorMessage,
   getField,
+  holdsAuditLock,
   humanActedSinceGate,
   humanPresenceGuardDisabled,
   relativeRecordDir,
@@ -52,6 +53,7 @@ import {
   resolveProjectDir,
   setFieldStrict,
   setOrInsertField,
+  withAuditLock,
   worktreePath,
   worktreeStateFilePath,
   writeStateFile,
@@ -65,7 +67,11 @@ function emitAudit(
   intent?: string,
   space?: string
 ): void {
-  appendAuditEntry(eventType, fields, pd, intent, space);
+  if (holdsAuditLock(pd, intent, space)) {
+    appendAuditEntryUnlocked(eventType, fields, pd, intent, space);
+  } else {
+    appendAuditEntry(eventType, fields, pd, intent, space);
+  }
 }
 
 // The intent/space/repo SELECTOR re-serialised for a delegated sibling spawn. A
@@ -804,50 +810,44 @@ function handleSetAutonomy(args: string[]): void {
 
   const pd = resolveProjectDir(projectDir);
 
-  // Human-presence guard on ESCALATION only. Switching to autonomous is the
-  // human's ladder-prompt grant — and every downstream presence carve-out
-  // (`isAutonomousMode` in approve / answer) keys off the field this writes, so
-  // an unattended model that could flip it would unlock every gate at once.
-  // Require a HUMAN_TURN since the last gate resolution, exactly the approve
-  // guard's semantics: the human's ladder answer mints the fresh turn, and
-  // humanActedSinceGate treats the autonomous-mode AUTONOMY_MODE_SET row as a
-  // resolution so the grant consumes the turn (one authority action per human
-  // turn). The ladder choice is set-autonomy-owned — logging it via `aidlc-log
-  // answer` first would consume the turn as QUESTION_ANSWERED and refuse here.
-  // De-escalation (gated) restores gates; it never requires presence.
-  if (flags.mode === "autonomous" && !humanPresenceGuardDisabled() && !humanActedSinceGate(pd)) {
-    error(
-      "Refusing to switch Construction to autonomous: a real human has not acted since the last " +
-        "gate resolution, and autonomous mode is granted only by the human's ladder-prompt answer " +
-        "(it waives every later gate, so the grant itself needs a fresh human turn). Ask the human " +
-        "to confirm autonomous mode in a typed message, then retry. Do not log the ladder choice " +
-        "via aidlc-log answer; the choice is recorded by set-autonomy itself.",
-    );
-  }
+  // One lock covers presence check -> audit consume -> state write. Otherwise
+  // two grants, or a grant racing approval, can both observe one fresh turn.
+  withAuditLock(pd, () => {
+    // Human-presence guard on ESCALATION only. Switching to autonomous is the
+    // human's ladder-prompt grant and consumes that turn through the emitted
+    // AUTONOMY_MODE_SET row. De-escalation restores gates without presence.
+    if (
+      flags.mode === "autonomous" &&
+      !humanPresenceGuardDisabled() &&
+      !humanActedSinceGate(pd)
+    ) {
+      error(
+        "Refusing to switch Construction to autonomous: a real human has not acted since the last " +
+          "gate resolution, and autonomous mode is granted only by the human's ladder-prompt answer " +
+          "(it waives every later gate, so the grant itself needs a fresh human turn). Ask the human " +
+          "to confirm autonomous mode in a typed message, then retry. Do not log the ladder choice " +
+          "via aidlc-log answer; the choice is recorded by set-autonomy itself.",
+      );
+    }
 
-  // Validate state-file shape BEFORE emitting audit. setFieldStrict throws if
-  // the field is absent (v4 state files or hand-edited files). If we emitted
-  // audit first and the field was missing, we'd leave an orphan
-  // AUTONOMY_MODE_SET in audit.md with no corresponding state mutation —
-  // exactly the t59-class drift the refactor aims to prevent.
-  const content = readStateFile(pd);
-  let updated: string;
-  try {
-    updated = setFieldStrict(content, "Construction Autonomy Mode", flags.mode);
-  } catch (e) {
-    error(`State update failed: ${errorMessage(e)}`);
-  }
+    // Validate state-file shape before the audit-first mutation.
+    const content = readStateFile(pd);
+    let updated: string;
+    try {
+      updated = setFieldStrict(content, "Construction Autonomy Mode", flags.mode);
+    } catch (e) {
+      error(`State update failed: ${errorMessage(e)}`);
+    }
 
-  // Now audit-first: emit audit before writing the mutated state.
-  try {
-    emitAudit(pd, "AUTONOMY_MODE_SET", {
-      Mode: flags.mode,
-    });
-  } catch (e) {
-    error(`Audit emission failed: ${errorMessage(e)}`);
-  }
-
-  writeStateFile(pd, updated);
+    try {
+      emitAudit(pd, "AUTONOMY_MODE_SET", {
+        Mode: flags.mode,
+      });
+    } catch (e) {
+      error(`Audit emission failed: ${errorMessage(e)}`);
+    }
+    writeStateFile(pd, updated);
+  });
 
   console.log(
     JSON.stringify({

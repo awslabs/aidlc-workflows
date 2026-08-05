@@ -3664,6 +3664,8 @@ export function worktreeRuntimeGraphPath(wtPath: string, recordPrefix?: string |
 // regex.
 export const BOLT_SLUG_REGEX = /^[a-z][a-z0-9-]*$/;
 export const BOLT_SLUG_MAX_LENGTH = 64;
+export const UNIT_NAME_REGEX = /^[a-z][a-z0-9-]*$/;
+export const UNIT_NAME_MAX_LENGTH = 64;
 
 // --- Error helpers (catch-block discipline) ---
 //
@@ -3823,6 +3825,38 @@ export function validateBoltSlug(slug: string): string | null {
     return `Invalid Bolt slug "${slug}" — must match ${BOLT_SLUG_REGEX} (lowercase letter, then lowercase letters/digits/hyphens)`;
   }
   return null;
+}
+
+// Unit names become path components under construction/<unit>/ and are also
+// mirrored into single-line state fields. Keep one canonical validator for the
+// authored DAG, cached runtime graph, and lifecycle CLI.
+export function validateUnitName(name: string): string | null {
+  if (!name) return "Unit name is empty";
+  if (name.length > UNIT_NAME_MAX_LENGTH) {
+    return `Unit name "${name.slice(0, 32)}..." is ${name.length} chars; max is ${UNIT_NAME_MAX_LENGTH}`;
+  }
+  if (!UNIT_NAME_REGEX.test(name)) {
+    return (
+      `Invalid Unit name "${name}" - must match ${UNIT_NAME_REGEX} ` +
+      "(lowercase letter, then lowercase letters/digits/hyphens)"
+    );
+  }
+  return null;
+}
+
+export function hasUnsafeSingleLineCharacter(value: string): boolean {
+  for (const char of value) {
+    const codePoint = char.codePointAt(0) ?? 0;
+    if (
+      codePoint <= 0x1f ||
+      codePoint === 0x7f ||
+      codePoint === 0x2028 ||
+      codePoint === 0x2029
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 // --- State file I/O ---
@@ -4773,10 +4807,9 @@ export function findAllEvents(
 // stage's latest MAIN-WORKFLOW STAGE_STARTED row ("" when none). Rows from a
 // `--single` stage-runner carry `Workflow: single-stage:<slug>` and never move
 // the floor. Every (re-)entry into a stage lands a fresh STAGE_STARTED naming
-// the slug (advance and jump both emit it), so the floor identifies the
-// current attempt. Shared by the emitter (aidlc-swarm.ts stamps it into each
-// SWARM_UNIT_CONVERGED row) and every consumer, so both sides compute the
-// attempt identity with one function.
+// the slug (advance and jump both emit it). Retained as the secondary
+// timestamp-order guard for attempt-scoped readers; exact identity comes from
+// latestMainWorkflowStageRunFloor below.
 export function latestMainWorkflowStageStarted(
   audit: string,
   slug: string,
@@ -4793,6 +4826,73 @@ export function latestMainWorkflowStageStarted(
   return since;
 }
 
+// Exact identity for the current main-workflow attempt of one stage. The token
+// names the latest relevant boundary plus its matching-event ordinal, so two
+// boundaries emitted in the same second still receive different floors.
+//
+// Unit-major Construction can run a later stage before that stage's own
+// STAGE_STARTED row exists. For that walk, a stage attempt begins at the latest
+// workflow birth, jump, or stage rejection and deliberately ignores
+// STAGE_STARTED. This matches the reviewer-receipt floor: the later stage start
+// must not invalidate work legitimately completed earlier in the same
+// unit-major block.
+//
+// The no-boundary sentinel keeps fixture/recovery flows deterministic while
+// unstamped legacy rows still fail closed.
+export function latestMainWorkflowStageRunFloor(
+  audit: string,
+  slug: string,
+  unitMajor = false,
+): string {
+  let floor = "unstarted#0";
+  const ordinals = new Map<string, number>();
+  const relevant = new Set([
+    "WORKFLOW_STARTED",
+    "STAGE_STARTED",
+    "STAGE_JUMPED",
+    "GATE_REJECTED",
+  ]);
+  const events = audit
+    .replace(/\r\n/g, "\n")
+    .split(/\n---\n/)
+    .map((block, pos) => ({
+      block,
+      event: auditBlockField(block, "Event"),
+      pos,
+      timestamp: auditBlockField(block, "Timestamp") ?? "",
+    }))
+    .filter(
+      (row): row is { block: string; event: string; pos: number; timestamp: string } =>
+        row.event !== null && relevant.has(row.event) && row.timestamp !== "",
+    )
+    .sort((a, b) =>
+      a.timestamp !== b.timestamp
+        ? a.timestamp < b.timestamp
+          ? -1
+          : 1
+        : a.pos - b.pos,
+    );
+
+  for (const row of events) {
+    const stage = auditBlockField(row.block, "Stage");
+    let matches = false;
+    if (row.event === "WORKFLOW_STARTED" || row.event === "STAGE_JUMPED") {
+      matches = true;
+    } else if (row.event === "GATE_REJECTED") {
+      matches = stage === slug;
+    } else if (row.event === "STAGE_STARTED" && !unitMajor) {
+      matches =
+        stage === slug &&
+        !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:");
+    }
+    if (!matches) continue;
+    const ordinal = (ordinals.get(row.event) ?? 0) + 1;
+    ordinals.set(row.event, ordinal);
+    floor = `${row.event}:${row.timestamp}#${ordinal}`;
+  }
+  return floor;
+}
+
 // The set of units the CURRENT attempt of `slug` has genuinely converged and
 // merged, from the `SWARM_UNIT_CONVERGED` rows `aidlc-swarm.ts finalize`
 // writes. A row counts only when its `Stage` names this slug AND its
@@ -4800,7 +4900,7 @@ export function latestMainWorkflowStageStarted(
 // a row minted by a late finalize retry against a PRIOR attempt's preserved
 // worktree carries the prior floor and is rejected regardless of its emission
 // timestamp, and another swarm stage's rows fail the Stage match even when
-// the floor degrades to "" (no STAGE_STARTED yet). Rows without the two
+// the floor is the no-boundary sentinel. Rows without the two
 // fields (pre-2.5.0 audit logs) fail closed: the affected units re-fan on the
 // next swarm pass, which finalize's re-verify makes safe. The timestamp check
 // stays as belt-and-braces.
@@ -4810,12 +4910,13 @@ export function swarmConvergedUnits(
 ): Set<string> {
   const audit = readAllAuditShards(projectDir);
   if (!audit) return new Set();
-  const floor = latestMainWorkflowStageStarted(audit, slug);
+  const startedAt = latestMainWorkflowStageStarted(audit, slug);
+  const floor = latestMainWorkflowStageRunFloor(audit, slug);
   const converged = new Set<string>();
   for (const { timestamp, block } of findAllEvents(audit, "SWARM_UNIT_CONVERGED")) {
     if (auditBlockField(block, "Stage") !== slug) continue;
     if ((auditBlockField(block, "Run floor") ?? "") !== floor) continue;
-    if (floor && timestamp < floor) continue;
+    if (startedAt && timestamp < startedAt) continue;
     const unit = auditBlockField(block, "Unit name");
     if (unit) converged.add(unit);
   }
@@ -4826,27 +4927,105 @@ export function swarmConvergedUnits(
 // completion receipts for, from the UNIT_COMPLETED rows `aidlc-state.ts unit
 // complete` writes — the interactive-path twin of swarmConvergedUnits, with
 // the same attempt-floor discipline: a row counts only when its Stage names
-// this slug AND its timestamp is not older than the stage's latest
-// main-workflow STAGE_STARTED (a re-entered stage re-earns its receipts).
+// this slug AND its exact Run floor equals the current main-workflow attempt.
+// The floor includes a boundary-event ordinal, so same-second re-entry still
+// invalidates every receipt from the prior attempt. Unit-major uses its
+// workflow/jump/rejection boundary so a later STAGE_STARTED does not erase
+// receipts legitimately emitted earlier in that block.
 // Artifact existence is deliberately NOT consulted here: the receipt is the
 // transition, artifacts are the evidence the receipt-writer checked at emit
 // time. A paused or partially-written unit has artifacts but no receipt, so it
 // stays uncovered.
+type UnitLifecycleRow = {
+  ts: string;
+  pos: number;
+  event: string;
+  block: string;
+  unit: string;
+};
+
+function currentUnitLifecycleRows(
+  audit: string,
+  slug: string,
+  unitMajor: boolean,
+): UnitLifecycleRow[] {
+  const startedAt = latestMainWorkflowStageStarted(audit, slug);
+  const floor = latestMainWorkflowStageRunFloor(audit, slug, unitMajor);
+  const unitEvents = new Set([
+    "UNIT_STARTED",
+    "UNIT_PAUSED",
+    "UNIT_RESUMED",
+    "UNIT_COMPLETED",
+  ]);
+  const blocks = audit.replace(/\r\n/g, "\n").split(/\n---\n/);
+  const rows: UnitLifecycleRow[] = [];
+  for (let i = 0; i < blocks.length; i++) {
+    const event = auditBlockField(blocks[i], "Event");
+    if (!event || !unitEvents.has(event)) continue;
+    if (auditBlockField(blocks[i], "Stage") !== slug) continue;
+    const ts = auditBlockField(blocks[i], "Timestamp") ?? "";
+    if (auditBlockField(blocks[i], "Run floor") !== floor) continue;
+    if (!unitMajor && startedAt && ts < startedAt) continue;
+    const unit = auditBlockField(blocks[i], "Unit");
+    if (!unit) continue;
+    rows.push({ ts, pos: i, event, block: blocks[i], unit });
+  }
+  rows.sort((a, b) => (a.ts !== b.ts ? (a.ts < b.ts ? -1 : 1) : a.pos - b.pos));
+  return rows;
+}
+
+function unitMajorLifecycleMode(projectDir: string): boolean {
+  try {
+    return (
+      getField(readStateFile(projectDir), "Construction Iteration")?.trim() ===
+      "unit-major"
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function unitCompletedReceipts(
   projectDir: string,
   slug: string,
 ): Set<string> {
   const audit = readAllAuditShards(projectDir);
   if (!audit) return new Set();
-  const floor = latestMainWorkflowStageStarted(audit, slug);
+  const unitMajor = unitMajorLifecycleMode(projectDir);
   const done = new Set<string>();
-  for (const { timestamp, block } of findAllEvents(audit, "UNIT_COMPLETED")) {
-    if (auditBlockField(block, "Stage") !== slug) continue;
-    if (floor && timestamp < floor) continue;
-    const unit = auditBlockField(block, "Unit");
-    if (unit) done.add(unit);
+  for (const row of currentUnitLifecycleRows(audit, slug, unitMajor)) {
+    if (row.event === "UNIT_COMPLETED") done.add(row.unit);
+    else done.delete(row.unit);
   }
   return done;
+}
+
+// Receipt mode is sticky across attempts. Once a stage has emitted any
+// lifecycle row, a later attempt with no current receipts must remain
+// unsettled rather than silently falling back to artifact-only coverage.
+export function unitLifecycleReceiptsInUse(
+  projectDir: string,
+  slug: string,
+): boolean {
+  const audit = readAllAuditShards(projectDir);
+  if (!audit) return false;
+  const unitEvents = new Set([
+    "UNIT_STARTED",
+    "UNIT_PAUSED",
+    "UNIT_RESUMED",
+    "UNIT_COMPLETED",
+  ]);
+  for (const block of audit.replace(/\r\n/g, "\n").split(/\n---\n/)) {
+    const event = auditBlockField(block, "Event");
+    if (
+      event &&
+      unitEvents.has(event) &&
+      auditBlockField(block, "Stage") === slug
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 // The active unit-lifecycle checkpoint for a stage: the LATEST UNIT_STARTED /
@@ -4865,24 +5044,8 @@ export function activeUnitCheckpoint(
 ): { unit: string; state: "in-progress" | "paused"; reason: string | null; nextAction: string | null } | null {
   const audit = readAllAuditShards(projectDir);
   if (!audit) return null;
-  const floor = latestMainWorkflowStageStarted(audit, slug);
-  const UNIT_EVENTS = new Set(["UNIT_STARTED", "UNIT_PAUSED", "UNIT_RESUMED", "UNIT_COMPLETED"]);
-  // One chronological pass over the blocks ((timestamp, buffer position) — the
-  // findAllEvents ordering, applied across all four event types at once so a
-  // same-second resume→pause sequence keeps its append order).
-  const blocks = audit.replace(/\r\n/g, "\n").split(/\n---\n/);
-  const rows: { ts: string; pos: number; event: string; block: string; unit: string }[] = [];
-  for (let i = 0; i < blocks.length; i++) {
-    const ev = auditBlockField(blocks[i], "Event");
-    if (!ev || !UNIT_EVENTS.has(ev)) continue;
-    if (auditBlockField(blocks[i], "Stage") !== slug) continue;
-    const ts = auditBlockField(blocks[i], "Timestamp") ?? "";
-    if (floor && ts < floor) continue;
-    const unit = auditBlockField(blocks[i], "Unit");
-    if (!unit) continue;
-    rows.push({ ts, pos: i, event: ev, block: blocks[i], unit });
-  }
-  rows.sort((a, b) => (a.ts !== b.ts ? (a.ts < b.ts ? -1 : 1) : a.pos - b.pos));
+  const unitMajor = unitMajorLifecycleMode(projectDir);
+  const rows = currentUnitLifecycleRows(audit, slug, unitMajor);
   const latest = new Map<string, { event: string; block: string }>();
   for (const row of rows) {
     latest.set(row.unit, { event: row.event, block: row.block });
@@ -6757,10 +6920,8 @@ function parseUnitsBlock(block: string): UnitDependencyEdge[] {
   if (current) edges.push(current);
 
   for (const e of edges) {
-    // Reject empty AND whitespace-only names — a quoted `"   "` survives
-    // unquoteScalar with literal spaces and would otherwise become a
-    // meaningless valid unit (and dependency target).
-    if (!e.name.trim()) throw new Error("unit with empty name");
+    const nameError = validateUnitName(e.name);
+    if (nameError) throw new Error(nameError);
   }
   return edges;
 }
@@ -6905,12 +7066,16 @@ export function resolveBoltDag(projectDir: string): BoltDagResolution {
         batches.every(
           (batch) =>
             Array.isArray(batch) &&
-            batch.every((unit) => typeof unit === "string" && unit.length > 0),
+            batch.every(
+              (unit) =>
+                typeof unit === "string" &&
+                validateUnitName(unit) === null,
+            ),
         )
       ) {
         const typedBatches = batches as string[][];
         const units = typedBatches.flat();
-        if (units.length > 0) {
+        if (units.length > 0 && new Set(units).size === units.length) {
           const unitKinds = new Map<string, string>();
           if (Array.isArray(boltDag?.units)) {
             for (const unit of boltDag.units) {

@@ -16,7 +16,7 @@
 // anti-tamper baseline, and the exit-2-baton-returns shell the .sh keys on. So
 // we SPAWN the real tool via spawnSync(BUN, [SWARM_TOOL, ...]) and assert on
 // res.status / res.stdout and the on-disk audit, exactly as the .sh did with
-// run_ref. spawnCount = all 13 cases.
+// run_ref.
 //
 // Source under test (dist/claude/.claude/tools/aidlc-swarm.ts):
 //   - handlePrepare (:296): forks a worktree per unit via aidlc-worktree create
@@ -69,8 +69,9 @@
 //   .sh 12 conductor attribution (--reasons unsatisfiable)   -> "12 conductor attribution: --reasons unsatisfiable lands the typed reason"
 //   .sh 13 --reasons cannot override the lying-conductor guard-> "13 --reasons cannot launder a claimed-but-red unit (stays error)"
 //
-// 13 .sh asserts -> 13 expect()-bearing test() cases (same count, same
-// observables). STRONGER than the .sh in several places: the .sh grepped loose
+// The 13 migrated .sh cases retain their 1:1 tests; case 14 adds the
+// exact-attempt stale-finalize regression. STRONGER than the .sh in several
+// places: the .sh grepped loose
 // substrings (`grep -q '"converged":true'`); here the stdout is JSON.parse'd and
 // asserted field-by-field (e.g. the lying unit's status === "failed" + reason
 // === "error" on the parsed envelope row), and audit-event presence is an exact
@@ -241,6 +242,11 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     expect(env.units.find((u: { unit: string }) => u.unit === "alpha")?.ok).toBe(true);
     // SWARM_STARTED fired exactly once for the batch.
     expect(eventCount(proj, "SWARM_STARTED")).toBe(1);
+    const startedBlock = auditBody(proj)
+      .split("\n---\n")
+      .find((b) => b.includes("**Event**: SWARM_STARTED"));
+    expect(startedBlock).toContain("**Stage**: functional-design");
+    expect(startedBlock).toContain("**Run floor**: unstarted#0");
     // The worktree directory landed on disk via the real `git worktree add`.
     expect(existsSync(wtPath(proj, "alpha"))).toBe(true);
 
@@ -283,14 +289,74 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     expect(fEnv.converged).toBe(1);
     expect(fEnv.merge_failures).toEqual([]);
     expect(eventCount(proj, "SWARM_UNIT_CONVERGED")).toBe(1);
-    // The row carries the attempt-identity stamp: Stage from the state file's
-    // Current Stage, Run floor = the stage's latest main-workflow
-    // STAGE_STARTED ("" here - the fixture audit has none).
+    // Finalize preserves prepare's exact attempt stamp.
     const convergedBlock = auditBody(proj)
       .split("\n---\n")
       .find((b) => b.includes("**Event**: SWARM_UNIT_CONVERGED"));
     expect(convergedBlock).toContain("**Stage**: functional-design");
-    expect(convergedBlock).toContain("**Run floor**: ");
+    expect(convergedBlock).toContain("**Run floor**: unstarted#0");
+  }, 120000);
+
+  test("14a stale finalize is refused before merge after the stage attempt changes", () => {
+    const proj = makeSwarmFixture();
+    expect(
+      runRef(proj, [
+        "prepare",
+        "--batch",
+        "1",
+        "--units",
+        "stale",
+        "--base",
+        "main",
+      ]).rc,
+    ).toBe(0);
+    writeFileSync(join(wtPath(proj, "stale"), "impl.txt"), "done\n");
+    writeFileSync(
+      join(seededAuditDir(proj), "fixture.md"),
+      [
+        "",
+        "## Stage Start",
+        "**Timestamp**: 2026-08-05T00:00:00Z",
+        "**Event**: STAGE_STARTED",
+        "**Stage**: functional-design",
+        "",
+        "---",
+        "",
+      ].join("\n"),
+      { flag: "a" },
+    );
+
+    // A failed re-prepare must not stamp the preserved attempt-1 worktree with
+    // attempt 2. The existing worktree makes create fail, and SWARM_STARTED
+    // remains the single attempt-1 receipt.
+    const reprepare = runRef(proj, [
+      "prepare",
+      "--batch",
+      "1",
+      "--units",
+      "stale",
+      "--base",
+      "main",
+    ]);
+    expect(reprepare.rc).toBe(2);
+    expect(eventCount(proj, "SWARM_STARTED")).toBe(1);
+
+    const finalized = runRef(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "stale",
+      "--claimed",
+      "stale",
+      "--check-cmd",
+      "test -f impl.txt",
+    ]);
+    expect(finalized.rc).toBe(2);
+    expect(JSON.parse(finalized.out).units[0].detail).toContain(
+      "does not match the current attempt",
+    );
+    expect(eventCount(proj, "SWARM_UNIT_CONVERGED")).toBe(0);
   }, 120000);
 
   // Cases 2, 3, 4, 6 are asserted inside test 1's shared-fixture flow above

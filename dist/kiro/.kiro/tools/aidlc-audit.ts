@@ -6,6 +6,7 @@ import {
   auditFilePath,
   cloneIdPath,
   errorMessage,
+  hasUnsafeSingleLineCharacter,
   isoTimestamp,
   parseFieldArgs,
   relativeRecordDir,
@@ -316,8 +317,8 @@ export interface AuditEntryInput {
 // Authority-bearing events: rows the engine's guards read as authorization
 // evidence — human presence (humanActedSinceGate), gate resolutions, interview
 // answers (one-answer-per-human-turn), reviewer receipts
-// (verifyReviewerPrecondition), swarm convergence (the artifact-guard
-// carve-out), and the autonomy grant. Each has exactly one owning emitter that
+// (verifyReviewerPrecondition), swarm attempt/convergence (the finalize and
+// artifact-guard boundaries), and the autonomy grant. Each has exactly one owning emitter that
 // reaches appendAuditEntry through the library import (hooks, aidlc-state,
 // aidlc-log, aidlc-swarm, aidlc-bolt). The public CLI refuses them so a
 // conductor cannot mint authority it does not have; everything else stays
@@ -331,6 +332,7 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "QUESTION_ANSWERED",
   "REVIEW_REQUESTED",
   "REVIEW_COMPLETED",
+  "SWARM_STARTED",
   "SWARM_UNIT_CONVERGED",
   "AUTONOMY_MODE_SET",
   // Unit lifecycle receipts: routing trusts UNIT_COMPLETED as the completion
@@ -365,6 +367,7 @@ function refuseProtectedEvent(eventType: string): never {
 // spoof — the emitter's own `**Timestamp**:` line is written first and every
 // parser takes the first match.
 const RESERVED_FIELD_KEYS = new Set(["Event"]);
+const AUDIT_FIELD_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9 ._()/-]*$/;
 
 function validateAuditEntry(entry: AuditEntryInput): void {
   if (!VALID_EVENT_TYPES.has(entry.eventType)) {
@@ -379,6 +382,12 @@ function validateAuditEntry(entry: AuditEntryInput): void {
           "value would forge a second matching line and spoof multiline event queries."
       );
     }
+    if (!AUDIT_FIELD_KEY_PATTERN.test(key)) {
+      throw new Error(
+        `Invalid audit field key: ${JSON.stringify(key)}. Field keys must match ` +
+          `${AUDIT_FIELD_KEY_PATTERN} so they remain one Markdown label on one physical line.`
+      );
+    }
   }
 }
 
@@ -391,9 +400,9 @@ function renderAuditBlock(
   block += `**Timestamp**: ${timestamp}\n`;
   block += `**Event**: ${entry.eventType}\n`;
   for (const [key, value] of Object.entries(entry.fields)) {
-    // Escape CR/LF in values so a malicious or malformed input (e.g., a file
-    // path containing '\n**Event**: FAKE\n') cannot forge an audit entry.
-    const safeValue = String(value).replace(/\r?\n/g, "\\n");
+    // Escape every JavaScript line terminator in values so a malicious or
+    // malformed input cannot forge a second audit field or event line.
+    const safeValue = String(value).replace(/\r\n?|\n|\u2028|\u2029/g, "\\n");
     block += `**${key}**: ${safeValue}\n`;
   }
   return `${block}\n---\n`;
@@ -582,6 +591,9 @@ function handleAppendRaw(
   body: string,
   projectDir: string
 ): void {
+  if (hasUnsafeSingleLineCharacter(heading)) {
+    jsonError("append-raw heading must be printable text on one physical line");
+  }
   // A raw body is written verbatim, and every event query (findAllEvents,
   // auditBlockField) matches `**Event**:` lines anywhere in a block — so a raw
   // body carrying an `**Event**: <taxonomy event>` line IS that event to every
@@ -589,7 +601,7 @@ function handleAppendRaw(
   // go through `append`, which validates ownership); non-taxonomy Event lines
   // (custom diagnostics) stay allowed — no query resolves them to authority.
   const expandedBody = body.replace(/\\n/g, "\n");
-  for (const raw of expandedBody.split("\n")) {
+  for (const raw of expandedBody.split(/\r\n?|\n|\u2028|\u2029/)) {
     const line = raw.startsWith("- ") ? raw.slice(2) : raw;
     if (!line.startsWith("**Event**:")) continue;
     const value = line.slice("**Event**:".length).trim();

@@ -732,22 +732,60 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
     });
 
-    test("a redundant rejection answer with NO human turn refuses (reject carries no presence guard of its own)", () => {
+    test("rejection with NO human turn refuses without mutating state", () => {
       const slug = field(proj, "Current Stage");
       guarded(proj, ["checkbox", `${slug}=in-progress`]);
       guarded(proj, ["gate-start", slug]);
 
-      const answer = guardedLog(proj, [
-        "answer",
+      const reject = guardedReport(proj, [
         "--stage",
         slug,
-        "--details",
+        "--result",
+        "rejected",
+        "--user-input",
         "Request Changes: tighten the schema",
       ]);
-      expect(answer.rc).not.toBe(0);
-      expect(answer.out).toContain("Refusing to acknowledge this approval choice");
-      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(0);
+      expect(reject.rc).toBe(0);
+      expect(reject.out).toContain('"kind":"error"');
+      expect(reject.out).toContain("Refusing to reject");
       expect(eventCount(proj, "GATE_REJECTED")).toBe(0);
+      expect(field(proj, "Revision Count")).toBe("0");
+      expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(
+        `- [?] ${slug}`,
+      );
+    });
+
+    test("a rejection consumes its human turn", () => {
+      const slug = field(proj, "Current Stage");
+      guarded(proj, ["checkbox", `${slug}=in-progress`]);
+      guarded(proj, ["gate-start", slug]);
+      recordHumanTurn(proj);
+
+      const first = guardedReport(proj, [
+        "--stage",
+        slug,
+        "--result",
+        "rejected",
+        "--user-input",
+        "Request Changes: tighten the schema",
+      ]);
+      expect(first.rc).toBe(0);
+      expect(first.out).not.toContain('"kind":"error"');
+      expect(eventCount(proj, "GATE_REJECTED")).toBe(1);
+
+      guarded(proj, ["revise", slug]);
+      const second = guardedReport(proj, [
+        "--stage",
+        slug,
+        "--result",
+        "rejected",
+        "--user-input",
+        "Request Changes: tighten the schema again",
+      ]);
+      expect(second.rc).toBe(0);
+      expect(second.out).toContain('"kind":"error"');
+      expect(second.out).toContain("Refusing to reject");
+      expect(eventCount(proj, "GATE_REJECTED")).toBe(1);
     });
 
     test("a redundant rejection answer with a human turn is a no-op and report still rejects", () => {

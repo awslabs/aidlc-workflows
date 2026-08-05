@@ -1,4 +1,4 @@
-// covers: cli:aidlc-audit(append-protected,append-batch-protected,append-raw-event-line,reserved-field-keys), subcommand:aidlc-bolt:set-autonomy, function:humanActedSinceGate, function:isNonAnswer
+// covers: cli:aidlc-audit(append-protected,append-batch-protected,append-raw-event-line,reserved-field-keys), subcommand:aidlc-bolt:set-autonomy, function:humanActedSinceGate, function:hasUnsafeSingleLineCharacter, function:isNonAnswer
 //
 // t261 — the authority floor on the audit surface (issue 681, claims 3/4/7/8).
 // Four related guarantees, each with a REFUSE case and an ALLOW case so the
@@ -6,10 +6,10 @@
 //
 //   1. The public audit CLI cannot forge authority-bearing receipts: `append`
 //      / `append-batch` refuse HUMAN_TURN / GATE_* / QUESTION_ANSWERED /
-//      REVIEW_* / SWARM_UNIT_CONVERGED / AUTONOMY_MODE_SET; `append-raw`
+//      REVIEW_* / SWARM_STARTED / SWARM_UNIT_CONVERGED / AUTONOMY_MODE_SET; `append-raw`
 //      refuses a body carrying a taxonomy `**Event**:` line; caller-supplied
-//      Event/Timestamp field keys are refused everywhere (a second `**Event**:`
-//      line would spoof the multiline event queries). Diagnostic events and
+//      field keys use a strict one-line grammar and Event is reserved (a second
+//      `**Event**:` line would spoof the multiline event queries). Diagnostic events and
 //      free-form notes stay CLI-appendable; AIDLC_ALLOW_DIRECT_AUDIT_EVENTS=1
 //      is the fixture escape (the suite sets it globally; this file clears it
 //      per spawn to exercise the refusal).
@@ -41,7 +41,7 @@
 //   aidlc-state.ts  handleApprove / handleReject non-answer floors.
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -81,6 +81,28 @@ function guarded(
   return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
 
+function guardedAsync(
+  tool: string,
+  args: string[],
+  proj: string,
+): Promise<{ rc: number; out: string }> {
+  return new Promise((resolve) => {
+    const env = { ...process.env };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    delete env.AIDLC_ALLOW_DIRECT_AUDIT_EVENTS;
+    const child = spawn(BUN, [tool, ...args, "--project-dir", proj], {
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let out = "";
+    child.stdout.setEncoding("utf-8");
+    child.stderr.setEncoding("utf-8");
+    child.stdout.on("data", (chunk) => { out += chunk; });
+    child.stderr.on("data", (chunk) => { out += chunk; });
+    child.on("close", (code) => resolve({ rc: code ?? -1, out }));
+  });
+}
+
 // The owning-emitter route for a HUMAN_TURN (what the mint hook does through
 // the library import) — simulated via the documented fixture escape.
 function mintHumanTurn(proj: string): void {
@@ -104,6 +126,7 @@ describe("t261 public audit CLI refuses authority-bearing receipts", () => {
     "QUESTION_ANSWERED",
     "REVIEW_REQUESTED",
     "REVIEW_COMPLETED",
+    "SWARM_STARTED",
     "SWARM_UNIT_CONVERGED",
     "AUTONOMY_MODE_SET",
     "UNIT_STARTED",
@@ -149,12 +172,40 @@ describe("t261 public audit CLI refuses authority-bearing receipts", () => {
     expect(readAllAuditShards(proj)).not.toContain("GATE_APPROVED");
   });
 
-  test("the Event field key is reserved on every emit path (Timestamp stays legal)", () => {
+  test("field keys use a strict single-line grammar and Event stays reserved", () => {
     proj = createTestProject();
     const r = guarded(AUDIT, ["append", "ERROR_LOGGED", "--field", "Event=HUMAN_TURN"], proj);
     expect(r.rc).not.toBe(0);
     expect(r.out).toContain("Reserved field key");
     expect(readAllAuditShards(proj)).not.toContain("HUMAN_TURN");
+
+    for (const key of [
+      "\n**Event",
+      "\r\n**Event",
+      "Bad\u2028Key",
+      "Bad\u2029Key",
+    ]) {
+      const injected = guarded(
+        AUDIT,
+        ["append", "ERROR_LOGGED", "--field", `${key}=HUMAN_TURN`],
+        proj,
+      );
+      expect(injected.rc).not.toBe(0);
+      expect(injected.out).toContain("Invalid audit field key");
+    }
+    const batch = guarded(
+      AUDIT,
+      [
+        "append-batch",
+        JSON.stringify([
+          { eventType: "ERROR_LOGGED", fields: { "Bad\u0000Key": "UNIT_COMPLETED" } },
+        ]),
+      ],
+      proj,
+    );
+    expect(batch.rc).not.toBe(0);
+    expect(batch.out).toContain("Invalid audit field key");
+
     // Timestamp is a documented field on park/unpark rows — it must not refuse,
     // and it cannot spoof (the emitter's own **Timestamp**: line is first).
     const ts = guarded(
@@ -163,6 +214,26 @@ describe("t261 public audit CLI refuses authority-bearing receipts", () => {
       proj,
     );
     expect(ts.rc).toBe(0);
+    expect(
+      guarded(
+        AUDIT,
+        ["append", "ERROR_LOGGED", "--field", "Worker (retry)/path.v2=ok"],
+        proj,
+      ).rc,
+    ).toBe(0);
+    expect(readAllAuditShards(proj)).not.toContain("UNIT_COMPLETED");
+  });
+
+  test("append-raw rejects event injection through CR line breaks or its heading", () => {
+    proj = createTestProject();
+    for (const args of [
+      ["append-raw", "Note", "safe\r**Event**: HUMAN_TURN"],
+      ["append-raw", "Note\n**Event**: HUMAN_TURN", "safe"],
+    ]) {
+      const result = guarded(AUDIT, args, proj);
+      expect(result.rc).not.toBe(0);
+    }
+    expect(readAllAuditShards(proj)).not.toContain("HUMAN_TURN");
   });
 
   test("diagnostic events, free-form notes, and the fixture escape still work", () => {
@@ -224,6 +295,23 @@ describe("t261 set-autonomy escalation requires and consumes a human turn", () =
   test("de-escalation to gated never needs presence", () => {
     proj = constructionProject();
     expect(guarded(BOLT, ["set-autonomy", "--mode", "gated"], proj).rc).toBe(0);
+  });
+
+  test("concurrent grants consume one turn exactly once", async () => {
+    proj = constructionProject();
+    mintHumanTurn(proj);
+    const results = await Promise.all([
+      guardedAsync(BOLT, ["set-autonomy", "--mode", "autonomous"], proj),
+      guardedAsync(BOLT, ["set-autonomy", "--mode", "autonomous"], proj),
+    ]);
+    expect(results.filter((result) => result.rc === 0).length).toBe(1);
+    expect(results.filter((result) => result.rc !== 0).length).toBe(1);
+    expect(
+      readAllAuditShards(proj).match(/\*\*Event\*\*: AUTONOMY_MODE_SET/g)?.length,
+    ).toBe(1);
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(
+      "Construction Autonomy Mode**: autonomous",
+    );
   });
 });
 

@@ -262,12 +262,9 @@ describe("appendAuditEntryUnlocked — escaping and append-not-overwrite", () =>
     expect(result.event).toBe("ERROR_LOGGED");
   });
 
-  test("collapses CRLF to one escape but leaves a lone CR untouched (regex is /\\r?\\n/)", () => {
-    // Source escape is value.replace(/\r?\n/g, "\\n"). A CRLF pair becomes a
-    // single "\n" escape; a bare carriage return (CR not followed by LF) is
-    // NOT matched and survives verbatim. Pinning both halves of that contract
-    // catches a regression that widened the regex to also swallow lone CRs
-    // (which would change byte output for Mac-classic line endings).
+  test("collapses CRLF and lone CR line breaks to one literal escape", () => {
+    // Every JavaScript line terminator must stay on one physical audit line:
+    // multiline event readers treat a bare CR as a line boundary too.
     const proj = freshProject();
     appendAuditEntryUnlocked(
       "DECISION_RECORDED",
@@ -275,10 +272,10 @@ describe("appendAuditEntryUnlocked — escaping and append-not-overwrite", () =>
       proj,
     );
     const content = readAudit(proj);
-    // CRLF -> single \n escape (one char each in the \r and \n collapsing).
+    // CRLF -> one escape, not two.
     expect(content).toContain(`**CrLf**: p\\nq\n`);
-    // Lone CR passes through as a literal carriage return.
-    expect(content).toContain(`**LoneCr**: x\ry\n`);
+    expect(content).toContain(`**LoneCr**: x\\ny\n`);
+    expect(content).not.toContain("\r");
   });
 
   test("a second append preserves the first block (append, never overwrite)", () => {

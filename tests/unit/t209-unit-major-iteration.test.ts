@@ -255,6 +255,33 @@ function setIteration(proj: string, value: string): { rc: number; out: string } 
   return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
 
+function unitVerb(
+  proj: string,
+  stage: string,
+  action: "start" | "complete",
+  unit: string,
+): { rc: number; out: string } {
+  const r = spawnSync(
+    BUN,
+    [
+      STATE,
+      "unit",
+      action,
+      "--stage",
+      stage,
+      "--unit",
+      unit,
+      "--project-dir",
+      proj,
+    ],
+    { encoding: "utf-8", env: process.env },
+  );
+  return {
+    rc: r.status ?? -1,
+    out: `${r.stdout ?? ""}${r.stderr ?? ""}`,
+  };
+}
+
 function logReviewReady(proj: string, stage: string, unit: string): void {
   const args = [
     LOG,
@@ -479,5 +506,32 @@ describe("t209 opt-in unit-major construction design iteration", () => {
       "approved",
     ]);
     expect(nfr.kind).toBe("done");
+  }, 30000);
+
+  test("10: lifecycle receipts for a later unit-major stage survive its STAGE_STARTED", () => {
+    const proj = seedProject("unit-major");
+    seedBoltDag(proj, ["alpha"]);
+
+    expect(unitVerb(proj, "nfr-requirements", "start", "alpha").rc).toBe(0);
+    coverUnit(proj, "alpha", "nfr-requirements");
+    expect(unitVerb(proj, "nfr-requirements", "complete", "alpha").rc).toBe(0);
+
+    coverFullGrid(proj, ["alpha"]);
+    logReviewReady(proj, "functional-design", "alpha");
+    logReviewReady(proj, "nfr-requirements", "alpha");
+
+    const functional = runReport(proj, [
+      "--stage",
+      "functional-design",
+      "--result",
+      "approved",
+    ]);
+    expect(functional.kind).toBe("done");
+
+    const nfr = runNext(proj);
+    expect(nfr.kind).toBe("run-stage");
+    expect(nfr.stage).toBe("nfr-requirements");
+    expect(nfr.unit).toBe("alpha");
+    expect(nfr.gate).toBe(true);
   }, 30000);
 });

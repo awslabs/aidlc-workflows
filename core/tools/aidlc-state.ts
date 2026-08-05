@@ -21,6 +21,7 @@ import {
   firstInScopeStageOfPhase,
   freshReviewReceipts,
   getField,
+  hasUnsafeSingleLineCharacter,
   holdsAuditLock,
   humanActedSinceGate,
   humanPresenceGuardDisabled,
@@ -30,6 +31,7 @@ import {
   isNonAnswer,
   isoTimestamp,
   KNOWN_CODEKB_STAGES,
+  latestMainWorkflowStageRunFloor,
   loadScopeMapping,
   nextInScopeStage,
   PHASE_NUMBERS,
@@ -58,6 +60,7 @@ import {
   stagesInScope,
   swarmConvergedUnits,
   updateIntentStatus,
+  validateUnitName,
   validScopes,
   withAuditLock,
   worktreeDocsDir,
@@ -854,10 +857,16 @@ function handleUnit(args: string[]): void {
   const rest = args.slice(1);
   const slug = getFlagValue(rest, "--stage");
   const unit = getFlagValue(rest, "--unit");
-  const reason = getFlagValue(rest, "--reason")?.trim();
-  const nextAction = getFlagValue(rest, "--next-action")?.trim();
+  const rawReason = getFlagValue(rest, "--reason");
+  const rawNextAction = getFlagValue(rest, "--next-action");
+  const reason = rawReason?.trim();
+  const nextAction = rawNextAction?.trim();
   if (!slug) error("Missing --stage <slug>");
   if (!unit) error("Missing --unit <name>");
+  const unitNameError = validateUnitName(unit);
+  if (unitNameError) error(unitNameError);
+  validateStateLineValue("--reason", rawReason);
+  validateStateLineValue("--next-action", rawNextAction);
   const stage = findStageBySlug(slug);
   if (!stage) error(`Unknown stage: ${slug}`);
   if (stage.for_each !== "unit-of-work") {
@@ -884,6 +893,19 @@ function handleUnit(args: string[]): void {
         `Refusing unit ${action}: Construction Autonomy Mode is autonomous. The swarm referee ` +
           "owns per-unit bookkeeping (SWARM_UNIT_* receipts); interactive unit receipts apply " +
           "only to gated Construction.",
+      );
+    }
+
+    const resolution = resolveBoltDag(pd);
+    if (resolution.state === "malformed") {
+      error(
+        `Refusing unit ${action}: the authoritative unit DAG is ${resolution.reason} ` +
+          `(${resolution.detail}). Fix unit-of-work-dependency.md first.`,
+      );
+    }
+    if (resolution.state !== "ok" || !resolution.units.includes(unit)) {
+      error(
+        `Refusing unit ${action} for "${unit}": it is not in the authoritative unit DAG.`,
       );
     }
 
@@ -946,7 +968,15 @@ function handleUnit(args: string[]): void {
     else if (action === "pause") eventType = "UNIT_PAUSED";
     else if (action === "resume") eventType = "UNIT_RESUMED";
     else eventType = "UNIT_COMPLETED";
-    const fields: Record<string, string> = { Stage: slug, Unit: unit };
+    const fields: Record<string, string> = {
+      Stage: slug,
+      Unit: unit,
+      "Run floor": latestMainWorkflowStageRunFloor(
+        readAllAuditShards(pd),
+        slug,
+        getField(content, "Construction Iteration")?.trim() === "unit-major",
+      ),
+    };
     if (reason) fields.Reason = reason;
     if (nextAction) fields["Next Action"] = nextAction;
 
@@ -985,6 +1015,12 @@ function handleUnit(args: string[]): void {
     writeStateFile(pd, content);
     console.log(JSON.stringify({ emitted: eventType, stage: slug, unit, timestamp }));
   });
+}
+
+function validateStateLineValue(label: string, value: string | undefined): void {
+  if (value !== undefined && hasUnsafeSingleLineCharacter(value)) {
+    error(`${label} must be printable text on one physical line.`);
+  }
 }
 
 // The unit's missing REQUIRED artifacts (kind-filtered like the engine's
@@ -2363,6 +2399,17 @@ function handleReject(args: string[]): void {
   if (!stage) error(`Unknown stage: ${slug}`);
   validateSlugInState(content, slug, ["awaiting-approval", "in-progress"]);
   const gateWasMissing = getSlugState(content, slug) === "in-progress";
+
+  if (
+    !isAutonomousMode(content) &&
+    !humanPresenceGuardDisabled() &&
+    !humanActedSinceGate(pd)
+  ) {
+    error(
+      `Refusing to reject "${slug}": a real human has not acted at this gate since it opened. ` +
+        "Requesting changes requires a typed human turn before it can commit.",
+    );
+  }
 
   // Increment Revision Count. Guard against non-numeric values (missing field,
   // manual edits, legacy state files) by coercing non-integers to 0.

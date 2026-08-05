@@ -576,7 +576,8 @@ describe("t185: stage-completion artifact guard (#366)", () => {
       );
       // Referee convergence rows for the converged subset, carrying the
       // attempt-identity stamp (Stage + Run floor) the consumers require; the
-      // fixture has no STAGE_STARTED row, so the matching floor is "".
+      // fixture has no STAGE_STARTED row, so the matching floor is the exact
+      // no-boundary sentinel.
       const shard = seededAuditShard(proj);
       mkdirSync(join(shard, ".."), { recursive: true });
       const rows = converged
@@ -587,7 +588,7 @@ describe("t185: stage-completion artifact guard (#366)", () => {
             "**Event**: SWARM_UNIT_CONVERGED",
             `**Unit name**: ${unit}`,
             "**Stage**: code-generation",
-            "**Run floor**: ",
+            "**Run floor**: unstarted#0",
             "",
             "---",
             "",
