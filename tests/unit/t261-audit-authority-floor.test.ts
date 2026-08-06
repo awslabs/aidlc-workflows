@@ -9,10 +9,9 @@
 //      REVIEW_* / SWARM_STARTED / SWARM_UNIT_CONVERGED / AUTONOMY_MODE_SET; `append-raw`
 //      refuses a body carrying a taxonomy `**Event**:` line; caller-supplied
 //      field keys use a strict one-line grammar and Event is reserved (a second
-//      `**Event**:` line would spoof the multiline event queries). Diagnostic events and
-//      free-form notes stay CLI-appendable; AIDLC_ALLOW_DIRECT_AUDIT_EVENTS=1
-//      is the fixture escape (the suite sets it globally; this file clears it
-//      per spawn to exercise the refusal).
+//      `**Event**:` line would spoof the multiline event queries). Diagnostic
+//      events and free-form notes stay CLI-appendable; fixtures mint receipts
+//      through the same library API used by their owning emitters.
 //   2. `aidlc-bolt set-autonomy --mode autonomous` requires a fresh HUMAN_TURN
 //      (the ladder answer) and the grant CONSUMES the turn (a second
 //      escalation without a new turn refuses); de-escalation to gated never
@@ -52,6 +51,7 @@ import {
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { humanActedSinceGate, readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath;
@@ -103,13 +103,11 @@ function guardedAsync(
   });
 }
 
-// The owning-emitter route for a HUMAN_TURN (what the mint hook does through
-// the library import) — simulated via the documented fixture escape.
+// The owning-emitter route for a HUMAN_TURN, matching the mint hook's library
+// call. The public CLI remains unavailable even when the suite enables its
+// broader direct-audit fixture escape.
 function mintHumanTurn(proj: string): void {
-  const r = guarded(AUDIT, ["append", "HUMAN_TURN"], proj, {
-    AIDLC_ALLOW_DIRECT_AUDIT_EVENTS: "1",
-  });
-  if (r.rc !== 0) throw new Error(`mint failed: ${r.out}`);
+  appendAuditEntry("HUMAN_TURN", {}, proj);
 }
 
 let proj = "";
@@ -140,7 +138,7 @@ describe("t261 public audit CLI refuses authority-bearing receipts", () => {
     for (const event of PROTECTED) {
       const r = guarded(AUDIT, ["append", event], proj);
       expect(r.rc).not.toBe(0);
-      expect(r.out).toContain("authority-bearing receipt");
+      expect(r.out).toMatch(/authority-bearing receipt|reserved for its owning hook\/tool/);
       expect(r.out).toContain(event);
     }
     // nothing landed on disk
@@ -236,13 +234,12 @@ describe("t261 public audit CLI refuses authority-bearing receipts", () => {
     expect(readAllAuditShards(proj)).not.toContain("HUMAN_TURN");
   });
 
-  test("diagnostic events, free-form notes, and the fixture escape still work", () => {
+  test("diagnostic events, free-form notes, and owning emitters still work", () => {
     proj = createTestProject();
     expect(guarded(AUDIT, ["append", "ERROR_LOGGED", "--field", "Details=x"], proj).rc).toBe(0);
     expect(guarded(AUDIT, ["append-raw", "Note", "just a diagnostic note"], proj).rc).toBe(0);
-    expect(
-      guarded(AUDIT, ["append", "HUMAN_TURN"], proj, { AIDLC_ALLOW_DIRECT_AUDIT_EVENTS: "1" }).rc,
-    ).toBe(0);
+    mintHumanTurn(proj);
+    expect(readAllAuditShards(proj)).toContain("HUMAN_TURN");
   });
 });
 

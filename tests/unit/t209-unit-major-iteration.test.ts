@@ -512,6 +512,7 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     const proj = seedProject("unit-major");
     seedBoltDag(proj, ["alpha"]);
 
+    coverUnit(proj, "alpha", "functional-design");
     expect(unitVerb(proj, "nfr-requirements", "start", "alpha").rc).toBe(0);
     coverUnit(proj, "alpha", "nfr-requirements");
     expect(unitVerb(proj, "nfr-requirements", "complete", "alpha").rc).toBe(0);

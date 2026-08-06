@@ -108,6 +108,7 @@ import {
   getField,
   intentRepos,
   isPerUnitStage,
+  isRegularFile,
   listIntents,
   loadScopeMetadata,
   loadScopeMetadataAll,
@@ -2945,7 +2946,7 @@ function unitCovered(
   for (const name of applicable) {
     const rel = resolveArtifactPath(name, node, unit, recordPrefix, codekbCtx);
     const abs = join(projectDir, ...rel.split("/"));
-    if (!existsSync(abs)) return false;
+    if (!isRegularFile(abs)) return false;
   }
   return true;
 }

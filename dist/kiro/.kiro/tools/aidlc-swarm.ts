@@ -73,24 +73,33 @@
 //     (BOLT_FAILED paired with the BOLT_STARTED that `start --worktree` emitted).
 
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { basename, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import {
   auditBlockField,
+  auditShardDir,
   findAllEvents,
   getField,
+  isRegularFile,
   latestMainWorkflowStageRunFloor,
+  latestMainWorkflowStageRunFloorForProject,
   parseArgs,
+  readAuditShardEvents,
   readAllAuditShards,
   readStateFile,
+  relativeRecordDir,
   reviewArtifactFingerprint,
   resolveConstructionRepo,
   resolveProjectDir,
   resolveStage,
+  worktreeAuditFilePath,
   worktreePath,
+  worktreeRuntimeGraphPath,
+  worktreeStateFilePath,
 } from "./aidlc-lib.ts";
 import { compiledExecutable } from "./aidlc-runtime-paths.ts";
 
@@ -871,10 +880,7 @@ function currentSwarmAttempt(projectDir: string): SwarmAttemptStamp | null {
     if (!stage) return null;
     return {
       stage,
-      floor: latestMainWorkflowStageRunFloor(
-        readAllAuditShards(projectDir),
-        stage,
-      ),
+      floor: latestMainWorkflowStageRunFloorForProject(projectDir, stage),
     };
   } catch {
     return null;
@@ -886,18 +892,142 @@ function preparedSwarmAttempt(
   batch: string,
   unit: string,
 ): SwarmAttemptStamp | null {
-  const audit = readAllAuditShards(projectDir);
-  let stamp: SwarmAttemptStamp | null = null;
-  for (const event of findAllEvents(audit, "SWARM_STARTED")) {
-    if (auditBlockField(event.block, "Batch number") !== batch) continue;
+  const matching = readAuditShardEvents(projectDir).filter((event) => {
+    if (event.event !== "SWARM_STARTED") return false;
+    if (auditBlockField(event.block, "Batch number") !== batch) return false;
     const units = splitCsv(auditBlockField(event.block, "Unit names") ?? "");
-    if (!units.includes(unit)) continue;
-    const stage = auditBlockField(event.block, "Stage");
-    const floor = auditBlockField(event.block, "Run floor");
-    if (!stage || !floor) continue;
-    stamp = { stage, floor };
+    return units.includes(unit);
+  });
+  const stamped = matching.filter(
+    (event) =>
+      auditBlockField(event.block, "Stage") !== null &&
+      auditBlockField(event.block, "Run floor") !== null,
+  );
+  if (stamped.length > 0) {
+    stamped.sort((a, b) => {
+      if (a.timestamp !== b.timestamp) {
+        return a.timestamp < b.timestamp ? -1 : 1;
+      }
+      if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+      return a.pos - b.pos;
+    });
+    const timestamp = stamped[stamped.length - 1].timestamp;
+    const latest = stamped.filter((event) => event.timestamp === timestamp);
+    const stamps = new Map<string, SwarmAttemptStamp>();
+    for (const event of latest) {
+      const stage = auditBlockField(event.block, "Stage");
+      const floor = auditBlockField(event.block, "Run floor");
+      if (!stage || !floor) continue;
+      stamps.set(`${stage}\0${floor}`, { stage, floor });
+    }
+    // Same-second starts in different shards are unordered. A shared stamp is
+    // harmless; differing stamps fail closed instead of picking by filename.
+    if (
+      new Set(latest.map((event) => event.shard)).size > 1 &&
+      stamps.size !== 1
+    ) {
+      return null;
+    }
+    return stamps.values().next().value ?? null;
   }
-  return stamp;
+  return legacyPreparedSwarmAttempt(projectDir, batch, unit);
+}
+
+function legacyPreparedSwarmAttempt(
+  projectDir: string,
+  batch: string,
+  unit: string,
+): SwarmAttemptStamp | null {
+  const wt = worktreePath(projectDir, unit);
+  const recordPrefix = relativeRecordDir(projectDir);
+  const wtState = worktreeStateFilePath(wt, recordPrefix);
+  const wtAudit = worktreeAuditFilePath(wt, recordPrefix, projectDir);
+  const wtRuntime = worktreeRuntimeGraphPath(wt, recordPrefix);
+  if (
+    !existsSync(wt) ||
+    !isRegularFile(wtState) ||
+    !isRegularFile(wtAudit) ||
+    !isRegularFile(wtRuntime)
+  ) {
+    return null;
+  }
+
+  let worktreeAudit: string;
+  let state: string;
+  try {
+    worktreeAudit = readFileSync(wtAudit, "utf-8");
+    state = readFileSync(wtState, "utf-8");
+  } catch {
+    return null;
+  }
+  const fork = findAllEvents(worktreeAudit, "AUDIT_FORKED")
+    .filter((event) => auditBlockField(event.block, "Bolt slug") === unit)
+    .at(-1);
+  const boundaryRaw = fork ? auditBlockField(fork.block, "Fork Boundary") : null;
+  const sourceHash = fork ? auditBlockField(fork.block, "Source Audit Hash") : null;
+  if (!boundaryRaw || !sourceHash || !/^[0-9]+$/.test(boundaryRaw)) return null;
+
+  const mainDir = auditShardDir(projectDir);
+  if (!mainDir) return null;
+  const mainShard = join(mainDir, basename(wtAudit));
+  let mainBytes: Buffer;
+  try {
+    mainBytes = readFileSync(mainShard);
+  } catch {
+    return null;
+  }
+  const boundary = Number(boundaryRaw);
+  if (!Number.isSafeInteger(boundary) || boundary < 0 || mainBytes.length < boundary) {
+    return null;
+  }
+  const frozenBytes = mainBytes.subarray(0, boundary);
+  if (createHash("sha256").update(frozenBytes).digest("hex") !== sourceHash) {
+    return null;
+  }
+  const frozenAudit = frozenBytes.toString("utf-8");
+  const frozenBlocks = frozenAudit.replace(/\r\n/g, "\n").split(/\n---\n/);
+  const legacyStarts: number[] = [];
+  const boltStarts: number[] = [];
+  const stateForks: number[] = [];
+  for (let index = 0; index < frozenBlocks.length; index++) {
+    const block = frozenBlocks[index];
+    const event = auditBlockField(block, "Event");
+    if (
+      event === "SWARM_STARTED" &&
+      auditBlockField(block, "Batch number") === batch &&
+      !auditBlockField(block, "Stage") &&
+      !auditBlockField(block, "Run floor") &&
+      splitCsv(auditBlockField(block, "Unit names") ?? "").includes(unit)
+    ) {
+      legacyStarts.push(index);
+    }
+    if (
+      event === "BOLT_STARTED" &&
+      auditBlockField(block, "Batch number") === batch &&
+      auditBlockField(block, "Bolt slug") === unit
+    ) {
+      boltStarts.push(index);
+    }
+    if (
+      event === "STATE_FORKED" &&
+      auditBlockField(block, "Bolt slug") === unit
+    ) {
+      stateForks.push(index);
+    }
+  }
+  const hasPreparationSequence = legacyStarts.some((started) =>
+    boltStarts.some((bolt) =>
+      bolt > started && stateForks.some((forked) => forked > bolt),
+    ),
+  );
+  if (!hasPreparationSequence) return null;
+
+  const stage = getField(state, "Current Stage")?.trim() ?? "";
+  if (!stage) return null;
+  return {
+    stage,
+    floor: latestMainWorkflowStageRunFloor(frozenAudit, stage),
+  };
 }
 
 function currentBranch(projectDir: string): string {

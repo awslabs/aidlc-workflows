@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 524,
+    "total": 527,
     "enumeratedByClass": {
-      "function": 278,
+      "function": 281,
       "audit": 82,
       "scope": 9,
       "stage": 32,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 126,
+      "function": 129,
       "audit": 40,
       "scope": 9,
       "stage": 9,
@@ -1979,6 +1979,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:isRegularFile",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:isValidRepoName",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2032,6 +2044,22 @@
     {
       "unitClass": "function",
       "unitId": "function:latestMainWorkflowStageRunFloor",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t201-swarm-batch-advance.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:latestMainWorkflowStageRunFloorForProject",
       "minMechanism": "none",
       "coveredBy": [
         {
@@ -2665,6 +2693,18 @@
       "coveredBy": [
         {
           "file": "tests/integration/t172-migration-audit-trail.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readAuditShardEvents",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
           "mechanism": "cli"
         }
       ],

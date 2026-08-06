@@ -87,6 +87,7 @@ import {
   FIXTURES_DIR,
   cleanupWorktreeFixture,
   seededAuditDir,
+  seededAuditShard,
   seededRecordDir,
   seededStateFile,
   setupWorktreeFixture,
@@ -225,6 +226,54 @@ function eventCount(p: string, event: string): number {
     .filter((l) => l === `**Event**: ${event}`).length;
 }
 
+function prepareAsLegacy(proj: string, unit: string): void {
+  const shard = seededAuditShard(proj);
+  mkdirSync(seededAuditDir(proj), { recursive: true });
+  writeFileSync(
+    shard,
+    [
+      "# AI-DLC Audit Log",
+      "",
+      "## Swarm Started",
+      "**Timestamp**: 2026-08-05T00:00:00Z",
+      "**Event**: SWARM_STARTED",
+      "**Batch number**: 1",
+      `**Unit names**: ${unit}`,
+      "**Concurrency cap**: 1",
+      "",
+      "---",
+      "",
+    ].join("\n"),
+    "utf-8",
+  );
+  expect(
+    runRef(proj, [
+      "prepare",
+      "--batch",
+      "1",
+      "--units",
+      unit,
+      "--base",
+      "main",
+    ]).rc,
+  ).toBe(0);
+
+  // Current prepare writes a stamped row after the fork. Remove only that row
+  // to reproduce an in-flight worktree created by the pre-stamp release; the
+  // frozen audit prefix still contains the legacy row and full fork evidence.
+  const withoutStamped = readFileSync(shard, "utf-8")
+    .split("\n---\n")
+    .filter(
+      (block) =>
+        !(
+          block.includes("**Event**: SWARM_STARTED") &&
+          block.includes("**Run floor**:")
+        ),
+    )
+    .join("\n---\n");
+  writeFileSync(shard, withoutStamped, "utf-8");
+}
+
 describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swarm-referee.sh, plan 13)", () => {
   // ===========================================================================
   // Cases 1-4 + 6 share ONE fixture: prepare + stateless check + finalize on a
@@ -349,6 +398,69 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
       "stale",
       "--claimed",
       "stale",
+      "--check-cmd",
+      "test -f impl.txt",
+    ]);
+    expect(finalized.rc).toBe(2);
+    expect(JSON.parse(finalized.out).units[0].detail).toContain(
+      "does not match the current attempt",
+    );
+    expect(eventCount(proj, "SWARM_UNIT_CONVERGED")).toBe(0);
+  }, 120000);
+
+  test("14b a fully proven pre-upgrade swarm can finalize without re-prepare", () => {
+    const proj = makeSwarmFixture();
+    prepareAsLegacy(proj, "legacy");
+    writeFileSync(join(wtPath(proj, "legacy"), "impl.txt"), "done\n");
+    logWorktreeReview(proj, "legacy");
+
+    const finalized = runRef(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "legacy",
+      "--claimed",
+      "legacy",
+      "--check-cmd",
+      "test -f impl.txt",
+    ]);
+    expect(finalized.rc).toBe(0);
+    expect(JSON.parse(finalized.out).converged).toBe(1);
+    const convergedBlock = auditBody(proj)
+      .split("\n---\n")
+      .find((block) => block.includes("**Event**: SWARM_UNIT_CONVERGED"));
+    expect(convergedBlock).toContain("**Stage**: functional-design");
+    expect(convergedBlock).toContain("**Run floor**: unstarted#0");
+  }, 120000);
+
+  test("14c a pre-upgrade swarm from a prior attempt remains refused", () => {
+    const proj = makeSwarmFixture();
+    prepareAsLegacy(proj, "legacy-stale");
+    writeFileSync(join(wtPath(proj, "legacy-stale"), "impl.txt"), "done\n");
+    writeFileSync(
+      join(seededAuditDir(proj), "fixture.md"),
+      [
+        "",
+        "## Stage Start",
+        "**Timestamp**: 2026-08-05T00:00:01Z",
+        "**Event**: STAGE_STARTED",
+        "**Stage**: functional-design",
+        "",
+        "---",
+        "",
+      ].join("\n"),
+      { flag: "a" },
+    );
+
+    const finalized = runRef(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "legacy-stale",
+      "--claimed",
+      "legacy-stale",
       "--check-cmd",
       "test -f impl.txt",
     ]);

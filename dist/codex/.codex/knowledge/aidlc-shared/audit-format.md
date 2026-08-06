@@ -91,17 +91,20 @@ All event names follow `SUBJECT_PAST_VERB` — every event answers "what happene
 The interactive twin of the swarm's `SWARM_UNIT_*` ledger. `UNIT_COMPLETED` is
 the completion receipt the engine's coverage walk prefers over bare artifact
 existence once any receipt exists for the stage; the emitting verb verifies
-the unit's required artifacts on disk before committing it. `Run floor` is an
-exact boundary token (`<event>:<timestamp>#<ordinal>`), so same-second attempts
-cannot reuse receipts. Unit-major stages key it to workflow/jump/rejection
-boundaries because their work can precede their own `STAGE_STARTED`.
+the unit's required artifacts as regular files on disk before committing it.
+`Run floor` is an exact boundary token (`<event>:<timestamp>#<ordinal>`), so
+same-second attempts within one shard cannot reuse receipts. Equal-time
+boundaries in different shards are causally unordered and use a deterministic
+`AMBIGUOUS:<timestamp>#<digest>` floor; prior receipts cannot match it.
+Unit-major stages key the floor to workflow/jump/rejection boundaries because
+their work can precede their own `STAGE_STARTED`.
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
 | `UNIT_STARTED` | A unit's work begins on an inline per-unit stage; refused while another unit of the stage is open | Timestamp, Stage, Unit, Run floor | `tools/aidlc-state.ts unit start` |
 | `UNIT_PAUSED` | A unit stops before completion; the checkpoint carries why and what comes next | Timestamp, Stage, Unit, Run floor, Reason, Next Action | `tools/aidlc-state.ts unit pause` |
 | `UNIT_RESUMED` | The paused unit is explicitly resumed (the engine hard-stops until this) | Timestamp, Stage, Unit, Run floor | `tools/aidlc-state.ts unit resume` |
-| `UNIT_COMPLETED` | The unit's work is done AND its required artifacts exist on disk (verified at emit) | Timestamp, Stage, Unit, Run floor | `tools/aidlc-state.ts unit complete` |
+| `UNIT_COMPLETED` | The unit's work is done AND its required artifacts are regular files on disk (verified at emit) | Timestamp, Stage, Unit, Run floor | `tools/aidlc-state.ts unit complete` |
 
 ### Artifact Events (3 events — hook-emitted)
 
@@ -220,7 +223,7 @@ Emitted by stage-protocol §13 (Learnings Ritual). The runtime-graph compile emi
 
 ### Swarm (6 events)
 
-All six swarm events emit from the swarm referee `aidlc-swarm.ts` — the deterministic verdict surface the conductor consults. The referee is stateless (no iteration counter): `prepare` captures the exact stage-attempt token, forks the per-unit worktrees, and emits stamped `SWARM_STARTED` (and `SWARM_DEGRADED` when the conductor reports a loud downgrade); `finalize` requires that prepared token to still match the current attempt before merging, then preserves it on each convergence row. It re-verifies the conductor's claimed-converged set, serialised-merges the genuine passes, and emits the per-Unit pair (`SWARM_UNIT_CONVERGED` / `SWARM_UNIT_FAILED` — except a converged unit whose merge-back failed, which gets neither row until a finalize retry merges it), the per-failed-Unit baton row (`SWARM_BATON_RETURNED`), and the batch tally (`SWARM_COMPLETED`). The `check` subcommand emits nothing — it is an advisory verdict that informs the conductor's retry decision. The engine is read-only and the conductor never emits audit events, so the deterministic tool owns the whole swarm taxonomy. Because the loop and its cap live in the driver (the ultracode script's `for`-bound or the subagent floor's harness ceiling), not in the referee, the per-Unit rows carry no `Iterations` / `Cap value` fields — there is no counter to record.
+All six swarm events emit from the swarm referee `aidlc-swarm.ts` — the deterministic verdict surface the conductor consults. The referee is stateless (no iteration counter): `prepare` captures the exact stage-attempt token, forks the per-unit worktrees, and emits stamped `SWARM_STARTED` (and `SWARM_DEGRADED` when the conductor reports a loud downgrade); `finalize` requires that prepared token to still match the current attempt before merging, then preserves it on each convergence row. A worktree prepared by the immediately preceding unstamped release remains finalizable only when its frozen audit prefix proves the matching legacy `SWARM_STARTED`, `BOLT_STARTED`, `STATE_FORKED`, and `AUDIT_FORKED` sequence, the fork hash still matches, all three worktree mirrors exist, and the derived frozen attempt still equals the current attempt; this compatibility path never emits a backdated start or adopts a stale worktree. It re-verifies the conductor's claimed-converged set, serialised-merges the genuine passes, and emits the per-Unit pair (`SWARM_UNIT_CONVERGED` / `SWARM_UNIT_FAILED` — except a converged unit whose merge-back failed, which gets neither row until a finalize retry merges it), the per-failed-Unit baton row (`SWARM_BATON_RETURNED`), and the batch tally (`SWARM_COMPLETED`). The `check` subcommand emits nothing — it is an advisory verdict that informs the conductor's retry decision. The engine is read-only and the conductor never emits audit events, so the deterministic tool owns the whole swarm taxonomy. Because the loop and its cap live in the driver (the ultracode script's `for`-bound or the subagent floor's harness ceiling), not in the referee, the per-Unit rows carry no `Iterations` / `Cap value` fields — there is no counter to record.
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|

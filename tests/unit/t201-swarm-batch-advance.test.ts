@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, function:swarmConvergedUnits, function:latestMainWorkflowStageStarted, function:latestMainWorkflowStageRunFloor
+// covers: subcommand:aidlc-orchestrate:next, function:swarmConvergedUnits, function:latestMainWorkflowStageStarted, function:latestMainWorkflowStageRunFloor, function:latestMainWorkflowStageRunFloorForProject
 //
 // CLI-contract test for the autonomous Construction swarm batch advance.
 // mechanism = cli.
@@ -55,6 +55,7 @@ import {
   runOrchestrateNext,
   seedAidlcMemory,
   seedBoltDagBatches,
+  seededAuditDir,
   seededAuditShard,
   seededStateFile,
 } from "../harness/fixtures.ts";
@@ -480,6 +481,54 @@ describe("t201 converged-row attempt identity (Stage + Run floor stamp)", () => 
       runFloorSecond: 0,
       runFloorOrdinal: 1,
     });
+    const d = runNext(proj);
+    expect(d.kind).toBe("invoke-swarm");
+    expect(d.units).toEqual(["auth"]);
+  }, 30000);
+
+  test("10c: cross-shard same-second boundaries do not revive stale convergence", () => {
+    const proj = seedProject();
+    seedBoltDagBatches(proj, [["auth"], ["api"]]);
+    const ts = fixtureTs(0);
+    mkdirSync(seededAuditDir(proj), { recursive: true });
+    writeFileSync(
+      join(seededAuditDir(proj), "zzzz-old.md"),
+      [
+        "# AI-DLC Audit Log\n",
+        auditBlock(
+          "Stage Start",
+          ts,
+          "STAGE_STARTED",
+          [["Stage", "code-generation"]],
+        ),
+        ...["auth", "api"].map((unit) =>
+          auditBlock(
+            "Swarm Unit Converged",
+            ts,
+            "SWARM_UNIT_CONVERGED",
+            [
+              ["Batch number", "1"],
+              ["Unit name", unit],
+              ["Stage", "code-generation"],
+              ["Run floor", `STAGE_STARTED:${ts}#1`],
+            ],
+          ),
+        ),
+      ].join(""),
+    );
+    writeFileSync(
+      join(seededAuditDir(proj), "aaaa-new.md"),
+      [
+        "# AI-DLC Audit Log\n",
+        auditBlock(
+          "Gate Rejected",
+          ts,
+          "GATE_REJECTED",
+          [["Stage", "code-generation"]],
+        ),
+      ].join(""),
+    );
+
     const d = runNext(proj);
     expect(d.kind).toBe("invoke-swarm");
     expect(d.units).toEqual(["auth"]);

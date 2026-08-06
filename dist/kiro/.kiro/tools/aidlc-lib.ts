@@ -2888,6 +2888,51 @@ export function readAllAuditShards(projectDir: string, intent?: string, space?: 
   return parts.join("\n");
 }
 
+export interface AuditShardEvent {
+  block: string;
+  event: string;
+  pos: number;
+  shard: string;
+  shardIndex: number;
+  timestamp: string;
+}
+
+// Preserve shard identity while parsing audit rows. A concatenated audit buffer
+// can preserve append order only within one shard; equal second-precision
+// timestamps across shards are causally unordered and must not be resolved by
+// filename position when authority or attempt freshness depends on the result.
+export function readAuditShardEvents(
+  projectDir: string,
+  intent?: string,
+  space?: string,
+): AuditShardEvent[] {
+  const rows: AuditShardEvent[] = [];
+  const shards = auditShards(projectDir, intent, space);
+  for (let shardIndex = 0; shardIndex < shards.length; shardIndex++) {
+    let content: string;
+    try {
+      content = readFileSync(shards[shardIndex], "utf-8");
+    } catch {
+      continue;
+    }
+    const blocks = content.replace(/\r\n/g, "\n").split(/\n---\n/);
+    for (let pos = 0; pos < blocks.length; pos++) {
+      const event = auditBlockField(blocks[pos], "Event");
+      const timestamp = auditBlockField(blocks[pos], "Timestamp");
+      if (!event || !timestamp) continue;
+      rows.push({
+        block: blocks[pos],
+        event,
+        pos,
+        shard: shards[shardIndex],
+        shardIndex,
+        timestamp,
+      });
+    }
+  }
+  return rows;
+}
+
 export function worktreePath(projectDir: string, boltSlug: string): string {
   return join(projectDir, ".aidlc", "worktrees", `bolt-${boltSlug}`);
 }
@@ -3664,7 +3709,11 @@ export function worktreeRuntimeGraphPath(wtPath: string, recordPrefix?: string |
 // regex.
 export const BOLT_SLUG_REGEX = /^[a-z][a-z0-9-]*$/;
 export const BOLT_SLUG_MAX_LENGTH = 64;
-export const UNIT_NAME_REGEX = /^[a-z][a-z0-9-]*$/;
+// New workflows author lowercase kebab-case names, but pre-lifecycle DAGs
+// accepted other filesystem-safe names. Keep those existing identifiers
+// routable while still excluding separators, traversal, whitespace, and
+// control characters.
+export const UNIT_NAME_REGEX = /^[A-Za-z][A-Za-z0-9._-]*$/;
 export const UNIT_NAME_MAX_LENGTH = 64;
 
 // --- Error helpers (catch-block discipline) ---
@@ -3829,7 +3878,9 @@ export function validateBoltSlug(slug: string): string | null {
 
 // Unit names become path components under construction/<unit>/ and are also
 // mirrored into single-line state fields. Keep one canonical validator for the
-// authored DAG, cached runtime graph, and lifecycle CLI.
+// authored DAG, cached runtime graph, and lifecycle CLI. Lowercase kebab-case is
+// the authoring convention; uppercase letters, underscores, and dots remain
+// accepted for safe legacy DAG names.
 export function validateUnitName(name: string): string | null {
   if (!name) return "Unit name is empty";
   if (name.length > UNIT_NAME_MAX_LENGTH) {
@@ -3838,10 +3889,18 @@ export function validateUnitName(name: string): string | null {
   if (!UNIT_NAME_REGEX.test(name)) {
     return (
       `Invalid Unit name "${name}" - must match ${UNIT_NAME_REGEX} ` +
-      "(lowercase letter, then lowercase letters/digits/hyphens)"
+      "(ASCII letter, then ASCII letters/digits/dot/underscore/hyphen)"
     );
   }
   return null;
+}
+
+export function isRegularFile(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
 }
 
 export function hasUnsafeSingleLineCharacter(value: string): boolean {
@@ -4893,6 +4952,74 @@ export function latestMainWorkflowStageRunFloor(
   return floor;
 }
 
+// Shard-aware attempt identity for live project readers. Same-shard timestamp
+// ties retain append order. If the latest relevant boundary is tied across
+// different shards, execution order is unknowable: mint a deterministic
+// ambiguity floor from the complete tied set. Existing receipts cannot match
+// it, so the boundary fails closed; receipts emitted after the ambiguity use
+// the same stable token until another boundary arrives.
+export function latestMainWorkflowStageRunFloorForProject(
+  projectDir: string,
+  slug: string,
+  unitMajor = false,
+): string {
+  const relevant = new Set([
+    "WORKFLOW_STARTED",
+    "STAGE_STARTED",
+    "STAGE_JUMPED",
+    "GATE_REJECTED",
+  ]);
+  const rows = readAuditShardEvents(projectDir)
+    .filter((row) => {
+      if (!relevant.has(row.event)) return false;
+      const stage = auditBlockField(row.block, "Stage");
+      if (row.event === "WORKFLOW_STARTED" || row.event === "STAGE_JUMPED") {
+        return true;
+      }
+      if (row.event === "GATE_REJECTED") return stage === slug;
+      return (
+        !unitMajor &&
+        stage === slug &&
+        !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:")
+      );
+    })
+    .sort((a, b) => {
+      if (a.timestamp !== b.timestamp) {
+        return a.timestamp < b.timestamp ? -1 : 1;
+      }
+      if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+      return a.pos - b.pos;
+    });
+  if (rows.length === 0) return "unstarted#0";
+
+  const latestTimestamp = rows[rows.length - 1].timestamp;
+  const tied = rows.filter((row) => row.timestamp === latestTimestamp);
+  if (new Set(tied.map((row) => row.shard)).size > 1) {
+    const identity = tied
+      .map((row) =>
+        [
+          basename(row.shard),
+          row.pos,
+          row.event,
+          auditBlockField(row.block, "Stage") ?? "",
+        ].join(":"),
+      )
+      .sort()
+      .join("|");
+    const digest = createHash("sha256").update(identity).digest("hex").slice(0, 12);
+    return `AMBIGUOUS:${latestTimestamp}#${digest}`;
+  }
+
+  const ordinals = new Map<string, number>();
+  let floor = "unstarted#0";
+  for (const row of rows) {
+    const ordinal = (ordinals.get(row.event) ?? 0) + 1;
+    ordinals.set(row.event, ordinal);
+    floor = `${row.event}:${row.timestamp}#${ordinal}`;
+  }
+  return floor;
+}
+
 // The set of units the CURRENT attempt of `slug` has genuinely converged and
 // merged, from the `SWARM_UNIT_CONVERGED` rows `aidlc-swarm.ts finalize`
 // writes. A row counts only when its `Stage` names this slug AND its
@@ -4911,7 +5038,7 @@ export function swarmConvergedUnits(
   const audit = readAllAuditShards(projectDir);
   if (!audit) return new Set();
   const startedAt = latestMainWorkflowStageStarted(audit, slug);
-  const floor = latestMainWorkflowStageRunFloor(audit, slug);
+  const floor = latestMainWorkflowStageRunFloorForProject(projectDir, slug);
   const converged = new Set<string>();
   for (const { timestamp, block } of findAllEvents(audit, "SWARM_UNIT_CONVERGED")) {
     if (auditBlockField(block, "Stage") !== slug) continue;
@@ -4945,12 +5072,17 @@ type UnitLifecycleRow = {
 };
 
 function currentUnitLifecycleRows(
+  projectDir: string,
   audit: string,
   slug: string,
   unitMajor: boolean,
 ): UnitLifecycleRow[] {
   const startedAt = latestMainWorkflowStageStarted(audit, slug);
-  const floor = latestMainWorkflowStageRunFloor(audit, slug, unitMajor);
+  const floor = latestMainWorkflowStageRunFloorForProject(
+    projectDir,
+    slug,
+    unitMajor,
+  );
   const unitEvents = new Set([
     "UNIT_STARTED",
     "UNIT_PAUSED",
@@ -4993,7 +5125,7 @@ export function unitCompletedReceipts(
   if (!audit) return new Set();
   const unitMajor = unitMajorLifecycleMode(projectDir);
   const done = new Set<string>();
-  for (const row of currentUnitLifecycleRows(audit, slug, unitMajor)) {
+  for (const row of currentUnitLifecycleRows(projectDir, audit, slug, unitMajor)) {
     if (row.event === "UNIT_COMPLETED") done.add(row.unit);
     else done.delete(row.unit);
   }
@@ -5045,7 +5177,7 @@ export function activeUnitCheckpoint(
   const audit = readAllAuditShards(projectDir);
   if (!audit) return null;
   const unitMajor = unitMajorLifecycleMode(projectDir);
-  const rows = currentUnitLifecycleRows(audit, slug, unitMajor);
+  const rows = currentUnitLifecycleRows(projectDir, audit, slug, unitMajor);
   const latest = new Map<string, { event: string; block: string }>();
   for (const row of rows) {
     latest.set(row.unit, { event: row.event, block: row.block });

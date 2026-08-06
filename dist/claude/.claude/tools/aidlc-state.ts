@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   activeIntent,
@@ -29,9 +30,10 @@ import {
   isAutonomousMode,
   isAutonomousSwarmStage,
   isNonAnswer,
+  isRegularFile,
   isoTimestamp,
   KNOWN_CODEKB_STAGES,
-  latestMainWorkflowStageRunFloor,
+  latestMainWorkflowStageRunFloorForProject,
   loadScopeMapping,
   nextInScopeStage,
   PHASE_NUMBERS,
@@ -69,6 +71,7 @@ import {
   writeStateFile,
 } from "./aidlc-lib.js";
 import { memoryDirFor } from "./aidlc-graph.ts";
+import { compiledExecutable } from "./aidlc-runtime-paths.ts";
 import {
   stageUsageAuditFields,
   workflowUsageAuditFields,
@@ -926,6 +929,7 @@ function handleUnit(args: string[]): void {
         console.log(JSON.stringify({ unit, stage: slug, state: checkpoint.state, already_active: true }));
         return;
       }
+      requireEngineRoutedUnit(pd, slug, unit);
     } else if (action === "pause" || action === "complete") {
       if (!checkpoint || checkpoint.unit !== unit) {
         error(
@@ -971,8 +975,8 @@ function handleUnit(args: string[]): void {
     const fields: Record<string, string> = {
       Stage: slug,
       Unit: unit,
-      "Run floor": latestMainWorkflowStageRunFloor(
-        readAllAuditShards(pd),
+      "Run floor": latestMainWorkflowStageRunFloorForProject(
+        pd,
         slug,
         getField(content, "Construction Iteration")?.trim() === "unit-major",
       ),
@@ -1023,6 +1027,76 @@ function validateStateLineValue(label: string, value: string | undefined): void 
   }
 }
 
+function requireEngineRoutedUnit(pd: string, stage: string, unit: string): void {
+  const executable = compiledExecutable();
+  let subargs = ["next", "--project-dir", pd];
+  let directive: unknown = null;
+  for (let attempts = 0; attempts < 1_000; attempts++) {
+    const command = executable
+      ? [executable, ...subargs]
+      : [
+          process.execPath,
+          fileURLToPath(new URL("./aidlc-orchestrate.ts", import.meta.url)),
+          ...subargs,
+        ];
+    const result = spawnSync(command[0], command.slice(1), {
+      cwd: pd,
+      encoding: "utf-8",
+      env: { ...process.env, AIDLC_PROJECT_DIR: pd },
+      timeout: 30_000,
+    });
+    if (result.status !== 0) {
+      error(
+        `Refusing to start unit "${unit}" for "${stage}": the orchestration engine could not resolve ` +
+          `the current routed unit (${(result.stderr ?? "").trim() || "no diagnostic"}).`,
+      );
+    }
+    try {
+      directive = JSON.parse((result.stdout ?? "").trim());
+    } catch {
+      error(
+        `Refusing to start unit "${unit}" for "${stage}": the orchestration engine returned an ` +
+          "unparseable directive.",
+      );
+    }
+    const transport =
+      directive !== null && typeof directive === "object"
+        ? directive as { kind?: unknown; continue_token?: unknown }
+        : {};
+    if (transport.kind !== "load-steering") break;
+    if (
+      typeof transport.continue_token !== "string" ||
+      transport.continue_token.length === 0
+    ) {
+      error(
+        `Refusing to start unit "${unit}" for "${stage}": the engine's steering directive ` +
+          "did not include a continuation token.",
+      );
+    }
+    subargs = ["continue", transport.continue_token, "--project-dir", pd];
+  }
+  const routed =
+    directive !== null && typeof directive === "object"
+      ? directive as { kind?: unknown; stage?: unknown; unit?: unknown }
+      : {};
+  if (
+    routed.kind !== "run-stage" ||
+    routed.stage !== stage ||
+    routed.unit !== unit
+  ) {
+    const expected =
+      routed.kind === "run-stage" &&
+      typeof routed.stage === "string" &&
+      typeof routed.unit === "string"
+        ? `"${routed.stage}"/"${routed.unit}"`
+        : `a ${String(routed.kind ?? "non-run-stage")} directive`;
+    error(
+      `Refusing to start unit "${unit}" for "${stage}": the engine currently routes ${expected}. ` +
+        "Run the exact directive.stage/directive.unit pair returned by aidlc-orchestrate.ts next.",
+    );
+  }
+}
+
 // The unit's missing REQUIRED artifacts (kind-filtered like the engine's
 // unitCovered): resolved under <record>/construction/<unit>/<slug>/<name>.md.
 // Returns [] when everything applicable exists. Kind filtering reads the
@@ -1049,7 +1123,7 @@ function missingUnitArtifacts(
   const missing: string[] = [];
   for (const name of required) {
     const p = join(rec, "construction", unit, stage.slug, `${name}.md`);
-    if (!existsSync(p)) missing.push(name);
+    if (!isRegularFile(p)) missing.push(name);
   }
   return missing;
 }
@@ -1259,7 +1333,7 @@ function producesArtifactsExist(
   }
   for (const dir of producesDirsForStage(pd, stage)) {
     for (const name of produces) {
-      if (existsSync(join(dir, `${name}.md`))) return true;
+      if (isRegularFile(join(dir, `${name}.md`))) return true;
     }
   }
   return false;

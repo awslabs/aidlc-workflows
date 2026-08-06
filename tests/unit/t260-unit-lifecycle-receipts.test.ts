@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-state:unit, function:unitCompletedReceipts, function:unitLifecycleReceiptsInUse, function:activeUnitCheckpoint, function:latestMainWorkflowStageRunFloor, audit:UNIT_STARTED, audit:UNIT_PAUSED, audit:UNIT_RESUMED, audit:UNIT_COMPLETED
+// covers: subcommand:aidlc-state:unit, function:unitCompletedReceipts, function:unitLifecycleReceiptsInUse, function:activeUnitCheckpoint, function:latestMainWorkflowStageRunFloor, function:latestMainWorkflowStageRunFloorForProject, function:readAuditShardEvents, function:isRegularFile, audit:UNIT_STARTED, audit:UNIT_PAUSED, audit:UNIT_RESUMED, audit:UNIT_COMPLETED
 //
 // t260 — unit lifecycle receipts on inline per-unit Construction stages
 // (issue 681, claims 1/2/9). The contract under test:
@@ -28,8 +28,9 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -114,8 +115,14 @@ function runNext(proj: string): { rc: number; out: string } {
 
 // The suite sets AIDLC_SKIP_ARTIFACT_GUARD=1 globally; unit complete's
 // artifact verification is a subject under test here, so clear it per spawn.
-function unitVerb(proj: string, action: string, unit: string, extra: string[] = []) {
-  const env = { ...process.env };
+function unitVerb(
+  proj: string,
+  action: string,
+  unit: string,
+  extra: string[] = [],
+  envOverrides: NodeJS.ProcessEnv = {},
+) {
+  const env = { ...process.env, ...envOverrides };
   delete env.AIDLC_SKIP_ARTIFACT_GUARD;
   delete env.AWS_AIDLC_DEFAULT_SCOPE;
   const r = spawnSync(
@@ -164,6 +171,22 @@ describe("t260 receipts are the transition, artifacts the evidence", () => {
     expect(activeUnitCheckpoint(proj, SLUG)).toBeNull();
   });
 
+  test("artifact-shaped directories neither complete nor settle a unit", () => {
+    constructionProject();
+    const dir = join(seededRecordDir(proj), "construction", "unit-a", SLUG);
+    mkdirSync(dir, { recursive: true });
+    for (const name of PRODUCES) {
+      mkdirSync(join(dir, `${name}.md`));
+    }
+
+    expect(runNext(proj).out).toContain('"unit":"unit-a"');
+    expect(unitVerb(proj, "start", "unit-a").rc).toBe(0);
+    const completed = unitVerb(proj, "complete", "unit-a");
+    expect(completed.rc).not.toBe(0);
+    expect(completed.out).toContain("missing");
+    expect(readAllAuditShards(proj)).not.toContain("UNIT_COMPLETED");
+  });
+
   test("artifacts without a receipt do not settle a unit once the ledger is in use", () => {
     constructionProject();
     // unit-a earns a real receipt; unit-b gets artifacts only.
@@ -195,6 +218,22 @@ describe("t260 receipts are the transition, artifacts the evidence", () => {
     expect(readFileSync(seededStateFile(proj), "utf-8")).not.toContain("rogue-unit");
   });
 
+  test("unit start accepts legacy-safe DAG names without weakening path safety", () => {
+    constructionProject();
+    seedBoltDag(proj, ["api_v2", "WebUI"]);
+    for (const unit of ["api_v2", "WebUI"]) {
+      const parsed = parseBoltDag(
+        `\`\`\`yaml\nunits:\n  - name: ${unit}\n    depends_on: []\n\`\`\`\n`,
+      );
+      expect(parsed.ok).toBe(true);
+    }
+
+    expect(unitVerb(proj, "start", "api_v2").rc).toBe(0);
+    writeUnitArtifacts(proj, "api_v2");
+    expect(unitVerb(proj, "complete", "api_v2").rc).toBe(0);
+    expect(unitVerb(proj, "start", "WebUI").rc).toBe(0);
+  });
+
   test("authored DAG membership overrides a stale cached unit set", () => {
     constructionProject();
     const dependencyDir = join(
@@ -214,7 +253,7 @@ describe("t260 receipts are the transition, artifacts the evidence", () => {
   });
 
   test("the authored DAG rejects unsafe path-component names", () => {
-    for (const unit of ["../escape", "nested/unit", "Uppercase", "white space"]) {
+    for (const unit of ["../escape", "nested/unit", ".hidden", "white space"]) {
       const parsed = parseBoltDag(
         `\`\`\`yaml\nunits:\n  - name: ${unit}\n    depends_on: []\n\`\`\`\n`,
       );
@@ -228,6 +267,51 @@ describe("t260 receipts are the transition, artifacts the evidence", () => {
 });
 
 describe("t260 single active unit", () => {
+  test("unit start must match the engine-routed topological unit", () => {
+    constructionProject();
+    seedBoltDag(
+      proj,
+      [
+        { name: "unit-a", depends_on: [] },
+        { name: "unit-b", depends_on: ["unit-a"] },
+      ],
+      [["unit-a"], ["unit-b"]],
+    );
+
+    const early = unitVerb(proj, "start", "unit-b");
+    expect(early.rc).not.toBe(0);
+    expect(JSON.parse(early.out).error).toContain(
+      'routes "functional-design"/"unit-a"',
+    );
+
+    expect(unitVerb(proj, "start", "unit-a").rc).toBe(0);
+    writeUnitArtifacts(proj, "unit-a");
+    expect(unitVerb(proj, "complete", "unit-a").rc).toBe(0);
+    expect(unitVerb(proj, "start", "unit-b").rc).toBe(0);
+  }, 30000);
+
+  test("unit start uses top-level next/continue verbs through the compiled dispatcher seam", () => {
+    constructionProject();
+    const dispatcher = join(proj, "aidlc-compiled-shim");
+    writeFileSync(
+      dispatcher,
+      [
+        "#!/usr/bin/env bun",
+        `import { main } from ${JSON.stringify(pathToFileURL(join(AIDLC_SRC, "tools", "aidlc.ts")).href)};`,
+        "await main(process.argv.slice(2));",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    chmodSync(dispatcher, 0o755);
+
+    const started = unitVerb(proj, "start", "unit-a", [], {
+      AIDLC_COMPILED_EXECUTABLE: dispatcher,
+    });
+    expect(started.rc).toBe(0);
+    expect(started.out).toContain("UNIT_STARTED");
+  }, 30000);
+
   test("a second unit cannot start while one is open; same-unit start acknowledges", () => {
     constructionProject();
     expect(unitVerb(proj, "start", "unit-a").rc).toBe(0);
@@ -254,13 +338,28 @@ describe("t260 single active unit", () => {
     expect(unitVerb(proj, "resume", "unit-a").rc).not.toBe(0);
   });
 
-  test("restarting a completed unit reopens it and clears settled coverage", () => {
+  test("a completed unit reopens only when the engine routes it again", () => {
     constructionProject();
     expect(unitVerb(proj, "start", "unit-a").rc).toBe(0);
     writeUnitArtifacts(proj, "unit-a");
     expect(unitVerb(proj, "complete", "unit-a").rc).toBe(0);
     expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
 
+    const outOfOrder = unitVerb(proj, "start", "unit-a");
+    expect(outOfOrder.rc).not.toBe(0);
+    expect(JSON.parse(outOfOrder.out).error).toContain(
+      'routes "functional-design"/"unit-b"',
+    );
+
+    rmSync(
+      join(
+        seededRecordDir(proj),
+        "construction",
+        "unit-a",
+        SLUG,
+        `${PRODUCES[0]}.md`,
+      ),
+    );
     const restart = unitVerb(proj, "start", "unit-a");
     expect(restart.rc).toBe(0);
     expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(false);
@@ -269,7 +368,7 @@ describe("t260 single active unit", () => {
     const next = runNext(proj);
     expect(next.out).toContain('"unit":"unit-a"');
     expect(next.out).toContain('"gate":false');
-  });
+  }, 30000);
 });
 
 describe("t260 pause carries the checkpoint and hard-stops the engine", () => {
@@ -301,7 +400,7 @@ describe("t260 pause carries the checkpoint and hard-stops the engine", () => {
     expect(cp?.state).toBe("paused");
     expect(cp?.reason).toBe("why");
     expect(cp?.nextAction).toBe("what next");
-  });
+  }, 30000);
 
   test("pause rejects line-breaking state values", () => {
     constructionProject();
@@ -333,7 +432,7 @@ describe("t260 pause carries the checkpoint and hard-stops the engine", () => {
     const state = readFileSync(seededStateFile(proj), "utf-8");
     expect(state).not.toContain("- **Active Unit**:");
     expect(state).not.toContain("- **Unit Pause Reason**:");
-  });
+  }, 30000);
 
   test("`next` emits a paused-unit ask (unit_state: paused) and names the checkpoint", () => {
     constructionProject();
@@ -392,5 +491,39 @@ describe("t260 receipts bind to an exact stage attempt", () => {
     constructionProject();
     expect(unitVerb(proj, "start", "unit-a").rc).toBe(0);
     expect(readAllAuditShards(proj)).toMatch(/\*\*Run floor\*\*:\s+\S+/);
+  });
+
+  test("same-second boundaries in different shards fail closed independent of filename order", () => {
+    constructionProject();
+    const ts = "2026-08-05T00:00:00Z";
+    const block = (event: string, fields: string) =>
+      `\n## ${event}\n**Timestamp**: ${ts}\n**Event**: ${event}\n${fields}\n---\n`;
+    mkdirSync(seededAuditDir(proj), { recursive: true });
+    writeFileSync(
+      join(seededAuditDir(proj), "zzzz-old.md"),
+      [
+        "# AI-DLC Audit Log\n",
+        block("STAGE_STARTED", `**Stage**: ${SLUG}\n`),
+        block(
+          "UNIT_COMPLETED",
+          `**Stage**: ${SLUG}\n**Unit**: unit-a\n**Run floor**: STAGE_STARTED:${ts}#1\n`,
+        ),
+      ].join(""),
+      "utf-8",
+    );
+    writeFileSync(
+      join(seededAuditDir(proj), "aaaa-new.md"),
+      [
+        "# AI-DLC Audit Log\n",
+        block("GATE_REJECTED", `**Stage**: ${SLUG}\n**Feedback**: revise\n`),
+      ].join(""),
+      "utf-8",
+    );
+
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(false);
+    expect(unitVerb(proj, "start", "unit-a").rc).toBe(0);
+    expect(readAllAuditShards(proj)).toMatch(
+      /\*\*Run floor\*\*: AMBIGUOUS:2026-08-05T00:00:00Z#[0-9a-f]{12}/,
+    );
   });
 });
