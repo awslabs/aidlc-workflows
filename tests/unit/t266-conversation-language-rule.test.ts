@@ -371,6 +371,10 @@ describe("t266 conversation-language rule layer", () => {
           surface = join(harness.engineRoot, "config.toml");
           required = `AIDLC_RULES_DIR = "${MEMORY_DIR}"`;
           break;
+        case "copilot-agents-md":
+          surface = join(harness.distRoot, "AGENTS.md");
+          required = `@${MEMORY_DIR}/org.md`;
+          break;
         case "kiro-steering":
           // The IDE's real surface: an always-included steering file whose
           // #[[file:...]] references pull the live memory tree in verbatim.

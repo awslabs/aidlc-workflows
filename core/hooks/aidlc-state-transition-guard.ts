@@ -220,42 +220,123 @@ export function isLifecycleBoundaryCommand(command: string): boolean {
 }
 
 export function delegatedLifecycleCommand(command: string): string | null {
+  return delegatedLifecycleCommandAtDepth(command, 0);
+}
+
+function shellTokenValue(token: string | undefined): string {
+  if (!token) return "";
+  if (
+    token.length >= 2 &&
+    ((token.startsWith('"') && token.endsWith('"')) ||
+      (token.startsWith("'") && token.endsWith("'")))
+  ) {
+    return token.slice(1, -1);
+  }
+  return token;
+}
+
+function delegatedDispatcherCommand(
+  prefix: string,
+  groupToken: string | undefined,
+  verbToken: string | undefined,
+): string | null {
+  const group = shellTokenValue(groupToken);
+  const verb = shellTokenValue(verbToken);
+  if (
+    ["next", "report", "park", "--resume", "--scope", "compose", "recompose", "init"]
+      .includes(group)
+  ) {
+    return `${prefix} ${group}`;
+  }
+  if (group === "state" && DELEGATED_STATE_MUTATIONS.has(verb)) {
+    return `${prefix} state ${verb}`;
+  }
+  if (group === "jump" && verb === "execute") {
+    return `${prefix} jump execute`;
+  }
+  if (group === "config" && verb === "set") {
+    return `${prefix} config set`;
+  }
+  if (
+    (group === "intent" || group === "space") &&
+    !["", "list", "help", "-h", "--help", "--json"].includes(verb)
+  ) {
+    return `${prefix} ${group} ${verb}`;
+  }
+  return null;
+}
+
+function delegatedUtilityCommand(
+  prefix: string,
+  verbToken: string | undefined,
+  argumentToken: string | undefined,
+): string | null {
+  const verb = shellTokenValue(verbToken);
+  const argument = shellTokenValue(argumentToken);
+  if (
+    ["scope-change", "config-change", "recompose", "intent-birth", "state-init"]
+      .includes(verb)
+  ) {
+    return `${prefix} ${verb}`;
+  }
+  if (
+    (verb === "intent" || verb === "space") &&
+    !["", "list", "help", "-h", "--help", "--json"].includes(argument)
+  ) {
+    return `${prefix} ${verb} ${argument}`;
+  }
+  return null;
+}
+
+function delegatedLifecycleCommandAtDepth(command: string, depth: number): string | null {
+  // A delegated agent may run build/validation shell commands, but it is never
+  // a workflow conductor. Match the authored TypeScript entrypoints at real
+  // shell command positions using the same masking rules as the direct-state
+  // guard, then classify only lifecycle/routing verbs.
   const shellText = executableShellText(command);
-  const invocation =
-    /(?:^|&&|\|\||[;|(\n{])[ \t]*(?:(?:command|exec)\s+)?(?:env(?:\s+-[^\s]+)*\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|]+)\s+)*(?:[^\s"';&|({]+\/)?bun(?:\.exe)?(?:\s+run)?\s+(?:"[^"\n]*aidlc-(orchestrate|state|jump|utility)\.ts"|'[^'\n]*aidlc-(orchestrate|state|jump|utility)\.ts'|[^\s;&|]*aidlc-(orchestrate|state|jump|utility)\.ts)\s+([a-z][a-z0-9-]*)\b/g;
-  for (const match of shellText.matchAll(invocation)) {
-    const tool = match[1] ?? match[2] ?? match[3];
-    const verb = match[4];
-    if (
-      (tool === "orchestrate" && ["next", "report", "park"].includes(verb)) ||
-      (tool === "state" && DELEGATED_STATE_MUTATIONS.has(verb)) ||
-      (tool === "jump" && verb === "execute") ||
-      (
-        tool === "utility" &&
-        ["scope-change", "config-change", "recompose", "intent-birth", "state-init"]
-          .includes(verb)
-      )
-    ) {
-      return `aidlc-${tool}.ts ${verb}`;
+
+  // Shell wrappers execute their -c argument as a fresh command string. Inspect
+  // only wrappers found at executable positions, then apply the same parser to
+  // their body. The depth bound avoids pathological recursive wrapper input.
+  if (depth < 8) {
+    const wrapperInvocation =
+      /(?:^|&&|\|\||[;|(\n{])[ \t]*(?:(?:command|exec)\s+)?(?:env(?:\s+-[^\s]+)*\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|]+)\s+)*(?:[^\s"';&|({]+\/)?(?:ba)?sh(?:\.exe)?\s+-(?:[A-Za-z]*c[A-Za-z]*)\s+("(?:\\.|[^"\\])*"|'[^']*'|[^\s;&|]+)/g;
+    for (const match of shellText.matchAll(wrapperInvocation)) {
+      const nested = delegatedLifecycleCommandAtDepth(shellTokenValue(match[1]), depth + 1);
+      if (nested !== null) return nested;
     }
   }
 
-  const compiledInvocation =
-    /(?:^|&&|\|\||[;|(\n{])[ \t]*(?:(?:command|exec)\s+)?(?:env(?:\s+-[^\s]+)*\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|]+)\s+)*(?:[^\s"';&|({]+\/)?aidlc(?:\.exe)?\s+([^\s;&|]+)(?:\s+([^\s;&|]+))?/g;
-  for (const match of shellText.matchAll(compiledInvocation)) {
-    const group = match[1];
-    const verb = match[2] ?? "";
+  const invocation =
+    /(?:^|&&|\|\||[;|(\n{])[ \t]*(?:(?:command|exec)\s+)?(?:env(?:\s+-[^\s]+)*\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|]+)\s+)*(?:[^\s"';&|({]+\/)?bun(?:\.exe)?(?:\s+run)?\s+("[^"\n]*aidlc-(?:orchestrate|state|jump|utility)\.ts"|'[^'\n]*aidlc-(?:orchestrate|state|jump|utility)\.ts'|[^\s;&|]*aidlc-(?:orchestrate|state|jump|utility)\.ts)\s+("[^"\n]*"|'[^'\n]*'|[^\s;&|]+)(?:\s+("[^"\n]*"|'[^'\n]*'|[^\s;&|]+))?/g;
+  for (const match of shellText.matchAll(invocation)) {
+    const tool = match[1].match(/aidlc-(orchestrate|state|jump|utility)\.ts/)?.[1] ?? "";
+    const verb = shellTokenValue(match[2]);
     if (
-      ["next", "report", "park", "--resume", "--scope", "compose", "recompose", "init"]
-        .includes(group)
+      (tool === "orchestrate" && ["next", "report", "park"].includes(verb)) ||
+      (tool === "state" && DELEGATED_STATE_MUTATIONS.has(verb)) ||
+      (tool === "jump" && verb === "execute")
     ) {
-      return `aidlc ${group}`;
+      return `aidlc-${tool}.ts ${verb}`;
     }
-    if (group === "state" && DELEGATED_STATE_MUTATIONS.has(verb)) {
-      return `aidlc state ${verb}`;
+    if (tool === "utility") {
+      const utility = delegatedUtilityCommand("aidlc-utility.ts", match[2], match[3]);
+      if (utility !== null) return utility;
     }
-    if (group === "jump" && verb === "execute") return "aidlc jump execute";
-    if (group === "config" && verb === "set") return "aidlc config set";
+  }
+
+  const typescriptDispatcherInvocation =
+    /(?:^|&&|\|\||[;|(\n{])[ \t]*(?:(?:command|exec)\s+)?(?:env(?:\s+-[^\s]+)*\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|]+)\s+)*(?:[^\s"';&|({]+\/)?bun(?:\.exe)?(?:\s+run)?\s+(?:"[^"\n]*aidlc\.ts"|'[^'\n]*aidlc\.ts'|[^\s;&|]*aidlc\.ts)\s+("[^"\n]*"|'[^'\n]*'|[^\s;&|]+)(?:\s+("[^"\n]*"|'[^'\n]*'|[^\s;&|]+))?/g;
+  for (const match of shellText.matchAll(typescriptDispatcherInvocation)) {
+    const delegated = delegatedDispatcherCommand("aidlc.ts", match[1], match[2]);
+    if (delegated !== null) return delegated;
+  }
+
+  const compiledInvocation =
+    /(?:^|&&|\|\||[;|(\n{])[ \t]*(?:(?:command|exec)\s+)?(?:env(?:\s+-[^\s]+)*\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|]+)\s+)*(?:[^\s"';&|({]+\/)?aidlc(?:\.exe)?\s+("[^"\n]*"|'[^'\n]*'|[^\s;&|]+)(?:\s+("[^"\n]*"|'[^'\n]*'|[^\s;&|]+))?/g;
+  for (const match of shellText.matchAll(compiledInvocation)) {
+    const delegated = delegatedDispatcherCommand("aidlc", match[1], match[2]);
+    if (delegated !== null) return delegated;
   }
   return null;
 }

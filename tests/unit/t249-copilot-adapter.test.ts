@@ -4,8 +4,7 @@
 // covers: file:hooks/aidlc-stop.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-audit-logger.ts, file:hooks/aidlc-log-subagent.ts, file:hooks/aidlc-session-end.ts, file:hooks/aidlc-dispatch-rules.ts
 //
 // WHAT. Each case pipes a fixture from tests/fixtures/copilot-hook-payloads/
-// (field-verbatim captures off Copilot CLI 1.0.74 — the compat-spike corpus
-// at tmp/copilot-compat-spike/proj/hookout/) into
+// (field-verbatim captures off Copilot CLI 1.0.74, sanitized for publication) into
 // the generated Copilot adapter inside a scratch project carrying an active
 // workflow state, then asserts the observable core-hook effect:
 //   stop           → block fields at top level for CLI and under
@@ -575,6 +574,95 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(allowed.stdout.trim()).toBe("");
   });
 
+  test("18a: apply_patch cannot mutate a sibling unit through its input envelope", () => {
+    const dir = scratchProject(true);
+    const hostSessionId = "11111111-2222-4333-8444-555555555556";
+    const record = seededRecordDir(dir);
+    mkdirSync(record, { recursive: true });
+    writeFileSync(
+      join(record, ".aidlc-reviewer-dispatch.json"),
+      JSON.stringify({
+        reviewer: "aidlc-architecture-reviewer-agent",
+        stage: "functional-design",
+        unit: "U01",
+        exempt: [],
+      }),
+      "utf-8",
+    );
+    runAdapter(dir, "subagent-start", {
+      hook_event_name: "SubagentStart",
+      cwd: dir,
+      session_id: hostSessionId,
+      agent_type: "aidlc-architecture-reviewer-agent",
+      agent_id: "vscode-agent-patch",
+    });
+
+    const sibling = join(record, "construction", "U02", "code", "sibling.ts");
+    const result = runAdapter(dir, "pre-tool", {
+      hook_event_name: "PreToolUse",
+      session_id: hostSessionId,
+      cwd: dir,
+      tool_name: "apply_patch",
+      tool_input: {
+        input: `*** Begin Patch\n*** Update File: ${sibling}\n@@\n*** End Patch\n`,
+      },
+    });
+    expect(
+      (JSON.parse(result.stdout) as {
+        hookSpecificOutput?: { permissionDecision?: string };
+      }).hookSpecificOutput?.permissionDecision,
+    ).toBe("deny");
+  });
+
+  test("18b: file_search query maps to scoped Glob.pattern enforcement", () => {
+    const dir = scratchProject(true);
+    const hostSessionId = "11111111-2222-4333-8444-555555555557";
+    const record = seededRecordDir(dir);
+    mkdirSync(record, { recursive: true });
+    writeFileSync(
+      join(record, ".aidlc-reviewer-dispatch.json"),
+      JSON.stringify({
+        reviewer: "aidlc-architecture-reviewer-agent",
+        stage: "functional-design",
+        unit: "U01",
+        exempt: [],
+      }),
+      "utf-8",
+    );
+    runAdapter(dir, "subagent-start", {
+      hook_event_name: "SubagentStart",
+      cwd: dir,
+      session_id: hostSessionId,
+      agent_type: "aidlc-architecture-reviewer-agent",
+      agent_id: "vscode-agent-search",
+    });
+
+    const search = (query: string) =>
+      runAdapter(dir, "pre-tool", {
+        hook_event_name: "PreToolUse",
+        session_id: hostSessionId,
+        cwd: dir,
+        tool_name: "file_search",
+        tool_input: { query },
+      });
+    const currentUnit = search(join(record, "construction", "U01", "**", "*.ts"));
+    expect(currentUnit.stdout.trim()).toBe("");
+
+    for (const query of [
+      join(record, "construction", "U02", "**", "*.ts"),
+      join(record, "construction", "*", "**", "*.ts"),
+      "**/*",
+    ]) {
+      const blocked = search(query);
+      expect(
+        (JSON.parse(blocked.stdout) as {
+          hookSpecificOutput?: { permissionDecision?: string };
+        }).hookSpecificOutput?.permissionDecision,
+        query,
+      ).toBe("deny");
+    }
+  });
+
   test("19: correlated support agents cannot conduct workflow lifecycle", () => {
     const dir = scratchProject(true);
     const identity = {
@@ -591,6 +679,13 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     for (const command of [
       "bun .aidlc/tools/aidlc-orchestrate.ts next --resume",
       "bun .aidlc/tools/aidlc-state.ts unpark",
+      'bash -lc "bun .aidlc/tools/aidlc-orchestrate.ts next --resume"',
+      'sh -c "bun .aidlc/tools/aidlc-state.ts unpark"',
+      "bun .aidlc/tools/aidlc.ts --resume",
+      "bun .aidlc/tools/aidlc.ts intent other-intent",
+      "bun .aidlc/tools/aidlc.ts space other-space",
+      "bun .aidlc/tools/aidlc-utility.ts intent other-intent",
+      "bun .aidlc/tools/aidlc-utility.ts space other-space",
     ]) {
       const blocked = runAdapter(dir, "pre-tool", {
         hook_event_name: "PreToolUse",
@@ -609,6 +704,22 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         command,
       ).toBe("deny");
       expect(blocked.stdout, command).toContain("conductor-owned");
+    }
+
+    for (const command of [
+      "bun .aidlc/tools/aidlc.ts intent list",
+      "bun .aidlc/tools/aidlc.ts space list",
+      "bun .aidlc/tools/aidlc-utility.ts intent list",
+      "bun .aidlc/tools/aidlc-utility.ts space list",
+    ]) {
+      const allowed = runAdapter(dir, "pre-tool", {
+        hook_event_name: "PreToolUse",
+        session_id: identity.session_id,
+        cwd: dir,
+        toolName: "runTerminalCommand",
+        toolInput: { command },
+      });
+      expect(allowed.stdout.trim(), command).toBe("");
     }
 
     runAdapter(dir, "log-subagent", {

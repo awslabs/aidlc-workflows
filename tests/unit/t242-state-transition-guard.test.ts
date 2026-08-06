@@ -179,9 +179,45 @@ describe("t242 state-transition ownership guard", () => {
         "bun .claude/tools/aidlc-utility.ts recompose --add user-stories",
         "aidlc-utility.ts recompose",
       ],
+      [
+        'bash -lc "bun .claude/tools/aidlc-orchestrate.ts next --resume"',
+        "aidlc-orchestrate.ts next",
+      ],
+      [
+        'sh -c "bun .claude/tools/aidlc-state.ts unpark"',
+        "aidlc-state.ts unpark",
+      ],
+      ["bun .claude/tools/aidlc.ts --resume", "aidlc.ts --resume"],
+      [
+        "bun .claude/tools/aidlc.ts intent other-intent",
+        "aidlc.ts intent other-intent",
+      ],
+      [
+        "bun .claude/tools/aidlc.ts space other-space",
+        "aidlc.ts space other-space",
+      ],
+      [
+        "bun .claude/tools/aidlc.ts intent switch other-intent",
+        "aidlc.ts intent switch",
+      ],
+      ["bun .claude/tools/aidlc.ts intent birth", "aidlc.ts intent birth"],
+      [
+        "bun .claude/tools/aidlc.ts space create other-space",
+        "aidlc.ts space create",
+      ],
+      [
+        "bun .claude/tools/aidlc-utility.ts intent other-intent",
+        "aidlc-utility.ts intent other-intent",
+      ],
+      [
+        "bun .claude/tools/aidlc-utility.ts space other-space",
+        "aidlc-utility.ts space other-space",
+      ],
       ["aidlc next --resume", "aidlc next"],
       ["aidlc report --result resumed --user-input 1", "aidlc report"],
       ["aidlc state unpark", "aidlc state unpark"],
+      ["aidlc intent other-intent", "aidlc intent other-intent"],
+      ["aidlc space other-space", "aidlc space other-space"],
       [
         "cd project && aidlc jump execute --target requirements-analysis",
         "aidlc jump execute",
@@ -197,9 +233,36 @@ describe("t242 state-transition ownership guard", () => {
     expect(
       delegatedLifecycleCommand("bun .claude/tools/aidlc-orchestrate.ts --help"),
     ).toBeNull();
+    for (const command of [
+      "bun .claude/tools/aidlc.ts intent",
+      "bun .claude/tools/aidlc.ts intent list",
+      "bun .claude/tools/aidlc.ts intent --json",
+      "bun .claude/tools/aidlc.ts space",
+      "bun .claude/tools/aidlc.ts space list",
+      "bun .claude/tools/aidlc.ts space help",
+      "bun .claude/tools/aidlc-utility.ts intent",
+      "bun .claude/tools/aidlc-utility.ts intent list",
+      "bun .claude/tools/aidlc-utility.ts intent --json",
+      "bun .claude/tools/aidlc-utility.ts space",
+      "bun .claude/tools/aidlc-utility.ts space list",
+      "bun .claude/tools/aidlc-utility.ts space help",
+      "aidlc intent",
+      "aidlc intent list",
+      "aidlc intent --json",
+      "aidlc space",
+      "aidlc space list",
+      "aidlc space help",
+    ]) {
+      expect(delegatedLifecycleCommand(command), command).toBeNull();
+    }
     expect(
       delegatedLifecycleCommand(
         "echo 'bun .claude/tools/aidlc-orchestrate.ts next --resume'",
+      ),
+    ).toBeNull();
+    expect(
+      delegatedLifecycleCommand(
+        'printf %s \'bash -lc "bun .claude/tools/aidlc-orchestrate.ts next --resume"\'',
       ),
     ).toBeNull();
   });

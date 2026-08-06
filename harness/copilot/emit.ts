@@ -3,7 +3,7 @@
 // The unified packager copies core/ → dist/copilot/.aidlc/ and runs graph
 // compile there, then calls this emit() for the .github/ shell — the project
 // discovery surface BOTH Copilot surfaces read (CLI 1.0.74+ and VS Code agent
-// mode 1.130+; compat spike tmp/copilot-compat-spike/ in the framework repo):
+// mode 1.130+; verified by the compatibility-spike evidence):
 //   - .github/hooks/aidlc.json — the hook wiring: PascalCase event names in
 //     the {"version":1} envelope (the shared-recipe: BOTH surfaces then
 //     deliver snake_case payloads to the adapter), matcher-FREE (VS Code

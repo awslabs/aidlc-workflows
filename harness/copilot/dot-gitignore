@@ -32,6 +32,7 @@ dist-ssr
 # different spaces/intents at once; committing them would dirty the tree on
 # every /aidlc and have teammates fight over the cursor on each switch).
 aidlc/active-space
+aidlc/.aidlc-active-space-*.tmp
 aidlc/spaces/*/intents/active-intent
 #
 # Machine-local runtime / derived — ignored (regenerated per machine).

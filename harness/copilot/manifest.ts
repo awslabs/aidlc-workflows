@@ -4,8 +4,8 @@
 // agent mode (1.130+) — because GitHub converged them on the same project
 // discovery paths: .github/skills/, .github/agents/, .github/hooks/, and the
 // root AGENTS.md are read identically by both (compat spike, 10 live CLI
-// probes + IDE parser extraction: tmp/copilot-compat-spike/ in the framework
-// repo). Splitting cli/ide harnesses would ship two dists competing for the
+// probes + IDE parser extraction in the compatibility-spike evidence). Splitting
+// cli/ide harnesses would ship two dists competing for the
 // same .github file paths; the divergences are authoring rules instead:
 //   - hooks registered under PascalCase event names → BOTH surfaces deliver
 //     Claude-shaped snake_case payloads (one adapter path);

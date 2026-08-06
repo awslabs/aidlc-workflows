@@ -11,7 +11,7 @@
 // uses its documented camelCase tool names/inputs plus snake_case agent ids.
 // The adapter accepts both dialects. The
 // load-bearing differences from Claude Code, all live-captured
-// (tmp/copilot-compat-spike/ in the framework repo):
+// (captured by the compatibility spike):
 //   1. File-tool input keys differ: Copilot sends `path` + `file_text` /
 //      `old_str` / `new_str` where the core hooks read `file_path`. The shim
 //      re-keys. Tool NAMES already match (Bash/Write/Edit/Read).
@@ -176,15 +176,13 @@ export async function run(
     semantic_search: "Grep",
     semanticSearch: "Grep",
   };
-  const toolName = (() => {
-    const raw = copilot.tool_name ?? copilot.toolName ?? "";
-    return TOOL_ALIAS[raw] ?? raw;
-  })();
+  const rawToolName = copilot.tool_name ?? copilot.toolName ?? "";
+  const toolName = TOOL_ALIAS[rawToolName] ?? rawToolName;
+  const isApplyPatch = rawToolName === "apply_patch" || rawToolName === "applyPatch";
 
   // Re-serialize the payload with the canonical tool_name so verbatim pipes
   // (Bash → guards, runtime-compile) carry the name the core hooks match on.
   const canonicalInput = (() => {
-    const rawToolName = copilot.tool_name ?? copilot.toolName;
     if (!rawToolName) return input;
     try {
       const parsed = JSON.parse(input) as Record<string, unknown>;
@@ -316,7 +314,23 @@ export async function run(
     return canonical;
   }
 
-  function filePathsOf(toolInput: Record<string, unknown> | undefined): string[] {
+  function applyPatchPaths(toolInput: Record<string, unknown>): string[] {
+    const patch = [toolInput.input, toolInput.patchText, toolInput.patch, toolInput.command]
+      .find((value): value is string => typeof value === "string") ?? "";
+    const paths: string[] = [];
+    for (const match of patch.matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)) {
+      paths.push(match[1].trim());
+    }
+    for (const match of patch.matchAll(/^\*\*\* Move to: (.+)$/gm)) {
+      paths.push(match[1].trim());
+    }
+    return paths.filter((path) => path.length > 0);
+  }
+
+  function filePathsOf(
+    toolInput: Record<string, unknown> | undefined,
+    parsePatchEnvelope = false,
+  ): string[] {
     if (!toolInput) return [];
     const rawPaths: string[] = [];
     const add = (value: unknown): void => {
@@ -339,6 +353,7 @@ export async function run(
         for (const value of values) add(value);
       }
     }
+    if (parsePatchEnvelope) rawPaths.push(...applyPatchPaths(toolInput));
     return [...new Set(rawPaths.map(confinedPath).filter((p): p is string => p !== null))];
   }
 
@@ -571,16 +586,27 @@ export async function run(
       // (Read|Edit|Write plus LS/Glob/Grep — the sibling-sweep evasions).
       if (["Write", "Edit", "Read", "LS", "Glob", "Grep"].includes(toolName)) {
         const ti = nativeToolInput ?? {};
-        const filePaths = filePathsOf(nativeToolInput);
+        const filePaths = filePathsOf(nativeToolInput, isApplyPatch);
         // Path-shaped tools re-key `path` → `file_path`; the search tools
         // (LS/Glob/Grep) keep their native fields, which the core matcher
         // reads directly (path/pattern/glob).
         const toolInputs: Array<Record<string, unknown>> =
           toolName === "LS" || toolName === "Glob" || toolName === "Grep"
-            ? [{
-                ...withoutPathFields(ti),
-                ...(filePaths[0] ? { path: filePaths[0] } : {}),
-              }]
+            ? [(() => {
+                const searchInput: Record<string, unknown> = {
+                  ...withoutPathFields(ti),
+                  ...(filePaths[0] ? { path: filePaths[0] } : {}),
+                };
+                if (
+                  toolName === "Glob" &&
+                  (rawToolName === "file_search" || rawToolName === "fileSearch") &&
+                  typeof searchInput.query === "string"
+                ) {
+                  const { query, ...rest } = searchInput;
+                  return { ...rest, pattern: query };
+                }
+                return searchInput;
+              })()]
             : filePaths.map((filePath) => ({ file_path: filePath }));
         for (const toolInput of toolInputs) {
           if (Object.keys(toolInput).length === 0) continue;
@@ -605,7 +631,7 @@ export async function run(
       // Matcher-free registration: self-filter on tool_name (the IDE ignores
       // matchers — difference in the wiring header). Advisory targets only.
       if (toolName === "Write" || toolName === "Edit") {
-        for (const filePath of filePathsOf(nativeToolInput)) {
+        for (const filePath of filePathsOf(nativeToolInput, isApplyPatch)) {
           const fwd = JSON.stringify({
             hook_event_name: "PostToolUse",
             tool_name: toolName,

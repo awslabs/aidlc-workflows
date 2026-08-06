@@ -10,7 +10,7 @@
 // LIVE-PROVEN (2026-07-25, @github/copilot 1.0.74 over Bedrock BYOK): the
 // compat-spike rig ran skill discovery, hook wiring (PascalCase events →
 // snake_case payloads), PreToolUse deny, Stop block, and subagent delegation
-// on this exact surface — tmp/copilot-compat-spike/ in the framework repo.
+// on this exact surface; the private capture path is intentionally not shipped.
 // This test pins the cheap status journey so CI can re-verify the shipped
 // tree end-to-end without burning a whole workflow.
 //

@@ -42,7 +42,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -434,6 +434,57 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
     } finally {
       s.cleanup();
       rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  test("11a: apply_patch confines and fans out Add, Update, Delete, and Move paths", () => {
+    const s = scratch();
+    try {
+      const patch = `*** Begin Patch
+*** Add File: src/added.ts
++export const added = true;
+*** Update File: src/old.ts
+@@
+*** Move to: src/moved.ts
+*** Delete File: src/deleted.ts
+*** Add File: ../escaped.ts
+*** End Patch
+`;
+      const payload = {
+        hook_event_name: "PreToolUse",
+        tool_name: "apply_patch",
+        tool_input: { input: patch },
+      };
+
+      const before = runAdapter(s, "pre-tool", payload);
+      expect(before.code).toBe(0);
+      const expected = ["src/added.ts", "src/old.ts", "src/moved.ts", "src/deleted.ts"]
+        .map((path) => resolve(s.projectRoot, path))
+        .sort();
+      const reviewerPaths = capturedInputs(s.captureDir, "aidlc-reviewer-scope.ts")
+        .map((entry) =>
+          (entry.tool_input as { file_path?: string } | undefined)?.file_path ?? ""
+        )
+        .filter(Boolean)
+        .sort();
+      expect(reviewerPaths).toEqual(expected);
+
+      const after = runAdapter(s, "post-tool", {
+        ...payload,
+        hook_event_name: "PostToolUse",
+      });
+      expect(after.code).toBe(0);
+      for (const hook of ["aidlc-audit-logger.ts", "aidlc-sensor-fire.ts"]) {
+        const paths = capturedInputs(s.captureDir, hook)
+          .map((entry) =>
+            (entry.tool_input as { file_path?: string } | undefined)?.file_path ?? ""
+          )
+          .filter(Boolean)
+          .sort();
+        expect(paths, hook).toEqual(expected);
+      }
+    } finally {
+      s.cleanup();
     }
   });
 
