@@ -976,6 +976,12 @@ for stages without a `reviewer` field. See the `reviewer` /
 `reviewer_max_iterations` / `review_class` frontmatter fields in
 [Stage Definition](15-stage-definition.md).
 
+If reviewer dispatch fails, times out, or the session ends after
+`REVIEW_REQUESTED` but before a verdict, rerun the same request command with
+`--retry-pending` before dispatching again. The logger accepts this recovery
+only for the same unmatched request, records `Retry: pending-request`, and does
+not consume another iteration. A completed request cannot be retried.
+
 ---
 
 ## Learnings Ritual

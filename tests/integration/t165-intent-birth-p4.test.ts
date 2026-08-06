@@ -28,6 +28,7 @@ import {
   activeSpace,
   listIntents,
   listSpaces,
+  readAllAuditShards,
   readIntentRegistry,
   slugify,
   updateIntentStatus,
@@ -541,7 +542,13 @@ describe("t164 migration wiring (flat → per-intent on first birth)", () => {
     const cursor = join(proj, "aidlc", "active-space");
     rmSync(cursor, { force: true });
 
-    const r = util(["intent-birth", "--scope", "feature"]);
+    const r = util([
+      "intent-birth",
+      "--scope",
+      "feature",
+      "--review",
+      "none",
+    ]);
     expect(r.status).toBe(0);
     expect(readFileSync(cursor, "utf-8")).toBe("default\n");
 
@@ -554,6 +561,10 @@ describe("t164 migration wiring (flat → per-intent on first birth)", () => {
     // The migrated record carries the flat project's state (Project field).
     const migrated = readFileSync(join(intentsDir(proj), records[0], "aidlc-state.md"), "utf-8");
     expect(migrated).toContain("Legacy App");
+    expect(migrated).toContain("- **Review Override**: none");
+    const migratedAudit = readAllAuditShards(proj);
+    expect(migratedAudit).toContain("**Event**: REVIEW_CLASS_CHANGED");
+    expect(migratedAudit).toContain("**Review Override**: none");
     // The .migrated marker was written (idempotency key).
     expect(existsSync(join(proj, "aidlc", ".migrated"))).toBe(true);
     // The flat tree was removed from the working tree post-move (git-rm step).

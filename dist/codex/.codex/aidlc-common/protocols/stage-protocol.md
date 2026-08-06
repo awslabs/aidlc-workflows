@@ -1033,6 +1033,11 @@ The directive's `review_class` field tells you HOW the review runs - the engine 
 
    Immediately before every reviewer dispatch, record the request:
    `bun .codex/tools/aidlc-log.ts review --stage "<directive.stage>" --reviewer "<directive.reviewer>" --iteration <n>`; add `--unit "<directive.unit>"` on a per-unit stage and `--single` on an isolated stage run.
+   If that dispatch fails, times out, or the session ends before a verdict is
+   recorded, rerun the same request command with `--retry-pending` before
+   dispatching again. The logger accepts it only while that exact request is
+   unmatched, marks the retry in the audit, and does not consume another review
+   iteration. Never use `--retry-pending` after a verdict.
 
 2. **Reviewer executes.** An `adversarial` review runs under the **adversarial review contract**:
 

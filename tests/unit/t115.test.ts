@@ -991,7 +991,12 @@ function completeReview(args: string[], p: string): CliResult {
 }
 
 function appendAudit(event: string, fields: Record<string, string>, p: string): CliResult {
-  if (event === "ARTIFACT_CREATED" || event === "ARTIFACT_UPDATED") {
+  if (
+    event === "ARTIFACT_CREATED" ||
+    event === "ARTIFACT_UPDATED" ||
+    event === "REVIEW_REQUESTED" ||
+    event === "REVIEW_COMPLETED"
+  ) {
     appendAuditEntry(event, fields, p);
     return { status: 0, out: "", stdout: "" };
   }

@@ -90,8 +90,8 @@ function parseFlags(
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a.startsWith("--")) {
-      if (a === "--single") {
-        flags.single = "true";
+      if (a === "--single" || a === "--retry-pending") {
+        flags[a.slice(2)] = "true";
         continue;
       }
       if (i + 1 >= args.length) {
@@ -644,7 +644,9 @@ function reviewAttemptSummary(
     if (!rawIteration || !/^[1-9][0-9]*$/.test(rawIteration)) continue;
     const iteration = Number(rawIteration);
     if (entry.event === "REVIEW_REQUESTED") {
-      requestCount++;
+      if (auditBlockField(entry.block, "Retry") !== "pending-request") {
+        requestCount++;
+      }
       pendingIterations.add(iteration);
     } else {
       pendingIterations.delete(iteration);
@@ -693,6 +695,7 @@ function handleReview(args: string[]): void {
   };
   if (flags.unit) fields.Unit = flags.unit;
   if (flags.single === "true") fields.Workflow = `single-stage:${flags.stage}`;
+  const retryPending = flags["retry-pending"] === "true";
 
   const loadContext = () => {
     const state = readStateFile(pd, intent, space);
@@ -732,14 +735,30 @@ function handleReview(args: string[]): void {
     }
     const iteration = Number(flags.iteration);
     fields.Iteration = flags.iteration;
+    let retried = false;
     try {
       withAuditLock(pd, () => {
         const { state, node, attempt, autonomousCandidate } = loadContext();
+        if (retryPending) {
+          if (!attempt.pendingIterations.has(iteration)) {
+            refuseReview(
+              `Refusing review retry for "${flags.stage}": no unmatched ` +
+                `REVIEW_REQUESTED iteration ${iteration} exists in the current audit attempt.`,
+            );
+          }
+          fields.Retry = "pending-request";
+          emitAudit(pd, "REVIEW_REQUESTED", fields, intent, space);
+          retried = true;
+          return;
+        }
         const expected = attempt.requestCount + 1;
         const declared = node.review_class ?? "adversarial";
         let budget: number | null = null;
         if (autonomousCandidate && attempt.boltStarted) {
-          budget = node.reviewer_max_iterations ?? 2;
+          budget =
+            declared === "advisory"
+              ? 1
+              : node.reviewer_max_iterations ?? 2;
         } else {
           try {
             const effective = resolveReviewClass(
@@ -772,10 +791,17 @@ function handleReview(args: string[]): void {
       if (e instanceof ReviewRefusal) error(e.message);
       error(`Audit emission failed: ${errorMessage(e)}`);
     }
-    console.log(JSON.stringify({ emitted: "REVIEW_REQUESTED", stage: flags.stage }));
+    console.log(JSON.stringify({
+      emitted: "REVIEW_REQUESTED",
+      stage: flags.stage,
+      ...(retried ? { retry: "pending-request" } : {}),
+    }));
     return;
   }
 
+  if (retryPending) {
+    error("--retry-pending cannot be combined with --verdict.");
+  }
   if (!flags.iteration || !/^[1-9][0-9]*$/.test(flags.iteration)) {
     error("REVIEW_COMPLETED requires --iteration <positive integer>.");
   }

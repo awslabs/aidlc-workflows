@@ -175,10 +175,20 @@ function applyReviewOverride(
   const changed = storedReview !== (oldReview ?? "");
   if (!changed) return { content, oldReview, storedReview, changed };
   if (oldReview === null) {
+    const beforeInsert = content;
     content = content.replace(
       /^(- \*\*Test Strategy\*\*:[^\n]*)$/m,
       "$1\n- **Review Override**:",
     );
+    if (content === beforeInsert) {
+      content = content.replace(
+        /^(- \*\*Scope\*\*:[^\n]*)$/m,
+        "$1\n- **Review Override**:",
+      );
+    }
+    if (content === beforeInsert) {
+      content = `${content.trimEnd()}\n- **Review Override**:\n`;
+    }
   }
   content = setField(content, "Review Override", storedReview);
   return { content, oldReview, storedReview, changed };
@@ -3618,6 +3628,14 @@ function handleIntentBirth(projectDir: string, flags: Record<string, string>): v
     const migration = migrateFlatLayout(projectDir);
     if (migration) {
       gitRmFlatTree(projectDir, migration.movedFrom);
+      const migratedState = readStateFile(projectDir);
+      const reviewUpdate = applyReviewOverride(
+        migratedState,
+        reviewOverride,
+      );
+      if (reviewUpdate.changed) {
+        writeStateFile(projectDir, reviewUpdate.content);
+      }
       // The migrated record carries its prior state + audit history. Record that
       // the workspace was migrated into this intent (lands in the migrated
       // intent's audit shard — the cursor points there now). No state rebuild.
@@ -3625,7 +3643,20 @@ function handleIntentBirth(projectDir: string, flags: Record<string, string>): v
         Request: `/aidlc ${flags.arguments || scope}`,
         Scope: scope,
         Details: `Migrated flat aidlc-docs/ into ${migration.intentDirName}`,
+        ...(reviewOverride !== undefined
+          ? {
+              "Review Override":
+                reviewUpdate.storedReview || "adversarial (stage defaults)",
+            }
+          : {}),
       });
+      if (reviewUpdate.changed) {
+        appendAuditEvent(projectDir, "REVIEW_CLASS_CHANGED", {
+          "Old Override": reviewUpdate.oldReview || "none set",
+          "New Override":
+            reviewUpdate.storedReview || "cleared (stage defaults apply)",
+        });
+      }
       process.stdout.write(
         `Migrated flat workspace into intent: ${migration.intentDirName} (space: ${DEFAULT_SPACE})\n`,
       );

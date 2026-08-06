@@ -2829,13 +2829,17 @@ function tryEmitSwarm(
   // class here would remove the sole check rather than rebalance it. The
   // declared class (adversarial for every shipped construction stage) rides
   // along verbatim; review_class is emitted for observability.
+  const declaredReviewClass = node.review_class ?? "adversarial";
   const reviewerFields = node.reviewer
     ? {
         stage: node.slug,
         stage_file: stageFileFor(node.phase, node.slug),
         reviewer: node.reviewer,
-        review_class: node.review_class ?? "adversarial",
-        reviewer_max_iterations: node.reviewer_max_iterations ?? 2,
+        review_class: declaredReviewClass,
+        reviewer_max_iterations:
+          declaredReviewClass === "advisory"
+            ? 1
+            : node.reviewer_max_iterations ?? 2,
       }
     : {};
   if (repos.length === 1) {

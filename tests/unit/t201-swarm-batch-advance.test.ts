@@ -45,7 +45,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   AIDLC_SRC,
@@ -77,6 +77,7 @@ interface Directive {
   units?: unknown;
   gate?: unknown;
   reviewer?: string;
+  review_class?: string;
   reviewer_max_iterations?: number;
   message?: string;
   [k: string]: unknown;
@@ -226,8 +227,11 @@ function seedProject(): string {
 }
 
 /** Run `aidlc-orchestrate.ts next` and parse the emitted directive. */
-function runNext(proj: string): Directive {
-  const env = { ...process.env };
+function runNext(
+  proj: string,
+  extraEnv: Record<string, string> = {},
+): Directive {
+  const env = { ...process.env, ...extraEnv };
   delete env.AWS_AIDLC_DEFAULT_SCOPE;
   const r = runOrchestrateNext(ORCH, proj, [], { env });
   if (r.directive === null) {
@@ -292,6 +296,24 @@ describe("t201 autonomous swarm advances through every Bolt batch (issue headlin
     expect(d.stage).toBe("code-generation");
     expect(d.reviewer).toBe("aidlc-architecture-reviewer-agent");
     expect(d.reviewer_max_iterations).toBe(2);
+  }, 30000);
+
+  test("1b: an advisory swarm directive exposes the single-pass cap", () => {
+    const proj = seedProject();
+    seedBoltDagBatches(proj, [["auth"]]);
+    const source = join(AIDLC_SRC, "tools", "data", "stage-graph.json");
+    const graph = JSON.parse(readFileSync(source, "utf-8")) as Array<Record<string, unknown>>;
+    const codeGeneration = graph.find((stage) => stage.slug === "code-generation");
+    if (!codeGeneration) throw new Error("code-generation missing from test stage graph");
+    codeGeneration.review_class = "advisory";
+    codeGeneration.reviewer_max_iterations = 2;
+    const graphPath = join(proj, "advisory-stage-graph.json");
+    writeFileSync(graphPath, `${JSON.stringify(graph, null, 2)}\n`);
+
+    const d = runNext(proj, { AIDLC_STAGE_GRAPH: graphPath });
+    expect(d.kind).toBe("invoke-swarm");
+    expect(d.review_class).toBe("advisory");
+    expect(d.reviewer_max_iterations).toBe(1);
   }, 30000);
 
   // 2: batch 1 complete, batch 2 incomplete -> invoke-swarm emits batch 2 ONLY.
