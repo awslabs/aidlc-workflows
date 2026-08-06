@@ -42,6 +42,14 @@ const UTIL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utilit
 const ORCH = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-orchestrate.ts");
 const SESSION_START = join(REPO_ROOT, "dist", "claude", ".claude", "hooks", "aidlc-session-start.ts");
 const SESSION_END = join(REPO_ROOT, "dist", "claude", ".claude", "hooks", "aidlc-session-end.ts");
+const REBUILD_STAGE_GRAPH = join(
+  REPO_ROOT,
+  "dist",
+  "claude",
+  ".claude",
+  "hooks",
+  "aidlc-rebuild-stage-graph.ts",
+);
 
 let proj: string;
 beforeEach(() => {
@@ -87,7 +95,7 @@ function next(args: string[], p = proj): Run {
   return { status: r.exitCode, stdout, out: `${stdout}${r.stderr.toString()}` };
 }
 
-function fireHook(hook: string, payload: Record<string, string>, p = proj): number {
+function fireHook(hook: string, payload: Record<string, unknown>, p = proj): number {
   const r = Bun.spawnSync({
     cmd: [BUN, hook],
     stdin: new TextEncoder().encode(JSON.stringify(payload)),
@@ -96,6 +104,22 @@ function fireHook(hook: string, payload: Record<string, string>, p = proj): numb
     env: { ...process.env, CLAUDE_PROJECT_DIR: p },
   });
   return r.exitCode;
+}
+
+function bindCreatedSession(sessionId: string, created: Run, p = proj): number {
+  return fireHook(
+    REBUILD_STAGE_GRAPH,
+    {
+      hook_event_name: "PostToolUse",
+      session_id: sessionId,
+      tool_name: "Bash",
+      tool_input: {
+        command: "bun .claude/tools/aidlc-utility.ts intent-create --scope poc",
+      },
+      tool_response: created.stdout,
+    },
+    p,
+  );
 }
 
 const intentsDir = (p: string, space = "default"): string =>
@@ -336,9 +360,15 @@ describe("t164 --new-intent birth directive hands off to a fresh session", () =>
     expect(
       fireHook(SESSION_START, { source: "startup", session_id: "handoff-session-1" }),
     ).toBe(0);
-    expect(
-      util(["intent-create", "--scope", "poc", "--arguments", "first intent"]).status,
-    ).toBe(0);
+    const firstCreate = util([
+      "intent-create",
+      "--scope",
+      "poc",
+      "--arguments",
+      "first intent",
+    ]);
+    expect(firstCreate.status).toBe(0);
+    expect(bindCreatedSession("handoff-session-1", firstCreate)).toBe(0);
     const first = activeIntent(proj);
     expect(first).not.toBeNull();
     expect(
@@ -352,17 +382,17 @@ describe("t164 --new-intent birth directive hands off to a fresh session", () =>
       "fix the flaky login test",
     ]);
     expect(JSON.parse(directive.stdout.trim()).kind).toBe("print");
-    expect(
-      util([
-        "intent-create",
-        "--scope",
-        "bugfix",
-        "--arguments",
-        "fix the flaky login test",
-        "--label",
-        "flaky login",
-      ]).status,
-    ).toBe(0);
+    const secondCreate = util([
+      "intent-create",
+      "--scope",
+      "bugfix",
+      "--arguments",
+      "fix the flaky login test",
+      "--label",
+      "flaky login",
+    ]);
+    expect(secondCreate.status).toBe(0);
+    expect(bindCreatedSession("handoff-session-1", secondCreate)).toBe(0);
     const second = activeIntent(proj);
     expect(second).not.toBeNull();
     expect(second).not.toBe(first);
@@ -389,6 +419,44 @@ describe("t164 --new-intent birth directive hands off to a fresh session", () =>
     const secondAudit = readIntentAudit(proj, second!);
     expect(secondAudit).toContain("**Event**: SESSION_STARTED");
     expect(secondAudit).not.toContain("**Event**: SESSION_ENDED");
+  });
+
+  test("concurrent pre-workflow sessions bind only the session that invoked birth", () => {
+    expect(fireHook(SESSION_START, { source: "startup", session_id: "session-a" })).toBe(0);
+    expect(fireHook(SESSION_START, { source: "startup", session_id: "session-b" })).toBe(0);
+
+    const created = util([
+      "intent-create",
+      "--scope",
+      "poc",
+      "--arguments",
+      "session A work",
+    ]);
+    expect(created.status).toBe(0);
+    expect(bindCreatedSession("session-a", created)).toBe(0);
+
+    const record = activeIntent(proj);
+    const registry = readIntentRegistry(proj);
+    expect(record).not.toBeNull();
+    expect(registry.length).toBe(1);
+    const sessions = join(proj, "aidlc", ".aidlc-sessions");
+    expect(readFileSync(join(sessions, "session-a"), "utf-8").trim()).toBe(
+      registry[0].uuid,
+    );
+    expect(existsSync(join(sessions, "session-b"))).toBe(false);
+
+    // B has no ownership evidence. Its end must not fall back to A's active
+    // cursor, while A's exact binding still routes its own end correctly.
+    expect(
+      fireHook(SESSION_END, { reason: "logout", session_id: "session-b" }),
+    ).toBe(0);
+    expect(readIntentAudit(proj, record!)).not.toContain("**Event**: SESSION_ENDED");
+    expect(
+      fireHook(SESSION_END, { reason: "clear", session_id: "session-a" }),
+    ).toBe(0);
+    const audit = readIntentAudit(proj, record!);
+    expect(audit).toContain("**Event**: SESSION_ENDED");
+    expect(audit).toContain("**Reason**: clear");
   });
 
   test("a later birth cannot claim an unstamped session when an intent already exists", () => {
@@ -799,6 +867,12 @@ describe("t164 migration wiring (flat → per-intent on first birth)", () => {
     const cursor = join(proj, "aidlc", "active-space");
     rmSync(cursor, { force: true });
 
+    expect(
+      fireHook(SESSION_START, {
+        source: "startup",
+        session_id: "migration-session",
+      }),
+    ).toBe(0);
     const r = util([
       "intent-create",
       "--scope",
@@ -807,6 +881,7 @@ describe("t164 migration wiring (flat → per-intent on first birth)", () => {
       "none",
     ]);
     expect(r.status).toBe(0);
+    expect(bindCreatedSession("migration-session", r)).toBe(0);
     expect(readFileSync(cursor, "utf-8")).toBe("default\n");
 
     // Migration moved the flat state into a per-intent record (NOT a second
@@ -815,6 +890,12 @@ describe("t164 migration wiring (flat → per-intent on first birth)", () => {
       existsSync(join(intentsDir(proj), d, "aidlc-state.md")),
     );
     expect(records.length).toBe(1);
+    expect(
+      readFileSync(
+        join(proj, "aidlc", ".aidlc-sessions", "migration-session"),
+        "utf-8",
+      ).trim(),
+    ).toBe(readIntentRegistry(proj)[0]?.uuid);
     // The migrated record carries the flat project's state (Project field).
     const migrated = readFileSync(join(intentsDir(proj), records[0], "aidlc-state.md"), "utf-8");
     expect(migrated).toContain("Legacy App");

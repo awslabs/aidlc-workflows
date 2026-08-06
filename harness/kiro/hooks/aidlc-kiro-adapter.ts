@@ -790,6 +790,8 @@ function buildForward(): Forward {
           hook_event_name: "PostToolUse",
           tool_name: "Bash",
           tool_input: { command: (ti.command as string) ?? "" },
+          ...(kiro.session_id ? { session_id: kiro.session_id } : {}),
+          tool_response: kiro.tool_response,
         },
       };
     }

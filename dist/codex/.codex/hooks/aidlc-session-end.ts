@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import {
+  activeIntentUuid,
   errorMessage,
   findIntentByUuid,
   hooksHealthDir,
@@ -58,11 +59,18 @@ if (sessionId) {
     }
     intent = stampedIntent.dirName;
     space = stampedIntent.space;
+  } else if (activeIntentUuid(projectDir)) {
+    // A UUID-backed workflow has exact per-session ownership. Falling back to
+    // the shared cursor here can attribute a concurrent pre-workflow session's
+    // end to an intent it never invoked. Missing identity therefore fails
+    // closed; flat/legacy workspaces (no active UUID) retain cursor fallback.
+    return 0;
   }
 }
 
 // No workflow active for the resolved session intent — do nothing (consistent
-// with session-start.ts). An unstamped/legacy session retains cursor fallback.
+// with session-start.ts). A session without an id, or a flat legacy workflow,
+// retains cursor fallback.
 if (!existsSync(stateFilePath(projectDir, intent, space))) return 0;
 
 // Health heartbeat follows the same session-owned intent as the audit event.

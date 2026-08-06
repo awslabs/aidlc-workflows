@@ -87,7 +87,9 @@ Result prose is identical on both channels (`toolResult` on 0.12,
 - **rebuild-stage-graph** — the shell command is unrecoverable, so the IDE path
   drops the command filter and gates purely on the audit tail (with an mtime
   idempotency guard so a lingering transition — e.g. after `WORKFLOW_COMPLETED`
-  — does not recompile on every subsequent shell command).
+  — does not recompile on every subsequent shell command). The shell result and
+  modern `session_id` are still forwarded: when the result names a successful
+  `intent-create`, the shared hook binds that exact session to the created record.
 - **sync-workflow-state** — the IDE gives no task payload, so it derives the current
   stage from the latest `STAGE_STARTED` in the audit tail. This is a
   **forward-only** mirror: it never rewinds `Current Stage` to a completed or

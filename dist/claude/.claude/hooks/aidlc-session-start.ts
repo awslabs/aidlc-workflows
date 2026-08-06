@@ -172,13 +172,13 @@ if (sessionId) {
         // The cursor verb switches within the active space. When the stamped
         // intent lives elsewhere, prefix the space switch. Use the harness's
         // native entry skill so Codex never receives a slash command.
-        const switchCmd =
+        const switchInstruction =
           was.space === activeSp
-            ? `${entrySkill} intent ${was.slug}`
-            : `${entrySkill} space ${was.space} && ${entrySkill} intent ${was.slug}`;
+            ? `run \`${entrySkill} intent ${was.slug}\``
+            : `first run \`${entrySkill} space ${was.space}\`; after it completes, run \`${entrySkill} intent ${was.slug}\``;
         rebindOffer =
           `INTENT REBIND OFFER: This conversation was working ${was.slug}, but the active intent is ${liveSlug}. ` +
-          `Switch back to ${was.slug}? [Y/n] — on Yes, run \`${switchCmd}\` to move the cursor; ` +
+          `Switch back to ${was.slug}? [Y/n] — on Yes, ${switchInstruction} to move the cursor; ` +
           `on No, keep working ${liveSlug}. This corrects the per-user cursor only; it never rebuilds the conversation.\n`;
         // Until the user accepts the offered switch, this resumed conversation
         // is operating on the live intent. Stamp that ownership now so a

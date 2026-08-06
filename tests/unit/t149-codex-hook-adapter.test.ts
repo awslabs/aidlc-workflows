@@ -45,7 +45,12 @@ import {
 import { hostname, tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createIntent, sessionsDir } from "../../core/tools/aidlc-lib.ts";
+import {
+  createIntent,
+  sessionsDir,
+  setActiveIntentCursor,
+  setActiveSpaceCursor,
+} from "../../core/tools/aidlc-lib.ts";
 import {
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
@@ -174,7 +179,10 @@ function activeRecord(dir: string): string {
   ).trim();
 }
 
-function runIntentCreate(dir: string, description: string): number {
+function runIntentCreate(
+  dir: string,
+  description: string,
+): { code: number; stdout: string } {
   const result = spawnSync(
     "bun",
     [
@@ -194,7 +202,10 @@ function runIntentCreate(dir: string, description: string): number {
       timeout: 30_000,
     },
   );
-  return result.status ?? -1;
+  return {
+    code: result.status ?? -1,
+    stdout: result.stdout ?? "",
+  };
 }
 
 /** Remap a captured apply_patch payload's `aidlc-docs/` paths (a verbatim
@@ -525,9 +536,28 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
         "prior-session-0000",
       );
 
-      expect(runIntentCreate(dir, "first intent")).toBe(0);
+      const firstCreate = runIntentCreate(dir, "first intent");
+      expect(firstCreate.code).toBe(0);
+      expect(
+        runAdapter(
+          dir,
+          "rebuild-stage-graph",
+          withCwd(
+            {
+              ...FIXTURES.postToolUse_bash,
+              session_id: "prior-session-0000",
+              tool_input: {
+                command:
+                  "bun .codex/tools/aidlc-utility.ts intent-create --scope poc",
+              },
+              tool_response: firstCreate.stdout,
+            },
+            dir,
+          ),
+        ).code,
+      ).toBe(0);
       const prior = activeRecord(dir);
-      expect(runIntentCreate(dir, "second intent")).toBe(0);
+      expect(runIntentCreate(dir, "second intent").code).toBe(0);
       const current = activeRecord(dir);
       expect(current).not.toBe(prior);
 
@@ -649,8 +679,12 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       runAdapter(dir, "session-start", withCwd({ ...FIXTURES.sessionStart, source: "startup" }, dir));
       const stampPath = join(dir, "aidlc", ".aidlc-sessions", sid);
       expect(readFileSync(stampPath, "utf-8").trim()).toBe(a.uuid);
-      // Move the live cursor to B (the drift the resume must detect).
-      const b = createIntent(dir, "intent-b", "default");
+      // Move the live cursor to B in another space (the drift the resume must
+      // detect). Cross-space correction must remain two skill invocations;
+      // joining `$aidlc` calls with shell syntax turns the second into args.
+      const b = createIntent(dir, "intent-b", "team-b");
+      setActiveIntentCursor(dir, b.dirName, "team-b");
+      setActiveSpaceCursor(dir, "team-b");
       const r = runAdapter(
         dir,
         "session-start",
@@ -663,8 +697,10 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       const ctx = out.hookSpecificOutput?.additionalContext ?? "";
       expect(ctx).toContain("INTENT REBIND OFFER");
       expect(ctx).toContain("intent-a");
+      expect(ctx).toContain("first run `$aidlc space default`");
       expect(ctx).toContain("$aidlc intent intent-a");
       expect(ctx).not.toContain("/aidlc intent intent-a");
+      expect(ctx).not.toContain("&&");
       expect(readFileSync(stampPath, "utf-8").trim()).toBe(b.uuid);
     } finally {
       rmSync(dir, { recursive: true, force: true });

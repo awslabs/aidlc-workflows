@@ -82,7 +82,6 @@ import {
   readActiveDirectiveMarker,
   recordHookDrop,
   readCurrentSessionId,
-  readSessionIntentUuid,
   readStateFile,
   refreshActiveDirectiveMarker,
   resolveBirthRepoSet,
@@ -251,19 +250,6 @@ function validateIntentCreateFlagValues(
   }
   for (const name of INTENT_CREATE_VALUE_FLAGS) {
     if (flags[name] !== undefined) flags[name] = flags[name].trim();
-  }
-}
-
-// Bind a session that started before any workflow existed to its first born
-// intent. Never overwrite an existing stamp: a second, unrelated birth must
-// leave the ending session owned by the prior intent.
-function bindUnstampedCurrentSession(projectDir: string, intentUuid: string): void {
-  const sessionId = readCurrentSessionId(projectDir);
-  if (
-    sessionId &&
-    !readSessionIntentUuid(projectDir, sessionId)
-  ) {
-    writeSessionIntentUuid(projectDir, sessionId, intentUuid);
   }
 }
 
@@ -3849,7 +3835,6 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     // project skips it).
     const migration = migrateFlatLayout(projectDir);
     if (migration) {
-      bindUnstampedCurrentSession(projectDir, migration.uuid);
       gitRmFlatTree(projectDir, migration.movedFrom);
       const migratedState = readStateFile(projectDir);
       const reviewUpdate = applyReviewOverride(
@@ -3911,11 +3896,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       );
     }
     const space = activeSpace(projectDir);
-    const isFirstIntent = listIntents(projectDir, space).every(
-      (intent) => intent.dirName === null,
-    );
-    const born = createIntent(projectDir, slug, space, scope, repos);
-    if (isFirstIntent) bindUnstampedCurrentSession(projectDir, born.uuid);
+    createIntent(projectDir, slug, space, scope, repos);
 
     const ts = isoTimestamp();
 

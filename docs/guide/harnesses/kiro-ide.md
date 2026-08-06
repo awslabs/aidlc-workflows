@@ -108,11 +108,14 @@ the `USER_PROMPT` environment variable with a camelCase equivalent, and the
 adapter accepts both). Captured PostToolUse write/shell events leave tool inputs
 empty on both channels, so their written path must be recovered from the result
 text and payload-free hooks (`rebuild-stage-graph`, `sync-workflow-state`) run from the
-audit trail. Later 1.x builds populate some PreToolUse and delegation inputs;
-the adapter preserves those fields without depending on them.
+audit trail. The graph-rebuild route also retains the shell result and modern
+`session_id` so a successful first `intent-create` binds to the invoking
+session. Later 1.x builds populate some
+PreToolUse and delegation inputs; the adapter preserves those fields without
+depending on them.
 
 The payload acquisition is **gated to payload-dependent targets**
-(`audit-and-sensors`, `log-subagent`). A non-empty `USER_PROMPT` is consumed
+(`audit-and-sensors`, `log-subagent`, `rebuild-stage-graph`). A non-empty `USER_PROMPT` is consumed
 immediately on 0.12 builds (which open stdin without ever writing); otherwise
 the adapter reads the 1.x stdin channel with a 2s broken-channel ceiling.
 Every other target - including `block`, which fires on every `PreToolUse` -

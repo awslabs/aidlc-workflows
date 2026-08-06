@@ -96,7 +96,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 // The two targets whose forward depends on the tool payload. Every other
 // target builds a fixed input (or reads only the filesystem), so it skips
 // payload acquisition entirely and keeps its zero-latency path.
-const PAYLOAD_TARGETS = new Set(["audit-and-sensors", "log-subagent"]);
+const PAYLOAD_TARGETS = new Set([
+  "audit-and-sensors",
+  "log-subagent",
+  "rebuild-stage-graph",
+]);
 const INPUT_TARGETS = new Set([...PAYLOAD_TARGETS, "session-start"]);
 const LEGACY_SESSION_ID = "kiro-ide-legacy-current";
 
@@ -449,6 +453,8 @@ function buildForward(): Forward {
           hook_event_name: "PostToolUse",
           tool_name: "Bash",
           tool_input: { command: "", source: "ide-audit-sync" },
+          ...(ide.sessionId ? { session_id: ide.sessionId } : {}),
+          tool_response: ide.toolResult ?? "",
         },
       };
     }

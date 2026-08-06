@@ -75,6 +75,11 @@ function runCore(
       const child = spawn(bin, [join(cwd, HOOKS_SUBDIR, hookFile)], {
         cwd,
         stdio: ["pipe", "pipe", "pipe"],
+        env: {
+          ...process.env,
+          AIDLC_PROJECT_DIR: cwd,
+          CLAUDE_PROJECT_DIR: cwd,
+        },
       });
       let out = "";
       let err = "";
@@ -531,12 +536,15 @@ export default async ({
       }
     },
 
-    "tool.execute.after": async (input: {
-      tool: string;
-      sessionID: string;
-      callID: string;
-      args: Record<string, unknown>;
-    }) => {
+    "tool.execute.after": async (
+      input: {
+        tool: string;
+        sessionID: string;
+        callID: string;
+        args: Record<string, unknown>;
+      },
+      output?: { output?: string },
+    ) => {
       const { tool, args } = input;
       if (tool === "write" || tool === "edit" || tool === "apply_patch") {
         const paths =
@@ -562,6 +570,8 @@ export default async ({
           hook_event_name: "PostToolUse",
           tool_name: "Bash",
           tool_input: { command: (args.command as string) ?? "" },
+          session_id: input.sessionID,
+          tool_response: output?.output ?? "",
         };
         await runCore("aidlc-rebuild-stage-graph.ts", payload, directory);
         return;

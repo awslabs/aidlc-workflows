@@ -202,6 +202,37 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
     expect(debug).toContain("rebuild-stage-graph\texit: audit empty");
     expect(debug).not.toContain("exit: command not a transition tool");
   });
+
+  test("post-shell creation forwards the invoking session and result", async () => {
+    const root = freshProject();
+    const trace = join(root, "runtime-input.json");
+    writeHook(
+      root,
+      "aidlc-rebuild-stage-graph.ts",
+      `import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(trace)}, await Bun.stdin.text(), "utf-8");
+`,
+    );
+    const { client } = fakeClient();
+    const adapter = await createAdapter({ client, directory: root });
+    await adapter["tool.execute.after"](
+      postTool("bash", {
+        command: "bun .aidlc/tools/aidlc-utility.ts intent-create --scope poc",
+      }),
+      {
+        output: "Intent created: fixture-record (space: default)\n",
+      },
+    );
+
+    const payload = JSON.parse(readFileSync(trace, "utf-8")) as {
+      session_id?: string;
+      tool_input?: { command?: string };
+      tool_response?: string;
+    };
+    expect(payload.session_id).toBe("main");
+    expect(payload.tool_input?.command).toContain("intent-create");
+    expect(payload.tool_response).toContain("Intent created: fixture-record");
+  });
 });
 
 describe("t241 OpenCode adapter reviewer scope", () => {

@@ -208,6 +208,27 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
     }
   });
 
+  test("3a: intent creation is not executed off-band without a session id", () => {
+    const dir = scratchProject();
+    try {
+      const raw = 'intent create --scope poc --arguments "build auth"';
+      const r = runAdapter(dir, "verb-intercept", {
+        prompt: promptWithNext(raw),
+        cwd: dir,
+      });
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("SYSTEM (deterministic engine pre-dispatch)");
+      expect(r.stdout).toContain(
+        "aidlc-utility.ts intent-create --scope poc --arguments 'build auth'",
+      );
+      expect(r.stdout).not.toContain("Intent created:");
+      expect(existsSync(latchPath(dir))).toBe(false);
+      expect(existsSync(forwardingPath(dir))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("3b: positional scope input stamps the complete forwarding vector", () => {
     const dir = scratchProject();
     try {

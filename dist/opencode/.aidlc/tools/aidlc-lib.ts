@@ -828,6 +828,11 @@ export function classifyTerminalCommand(args: string[]): TerminalCommand | null 
   // public grammar promises leading-token semantics.
   const workspaceCommand = parseWorkspaceCommand(args);
   if (workspaceCommand.kind !== "not-workspace") {
+    // Intent creation mutates workflow state and must remain on the normal
+    // engine/conductor/shell path. In particular, Kiro's prompt interceptor has
+    // no session_id, while the shell PostToolUse event does; executing creation
+    // off-band would make exact session ownership impossible.
+    if (workspaceCommand.kind === "create-intent") return null;
     return terminalCommandFromWorkspaceCommand(workspaceCommand, args);
   }
   for (let i = 0; i < args.length; i++) {

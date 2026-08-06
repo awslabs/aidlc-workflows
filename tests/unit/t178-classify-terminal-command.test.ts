@@ -288,4 +288,17 @@ describe("classifyTerminalCommand() — non-terminal inputs return null", () => 
     // workflow work and must go through the engine, so it classifies as null.
     expect(classifyTerminalCommand(["--scope", "mvp"])).toBeNull();
   });
+
+  test("intent birth stays on the engine/conductor shell path", () => {
+    expect(
+      classifyTerminalCommand([
+        "intent",
+        "birth",
+        "--scope",
+        "poc",
+        "--arguments",
+        "build auth",
+      ]),
+    ).toBeNull();
+  });
 });

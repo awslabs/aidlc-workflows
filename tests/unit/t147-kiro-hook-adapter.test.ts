@@ -561,6 +561,36 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
+  test("8b: post-shell intent creation binds the exact invoking session", () => {
+    const dir = scratchProject(true);
+    try {
+      const created = createIntent(dir, "kiro-posttool-create", "default");
+      const sid = "kiro-birth-session";
+      const r = runAdapter(dir, "rebuild-stage-graph", {
+        hook_event_name: "postToolUse",
+        cwd: dir,
+        session_id: sid,
+        tool_name: "shell",
+        tool_input: {
+          command: "bun .kiro/tools/aidlc-utility.ts intent-create --scope poc",
+        },
+        tool_response: {
+          items: [
+            {
+              Text: `Intent created: ${created.dirName} (space: default)\n`,
+            },
+          ],
+        },
+      });
+      expect(r.code).toBe(0);
+      expect(
+        readFileSync(join(dir, "aidlc", ".aidlc-sessions", sid), "utf-8").trim(),
+      ).toBe(created.uuid);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("10: session-start FORWARDS session_id — core hook stamps the per-session→intent record (M3)", () => {
     // M3: the Kiro adapter now forwards session_id when present, so the core
     // hook's per-session→intent STAMP is written (the session→intent record).

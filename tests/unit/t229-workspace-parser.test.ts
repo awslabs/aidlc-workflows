@@ -247,7 +247,6 @@ describe("classifier and next parser parity", () => {
       { args: ["intent", "list"], invocation: "intent" },
       { args: ["intent", "list", "--json"], invocation: "intent --json" },
       { args: ["intent", "switch", "list"], invocation: "intent switch list" },
-      { args: ["intent", "create", "--scope", "poc", "--label", "x"], invocation: "intent-create --scope poc --label x" },
       { args: ["space", "foo", "--status"], invocation: "space foo" },
     ];
     for (const row of rows) {
@@ -263,6 +262,20 @@ describe("classifier and next parser parity", () => {
       } finally {
         cleanup(projectDir);
       }
+    }
+  });
+
+  test("intent create stays on the session-aware workflow path", () => {
+    const args = ["intent", "create", "--scope", "poc", "--label", "x"];
+    expect(classifyTerminalCommand(args)).toBeNull();
+
+    const projectDir = scratchProject();
+    try {
+      const d = directive(projectDir, args);
+      expect(d.kind).toBe("print");
+      expect(d.message).toContain("aidlc-utility.ts intent-create --scope poc --label x");
+    } finally {
+      cleanup(projectDir);
     }
   });
 

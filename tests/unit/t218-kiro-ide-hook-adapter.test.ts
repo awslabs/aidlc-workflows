@@ -11,7 +11,7 @@
 //     written/closed. A non-empty USER_PROMPT is consumed immediately, without
 //     probing stdin.
 // Either way the adapter scrapes the written file path out of the result prose
-// and drives the payload-free hooks (runtime-compile, sync-statusline) off the
+// and drives the payload-free hooks (rebuild-stage-graph, sync-workflow-state) off the
 // audit tail.
 //
 // covers: file:hooks/aidlc-sync-workflow-state.ts, file:hooks/aidlc-write-audit-log.ts, file:hooks/aidlc-rebuild-stage-graph.ts
@@ -37,6 +37,9 @@ import {
 import { hostname, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  readIntentRegistry,
+} from "../../core/tools/aidlc-lib.ts";
 import {
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
@@ -278,7 +281,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     }
   });
 
-  test("7: runtime-compile dispatches off the audit tail with no command", () => {
+  test("7: rebuild-stage-graph dispatches off the audit tail with no command", () => {
     const dir = scratchProject(true);
     try {
       // A transition in the tail makes the core hook recompile; with no
@@ -290,7 +293,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     }
   });
 
-  test("7b: runtime-compile actually compiles when the audit tail has a transition (no command needed)", () => {
+  test("7b: rebuild-stage-graph actually compiles when the audit tail has a transition (no command needed)", () => {
     const dir = scratchProject(true);
     try {
       // Seed a STAGE_STARTED transition in the tail. The IDE never surfaces the
@@ -303,6 +306,30 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
       // The compile wrote the runtime graph — proof the command filter was
       // bypassed and the audit-tail gate fired.
       expect(existsSync(graphPath)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("7c: modern post-shell creation binds the exact invoking session", () => {
+    const dir = scratchProject(true);
+    try {
+      const expected = readIntentRegistry(dir)[0]?.uuid;
+      const result =
+        `Output:\nIntent created: ${DEFAULT_RECORD_DIR} (space: default)\n\nExit Code: 0`;
+      const r = runIdeStdin(
+        dir,
+        "rebuild-stage-graph",
+        ctx1x("execute_bash", result),
+      );
+      expect(r.code).toBe(0);
+      expect(expected).toBeDefined();
+      expect(
+        readFileSync(
+          join(dir, "aidlc", ".aidlc-sessions", "sess_t218"),
+          "utf-8",
+        ).trim(),
+      ).toBe(expected);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -827,6 +854,11 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
     // so one cannot silently no-op behind the other.
     const dir = scratchProject(true);
     try {
+      // The payload-free legacy agentStop path uses one synthetic session id.
+      // Seed its ownership through the matching legacy SessionStart first;
+      // UUID-backed SessionEnd intentionally refuses an unstamped cursor
+      // fallback because another concurrent session may own that cursor.
+      expect(runIde(dir, "session-start", null).code).toBe(0);
       for (const userPrompt of ["", null] as const) {
         const label = userPrompt === null ? "absent" : "empty";
         const stop = await runIdeOpenStdin(dir, "continue-workflow", userPrompt, 30_000);
