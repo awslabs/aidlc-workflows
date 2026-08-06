@@ -5,10 +5,11 @@ All notable changes to this project will be documented in this file.
 
 `intent-create` now fails closed when invoked without meaningful work details, and starting a second unrelated intent hands the conductor to a fresh session so the new work does not inherit the prior intent's transcript. Scope runners (`/aidlc-<scope>`) now offer the same explicit second-intent path instead of dead-ending at a completed workflow. **Upgrade:** re-copy your `dist/<harness>/` shell into the project so the updated tools, hooks, orchestrator skill, and scope runners are installed.
 
-* A bare `aidlc-utility.ts intent-create` invocation now errors without mutating the workspace; callers must provide a scope or description.
+* `bun .claude/tools/aidlc-utility.ts intent-create` with no `--scope`, `--arguments`, or `--label` now errors and mutates nothing; every value-bearing create option (`--scope`, `--arguments`, `--label`, `--depth`, `--test-strategy`, `--repos`, and `--project-dir`) also rejects a valueless or blank occurrence before path resolution or mutation.
 * Completed workflows advertise the human-confirmed `next --new-intent --scope <scope> "<description>"` route for unrelated work.
-* A confirmed second intent is created on disk, then the current conductor stops and hands off through the harness-native fresh-session flow before AI-DLC resumes.
-* Every generated scope runner carries the same recognize, confirm, create, and fresh-session handoff contract.
+* `next --new-intent` requires a nonblank new-work description. Its directive tells every harness conductor to create the intent, STOP, and use the harness-native fresh-session entry (`/aidlc`, or `$aidlc` on Codex); fresh-workspace creation still continues in-session.
+* The ending session remains bound to its original intent after creation switches the active cursor, so `SESSION_ENDED` and its heartbeat land with the session that actually ended.
+* Every generated scope runner carries the same recognize, confirm, create, and harness-native fresh-session handoff contract.
 
 ## [2.5.60] - 2026-08-09
 

@@ -11,11 +11,11 @@
 //     blank uuid is a no-op (never writes a stray file).
 //   - activeIntentUuid — the uuid of the active intent (cursor / lone), or null
 //     on flat-legacy (no per-intent record).
-//   - findIntentByUuid — resolves a uuid to {space, slug} across EVERY space, or
-//     null for an unknown uuid (a stale stamp from a deleted intent).
+//   - findIntentByUuid — resolves a uuid to {space, slug, dirName} across EVERY
+//     space, or null for an unknown uuid (a stale stamp from a deleted intent).
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import {
   activeIntentUuid,
@@ -80,17 +80,24 @@ describe("t167 session→intent helpers (mechanism none — pure in-process)", (
     expect(activeIntentUuid(proj, "default")).toBe(b.uuid);
   });
 
-  test("findIntentByUuid resolves a uuid to {space, slug} across spaces", () => {
+  test("findIntentByUuid resolves a uuid to its logical and on-disk identity across spaces", () => {
     createIntent(proj, "in-default", "default", "feature");
     const t = createIntent(proj, "in-teamb", "teamB", "feature");
     const found = findIntentByUuid(proj, t.uuid);
     expect(found).not.toBeNull();
     expect(found?.space).toBe("teamB");
     expect(found?.slug).toBe("in-teamb");
+    expect(found?.dirName).toBe(t.dirName);
   });
 
   test("findIntentByUuid returns null for an unknown uuid (stale stamp)", () => {
     createIntent(proj, "real", "default", "feature");
     expect(findIntentByUuid(proj, "00000000-0000-0000-0000-000000000000")).toBeNull();
+  });
+
+  test("findIntentByUuid returns null when the registry row has no record", () => {
+    const removed = createIntent(proj, "removed", "default", "feature");
+    rmSync(removed.recordDir, { recursive: true, force: true });
+    expect(findIntentByUuid(proj, removed.uuid)).toBeNull();
   });
 });

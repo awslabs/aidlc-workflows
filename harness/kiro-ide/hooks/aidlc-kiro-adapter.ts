@@ -27,10 +27,10 @@
 //   4. The tool name arrives as the IDE tool name: `fs_write`, `str_replace`,
 //      `fs_append`, `execute_bash`, etc.
 //
-// Payload acquisition is GATED to the two payload-dependent targets
-// (audit-and-sensors, log-subagent). Every other target is payload-independent
-// and never touches stdin — block fires on EVERY PreToolUse, and a 2s stall on
-// a never-closing stdin there would be felt on every tool call.
+// Payload acquisition is GATED to the two tool-payload targets plus
+// session-start, which reads only the modern session_id. Every other target is
+// payload-independent and never touches stdin — block fires on EVERY PreToolUse,
+// and a 2s stall on a never-closing stdin there would be felt on every tool call.
 //
 // Consequences, by target:
 //   - audit-and-sensors: scrape the written file path from toolResult prose
@@ -81,6 +81,7 @@ const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 // captures have empty inputs; later 1.x builds populate some PreToolUse and
 // delegation inputs (#543), so normalization preserves either shape.
 interface IdeHookContext {
+  sessionId?: string;
   toolName?: string;
   toolArgs?: Record<string, unknown>;
   toolResult?: string;
@@ -96,6 +97,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 // target builds a fixed input (or reads only the filesystem), so it skips
 // payload acquisition entirely and keeps its zero-latency path.
 const PAYLOAD_TARGETS = new Set(["audit-and-sensors", "log-subagent"]);
+const INPUT_TARGETS = new Set([...PAYLOAD_TARGETS, "session-start"]);
+const LEGACY_SESSION_ID = "kiro-ide-legacy-current";
 
 export async function run(
   target: string,
@@ -115,7 +118,7 @@ const projectDir = resolveProjectDirFromHook(import.meta.url);
 // camelCase {toolName, toolArgs, toolResult, toolSuccess}; 1.x snake_case
 // {tool_name, tool_input, tool_response} (no success flag) — accept both.
 let ide: IdeHookContext = {};
-if (PAYLOAD_TARGETS.has(target)) {
+if (INPUT_TARGETS.has(target)) {
   let raw = input;
   if (raw.trim().length === 0) raw = process.env.USER_PROMPT ?? "";
   if (raw.trim().length > 0) {
@@ -128,6 +131,7 @@ if (PAYLOAD_TARGETS.has(target)) {
         const rawArgs = parsed.toolArgs ?? parsed.tool_input;
         const rawResult = parsed.toolResult ?? parsed.tool_response;
         const rawSuccess = parsed.toolSuccess ?? parsed.tool_success;
+        const rawSessionId = parsed.session_id;
         const malformedFields: string[] = [];
         if (rawName !== null && rawName !== undefined && typeof rawName !== "string") {
           malformedFields.push("toolName");
@@ -146,6 +150,7 @@ if (PAYLOAD_TARGETS.has(target)) {
           malformedFields.push("toolSuccess");
         }
         ide = {
+          sessionId: typeof rawSessionId === "string" ? rawSessionId : undefined,
           toolName: typeof rawName === "string" ? rawName : undefined,
           toolArgs: isRecord(rawArgs) ? rawArgs : undefined,
           toolResult: typeof rawResult === "string" ? rawResult : "",
@@ -165,6 +170,7 @@ hookDebug(projectDir, "kiro-adapter", "invoked", {
   hasStdinPayload: input.trim().length > 0,
   hasUserPrompt: (process.env.USER_PROMPT ?? "").length > 0,
   toolName: ide.toolName ?? "",
+  sessionId: ide.sessionId ?? "",
   toolResult: (ide.toolResult ?? "").slice(0, 160),
 });
 
@@ -333,7 +339,7 @@ function extractAgentIdentity(toolResult: string, toolName = ""): string {
 type Forward = { hook: string; input: Record<string, unknown> } | null;
 
 function buildForward(): Forward {
-  if ((ide.malformedFields?.length ?? 0) > 0) {
+  if (PAYLOAD_TARGETS.has(target) && (ide.malformedFields?.length ?? 0) > 0) {
     recordHookDrop(
       projectDir,
       "kiro-adapter",
@@ -344,12 +350,15 @@ function buildForward(): Forward {
 
   switch (target) {
     case "session-start":
-      // UserPromptSubmit carries no source discrimination — every submit is a
-      // startup from the core hook's perspective; its state-file self-gate
-      // makes this a no-op outside active workflows.
+      // Modern IDE payloads carry session_id. Legacy promptSubmit does not, so
+      // use one workspace-local synthetic id for its promptSubmit/agentStop pair.
       return {
         hook: "aidlc-session-start.ts",
-        input: { hook_event_name: "SessionStart", source: "startup" },
+        input: {
+          hook_event_name: "SessionStart",
+          source: "startup",
+          session_id: ide.sessionId ?? LEGACY_SESSION_ID,
+        },
       };
 
     case "audit-and-sensors": {
@@ -564,7 +573,11 @@ function buildForward(): Forward {
     case "session-end":
       return {
         hook: "aidlc-session-end.ts",
-        input: { hook_event_name: "SessionEnd", reason: "agent_stop" },
+        input: {
+          hook_event_name: "SessionEnd",
+          reason: "agent_stop",
+          session_id: LEGACY_SESSION_ID,
+        },
       };
 
     default:
@@ -655,14 +668,14 @@ async function readStdinWithTimeout(timeoutMs: number): Promise<string> {
 
 if (import.meta.main) {
   const target = process.argv[2] ?? "";
-  // Acquire payload only for payload-dependent targets. A non-empty
+  // Acquire input only for targets that need tool payload or session identity. A non-empty
   // USER_PROMPT identifies the 0.12 channel and is consumed immediately: that
   // IDE leaves stdin open forever, so probing stdin first imposed a mandatory
   // 2s delay on every payload hook. IDE 1.x sends USER_PROMPT empty and writes
   // + closes stdin; retain the timeout only as a defensive broken-channel
   // ceiling. Every other target skips both channels (zero latency).
   let input = "";
-  if (PAYLOAD_TARGETS.has(target)) {
+  if (INPUT_TARGETS.has(target)) {
     const legacyPayload = process.env.USER_PROMPT ?? "";
     if (legacyPayload.trim().length > 0) {
       input = legacyPayload;

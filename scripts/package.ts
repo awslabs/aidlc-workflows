@@ -602,7 +602,7 @@ function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): strin
   // override the robust choice. The renameRulesInCompiledData backstop still
   // runs for renamed-rules harnesses to normalize any residual <dir>/rules/
   // prose-path that a future code path might emit (guarded no-op today).
-  runTool(treeRoot, harnessDir, ["tools/aidlc-graph.ts", "compile"], memoryDir);
+  runTool(treeRoot, harnessDir, m.name, ["tools/aidlc-graph.ts", "compile"], memoryDir);
   if (m.rulesRename) renameRulesInCompiledData(treeRoot, harnessDir, m.rulesRename);
 
   // 3b. Emit tools/data/harness.json — the runtime's open-set source of truth
@@ -620,8 +620,8 @@ function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): strin
   //    Codex skips this — it ships no <harnessDir>/skills/; emit() composes the
   //    whole skill set into .agents/skills/ instead.
   if (!m.skipRunnerGen) {
-    runTool(treeRoot, harnessDir, ["tools/aidlc-runner-gen.ts", "write"]);
-    runTool(treeRoot, harnessDir, ["tools/aidlc-runner-gen.ts", "scopes"]);
+    runTool(treeRoot, harnessDir, m.name, ["tools/aidlc-runner-gen.ts", "write"]);
+    runTool(treeRoot, harnessDir, m.name, ["tools/aidlc-runner-gen.ts", "scopes"]);
   }
 
   // 5. Per-shell emissions (codex only today). These may live outside
@@ -650,6 +650,7 @@ function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): strin
 function runTool(
   treeRoot: string,
   harnessDir: string,
+  harnessName: string,
   args: string[],
   rulesDirAbs?: string | null,
 ): void {
@@ -659,6 +660,7 @@ function runTool(
     ...process.env,
     AIDLC_SRC: treeRoot,
     AIDLC_HARNESS_DIR: harnessDir,
+    AIDLC_HARNESS_NAME: harnessName,
   };
   if (rulesDirAbs) env.AIDLC_RULES_DIR = rulesDirAbs;
   const res = spawnSync("bun", [toolPath, ...rest], {

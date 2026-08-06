@@ -76,6 +76,7 @@ import {
   AIDLC_SRC,
   cleanupTestProject,
   createOrchestrationTestProject,
+  createTestProject,
   FIXTURES_DIR,
   resetAidlcEnv,
   runOrchestrateNext,
@@ -501,6 +502,27 @@ describe("t114 parked branch (#367)", () => {
     const out = runNext(proj, ["--resume"]).out;
     expect(out).not.toContain('"kind":"parked"');
     expect(out).toContain("unpark");
+  });
+
+  test("--new-intent bypasses the parked terminal and keeps its description guard", () => {
+    proj = createTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    park(proj);
+
+    const valid = runNext(proj, [
+      "--new-intent",
+      "--scope",
+      "bugfix",
+      "fix the unrelated login bug",
+    ]).out;
+    expect(valid).toContain('"kind":"print"');
+    expect(valid).toContain("intent-birth --scope bugfix");
+    expect(valid).not.toContain('"kind":"parked"');
+
+    const missing = runNext(proj, ["--new-intent", "--scope", "bugfix"]).out;
+    expect(missing).toContain('"kind":"error"');
+    expect(missing).toContain("requires a nonblank new-work description");
+    expect(missing).not.toContain('"kind":"parked"');
   });
 
   test("stale parked (Current Stage advanced past Parked At Stage) is ignored", () => {

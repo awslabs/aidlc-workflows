@@ -320,6 +320,49 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     }
   });
 
+  test("8b: session-start forwards modern session_id and uses a legacy fallback id", () => {
+    const dir = scratchProject(true);
+    try {
+      const modern = runIdeStdin(
+        dir,
+        "session-start",
+        ctx1x("", "", "SessionStart"),
+      );
+      expect(modern.code).toBe(0);
+      expect(
+        readFileSync(join(dir, "aidlc", ".aidlc-sessions", "sess_t218"), "utf-8").trim(),
+      ).toBe("00000000-0000-7000-8000-000000000001");
+
+      const dispatcherPayload = JSON.stringify({
+        session_id: "sess_t218_dispatcher",
+        hook_event_name: "SessionStart",
+      });
+      const dispatcher = runIdeDispatcherStdin(
+        dir,
+        "session-start",
+        dispatcherPayload,
+      );
+      expect(dispatcher.code).toBe(0);
+      expect(
+        readFileSync(
+          join(dir, "aidlc", ".aidlc-sessions", "sess_t218_dispatcher"),
+          "utf-8",
+        ).trim(),
+      ).toBe("00000000-0000-7000-8000-000000000001");
+
+      const legacy = runIde(dir, "session-start", null);
+      expect(legacy.code).toBe(0);
+      expect(
+        readFileSync(
+          join(dir, "aidlc", ".aidlc-sessions", "kiro-ide-legacy-current"),
+          "utf-8",
+        ).trim(),
+      ).toBe("00000000-0000-7000-8000-000000000001");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("9: stop blocks with a reason while the workflow has pending work", () => {
     const dir = scratchProject(true);
     try {

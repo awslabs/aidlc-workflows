@@ -347,6 +347,7 @@ export default function emit(ctx: EmitContext): void {
   // carries no compiled JSON, so requiring it from coreRoot would fail.)
   const IMPLICIT_GUARD = "policy:\n  allow_implicit_invocation: false\n";
   process.env.AIDLC_HARNESS_DIR = harnessDir;
+  process.env.AIDLC_HARNESS_NAME = "codex";
   const gen = require(join(CODEX_ROOT, "tools", "aidlc-runner-gen.ts")) as {
     runnableStages: () => Array<{ slug: string }>;
     renderStageRunner: (node: { slug: string }) => string;

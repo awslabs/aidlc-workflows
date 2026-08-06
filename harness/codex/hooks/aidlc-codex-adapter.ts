@@ -57,7 +57,7 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
-import { stateFilePath } from "../tools/aidlc-lib.ts";
+import { sessionsDir, stateFilePath } from "../tools/aidlc-lib.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -276,14 +276,15 @@ function wrapContext(coreStdout: string, eventName: string): string {
 
 // --- D-4: SESSION_ENDED reconcile-at-next-start ------------------------------
 
-const heartbeatFile = join(projectDir, "aidlc-docs", ".aidlc-hooks-health", "codex-session.json");
+const heartbeatFile = join(sessionsDir(projectDir), "codex-session.json");
 
 function reconcilePriorSession(): void {
-  // Only meaningful inside an active workflow; the heartbeat lives in the
-  // same health dir the core hooks already maintain.
-  if (!existsSync(join(projectDir, "aidlc-docs"))) return;
+  // The heartbeat is recorded even before a workflow exists. If the first turn
+  // births an intent, the utility can then bind this session to that record and
+  // a later Codex session can reconcile its inferred SESSION_ENDED correctly.
+  const hasActiveWorkflow = existsSync(stateFilePath(projectDir));
   try {
-    if (existsSync(heartbeatFile)) {
+    if (hasActiveWorkflow && existsSync(heartbeatFile)) {
       const prior = JSON.parse(readFileSync(heartbeatFile, "utf-8")) as {
         session_id?: string;
         ts?: string;
@@ -295,7 +296,10 @@ function reconcilePriorSession(): void {
         const reason =
           `inferred — Codex has no SessionEnd event (D-4); reconciled at next ` +
           `SessionStart. Prior session ${prior.session_id} last seen ${prior.ts ?? "unknown"}.`;
-        runCore("aidlc-session-end.ts", JSON.stringify({ reason }));
+        runCore(
+          "aidlc-session-end.ts",
+          JSON.stringify({ reason, session_id: prior.session_id }),
+        );
       }
     }
     mkdirSync(dirname(heartbeatFile), { recursive: true });

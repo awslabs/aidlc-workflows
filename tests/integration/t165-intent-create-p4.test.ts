@@ -40,6 +40,8 @@ const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const UTIL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
 const ORCH = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-orchestrate.ts");
+const SESSION_START = join(REPO_ROOT, "dist", "claude", ".claude", "hooks", "aidlc-session-start.ts");
+const SESSION_END = join(REPO_ROOT, "dist", "claude", ".claude", "hooks", "aidlc-session-end.ts");
 
 let proj: string;
 beforeEach(() => {
@@ -85,8 +87,33 @@ function next(args: string[], p = proj): Run {
   return { status: r.exitCode, stdout, out: `${stdout}${r.stderr.toString()}` };
 }
 
+function fireHook(hook: string, payload: Record<string, string>, p = proj): number {
+  const r = Bun.spawnSync({
+    cmd: [BUN, hook],
+    stdin: new TextEncoder().encode(JSON.stringify(payload)),
+    stdout: "ignore",
+    stderr: "ignore",
+    env: { ...process.env, CLAUDE_PROJECT_DIR: p },
+  });
+  return r.exitCode;
+}
+
 const intentsDir = (p: string, space = "default"): string =>
   join(p, "aidlc", "spaces", space, "intents");
+
+function readIntentAudit(p: string, record: string): string {
+  const auditDir = join(intentsDir(p), record, "audit");
+  if (!existsSync(auditDir)) return "";
+  return readdirSync(auditDir)
+    .filter((name) => name.endsWith(".md"))
+    .sort()
+    .map((name) => readFileSync(join(auditDir, name), "utf-8"))
+    .join("\n");
+}
+
+function hookHeartbeat(p: string, record: string, name: string): string {
+  return join(intentsDir(p), record, ".aidlc-hooks-health", name);
+}
 
 // ============================================================
 // Auto-birth on an empty workspace
@@ -166,20 +193,20 @@ describe("t164 auto-birth (intent-create) on an empty workspace", () => {
 });
 
 // ============================================================
-// intent-birth fails CLOSED on a truly-bare invocation
+// intent-create fails CLOSED on a truly-bare invocation
 // ============================================================
-describe("t164 intent-birth fails closed on a bare invocation", () => {
-  // A bare `intent-birth` (no --scope, no --arguments, no --label) used to
+describe("t164 intent-create fails closed on a bare invocation", () => {
+  // A bare `intent-create` (no --scope, no --arguments, no --label) used to
   // silently mint a garbage default-scope intent (scope resolved to the install
   // default, slug == the scope token, empty description), a routing fumble that
   // became actual corrupt workspace state. Birth is a mutation; a bare call is
   // almost always a mistake, so it must REFUSE, mutate nothing, and point at the
   // blessed entry points.
-  test("bare intent-birth is refused (exit 1) and mints NOTHING", () => {
-    const r = util(["intent-birth"]);
+  test("bare intent-create is refused (exit 1) and mints NOTHING", () => {
+    const r = util(["intent-create"]);
     expect(r.status).toBe(1);
     // Actionable refusal naming the missing flags + the blessed paths.
-    expect(r.out).toContain("intent-birth refused");
+    expect(r.out).toContain("intent-create refused");
     expect(r.out).toContain("--scope");
     // No mutation: no intents dir, no state file, no registry.
     expect(existsSync(intentsDir(proj))).toBe(false);
@@ -187,18 +214,45 @@ describe("t164 intent-birth fails closed on a bare invocation", () => {
     expect(readIntentRegistry(proj).length).toBe(0);
   });
 
+  test("every value-bearing birth flag rejects valueless or blank occurrences", () => {
+    for (const args of [
+      ["intent-create", "--scope"],
+      ["intent-create", "--arguments"],
+      ["intent-create", "--label"],
+      ["intent-create", "--scope", "poc", "--depth"],
+      ["intent-create", "--scope", "poc", "--test-strategy"],
+      ["intent-create", "--scope", "poc", "--review"],
+      ["intent-create", "--scope", "poc", "--repos"],
+      ["intent-create", "--scope", "poc", "--project-dir"],
+      ["intent-create", "--scope", "   "],
+      ["intent-create", "--arguments", "   "],
+      ["intent", "create", "--label", ""],
+      ["intent-create", "--scope", "poc", "--depth", "   "],
+      ["intent-create", "--scope", "poc", "--test-strategy", ""],
+      ["intent-create", "--scope", "poc", "--review", "   "],
+      ["intent-create", "--scope", "poc", "--repos", "   "],
+      ["intent-create", "--scope", "poc", "--project-dir", ""],
+    ]) {
+      const r = util(args);
+      expect(r.status, args.join(" ")).toBe(1);
+      expect(r.out, args.join(" ")).toContain("requires a nonblank value");
+      expect(existsSync(intentsDir(proj)), args.join(" ")).toBe(false);
+      expect(readIntentRegistry(proj).length, args.join(" ")).toBe(0);
+    }
+  });
+
   // The guard keys on "no scope AND no args AND no label"; each of the three
   // signals independently satisfies it, so every blessed path still births.
   test("any one of --scope / --arguments / --label satisfies the guard (births)", () => {
     // --scope alone: the engine's birth print directive always supplies it.
-    expect(util(["intent-birth", "--scope", "poc"]).status).toBe(0);
+    expect(util(["intent-create", "--scope", "poc"]).status).toBe(0);
     removeWorkspaceRecord(proj);
     // --arguments alone: the init runner forwards a freeform description here;
     // scope falls back to the install default (a legitimate, described birth).
-    expect(util(["intent-birth", "--arguments", "build a thing"]).status).toBe(0);
+    expect(util(["intent-create", "--arguments", "build a thing"]).status).toBe(0);
     removeWorkspaceRecord(proj);
     // --label alone: a described birth with an explicit dir-name essence.
-    expect(util(["intent-birth", "--label", "some work"]).status).toBe(0);
+    expect(util(["intent-create", "--label", "some work"]).status).toBe(0);
   });
 });
 
@@ -237,7 +291,7 @@ describe("t164 done-on-completed carries the new-work hint", () => {
 // prior intent's context.
 // ============================================================
 describe("t164 --new-intent birth directive hands off to a fresh session", () => {
-  test("next --new-intent emits a birth print that STOPs and points at a fresh session (/clear)", () => {
+  test("next --new-intent emits a command-neutral birth print that STOPs for a fresh session", () => {
     // Seed an active intent so this mirrors the real 'second intent while one is
     // live' path; Branch 4a fires before any continuation branch regardless.
     seedStateFile(proj, join(FIXTURES_DIR, "state-mid-ideation.md"));
@@ -245,16 +299,110 @@ describe("t164 --new-intent birth directive hands off to a fresh session", () =>
     const d = JSON.parse(r.stdout.trim());
     expect(d.kind).toBe("print");
     // Names the birth move for the CONFIRMED scope (not the active intent's scope).
-    expect(d.message).toContain("intent-birth --scope bugfix");
-    // The hand-off: STOP, don't continue in-session; start fresh, then /aidlc.
+    expect(d.message).toContain("intent-create --scope bugfix");
+    // The shared engine names the handoff but leaves concrete entry/reset
+    // commands to each harness SKILL.
     expect(d.message).toContain("STOP");
-    expect(d.message).toContain("/clear");
-    expect(d.message).toContain("/aidlc");
+    expect(d.message).toContain("fresh session");
+    expect(d.message).toContain("AI-DLC entry skill");
+    expect(d.message).not.toContain("/clear");
+    expect(d.message).not.toContain("run `/aidlc`");
+    expect(d.message).not.toContain("invoke `/aidlc`");
+    expect(d.message).not.toContain("$aidlc");
     // It must NOT carry the fresh-start continuation tail (that would keep the
     // new intent in the polluted session).
     expect(d.message).not.toContain("re-run `next` to continue");
     // next is read-only: naming the birth move mutates nothing.
     expect(readIntentRegistry(proj).length).toBe(0);
+  });
+
+  test("next --new-intent rejects a missing or blank description", () => {
+    seedStateFile(proj, join(FIXTURES_DIR, "state-mid-ideation.md"));
+    for (const args of [
+      ["--new-intent", "--scope", "bugfix"],
+      ["--new-intent", "--scope", "bugfix", "   "],
+    ]) {
+      const r = next(args);
+      const d = JSON.parse(r.stdout.trim());
+      expect(d.kind, args.join(" ")).toBe("error");
+      expect(d.message, args.join(" ")).toContain("requires a nonblank new-work description");
+      expect(readIntentRegistry(proj).length, args.join(" ")).toBe(0);
+    }
+  });
+
+  test("the complete fresh-session handoff attributes SESSION_ENDED to the original intent", () => {
+    // Real production order: the host starts a session before any workflow
+    // exists, then the first /aidlc invocation births the initial intent.
+    expect(
+      fireHook(SESSION_START, { source: "startup", session_id: "handoff-session-1" }),
+    ).toBe(0);
+    expect(
+      util(["intent-create", "--scope", "poc", "--arguments", "first intent"]).status,
+    ).toBe(0);
+    const first = activeIntent(proj);
+    expect(first).not.toBeNull();
+    expect(
+      existsSync(join(proj, "aidlc", ".aidlc-sessions", "handoff-session-1")),
+    ).toBe(true);
+
+    const directive = next([
+      "--new-intent",
+      "--scope",
+      "bugfix",
+      "fix the flaky login test",
+    ]);
+    expect(JSON.parse(directive.stdout.trim()).kind).toBe("print");
+    expect(
+      util([
+        "intent-create",
+        "--scope",
+        "bugfix",
+        "--arguments",
+        "fix the flaky login test",
+        "--label",
+        "flaky login",
+      ]).status,
+    ).toBe(0);
+    const second = activeIntent(proj);
+    expect(second).not.toBeNull();
+    expect(second).not.toBe(first);
+
+    expect(
+      fireHook(SESSION_END, {
+        reason: "clear",
+        session_id: "handoff-session-1",
+      }),
+    ).toBe(0);
+    expect(activeIntent(proj)).toBe(second);
+
+    const firstAudit = readIntentAudit(proj, first!);
+    const secondAuditBeforeStart = readIntentAudit(proj, second!);
+    expect(firstAudit).toContain("**Event**: SESSION_ENDED");
+    expect(firstAudit).toContain("**Reason**: clear");
+    expect(secondAuditBeforeStart).not.toContain("**Event**: SESSION_ENDED");
+    expect(existsSync(hookHeartbeat(proj, first!, "session-end.last"))).toBe(true);
+    expect(existsSync(hookHeartbeat(proj, second!, "session-end.last"))).toBe(false);
+
+    expect(
+      fireHook(SESSION_START, { source: "clear", session_id: "handoff-session-2" }),
+    ).toBe(0);
+    const secondAudit = readIntentAudit(proj, second!);
+    expect(secondAudit).toContain("**Event**: SESSION_STARTED");
+    expect(secondAudit).not.toContain("**Event**: SESSION_ENDED");
+  });
+
+  test("a later birth cannot claim an unstamped session when an intent already exists", () => {
+    expect(
+      util(["intent-create", "--scope", "poc", "--arguments", "existing intent"]).status,
+    ).toBe(0);
+    const sessions = join(proj, "aidlc", ".aidlc-sessions");
+    mkdirSync(sessions, { recursive: true });
+    writeFileSync(join(sessions, ".current-session"), "legacy-unstamped\n", "utf-8");
+
+    expect(
+      util(["intent-create", "--scope", "bugfix", "--arguments", "later intent"]).status,
+    ).toBe(0);
+    expect(existsSync(join(sessions, "legacy-unstamped"))).toBe(false);
   });
 
   test("a fresh-start birth (no --new-intent) keeps the same-session continuation tail", () => {
@@ -263,12 +411,12 @@ describe("t164 --new-intent birth directive hands off to a fresh session", () =>
     const r = next(["--scope", "bugfix"]);
     const d = JSON.parse(r.stdout.trim());
     expect(d.kind).toBe("print");
-    expect(d.message).toContain("intent-birth --scope bugfix");
+    expect(d.message).toContain("intent-create --scope bugfix");
     // Fresh-start tail is unchanged (the birth-directive pins expect this too):
     // continue in-session, no fresh-session hand-off.
     expect(d.message).toContain("re-run `next` to continue");
     expect(d.message).not.toContain("STOP");
-    expect(d.message).not.toContain("/clear");
+    expect(d.message).not.toContain("fresh session");
   });
 });
 

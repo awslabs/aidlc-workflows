@@ -110,6 +110,14 @@ const EXPECTED_SKILLS = [
   COMPOSE_RUNNER_SKILL,
 ].sort();
 
+const FRESH_SESSION_TEXT: Record<string, string> = {
+  claude: "use `/clear` (or restart Claude Code)",
+  codex: "exit or restart Codex CLI and start a new session",
+  kiro: "exit or restart Kiro CLI and start a new session",
+  "kiro-ide": "open a new Kiro IDE chat",
+  opencode: "exit or restart OpenCode and start a new session",
+};
+
 /**
  * Discover the shipped skill set: every directory under the skills dir that
  * contains a SKILL.md (mirrors the .sh for-loop over the skills dir that keeps
@@ -150,6 +158,22 @@ describe("t123 (smoke) skills-spec conformance — every shipped skill set", () 
       expect(runner).not.toContain("{{HARNESS_DIR}}");
       if (harness.manifest.skipRunnerGen) {
         expect(existsSync(join(harness.engineRoot, "skills"))).toBe(false);
+      }
+    });
+
+    test(`${harness.name}: generated scope runners use the harness entry skill for fresh-session handoff`, () => {
+      const runner = readFileSync(
+        join(harness.skillsRoot, "aidlc-bugfix", "SKILL.md"),
+        "utf-8",
+      );
+      const entrySkill = harness.name === "codex" ? "$aidlc" : "/aidlc";
+      expect(runner).toContain(`Packaging over \`${entrySkill} --scope bugfix\``);
+      expect(runner).toContain(`invoke \`${entrySkill}\` to begin the`);
+      expect(runner).toContain("**STOP**");
+      expect(runner).toContain("fresh session");
+      expect(runner).toContain(FRESH_SESSION_TEXT[harness.name]);
+      if (harness.name === "codex") {
+        expect(runner).not.toContain("run `/aidlc`");
       }
     });
   }

@@ -574,6 +574,22 @@ function scopeRunnerDirName(scope: string, front: Pick<ScopeFront, "plugin">): s
 export function renderRunner(scope: string, description: string): string {
   const front = discoverScopes()[scope];
   const dir = scopeRunnerDirName(scope, front ?? {});
+  const activeHarnessDir = harnessDir();
+  const harnessName = process.env.AIDLC_HARNESS_NAME?.trim();
+  const entrySkill = activeHarnessDir === ".codex" ? "$aidlc" : "/aidlc";
+  const freshSessionFlow = (() => {
+    if (harnessName === "claude") return "use `/clear` (or restart Claude Code)";
+    if (harnessName === "codex") return "exit or restart Codex CLI and start a new session";
+    if (harnessName === "kiro") return "exit or restart Kiro CLI and start a new session";
+    if (harnessName === "kiro-ide") return "open a new Kiro IDE chat";
+    if (harnessName === "opencode") return "exit or restart OpenCode and start a new session";
+    if (activeHarnessDir === ".claude") return "use `/clear` (or restart Claude Code)";
+    if (activeHarnessDir === ".codex") return "exit or restart Codex CLI and start a new session";
+    if (activeHarnessDir === ".kiro") {
+      return "start a new Kiro CLI session or open a new Kiro IDE chat";
+    }
+    return "exit or restart the current harness and start a new session";
+  })();
   // Normalise the scope's one-line description into a sentence (trailing period)
   // so it reads cleanly when stitched between the lead-in and the packaging note.
   const raw = (description || `Run the AI-DLC workflow with the ${scope} scope`).trim();
@@ -583,7 +599,7 @@ name: ${dir}
 generated-by: aidlc-runner-gen
 description: >
   Run the AI-DLC workflow with the ${scope} scope baked in — no scope
-  detection. ${desc} Packaging over \`/aidlc --scope ${scope}\`, which works
+  detection. ${desc} Packaging over \`${entrySkill} --scope ${scope}\`, which works
   without this skill.
 argument-hint: "[description | --status | --stage <slug|#> | --phase <name|#>]"
 user-invocable: true
@@ -592,7 +608,7 @@ user-invocable: true
 # AI-DLC — ${scope} scope
 
 Drive the AI-DLC engine with the **${scope}** scope fixed. This is the same
-deterministic forwarding loop the \`/aidlc\` orchestrator runs, with \`--scope
+deterministic forwarding loop the \`${entrySkill}\` orchestrator runs, with \`--scope
 ${scope}\` baked into the first \`next\` so scope detection is skipped. The
 engine owns all routing; the conductor persona arrives on the first directive's
 \`conductor_persona\` field — adopt it for the whole run.
@@ -607,12 +623,12 @@ engine owns all routing; the conductor persona arrives on the first directive's
 Pass \`$ARGUMENTS\` through verbatim after \`--scope ${scope}\`; the engine parses
 any flags (\`--status\`, \`--stage\`, …) and the \`--scope\` from the
 state file always wins on an existing workflow, so re-running a started workflow
-resumes it. To run a different scope, use \`/aidlc --scope <other>\` instead.
+resumes it. To run a different scope, use \`${entrySkill} --scope <other>\` instead.
 
 ## Starting unrelated new work?
 
 Before you forward \`$ARGUMENTS\` on step 1, make the SAME recognise-vs-route
-judgment the \`/aidlc\` orchestrator makes: does this input **continue** the
+judgment the \`${entrySkill}\` orchestrator makes: does this input **continue** the
 active intent, or does it describe a **genuinely new, unrelated** piece of work?
 This matters most when the active intent is already **complete**: then \`next\`
 correctly returns \`done\` (the engine is read-only and never births alongside a
@@ -643,8 +659,8 @@ continuation; the escape hatch is \`next --new-intent\`.
   as the loop's \`print\` handling describes: run the birth, then, because this is
   a NEW, unrelated intent and this session still carries the previous intent's
   context, **STOP** and follow the directive's hand-off: tell the user to start a
-  fresh session (\`/clear\`, or restart the CLI) and run \`/aidlc\` to begin the new
-  intent with a clean slate. Nothing is lost; the intent is saved on disk.
+  fresh session (${freshSessionFlow}) and invoke \`${entrySkill}\` to begin the
+  new intent with a clean slate. Nothing is lost; the intent is saved on disk.
 - **On DECLINE**, proceed with the active intent, the normal loop above.
 `;
 }

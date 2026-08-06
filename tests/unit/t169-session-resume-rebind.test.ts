@@ -125,6 +125,7 @@ describe("t169 session-start resume rebind (mechanism cli — spawned hook + cur
     const resumed = fire(proj, "resume", "NEVER-STAMPED");
     expect(resumed.exitCode).toBe(0);
     expect(resumed.context).not.toContain("INTENT REBIND OFFER");
+    expect(readSessionIntentUuid(proj, "NEVER-STAMPED")).toBe(a.uuid);
   });
 
   test("flat-legacy project (no per-intent record) never offers a rebind", () => {

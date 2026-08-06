@@ -132,6 +132,14 @@ const SUMMARY_STOP_ANNEX_TOKENS = [
   '**"What should change?"**',
 ];
 
+const FRESH_SESSION_TOKENS: Record<string, string[]> = {
+  claude: ["/clear", "`/aidlc`"],
+  codex: ["restart Codex CLI", "`$aidlc`"],
+  kiro: ["restart Kiro CLI", "`/aidlc`"],
+  "kiro-ide": ["new Kiro IDE chat", "`/aidlc`"],
+  opencode: ["restart OpenCode", "`/aidlc`"],
+};
+
 function stageTableRows(body: string): string[] {
   const lines = body.split(/\r?\n/);
   const start = lines.indexOf("## Stage Graph");
@@ -207,6 +215,42 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     }
     // One distinct block text => every harness agrees.
     expect([...blocks.values()].map((v) => v.sort())).toHaveLength(1);
+  });
+
+  test("every shipped conductor SKILL stops new-intent births and names its fresh-session flow", () => {
+    const failures: string[] = [];
+    for (const harness of HARNESS_MATRIX) {
+      const rel = `harness/${harness.name}/skills/aidlc/SKILL.md`;
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      for (const token of [
+        "**run-then-stop**",
+        "Then **STOP and hand off to a fresh session** rather than re-running `next`",
+        ...(FRESH_SESSION_TOKENS[harness.name] ?? []),
+      ]) {
+        if (!body.includes(token)) failures.push(`${rel}  missing: ${token}`);
+      }
+      if (body.includes("run it, then re-run `next` to land on the new intent's first stage")) {
+        failures.push(`${rel}  still continues a new intent in the prior session`);
+      }
+    }
+    expect(failures).toEqual([]);
+  });
+
+  test("Codex conductor guidance uses its native $aidlc invocation", () => {
+    const body = readFileSync(
+      join(REPO_ROOT, "harness/codex/skills/aidlc/SKILL.md"),
+      "utf-8",
+    );
+    for (const stale of [
+      "`/aidlc --resume`",
+      "fresh `/aidlc`",
+      "`/aidlc intent",
+      "`/aidlc space",
+      "on `/aidlc compose",
+      "second `/aidlc` invocation",
+    ]) {
+      expect(body).not.toContain(stale);
+    }
   });
 
   test("every shipped conductor SKILL requires a valid two-option learning question", () => {

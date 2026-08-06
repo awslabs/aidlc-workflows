@@ -63,6 +63,6 @@ continuation; the escape hatch is `next --new-intent`.
   as the loop's `print` handling describes: run the birth, then, because this is
   a NEW, unrelated intent and this session still carries the previous intent's
   context, **STOP** and follow the directive's hand-off: tell the user to start a
-  fresh session (`/clear`, or restart the CLI) and run `/aidlc` to begin the new
-  intent with a clean slate. Nothing is lost; the intent is saved on disk.
+  fresh session (open a new Kiro IDE chat) and invoke `/aidlc` to begin the
+  new intent with a clean slate. Nothing is lost; the intent is saved on disk.
 - **On DECLINE**, proceed with the active intent, the normal loop above.

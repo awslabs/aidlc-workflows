@@ -45,7 +45,7 @@ import {
 import { hostname, tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createIntent } from "../../core/tools/aidlc-lib.ts";
+import { createIntent, sessionsDir } from "../../core/tools/aidlc-lib.ts";
 import {
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
@@ -67,10 +67,9 @@ const FIXTURES = JSON.parse(
 // the scratch project seeds the per-intent shell + the state fixture into the
 // default record (so the cursor resolves) + the resolved audit SHARD (pinned
 // clone-id so the log-subagent shard gate passes and reads are deterministic).
-// NOTE: the Codex ADAPTER's OWN bookkeeping (codex-session.json) still lives at
-// <cwd>/aidlc-docs/.aidlc-hooks-health/ — that path is hardcoded in the harness
-// adapter (harness/codex/hooks/aidlc-codex-adapter.ts), NOT a core path helper,
-// so test 10 keeps seeding it there.
+// The Codex adapter's session heartbeat lives with the core session stamps at
+// aidlc/.aidlc-sessions/, independent of the active-intent cursor. That lets a
+// new session reconcile its predecessor after a second intent became active.
 const PINNED_CLONE_ID = "testcloneid149";
 function pinnedShardName(): string {
   const host =
@@ -138,6 +137,21 @@ function readAudit(dir: string): string {
     .join("\n");
 }
 
+function readRecordAudit(dir: string, record: string): string {
+  const auditDir = join(intentsDirOf(dir, DEFAULT_SPACE), record, "audit");
+  let names: string[];
+  try {
+    names = readdirSync(auditDir);
+  } catch {
+    return "";
+  }
+  return names
+    .filter((name) => name.endsWith(".md"))
+    .sort()
+    .map((name) => readFileSync(join(auditDir, name), "utf-8"))
+    .join("\n");
+}
+
 function withCwd(payload: Record<string, unknown>, dir: string): Record<string, unknown> {
   return { ...payload, cwd: dir };
 }
@@ -151,6 +165,36 @@ function seedUnapprovedCodeGeneration(dir: string, unit: string): void {
   mkdirSync(join(seededRecordDir(dir), "construction", unit, "code-generation"), {
     recursive: true,
   });
+}
+
+function activeRecord(dir: string): string {
+  return readFileSync(
+    join(intentsDirOf(dir, DEFAULT_SPACE), "active-intent"),
+    "utf-8",
+  ).trim();
+}
+
+function runIntentCreate(dir: string, description: string): number {
+  const result = spawnSync(
+    "bun",
+    [
+      join(dir, ".codex", "tools", "aidlc-utility.ts"),
+      "intent-create",
+      "--scope",
+      "poc",
+      "--arguments",
+      description,
+      "--project-dir",
+      dir,
+    ],
+    {
+      cwd: dir,
+      encoding: "utf-8",
+      env: { ...process.env, CLAUDE_PROJECT_DIR: undefined } as NodeJS.ProcessEnv,
+      timeout: 30_000,
+    },
+  );
+  return result.status ?? -1;
 }
 
 /** Remap a captured apply_patch payload's `aidlc-docs/` paths (a verbatim
@@ -458,27 +502,57 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
   });
 
   test("10: session-start reconciles an unclosed prior session as inferred SESSION_ENDED (D-4)", () => {
-    const dir = scratchProject(true);
+    const dir = scratchProject(false);
     try {
-      // Seed a heartbeat from a DIFFERENT prior session.
-      const health = join(dir, "aidlc-docs", ".aidlc-hooks-health");
-      mkdirSync(health, { recursive: true });
-      writeFileSync(
-        join(health, "codex-session.json"),
-        JSON.stringify({ session_id: "prior-session-0000", ts: "2026-06-12T00:00:00Z" }),
-        "utf-8",
+      rmSync(intentsDirOf(dir, DEFAULT_SPACE), { recursive: true, force: true });
+      const health = sessionsDir(dir);
+      const priorPayload = withCwd(
+        {
+          ...FIXTURES.sessionStart,
+          session_id: "prior-session-0000",
+          source: "startup",
+        },
+        dir,
       );
-      const r = runAdapter(dir, "session-start", withCwd(FIXTURES.sessionStart, dir));
+
+      // Codex starts before a workflow exists. The adapter must retain both its
+      // heartbeat and current-session marker so the first birth can bind it.
+      expect(runAdapter(dir, "session-start", priorPayload).code).toBe(0);
+      expect(
+        JSON.parse(readFileSync(join(health, "codex-session.json"), "utf-8")).session_id,
+      ).toBe("prior-session-0000");
+      expect(readFileSync(join(health, ".current-session"), "utf-8").trim()).toBe(
+        "prior-session-0000",
+      );
+
+      expect(runIntentCreate(dir, "first intent")).toBe(0);
+      const prior = activeRecord(dir);
+      expect(runIntentCreate(dir, "second intent")).toBe(0);
+      const current = activeRecord(dir);
+      expect(current).not.toBe(prior);
+
+      const nextPayload = withCwd(
+        {
+          ...FIXTURES.sessionStart,
+          session_id: "next-session-0001",
+          source: "startup",
+        },
+        dir,
+      );
+      const r = runAdapter(dir, "session-start", nextPayload);
       expect(r.code).toBe(0);
-      const audit = readAudit(dir);
-      expect(audit).toContain("SESSION_ENDED");
-      expect(audit).toContain("inferred");
-      expect(audit).toContain("prior-session-0000");
+      const priorAudit = readRecordAudit(dir, prior);
+      const currentAudit = readRecordAudit(dir, current);
+      expect(priorAudit).toContain("SESSION_ENDED");
+      expect(priorAudit).toContain("inferred");
+      expect(priorAudit).toContain("prior-session-0000");
+      expect(currentAudit).not.toContain("SESSION_ENDED");
+      expect(currentAudit).toContain("SESSION_STARTED");
       // The heartbeat now names the new session.
       const hb = JSON.parse(readFileSync(join(health, "codex-session.json"), "utf-8")) as {
         session_id: string;
       };
-      expect(hb.session_id).toBe(String(FIXTURES.sessionStart.session_id));
+      expect(hb.session_id).toBe("next-session-0001");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -576,7 +650,7 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       const stampPath = join(dir, "aidlc", ".aidlc-sessions", sid);
       expect(readFileSync(stampPath, "utf-8").trim()).toBe(a.uuid);
       // Move the live cursor to B (the drift the resume must detect).
-      createIntent(dir, "intent-b", "default");
+      const b = createIntent(dir, "intent-b", "default");
       const r = runAdapter(
         dir,
         "session-start",
@@ -589,6 +663,9 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       const ctx = out.hookSpecificOutput?.additionalContext ?? "";
       expect(ctx).toContain("INTENT REBIND OFFER");
       expect(ctx).toContain("intent-a");
+      expect(ctx).toContain("$aidlc intent intent-a");
+      expect(ctx).not.toContain("/aidlc intent intent-a");
+      expect(readFileSync(stampPath, "utf-8").trim()).toBe(b.uuid);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

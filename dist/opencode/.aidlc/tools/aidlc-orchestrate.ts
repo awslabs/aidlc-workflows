@@ -2555,6 +2555,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     !flags.stage &&
     !flags.phase &&
     !flags.review &&
+    !flags.newIntent &&
     (getField(stateContent, "Parked") ?? "").trim().length > 0
   ) {
     const parkedAt = (getField(stateContent, "Parked At Stage") ?? "").trim();
@@ -2685,13 +2686,20 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // new-work birth into "advance the current stage". The freeform new-work text
   // rides in flags.intent (the same slot Branch 9a threads as the description).
   if (flags.newIntent) {
+    const description = flags.intent?.trim();
+    if (!description) {
+      emit(errorDirective(
+        "`next --new-intent` requires a nonblank new-work description after the confirmed scope.",
+      ));
+      return;
+    }
     // Use the EXPLICIT --scope, not the precedence-ladder `scope` (which lets the
     // ACTIVE intent's state scope win — wrong for a brand-new intent: the offer
     // confirmed a scope for the NEW work, independent of what's in flight). Fall
     // back to the resolved scope only when no flag was passed. Both were already
     // validated above (Branch 3b validates flags.scope; the unknown-scope check
     // validates the resolved scope).
-    emit(createPrintDirective(flags.scope ?? scope, flags, flags.intent));
+    emit(createPrintDirective(flags.scope ?? scope, flags, description));
     return;
   }
 
