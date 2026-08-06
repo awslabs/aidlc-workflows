@@ -131,6 +131,19 @@ describe("t263 reviewer terminal-receipt ordering (receipt-invalidation loop fix
         "requirements-analysis",
         "--reviewer",
         "aidlc-product-lead-agent",
+        "--iteration",
+        "1",
+      ], p).status,
+    ).toBe(0);
+    expect(
+      run(LOG_TOOL, [
+        "review",
+        "--stage",
+        "requirements-analysis",
+        "--reviewer",
+        "aidlc-product-lead-agent",
+        "--iteration",
+        "1",
         "--verdict",
         "READY",
       ], p).status,

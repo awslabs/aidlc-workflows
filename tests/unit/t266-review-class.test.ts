@@ -1,4 +1,4 @@
-// t265 — reviewer class (adversarial | advisory | none): the review-cost dial.
+// t266 — reviewer class (adversarial | advisory | none): the review-cost dial.
 //
 // Pins the four seams the feature spans:
 //   1. Schema: review_class accepts adversarial/advisory, rejects other values,
@@ -14,16 +14,59 @@
 //      the gate, no lead re-invoke), in core AND in every dist projection.
 //
 // The engine-enforced iteration ceiling (aidlc-log review refusing an
-// over-budget REVIEW_REQUESTED) is pinned in t266 — it spawns the real CLI.
+// over-budget REVIEW_REQUESTED) is pinned in t271 — it spawns the real CLI.
 
-import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { afterAll, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { validateStageFrontmatter } from "../../core/tools/aidlc-stage-schema.ts";
-import { resolveReviewClass } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  readAllAuditShards,
+  resolveReviewClass,
+  stateFilePath,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  cleanupTestProject,
+  createTestProject,
+  removeWorkspaceRecord,
+  resetAidlcEnv,
+  runOrchestrateNext,
+  seedAidlcMemory,
+  seedStateFile,
+} from "../harness/fixtures.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
 const read = (rel: string) => readFileSync(join(ROOT, rel), "utf8");
+const ORCHESTRATE = join(ROOT, "dist", "claude", ".claude", "tools", "aidlc-orchestrate.ts");
+const UTILITY = join(ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
+const tempDirs: string[] = [];
+
+resetAidlcEnv();
+afterAll(() => {
+  for (const dir of tempDirs) cleanupTestProject(dir);
+});
+
+function projectWithState(): string {
+  const project = createTestProject();
+  tempDirs.push(project);
+  seedAidlcMemory(project);
+  seedStateFile(project, "state-mid-inception.md");
+  return project;
+}
+
+function runUtility(project: string, args: string[]) {
+  const result = spawnSync(
+    process.execPath,
+    [UTILITY, ...args, "--project-dir", project],
+    { encoding: "utf-8" },
+  );
+  return {
+    status: result.status ?? -1,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? "",
+  };
+}
 
 // Minimal valid frontmatter the schema accepts; review fields layered per case.
 const BASE = {
@@ -41,7 +84,7 @@ const BASE = {
   outputs: "none",
 };
 
-describe("t265 review class", () => {
+describe("t266 review class", () => {
   // --- 1. schema -----------------------------------------------------------
   test("schema accepts adversarial and advisory with a reviewer", () => {
     for (const cls of ["adversarial", "advisory"]) {
@@ -160,6 +203,110 @@ describe("t265 review class", () => {
     expect(
       resolveReviewClass("adversarial", "feature", "- **Review Override**: \n")
     ).toBe("adversarial");
+  });
+
+  test("birth and scope/config routes preserve --review", () => {
+    const fresh = createTestProject();
+    tempDirs.push(fresh);
+    removeWorkspaceRecord(fresh);
+    const birth = runOrchestrateNext(
+      ORCHESTRATE,
+      fresh,
+      ["--scope", "feature", "--review", "none"],
+    );
+    expect(birth.status).toBe(0);
+    expect(String(birth.directive?.message)).toContain(
+      "intent-birth --scope feature --review none",
+    );
+
+    const active = projectWithState();
+    const changedScope = runOrchestrateNext(
+      ORCHESTRATE,
+      active,
+      ["--scope", "feature", "--review", "none"],
+    );
+    expect(changedScope.status).toBe(0);
+    expect(String(changedScope.directive?.message)).toContain(
+      "scope-change --scope feature --review none",
+    );
+
+    const sameScope = runOrchestrateNext(
+      ORCHESTRATE,
+      active,
+      ["--scope", "bugfix", "--review", "none"],
+    );
+    expect(sameScope.status).toBe(0);
+    expect(String(sameScope.directive?.message)).toContain(
+      "config-change --review none",
+    );
+
+    const parked = projectWithState();
+    const parkedState = stateFilePath(parked);
+    writeFileSync(
+      parkedState,
+      `${readFileSync(parkedState, "utf-8")}\n- **Parked**: true\n- **Parked At Stage**: requirements-analysis\n`,
+      "utf-8",
+    );
+    const parkedConfig = runOrchestrateNext(
+      ORCHESTRATE,
+      parked,
+      ["--review", "none"],
+    );
+    expect(parkedConfig.status).toBe(0);
+    expect(String(parkedConfig.directive?.message)).toContain(
+      "config-change --review none",
+    );
+  });
+
+  test("routes that cannot apply --review reject it instead of discarding it", () => {
+    const active = projectWithState();
+    for (const args of [
+      ["--stage", "requirements-analysis", "--review", "none"],
+      ["--stage", "requirements-analysis", "--single", "--review", "none"],
+      ["compose", "--review", "none"],
+      ["--resume", "--review", "none"],
+    ]) {
+      const result = runOrchestrateNext(ORCHESTRATE, active, args);
+      expect(result.status, args.join(" ")).toBe(0);
+      expect(result.directive?.kind, args.join(" ")).toBe("error");
+      expect(String(result.directive?.message), args.join(" ")).toContain(
+        "Cannot combine --review",
+      );
+    }
+  });
+
+  test("intent-birth and scope-change persist and audit --review", () => {
+    const fresh = createTestProject();
+    tempDirs.push(fresh);
+    seedAidlcMemory(fresh);
+    const born = runUtility(fresh, [
+      "intent-birth",
+      "--scope",
+      "feature",
+      "--review",
+      "none",
+    ]);
+    expect(born.status).toBe(0);
+    expect(readFileSync(stateFilePath(fresh), "utf-8")).toContain(
+      "- **Review Override**: none",
+    );
+    expect(readAllAuditShards(fresh)).toContain("**Review Override**: none");
+
+    const active = projectWithState();
+    const changed = runUtility(active, [
+      "scope-change",
+      "--scope",
+      "feature",
+      "--review",
+      "none",
+    ]);
+    expect(changed.status).toBe(0);
+    expect(readFileSync(stateFilePath(active), "utf-8")).toContain(
+      "- **Review Override**: none",
+    );
+    expect(readAllAuditShards(active)).toContain(
+      "**Event**: REVIEW_CLASS_CHANGED",
+    );
   });
 
   // --- 4. prose (core + every dist skill) -----------------------------------

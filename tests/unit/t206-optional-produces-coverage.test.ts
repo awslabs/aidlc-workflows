@@ -50,12 +50,14 @@ const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 // approve without a terminal REVIEW_COMPLETED. These tests target the coverage
 // guard, not the reviewer gate, so record a READY review before approving.
 function logReviewReady(proj: string, stage: string, reviewer: string, unit?: string): void {
-  const args = [LOG, "review", "--stage", stage, "--reviewer", reviewer, "--iteration", "1", "--verdict", "READY"];
+  const args = [LOG, "review", "--stage", stage, "--reviewer", reviewer, "--iteration", "1"];
   if (unit) args.push("--unit", unit);
   args.push("--project-dir", proj);
-  const res = spawnSync(BUN, args, { encoding: "utf-8" });
-  // Keep a log-record failure local, not surfaced later as a confusing gate error.
-  expect(res.status).toBe(0);
+  for (const suffix of [[], ["--verdict", "READY"]]) {
+    const res = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
+    // Keep a log-record failure local, not surfaced later as a confusing gate error.
+    expect(res.status).toBe(0);
+  }
 }
 
 // The record-relative prefix every resolved per-unit path is rooted at.

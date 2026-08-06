@@ -125,7 +125,7 @@ function birth(proj: string, scope: string): RunResult {
 
 function recordRequiredReview(proj: string, slug: string): void {
   if (slug !== "intent-capture" && slug !== "rough-mockups") return;
-  const reviewed = run(LOG_TOOL, proj, [
+  const args = [
     "review",
     "--stage",
     slug,
@@ -133,11 +133,12 @@ function recordRequiredReview(proj: string, slug: string): void {
     "aidlc-product-lead-agent",
     "--iteration",
     "1",
-    "--verdict",
-    "READY",
-  ]);
-  if (reviewed.rc !== 0) {
-    throw new Error(`failed to record ${slug} review: ${reviewed.combined}`);
+  ];
+  for (const suffix of [[], ["--verdict", "READY"]]) {
+    const reviewed = run(LOG_TOOL, proj, [...args, ...suffix]);
+    if (reviewed.rc !== 0) {
+      throw new Error(`failed to record ${slug} review: ${reviewed.combined}`);
+    }
   }
 }
 

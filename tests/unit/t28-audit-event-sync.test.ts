@@ -46,7 +46,7 @@
 //   .sh test 4 (every MD event in TS)                 -> "every audit-format.md event appears in aidlc-audit.ts"
 //   .sh test 5 (EVENT_HEADINGS has every TS event)    -> "EVENT_HEADINGS maps every VALID_EVENT_TYPES member"
 //   .sh test 6 (assert_eq TS_COUNT MD_COUNT)          -> "event counts match across the two files"
-//   .sh test 7 (assert_eq TS_COUNT - baseline pin)    -> "VALID_EVENT_TYPES.size === 77 (baseline pin)"
+//   .sh test 7 (assert_eq TS_COUNT - baseline pin)    -> "VALID_EVENT_TYPES.size === 78 (baseline pin)"
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";

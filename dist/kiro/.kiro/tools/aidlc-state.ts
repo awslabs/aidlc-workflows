@@ -25,6 +25,7 @@ import {
   humanPresenceGuardDisabled,
   intentRepos,
   isAutonomousMode,
+  isAutonomousSwarmStage,
   isoTimestamp,
   KNOWN_CODEKB_STAGES,
   loadScopeMapping,
@@ -44,6 +45,7 @@ import {
   removeSlug,
   replaceSection,
   resolveBoltDag,
+  resolveReviewClass,
   resolveProjectDir,
   resolveStage,
   setCheckbox,
@@ -922,15 +924,9 @@ function isSettledSwarmForArtifactGuard(
   stage: { slug: string; phase: string; for_each?: string; mode?: string },
   stateContent: string,
 ): boolean {
-  if (stage.phase !== "construction") return false;
-  if (stage.for_each !== "unit-of-work" || stage.mode !== "subagent") return false;
-  if (!isAutonomousMode(stateContent)) return false;
-  const scope = getField(stateContent, "Scope");
-  if (!scope) return false;
-  const first = firstInScopeStageOfPhase("construction", scope);
-  if (first !== null && first.slug === stage.slug) return false; // skeleton gate
+  if (!isAutonomousSwarmStage(pd, stateContent, stage)) return false;
   const resolution = resolveBoltDag(pd);
-  if (resolution.state !== "ok" || resolution.units.length === 0) return false;
+  if (resolution.state !== "ok") return false;
   // Shared attempt-scoped read (aidlc-lib.ts): a row counts only when its
   // Stage names this slug AND its Run floor equals the current attempt's
   // floor, so stale-attempt and cross-stage rows never satisfy the guard.
@@ -1263,13 +1259,32 @@ function verifyReviewerPrecondition(
     name: string;
     phase: string;
     for_each?: string;
+    mode?: string;
     reviewer?: string;
+    review_class?: "adversarial" | "advisory";
     produces?: string[];
     optional_produces?: string[];
     produces_kinds?: Record<string, string[]>;
   }
 ): void {
   if (!stage.reviewer) return; // stage declares no reviewer — nothing to enforce
+
+  // Interactive directives omit the reviewer when the effective class resolves
+  // to `none`; their completion path must use that same resolution or it asks
+  // for a receipt the conductor was explicitly told not to create. Autonomous
+  // swarm stages are the exception: their declared reviewer is the only
+  // pre-merge verification inside each Bolt, so caps/overrides do not silence
+  // the receipt requirement there.
+  if (
+    !isAutonomousSwarmStage(pd, content, stage) &&
+    resolveReviewClass(
+      stage.review_class ?? "adversarial",
+      getField(content, "Scope") ?? "",
+      content,
+    ) === "none"
+  ) {
+    return;
+  }
 
   const reviewer = stage.reviewer;
   if (readAllAuditShards(pd).length === 0) {

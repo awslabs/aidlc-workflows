@@ -308,6 +308,7 @@ export const VALID_KINDS = [
 // aidlc-stage-schema.ts VALID_MODES (the directive's mode is read straight off
 // the stage node, so the value set is identical).
 export const VALID_MODES = ["inline", "subagent", "pipeline", "mob", "agent-team"] as const;
+export const VALID_REVIEW_CLASSES = ["adversarial", "advisory"] as const;
 
 // Per-kind allowed-key sets. A field outside its kind's set is rejected as an
 // unknown key (mirrors aidlc-stage-schema.ts KNOWN_FIELDS). `kind` is always
@@ -461,6 +462,11 @@ export function validateDirective(obj: unknown): ValidationResult {
       checkOptionalString(o, "stage_file", kind, errors);
       checkOptionalString(o, "reviewer", kind, errors);
       checkOptionalPositiveInteger(o, "reviewer_max_iterations", kind, errors);
+      checkOptionalString(o, "review_class", kind, errors);
+      checkEnum(o, "review_class", VALID_REVIEW_CLASSES, kind, errors);
+      if ("review_class" in o && typeof o.reviewer !== "string") {
+        errors.push(`${kind}: review_class requires reviewer`);
+      }
       checkOptionalString(o, "repo", kind, errors);
       break;
     case "present-gate":
@@ -536,6 +542,11 @@ function checkRunStageShared(
   // an optional string, reviewer_max_iterations an optional positive integer.
   checkOptionalString(o, "reviewer", kind, errors);
   checkOptionalPositiveInteger(o, "reviewer_max_iterations", kind, errors);
+  checkOptionalString(o, "review_class", kind, errors);
+  checkEnum(o, "review_class", VALID_REVIEW_CLASSES, kind, errors);
+  if ("review_class" in o && typeof o.reviewer !== "string") {
+    errors.push(`${kind}: review_class requires reviewer`);
+  }
   // unit: optional on a run-stage directive (present only on a per-unit
   // Construction directive resolved to a concrete Unit of Work). A present
   // value must be a string; absent is valid.

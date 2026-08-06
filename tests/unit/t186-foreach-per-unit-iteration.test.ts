@@ -85,7 +85,7 @@ afterEach(() => {
 });
 
 function logReviewReady(proj: string, stage: string, unit: string): void {
-  const res = spawnSync(BUN, [
+  const args = [
     LOG,
     "review",
     "--stage",
@@ -96,13 +96,14 @@ function logReviewReady(proj: string, stage: string, unit: string): void {
     unit,
     "--iteration",
     "1",
-    "--verdict",
-    "READY",
     "--project-dir",
     proj,
-  ], { encoding: "utf-8" });
-  if ((res.status ?? -1) !== 0) {
-    throw new Error(`review log failed: ${res.stdout ?? ""}${res.stderr ?? ""}`);
+  ];
+  for (const suffix of [[], ["--verdict", "READY"]]) {
+    const res = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
+    if ((res.status ?? -1) !== 0) {
+      throw new Error(`review log failed: ${res.stdout ?? ""}${res.stderr ?? ""}`);
+    }
   }
 }
 

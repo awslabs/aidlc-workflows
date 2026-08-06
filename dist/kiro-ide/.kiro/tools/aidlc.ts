@@ -330,11 +330,12 @@ export const ROUTES: readonly Route[] = [
     group: "config",
     kind: "custom",
     classification: "translation",
-    verbs: ["set depth", "set test-strategy", "get", "list"],
+    verbs: ["set depth", "set test-strategy", "set review", "get", "list"],
     custom: "config",
     targets: {
       "set depth": "config-change",
       "set test-strategy": "config-change",
+      "set review": "config-change",
       get: "config-get",
       list: "config-list",
     },
@@ -343,7 +344,7 @@ export const ROUTES: readonly Route[] = [
       { command: "config set <key> <value>", summary: "change supported project configuration" },
       { command: "config list", summary: "list supported project configuration" },
     ],
-    all: ["set depth <value>", "set test-strategy <value>", "get <key>", "list"],
+    all: ["set depth <value>", "set test-strategy <value>", "set review <value>", "get <key>", "list"],
   },
   {
     id: "plugin",
@@ -582,6 +583,11 @@ function handleConfig(route: Route, argv: string[]): Action {
     const missing = requireValue("config", "set test-strategy", value);
     if (missing) return missing;
     return { type: "delegate", tool: TOOLS.utility, args: ["config-change", "--test-strategy", value, ...argv.slice(4)] };
+  }
+  if (key === "review") {
+    const missing = requireValue("config", "set review", value);
+    if (missing) return missing;
+    return { type: "delegate", tool: TOOLS.utility, args: ["config-change", "--review", value, ...argv.slice(4)] };
   }
   return nounError("config", key ? `set ${key}` : "set");
 }

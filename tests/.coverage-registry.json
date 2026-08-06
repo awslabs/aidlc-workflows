@@ -1816,6 +1816,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:isAutonomousSwarmStage",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t271-review-iteration-ceiling.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:isClaudeCodeHookInput",
       "minMechanism": "none",
       "coveredBy": [],

@@ -138,7 +138,7 @@ function recordStageStarted(proj: string, slug: string): void {
 }
 
 function recordReview(proj: string, slug: string, iteration: number): void {
-  const r = spawnSync(BUN, [
+  const args = [
     LOG,
     "review",
     "--stage",
@@ -147,13 +147,14 @@ function recordReview(proj: string, slug: string, iteration: number): void {
     "aidlc-product-lead-agent",
     "--iteration",
     String(iteration),
-    "--verdict",
-    "READY",
     "--project-dir",
     proj,
-  ], { encoding: "utf-8", env: process.env });
-  if ((r.status ?? -1) !== 0) {
-    throw new Error(`recordReview failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
+  ];
+  for (const suffix of [[], ["--verdict", "READY"]]) {
+    const r = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8", env: process.env });
+    if ((r.status ?? -1) !== 0) {
+      throw new Error(`recordReview failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
+    }
   }
 }
 
@@ -351,7 +352,7 @@ describe("t205: approve-time gate-revision backstop", () => {
     expect(field(proj, "Revision Count")).toBe("1");
     expect(stateContent(proj)).toContain(`- [?] ${slug}`);
 
-    recordReview(proj, slug, 2);
+    recordReview(proj, slug, 1);
     const accepted = guarded(proj, ["approve", slug, "--user-input", "looks good now"]);
     expect(accepted.rc).toBe(0);
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);

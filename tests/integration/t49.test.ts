@@ -309,6 +309,7 @@ beforeAll(() => {
   // requirements-analysis declares a reviewer; record a fresh terminal review
   // (after the revise) so the §12a gate precondition passes. This test targets
   // the reject/revise transition trail, not the reviewer gate.
+  run(LOG, ["review", "--stage", "requirements-analysis", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1"], proj);
   run(LOG, ["review", "--stage", "requirements-analysis", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1", "--verdict", "READY"], proj);
   // Step 4: approve [?] -> [x] (auto-advances to the next in-scope stage).
   approveAck = run(

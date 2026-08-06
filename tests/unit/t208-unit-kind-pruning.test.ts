@@ -154,8 +154,8 @@ function runReport(proj: string, args: string[], enforceGuard = false): Directiv
   }
 }
 
-function logReviewReady(proj: string, unit: string): void {
-  const r = spawnSync(BUN, [
+function logReviewReady(proj: string, unit: string, iteration = 1): void {
+  const args = [
     LOG,
     "review",
     "--stage",
@@ -165,14 +165,15 @@ function logReviewReady(proj: string, unit: string): void {
     "--unit",
     unit,
     "--iteration",
-    "1",
-    "--verdict",
-    "READY",
+    String(iteration),
     "--project-dir",
     proj,
-  ], { encoding: "utf-8" });
-  if ((r.status ?? -1) !== 0) {
-    throw new Error(`review log failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
+  ];
+  for (const suffix of [[], ["--verdict", "READY"]]) {
+    const r = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
+    if ((r.status ?? -1) !== 0) {
+      throw new Error(`review log failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
+    }
   }
 }
 
@@ -387,7 +388,7 @@ describe("t208 engine unit-kind pruning", () => {
     expect(refused.message).toContain("1 of 2 applicable units");
     expect(refused.message).toContain("(beta)");
 
-    logReviewReady(proj, "beta");
+    logReviewReady(proj, "beta", 2);
     const accepted = runReport(
       proj,
       ["--stage", "functional-design", "--result", "approved"],

@@ -35,8 +35,8 @@ All AI-DLC commands start with the orchestrator invocation. This chapter is a co
 | `/aidlc --depth <level>` | Override depth level (minimal, standard, comprehensive) |
 | `/aidlc --test-strategy <level>` | Override test strategy (minimal, standard, comprehensive) |
 | `/aidlc --review <class>` | Cap stage reviews for this run (adversarial, advisory, none) |
-| `/aidlc config get <key>` | Print active workflow config (`depth`, `test-strategy`) |
-| `/aidlc config set <key> <value>` | Change active workflow config (`depth`, `test-strategy`) |
+| `/aidlc config get <key>` | Print active workflow config (`depth`, `test-strategy`, `review`) |
+| `/aidlc config set <key> <value>` | Change active workflow config (`depth`, `test-strategy`, `review`) |
 | `/aidlc config list` | List active workflow config (`--json` for structured output) |
 | `/aidlc plugin select [names]` | Show or set the enabled plugin list for this install |
 | `/aidlc plugin list` | List installed plugins and enabled state |
@@ -451,7 +451,7 @@ Change the active scope of a running workflow.
 /aidlc --scope enterprise
 ```
 
-**Behavior:** Updates the scope configuration in `aidlc-state.md`, recalculates which stages should execute and which should be skipped, and logs a `SCOPE_CHANGED` audit event. Can be combined with `--depth` to override the new scope's default depth.
+**Behavior:** Updates the scope configuration in `aidlc-state.md`, recalculates which stages should execute and which should be skipped, and logs a `SCOPE_CHANGED` audit event. Can be combined with `--depth`, `--test-strategy`, and `--review`; all supplied overrides are applied in the same change.
 
 Refused under autonomous Construction (`Construction Autonomy Mode: autonomous`), the same rule as `recompose`: re-shaping the plan needs a human at the gate, and an unattended run has none. Switch to gated Construction first (`aidlc-bolt set-autonomy --mode gated`) or let the swarm finish.
 
@@ -544,7 +544,9 @@ reviewer dispatch entirely, and `--review adversarial` clears the override
 Autonomous swarm construction is exempt: inside a Bolt the reviewer is the
 only pre-merge verification, so the declared class always applies there.
 Updates the `Review Override` field in `aidlc-state.md` and logs a
-`REVIEW_CLASS_CHANGED` audit event.
+`REVIEW_CLASS_CHANGED` audit event. It can be supplied when a workflow is
+born or alongside `--scope`; a same-as-current scope applies the review
+override as a config change instead of discarding it.
 
 **Valid values:** `adversarial`, `advisory`, `none` (case-insensitive).
 

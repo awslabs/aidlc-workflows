@@ -256,7 +256,7 @@ function setIteration(proj: string, value: string): { rc: number; out: string } 
 }
 
 function logReviewReady(proj: string, stage: string, unit: string): void {
-  const r = spawnSync(BUN, [
+  const args = [
     LOG,
     "review",
     "--stage",
@@ -267,13 +267,14 @@ function logReviewReady(proj: string, stage: string, unit: string): void {
     unit,
     "--iteration",
     "1",
-    "--verdict",
-    "READY",
     "--project-dir",
     proj,
-  ], { encoding: "utf-8" });
-  if ((r.status ?? -1) !== 0) {
-    throw new Error(`review log failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
+  ];
+  for (const suffix of [[], ["--verdict", "READY"]]) {
+    const r = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
+    if ((r.status ?? -1) !== 0) {
+      throw new Error(`review log failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
+    }
   }
 }
 

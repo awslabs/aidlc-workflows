@@ -311,6 +311,7 @@ describe("t136 revision-loop — aidlc-state gate/reject/revise/approve cumulati
     expect(state(proj, "revise", SLUG).status).toBe(0); // S1
     // requirements-analysis declares a reviewer; record a fresh terminal review
     // (after the revise) so the §12a gate precondition passes.
+    spawnSync(BUN, [LOG_TS, "review", "--stage", SLUG, "--reviewer", "aidlc-product-lead-agent", "--iteration", "1", "--project-dir", proj], { encoding: "utf-8" });
     spawnSync(BUN, [LOG_TS, "review", "--stage", SLUG, "--reviewer", "aidlc-product-lead-agent", "--iteration", "1", "--verdict", "READY", "--project-dir", proj], { encoding: "utf-8" });
     expect(state(proj, "approve", SLUG, "--user-input", "accept as-is").status).toBe(0); // S1
     expect(checkboxGlyph(proj, SLUG)).toBe("x");

@@ -353,6 +353,38 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     );
   });
 
+  test("run-stage review_class validates the advisory/adversarial enum", () => {
+    expect(
+      errs({
+        ...runStage(),
+        reviewer: "aidlc-product-lead-agent",
+        reviewer_max_iterations: 1,
+        review_class: "advisory",
+      }),
+    ).toBe("VALID");
+    expect(errs({ ...runStage(), review_class: "none" })).toContain(
+      "run-stage: review_class must be one of adversarial | advisory",
+    );
+    expect(errs({ ...runStage(), review_class: 1 })).toContain(
+      "run-stage: review_class must be string, got number",
+    );
+    expect(errs({ ...runStage(), review_class: "advisory" })).toContain(
+      "run-stage: review_class requires reviewer",
+    );
+  });
+
+  test("invoke-swarm review_class validates the advisory/adversarial enum", () => {
+    expect(errs({ ...invokeSwarm(), review_class: "adversarial" })).toBe(
+      "VALID",
+    );
+    expect(errs({ ...invokeSwarm(), review_class: "none" })).toContain(
+      "invoke-swarm: review_class must be one of adversarial | advisory",
+    );
+    expect(errs({ ...invokeSwarm(), reviewer: undefined, review_class: "advisory" })).toContain(
+      "invoke-swarm: review_class requires reviewer",
+    );
+  });
+
   test("dispatch-subagent rejects the single-only marker", () => {
     expect(errs({ ...dispatchSubagent(), single: true })).toContain(
       "dispatch-subagent: unknown key: single",

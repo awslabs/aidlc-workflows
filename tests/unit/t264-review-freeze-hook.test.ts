@@ -190,23 +190,24 @@ function projWithGate(): string {
 }
 
 function recordReview(p: string, verdict: "READY" | "NOT-READY"): void {
-  const r = spawnSync(
-    BUN,
-    [
-      LOG_TOOL,
-      "review",
-      "--stage",
-      "requirements-analysis",
-      "--reviewer",
-      "aidlc-product-lead-agent",
-      "--verdict",
-      verdict,
-      "--project-dir",
-      p,
-    ],
-    { encoding: "utf-8" },
-  );
-  if ((r.status ?? -1) !== 0) throw new Error(`review log failed: ${r.stdout}${r.stderr}`);
+  const args = [
+    LOG_TOOL,
+    "review",
+    "--stage",
+    "requirements-analysis",
+    "--reviewer",
+    "aidlc-product-lead-agent",
+    "--iteration",
+    "1",
+    "--project-dir",
+    p,
+  ];
+  for (const suffix of [[], ["--verdict", verdict]]) {
+    const r = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
+    if ((r.status ?? -1) !== 0) {
+      throw new Error(`review log failed: ${r.stdout}${r.stderr}`);
+    }
+  }
 }
 
 function reject(p: string): void {

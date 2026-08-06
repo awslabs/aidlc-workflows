@@ -332,6 +332,13 @@ describe("t230 dispatcher route parity", () => {
       fixture: true,
     },
     {
+      name: "config review maps to config-change",
+      routerArgs: ["config", "set", "review", "advisory"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["config-change", "--review", "advisory"],
+      fixture: true,
+    },
+    {
       name: "plugin select maps to select-plugins",
       routerArgs: ["plugin", "select"],
       tool: "aidlc-utility.ts",

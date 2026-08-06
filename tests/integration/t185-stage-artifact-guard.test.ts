@@ -58,7 +58,7 @@ const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const MID_IDEATION = "state-mid-ideation.md"; // Current Stage: feasibility
 
 function reviewCodeGen(proj: string, unit: string): void {
-  spawnSync(BUN, [
+  const args = [
     LOG,
     "review",
     "--stage",
@@ -69,11 +69,12 @@ function reviewCodeGen(proj: string, unit: string): void {
     "aidlc-architecture-reviewer-agent",
     "--iteration",
     "1",
-    "--verdict",
-    "READY",
     "--project-dir",
     proj,
-  ], { encoding: "utf-8" });
+  ];
+  for (const suffix of [[], ["--verdict", "READY"]]) {
+    spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
+  }
 }
 
 // Drive a state subcommand with the artifact guard ENABLED (clear the suite's

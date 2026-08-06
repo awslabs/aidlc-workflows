@@ -11,6 +11,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { relative, resolve, sep } from "node:path";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
+  activeIntent,
+  activeSpace,
   auditBlockField,
   emitError,
   errorMessage,
@@ -20,6 +22,7 @@ import {
   humanActedSinceLastAnswer,
   humanPresenceGuardDisabled,
   isAutonomousMode,
+  isAutonomousSwarmStage,
   loadStageGraphAll,
   parseCheckboxes,
   readAllAuditShards,
@@ -28,7 +31,6 @@ import {
   reviewArtifactFingerprint,
   resolveProjectDir,
   resolveReviewClass,
-  resolveStage,
   SUMMARY_CONFIRMATION_CHECKPOINT,
   stateFilePath,
   toPosix,
@@ -66,13 +68,15 @@ function resolveActiveProjectDir(explicit?: string): string {
 function emitAudit(
   pd: string,
   eventType: string,
-  fields: Record<string, string>
+  fields: Record<string, string>,
+  intent?: string,
+  space?: string,
 ): void {
-  if (holdsAuditLock(pd)) {
-    appendAuditEntryUnlocked(eventType, fields, pd);
+  if (holdsAuditLock(pd, intent, space)) {
+    appendAuditEntryUnlocked(eventType, fields, pd, intent, space);
     return;
   }
-  appendAuditEntry(eventType, fields, pd);
+  appendAuditEntry(eventType, fields, pd, intent, space);
 }
 
 // --- Flag parsing ---
@@ -510,100 +514,305 @@ function handleAnswer(args: string[]): void {
 // PER UNIT, so pass --unit; the approve guard requires one review per unit.
 const VALID_VERDICTS = new Set(["READY", "NOT-READY"]);
 
+type ReviewAttemptSummary = {
+  requestCount: number;
+  boltStarted: boolean;
+  pendingIterations: Set<number>;
+};
+
+// Count requests in the current stage/unit attempt. The same chronological
+// floors used by receipt freshness reset the budget on workflow start, jump,
+// stage re-entry, or gate rejection. A matching BOLT_STARTED is a stronger
+// per-unit floor because the forked audit inherits the main workflow's prior
+// rows; it is also the proof that `--unit` belongs to an actual Bolt attempt.
+function reviewAttemptSummary(
+  audit: string,
+  stateContent: string,
+  stage: { slug: string; for_each?: string },
+  reviewer: string,
+  unit: string | undefined,
+  workflow: string | undefined,
+  trackBoltLifecycle: boolean,
+): ReviewAttemptSummary {
+  const relevant = new Set([
+    "WORKFLOW_STARTED",
+    "STAGE_STARTED",
+    "STAGE_COMPLETED",
+    "STAGE_JUMPED",
+    "GATE_REJECTED",
+    "BOLT_STARTED",
+    "BOLT_COMPLETED",
+    "BOLT_FAILED",
+    "REVIEW_REQUESTED",
+    "REVIEW_COMPLETED",
+  ]);
+  const blocks = audit.replace(/\r\n/g, "\n").split(/\n---\n/);
+  const events: { pos: number; ts: string; event: string; block: string }[] = [];
+  for (let i = 0; i < blocks.length; i++) {
+    const event = auditBlockField(blocks[i], "Event");
+    if (!event || !relevant.has(event)) continue;
+    events.push({
+      pos: i,
+      ts: auditBlockField(blocks[i], "Timestamp") ?? "",
+      event,
+      block: blocks[i],
+    });
+  }
+  events.sort((a, b) =>
+    a.ts !== b.ts ? (a.ts < b.ts ? -1 : 1) : a.pos - b.pos
+  );
+
+  const unitMajor =
+    stage.for_each === "unit-of-work" &&
+    getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
+  let floor = -1;
+  let boltStarted = false;
+  for (let i = 0; i < events.length; i++) {
+    const entry = events[i];
+    if (workflow !== undefined) {
+      if (
+        entry.event === "STAGE_COMPLETED" &&
+        auditBlockField(entry.block, "Stage") === stage.slug &&
+        auditBlockField(entry.block, "Workflow") === workflow
+      ) {
+        floor = i;
+      }
+      continue;
+    }
+    if (entry.event === "WORKFLOW_STARTED" || entry.event === "STAGE_JUMPED") {
+      floor = i;
+      boltStarted = false;
+      continue;
+    }
+    if (
+      entry.event === "BOLT_STARTED" &&
+      trackBoltLifecycle &&
+      unit !== undefined &&
+      auditBlockField(entry.block, "Bolt slug") === unit
+    ) {
+      floor = i;
+      boltStarted = true;
+      continue;
+    }
+    if (
+      trackBoltLifecycle &&
+      (entry.event === "BOLT_COMPLETED" || entry.event === "BOLT_FAILED") &&
+      unit !== undefined &&
+      auditBlockField(entry.block, "Bolt slug") === unit
+    ) {
+      floor = i;
+      boltStarted = false;
+      continue;
+    }
+    if (auditBlockField(entry.block, "Stage") !== stage.slug) continue;
+    if (entry.event === "GATE_REJECTED") {
+      floor = i;
+      boltStarted = false;
+    } else if (
+      entry.event === "STAGE_STARTED" &&
+      !unitMajor &&
+      !auditBlockField(entry.block, "Workflow")?.startsWith("single-stage:")
+    ) {
+      floor = i;
+      boltStarted = false;
+    }
+  }
+
+  let requestCount = 0;
+  const pendingIterations = new Set<number>();
+  for (let i = floor + 1; i < events.length; i++) {
+    const entry = events[i];
+    if (
+      entry.event !== "REVIEW_REQUESTED" &&
+      entry.event !== "REVIEW_COMPLETED"
+    ) {
+      continue;
+    }
+    if (auditBlockField(entry.block, "Stage") !== stage.slug) continue;
+    if (auditBlockField(entry.block, "Reviewer") !== reviewer) continue;
+    const eventUnit = auditBlockField(entry.block, "Unit") || undefined;
+    if (eventUnit !== unit) continue;
+    const eventWorkflow = auditBlockField(entry.block, "Workflow") || undefined;
+    if (
+      workflow !== undefined
+        ? eventWorkflow !== workflow
+        : eventWorkflow?.startsWith("single-stage:")
+    ) {
+      continue;
+    }
+    const rawIteration = auditBlockField(entry.block, "Iteration");
+    if (!rawIteration || !/^[1-9][0-9]*$/.test(rawIteration)) continue;
+    const iteration = Number(rawIteration);
+    if (entry.event === "REVIEW_REQUESTED") {
+      requestCount++;
+      pendingIterations.add(iteration);
+    } else {
+      pendingIterations.delete(iteration);
+    }
+  }
+  return { requestCount, boltStarted, pendingIterations };
+}
+
+function reviewBudgetMessage(stage: string, ordinal: number, budget: number): string {
+  return (
+    `Refusing REVIEW_REQUESTED for "${stage}": review request ${ordinal} exceeds ` +
+    `this stage's review budget (${budget}). ` +
+    (budget === 1
+      ? "This review runs as a single advisory pass - do not re-invoke the reviewer; " +
+        "quote its findings at the approval gate for the human to triage."
+      : "The review loop is exhausted - present the gate with the unresolved findings " +
+        "for the human's decision instead of another review pass.")
+  );
+}
+
+class ReviewRefusal extends Error {}
+
+function refuseReview(message: string): never {
+  throw new ReviewRefusal(message);
+}
+
 function handleReview(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
   if (!flags.reviewer) error("Missing --reviewer <agent>");
+  if (flags.intent || flags.space) {
+    error(
+      "The review command does not accept --intent/--space selectors. Switch to the target workspace first.",
+    );
+  }
 
   const pd = resolveActiveProjectDir(projectDir);
+  const space = activeSpace(pd);
+  const intent = activeIntent(pd, space);
+  if (!intent) {
+    error("Cannot resolve the active intent for review logging.");
+  }
   const fields: Record<string, string> = {
     Stage: flags.stage,
     Reviewer: flags.reviewer,
   };
   if (flags.unit) fields.Unit = flags.unit;
-  if (flags.iteration) fields.Iteration = flags.iteration;
   if (flags.single === "true") fields.Workflow = `single-stage:${flags.stage}`;
 
-  // Engine-enforced iteration ceiling (deterministic half of the §12a cap;
-  // the prose cap alone let a looping conductor run unbounded reviews). A
-  // REVIEW_REQUESTED whose --iteration exceeds the stage's effective budget
-  // is refused before any audit row lands. The budget mirrors directive
-  // emission exactly: advisory = 1 (single pass is the contract), else the
-  // stage's declared reviewer_max_iterations (default 2). Swarm/per-unit
-  // reviews (--unit) use the DECLARED class - same exemption as invoke-swarm
-  // emission, where scope caps and run overrides do not apply. Fail-open on
-  // a missing graph/state read (a broken lookup must not block a legitimate
-  // review), fail-closed only on a positive over-budget signal. Requests
-  // with no --iteration are exempt (older callers; the receipt precondition
-  // still holds them to a terminal verdict).
-  if (flags.verdict === undefined && flags.iteration) {
+  const loadContext = () => {
+    const state = readStateFile(pd, intent, space);
+    const node = loadStageGraphAll().find((stage) => stage.slug === flags.stage);
+    if (!node?.reviewer) {
+      refuseReview(`Cannot record review: stage "${flags.stage}" has no declared reviewer.`);
+    }
+    if (flags.reviewer !== node.reviewer) {
+      refuseReview(
+        `Cannot record review for "${flags.stage}": reviewer "${flags.reviewer}" ` +
+          `does not match the declared reviewer "${node.reviewer}".`,
+      );
+    }
+    if (flags.unit && node.for_each !== "unit-of-work") {
+      refuseReview(`Stage "${flags.stage}" is not per-unit; remove --unit.`);
+    }
+    const autonomousCandidate =
+      flags.unit !== undefined && isAutonomousSwarmStage(pd, state, node);
+    const attempt = reviewAttemptSummary(
+      readAllAuditShards(pd, intent, space),
+      state,
+      node,
+      flags.reviewer,
+      flags.unit,
+      fields.Workflow,
+      autonomousCandidate,
+    );
+    return { state, node, attempt, autonomousCandidate };
+  };
+
+  // REVIEW_REQUESTED owns its ordinal: require a positive integer, count prior
+  // requests in the current attempt, and append under the same lock. This closes
+  // duplicate/missing-label bypasses and makes concurrent requests serialize.
+  if (flags.verdict === undefined) {
+    if (!flags.iteration || !/^[1-9][0-9]*$/.test(flags.iteration)) {
+      error("REVIEW_REQUESTED requires --iteration <positive integer>.");
+    }
     const iteration = Number(flags.iteration);
-    if (Number.isInteger(iteration) && iteration >= 1) {
-      let budget: number | null = null;
-      try {
-        const node = loadStageGraphAll().find((s) => s.slug === flags.stage);
-        if (node?.reviewer) {
-          const declared = node.review_class ?? "adversarial";
-          let effective: string = declared;
-          if (!flags.unit) {
-            const state = readStateFile(pd, flags.intent, flags.space);
-            effective = resolveReviewClass(
+    fields.Iteration = flags.iteration;
+    try {
+      withAuditLock(pd, () => {
+        const { state, node, attempt, autonomousCandidate } = loadContext();
+        const expected = attempt.requestCount + 1;
+        const declared = node.review_class ?? "adversarial";
+        let budget: number | null = null;
+        if (autonomousCandidate && attempt.boltStarted) {
+          budget = node.reviewer_max_iterations ?? 2;
+        } else {
+          try {
+            const effective = resolveReviewClass(
               declared,
               getField(state, "Scope") ?? "",
-              state
+              state,
             );
+            if (effective === "none") budget = 0;
+            else if (effective === "advisory") budget = 1;
+            else budget = node.reviewer_max_iterations ?? 2;
+          } catch {
+            // Class resolution fails open; ordinal enforcement remains active.
           }
-          if (effective === "none") budget = 0;
-          else if (effective === "advisory") budget = 1;
-          else budget = node.reviewer_max_iterations ?? 2;
         }
-      } catch {
-        budget = null; // resolution failed - do not block the review
-      }
-      if (budget !== null && iteration > budget) {
-        error(
-          `Refusing REVIEW_REQUESTED for "${flags.stage}": iteration ${iteration} exceeds ` +
-            `this stage's review budget (${budget}). ` +
-            (budget === 1
-              ? "This review runs as a single advisory pass - do not re-invoke the reviewer; " +
-                "quote its findings at the approval gate for the human to triage."
-              : "The review loop is exhausted - present the gate with the unresolved findings " +
-                "for the human's decision instead of another review pass.")
-        );
-      }
+        if (budget !== null && iteration > budget) {
+          refuseReview(reviewBudgetMessage(flags.stage, iteration, budget));
+        }
+        if (budget !== null && expected > budget) {
+          refuseReview(reviewBudgetMessage(flags.stage, expected, budget));
+        }
+        if (iteration !== expected) {
+          refuseReview(
+            `Refusing REVIEW_REQUESTED for "${flags.stage}": iteration ${iteration} ` +
+              `is out of sequence; expected ${expected} from the current audit attempt.`,
+          );
+        }
+        emitAudit(pd, "REVIEW_REQUESTED", fields, intent, space);
+      }, intent, space);
+    } catch (e) {
+      if (e instanceof ReviewRefusal) error(e.message);
+      error(`Audit emission failed: ${errorMessage(e)}`);
     }
+    console.log(JSON.stringify({ emitted: "REVIEW_REQUESTED", stage: flags.stage }));
+    return;
   }
 
-  let eventType: "REVIEW_REQUESTED" | "REVIEW_COMPLETED";
-  if (flags.verdict !== undefined) {
-    const verdict = flags.verdict.toUpperCase();
-    if (!VALID_VERDICTS.has(verdict)) {
-      error(
-        `Unknown --verdict "${flags.verdict}". Accepted: ${[...VALID_VERDICTS].join(", ")}.`
-      );
-    }
-    fields.Verdict = verdict;
-    const stage = resolveStage(flags.stage);
-    if (!stage) error(`Cannot record review: unknown stage "${flags.stage}"`);
-    const fingerprint = reviewArtifactFingerprint(pd, stage, flags.unit);
-    if (fingerprint === null) {
-      error(
-        `Cannot record review for "${flags.stage}": the declared artifact set could not be fingerprinted. Resolve the active intent and readable artifact paths, then record the verdict again.`,
-      );
-    }
-    fields["Artifact Fingerprint"] = fingerprint;
-    eventType = "REVIEW_COMPLETED";
-  } else {
-    eventType = "REVIEW_REQUESTED";
+  if (!flags.iteration || !/^[1-9][0-9]*$/.test(flags.iteration)) {
+    error("REVIEW_COMPLETED requires --iteration <positive integer>.");
   }
+  const iteration = Number(flags.iteration);
+  fields.Iteration = flags.iteration;
+  const verdict = flags.verdict.toUpperCase();
+  if (!VALID_VERDICTS.has(verdict)) {
+    error(
+      `Unknown --verdict "${flags.verdict}". Accepted: ${[...VALID_VERDICTS].join(", ")}.`
+    );
+  }
+  fields.Verdict = verdict;
 
   try {
-    emitAudit(pd, eventType, fields);
+    withAuditLock(pd, () => {
+      const { node, attempt } = loadContext();
+      if (!attempt.pendingIterations.has(iteration)) {
+        refuseReview(
+          `Refusing REVIEW_COMPLETED for "${flags.stage}": no unmatched ` +
+            `REVIEW_REQUESTED iteration ${iteration} exists in the current audit attempt.`,
+        );
+      }
+      const fingerprint = reviewArtifactFingerprint(pd, node, flags.unit);
+      if (fingerprint === null) {
+        refuseReview(
+          `Cannot record review for "${flags.stage}": the declared artifact set could not be fingerprinted. Resolve the active intent and readable artifact paths, then record the verdict again.`,
+        );
+      }
+      fields["Artifact Fingerprint"] = fingerprint;
+      emitAudit(pd, "REVIEW_COMPLETED", fields, intent, space);
+    }, intent, space);
   } catch (e) {
+    if (e instanceof ReviewRefusal) error(e.message);
     error(`Audit emission failed: ${errorMessage(e)}`);
   }
 
-  console.log(JSON.stringify({ emitted: eventType, stage: flags.stage }));
+  console.log(JSON.stringify({ emitted: "REVIEW_COMPLETED", stage: flags.stage }));
 }
 
 // --- CLI entry point ---

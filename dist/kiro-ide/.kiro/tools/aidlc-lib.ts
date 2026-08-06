@@ -3153,6 +3153,7 @@ export function freshReviewReceipts(
     "GATE_REJECTED",
     "ARTIFACT_CREATED",
     "ARTIFACT_UPDATED",
+    "REVIEW_REQUESTED",
     "REVIEW_COMPLETED",
   ]);
   const blocks = audit.replace(/\r\n/g, "\n").split(/\n---\n/);
@@ -3190,6 +3191,7 @@ export function freshReviewReceipts(
   // an ambiguous matching path fails closed by clearing every unit receipt.
   const recordedRepos = new Set(intentRepos(projectDir));
   const unitVerdicts = new Map<string, ReviewVerdict>();
+  const pendingRequests = new Set<string>();
   let stageVerdict: ReviewVerdict | null = null;
   for (let i = floorIdx + 1; i < events.length; i++) {
     const e = events[i];
@@ -3207,13 +3209,26 @@ export function freshReviewReceipts(
       }
       continue;
     }
-    if (e.event !== "REVIEW_COMPLETED") continue;
+    if (
+      e.event !== "REVIEW_REQUESTED" &&
+      e.event !== "REVIEW_COMPLETED"
+    ) {
+      continue;
+    }
     if (auditBlockField(e.block, "Workflow")?.startsWith("single-stage:")) continue;
     if (auditBlockField(e.block, "Stage") !== stage.slug) continue;
     if (auditBlockField(e.block, "Reviewer") !== reviewer) continue;
+    const iteration = auditBlockField(e.block, "Iteration");
+    if (!iteration || !/^[1-9][0-9]*$/.test(iteration)) continue;
+    const unit = auditBlockField(e.block, "Unit") || undefined;
+    const requestKey = `${unit ?? ""}\u0000${iteration}`;
+    if (e.event === "REVIEW_REQUESTED") {
+      pendingRequests.add(requestKey);
+      continue;
+    }
     const verdict = auditBlockField(e.block, "Verdict");
     if (verdict !== "READY" && verdict !== "NOT-READY") continue;
-    const unit = auditBlockField(e.block, "Unit") || undefined;
+    if (!pendingRequests.delete(requestKey)) continue;
     const recordedFingerprint = auditBlockField(e.block, "Artifact Fingerprint");
     const currentFingerprint = reviewArtifactFingerprint(projectDir, stage, unit);
     if (
@@ -3814,6 +3829,31 @@ export const AUTONOMY_MODE_FIELD = "Construction Autonomy Mode";
 
 export function isAutonomousMode(stateContent: string | null): boolean {
   return !!stateContent && getField(stateContent, AUTONOMY_MODE_FIELD)?.trim() === "autonomous";
+}
+
+// True only for the topology the engine can dispatch as an autonomous swarm.
+// A truthy `--unit` is not proof: the four inline Construction design stages
+// are also per-unit. Keep this predicate shared by receipt and budget guards so
+// scope/run review caps are bypassed only for a real Bolt-capable stage.
+export function isAutonomousSwarmStage(
+  projectDir: string,
+  stateContent: string | null,
+  stage: {
+    slug: string;
+    phase: string;
+    for_each?: string;
+    mode?: string;
+  },
+): boolean {
+  if (stage.phase !== "construction") return false;
+  if (stage.for_each !== "unit-of-work" || stage.mode !== "subagent") return false;
+  if (!isAutonomousMode(stateContent)) return false;
+  const scope = stateContent ? getField(stateContent, "Scope") : null;
+  if (!scope) return false;
+  const first = firstInScopeStageOfPhase("construction", scope);
+  if (first !== null && first.slug === stage.slug) return false;
+  const resolution = resolveBoltDag(projectDir);
+  return resolution.state === "ok" && resolution.units.length > 0;
 }
 
 // Deterministic off-switch for the human-presence gate (mirrors

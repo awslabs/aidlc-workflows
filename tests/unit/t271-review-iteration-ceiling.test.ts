@@ -1,4 +1,6 @@
-// t266 — engine-enforced review iteration ceiling (aidlc-log review).
+// covers: function:isAutonomousSwarmStage
+//
+// t271 — engine-enforced review iteration ceiling (aidlc-log review).
 //
 // Before this feature the §12a iteration cap was prose-only: a conductor that
 // lost count (or got wedged in the receipt-invalidation loop) could dispatch
@@ -14,8 +16,9 @@
 //
 // Boundary cases pinned: at-budget passes, over-budget refuses (rc 1, no
 // audit row), REVIEW_COMPLETED (the --verdict half) is never budget-checked
-// (a terminal receipt must always be recordable), per-unit requests use the
-// DECLARED class (swarm exemption), and no --iteration stays exempt.
+// (a terminal receipt must always be recordable), request ordinals are owned
+// by the audit ledger, inline per-unit work remains capped, and only a matching
+// autonomous Bolt attempt receives the declared-class exemption.
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -24,9 +27,11 @@ import { join } from "node:path";
 import {
   createTestProject,
   seedAuditFile,
+  seedBoltDagBatches,
   seedStateFile,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const LOG_TOOL = join(
@@ -76,7 +81,7 @@ function seedProject(scope: "bugfix" | "feature"): string {
   return proj;
 }
 
-describe("t266 review iteration ceiling", () => {
+describe("t271 review iteration ceiling", () => {
   test("advisory stage: iteration 1 passes, iteration 2 refused with terminal guidance", () => {
     const proj = seedProject("feature"); // requirements-analysis declares advisory
     const ok = runReview(proj, [
@@ -156,18 +161,57 @@ describe("t266 review iteration ceiling", () => {
     expect(refused.stderr).toContain("review budget (0)");
   });
 
-  test("per-unit (--unit) requests use the DECLARED class - swarm exemption", () => {
-    // bugfix scope caps to advisory, but a --unit request on an adversarial
-    // stage keeps the declared budget of 2 (the reviewer is the only
-    // verification inside a Bolt).
+  test("inline per-unit reviews remain subject to scope caps", () => {
     const proj = seedProject("bugfix");
     const ok = runReview(proj, [
-      "--stage", "code-generation",
+      "--stage", "functional-design",
+      "--reviewer", "aidlc-architecture-reviewer-agent",
+      "--unit", "unit-alpha",
+      "--iteration", "1",
+    ]);
+    expect(ok.status).toBe(0);
+    appendAuditEntry("BOLT_STARTED", {
+      "Bolt names": "unit-alpha",
+      "Batch number": "1",
+      "Walking skeleton": "false",
+      "Bolt slug": "unit-alpha",
+    }, proj);
+    const over = runReview(proj, [
+      "--stage", "functional-design",
       "--reviewer", "aidlc-architecture-reviewer-agent",
       "--unit", "unit-alpha",
       "--iteration", "2",
     ]);
-    expect(ok.status).toBe(0);
+    expect(over.status).not.toBe(0);
+    expect(over.stderr).toContain("review budget (1)");
+  });
+
+  test("a matching autonomous Bolt attempt uses the declared class", () => {
+    const proj = seedProject("feature");
+    const sf = seededStateFile(proj);
+    writeFileSync(
+      sf,
+      readFileSync(sf, "utf8").replace(
+        "- **Test Strategy**: Minimal",
+        "- **Test Strategy**: Minimal\n- **Review Override**: none\n- **Construction Autonomy Mode**: autonomous",
+      ),
+    );
+    seedBoltDagBatches(proj, [["unit-alpha"]]);
+    appendAuditEntry("BOLT_STARTED", {
+      "Bolt names": "unit-alpha",
+      "Batch number": "1",
+      "Walking skeleton": "false",
+      "Bolt slug": "unit-alpha",
+    }, proj);
+    for (const iteration of ["1", "2"]) {
+      const ok = runReview(proj, [
+        "--stage", "code-generation",
+        "--reviewer", "aidlc-architecture-reviewer-agent",
+        "--unit", "unit-alpha",
+        "--iteration", iteration,
+      ]);
+      expect(ok.status).toBe(0);
+    }
     const over = runReview(proj, [
       "--stage", "code-generation",
       "--reviewer", "aidlc-architecture-reviewer-agent",
@@ -175,38 +219,104 @@ describe("t266 review iteration ceiling", () => {
       "--iteration", "3",
     ]);
     expect(over.status).not.toBe(0);
+    expect(over.stderr).toContain("review budget (2)");
+
+    appendAuditEntry("BOLT_FAILED", {
+      "Bolt slug": "unit-alpha",
+      Reason: "review-failed",
+    }, proj);
+    const afterFailure = runReview(proj, [
+      "--stage", "code-generation",
+      "--reviewer", "aidlc-architecture-reviewer-agent",
+      "--unit", "unit-alpha",
+      "--iteration", "1",
+    ]);
+    expect(afterFailure.status).not.toBe(0);
+    expect(afterFailure.stderr).toContain("review budget (0)");
   });
 
-  test("REVIEW_COMPLETED (--verdict) is never budget-checked", () => {
-    // A terminal receipt must always be recordable — the ceiling guards only
-    // new dispatches. Iteration 5 with a verdict lands fine.
+  test("REVIEW_COMPLETED must pair to an unmatched request iteration", () => {
     const proj = seedProject("feature");
-    const done = runReview(proj, [
+    const unpaired = runReview(proj, [
       "--stage", "requirements-analysis",
       "--reviewer", "aidlc-product-lead-agent",
       "--iteration", "5",
       "--verdict", "READY",
     ]);
-    expect(done.status).toBe(0);
-    expect(done.stdout).toContain("REVIEW_COMPLETED");
-  });
+    expect(unpaired.status).not.toBe(0);
+    expect(unpaired.stderr).toContain("no unmatched REVIEW_REQUESTED");
 
-  test("no --iteration stays exempt (older callers)", () => {
-    const proj = seedProject("feature");
-    const ok = runReview(proj, [
+    expect(runReview(proj, [
       "--stage", "requirements-analysis",
       "--reviewer", "aidlc-product-lead-agent",
+      "--iteration", "1",
+    ]).status).toBe(0);
+    const done = runReview(proj, [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+      "--iteration", "1",
+      "--verdict", "READY",
     ]);
-    expect(ok.status).toBe(0);
+    expect(done.status).toBe(0);
+    expect(done.stdout).toContain("REVIEW_COMPLETED");
+    const duplicate = runReview(proj, [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+      "--iteration", "1",
+      "--verdict", "READY",
+    ]);
+    expect(duplicate.status).not.toBe(0);
+    expect(duplicate.stderr).toContain("no unmatched REVIEW_REQUESTED");
   });
 
-  test("unknown stage fails open (resolution failure must not block a review)", () => {
+  test("missing and malformed request iterations are refused", () => {
+    for (const iteration of [undefined, "0", "-1", "1.5", "not-a-number"]) {
+      const proj = seedProject("feature");
+      const args = [
+        "--stage", "requirements-analysis",
+        "--reviewer", "aidlc-product-lead-agent",
+      ];
+      if (iteration !== undefined) args.push("--iteration", iteration);
+      const refused = runReview(proj, args);
+      expect(refused.status).not.toBe(0);
+      expect(refused.stderr).toContain("--iteration <positive integer>");
+      expect(readAllAuditShards(proj)).not.toContain("**Event**: REVIEW_REQUESTED");
+    }
+  });
+
+  test("duplicate and out-of-order ordinals are refused from audit history", () => {
     const proj = seedProject("feature");
-    const ok = runReview(proj, [
+    const request = (iteration: string) => runReview(proj, [
+      "--stage", "code-generation",
+      "--reviewer", "aidlc-architecture-reviewer-agent",
+      "--iteration", iteration,
+    ]);
+    expect(request("1").status).toBe(0);
+    const duplicate = request("1");
+    expect(duplicate.status).not.toBe(0);
+    expect(duplicate.stderr).toContain("expected 2");
+    expect(request("2").status).toBe(0);
+    const rows =
+      readAllAuditShards(proj).match(/\*\*Event\*\*: REVIEW_REQUESTED/g) ?? [];
+    expect(rows.length).toBe(2);
+  });
+
+  test("unknown stages and wrong reviewers are refused", () => {
+    const proj = seedProject("feature");
+    const unknown = runReview(proj, [
       "--stage", "not-a-real-stage",
       "--reviewer", "aidlc-product-lead-agent",
-      "--iteration", "9",
+      "--iteration", "1",
     ]);
-    expect(ok.status).toBe(0);
+    expect(unknown.status).not.toBe(0);
+    expect(unknown.stderr).toContain("has no declared reviewer");
+
+    const wrongReviewer = runReview(proj, [
+      "--stage", "requirements-analysis",
+      "--reviewer", "not-the-declared-reviewer",
+      "--iteration", "1",
+    ]);
+    expect(wrongReviewer.status).not.toBe(0);
+    expect(wrongReviewer.stderr).toContain("does not match the declared reviewer");
   });
 });

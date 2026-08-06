@@ -141,6 +141,49 @@ const VALID_TEST_STRATEGIES: Record<string, string> = {
 };
 
 const CONFIG_KEYS = ["depth", "test-strategy", "review"] as const;
+type ReviewOverride = "adversarial" | "advisory" | "none";
+
+function parseReviewOverride(raw: string | undefined): ReviewOverride | undefined {
+  if (!raw) return undefined;
+  const value = raw.toLowerCase();
+  if (value !== "adversarial" && value !== "advisory" && value !== "none") {
+    die(`Unknown review class: "${raw}". Valid: adversarial, advisory, none.`);
+  }
+  return value;
+}
+
+function storedReviewOverride(value: ReviewOverride): string {
+  // "adversarial" means no per-run ceiling; stage declarations and scope caps
+  // still apply, so represent it with the same empty field as config-change.
+  return value === "adversarial" ? "" : value;
+}
+
+function applyReviewOverride(
+  content: string,
+  value: ReviewOverride | undefined,
+): {
+  content: string;
+  oldReview: string | null;
+  storedReview: string | undefined;
+  changed: boolean;
+} {
+  const oldReview = getField(content, "Review Override");
+  if (value === undefined) {
+    return { content, oldReview, storedReview: undefined, changed: false };
+  }
+  const storedReview = storedReviewOverride(value);
+  const changed = storedReview !== (oldReview ?? "");
+  if (!changed) return { content, oldReview, storedReview, changed };
+  if (oldReview === null) {
+    content = content.replace(
+      /^(- \*\*Test Strategy\*\*:[^\n]*)$/m,
+      "$1\n- **Review Override**:",
+    );
+  }
+  content = setField(content, "Review Override", storedReview);
+  return { content, oldReview, storedReview, changed };
+}
+
 // These workspace transactions can legitimately queue behind a full plugin
 // compose (compile + runner regeneration), so they share its ~60s lock budget.
 const WORKSPACE_MUTATION_LOCK_RETRIES = 600;
@@ -215,8 +258,8 @@ Utilities:
   space list        List spaces (read-only; --json for structured output)
   space switch <name>  Switch the active space (bare space <name> still works)
   space create <name>  Create a new space (space-create <name> still works)
-  config get <key>  Show active workflow config (depth, test-strategy)
-  config set <key> <value>  Change active workflow config (depth, test-strategy)
+  config get <key>  Show active workflow config (depth, test-strategy, review)
+  config set <key> <value>  Change active workflow config (depth, test-strategy, review)
   config list       List active workflow config (--json for structured output)
   plugin select [names]  Show or set the enabled plugin list
   plugin list       List installed plugins and enabled state (--json for structured output)
@@ -3543,6 +3586,7 @@ function handleIntentBirth(projectDir: string, flags: Record<string, string>): v
   if (testStrategyOverride && !VALID_TEST_STRATEGIES[testStrategyOverride.toLowerCase()]) {
     die(`Unknown test strategy: "${testStrategyOverride}". Valid: minimal, standard, comprehensive.`);
   }
+  const reviewOverride = parseReviewOverride(flags.review);
 
   // Resolve the repo set the intent touches (P7 multi-repo): an explicit
   // `--repos a,b` wins; absent it, sibling auto-discovery scans the workspace
@@ -3633,6 +3677,12 @@ function handleIntentBirth(projectDir: string, flags: Record<string, string>): v
     appendAuditEvent(projectDir, "WORKFLOW_STARTED", {
       Scope: scope,
       Request: `/aidlc ${flags.arguments || scope}`,
+      ...(reviewOverride !== undefined
+        ? {
+            "Review Override":
+              storedReviewOverride(reviewOverride) || "adversarial (stage defaults)",
+          }
+        : {}),
       // Record the intent's repo span at birth (P7). Omitted when no repos were
       // captured (legacy single-repo / fresh greenfield → the lone repo is inferred).
       ...(repos.length > 0 ? { Repos: repos.join(", ") } : {}),
@@ -3687,7 +3737,7 @@ function handleIntentBirth(projectDir: string, flags: Record<string, string>): v
       Details: "Per-intent artifact dirs + space-level knowledge/ ensured",
     });
 
-    handleIntentBirthStateBuild(projectDir, flags, scope, ts);
+    handleIntentBirthStateBuild(projectDir, flags, scope, ts, reviewOverride);
   }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
 }
 
@@ -3700,6 +3750,7 @@ function handleIntentBirthStateBuild(
   flags: Record<string, string>,
   scope: string,
   ts: string,
+  reviewOverride: ReviewOverride | undefined,
 ): void {
   const depthOverride = flags.depth;
   const testStrategyOverride = flags["test-strategy"];
@@ -3891,7 +3942,7 @@ function handleIntentBirthStateBuild(
 - **Stages to Skip**: ${skipStages.length > 0 ? skipStages.join(", ") : "none"}
 - **Depth**: ${effectiveDepth}
 - **Test Strategy**: ${effectiveTestStrategy}
-- **Review Override**:
+- **Review Override**: ${reviewOverride === undefined ? "" : storedReviewOverride(reviewOverride)}
 
 ## Workspace State
 - **Project Root**: ${projectDir}
@@ -4541,6 +4592,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
   if (testStrategyOverride && !VALID_TEST_STRATEGIES[testStrategyOverride.toLowerCase()]) {
     die(`Unknown test strategy: "${testStrategyOverride}". Valid: minimal, standard, comprehensive.`);
   }
+  const reviewOverride = parseReviewOverride(flags.review);
 
   const sp = stateFilePath(projectDir, flags.intent, flags.space);
   if (!existsSync(sp)) die("No state file found. Start a workflow first by describing what to build (/aidlc \"build the auth service\").");
@@ -4572,6 +4624,10 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
   if (!oldScope) die("Cannot read current Scope from state file.");
 
   if (oldScope === newScope) {
+    if (depthOverride || testStrategyOverride || reviewOverride !== undefined) {
+      handleConfigChange(projectDir, flags);
+      return;
+    }
     process.stdout.write(`Scope is already ${newScope}\n`);
     return;
   }
@@ -4663,6 +4719,8 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     ? VALID_TEST_STRATEGIES[testStrategyOverride.toLowerCase()]
     : (newScopeDef.testStrategy ?? effectiveDepth);
   content = setField(content, "Test Strategy", effectiveTestStrategy);
+  const reviewUpdate = applyReviewOverride(content, reviewOverride);
+  content = reviewUpdate.content;
   content = setField(content, "Total Stages", String(executeStages.length));
 
   // Recount completed based on actual [x] count of in-scope EXECUTE stages
@@ -4718,13 +4776,22 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     "Approval Gates": String(gates),
     Depth: effectiveDepth,
   });
+  if (reviewUpdate.changed) {
+    appendAuditEvent(projectDir, "REVIEW_CLASS_CHANGED", {
+      "Old Override": reviewUpdate.oldReview || "none set",
+      "New Override":
+        reviewUpdate.storedReview || "cleared (stage defaults apply)",
+    });
+  }
 
   process.stdout.write(
     `Scope changed: ${oldScope} → ${newScope}
 Stages in scope: ${executeStages.length} (${deltaStr})
 Approval gates: ${gates}
 Depth: ${effectiveDepth}
-Completed: ${completedCount}/${executeStages.length}
+${reviewOverride === undefined
+      ? ""
+      : `Review override: ${reviewUpdate.storedReview || "adversarial (stage defaults)"}\n`}Completed: ${completedCount}/${executeStages.length}
 `
   );
 }
@@ -5037,17 +5104,8 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
   }
 
   // --review sets the per-run Review Override (a CEILING on the effective
-  // review class, low-wins against stage declaration and scope review_cap;
-  // see resolveReviewClass). "adversarial" here means "no override" and
-  // clears the field - it cannot RAISE a class the scope capped.
-  let newReview: string | undefined;
-  if (rawReview) {
-    const v = rawReview.toLowerCase();
-    if (v !== "adversarial" && v !== "advisory" && v !== "none") {
-      die(`Unknown review class: "${rawReview}". Valid: adversarial, advisory, none.`);
-    }
-    newReview = v;
-  }
+  // review class, low-wins against stage declaration and scope review_cap).
+  const newReview = parseReviewOverride(rawReview);
 
   const sp = stateFilePath(projectDir, flags.intent, flags.space);
   if (!existsSync(sp)) die(NO_STATE_FILE_MESSAGE);
@@ -5064,28 +5122,13 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
   if (newStrategy !== undefined && newStrategy !== oldStrategy) {
     content = setField(content, "Test Strategy", newStrategy);
   }
-  const oldReview = getField(content, "Review Override");
-  // "adversarial" = no override; store it as an empty field so the resolver's
-  // absent-field path applies (the stage's declared class + scope cap stand).
-  const storedReview =
-    newReview === undefined ? undefined : newReview === "adversarial" ? "" : newReview;
-  if (storedReview !== undefined && storedReview !== (oldReview ?? "")) {
-    // setField silently no-ops on a state file that predates the field (every
-    // pre-2.5.40 workflow). Seed the line under the Test Strategy row first so
-    // the write always lands.
-    if (oldReview === null) {
-      content = content.replace(
-        /^(- \*\*Test Strategy\*\*:[^\n]*)$/m,
-        "$1\n- **Review Override**:"
-      );
-    }
-    content = setField(content, "Review Override", storedReview);
-  }
+  const reviewUpdate = applyReviewOverride(content, newReview);
+  content = reviewUpdate.content;
+  const { oldReview, storedReview } = reviewUpdate;
   const depthChanging = newDepth !== undefined && newDepth !== oldDepth;
   const strategyChanging =
     newStrategy !== undefined && newStrategy !== oldStrategy;
-  const reviewChanging =
-    storedReview !== undefined && storedReview !== (oldReview ?? "");
+  const reviewChanging = reviewUpdate.changed;
   if (depthChanging || strategyChanging || reviewChanging) {
     content = setField(content, "Last Updated", isoTimestamp());
     writeStateFile(projectDir, content, flags.intent, flags.space);
@@ -5598,7 +5641,7 @@ export async function main(argv: string[]): Promise<void> {
     process.stdout.write(
       "Usage: aidlc-utility intent-birth --scope <scope> " +
         '[--arguments "<description>"] [--label "<short label>"] ' +
-        "[--depth <level>] [--test-strategy <level>] [--repos <name,...>] " +
+        "[--depth <level>] [--test-strategy <level>] [--review <class>] [--repos <name,...>] " +
         "[--project-dir <path>]\n",
     );
     return;

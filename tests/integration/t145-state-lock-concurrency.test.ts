@@ -130,11 +130,14 @@ function stateSync(args: string[], p: string): { status: number; stdout: string;
 /** Record a terminal READY review so a reviewer-bearing stage passes the §12a
  *  gate precondition (these tests target the state lock, not the reviewer gate). */
 function logReview(slug: string, reviewer: string, p: string): void {
-  Bun.spawnSync({
-    cmd: [BUN, LOG_TOOL, "review", "--stage", slug, "--reviewer", reviewer, "--iteration", "1", "--verdict", "READY", "--project-dir", p],
-    stdout: "pipe",
-    stderr: "pipe",
-  });
+  const args = [BUN, LOG_TOOL, "review", "--stage", slug, "--reviewer", reviewer, "--iteration", "1", "--project-dir", p];
+  for (const suffix of [[], ["--verdict", "READY"]]) {
+    Bun.spawnSync({
+      cmd: [...args, ...suffix],
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+  }
 }
 
 /**

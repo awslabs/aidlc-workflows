@@ -492,7 +492,7 @@ function parseNextFlags(args: string[]): ParsedFlags {
 // deterministic tool mutates, the human's "start a new intent?" judgement gated
 // the get-here. Threads the freeform feature description (--arguments) so the
 // born intent's slug + state Project field carry it, plus --depth /
-// --test-strategy. Shared by Branch 7b (valid-scope positional) and
+// --test-strategy / --review. Shared by Branch 7b (valid-scope positional) and
 // Branch 9 (explicit --scope flag) so the explicit-naming shapes emit identical
 // directives. The harness dir is resolved through harnessDir() so the directive
 // names the right tree on every harness (.claude/.kiro/.codex).
@@ -512,6 +512,7 @@ function birthPrintDirective(scope: string, flags: ParsedFlags, description?: st
   }
   if (flags.depth) cmd.push(`--depth ${flags.depth}`);
   if (flags.testStrategy) cmd.push(`--test-strategy ${flags.testStrategy}`);
+  if (flags.review) cmd.push(`--review ${flags.review}`);
   // Disclose the ceremony on the print: an explicitly named scope births
   // directly (no confirm ask by design), so the stage/gate counts ride here.
   // Omit the parenthetical when the scope does not resolve (fixture trees).
@@ -2030,6 +2031,29 @@ function nodeForSlug(slug: string): GraphStage | undefined {
 function handleNext(args: string[], projectDir: string | undefined): void {
   const flags = parseNextFlags(args);
 
+  // Review changes mutate workflow configuration. Compound modes that return
+  // before the config branch cannot silently discard the flag; require callers
+  // to apply the override first, then invoke the other mode separately.
+  if (
+    flags.review &&
+    (
+      flags.readOnly ||
+      flags.workspaceCommand ||
+      flags.compose ||
+      flags.newScope ||
+      flags.report ||
+      flags.single ||
+      flags.stage ||
+      flags.phase ||
+      flags.resume
+    )
+  ) {
+    emit(errorDirective(
+      "Cannot combine --review with read-only, workspace, compose, single-stage, jump, or resume modes. Apply /aidlc --review <class> first, then run the other command.",
+    ));
+    return;
+  }
+
   // Branch 0 — turn-scoped no-op-next guard (Kiro roll-forward defense). On Kiro
   // the userPromptSubmit seam handles a read-only/navigation command
   // deterministically off-band but CANNOT block the turn, so the conductor relays
@@ -2195,6 +2219,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     !flags.resume &&
     !flags.stage &&
     !flags.phase &&
+    !flags.review &&
     (getField(stateContent, "Parked") ?? "").trim().length > 0
   ) {
     const parkedAt = (getField(stateContent, "Parked At Stage") ?? "").trim();
@@ -2391,16 +2416,19 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       const parts = [`scope-change --scope ${flags.scope}`];
       if (flags.depth) parts.push(`--depth ${flags.depth}`);
       if (flags.testStrategy) parts.push(`--test-strategy ${flags.testStrategy}`);
+      if (flags.review) parts.push(`--review ${flags.review}`);
       emit(printDirective(
         `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${parts.join(" ")}\` to change scope, then print its output verbatim and stop.`,
       ));
       return;
     }
     // A depth / test-strategy / review modifier with no scope change is a
-    // config-change. Gate it on the absence of a scope flag so a
-    // `--scope X --depth Y` combo routes through scope-change above (which
-    // carries the depth), not here.
-    if (!flags.scope && (flags.depth || flags.testStrategy || flags.review)) {
+    // config-change. A same-as-current --scope is also config-only: dropping
+    // it here would silently discard the modifiers and run the current stage.
+    if (
+      (!flags.scope || flags.scope === currentStateScope) &&
+      (flags.depth || flags.testStrategy || flags.review)
+    ) {
       const parts = ["config-change"];
       if (flags.depth) parts.push(`--depth ${flags.depth}`);
       if (flags.testStrategy) parts.push(`--test-strategy ${flags.testStrategy}`);
