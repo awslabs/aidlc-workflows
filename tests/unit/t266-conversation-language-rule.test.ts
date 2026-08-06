@@ -94,6 +94,11 @@ const REQUIRED_TOKENS = [
   "[assumption]",
   "[Q<n>]",
   "[memory:M<n>]",
+  // The two literal prefixes the claim-sources sensor matches on their own,
+  // alongside the bracket tags — a register line loses its source when either
+  // is localized, so the rule has to name them as tokens too.
+  "Initial description:",
+  "Workflow-selected scope:",
   "required-sections",
   "## Sources",
   "## Assumptions & Open Questions",
@@ -443,6 +448,166 @@ describe("t266 conversation-language rule layer", () => {
     ).toBe(true);
   });
 
+  // The guarantee's scope. "Holds for the whole WORKFLOW" was not true of the
+  // implementation: an explicitly switched language the human declines to
+  // persist is carried only by the `Conversation language:` line, which lives in
+  // the conversation. A workflow outlives a session — it can be parked and
+  // resumed — and `aidlc-session-start.ts` injects scope, phase, stage, status,
+  // agent and next action but NO language, so the first turn of a resumed
+  // session has no language signal at all. Left unscoped, the rule promised
+  // continuity the engine cannot deliver and a resumed conductor could silently
+  // fall back to the English initial description. Scope the promise to the
+  // session and make the fresh-session path explicit and TOTAL, so no branch
+  // ends in "assume English".
+  test("d: the stability guarantee is session-scoped with a total fresh-session fallback", () => {
+    const entries = sectionEntries(readFileSync(AUTHORED_ORG_MD, "utf-8"), "Mandated");
+    const rule = entries.find((entry) =>
+      entry.startsWith("**Conversation language — stability**"),
+    );
+    expect(rule, "the stability rule exists").toBeDefined();
+
+    // The promise itself, and that it still covers everything INSIDE a session
+    // (scoping it must not weaken the no-signal-turn guarantee to one turn).
+    expect(
+      rule!.includes("holds for the whole session"),
+      "the guarantee is scoped to the session, which is what the brief line can carry",
+    ).toBe(true);
+    expect(
+      /inside that session for every stage, dispatch, reviewer pass and approval gate of the workflow/.test(
+        rule as string,
+      ),
+      "within a session the language still holds across every stage, dispatch and gate",
+    ).toBe(true);
+    expect(
+      rule!.includes("nothing but a session boundary ends it"),
+      "only a session boundary ends the established language",
+    ).toBe(true);
+
+    // The gap is named concretely, so a future reader can check the claim
+    // against the hook instead of trusting the prose.
+    expect(
+      /resume context the engine injects at session start carries [^.]*but NO language/.test(
+        rule as string,
+      ),
+      "the rule states that the resume context injects no language",
+    ).toBe(true);
+    // The obligation is the orchestrator's, and it lands BEFORE any dispatch —
+    // otherwise the first brief of a resumed session is the thing that guesses.
+    expect(
+      /orchestrator MUST re-resolve the language before it dispatches anything/.test(
+        rule as string,
+      ),
+      "a fresh session re-resolves before the first dispatch",
+    ).toBe(true);
+    // Total: every branch terminates, and none of them terminates in English.
+    for (const step of [
+      "the persisted rule from (2)",
+      "the human-readable artifacts this workflow has already produced",
+      "the verbatim initial description from (3)",
+      "ASKS the human rather than defaulting to English",
+    ]) {
+      expect(rule!.includes(step), `the fresh-session fallback names: ${step}`).toBe(true);
+    }
+    // Re-resolution must not be mistaken for a switch: treating it as one would
+    // send it down the §13 write path and persist a language the human never
+    // asked for.
+    expect(
+      rule!.includes("Re-resolving is not a switch"),
+      "re-resolution is distinguished from an explicit switch",
+    ).toBe(true);
+    // And the consequence is stated, so declining persistence is an informed
+    // choice rather than a silent trap.
+    expect(
+      rule!.includes("An unpersisted switch therefore does not outlive its session"),
+      "the cost of declining persistence is stated",
+    ).toBe(true);
+
+    // The superseded promise must not come back in ANY projection.
+    for (const { label, text } of [
+      { label: "core/memory/org.md", text: readFileSync(AUTHORED_ORG_MD, "utf-8") },
+      ...orgMdProjections().map(({ label, path }) => ({
+        label,
+        text: readFileSync(path, "utf-8"),
+      })),
+    ]) {
+      expect(
+        text.includes("holds for the whole workflow"),
+        `${label} must not promise continuity across a session boundary`,
+      ).toBe(false);
+    }
+  });
+
+  // Cross-file precedence. The fallback used to read "project.md OR team.md",
+  // with its LAST-one-wins tie-break defined only for duplicates within "that
+  // file". Both files can legitimately carry one: the §13 ritual permits project
+  // or team scope (stage-protocol §13), so a newer TEAM-level rule could sit
+  // opposite a stale PROJECT-level one with no defined winner. Position cannot
+  // settle it either — aidlc-graph.ts concatenates org → team → project → phase
+  // unconditionally, so team ALWAYS precedes project in the bundle regardless of
+  // which was written last, and "the last one wins" would hand it to the stale
+  // project rule. Two things fix it: persistence is project-only, and project
+  // outranks team by rule rather than by position.
+  test("d: language-switch persistence is project-only and outranks a team default", () => {
+    const entries = sectionEntries(readFileSync(AUTHORED_ORG_MD, "utf-8"), "Mandated");
+    const resolution = entries.find((entry) =>
+      entry.startsWith("**Conversation language — resolution**"),
+    );
+    const stability = entries.find((entry) =>
+      entry.startsWith("**Conversation language — stability**"),
+    );
+    expect(resolution, "the resolution rule exists").toBeDefined();
+    expect(stability, "the stability rule exists").toBeDefined();
+
+    expect(
+      resolution!.includes("the ONLY file a language switch is ever persisted to"),
+      "the fallback names project.md as the single persistence target",
+    ).toBe(true);
+    expect(
+      resolution!.includes("ALWAYS outranks a conversation-language rule in `team.md`"),
+      "project-level explicitly outranks a team-level language rule",
+    ).toBe(true);
+    expect(
+      resolution!.includes("can only ever be a team default and NEVER the record of a switch"),
+      "a team-level language rule is a default, never a switch record",
+    ).toBe(true);
+    // The reason the precedence has to be STATED rather than positional, named
+    // with the concatenation order it defends against.
+    expect(
+      resolution!.includes("cross-file position is NOT recency"),
+      "the rule warns that bundle position is not recency across files",
+    ).toBe(true);
+    expect(
+      resolution!.includes("`org → team → project → phase`"),
+      "the runtime concatenation order is named, so the claim is checkable",
+    ).toBe(true);
+    // The within-file tie-break survives, but is now explicitly bounded to
+    // project.md rather than to whichever file happened to be read.
+    expect(
+      resolution!.includes("within `project.md`, when it carries more than one"),
+      "the LAST-one-wins tie-break is scoped to project.md",
+    ).toBe(true);
+    // The write side must agree with the read side, or the ritual could still
+    // create the ambiguity the precedence exists to resolve.
+    expect(
+      stability!.includes("in `project.md` and NEVER in `team.md`"),
+      "the ritual persists a switch to project.md only",
+    ).toBe(true);
+
+    // The superseded, ambiguous shape must be gone from every projection.
+    for (const { label, text } of [
+      { label: "core/memory/org.md", text: readFileSync(AUTHORED_ORG_MD, "utf-8") },
+      ...orgMdProjections().map(({ label, path }) => ({
+        label,
+        text: readFileSync(path, "utf-8"),
+      })),
+    ]) {
+      expect(
+        text.includes("`project.md` or `team.md` — the FALLBACK"),
+        `${label} must not leave the persisted fallback split across two files`,
+      ).toBe(false);
+    }
+  });
+
   test("d: the resolution rule gives a delegated agent a source that always exists", () => {
     // Sources that read files can all come up empty: a greenfield run of a
     // stage whose `consumes` are every one `conditional_on: brownfield`
@@ -719,6 +884,92 @@ describe("t266 conversation-language rule layer", () => {
       trailingPrompt.indexOf(superseded) < trailingPrompt.indexOf(current),
       "`## Corrections` order survives regardless of where the brief line sits",
     ).toBe(true);
+  });
+
+  // The SPLIT case the (e) pair does not reach: it writes both rules into
+  // project.md, so the only ambiguity it exercises is within one file, which
+  // LAST-one-wins already settles. The §13 ritual permits project OR team scope,
+  // so the real conflict is cross-file — and there, position is actively
+  // misleading: aidlc-graph.ts concatenates org → team → project → phase, so a
+  // NEWER team-level rule arrives BEFORE a staler project-level one, and a
+  // delegate applying "the last one wins" to the bundle would pick the wrong
+  // language. This test writes the two rules into two files, dispatches with NO
+  // brief language line (the only situation the persisted fallback decides at
+  // all), and pins both halves of the fix: that the bundle really does deliver
+  // team before project, and that the delegate receives the stated precedence
+  // that overrides that order.
+  test("e3: a team-level language rule never outranks the project-level one it precedes", () => {
+    const proj = mkdtempSync(join(tmpdir(), "aidlc-t266-split-"));
+    tempDirs.push(proj);
+    const birth = spawnSync(
+      BUN,
+      [UTILITY, "intent-birth", "--scope", "poc", "--arguments", "x", "--project-dir", proj],
+      { encoding: "utf-8" },
+    );
+    expect(birth.status, `intent-birth failed: ${birth.stdout}\n${birth.stderr}`).toBe(0);
+
+    const memory = join(proj, "aidlc", "spaces", "default", "memory");
+    const teamMd = join(memory, "team.md");
+    const projectMd = join(memory, "project.md");
+    expect(existsSync(teamMd), "the active space ships team.md").toBe(true);
+    expect(existsSync(projectMd), "the active space ships project.md").toBe(true);
+
+    // The team file carries a DEFAULT; the project file carries the switch. Per
+    // the rule the project one wins, even though the team one is written second
+    // here and reaches the delegate first.
+    const teamDefault = "Conversation language: Japanese.";
+    const projectCurrent = "Conversation language: English.";
+    for (const [path, entry] of [
+      [teamMd, teamDefault],
+      [projectMd, projectCurrent],
+    ] as const) {
+      const body = readFileSync(path, "utf-8");
+      expect(body.includes("## Corrections"), `${path} ships ## Corrections`).toBe(true);
+      writeFileSync(path, body.replace("## Corrections", `## Corrections\n\n- ${entry}`), "utf-8");
+    }
+
+    // No `Conversation language:` line: the brief is silent, so (2) decides.
+    const result = augmentDispatchRules(
+      "task",
+      {
+        subagent_type: "aidlc-product-agent",
+        prompt: "Execute the current stage and write its artifacts.",
+      },
+      proj,
+    );
+    expect(result.error ?? null, "dispatch rewrite produced no error").toBeNull();
+    expect(result.changed, "the hook rewrote the delegated prompt").toBe(true);
+    const prompt = String(result.updatedInput?.prompt ?? "");
+
+    // Both files reach the delegate, so the conflict is real rather than
+    // hypothetical — a bundle that dropped team.md would make this test vacuous.
+    expect(prompt.includes(teamDefault), "the team-level default is delivered").toBe(true);
+    expect(prompt.includes(projectCurrent), "the project-level rule is delivered").toBe(true);
+
+    // THE MISLEADING ORDER, pinned. If this ever flips, the stated precedence
+    // stops being load-bearing and the rule can be simplified; while it holds,
+    // a positional reading gives the WRONG answer and the rule is required.
+    const teamAt = prompt.indexOf(teamDefault);
+    const projectAt = prompt.indexOf(projectCurrent);
+    expect(teamAt, "the team rule is located in the bundle").toBeGreaterThan(-1);
+    expect(projectAt, "the project rule is located in the bundle").toBeGreaterThan(-1);
+    expect(
+      teamAt < projectAt,
+      "the bundle concatenates team before project, so position is not recency",
+    ).toBe(true);
+
+    // And the tie-breaker itself is in the same prompt, so the delegate can
+    // resolve the conflict from what it was handed rather than guessing.
+    for (const clause of [
+      "ALWAYS outranks a conversation-language rule in `team.md`",
+      "cross-file position is NOT recency",
+      "the ONLY file a language switch is ever persisted to",
+    ]) {
+      expect(
+        prompt.includes(clause),
+        `the delegate receives the cross-file precedence clause: ${JSON.stringify(clause)}`,
+      ).toBe(true);
+    }
   });
 
   // The (e) pair proves the bundle DELIVERS a stale persisted rule, the fresh
