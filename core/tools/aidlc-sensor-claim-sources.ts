@@ -54,13 +54,6 @@ const SOURCE_TAG_RE =
 	/\[(desc|scope|assumption|Q\d+|memory:[A-Za-z0-9][A-Za-z0-9._-]*)\]/g;
 const SOURCE_ENTRY_RE =
 	/^ {0,3}[-*+]\s+\[(desc|scope|memory:[A-Za-z0-9][A-Za-z0-9._-]*)\]\s+(.+?)\s*$/;
-// A parenthesised title may not hold an unescaped `(` — CommonMark reads such a
-// line as prose, so accepting it here would let the line exempt its block.
-const REFERENCE_TITLE_RE =
-	/^ {0,3}(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^()\\])*\))[ \t]*$/;
-// The same title, when it trails the destination on the definition's own line.
-const REFERENCE_TITLE_BODY_RE =
-	/^(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^()\\])*\))$/;
 
 function parseFlags(argv: string[]): Flags {
 	const flags: Flags = {};
@@ -524,18 +517,23 @@ function isTableLine(line: string): boolean {
 }
 
 function isListItem(line: string): boolean {
-	return /^\s*(?:[-*+]|\d+\.)\s+/.test(line);
+	return /^\s*(?:[-*+]|\d{1,9}[.)])\s+/.test(line);
 }
 
 function isNoneBlock(text: string): boolean {
 	return /^None\.?$/i.test(text.trim());
 }
 
-function claimBlocks(body: string): {
+function claimBlocks(
+	body: string,
+	definitionLines: ReadonlySet<number> = new Set(),
+): {
 	blocks: ClaimBlock[];
 	hasAssumptionsSection: boolean;
 } {
-	const lines = visibleMarkdownLines(body);
+	const lines = visibleMarkdownLines(body).map((line, index) =>
+		definitionLines.has(index) ? "" : line,
+	);
 	const tableHeaders = new Set<number>();
 	for (let index = 1; index < lines.length; index++) {
 		if (isTableSeparator(lines[index]) && isTableLine(lines[index - 1])) {
@@ -576,8 +574,13 @@ function claimBlocks(body: string): {
 			continue;
 		}
 		if (skipReview) continue;
-		if (line.trim().length === 0 || /^\s*---+\s*$/.test(line)) {
+		if (line.trim().length === 0 || isThematicBreak(line)) {
 			flush();
+			continue;
+		}
+		if (isHtmlBlockStart(line)) {
+			flush();
+			pending.push(line);
 			continue;
 		}
 		if (isTableLine(line)) {
@@ -792,6 +795,7 @@ function referenceDestinationEnd(text: string, start: number): number {
 		if (isEscaped(text, index)) continue;
 		if (text[index] === "(") {
 			depth++;
+			if (depth > 32) return -1;
 		} else if (text[index] === ")") {
 			depth--;
 			if (depth < 0) return -1;
@@ -800,160 +804,410 @@ function referenceDestinationEnd(text: string, start: number): number {
 	return depth === 0 && index > start ? index : -1;
 }
 
-// Shape alone does not make a definition: `[label]: some prose` renders as the
-// visible sentence it is. Requiring a well-formed destination keeps a line the
-// reader can see out of the definition set, which is what stops such a line
-// from exempting its block from inspection. Multiline destinations are
-// collected separately for document-wide reference resolution, but stay as
-// prose here: when block removal cannot afford the complete grammar it must
-// inspect more, never less.
 interface ReferenceDefinition {
 	label: string;
-	context: string;
-	mayContinueTitle: boolean;
+	endLine: number;
 }
 
-function referenceLabelEnd(text: string, start: number): number {
-	for (let index = start + 1; index < text.length; index++) {
-		if (isEscaped(text, index)) continue;
-		if (text[index] === "[") return -1;
-		if (text[index] === "]") {
-			const label = text.slice(start + 1, index);
-			return label.trim().length > 0 && label.length <= 999 ? index : -1;
+interface ReferenceAnalysis {
+	labels: Set<string>;
+	definitionLines: Set<number>;
+}
+
+interface ActiveListContainer {
+	beforeQuotes: number;
+	contentIndent: number;
+	listContext: string;
+}
+
+function contextParts(context: string): string[] {
+	return context.length > 0 ? context.split("/") : [];
+}
+
+function textColumns(text: string): number {
+	let column = 0;
+	for (const char of text) {
+		if (char === "\t") {
+			column += 4 - (column % 4);
+		} else {
+			column++;
 		}
 	}
-	return -1;
+	return column;
 }
 
-function referenceDefinition(line: string): ReferenceDefinition | null {
-	const container = containerLine(line);
-	const text = container.text;
-	const start = text.search(/\S/);
-	if (start < 0 || start > 3 || text[start] !== "[") return null;
-	const labelEnd = referenceLabelEnd(text, start);
-	if (labelEnd < 0 || text[labelEnd + 1] !== ":") return null;
+function firstContent(text: string): { index: number; column: number } | null {
+	let column = 0;
+	for (let index = 0; index < text.length; index++) {
+		if (text[index] === " ") {
+			column++;
+			continue;
+		}
+		if (text[index] === "\t") {
+			column += 4 - (column % 4);
+			continue;
+		}
+		return { index, column };
+	}
+	return null;
+}
 
-	const rest = text.slice(labelEnd + 2);
-	const destinationStart = rest.search(/\S/);
-	if (destinationStart < 0) return null;
-	const destinationEnd = referenceDestinationEnd(rest, destinationStart);
-	if (destinationEnd < 0) return null;
-	const rawTrailing = rest.slice(destinationEnd);
-	const trailing = rawTrailing.trim();
+function stripIndentColumns(text: string, required: number): string | null {
+	let column = 0;
+	let index = 0;
+	while (column < required && index < text.length) {
+		if (text[index] === " ") {
+			column++;
+			index++;
+			continue;
+		}
+		if (text[index] === "\t") {
+			column += 4 - (column % 4);
+			index++;
+			continue;
+		}
+		return null;
+	}
+	if (column < required) return null;
+	return `${" ".repeat(column - required)}${text.slice(index)}`;
+}
+
+function stripLeadingQuotes(
+	line: string,
+	count: number,
+): { text: string; contexts: string[] } | null {
+	let text = line;
+	const contexts: string[] = [];
+	for (let index = 0; index < count; index++) {
+		const quote = /^ {0,3}> ?/.exec(text);
+		if (!quote) return null;
+		text = text.slice(quote[0].length);
+		contexts.push("quote");
+	}
+	return { text, contexts };
+}
+
+function explicitListContainer(
+	line: string,
+	listItem: number,
+): { line: ContainerLine; active: ActiveListContainer } | null {
+	let text = line;
+	const before: string[] = [];
+	for (;;) {
+		const quote = /^ {0,3}> ?/.exec(text);
+		if (!quote) break;
+		text = text.slice(quote[0].length);
+		before.push("quote");
+	}
+
+	const marker =
+		/^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:\t| {1,4}(?! ))/.exec(text);
+	if (!marker) return null;
+	const after = containerLine(text.slice(marker[0].length));
+	const listContext = `list#${listItem}`;
+	return {
+		line: {
+			text: after.text,
+			context: [...before, listContext, ...contextParts(after.context)].join(
+				"/",
+			),
+		},
+		active: {
+			beforeQuotes: before.length,
+			contentIndent: textColumns(marker[0]),
+			listContext,
+		},
+	};
+}
+
+// Container markers on the definition's first line are not repeated on its
+// continuation lines. Preserve the active list item's exact quote/list nesting,
+// indentation columns, and identity so continuations work through block quotes
+// and tabs but never cross into a sibling item.
+function documentContainerLines(lines: string[]): ContainerLine[] {
+	const result: ContainerLine[] = [];
+	let activeList: ActiveListContainer | null = null;
+	let listItem = 0;
+
+	for (const line of lines) {
+		const explicitList = explicitListContainer(line, listItem + 1);
+		if (explicitList) {
+			listItem++;
+			activeList = explicitList.active;
+			result.push(explicitList.line);
+			continue;
+		}
+
+		if (line.trim().length === 0) {
+			result.push({ text: line, context: activeList?.listContext ?? "" });
+			continue;
+		}
+
+		if (activeList) {
+			const quoted = stripLeadingQuotes(line, activeList.beforeQuotes);
+			if (quoted && /^[ \t]*$/.test(quoted.text)) {
+				result.push({
+					text: "",
+					context: [...quoted.contexts, activeList.listContext].join("/"),
+				});
+				continue;
+			}
+			const continuation = quoted
+				? stripIndentColumns(quoted.text, activeList.contentIndent)
+				: null;
+			if (quoted && continuation !== null) {
+				const after = containerLine(continuation);
+				result.push({
+					text: after.text,
+					context: [
+						...quoted.contexts,
+						activeList.listContext,
+						...contextParts(after.context),
+					].join("/"),
+				});
+				continue;
+			}
+		}
+
+		activeList = null;
+		result.push(containerLine(line));
+	}
+
+	return result;
+}
+
+const HTML_BLOCK_TAGS =
+	"address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h1|h2|h3|h4|h5|h6|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul";
+const HTML_BLOCK_RE = new RegExp(
+	`^(?:<(?:script|pre|style|textarea)(?:[ \\t>]|$)|<!--|<\\?|<![A-Z]|<!\\[CDATA\\[|<\\/?(?:${HTML_BLOCK_TAGS})(?:[ \\t\\n\\f\\r\\/>]|$))`,
+	"i",
+);
+
+function isThematicBreak(line: string): boolean {
+	const content = firstContent(line);
+	if (content === null || content.column > 3) return false;
+	return /^(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/.test(
+		line.slice(content.index),
+	);
+}
+
+function isHtmlBlockStart(line: string): boolean {
+	const content = firstContent(line);
+	return (
+		content !== null &&
+		content.column <= 3 &&
+		HTML_BLOCK_RE.test(line.slice(content.index))
+	);
+}
+
+function interruptsReferenceContinuation(text: string): boolean {
+	const content = firstContent(text);
+	if (!content) return true;
+	// Once a reference definition has started, CommonMark accepts indented lazy
+	// continuation lines. At that point four columns are content, not a fresh
+	// indented-code block, and block-start tests do not interrupt the definition.
+	if (content.column > 3) return false;
+	const rest = text.slice(content.index);
+	return (
+		/^#{1,6}(?:[ \t]+|$)/.test(rest) ||
+		isThematicBreak(text) ||
+		/^(?:=+|-+)[ \t]*$/.test(rest) ||
+		HTML_BLOCK_RE.test(rest)
+	);
+}
+
+function canContinueReference(
+	lines: ContainerLine[],
+	index: number,
+	context: string,
+): boolean {
+	const line = lines[index];
+	if (!line) return false;
+	const sameOrLazilyElidedContext =
+		line.context === context ||
+			(line.context === "" && context !== "") ||
+			(line.context !== "" && context.startsWith(`${line.context}/`));
+	return (
+		sameOrLazilyElidedContext &&
+		!interruptsReferenceContinuation(line.text)
+	);
+}
+
+function referenceTitleEnd(
+	lines: ContainerLine[],
+	startLine: number,
+	start: number,
+): number | null {
+	const context = lines[startLine].context;
+	const opening = lines[startLine].text[start];
+	if (opening !== '"' && opening !== "'" && opening !== "(") return null;
+	const closing = opening === "(" ? ")" : opening;
+	let lineIndex = startLine;
+	let cursor = start + 1;
+
+	for (;;) {
+		const text = lines[lineIndex].text;
+		for (; cursor < text.length; cursor++) {
+			if (isEscaped(text, cursor)) continue;
+			if (opening === "(" && text[cursor] === "(") return null;
+			if (text[cursor] !== closing) continue;
+			return /^[ \t]*$/.test(text.slice(cursor + 1)) ? lineIndex : null;
+		}
+
+		const next = lines[lineIndex + 1];
+		if (!next || !canContinueReference(lines, lineIndex + 1, context)) {
+			return null;
+		}
+		lineIndex++;
+		cursor = 0;
+	}
+}
+
+// Parse one complete CommonMark link-reference definition. Lines are consumed
+// only after the label, destination, and optional title are certainly valid;
+// malformed candidates remain visible prose and are inspected fail-closed.
+function referenceDefinitionAt(
+	lines: ContainerLine[],
+	startLine: number,
+): ReferenceDefinition | null {
+	const context = lines[startLine].context;
+	let lineIndex = startLine;
+	let text = lines[lineIndex].text;
+	const first = firstContent(text);
+	if (!first || first.column > 3 || text[first.index] !== "[") return null;
+	const start = first.index;
+
+	let cursor = start + 1;
+	let label = "";
+	for (;;) {
+		let closed = false;
+		for (; cursor < text.length; cursor++) {
+			if (isEscaped(text, cursor)) {
+				label += text[cursor];
+				continue;
+			}
+			if (text[cursor] === "[") return null;
+			if (text[cursor] === "]") {
+				closed = true;
+				break;
+			}
+			label += text[cursor];
+		}
+		if (closed) break;
+
+		const next = lines[lineIndex + 1];
+		if (!next || !canContinueReference(lines, lineIndex + 1, context)) {
+			return null;
+		}
+		label += "\n";
+		lineIndex++;
+		text = next.text;
+		cursor = 0;
+	}
+
 	if (
-		trailing.length > 0 &&
-		(!/^[ \t]+/.test(rawTrailing) || !REFERENCE_TITLE_BODY_RE.test(trailing))
+		text[cursor + 1] !== ":" ||
+		!/[^ \t\n\r]/.test(label) ||
+		Array.from(label).length > 999
 	) {
 		return null;
 	}
 
-	return {
-		label: text.slice(start + 1, labelEnd),
-		context: container.context,
-		mayContinueTitle: trailing.length === 0,
-	};
-}
-
-// CommonMark matches link labels case-insensitively with runs of whitespace
-// collapsed to a single space.
-function normalizedReferenceLabel(label: string): string {
-	return label.trim().replace(/\s+/g, " ").toLowerCase();
-}
-
-// The labels a document defines. A reference link resolves against the whole
-// document, so this is collected once per file and handed to every block.
-function referenceLabels(body: string): Set<string> {
-	const labels = new Set<string>();
-	const lines = visibleMarkdownLines(body);
-	let titleContinuationContext: string | null = null;
-	for (let index = 0; index < lines.length; index++) {
-		const line = lines[index];
-		const container = containerLine(line);
+	let destinationLine = lineIndex;
+	let destinationOffset = cursor + 2;
+	let destinationText = text.slice(destinationOffset);
+	let destination = firstContent(destinationText);
+	if (!destination) {
+		const next = lines[destinationLine + 1];
 		if (
-			titleContinuationContext !== null &&
-			container.context === titleContinuationContext &&
-			REFERENCE_TITLE_RE.test(container.text)
+			!next ||
+			!canContinueReference(lines, destinationLine + 1, context)
 		) {
-			titleContinuationContext = null;
-			continue;
+			return null;
 		}
-
-		const definition = referenceDefinition(line);
-		if (definition !== null) {
-			labels.add(normalizedReferenceLabel(definition.label));
-			titleContinuationContext = definition.mayContinueTitle
-				? definition.context
-				: null;
-			continue;
-		}
-
-		titleContinuationContext = null;
-		const text = container.text;
-		const start = text.search(/\S/);
-		if (start < 0 || start > 3 || text[start] !== "[") continue;
-		const labelEnd = referenceLabelEnd(text, start);
-		if (labelEnd < 0 || text[labelEnd + 1] !== ":") continue;
-		if (text.slice(labelEnd + 2).trim().length > 0) continue;
-
-		const next = lines[index + 1];
-		if (next === undefined) continue;
-		const nextContainer = containerLine(next);
-		if (nextContainer.context !== container.context) continue;
-		const destinationStart = nextContainer.text.search(/\S/);
-		if (destinationStart < 0 || destinationStart > 3) continue;
-		const destinationEnd = referenceDestinationEnd(
-			nextContainer.text,
-			destinationStart,
-		);
-		if (destinationEnd < 0) continue;
-		const rawTrailing = nextContainer.text.slice(destinationEnd);
-		const trailing = rawTrailing.trim();
-		if (
-			trailing.length > 0 &&
-			(!/^[ \t]+/.test(rawTrailing) || !REFERENCE_TITLE_BODY_RE.test(trailing))
-		) {
-			continue;
-		}
-		labels.add(normalizedReferenceLabel(text.slice(start + 1, labelEnd)));
-		index++;
+		destinationLine++;
+		destinationOffset = 0;
+		destinationText = next.text;
+		destination = firstContent(destinationText);
+		if (!destination) return null;
 	}
-	return labels;
+	const destinationStart = destination.index;
+
+	const destinationEnd = referenceDestinationEnd(
+		destinationText,
+		destinationStart,
+	);
+	if (destinationEnd < 0) return null;
+
+	const rawTrailing = destinationText.slice(destinationEnd);
+	if (/[^ \t]/.test(rawTrailing)) {
+		if (!/^[ \t]+/.test(rawTrailing)) return null;
+		const trailing = firstContent(rawTrailing);
+		if (!trailing) return null;
+		const titleStart =
+			destinationOffset + destinationEnd + trailing.index;
+		const titleEnd = referenceTitleEnd(lines, destinationLine, titleStart);
+		return titleEnd === null ? null : { label, endLine: titleEnd };
+	}
+
+	const possibleTitle = lines[destinationLine + 1];
+	if (
+		possibleTitle &&
+		canContinueReference(lines, destinationLine + 1, context)
+	) {
+		const title = firstContent(possibleTitle.text);
+		if (
+			title &&
+			['"', "'", "("].includes(possibleTitle.text[title.index])
+		) {
+			const titleEnd = referenceTitleEnd(
+				lines,
+				destinationLine + 1,
+				title.index,
+			);
+			if (titleEnd !== null) return { label, endLine: titleEnd };
+		}
+	}
+
+	return { label, endLine: destinationLine };
+}
+
+// CommonMark label matching uses Unicode case folding after whitespace
+// normalization. The lower-then-upper sequence matches markdown-it and folds
+// variants such as `ss`, `ß`, and `ẞ` to the same key.
+function normalizedReferenceLabel(label: string): string {
+	return label.trim().replace(/\s+/g, " ").toLowerCase().toUpperCase();
+}
+
+function referenceAnalysis(body: string): ReferenceAnalysis {
+	const visibleLines = visibleMarkdownLines(body);
+	const lines = documentContainerLines(visibleLines);
+	const labels = new Set<string>();
+	const definitionLines = new Set<number>();
+
+	for (let index = 0; index < lines.length; index++) {
+		const definition = referenceDefinitionAt(lines, index);
+		if (!definition) continue;
+		labels.add(normalizedReferenceLabel(definition.label));
+		for (let line = index; line <= definition.endLine; line++) {
+			definitionLines.add(line);
+		}
+		index = definition.endLine;
+	}
+
+	return { labels, definitionLines };
+}
+
+// A reference resolves against definitions anywhere in the document.
+function referenceLabels(body: string): Set<string> {
+	return referenceAnalysis(body).labels;
 }
 
 function withoutReferenceDefinitions(text: string): string {
-	const visible: string[] = [];
-	let titleContinuationContext: string | null = null;
-	for (const line of text.split("\n")) {
-		const container = containerLine(line);
-		if (
-			titleContinuationContext !== null &&
-			container.context === titleContinuationContext &&
-			REFERENCE_TITLE_RE.test(container.text)
-		) {
-			visible.push("");
-			titleContinuationContext = null;
-			continue;
-		}
-
-		const definition = referenceDefinition(line);
-		if (definition !== null) {
-			visible.push("");
-			titleContinuationContext = definition.mayContinueTitle
-				? definition.context
-				: null;
-			continue;
-		}
-
-		visible.push(line);
-		titleContinuationContext = null;
-	}
-	return visible.join("\n");
-}
-
-// A block that carries nothing but link reference definitions renders as
-// nothing at all, so it states no claim to ground.
-function isReferenceDefinitionBlock(text: string): boolean {
-	return withoutReferenceDefinitions(text).trim().length === 0;
+	const analysis = referenceAnalysis(text);
+	return visibleMarkdownLines(text)
+		.map((line, index) => (analysis.definitionLines.has(index) ? "" : line))
+		.join("\n");
 }
 
 function visibleMarkdownLinkText(text: string, labels: Set<string>): string {
@@ -1024,7 +1278,7 @@ function sourceTags(text: string, labels: Set<string>): string[] {
 
 function normalizedAssumption(text: string): string {
 	return text
-		.replace(/^\s*(?:[-*+]|\d+\.)\s+/, "")
+		.replace(/^\s*(?:[-*+]|\d{1,9}[.)])\s+/, "")
 		.replace(SOURCE_TAG_RE, "")
 		.replace(/\s+/g, " ")
 		.trim()
@@ -1046,17 +1300,17 @@ function inspectDeliverable(
 		};
 	}
 
-	const parsed = claimBlocks(body);
+	const references = referenceAnalysis(body);
+	const parsed = claimBlocks(body, references.definitionLines);
 	if (!parsed.hasAssumptionsSection) {
 		findings.push(
 			`${basename(path)}: missing ## ${ASSUMPTIONS_HEADING}`,
 		);
 	}
 
-	const labels = referenceLabels(body);
+	const labels = references.labels;
 	let hasAssumptions = false;
 	for (const block of parsed.blocks) {
-		if (isReferenceDefinitionBlock(block.text)) continue;
 		const location = `${basename(path)}${block.section ? ` ## ${block.section}` : ""}`;
 		const tags = sourceTags(block.text, labels);
 
