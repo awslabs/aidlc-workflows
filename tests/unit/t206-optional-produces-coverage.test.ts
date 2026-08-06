@@ -79,6 +79,14 @@ interface Directive {
   unit?: string;
   gate?: unknown;
   produces?: string[];
+  wave?: {
+    entries: Array<{
+      unit: string;
+      build_required: boolean;
+      review_state: string;
+      required_produces: string[];
+    }>;
+  };
   message?: string;
   [k: string]: unknown;
 }
@@ -173,15 +181,35 @@ function runReport(proj: string, args: string[]): Directive {
 
 describe("t206 optional_produces exempt from per-unit coverage", () => {
   // 1: happy path - the conditional artifact is ABSENT and the unit still
-  // counts covered, so the loop advances. Cover alpha with ONLY the three
-  // required artifacts (no frontend-components.md) -> next emits beta.
+  // counts covered. Cover alpha with ONLY the three required artifacts (no
+  // frontend-components.md) -> alpha is review-only, then its receipt advances.
   test("1: a unit covered by required-only artifacts advances the iteration", () => {
     const proj = seedProject("functional-design");
     seedBoltDag(proj, ["alpha", "beta"]);
     coverUnit(proj, "alpha", "functional-design", FD_REQUIRED);
-    const d = runNext(proj);
-    expect(d.kind).toBe("run-stage");
-    expect(d.unit).toBe("beta");
+    const reviewOnly = runNext(proj);
+    expect(reviewOnly.kind).toBe("run-stage");
+    expect(reviewOnly.unit).toBe("alpha");
+    expect(reviewOnly.wave?.entries[0]).toMatchObject({
+      build_required: false,
+      review_state: "outstanding",
+      required_produces: FD_REQUIRED.map(
+        (name) =>
+          `${RP}/construction/alpha/functional-design/${name}.md`,
+      ),
+    });
+    expect(
+      reviewOnly.wave?.entries[0].required_produces.some((path) =>
+        path.endsWith(`/${FD_OPTIONAL}.md`)
+      ),
+    ).toBe(false);
+    logReviewReady(
+      proj,
+      "functional-design",
+      "aidlc-architecture-reviewer-agent",
+      "alpha",
+    );
+    expect(runNext(proj).unit).toBe("beta");
   }, 30000);
 
   // 2: guard - a MISSING REQUIRED artifact still blocks coverage even when the
@@ -210,6 +238,18 @@ describe("t206 optional_produces exempt from per-unit coverage", () => {
     seedBoltDag(proj, ["alpha", "beta"]);
     coverUnit(proj, "alpha", "functional-design", FD_REQUIRED);
     coverUnit(proj, "beta", "functional-design", FD_REQUIRED);
+    logReviewReady(
+      proj,
+      "functional-design",
+      "aidlc-architecture-reviewer-agent",
+      "alpha",
+    );
+    logReviewReady(
+      proj,
+      "functional-design",
+      "aidlc-architecture-reviewer-agent",
+      "beta",
+    );
     const d = runNext(proj);
     expect(d.kind).toBe("run-stage");
     expect(d.unit).toBe("beta");

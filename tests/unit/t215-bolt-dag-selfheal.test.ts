@@ -29,6 +29,7 @@ resetAidlcEnv();
 
 const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
+const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const RP = `aidlc/spaces/${DEFAULT_SPACE}/intents/${DEFAULT_RECORD_DIR}`;
 const SEP = "\u2014";
 const HEAL_NOTE =
@@ -53,6 +54,10 @@ interface Directive {
   gate?: unknown;
   inputs?: string[];
   produces?: string[];
+  wave?: {
+    batch_index: number;
+    entries: Array<{ unit: string; unit_kind: string | null }>;
+  };
   message?: string;
   [k: string]: unknown;
 }
@@ -244,6 +249,37 @@ function setAutonomous(proj: string): void {
   writeFileSync(statePath, state);
 }
 
+function logReview(
+  proj: string,
+  unit: string,
+  verdict: "READY" | "NOT-READY" = "READY",
+  iteration = 1,
+): void {
+  const result = spawnSync(
+    BUN,
+    [
+      LOG,
+      "review",
+      "--stage",
+      "functional-design",
+      "--reviewer",
+      "aidlc-architecture-reviewer-agent",
+      "--unit",
+      unit,
+      "--iteration",
+      String(iteration),
+      "--verdict",
+      verdict,
+      "--project-dir",
+      proj,
+    ],
+    { encoding: "utf-8" },
+  );
+  if ((result.status ?? -1) !== 0) {
+    throw new Error(`review log failed: ${result.stdout}${result.stderr}`);
+  }
+}
+
 function runOrch(proj: string, args: string[]): RunResult {
   const r = spawnSync(BUN, [ORCH, ...args, "--project-dir", proj], {
     encoding: "utf-8",
@@ -378,9 +414,14 @@ describe("t215 bolt dag self-heal", () => {
     seedBoltDag(proj, ["alpha"]);
     seedAlphaBetaDependency(proj);
     coverUnit(proj, "alpha", "functional-design", FD_PRODUCES);
+    logReview(proj, "alpha");
     const r = runNext(proj);
     expect(r.directive.kind).toBe("run-stage");
     expect(r.directive.unit).toBe("beta");
+    expect(r.directive.wave?.batch_index).toBe(1);
+    expect(r.directive.wave?.entries.map((entry) => entry.unit)).toEqual([
+      "beta",
+    ]);
     expect(r.stderr).toContain(HEAL_NOTE);
     logCapturedStderr(r.stderr);
   }, 30000);
@@ -425,6 +466,7 @@ describe("t215 bolt dag self-heal", () => {
     const proj = seedProject("functional-design");
     seedAlphaBetaDependency(proj);
     coverUnit(proj, "alpha", "functional-design", FD_PRODUCES);
+    logReview(proj, "alpha");
 
     const betaRun = runNext(proj);
     expect(betaRun.directive.kind).toBe("run-stage");
@@ -434,6 +476,12 @@ describe("t215 bolt dag self-heal", () => {
     logCapturedStderr(betaRun.stderr);
 
     coverUnit(proj, "beta", "functional-design", FD_PRODUCES);
+    const reviewRun = runNext(proj);
+    expect(reviewRun.directive.kind).toBe("run-stage");
+    expect(reviewRun.directive.unit).toBe("beta");
+    expect(reviewRun.directive.gate).toBe(false);
+
+    logReview(proj, "beta", "NOT-READY", 2);
     const settle = runNext(proj);
     expect(settle.directive.kind).toBe("run-stage");
     expect(settle.directive.unit).toBe("beta");

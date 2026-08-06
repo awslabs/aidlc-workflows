@@ -87,29 +87,25 @@ Only the exact value `unit-major` activates it; absent or `stage-major` is the
 default.
 
 **Per-unit batch waves (optional, stage-major only).** On the default
-stage-major walk, the conductor MAY process a `gate: false` per-unit directive
-as a wave — but ONLY for one of the four inline design stages (3.1–3.4).
+stage-major walk, the engine MAY emit `directive.wave` for one of the four
+inline design stages (3.1–3.4). The wave comes from one healed DAG snapshot;
+the conductor does not read `runtime-graph.json` or derive sibling paths.
 Code Generation (3.5, `workspace_requires: true`) is NEVER wave-eligible:
 concurrent builders would collide writing into the shared workspace (the
 swarm path's per-unit worktrees exist for exactly this isolation), and its
 Step 3 Plan Approval is a mandatory hard stop in every execution mode that
-cannot fold into a builder's return message. For an eligible stage, the
-conductor reads `bolt_dag.batches` from the intent's `runtime-graph.json`,
-finds the batch containing `directive.unit`, takes the sibling units whose
-*kind* actually requires this stage's produces (via `produces_kinds` against
-each unit's `bolt_dag.units[].kind`), resolves each sibling's own paths and
-produces from its own kind, and dispatches the stage body for every uncovered
-member concurrently (one dispatch per unit, each running the stage's lead
-persona for that one unit, confined to `construction/<unit>/<stage>/`). The
-engine needs no cooperation — per-unit coverage is a stateless disk scan, so
-the next `next` simply skips whatever landed, though that scan proves
-artifact existence only: on crash re-entry the conductor runs the §12a
-reviewer step for any wave unit that reads as covered but carries no verdict
-yet, before presenting the gate. Reviewers run per wave unit at wave end, and
-every verdict settles before the single stage gate. Waves never apply under
-`Construction Iteration: unit-major`; harnesses without a parallel dispatch
-primitive stay on the serial loop. See `stage-protocol.md` §3 "Per-unit batch
-waves" for the full contract.
+cannot fold into a builder's return message.
+
+Each entry carries kind-resolved consumes, explicit absent consumes, all
+produces, the applicable required subset, a Unit-local diary path, and build
+and review state. Builders receive the parent stage file, inline context roster,
+warnings, and exact accumulated steering content. A blocked builder withholds
+an applicable required path, not an optional or kind-exempt path. The engine
+holds the current batch until every applicable Unit has a fresh terminal
+`REVIEW_COMPLETED`, then permits a dependent batch or the single stage gate.
+Waves never apply under `Construction Iteration: unit-major`; harnesses without
+a parallel dispatch primitive process the entries serially. See
+`stage-protocol.md` §3 "Per-unit batch waves" for the full contract.
 
 **Parallel batches.** When two or more Bolts share dependency-satisfaction
 and don't depend on each other, the conductor dispatches their Code

@@ -1,369 +1,565 @@
-// covers: file:aidlc-common/protocols/stage-protocol.md §3 §5,
+// covers: subcommand:aidlc-orchestrate:next, function:validateDirective,
+// file:aidlc-common/protocols/stage-protocol.md §3 §5,
 // file:skills/aidlc/SKILL.md per-unit wave paragraph
 //
-// t249 - batch-parallel per-unit waves (#610, floor version). The conductor
-// MAY widen a gate:false per-unit design directive into a Bolt-DAG batch wave
-// (one concurrent stage-body dispatch per uncovered batch unit) with §12a
-// reviewers dispatched at wave end as parallel FOREGROUND tasks where no
-// reviewer-scope dispatch record is active. Conductor-prose only - the engine
-// is untouched (its per-unit coverage is a stateless disk scan). This test
-// pins the load-bearing sentences on every surface that carries them - the
-// five authored harness SKILL.md files, their dist copies, and the shared
-// stage-protocol §3 wave paragraph + §5 topology carve-out (authored core +
-// per-harness dist copies) - so a prose sweep cannot silently drop:
-//   (a) the MAY-not-MUST framing (harnesses without parallel dispatch fall
-//       back to the serial loop, which stays fully correct),
-//   (b) the unit-major exclusion (waves apply to the stage-major walk only),
-//   (c) the builder write confinement to construction/<unit>/<stage>/ (the
-//       sentence that keeps a wave from racing shared files) + the
-//       no-stage-level-diary rule (conductor consolidates per wave, carrying
-//       every unit's memory-note content verbatim),
-//   (d) the never-present-the-gate-with-an-outstanding-reviewer rule (the
-//       wait is deferred, not skipped),
-//   (e) the enforcement constraint: parallel foreground reviewers only where
-//       no reviewer-scope dispatch record is active - the record is a single
-//       file, so enforcement harnesses serialize per-unit reviews,
-//   (f) wave eligibility is carved down to the four inline per-unit design
-//       stages - any `workspace_requires: true` stage (code-generation) is
-//       NEVER wave-eligible (shared-workspace collision + the Step 3 Plan
-//       Approval hard stop can't fold into a builder's return message),
-//   (g) sibling-unit membership and per-sibling derivation are kind-aware -
-//       a sibling only joins the wave if its kind actually requires this
-//       stage's produces (produces_kinds vs. bolt_dag.units[].kind), and
-//       each sibling's paths/produces are derived from ITS OWN kind, never
-//       by substituting its name into the one resolved directive,
-//   (h) crash re-entry runs the §12a reviewer step for any wave unit that
-//       reads as covered but carries no verdict yet, before the gate - the
-//       disk-scan coverage predicate proves artifact existence, not review,
-//   (i) a builder with a human-blocking question must withhold at least one
-//       required produce so the engine still reads its unit as uncovered.
-//
-// Mechanism: none (readFileSync over authored + dist prose; zero spawn, zero
-// LLM). Style follows t217: iterate HARNESS_MATRIX so a new harness cannot
-// ship without the wave paragraph, and read dist through each harness's
-// matrix roots so byte-parity drift in a generated copy also reds here.
-// (f)-(g) are additionally grounded against real stage frontmatter (below)
-// so the prose's factual claims about workspace_requires and produces_kinds
-// cannot silently drift from the stages they describe.
+// t249 - engine-emitted, receipt-settled waves for stage-major per-unit design.
+// The engine derives complete sibling entries from one healed Bolt-DAG snapshot,
+// keeps a batch active until every applicable unit has fresh review evidence,
+// and transports the optional wave through the existing steering boundary.
 
-import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { afterEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import {
+  AIDLC_SRC,
+  cleanupTestProject,
+  createTestProject,
+  DEFAULT_RECORD_DIR,
+  DEFAULT_SPACE,
+  runOrchestrateNext,
+  seedAidlcMemory,
+  seedBoltDag,
+  seededRecordDir,
+  seededStateFile,
+} from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
-const SKILL = "skills/aidlc/SKILL.md";
-const PROTOCOL = join("aidlc-common", "protocols", "stage-protocol.md");
-const CORE_STAGES = join("core", "aidlc-common", "stages", "construction");
+const BUN = process.execPath;
+const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
+const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
+const RP = `aidlc/spaces/${DEFAULT_SPACE}/intents/${DEFAULT_RECORD_DIR}`;
+const SEP = "\u2014";
+const REQUIRED_FD = [
+  "business-logic-model",
+  "business-rules",
+  "domain-entities",
+];
+interface WaveEntry {
+  unit: string;
+  unit_kind: string | null;
+  build_required: boolean;
+  review_state:
+    | "outstanding"
+    | "repair-required"
+    | "READY"
+    | "NOT-READY"
+    | "not-required";
+  review_iteration: number | null;
+  unit_memory_path: string;
+  consumes: string[];
+  consumes_absent: Array<{ path: string; expected: boolean }>;
+  produces: string[];
+  required_produces: string[];
+}
 
-/** The load-bearing wave sentences every conductor SKILL must carry. */
-function expectWaveParagraph(labelled: string): void {
-  // The paragraph exists and is anchored to the per-unit loop.
-  expect(labelled).toContain("**Per-unit batch waves (optional).**");
-  // (a) MAY, never MUST - with the serial loop staying fully correct.
-  expect(labelled).toMatch(/you MAY process a `gate: false` per-unit directive/);
-  expect(labelled).toMatch(
-    /The wave is a MAY, never a MUST: the serial loop above remains fully correct\./,
+interface Directive {
+  kind?: string;
+  stage?: string;
+  unit?: string;
+  gate?: unknown;
+  memory_path?: string;
+  inline_context_paths?: string[];
+  context_warnings?: string[];
+  rules_in_context?: string[];
+  wave?: { batch_index: number; entries: WaveEntry[] };
+  message?: string;
+  [key: string]: unknown;
+}
+
+const tempDirs: string[] = [];
+afterEach(() => {
+  while (tempDirs.length > 0) cleanupTestProject(tempDirs.pop());
+});
+
+function row(marker: " " | "-" | "x", slug: string): string {
+  return `- [${marker}] ${slug} ${SEP} EXECUTE`;
+}
+
+function constructionState(
+  current: string,
+  iteration: "stage-major" | "unit-major" = "stage-major",
+): string {
+  return `# AI-DLC State Tracking
+
+## Project Information
+- **Project**: wave test
+- **Project Type**: Greenfield
+- **Scope**: feature
+- **State Version**: 7
+- **Skeleton Stance**: on
+- **Construction Iteration**: ${iteration}
+
+## Scope Configuration
+- **Stages to Execute**: all
+- **Stages to Skip**: none
+- **Depth**: Standard
+- **Test Strategy**: Standard
+
+## Stage Progress
+
+### INCEPTION PHASE
+${row("x", "application-design")}
+${row("x", "units-generation")}
+
+### CONSTRUCTION PHASE
+${row(current === "functional-design" ? "-" : " ", "functional-design")}
+${row(current === "nfr-requirements" ? "-" : " ", "nfr-requirements")}
+${row(current === "nfr-design" ? "-" : " ", "nfr-design")}
+${row(current === "infrastructure-design" ? "-" : " ", "infrastructure-design")}
+${row(current === "code-generation" ? "-" : " ", "code-generation")}
+${row(" ", "build-and-test")}
+
+## Current Status
+- **Lifecycle Phase**: CONSTRUCTION
+- **Current Stage**: ${current}
+- **Status**: Running
+`;
+}
+
+function project(
+  current = "functional-design",
+  iteration: "stage-major" | "unit-major" = "stage-major",
+): string {
+  const proj = createTestProject();
+  tempDirs.push(proj);
+  seedAidlcMemory(proj);
+  writeFileSync(seededStateFile(proj), constructionState(current, iteration));
+  return proj;
+}
+
+function next(proj: string) {
+  const env = { ...process.env };
+  delete env.AWS_AIDLC_DEFAULT_SCOPE;
+  const result = runOrchestrateNext(ORCH, proj, [], { env });
+  if (result.directive === null) {
+    throw new Error(
+      `next emitted no JSON: ${result.status}\n${result.stdout}\n${result.stderr}`,
+    );
+  }
+  return {
+    ...result,
+    directive: result.directive as Directive,
+  };
+}
+
+function cover(
+  proj: string,
+  unit: string,
+  stage: string,
+  names: string[],
+): void {
+  const dir = join(seededRecordDir(proj), "construction", unit, stage);
+  mkdirSync(dir, { recursive: true });
+  for (const name of names) {
+    writeFileSync(join(dir, `${name}.md`), `# ${name} for ${unit}\n`);
+  }
+}
+
+function review(
+  proj: string,
+  unit: string,
+  verdict: "READY" | "NOT-READY" = "READY",
+  iteration = 1,
+): void {
+  const result = spawnSync(
+    BUN,
+    [
+      LOG,
+      "review",
+      "--stage",
+      "functional-design",
+      "--reviewer",
+      "aidlc-architecture-reviewer-agent",
+      "--unit",
+      unit,
+      "--iteration",
+      String(iteration),
+      "--verdict",
+      verdict,
+      "--project-dir",
+      proj,
+    ],
+    { encoding: "utf-8" },
   );
-  // (b) unit-major exclusion: waves ride the default stage-major walk only.
-  expect(labelled).toMatch(
-    /On the default stage-major walk only — when `Construction Iteration: unit-major` is recorded the walk stays serial/,
+  if ((result.status ?? -1) !== 0) {
+    throw new Error(`review failed: ${result.stdout}${result.stderr}`);
+  }
+}
+
+function writeDependencyArtifact(
+  proj: string,
+  units: Array<{ name: string; kind?: string; depends_on: string[] }>,
+): void {
+  const dir = join(seededRecordDir(proj), "inception", "units-generation");
+  mkdirSync(dir, { recursive: true });
+  const lines = ["# Unit Dependency", "", "```yaml", "units:"];
+  for (const unit of units) {
+    lines.push(`  - name: ${unit.name}`);
+    if (unit.kind) lines.push(`    kind: ${unit.kind}`);
+    lines.push(
+      `    depends_on: [${unit.depends_on.join(", ")}]`,
+    );
+  }
+  lines.push("```", "");
+  writeFileSync(join(dir, "unit-of-work-dependency.md"), lines.join("\n"));
+}
+
+describe("t249 engine-emitted wave contract", () => {
+  test("mixed-kind entries are independently resolved and keep parent versus unit memory distinct", () => {
+    const proj = project("infrastructure-design");
+    const knowledgeDir = join(
+      proj,
+      "aidlc",
+      "spaces",
+      "default",
+      "knowledge",
+      "aidlc-aws-platform-agent",
+    );
+    mkdirSync(knowledgeDir, { recursive: true });
+    symlinkSync(
+      join(knowledgeDir, "missing-target.md"),
+      join(knowledgeDir, "broken.md"),
+    );
+    seedBoltDag(proj, [
+      { name: "api", kind: "service" },
+      { name: "web", kind: "ui" },
+      { name: "contract", kind: "spec" },
+    ]);
+
+    const result = next(proj);
+    const directive = result.directive;
+    expect(directive.kind).toBe("run-stage");
+    expect(directive.stage).toBe("infrastructure-design");
+    expect(directive.wave?.batch_index).toBe(0);
+    expect(directive.wave?.entries.map((entry) => entry.unit)).toEqual([
+      "api",
+      "web",
+    ]);
+
+    const api = directive.wave?.entries[0] as WaveEntry;
+    const web = directive.wave?.entries[1] as WaveEntry;
+    expect(api.unit_kind).toBe("service");
+    expect(api.required_produces).toHaveLength(4);
+    expect(
+      api.required_produces.every((path) =>
+        path.includes("/construction/api/infrastructure-design/")
+      ),
+    ).toBe(true);
+    expect(web.unit_kind).toBe("ui");
+    expect(web.required_produces).toEqual([
+      `${RP}/construction/web/infrastructure-design/deployment-architecture.md`,
+      `${RP}/construction/web/infrastructure-design/cicd-pipeline.md`,
+    ]);
+    expect(web.produces).toContain(
+      `${RP}/construction/web/infrastructure-design/shared-infrastructure.md`,
+    );
+    expect(web.required_produces).not.toContain(
+      `${RP}/construction/web/infrastructure-design/shared-infrastructure.md`,
+    );
+    expect(api.consumes_absent).toBeArray();
+    expect(web.consumes_absent).toBeArray();
+    expect(directive.memory_path).toBe(
+      `${RP}/construction/infrastructure-design/memory.md`,
+    );
+    expect(api.unit_memory_path).toBe(
+      `${RP}/construction/api/infrastructure-design/memory.md`,
+    );
+    expect(web.unit_memory_path).toBe(
+      `${RP}/construction/web/infrastructure-design/memory.md`,
+    );
+
+    expect(result.steering.length).toBeGreaterThan(0);
+    expect(directive.rules_in_context?.length ?? 0).toBeGreaterThan(0);
+    expect(directive.inline_context_paths?.length ?? 0).toBeGreaterThan(0);
+    const deliveredRulePaths = [
+      ...new Set(
+        result.steering.flatMap((part) =>
+          (
+            part.rules_content as Array<{ path: string; text: string }>
+          ).map((entry) => entry.path)
+        ),
+      ),
+    ];
+    expect(deliveredRulePaths).toEqual(directive.rules_in_context ?? []);
+    expect(directive.context_warnings?.join("\n")).toContain(
+      "aidlc-aws-platform-agent/broken.md",
+    );
+  }, 30000);
+
+  test("downstream consumes omit artifacts pruned by the producer for this unit kind", () => {
+    const proj = project("nfr-design");
+    seedBoltDag(proj, [{ name: "contract", kind: "spec" }]);
+
+    const entry = next(proj).directive.wave?.entries[0] as WaveEntry;
+    const consumePaths = [
+      ...entry.consumes,
+      ...entry.consumes_absent.map((item) => item.path),
+    ];
+    for (const pruned of [
+      "performance-requirements",
+      "scalability-requirements",
+      "reliability-requirements",
+      "business-logic-model",
+    ]) {
+      expect(consumePaths.some((path) => path.endsWith(`/${pruned}.md`))).toBe(
+        false,
+      );
+    }
+    expect(consumePaths).toContain(
+      `${RP}/construction/contract/nfr-requirements/security-requirements.md`,
+    );
+    expect(consumePaths).toContain(
+      `${RP}/construction/contract/nfr-requirements/tech-stack-decisions.md`,
+    );
+    expect(entry.required_produces).toEqual([
+      `${RP}/construction/contract/nfr-design/security-design.md`,
+    ]);
+  }, 30000);
+
+  test("wave membership comes from the healed authored DAG, never the stale cache", () => {
+    const proj = project();
+    seedBoltDag(
+      proj,
+      [
+        { name: "alpha", kind: "service" },
+        { name: "beta", kind: "service" },
+      ],
+      [["alpha", "beta"]],
+    );
+    writeDependencyArtifact(proj, [
+      { name: "alpha", kind: "service", depends_on: [] },
+      { name: "beta", kind: "service", depends_on: ["alpha"] },
+    ]);
+
+    const result = next(proj);
+    expect(result.directive.wave?.batch_index).toBe(0);
+    expect(result.directive.wave?.entries.map((entry) => entry.unit)).toEqual([
+      "alpha",
+    ]);
+    expect(result.stderr).toContain("bolt_dag is missing or stale");
+  }, 30000);
+
+  test("dependent batches wait for fresh terminal receipts, including NOT-READY at cap", () => {
+    const proj = project();
+    seedBoltDag(
+      proj,
+      ["alpha", "beta"],
+      [["alpha"], ["beta"]],
+    );
+    cover(proj, "alpha", "functional-design", REQUIRED_FD);
+
+    const alphaReview = next(proj).directive;
+    expect(alphaReview.unit).toBe("alpha");
+    expect(alphaReview.gate).toBe(false);
+    expect(alphaReview.wave?.entries[0]).toMatchObject({
+      unit: "alpha",
+      build_required: false,
+      review_state: "outstanding",
+    });
+
+    review(proj, "alpha");
+    const betaBuild = next(proj).directive;
+    expect(betaBuild.unit).toBe("beta");
+    expect(betaBuild.wave?.batch_index).toBe(1);
+    expect(betaBuild.wave?.entries[0].build_required).toBe(true);
+
+    cover(proj, "beta", "functional-design", REQUIRED_FD);
+    const betaReview = next(proj).directive;
+    expect(betaReview.unit).toBe("beta");
+    expect(betaReview.gate).toBe(false);
+    expect(betaReview.wave?.entries[0]).toMatchObject({
+      build_required: false,
+      review_state: "outstanding",
+    });
+
+    review(proj, "beta", "NOT-READY", 1);
+    const repair = next(proj).directive;
+    expect(repair.unit).toBe("beta");
+    expect(repair.gate).toBe(false);
+    expect(repair.wave?.entries[0]).toMatchObject({
+      review_state: "repair-required",
+      review_iteration: 1,
+    });
+
+    writeFileSync(
+      join(
+        seededRecordDir(proj),
+        "construction",
+        "beta",
+        "functional-design",
+        "business-logic-model.md",
+      ),
+      "# repaired after iteration 1\n",
+    );
+    const reReview = next(proj).directive;
+    expect(reReview.wave?.entries[0]).toMatchObject({
+      review_state: "outstanding",
+      review_iteration: 2,
+    });
+
+    review(proj, "beta", "NOT-READY", 2);
+    const settled = next(proj).directive;
+    expect(settled.unit).toBe("beta");
+    expect(settled.gate).toBe(true);
+    expect(settled.wave).toBeUndefined();
+  }, 30000);
+
+  test("a post-review artifact change reopens only its owning earlier batch", () => {
+    const proj = project();
+    seedBoltDag(
+      proj,
+      ["alpha", "beta"],
+      [["alpha"], ["beta"]],
+    );
+    cover(proj, "alpha", "functional-design", REQUIRED_FD);
+    cover(proj, "beta", "functional-design", REQUIRED_FD);
+    review(proj, "alpha");
+    review(proj, "beta");
+    expect(next(proj).directive.gate).toBe(true);
+
+    writeFileSync(
+      join(
+        seededRecordDir(proj),
+        "construction",
+        "alpha",
+        "functional-design",
+        "business-logic-model.md",
+      ),
+      "# changed after review\n",
+    );
+    const reopened = next(proj).directive;
+    expect(reopened.wave?.batch_index).toBe(0);
+    expect(reopened.wave?.entries).toHaveLength(1);
+    expect(reopened.wave?.entries[0]).toMatchObject({
+      unit: "alpha",
+      build_required: false,
+      review_state: "outstanding",
+    });
+  }, 30000);
+
+  test("fully settled siblings are omitted from a repeated same-batch wave", () => {
+    const proj = project();
+    seedBoltDag(proj, ["alpha", "beta"]);
+    cover(proj, "alpha", "functional-design", REQUIRED_FD);
+    review(proj, "alpha");
+
+    const wave = next(proj).directive.wave;
+    expect(wave?.batch_index).toBe(0);
+    expect(wave?.entries.map((entry) => entry.unit)).toEqual(["beta"]);
+  }, 30000);
+
+  test("large independent batches emit deterministic same-batch prefixes below the transport cap", () => {
+    const proj = project();
+    const units = Array.from({ length: 100 }, (_, index) => ({
+      name: `unit-${index.toString().padStart(3, "0")}`,
+      kind: "service",
+    }));
+    seedBoltDag(proj, units);
+    const result = next(proj);
+    const entries = result.directive.wave?.entries ?? [];
+    expect(entries.length).toBeGreaterThan(0);
+    expect(entries.length).toBeLessThan(units.length);
+    expect(entries[0].unit).toBe("unit-000");
+    expect(result.directive.wave?.batch_index).toBe(0);
+    expect(Buffer.byteLength(result.stdout.trim(), "utf-8")).toBeLessThanOrEqual(
+      28 * 1024,
+    );
+  }, 30000);
+
+  test("unit-major design and non-autonomous code-generation remain serial", () => {
+    const unitMajor = project("functional-design", "unit-major");
+    seedBoltDag(unitMajor, ["alpha", "beta"]);
+    expect(next(unitMajor).directive.wave).toBeUndefined();
+
+    const codegen = project("code-generation");
+    seedBoltDag(codegen, ["alpha", "beta"]);
+    const directive = next(codegen).directive;
+    expect(directive.stage).toBe("code-generation");
+    expect(directive.unit).toBe("alpha");
+    expect(directive.wave).toBeUndefined();
+  }, 30000);
+});
+
+function expectWaveProse(body: string): void {
+  expect(body).toContain("**Per-unit batch waves (optional).**");
+  expect(body).toContain("directive.wave");
+  expect(body).toContain(
+    "branch on `directive.wave` before the ordinary per-unit or gate path",
   );
-  // (f) eligibility is carved down to the four inline design stages; a
-  // workspace_requires stage (code-generation) is never wave-eligible.
-  expect(labelled).toMatch(
-    /but ONLY on one of the four inline design stages \(functional-design, nfr-requirements, nfr-design, infrastructure-design\)/,
-  );
-  expect(labelled).toMatch(
-    /Code-generation \(`workspace_requires: true`\) is NEVER wave-eligible/,
-  );
-  expect(labelled).toMatch(/collide in the working tree/);
-  expect(labelled).toMatch(/Step 3 Plan Approval is a mandatory hard stop/);
-  // The wave source: bolt_dag.batches from the intent's runtime-graph.json,
-  // filtered to kind-eligible units whose artifacts for THIS stage are not
-  // yet on disk.
-  expect(labelled).toMatch(/read `bolt_dag\.batches` from the intent's `runtime-graph\.json`/);
-  // (g) kind-aware sibling membership + per-sibling derivation.
-  expect(labelled).toMatch(
-    /take the wave = that batch's units whose KIND actually requires this stage's produces/,
-  );
-  expect(labelled).toMatch(
-    /cross-reference the stage's `produces_kinds` map against each unit's `bolt_dag\.units\[\]\.kind`/,
-  );
-  expect(labelled).toMatch(
-    /vacuously covered and never a wave member/,
-  );
-  expect(labelled).toMatch(
-    /and whose artifacts for THIS stage are not yet on disk/,
-  );
-  expect(labelled).toMatch(
-    /Resolve each sibling unit's own paths and kind-filtered produces\/consumes from ITS OWN kind — never by substituting the sibling's name into `directive`'s already-resolved fields/,
-  );
-  // (c) builder write confinement + no stage-level diary (verbatim carry) +
-  // questions surface in the return message (never a mid-dispatch stop).
-  expect(labelled).toMatch(
-    /Each builder is confined to its own `construction\/<unit>\/<stage>\/`/,
-  );
-  expect(labelled).toMatch(
-    /builders must NOT write any stage-level diary — the conductor appends one consolidated diary entry per wave that carries every unit's memory-note content VERBATIM, not a paraphrase/,
-  );
-  expect(labelled).toMatch(
-    /the question surfaces in the builder's return message/,
-  );
-  // (i) blocking question => withhold at least one required produce.
-  expect(labelled).toMatch(
-    /A builder with a human-blocking question MUST withhold at least one of the stage's required produces so its unit still reads as uncovered/,
-  );
-  expect(labelled).toMatch(
-    /once a builder has written every required produce for its unit it MUST NOT raise a blocking question/,
-  );
-  // (d) the gate is never presented with a reviewer outstanding.
-  expect(labelled).toMatch(
-    /never present the gate with a reviewer outstanding or a NOT-READY unresolved within its iteration budget — the wait is deferred, not skipped\./,
-  );
-  // The loop re-entry stays engine-owned: re-run next, never report-approve.
-  expect(labelled).toMatch(/re-run `next` exactly as above \(do NOT report-approve/);
-  // (h) crash recovery: disk-scan proves build coverage only; the §12a
-  // reviewer step still runs for any covered-but-unreviewed wave unit before
-  // the gate is presented.
-  expect(labelled).toMatch(/`next` re-hands whatever is still uncovered/);
-  expect(labelled).toMatch(
-    /that scan is artifact-existence only and proves nothing about review/,
-  );
-  expect(labelled).toMatch(
-    /run the §12a reviewer step for any wave unit that reads as covered but whose primary artifact carries no `## Review` verdict yet/,
+  expect(body).toContain("do not execute those parent Unit fields separately");
+  expect(body).toContain("engine's healed Bolt-DAG snapshot");
+  expect(body).toContain("accumulated `load-steering.rules_content` bundle verbatim");
+  expect(body).toContain("parent `inline_context_paths`");
+  expect(body).toContain("parent `context_warnings`");
+  expect(body).toContain("unit-scoped PRE-GENERATION SUMMARY STOP");
+  expect(body).toContain("entry.required_produces");
+  expect(body).toContain("entry.unit_memory_path");
+  expect(body).toContain('review_state: "repair-required"');
+  expect(body).toContain("review_iteration + 1");
+  expect(body).toContain("fresh terminal `REVIEW_COMPLETED`");
+  expect(body).toContain("Code-generation (`workspace_requires: true`) is NEVER wave-eligible");
+  expect(body).toContain("The wave is a MAY, never a MUST");
+  expect(body).not.toContain(
+    "read `bolt_dag.batches` from the intent's `runtime-graph.json`",
   );
 }
 
-describe("t249 per-unit wave paragraph on every conductor SKILL surface", () => {
-  test("authored harness SKILL.md files carry the wave paragraph", () => {
+describe("t249 wave protocol parity", () => {
+  test("authored and generated conductor skills carry the current engine contract", () => {
     for (const harness of HARNESS_MATRIX) {
-      const path = join(harness.authoredRoot, SKILL);
-      expectWaveParagraph(`harness ${harness.name}: ${path}\n${readFileSync(path, "utf-8")}`);
-    }
-  });
-
-  test("dist SKILL.md copies carry the wave paragraph", () => {
-    for (const harness of HARNESS_MATRIX) {
-      const path = join(harness.skillsRoot, "aidlc", "SKILL.md");
-      expectWaveParagraph(`harness ${harness.name}: ${path}\n${readFileSync(path, "utf-8")}`);
-    }
-  });
-
-  test("the enforcement constraint is stated per harness capability", () => {
-    for (const harness of HARNESS_MATRIX) {
-      const path = join(harness.authoredRoot, SKILL);
-      const body = `harness ${harness.name}: ${path}\n${readFileSync(path, "utf-8")}`;
+      const authored = readFileSync(
+        join(harness.authoredRoot, "skills", "aidlc", "SKILL.md"),
+        "utf-8",
+      );
+      const generated = readFileSync(
+        join(harness.skillsRoot, "aidlc", "SKILL.md"),
+        "utf-8",
+      );
+      expectWaveProse(authored);
+      expectWaveProse(generated);
       if (harness.capabilities.reviewerScopeRegistration === "unsupported") {
-        // Kiro IDE: no reviewer-scope hook, so the wave's reviewers may run as
-        // parallel foreground dispatches (prose bound rides in each brief).
-        expect(body).toMatch(
-          /this harness has no reviewer-scope enforcement hook, so the wave's reviewers MAY be dispatched as parallel FOREGROUND/,
+        expect(authored).toContain(
+          "wave reviewers MAY run as parallel FOREGROUND dispatches",
         );
       } else {
-        // (e) enforcement harnesses: the single-file dispatch record
-        // serializes per-unit reviews - write record, review, delete, next.
-        expect(body).toMatch(
-          /allowed ONLY where no reviewer-scope dispatch record is active/,
-        );
-        expect(body).toMatch(
-          /the dispatch record is a single file, so per-unit reviews here serialize: write the record, review, delete, then the next unit\./,
+        expect(authored).toContain(
+          "per-unit reviews here serialize: write the record, review, delete, then the next unit",
         );
       }
     }
   });
-});
 
-/** The protocol-level (§3) wave paragraph, harness-neutral wording. */
-function expectProtocolWave(labelled: string): void {
-  expect(labelled).toContain("**Per-unit batch waves (optional, stage-major only).**");
-  // MAY not MUST, harness capability decides.
-  expect(labelled).toMatch(/the orchestrator MAY parallelize the loop above/);
-  expect(labelled).toMatch(
-    /the wave is a MAY, never a MUST, and the serial loop remains fully correct/,
-  );
-  // Unit-major exclusion.
-  expect(labelled).toMatch(
-    /When `Construction Iteration: unit-major` is recorded, the walk stays serial — waves apply to the default stage-major walk only\./,
-  );
-  // (f) eligibility carve-out at the protocol level.
-  expect(labelled).toMatch(
-    /but ONLY for the four inline per-Unit design stages \(functional-design, nfr-requirements, nfr-design, infrastructure-design\)/,
-  );
-  expect(labelled).toMatch(
-    /A stage with `workspace_requires: true` \(code-generation\) is NEVER wave-eligible/,
-  );
-  // (g) kind-aware sibling membership + per-sibling derivation.
-  expect(labelled).toMatch(
-    /take the wave = that batch's Units whose KIND actually requires this stage's produces/,
-  );
-  expect(labelled).toMatch(
-    /cross-reference the stage's `produces_kinds` map against each Unit's `bolt_dag\.units\[\]\.kind`/,
-  );
-  expect(labelled).toMatch(/vacuously covered by that stage and is never a wave member/);
-  expect(labelled).toMatch(
-    /Resolve each sibling Unit's own paths and kind-filtered produces\/consumes set from ITS OWN kind — never by substituting the sibling's name into `directive`'s already-resolved fields/,
-  );
-  // Confinement + consolidated diary (verbatim carry-over).
-  expect(labelled).toMatch(
-    /Each builder is confined to its own `construction\/<unit>\/<stage>\/`/,
-  );
-  expect(labelled).toMatch(
-    /no builder writes a stage-level diary — the orchestrator appends one consolidated diary entry per wave that carries every Unit's memory-note content VERBATIM, not a paraphrase/,
-  );
-  // (i) blocking question => withhold at least one required produce.
-  expect(labelled).toMatch(
-    /A builder with a human-blocking question MUST withhold at least one of the stage's required produces so its Unit still reads as uncovered/,
-  );
-  // Gate discipline.
-  expect(labelled).toMatch(
-    /the gate is never presented with a reviewer outstanding or a NOT-READY unresolved within its iteration budget — the wait is deferred, not skipped\./,
-  );
-  // Enforcement constraint at protocol level: foreground-parallel reviewers
-  // only with no active dispatch record; the single-file record serializes.
-  expect(labelled).toMatch(
-    /parallel FOREGROUND dispatches in one turn only on a harness\/path with no active reviewer-scope dispatch record/,
-  );
-  expect(labelled).toMatch(
-    /the single-file record serializes per-Unit reviews \(write record → review → delete → next\)/,
-  );
-  // (h) crash re-entry: build coverage only, §12a check before the gate.
-  expect(labelled).toMatch(
-    /that scan is artifact-existence only and proves nothing about review/,
-  );
-  expect(labelled).toMatch(
-    /the orchestrator MUST run the §12a reviewer step for any wave Unit that reads as covered but whose primary artifact carries no `## Review` verdict yet/,
-  );
-}
-
-/** The §5 topology carve-out: a wave is loop parallelization, not a mode. */
-function expectTopologyCarveOut(labelled: string): void {
-  expect(labelled).toContain("**Per-unit-wave carve-out.**");
-  expect(labelled).toMatch(
-    /a parallelization of the engine's per-Unit loop, NOT a communication topology/,
-  );
-  // The lead persona runs per unit.
-  expect(labelled).toMatch(
-    /Each wave dispatch runs the stage's LEAD persona for exactly ONE Unit/,
-  );
-  // mode: inline's "supports are voices" folds into each builder's brief.
-  expect(labelled).toMatch(
-    /the "supports are voices" rule folds into each builder's brief/,
-  );
-}
-
-describe("t249 stage-protocol §3 wave paragraph + §5 carve-out", () => {
-  test("authored core stage-protocol.md carries the §3 wave paragraph and §5 carve-out", () => {
-    const repoRoot = join(import.meta.dir, "..", "..");
-    const path = join(repoRoot, "core", PROTOCOL);
-    const body = `core: ${path}\n${readFileSync(path, "utf-8")}`;
-    expectProtocolWave(body);
-    expectTopologyCarveOut(body);
-  });
-
-  test("dist stage-protocol.md copies carry the §3 wave paragraph and §5 carve-out", () => {
-    for (const harness of HARNESS_MATRIX) {
-      const path = join(harness.engineRoot, PROTOCOL);
-      const body = `harness ${harness.name}: ${path}\n${readFileSync(path, "utf-8")}`;
-      expectProtocolWave(body);
-      expectTopologyCarveOut(body);
-    }
-  });
-
-  test("§5 carve-out sits inside the Multi-agent stages section, and the §3 paragraph follows the engine-driven per-unit prose", () => {
-    const repoRoot = join(import.meta.dir, "..", "..");
-    const body = readFileSync(join(repoRoot, "core", PROTOCOL), "utf-8");
-    // §3 ordering: engine-driven per-unit prose first, wave paragraph second,
-    // unit-major opt-in after (the wave paragraph parallelizes the loop the
-    // preceding paragraph defines).
-    const engineDriven = body.indexOf("**Engine-driven per-unit iteration.**");
-    const wave = body.indexOf("**Per-unit batch waves (optional, stage-major only).**");
-    const unitMajor = body.indexOf("**Unit-major iteration (opt-in).**");
-    expect(engineDriven).toBeGreaterThan(-1);
-    expect(wave).toBeGreaterThan(engineDriven);
-    expect(unitMajor).toBeGreaterThan(wave);
-    // §5 placement: the carve-out lives in the Multi-agent stages section,
-    // before §11 (the next numbered heading after §5's content).
-    const multiAgent = body.indexOf("### Multi-agent stages");
-    const carveOut = body.indexOf("**Per-unit-wave carve-out.**");
-    const section11 = body.indexOf("## 11. Subagent Return Summary");
-    expect(multiAgent).toBeGreaterThan(-1);
-    expect(carveOut).toBeGreaterThan(multiAgent);
-    expect(carveOut).toBeLessThan(section11);
-  });
-});
-
-// Grounding: the wave prose's eligibility claim (f) and kind-membership claim
-// (g) name real facts about real stage frontmatter. If a future edit to the
-// stage files drifts from what the prose asserts - e.g. code-generation loses
-// `workspace_requires: true`, or an inline design stage gains it, or a
-// produces_kinds map stops exempting any kind - this drifts silently unless
-// pinned against the actual frontmatter, not just the prose describing it.
-describe("t249 wave-eligibility and kind-membership claims are grounded in real stage frontmatter", () => {
-  const INLINE_WAVE_STAGES = [
-    "functional-design",
-    "nfr-requirements",
-    "nfr-design",
-    "infrastructure-design",
-  ];
-
-  function frontmatter(slug: string): string {
-    const repoRoot = join(import.meta.dir, "..", "..");
-    const path = join(repoRoot, CORE_STAGES, `${slug}.md`);
-    const body = readFileSync(path, "utf-8");
-    const end = body.indexOf("\n---", 3);
-    return body.slice(0, end === -1 ? undefined : end);
-  }
-
-  test("(f) the four inline wave-eligible stages carry no workspace_requires", () => {
-    for (const slug of INLINE_WAVE_STAGES) {
-      const fm = frontmatter(slug);
-      expect(fm).toMatch(/^mode:\s*inline\s*$/m);
-      expect(fm).not.toMatch(/workspace_requires:\s*true/);
-    }
-  });
-
-  test("(f) code-generation - the excluded stage - actually carries workspace_requires: true and mode: subagent", () => {
-    const fm = frontmatter("code-generation");
-    expect(fm).toMatch(/^mode:\s*subagent\s*$/m);
-    expect(fm).toMatch(/workspace_requires:\s*true/);
-  });
-
-  test("(g) mixed-kind batch: infrastructure-design's produces_kinds vacuously exempts a real kind (spec) from every required produce while a service-kind unit stays fully required", () => {
-    // This is the exact scenario apackeer's finding names: "a spec unit is
-    // vacuously covered by infrastructure-design". Ground it against the
-    // real produces_kinds map rather than asserting it only in prose.
-    const fm = frontmatter("infrastructure-design");
-    const producesMatch = fm.match(/^produces:\n([\s\S]*?)\n(?:optional_produces|produces_kinds):/m);
-    expect(producesMatch).not.toBeNull();
-    const requiredProduces = (producesMatch as RegExpMatchArray)[1]
-      .split("\n")
-      .map((l) => l.trim().replace(/^- /, ""))
-      .filter(Boolean);
-    expect(requiredProduces.length).toBeGreaterThan(0);
-
-    const kindsBlockMatch = fm.match(/^produces_kinds:\n([\s\S]*?)\nconsumes:/m);
-    expect(kindsBlockMatch).not.toBeNull();
-    const kindsBlock = (kindsBlockMatch as RegExpMatchArray)[1];
-
-    // A "spec" unit must be absent from EVERY required produce's kind list -
-    // i.e., a spec-kind sibling is exempt from all of this stage's produces
-    // and is therefore vacuously covered (never a wave member for this
-    // stage), exactly as the wave prose (g) claims for kind-exempt units.
-    for (const produce of requiredProduces) {
-      const line = kindsBlock
-        .split("\n")
-        .find((l) => l.trim().startsWith(`${produce}:`));
-      expect(line).toBeDefined();
-      expect(line as string).not.toMatch(/\bspec\b/);
-    }
-
-    // A "service" unit, by contrast, is named on every required produce's
-    // kind list, so a service-kind sibling IS a genuine wave member.
-    for (const produce of requiredProduces) {
-      const line = kindsBlock
-        .split("\n")
-        .find((l) => l.trim().startsWith(`${produce}:`)) as string;
-      expect(line).toMatch(/\bservice\b/);
-    }
+  test("shared protocol carries the engine, receipt, steering, and memory invariants", () => {
+    const core = readFileSync(
+      join(
+        import.meta.dir,
+        "..",
+        "..",
+        "core",
+        "aidlc-common",
+        "protocols",
+        "stage-protocol.md",
+      ),
+      "utf-8",
+    );
+    expect(core).toContain(
+      "**Per-unit batch waves (optional, stage-major only).**",
+    );
+    expect(core).toContain("engine emits `directive.wave`");
+    expect(core).toContain(
+      "branch here before the ordinary per-Unit or gate path",
+    );
+    expect(core).toContain("entry.required_produces");
+    expect(core).toContain("entry.unit_memory_path");
+    expect(core).toContain('review_state: "repair-required"');
+    expect(core).toContain("unit-scoped PRE-GENERATION SUMMARY STOP");
+    expect(core).toContain("fresh terminal `REVIEW_COMPLETED`");
+    expect(core).toContain(
+      "accumulated `load-steering.rules_content` bundle VERBATIM",
+    );
+    expect(core).not.toContain(
+      "read `bolt_dag.batches` from the intent's `runtime-graph.json`",
+    );
   });
 });

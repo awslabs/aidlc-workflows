@@ -30,6 +30,7 @@
 // with units [alpha, beta]. All temp dirs cleaned in afterEach.
 
 import { afterEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -48,6 +49,8 @@ import {
 resetAidlcEnv();
 
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
+const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
+const BUN = process.execPath;
 
 const FD_PRODUCES = [
   "business-logic-model",
@@ -134,6 +137,32 @@ function coverUnit(
   }
 }
 
+function reviewUnit(proj: string, unit: string): void {
+  const result = spawnSync(
+    BUN,
+    [
+      LOG,
+      "review",
+      "--stage",
+      "functional-design",
+      "--reviewer",
+      "aidlc-architecture-reviewer-agent",
+      "--unit",
+      unit,
+      "--iteration",
+      "1",
+      "--verdict",
+      "READY",
+      "--project-dir",
+      proj,
+    ],
+    { encoding: "utf-8" },
+  );
+  if ((result.status ?? -1) !== 0) {
+    throw new Error(`review failed: ${result.stdout}${result.stderr}`);
+  }
+}
+
 /** Seed a fresh Construction project. Returns the proj dir. */
 function seedProject(opts: {
   current?: string;
@@ -167,12 +196,15 @@ function runNext(proj: string): Directive {
 // stage-major "advance to beta" shape.
 function coverAlphaFd(proj: string): void {
   coverUnit(proj, "alpha", "functional-design", FD_PRODUCES);
+  reviewUnit(proj, "alpha");
 }
 
 // Cover both units' functional-design produces, to reach the all-covered gate.
 function coverBothFd(proj: string): void {
   coverUnit(proj, "alpha", "functional-design", FD_PRODUCES);
   coverUnit(proj, "beta", "functional-design", FD_PRODUCES);
+  reviewUnit(proj, "alpha");
+  reviewUnit(proj, "beta");
 }
 
 // Drive `next` for a given knob value at a given coverage state and return the

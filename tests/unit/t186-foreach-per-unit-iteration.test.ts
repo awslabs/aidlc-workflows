@@ -113,6 +113,15 @@ interface Directive {
   unit?: string;
   gate?: unknown;
   produces?: string[];
+  wave?: {
+    batch_index: number;
+    entries: Array<{
+      unit: string;
+      build_required: boolean;
+      review_state: string;
+      required_produces: string[];
+    }>;
+  };
   message?: string;
   [k: string]: unknown;
 }
@@ -250,6 +259,11 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     );
     // The literal placeholder is gone, the real unit was substituted.
     expect(d.produces?.some((p) => p.includes("{unit-name}"))).toBe(false);
+    expect(d.wave?.entries.map((entry) => entry.unit)).toEqual([
+      "alpha",
+      "beta",
+    ]);
+    expect(d.wave?.entries.every((entry) => entry.build_required)).toBe(true);
   }, 30000);
 
   // 2: gate suppressed on a non-last unit, alpha + beta both uncovered, so
@@ -262,18 +276,20 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     expect(d.gate).toBe(false);
   }, 30000);
 
-  // 3: iteration advance, cover alpha's full produces[] on disk -> next emits
-  // unit=beta (the engine walks to the next uncovered unit).
-  test("3: covering the first unit advances the iteration to the next unit", () => {
+  // 3: artifact coverage alone does not cross the wave's review boundary.
+  test("3: covering the first unit keeps it active until its fresh review receipt", () => {
     const proj = seedProject("functional-design", "on");
     seedBoltDag(proj, ["alpha", "beta"]);
     coverUnit(proj, "alpha", "functional-design", FD_REQUIRED_PRODUCES);
     const d = runNext(proj);
     expect(d.kind).toBe("run-stage");
-    expect(d.unit).toBe("beta");
-    expect(d.produces).toContain(
-      `${RP}/construction/beta/functional-design/business-logic-model.md`,
-    );
+    expect(d.unit).toBe("alpha");
+    expect(d.gate).toBe(false);
+    expect(d.wave?.entries[0]).toMatchObject({
+      unit: "alpha",
+      build_required: false,
+      review_state: "outstanding",
+    });
   }, 30000);
 
   // 4: gate STILL suppressed on the LAST uncovered unit. alpha covered, beta the
@@ -285,6 +301,7 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     const proj = seedProject("functional-design", "on");
     seedBoltDag(proj, ["alpha", "beta"]);
     coverUnit(proj, "alpha", "functional-design", FD_REQUIRED_PRODUCES);
+    logReviewReady(proj, "functional-design", "alpha");
     const d = runNext(proj);
     expect(d.unit).toBe("beta");
     expect(d.gate).toBe(false);
@@ -366,10 +383,8 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     expect(d.gate).toBe(false);
   }, 30000);
 
-  // 9: all-covered settle. Both units covered on disk but the checkbox is still
-  // in-flight -> next emits the LAST unit with the stage's REAL gate (true), so
-  // the single human approval is presented only after every unit is built.
-  test("9: with every unit covered, next presents the real gate on the last unit", () => {
+  // 9: all-covered is not all-settled until the review receipts are fresh.
+  test("9: with every unit covered, next keeps the wave active for review", () => {
     const proj = seedProject("functional-design", "on");
     seedBoltDag(proj, ["alpha", "beta"]);
     coverUnit(proj, "alpha", "functional-design", FD_REQUIRED_PRODUCES);
@@ -377,8 +392,12 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     const d = runNext(proj);
     expect(d.kind).toBe("run-stage");
     expect(d.stage).toBe("functional-design");
-    expect(d.unit).toBe("beta"); // the last unit in topo order
-    expect(d.gate).toBe(true);
+    expect(d.unit).toBe("alpha");
+    expect(d.gate).toBe(false);
+    expect(d.wave?.entries.every((entry) => !entry.build_required)).toBe(true);
+    expect(
+      d.wave?.entries.every((entry) => entry.review_state === "outstanding"),
+    ).toBe(true);
   }, 30000);
 
   test("9a: a covered gate:false unit without confirmation stops per-unit progression", () => {
@@ -407,6 +426,20 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
       "approved",
     ]);
     expect(d.kind).toBe("done");
+  }, 30000);
+
+  test("9c: every fresh terminal review settles the wave and presents the gate", () => {
+    const proj = seedProject("functional-design", "on");
+    seedBoltDag(proj, ["alpha", "beta"]);
+    coverUnit(proj, "alpha", "functional-design", FD_REQUIRED_PRODUCES);
+    coverUnit(proj, "beta", "functional-design", FD_REQUIRED_PRODUCES);
+    logReviewReady(proj, "functional-design", "alpha");
+    logReviewReady(proj, "functional-design", "beta");
+    const d = runNext(proj);
+    expect(d.kind).toBe("run-stage");
+    expect(d.unit).toBe("beta");
+    expect(d.gate).toBe(true);
+    expect(d.wave).toBeUndefined();
   }, 30000);
 
   // 10: re-reporting an ALREADY-completed ([x]) per-unit stage with a DAG present

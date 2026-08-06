@@ -1068,6 +1068,24 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     expect(countEvent(p, "GATE_APPROVED")).toBe(1);
   }, 30000);
 
+  test("R3b: NOT-READY before the iteration cap is not a terminal receipt", () => {
+    const p = projWithState("state-mid-inception.md");
+    expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
+
+    log(
+      ["review", "--stage", "requirements-analysis", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1", "--verdict", "NOT-READY"],
+      p,
+    );
+
+    const r = orchestrate(
+      ["report", "--stage", "requirements-analysis", "--result", "approved", "--user-input", "Approve"],
+      p,
+    );
+    expect(r.out).toContain('"kind":"error"');
+    expect(r.out).toContain("fresh REVIEW_COMPLETED");
+    expect(countEvent(p, "GATE_APPROVED")).toBe(0);
+  }, 30000);
+
   test("R4: a review recorded for a DIFFERENT stage does not unblock this one", () => {
     const p = projWithState("state-mid-inception.md");
     expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
