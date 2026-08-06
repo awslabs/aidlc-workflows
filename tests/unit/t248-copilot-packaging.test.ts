@@ -183,6 +183,8 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
       cpSync(COPILOT_ROOT, project, { recursive: true });
       rmSync(join(project, ".aidlc", "hooks", "aidlc-state-transition-guard.ts"));
       rmSync(join(project, ".aidlc", "hooks", "aidlc-dispatch-rules.ts"));
+      rmSync(join(project, ".aidlc", "hooks", "aidlc-plan-approval-guard.ts"));
+      rmSync(join(project, ".aidlc", "hooks", "aidlc-review-freeze.ts"));
       rmSync(join(project, "AGENTS.md"));
       const result = spawnSync(
         process.execPath,
@@ -207,6 +209,8 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
       expect(result.status).not.toBe(0);
       expect(output).toContain("✗  aidlc-state-transition-guard.ts present");
       expect(output).toContain("✗  aidlc-dispatch-rules.ts present");
+      expect(output).toContain("✗  aidlc-plan-approval-guard.ts present");
+      expect(output).toContain("✗  aidlc-review-freeze.ts present");
       expect(output).toContain("✗  AGENTS.md present (onboarding + method imports)");
     } finally {
       rmSync(project, { recursive: true, force: true });

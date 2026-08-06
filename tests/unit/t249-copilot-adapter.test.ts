@@ -1,7 +1,7 @@
 // t249-copilot-adapter: the Copilot stdin shim normalizes live-captured
 // payloads into the core hooks' contract.
 //
-// covers: file:hooks/aidlc-stop.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-audit-logger.ts, file:hooks/aidlc-log-subagent.ts, file:hooks/aidlc-session-end.ts, file:hooks/aidlc-dispatch-rules.ts
+// covers: file:hooks/aidlc-stop.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-audit-logger.ts, file:hooks/aidlc-log-subagent.ts, file:hooks/aidlc-session-end.ts, file:hooks/aidlc-dispatch-rules.ts, file:hooks/aidlc-plan-approval-guard.ts, file:hooks/aidlc-review-freeze.ts
 //
 // WHAT. Each case pipes a fixture from tests/fixtures/copilot-hook-payloads/
 // (field-verbatim captures off Copilot CLI 1.0.74, sanitized for publication) into
@@ -517,6 +517,35 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(audit).toContain("second.ts");
   });
 
+  test("17a: apply_patch Add File is audited as an artifact creation", () => {
+    const dir = scratchProject(true);
+    const added = join(
+      seededRecordDir(dir),
+      "construction",
+      "U01",
+      "code",
+      "added.ts",
+    );
+    mkdirSync(dirname(added), { recursive: true });
+    writeFileSync(added, "export const added = true;\n", "utf-8");
+
+    const result = runAdapter(dir, "post-tool", {
+      hook_event_name: "PostToolUse",
+      cwd: dir,
+      tool_name: "apply_patch",
+      tool_input: {
+        input:
+          `*** Begin Patch\n*** Add File: ${added}\n` +
+          "+export const added = true;\n*** End Patch\n",
+      },
+    });
+
+    expect(result.code).toBe(0);
+    const audit = readAudit(dir);
+    expect(audit).toContain("ARTIFACT_CREATED");
+    expect(audit).toContain("added.ts");
+  });
+
   test("18: VS Code agent_type/agent_id populate and clear reviewer identity", () => {
     const dir = scratchProject(true);
     const hostSessionId = "11111111-2222-4333-8444-555555555555";
@@ -681,11 +710,18 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       "bun .aidlc/tools/aidlc-state.ts unpark",
       'bash -lc "bun .aidlc/tools/aidlc-orchestrate.ts next --resume"',
       'sh -c "bun .aidlc/tools/aidlc-state.ts unpark"',
+      'zsh -o NO_RCS -c "bun .aidlc/tools/aidlc-state.ts unpark"',
+      'dash -c "bun .aidlc/tools/aidlc-orchestrate.ts continue steering-token"',
+      "echo \"$(bun .aidlc/tools/aidlc-state.ts unpark)\"",
+      ">/tmp/aidlc-output aidlc next --resume",
+      "if aidlc next --resume; then :; fi",
       "bun .aidlc/tools/aidlc.ts --resume",
+      "bun .aidlc/tools/aidlc.ts --project-dir /tmp next --resume",
       "bun .aidlc/tools/aidlc.ts intent other-intent",
       "bun .aidlc/tools/aidlc.ts space other-space",
       "bun .aidlc/tools/aidlc-utility.ts intent other-intent",
       "bun .aidlc/tools/aidlc-utility.ts space other-space",
+      "bun .aidlc/tools/aidlc-utility.ts space-create other-space",
     ]) {
       const blocked = runAdapter(dir, "pre-tool", {
         hook_event_name: "PreToolUse",
@@ -711,6 +747,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       "bun .aidlc/tools/aidlc.ts space list",
       "bun .aidlc/tools/aidlc-utility.ts intent list",
       "bun .aidlc/tools/aidlc-utility.ts space list",
+      "bun .aidlc/tools/aidlc-utility.ts --project-dir /tmp space list",
     ]) {
       const allowed = runAdapter(dir, "pre-tool", {
         hook_event_name: "PreToolUse",

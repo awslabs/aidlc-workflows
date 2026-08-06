@@ -8,6 +8,8 @@
 import {
   type ClaudeCodeHookInput,
   isClaudeCodeHookInput,
+  parseArgs,
+  parseWorkspaceCommand,
 } from "../tools/aidlc-lib.ts";
 
 export const BLOCKED_STATE_TRANSITIONS = new Set([
@@ -223,27 +225,407 @@ export function delegatedLifecycleCommand(command: string): string | null {
   return delegatedLifecycleCommandAtDepth(command, 0);
 }
 
-function shellTokenValue(token: string | undefined): string {
-  if (!token) return "";
-  if (
-    token.length >= 2 &&
-    ((token.startsWith('"') && token.endsWith('"')) ||
-      (token.startsWith("'") && token.endsWith("'")))
-  ) {
-    return token.slice(1, -1);
+function shellWords(input: string): string[] {
+  const words: string[] = [];
+  let word = "";
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  let started = false;
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+    if (ch === "\\" && input[i + 1] === "\n") {
+      i++;
+      continue;
+    }
+    if (escaped) {
+      word += ch;
+      escaped = false;
+      started = true;
+      continue;
+    }
+    if (ch === "\\" && quote !== "'") {
+      escaped = true;
+      started = true;
+      continue;
+    }
+    if (quote !== null) {
+      if (ch === quote) quote = null;
+      else word += ch;
+      started = true;
+      continue;
+    }
+    if (ch === "$" && (input[i + 1] === "'" || input[i + 1] === '"')) {
+      quote = input[++i] as "'" | '"';
+      started = true;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      started = true;
+    } else if (/\s/.test(ch)) {
+      if (started) {
+        words.push(word);
+        word = "";
+        started = false;
+      }
+    } else {
+      word += ch;
+      started = true;
+    }
   }
-  return token;
+  if (escaped) word += "\\";
+  if (started) words.push(word);
+  return words;
+}
+
+function maskRange(chars: string[], start: number, end: number): void {
+  for (let i = start; i <= end; i++) {
+    if (chars[i] !== "\n") chars[i] = " ";
+  }
+}
+
+function commandSubstitutionEnd(source: string, open: number): number {
+  let depth = 1;
+  let quote: "'" | '"' | "`" | null = null;
+  let escaped = false;
+  for (let i = open + 1; i < source.length; i++) {
+    const ch = source[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\" && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote !== null) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === "`") {
+      quote = ch;
+      continue;
+    }
+    if (ch === "(") depth++;
+    if (ch === ")" && --depth === 0) return i;
+  }
+  return -1;
+}
+
+function executableSubstitutions(command: string): {
+  masked: string;
+  bodies: string[];
+} {
+  const chars = [...command];
+  const bodies: string[] = [];
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\" && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      continue;
+    }
+    if (ch === "'" && quote === null) {
+      quote = "'";
+      continue;
+    }
+    if (ch === '"') {
+      quote = quote === '"' ? null : '"';
+      continue;
+    }
+    if (ch === "`") {
+      let end = i + 1;
+      let innerEscaped = false;
+      for (; end < command.length; end++) {
+        if (innerEscaped) {
+          innerEscaped = false;
+          continue;
+        }
+        if (command[end] === "\\") {
+          innerEscaped = true;
+          continue;
+        }
+        if (command[end] === "`") break;
+      }
+      if (end >= command.length) continue;
+      bodies.push(command.slice(i + 1, end));
+      maskRange(chars, i, end);
+      i = end;
+      continue;
+    }
+    if (ch === "$" && command[i + 1] === "(") {
+      const end = commandSubstitutionEnd(command, i + 1);
+      if (end < 0) continue;
+      bodies.push(command.slice(i + 2, end));
+      maskRange(chars, i, end);
+      i = end;
+    }
+  }
+  return { masked: chars.join(""), bodies };
+}
+
+function heredocSubstitutionBodies(command: string): string[] {
+  const bodies: string[] = [];
+  const pending: Array<{
+    delimiter: string;
+    stripTabs: boolean;
+    executable: boolean;
+    lines: string[];
+  }> = [];
+  for (const line of command.split("\n")) {
+    if (pending.length > 0) {
+      const active = pending[0];
+      const candidate = active.stripTabs ? line.replace(/^\t+/, "") : line;
+      if (candidate === active.delimiter) {
+        if (active.executable) {
+          bodies.push(...executableSubstitutions(active.lines.join("\n")).bodies);
+        }
+        pending.shift();
+      } else {
+        active.lines.push(line);
+      }
+      continue;
+    }
+    const heredoc = /<<(-)?\s*(?:'([^']+)'|"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))/g;
+    for (const match of line.matchAll(heredoc)) {
+      const delimiter = match[2] ?? match[3] ?? match[4];
+      if (delimiter) {
+        pending.push({
+          delimiter,
+          stripTabs: match[1] === "-",
+          executable: match[4] !== undefined,
+          lines: [],
+        });
+      }
+    }
+  }
+  return bodies;
+}
+
+function shellCommandSegments(command: string): string[] {
+  const segments: string[] = [];
+  let start = 0;
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  const push = (end: number): void => {
+    const segment = command.slice(start, end).trim();
+    if (segment) segments.push(segment);
+  };
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\" && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote !== null) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (ch === "#" && (i === 0 || /[\s;&|(){}]/.test(command[i - 1]))) {
+      push(i);
+      const newline = command.indexOf("\n", i + 1);
+      if (newline < 0) {
+        start = command.length;
+        break;
+      }
+      i = newline;
+      start = newline + 1;
+      continue;
+    }
+    if (
+      ch === ";" ||
+      ch === "|" ||
+      ch === "&" ||
+      ch === "\n" ||
+      ch === "(" ||
+      ch === ")" ||
+      ch === "{" ||
+      ch === "}"
+    ) {
+      push(i);
+      if ((ch === "|" || ch === "&") && command[i + 1] === ch) i++;
+      start = i + 1;
+    }
+  }
+  push(command.length);
+  return segments;
+}
+
+function commandBasename(command: string | undefined): string {
+  return (command ?? "").replace(/\\/g, "/").split("/").at(-1) ?? "";
+}
+
+function executableArgv(segment: string): string[] {
+  const words = shellWords(segment);
+  let cursor = 0;
+  const skipPrefixes = (): void => {
+    let previous = -1;
+    while (cursor !== previous) {
+      previous = cursor;
+      while (
+        ["if", "then", "while", "until", "do", "else", "elif", "!"].includes(
+          words[cursor] ?? "",
+        )
+      ) {
+        cursor++;
+      }
+      while (/^\d*(?:<<<|<<-?|<>|>>?|<|>\||<&|>&)/.test(words[cursor] ?? "")) {
+        const redirection = words[cursor++];
+        if (/^\d*(?:<<<|<<-?|<>|>>?|<|>\||<&|>&)$/.test(redirection)) cursor++;
+      }
+      while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[cursor] ?? "")) cursor++;
+    }
+  };
+  skipPrefixes();
+  if (commandBasename(words[cursor]) === "time") {
+    cursor++;
+    while ((words[cursor] ?? "").startsWith("-")) {
+      const option = words[cursor++];
+      if (["-f", "--format", "-o", "--output"].includes(option)) cursor++;
+    }
+    skipPrefixes();
+  }
+  while (["command", "exec"].includes(commandBasename(words[cursor]))) {
+    const prefix = commandBasename(words[cursor]);
+    cursor++;
+    while ((words[cursor] ?? "").startsWith("-")) {
+      const option = words[cursor++];
+      if (prefix === "command" && /[vV]/.test(option.replace(/^-+/, ""))) return [];
+      if (prefix === "exec" && option === "-a") cursor++;
+    }
+    skipPrefixes();
+  }
+  if (commandBasename(words[cursor]) === "env") {
+    cursor++;
+    while (cursor < words.length) {
+      const word = words[cursor];
+      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) {
+        cursor++;
+        continue;
+      }
+      if (word === "--") {
+        cursor++;
+        break;
+      }
+      if (word.startsWith("-S") && word.length > 2) {
+        return [...shellWords(word.slice(2)), ...words.slice(cursor + 1)];
+      }
+      if (word.startsWith("--split-string=")) {
+        return [
+          ...shellWords(word.slice("--split-string=".length)),
+          ...words.slice(cursor + 1),
+        ];
+      }
+      if (word === "-S" || word === "--split-string") {
+        return [
+          ...shellWords(words[cursor + 1] ?? ""),
+          ...words.slice(cursor + 2),
+        ];
+      }
+      if (["-u", "--unset", "-C", "--chdir"].includes(word)) {
+        cursor += 2;
+        continue;
+      }
+      if (word.startsWith("-")) {
+        cursor++;
+        continue;
+      }
+      break;
+    }
+  }
+  skipPrefixes();
+  return words.slice(cursor);
+}
+
+function bunScriptInvocation(argv: string[]): {
+  script: string;
+  args: string[];
+} | null {
+  const valueOptions = new Set([
+    "-C",
+    "--cwd",
+    "-r",
+    "--preload",
+    "--define",
+    "--loader",
+    "--conditions",
+    "--env-file",
+    "--config",
+  ]);
+  const evalOptions = new Set(["-e", "--eval", "-p", "--print"]);
+  let cursor = 1;
+  const skipOptions = (): boolean => {
+    while ((argv[cursor] ?? "").startsWith("-")) {
+      const option = argv[cursor];
+      if (option === "--") {
+        cursor++;
+        return true;
+      }
+      if (evalOptions.has(option)) return false;
+      cursor += valueOptions.has(option) && !option.includes("=") ? 2 : 1;
+    }
+    return true;
+  };
+  if (!skipOptions()) return null;
+  if (argv[cursor] === "run") {
+    cursor++;
+    if (!skipOptions()) return null;
+  }
+  const script = commandBasename(argv[cursor]);
+  return script ? { script, args: argv.slice(cursor + 1) } : null;
+}
+
+function withoutProjectDir(args: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--project-dir") {
+      i++;
+      continue;
+    }
+    out.push(args[i]);
+  }
+  return out;
+}
+
+function workspaceMutation(prefix: string, args: string[]): string | null {
+  if (args[1] === "--help") return null;
+  const workspace = parseWorkspaceCommand(args);
+  if (workspace.kind === "switch") {
+    return `${prefix} ${workspace.noun} ${workspace.explicit ? "switch" : workspace.name}`;
+  }
+  if (workspace.kind === "birth") return `${prefix} intent birth`;
+  if (workspace.kind === "create") {
+    return `${prefix} ${args[0] === "space-create" ? "space-create" : "space create"}`;
+  }
+  return null;
 }
 
 function delegatedDispatcherCommand(
   prefix: string,
-  groupToken: string | undefined,
-  verbToken: string | undefined,
+  rawArgs: string[],
 ): string | null {
-  const group = shellTokenValue(groupToken);
-  const verb = shellTokenValue(verbToken);
+  const args = withoutProjectDir(rawArgs);
+  const group = args[0] ?? "";
+  const verb = args[1] ?? "";
   if (
-    ["next", "report", "park", "--resume", "--scope", "compose", "recompose", "init"]
+    ["next", "continue", "report", "park", "--resume", "--scope", "compose", "recompose", "init"]
       .includes(group)
   ) {
     return `${prefix} ${group}`;
@@ -257,86 +639,93 @@ function delegatedDispatcherCommand(
   if (group === "config" && verb === "set") {
     return `${prefix} config set`;
   }
-  if (
-    (group === "intent" || group === "space") &&
-    !["", "list", "help", "-h", "--help", "--json"].includes(verb)
-  ) {
-    return `${prefix} ${group} ${verb}`;
-  }
-  return null;
+  return workspaceMutation(prefix, args);
 }
 
 function delegatedUtilityCommand(
   prefix: string,
-  verbToken: string | undefined,
-  argumentToken: string | undefined,
+  rawArgs: string[],
 ): string | null {
-  const verb = shellTokenValue(verbToken);
-  const argument = shellTokenValue(argumentToken);
+  const { positional } = parseArgs(rawArgs);
+  const verb = positional[0] ?? "";
   if (
-    ["scope-change", "config-change", "recompose", "intent-birth", "state-init"]
+    ["scope-change", "config-change", "recompose", "intent-birth", "state-init", "space-create"]
       .includes(verb)
   ) {
     return `${prefix} ${verb}`;
   }
-  if (
-    (verb === "intent" || verb === "space") &&
-    !["", "list", "help", "-h", "--help", "--json"].includes(argument)
-  ) {
-    return `${prefix} ${verb} ${argument}`;
-  }
-  return null;
+  return workspaceMutation(prefix, positional);
 }
 
 function delegatedLifecycleCommandAtDepth(command: string, depth: number): string | null {
-  // A delegated agent may run build/validation shell commands, but it is never
-  // a workflow conductor. Match the authored TypeScript entrypoints at real
-  // shell command positions using the same masking rules as the direct-state
-  // guard, then classify only lifecycle/routing verbs.
-  const shellText = executableShellText(command);
-
-  // Shell wrappers execute their -c argument as a fresh command string. Inspect
-  // only wrappers found at executable positions, then apply the same parser to
-  // their body. The depth bound avoids pathological recursive wrapper input.
-  if (depth < 8) {
-    const wrapperInvocation =
-      /(?:^|&&|\|\||[;|(\n{])[ \t]*(?:(?:command|exec)\s+)?(?:env(?:\s+-[^\s]+)*\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|]+)\s+)*(?:[^\s"';&|({]+\/)?(?:ba)?sh(?:\.exe)?\s+-(?:[A-Za-z]*c[A-Za-z]*)\s+("(?:\\.|[^"\\])*"|'[^']*'|[^\s;&|]+)/g;
-    for (const match of shellText.matchAll(wrapperInvocation)) {
-      const nested = delegatedLifecycleCommandAtDepth(shellTokenValue(match[1]), depth + 1);
-      if (nested !== null) return nested;
-    }
+  if (depth > 8) return "nested shell command beyond guard inspection limit";
+  const heredocBodies = heredocSubstitutionBodies(command);
+  const source = maskHeredocBodies(command);
+  const substitutions = executableSubstitutions(source);
+  for (const body of [...heredocBodies, ...substitutions.bodies]) {
+    const nested = delegatedLifecycleCommandAtDepth(body, depth + 1);
+    if (nested !== null) return nested;
   }
 
-  const invocation =
-    /(?:^|&&|\|\||[;|(\n{])[ \t]*(?:(?:command|exec)\s+)?(?:env(?:\s+-[^\s]+)*\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|]+)\s+)*(?:[^\s"';&|({]+\/)?bun(?:\.exe)?(?:\s+run)?\s+("[^"\n]*aidlc-(?:orchestrate|state|jump|utility)\.ts"|'[^'\n]*aidlc-(?:orchestrate|state|jump|utility)\.ts'|[^\s;&|]*aidlc-(?:orchestrate|state|jump|utility)\.ts)\s+("[^"\n]*"|'[^'\n]*'|[^\s;&|]+)(?:\s+("[^"\n]*"|'[^'\n]*'|[^\s;&|]+))?/g;
-  for (const match of shellText.matchAll(invocation)) {
-    const tool = match[1].match(/aidlc-(orchestrate|state|jump|utility)\.ts/)?.[1] ?? "";
-    const verb = shellTokenValue(match[2]);
-    if (
-      (tool === "orchestrate" && ["next", "report", "park"].includes(verb)) ||
-      (tool === "state" && DELEGATED_STATE_MUTATIONS.has(verb)) ||
-      (tool === "jump" && verb === "execute")
-    ) {
-      return `aidlc-${tool}.ts ${verb}`;
+  for (const segment of shellCommandSegments(substitutions.masked)) {
+    const argv = executableArgv(segment);
+    const executable = commandBasename(argv[0]);
+    if (executable === "eval") {
+      const nested = delegatedLifecycleCommandAtDepth(argv.slice(1).join(" "), depth + 1);
+      return nested ?? "eval shell command beyond guard inspection";
     }
-    if (tool === "utility") {
-      const utility = delegatedUtilityCommand("aidlc-utility.ts", match[2], match[3]);
-      if (utility !== null) return utility;
+    if (/^(?:ba|da|a|k|z)?sh(?:\.exe)?$/.test(executable)) {
+      for (let i = 1; i < argv.length; i++) {
+        const option = argv[i];
+        if (["-O", "+O", "-o", "+o", "--rcfile", "--init-file"].includes(option)) {
+          i++;
+          continue;
+        }
+        if (option === "-c" || /^-[A-Za-z]*c[A-Za-z]*$/.test(option)) {
+          const nested = delegatedLifecycleCommandAtDepth(argv[i + 1] ?? "", depth + 1);
+          if (nested !== null) return nested;
+          break;
+        }
+        if (!option.startsWith("-")) break;
+      }
+      continue;
     }
-  }
 
-  const typescriptDispatcherInvocation =
-    /(?:^|&&|\|\||[;|(\n{])[ \t]*(?:(?:command|exec)\s+)?(?:env(?:\s+-[^\s]+)*\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|]+)\s+)*(?:[^\s"';&|({]+\/)?bun(?:\.exe)?(?:\s+run)?\s+(?:"[^"\n]*aidlc\.ts"|'[^'\n]*aidlc\.ts'|[^\s;&|]*aidlc\.ts)\s+("[^"\n]*"|'[^'\n]*'|[^\s;&|]+)(?:\s+("[^"\n]*"|'[^'\n]*'|[^\s;&|]+))?/g;
-  for (const match of shellText.matchAll(typescriptDispatcherInvocation)) {
-    const delegated = delegatedDispatcherCommand("aidlc.ts", match[1], match[2]);
-    if (delegated !== null) return delegated;
-  }
-
-  const compiledInvocation =
-    /(?:^|&&|\|\||[;|(\n{])[ \t]*(?:(?:command|exec)\s+)?(?:env(?:\s+-[^\s]+)*\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|]+)\s+)*(?:[^\s"';&|({]+\/)?aidlc(?:\.exe)?\s+("[^"\n]*"|'[^'\n]*'|[^\s;&|]+)(?:\s+("[^"\n]*"|'[^'\n]*'|[^\s;&|]+))?/g;
-  for (const match of shellText.matchAll(compiledInvocation)) {
-    const delegated = delegatedDispatcherCommand("aidlc", match[1], match[2]);
-    if (delegated !== null) return delegated;
+    let args = argv.slice(1);
+    let script = executable;
+    if (/^bun(?:\.exe)?$/.test(executable)) {
+      const invocation = bunScriptInvocation(argv);
+      if (!invocation) continue;
+      script = invocation.script;
+      args = invocation.args;
+    }
+    const authored = script.match(/^aidlc-(orchestrate|state|jump|utility)\.ts$/);
+    if (authored) {
+      const tool = authored[1];
+      const positional = withoutProjectDir(args);
+      const verb = positional[0] ?? "";
+      if (
+        (tool === "orchestrate" && ["next", "continue", "report", "park"].includes(verb)) ||
+        (tool === "state" && DELEGATED_STATE_MUTATIONS.has(verb)) ||
+        (tool === "jump" && verb === "execute")
+      ) {
+        return `aidlc-${tool}.ts ${verb}`;
+      }
+      if (tool === "utility") {
+        const utility = delegatedUtilityCommand("aidlc-utility.ts", args);
+        if (utility !== null) return utility;
+      }
+      continue;
+    }
+    if (script === "aidlc.ts") {
+      const delegated = delegatedDispatcherCommand("aidlc.ts", args);
+      if (delegated !== null) return delegated;
+      continue;
+    }
+    if (/^aidlc(?:\.exe)?$/.test(script)) {
+      const delegated = delegatedDispatcherCommand("aidlc", args);
+      if (delegated !== null) return delegated;
+    }
   }
   return null;
 }

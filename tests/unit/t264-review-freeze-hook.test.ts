@@ -419,6 +419,15 @@ describe("t264 (c) harness registration", () => {
     expect(adapter.split('case "review-freeze"')[1]).toContain("Delete File|Move to");
   });
 
+  test("Copilot's shared pre-tool adapter invokes review-freeze", () => {
+    const adapter = readFileSync(
+      join(REPO_ROOT, "harness", "copilot", "hooks", "aidlc-copilot-adapter.ts"),
+      "utf-8",
+    );
+    expect(adapter).toContain('"aidlc-review-freeze.ts"');
+    expect(adapter).toContain("mutationTargetsOf");
+  });
+
   test("Kiro CLI registers freeze and invalidation on every writable agent", () => {
     for (const root of [
       join(REPO_ROOT, "harness", "kiro", "agents"),

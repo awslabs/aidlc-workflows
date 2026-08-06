@@ -170,6 +170,10 @@ describe("t242 state-transition ownership guard", () => {
         "aidlc-orchestrate.ts report",
       ],
       ["bun .claude/tools/aidlc-orchestrate.ts park", "aidlc-orchestrate.ts park"],
+      [
+        "bun .claude/tools/aidlc-orchestrate.ts continue steering-token",
+        "aidlc-orchestrate.ts continue",
+      ],
       ["bun .claude/tools/aidlc-state.ts unpark", "aidlc-state.ts unpark"],
       [
         "bun .claude/tools/aidlc-jump.ts execute --target requirements-analysis",
@@ -187,7 +191,50 @@ describe("t242 state-transition ownership guard", () => {
         'sh -c "bun .claude/tools/aidlc-state.ts unpark"',
         "aidlc-state.ts unpark",
       ],
+      [
+        'bash --noprofile -e -c "bun .claude/tools/aidlc-orchestrate.ts next --resume"',
+        "aidlc-orchestrate.ts next",
+      ],
+      [
+        'zsh -o NO_RCS -c "bun .claude/tools/aidlc-state.ts unpark"',
+        "aidlc-state.ts unpark",
+      ],
+      [
+        'dash -c "bun .claude/tools/aidlc-orchestrate.ts continue steering-token"',
+        "aidlc-orchestrate.ts continue",
+      ],
+      [
+        "bun .claude/tools/aidlc-orchestrate.ts --project-dir /tmp next --resume",
+        "aidlc-orchestrate.ts next",
+      ],
+      [
+        "bun .claude/tools/aidlc-state.ts --project-dir /tmp unpark",
+        "aidlc-state.ts unpark",
+      ],
+      [">/tmp/aidlc-output aidlc next --resume", "aidlc next"],
+      ["AIDLC_TEST=1 >/tmp/aidlc-output aidlc next --resume", "aidlc next"],
+      ["if aidlc next --resume; then :; fi", "aidlc next"],
+      [
+        "while bun .claude/tools/aidlc-state.ts unpark; do :; done",
+        "aidlc-state.ts unpark",
+      ],
+      [
+        "bun --silent .claude/tools/aidlc-state.ts unpark",
+        "aidlc-state.ts unpark",
+      ],
+      ["f(){ aidlc next --resume; }; f", "aidlc next"],
+      ['eval "aidlc next --resume"', "aidlc next"],
+      ['env -S "aidlc next --resume"', "aidlc next"],
+      ['env -S"aidlc next --resume"', "aidlc next"],
+      ['env --split-string="aidlc next --resume"', "aidlc next"],
+      ["time -p aidlc next --resume", "aidlc next"],
+      ["bash -c $'aidlc next --resume'", "aidlc next"],
+      ["aidlc \\\nnext --resume", "aidlc next"],
       ["bun .claude/tools/aidlc.ts --resume", "aidlc.ts --resume"],
+      [
+        "bun .claude/tools/aidlc.ts --project-dir /tmp next --resume",
+        "aidlc.ts next",
+      ],
       [
         "bun .claude/tools/aidlc.ts intent other-intent",
         "aidlc.ts intent other-intent",
@@ -213,19 +260,34 @@ describe("t242 state-transition ownership guard", () => {
         "bun .claude/tools/aidlc-utility.ts space other-space",
         "aidlc-utility.ts space other-space",
       ],
+      [
+        "bun .claude/tools/aidlc-utility.ts --project-dir /tmp space-create other-space",
+        "aidlc-utility.ts space-create",
+      ],
       ["aidlc next --resume", "aidlc next"],
+      ["aidlc continue steering-token", "aidlc continue"],
       ["aidlc report --result resumed --user-input 1", "aidlc report"],
       ["aidlc state unpark", "aidlc state unpark"],
       ["aidlc intent other-intent", "aidlc intent other-intent"],
       ["aidlc space other-space", "aidlc space other-space"],
+      ["aidlc --project-dir /tmp space-create other-space", "aidlc space-create"],
       [
         "cd project && aidlc jump execute --target requirements-analysis",
         "aidlc jump execute",
       ],
       ["env AIDLC_TEST=1 aidlc config set --depth comprehensive", "aidlc config set"],
+      [
+        'echo "$(bun .claude/tools/aidlc-state.ts unpark)"',
+        "aidlc-state.ts unpark",
+      ],
+      ["result=`aidlc next --resume`", "aidlc next"],
+      ["cat <<EOF\n$(aidlc next --resume)\nEOF", "aidlc next"],
     ] as const) {
       expect(delegatedLifecycleCommand(command), command).toBe(expected);
     }
+    let nested = "aidlc next --resume";
+    for (let i = 0; i < 9; i++) nested = `bash -c ${JSON.stringify(nested)}`;
+    expect(delegatedLifecycleCommand(nested)).not.toBeNull();
     expect(DELEGATED_STATE_MUTATIONS.has("unpark")).toBe(true);
     expect(
       delegatedLifecycleCommand("bun .claude/tools/aidlc-state.ts get 'Current Stage'"),
@@ -246,12 +308,17 @@ describe("t242 state-transition ownership guard", () => {
       "bun .claude/tools/aidlc-utility.ts space",
       "bun .claude/tools/aidlc-utility.ts space list",
       "bun .claude/tools/aidlc-utility.ts space help",
+      "bun .claude/tools/aidlc-utility.ts --project-dir /tmp space list",
       "aidlc intent",
       "aidlc intent list",
       "aidlc intent --json",
       "aidlc space",
       "aidlc space list",
       "aidlc space help",
+      "aidlc --project-dir /tmp intent list",
+      "echo ok # ; aidlc next --resume",
+      "cat <<'EOF'\n$(aidlc next --resume)\nEOF",
+      "command -v aidlc next --resume",
     ]) {
       expect(delegatedLifecycleCommand(command), command).toBeNull();
     }
@@ -263,6 +330,16 @@ describe("t242 state-transition ownership guard", () => {
     expect(
       delegatedLifecycleCommand(
         'printf %s \'bash -lc "bun .claude/tools/aidlc-orchestrate.ts next --resume"\'',
+      ),
+    ).toBeNull();
+    expect(
+      delegatedLifecycleCommand(
+        "printf %s '$(aidlc next --resume)'",
+      ),
+    ).toBeNull();
+    expect(
+      delegatedLifecycleCommand(
+        "echo '`aidlc space other-space`'",
       ),
     ).toBeNull();
   });

@@ -1323,6 +1323,8 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
         "aidlc-sensor-fire",
         "aidlc-runtime-compile",
         "aidlc-dispatch-rules",
+        "aidlc-plan-approval-guard",
+        "aidlc-review-freeze",
       );
     }
     for (const h of tsHooks) {

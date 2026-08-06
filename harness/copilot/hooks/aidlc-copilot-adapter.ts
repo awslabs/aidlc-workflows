@@ -314,23 +314,30 @@ export async function run(
     return canonical;
   }
 
-  function applyPatchPaths(toolInput: Record<string, unknown>): string[] {
+  type MutationTarget = {
+    filePath: string;
+    toolName: "Write" | "Edit";
+  };
+
+  function applyPatchTargets(
+    toolInput: Record<string, unknown>,
+  ): Array<{ path: string; toolName: "Write" | "Edit" }> {
     const patch = [toolInput.input, toolInput.patchText, toolInput.patch, toolInput.command]
-      .find((value): value is string => typeof value === "string") ?? "";
-    const paths: string[] = [];
-    for (const match of patch.matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)) {
-      paths.push(match[1].trim());
+      .find((value): value is string => typeof value === "string" && value.length > 0) ?? "";
+    const targets: Array<{ path: string; toolName: "Write" | "Edit" }> = [];
+    for (const match of patch.matchAll(/^\*\*\* (Add|Update|Delete) File: (.+)$/gm)) {
+      targets.push({
+        path: match[2].trim(),
+        toolName: match[1] === "Add" ? "Write" : "Edit",
+      });
     }
     for (const match of patch.matchAll(/^\*\*\* Move to: (.+)$/gm)) {
-      paths.push(match[1].trim());
+      targets.push({ path: match[1].trim(), toolName: "Write" });
     }
-    return paths.filter((path) => path.length > 0);
+    return targets.filter((target) => target.path.length > 0);
   }
 
-  function filePathsOf(
-    toolInput: Record<string, unknown> | undefined,
-    parsePatchEnvelope = false,
-  ): string[] {
+  function filePathsOf(toolInput: Record<string, unknown> | undefined): string[] {
     if (!toolInput) return [];
     const rawPaths: string[] = [];
     const add = (value: unknown): void => {
@@ -347,14 +354,39 @@ export async function run(
     add(toolInput.path);
     add(toolInput.file_path);
     add(toolInput.filePath);
-    for (const key of ["files", "filePaths"] as const) {
+    for (const key of ["files", "filePaths", "replacements"] as const) {
       const values = toolInput[key];
       if (Array.isArray(values)) {
         for (const value of values) add(value);
       }
     }
-    if (parsePatchEnvelope) rawPaths.push(...applyPatchPaths(toolInput));
     return [...new Set(rawPaths.map(confinedPath).filter((p): p is string => p !== null))];
+  }
+
+  function mutationTargetsOf(
+    toolInput: Record<string, unknown> | undefined,
+    defaultToolName: "Write" | "Edit",
+    parsePatchEnvelope = false,
+  ): MutationTarget[] {
+    if (!toolInput) return [];
+    const rawTargets = parsePatchEnvelope
+      ? applyPatchTargets(toolInput)
+      : filePathsOf(toolInput).map((path) => ({
+          path,
+          toolName: defaultToolName,
+        }));
+    const targets = new Map<string, MutationTarget>();
+    for (const rawTarget of rawTargets) {
+      const filePath = parsePatchEnvelope
+        ? confinedPath(rawTarget.path)
+        : rawTarget.path;
+      if (!filePath) continue;
+      const existing = targets.get(filePath);
+      if (!existing || (existing.toolName === "Edit" && rawTarget.toolName === "Write")) {
+        targets.set(filePath, { filePath, toolName: rawTarget.toolName });
+      }
+    }
+    return [...targets.values()];
   }
 
   function withoutPathFields(toolInput: Record<string, unknown>): Record<string, unknown> {
@@ -364,6 +396,7 @@ export async function run(
       filePath: _camelFilePath,
       files: _files,
       filePaths: _filePaths,
+      replacements: _replacements,
       ...rest
     } = toolInput;
     return rest;
@@ -557,6 +590,43 @@ export async function run(
           process.stdout.write(denyJson(dispatch.stderr));
           return 0;
         }
+        let dispatchInput = nativeToolInput ?? {};
+        if (dispatch.stdout) {
+          try {
+            const updated = (
+              JSON.parse(dispatch.stdout) as {
+                hookSpecificOutput?: { updatedInput?: Record<string, unknown> };
+              }
+            ).hookSpecificOutput?.updatedInput;
+            if (updated) dispatchInput = updated;
+          } catch {
+            // Malformed advisory output does not disable plan enforcement.
+          }
+        }
+        const dispatchTarget = [
+          dispatchInput.subagent_type,
+          dispatchInput.agent_type,
+          dispatchInput.agent,
+          dispatchInput.role,
+        ].find(
+          (value): value is string =>
+            typeof value === "string" && value.trim().length > 0,
+        )?.trim() ?? "";
+        const planApproval = runCoreWithStderr(
+          "aidlc-plan-approval-guard.ts",
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            tool_name: "Agent",
+            tool_input: {
+              ...dispatchInput,
+              subagent_type: dispatchTarget,
+            },
+          }),
+        );
+        if (planApproval.code === 2) {
+          process.stdout.write(denyJson(planApproval.stderr));
+          return 0;
+        }
         if (dispatch.stdout) process.stdout.write(dispatch.stdout);
         return 0;
       }
@@ -580,47 +650,89 @@ export async function run(
           process.stdout.write(denyJson(scope.stderr));
           return 0;
         }
+        const freeze = runCoreWithStderr(
+          "aidlc-review-freeze.ts",
+          canonicalInput,
+        );
+        if (freeze.code === 2) {
+          process.stdout.write(denyJson(freeze.stderr));
+          return 0;
+        }
         return 0;
       }
       // The full read/edit sweep surface the core matcher enforces on Claude
       // (Read|Edit|Write plus LS/Glob/Grep — the sibling-sweep evasions).
       if (["Write", "Edit", "Read", "LS", "Glob", "Grep"].includes(toolName)) {
         const ti = nativeToolInput ?? {};
-        const filePaths = filePathsOf(nativeToolInput, isApplyPatch);
+        const filePaths = filePathsOf(nativeToolInput);
+        const mutationTargets =
+          toolName === "Write" || toolName === "Edit"
+            ? mutationTargetsOf(nativeToolInput, toolName, isApplyPatch)
+            : [];
         // Path-shaped tools re-key `path` → `file_path`; the search tools
         // (LS/Glob/Grep) keep their native fields, which the core matcher
         // reads directly (path/pattern/glob).
-        const toolInputs: Array<Record<string, unknown>> =
+        const toolCalls: Array<{
+          toolName: string;
+          toolInput: Record<string, unknown>;
+        }> =
           toolName === "LS" || toolName === "Glob" || toolName === "Grep"
-            ? [(() => {
-                const searchInput: Record<string, unknown> = {
-                  ...withoutPathFields(ti),
-                  ...(filePaths[0] ? { path: filePaths[0] } : {}),
-                };
-                if (
-                  toolName === "Glob" &&
-                  (rawToolName === "file_search" || rawToolName === "fileSearch") &&
-                  typeof searchInput.query === "string"
-                ) {
-                  const { query, ...rest } = searchInput;
-                  return { ...rest, pattern: query };
-                }
-                return searchInput;
-              })()]
-            : filePaths.map((filePath) => ({ file_path: filePath }));
-        for (const toolInput of toolInputs) {
-          if (Object.keys(toolInput).length === 0) continue;
+            ? [{
+                toolName,
+                toolInput: (() => {
+                  const searchInput: Record<string, unknown> = {
+                    ...withoutPathFields(ti),
+                    ...(filePaths[0] ? { path: filePaths[0] } : {}),
+                  };
+                  if (
+                    toolName === "Glob" &&
+                    (rawToolName === "file_search" || rawToolName === "fileSearch") &&
+                    typeof searchInput.query === "string"
+                  ) {
+                    const { query, ...rest } = searchInput;
+                    return { ...rest, pattern: query };
+                  }
+                  return searchInput;
+                })(),
+              }]
+            : toolName === "Write" || toolName === "Edit"
+              ? mutationTargets.map((target) => ({
+                  toolName: target.toolName,
+                  toolInput: { file_path: target.filePath },
+                }))
+              : filePaths.map((filePath) => ({
+                  toolName,
+                  toolInput: { file_path: filePath },
+                }));
+        for (const call of toolCalls) {
+          if (Object.keys(call.toolInput).length === 0) continue;
           const agentType = activeSubagentType();
           const fwd = JSON.stringify({
             hook_event_name: "PreToolUse",
-            tool_name: toolName,
-            tool_input: toolInput,
+            tool_name: call.toolName,
+            tool_input: call.toolInput,
             ...(agentType ? { agent_type: agentType } : {}),
           });
           const r = runCoreWithStderr("aidlc-reviewer-scope.ts", fwd);
           if (r.code === 2) {
             process.stdout.write(denyJson(r.stderr));
             return 0;
+          }
+        }
+        for (const call of toolCalls) {
+          if (call.toolName === "Write" || call.toolName === "Edit") {
+            const freeze = runCoreWithStderr(
+              "aidlc-review-freeze.ts",
+              JSON.stringify({
+                hook_event_name: "PreToolUse",
+                tool_name: call.toolName,
+                tool_input: call.toolInput,
+              }),
+            );
+            if (freeze.code === 2) {
+              process.stdout.write(denyJson(freeze.stderr));
+              return 0;
+            }
           }
         }
       }
@@ -631,11 +743,17 @@ export async function run(
       // Matcher-free registration: self-filter on tool_name (the IDE ignores
       // matchers — difference in the wiring header). Advisory targets only.
       if (toolName === "Write" || toolName === "Edit") {
-        for (const filePath of filePathsOf(nativeToolInput, isApplyPatch)) {
+        for (
+          const target of mutationTargetsOf(
+            nativeToolInput,
+            toolName,
+            isApplyPatch,
+          )
+        ) {
           const fwd = JSON.stringify({
             hook_event_name: "PostToolUse",
-            tool_name: toolName,
-            tool_input: { file_path: filePath },
+            tool_name: target.toolName,
+            tool_input: { file_path: target.filePath },
           });
           runCore("aidlc-audit-logger.ts", fwd);
           runCore("aidlc-sensor-fire.ts", fwd);

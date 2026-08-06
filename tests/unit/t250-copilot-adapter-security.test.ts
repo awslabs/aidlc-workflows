@@ -25,7 +25,7 @@
 // WHY SUBPROCESS. Fail-open is an exit-code contract; only a real subprocess
 // exercises process.exit()/uncaught-throw faithfully.
 //
-// covers: file:hooks/aidlc-reviewer-scope.ts, file:hooks/aidlc-state-transition-guard.ts, file:hooks/aidlc-audit-logger.ts
+// covers: file:hooks/aidlc-reviewer-scope.ts, file:hooks/aidlc-state-transition-guard.ts, file:hooks/aidlc-plan-approval-guard.ts, file:hooks/aidlc-review-freeze.ts, file:hooks/aidlc-audit-logger.ts
 
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
@@ -59,6 +59,8 @@ const CORE_HOOKS = [
   "aidlc-session-start.ts",
   "aidlc-session-end.ts",
   "aidlc-dispatch-rules.ts",
+  "aidlc-plan-approval-guard.ts",
+  "aidlc-review-freeze.ts",
   "aidlc-state-transition-guard.ts",
   "aidlc-reviewer-scope.ts",
   "aidlc-audit-logger.ts",
@@ -458,16 +460,22 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
 
       const before = runAdapter(s, "pre-tool", payload);
       expect(before.code).toBe(0);
-      const expected = ["src/added.ts", "src/old.ts", "src/moved.ts", "src/deleted.ts"]
-        .map((path) => resolve(s.projectRoot, path))
-        .sort();
-      const reviewerPaths = capturedInputs(s.captureDir, "aidlc-reviewer-scope.ts")
-        .map((entry) =>
-          (entry.tool_input as { file_path?: string } | undefined)?.file_path ?? ""
-        )
-        .filter(Boolean)
-        .sort();
-      expect(reviewerPaths).toEqual(expected);
+      const expected = [
+        ["src/added.ts", "Write"],
+        ["src/old.ts", "Edit"],
+        ["src/moved.ts", "Write"],
+        ["src/deleted.ts", "Edit"],
+      ].map(([path, tool]) => [resolve(s.projectRoot, path), tool]).sort();
+      for (const hook of ["aidlc-review-freeze.ts", "aidlc-reviewer-scope.ts"]) {
+        const targets = capturedInputs(s.captureDir, hook)
+          .map((entry) => [
+            (entry.tool_input as { file_path?: string } | undefined)?.file_path ?? "",
+            entry.tool_name ?? "",
+          ])
+          .filter(([path]) => path)
+          .sort();
+        expect(targets, hook).toEqual(expected);
+      }
 
       const after = runAdapter(s, "post-tool", {
         ...payload,
@@ -475,13 +483,70 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
       });
       expect(after.code).toBe(0);
       for (const hook of ["aidlc-audit-logger.ts", "aidlc-sensor-fire.ts"]) {
-        const paths = capturedInputs(s.captureDir, hook)
+        const targets = capturedInputs(s.captureDir, hook)
+          .map((entry) => [
+            (entry.tool_input as { file_path?: string } | undefined)?.file_path ?? "",
+            entry.tool_name ?? "",
+          ])
+          .filter(([path]) => path)
+          .sort();
+        expect(targets, hook).toEqual(expected);
+      }
+    } finally {
+      s.cleanup();
+    }
+  });
+
+  test("11b: multi-file replacements fan out through every mutation hook", () => {
+    const s = scratch();
+    try {
+      const payload = {
+        hook_event_name: "PreToolUse",
+        tool_name: "multi_replace_string_in_file",
+        tool_input: {
+          replacements: [
+            { filePath: "src/first.ts", oldString: "a", newString: "b" },
+            { file_path: "src/second.ts", oldString: "c", newString: "d" },
+          ],
+        },
+      };
+      const expected = ["src/first.ts", "src/second.ts"]
+        .map((path) => resolve(s.projectRoot, path))
+        .sort();
+
+      expect(runAdapter(s, "pre-tool", payload).code).toBe(0);
+      expect(
+        capturedInputs(s.captureDir, "aidlc-review-freeze.ts")
           .map((entry) =>
             (entry.tool_input as { file_path?: string } | undefined)?.file_path ?? ""
           )
           .filter(Boolean)
-          .sort();
-        expect(paths, hook).toEqual(expected);
+          .sort(),
+      ).toEqual(expected);
+      expect(
+        capturedInputs(s.captureDir, "aidlc-reviewer-scope.ts")
+          .map((entry) =>
+            (entry.tool_input as { file_path?: string } | undefined)?.file_path ?? ""
+          )
+          .filter(Boolean)
+          .sort(),
+      ).toEqual(expected);
+
+      expect(
+        runAdapter(s, "post-tool", {
+          ...payload,
+          hook_event_name: "PostToolUse",
+        }).code,
+      ).toBe(0);
+      for (const hook of ["aidlc-audit-logger.ts", "aidlc-sensor-fire.ts"]) {
+        const calls = capturedInputs(s.captureDir, hook);
+        expect(
+          calls.map((entry) =>
+            (entry.tool_input as { file_path?: string } | undefined)?.file_path ?? ""
+          ).filter(Boolean).sort(),
+          hook,
+        ).toEqual(expected);
+        expect(calls.every((entry) => entry.tool_name === "Edit"), hook).toBe(true);
       }
     } finally {
       s.cleanup();
@@ -540,6 +605,115 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
       );
       // reviewer-scope is the SECOND Bash pre-hook — it must be short-circuited.
       expect(reached(s.captureDir, "aidlc-reviewer-scope.ts")).toBe(0);
+    } finally {
+      s.cleanup();
+    }
+  });
+
+  test("13a: plan approval normalizes Copilot agent input and blocks before rule injection", () => {
+    const s = scratch();
+    try {
+      writeFileSync(
+        join(s.hooksDir, "aidlc-plan-approval-guard.ts"),
+        stubHookBody("aidlc-plan-approval-guard.ts", 2, "plan approval required"),
+        "utf-8",
+      );
+      const r = runAdapter(s, "pre-tool", {
+        hook_event_name: "PreToolUse",
+        tool_name: "agent",
+        tool_input: {
+          subagent_type: "",
+          agent: "aidlc-developer-agent",
+          prompt: "AIDLC-UNIT: U01\nGenerate code.",
+        },
+      });
+      expect(r.code).toBe(0);
+      expect(
+        (JSON.parse(r.stdout) as {
+          hookSpecificOutput?: { permissionDecision?: string };
+        }).hookSpecificOutput?.permissionDecision,
+      ).toBe("deny");
+      const forwarded = capturedInputs(
+        s.captureDir,
+        "aidlc-plan-approval-guard.ts",
+      )[0];
+      expect(forwarded.tool_name).toBe("Agent");
+      expect(
+        (forwarded.tool_input as { subagent_type?: string }).subagent_type,
+      ).toBe("aidlc-developer-agent");
+      expect(reached(s.captureDir, "aidlc-dispatch-rules.ts")).toBe(1);
+    } finally {
+      s.cleanup();
+    }
+  });
+
+  test("13b: dispatch-rule failures block before plan approval", () => {
+    const s = scratch();
+    try {
+      writeFileSync(
+        join(s.hooksDir, "aidlc-dispatch-rules.ts"),
+        stubHookBody("aidlc-dispatch-rules.ts", 2, "mandatory rules unavailable"),
+        "utf-8",
+      );
+      const r = runAdapter(s, "pre-tool", {
+        hook_event_name: "PreToolUse",
+        tool_name: "agent",
+        tool_input: {
+          agent: "aidlc-developer-agent",
+          prompt: "AIDLC-UNIT: U01\nGenerate code.",
+        },
+      });
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("mandatory rules unavailable");
+      expect(reached(s.captureDir, "aidlc-plan-approval-guard.ts")).toBe(0);
+    } finally {
+      s.cleanup();
+    }
+  });
+
+  test("13c: review freeze blocks shell writes after reviewer scope", () => {
+    const s = scratch();
+    try {
+      writeFileSync(
+        join(s.hooksDir, "aidlc-review-freeze.ts"),
+        stubHookBody("aidlc-review-freeze.ts", 2, "review receipt is frozen"),
+        "utf-8",
+      );
+      const r = runAdapter(s, "pre-tool", {
+        hook_event_name: "PreToolUse",
+        tool_name: "run_in_terminal",
+        tool_input: { command: "printf changed > artifact.md" },
+      });
+      expect(r.code).toBe(0);
+      expect(
+        (JSON.parse(r.stdout) as {
+          hookSpecificOutput?: { permissionDecision?: string };
+        }).hookSpecificOutput?.permissionDecision,
+      ).toBe("deny");
+      expect(reached(s.captureDir, "aidlc-state-transition-guard.ts")).toBe(1);
+      expect(reached(s.captureDir, "aidlc-review-freeze.ts")).toBe(1);
+      expect(reached(s.captureDir, "aidlc-reviewer-scope.ts")).toBe(1);
+    } finally {
+      s.cleanup();
+    }
+  });
+
+  test("13d: reviewer-scope failures block before review freeze", () => {
+    const s = scratch();
+    try {
+      writeFileSync(
+        join(s.hooksDir, "aidlc-reviewer-scope.ts"),
+        stubHookBody("aidlc-reviewer-scope.ts", 2, "outside reviewer scope"),
+        "utf-8",
+      );
+      const r = runAdapter(s, "pre-tool", {
+        hook_event_name: "PreToolUse",
+        tool_name: "run_in_terminal",
+        tool_input: { command: "printf changed > artifact.md" },
+      });
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("outside reviewer scope");
+      expect(reached(s.captureDir, "aidlc-review-freeze.ts")).toBe(0);
     } finally {
       s.cleanup();
     }

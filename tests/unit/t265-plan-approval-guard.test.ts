@@ -572,6 +572,15 @@ describe("t265c registrations", () => {
     expect(hooksJson).toContain("aidlc-codex-adapter.ts plan-approval-guard");
   });
 
+  test("copilot: the shared pre-tool adapter invokes the plan-approval guard", () => {
+    const adapter = readFileSync(
+      join(REPO_ROOT, "harness", "copilot", "hooks", "aidlc-copilot-adapter.ts"),
+      "utf-8",
+    );
+    expect(adapter).toContain('"aidlc-plan-approval-guard.ts"');
+    expect(adapter).toContain('tool_name: "Agent"');
+  });
+
   test("kiro: the conductor agent registers the guard on the subagent matcher", () => {
     const agent = readFileSync(
       join(REPO_ROOT, "dist", "kiro", ".kiro", "agents", "aidlc.json"),
