@@ -106,11 +106,22 @@ cd aidlc-workflows
 git checkout v2
 ```
 
-Run the `cp` commands in the sections below from this repository's root.
+Run the `cp` commands in the sections below from this repository's root — or use the **interactive installer** instead:
+
+```bash
+bun scripts/install.ts
+```
+
+The installer prompts you to choose a harness, then copies the correct `dist/<harness>/` tree into your project. For CI or scripted setups, pass flags directly:
+
+```bash
+bun scripts/install.ts --harness kiro --target ~/my-project --force
+bun scripts/install.ts --help   # see all options
+```
 
 ### Install a harness
 
-With bun in place, pick your harness below and expand it — each section installs that CLI, sets up your project, and walks the first run end to end.
+With bun in place, pick your harness below and expand it — each section installs that CLI, sets up your project, and walks the first run end to end. (Or skip the manual `cp` steps by running `bun scripts/install.ts` above.)
 
 <details>
 <summary><b>Kiro IDE</b></summary>
@@ -311,6 +322,7 @@ aidlc-claude/
 ├── scripts/
 │   ├── package.ts              # THE build entry: copy core+harness per manifest → graph compile →
 │   │                           #   runner-gen → emit() per tree.  --check = total drift guard (CI)
+│   ├── install.ts              # interactive installer: pick a harness → copy dist/<harness>/ into your project
 │   ├── build-binaries.ts       # release-only CLI bundles under ignored build/
 │   └── manifest-types.ts       # shared manifest contract
 │

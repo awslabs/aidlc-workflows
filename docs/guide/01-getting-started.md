@@ -162,6 +162,16 @@ git checkout v2
 
 ### Step 1: Copy the implementation
 
+**Option A — Interactive installer** (recommended):
+
+```bash
+bun scripts/install.ts --target ~/your-project
+```
+
+This prompts for harness selection, then copies the right files. For scripted/CI use: `bun scripts/install.ts --harness kiro --target ~/your-project --force`.
+
+**Option B — Manual copy**
+
 Expand your harness:
 
 <details open markdown="1">
