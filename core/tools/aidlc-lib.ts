@@ -3718,7 +3718,7 @@ export const BOLT_SLUG_MAX_LENGTH = 64;
 // accepted other filesystem-safe names. Keep those existing identifiers
 // routable while still excluding separators, traversal, whitespace, and
 // control characters.
-export const UNIT_NAME_REGEX = /^[A-Za-z][A-Za-z0-9._-]*$/;
+export const UNIT_NAME_REGEX = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 export const UNIT_NAME_MAX_LENGTH = 64;
 
 // --- Error helpers (catch-block discipline) ---
@@ -3884,8 +3884,8 @@ export function validateBoltSlug(slug: string): string | null {
 // Unit names become path components under construction/<unit>/ and are also
 // mirrored into single-line state fields. Keep one canonical validator for the
 // authored DAG, cached runtime graph, and lifecycle CLI. Lowercase kebab-case is
-// the authoring convention; uppercase letters, underscores, and dots remain
-// accepted for safe legacy DAG names.
+// the authoring convention; leading digits, uppercase letters, underscores,
+// and dots remain accepted for safe legacy DAG names.
 export function validateUnitName(name: string): string | null {
   if (!name) return "Unit name is empty";
   if (name.length > UNIT_NAME_MAX_LENGTH) {
@@ -3894,7 +3894,7 @@ export function validateUnitName(name: string): string | null {
   if (!UNIT_NAME_REGEX.test(name)) {
     return (
       `Invalid Unit name "${name}" - must match ${UNIT_NAME_REGEX} ` +
-      "(ASCII letter, then ASCII letters/digits/dot/underscore/hyphen)"
+      "(ASCII letter/digit, then ASCII letters/digits/dot/underscore/hyphen)"
     );
   }
   return null;

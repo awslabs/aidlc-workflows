@@ -887,15 +887,14 @@ function handleUnit(args: string[]): void {
   withAuditLock(pd, () => {
     let content = readStateFile(pd);
 
-    // Autonomous Construction keeps its own per-unit ledger (the swarm
-    // referee's SWARM_UNIT_* rows); interactive receipts must not interleave
-    // with it, and an unattended run has no human to resume a pause — the
-    // same rule park applies.
-    if (isAutonomousMode(content)) {
+    // Only an engine-eligible autonomous swarm owns SWARM_UNIT_* bookkeeping.
+    // The autonomy grant persists across backward jumps, where inline per-unit
+    // stages still need this interactive lifecycle ledger.
+    if (autonomousSwarmOwnsStage(stage, content)) {
       error(
         `Refusing unit ${action}: Construction Autonomy Mode is autonomous. The swarm referee ` +
           "owns per-unit bookkeeping (SWARM_UNIT_* receipts); interactive unit receipts apply " +
-          "only to gated Construction.",
+          "only when the engine routes the stage inline.",
       );
     }
 
@@ -1214,6 +1213,22 @@ function handleCount(args: string[]): void {
 
 function artifactGuardDisabled(): boolean {
   return process.env.AIDLC_SKIP_ARTIFACT_GUARD === "1";
+}
+
+// Mirrors aidlc-orchestrate.ts isAutonomousSwarmCandidate for the lifecycle
+// writer. A missing scope fails closed for a subagent stage: without it, this
+// tool cannot prove that the stage is the non-swarm skeleton gate.
+function autonomousSwarmOwnsStage(
+  stage: { slug: string; phase: string; for_each?: string; mode?: string },
+  stateContent: string,
+): boolean {
+  if (stage.phase !== "construction") return false;
+  if (stage.for_each !== "unit-of-work" || stage.mode !== "subagent") return false;
+  if (!isAutonomousMode(stateContent)) return false;
+  const scope = getField(stateContent, "Scope");
+  if (!scope) return true;
+  const first = firstInScopeStageOfPhase("construction", scope);
+  return first === null || first.slug !== stage.slug;
 }
 
 // Settled-autonomous-swarm exemption, mirroring isSettledAutonomousSwarm in

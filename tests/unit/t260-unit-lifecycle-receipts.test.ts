@@ -148,6 +148,19 @@ function constructionProject(): string {
   seedBoltDag(proj, ["unit-a", "unit-b"]);
   return proj;
 }
+
+function enableAutonomy(): void {
+  const path = seededStateFile(proj);
+  writeFileSync(
+    path,
+    readFileSync(path, "utf-8").replace(
+      "- **Skeleton Stance**: on",
+      "- **Skeleton Stance**: on\n- **Construction Autonomy Mode**: autonomous",
+    ),
+    "utf-8",
+  );
+}
+
 afterEach(() => {
   if (proj) cleanupTestProject(proj);
   proj = "";
@@ -220,18 +233,51 @@ describe("t260 receipts are the transition, artifacts the evidence", () => {
 
   test("unit start accepts legacy-safe DAG names without weakening path safety", () => {
     constructionProject();
-    seedBoltDag(proj, ["api_v2", "WebUI"]);
-    for (const unit of ["api_v2", "WebUI"]) {
+    seedBoltDag(
+      proj,
+      ["2fa", "api_v2", "WebUI"],
+      [["2fa"], ["api_v2"], ["WebUI"]],
+    );
+    for (const unit of ["2fa", "api_v2", "WebUI"]) {
       const parsed = parseBoltDag(
         `\`\`\`yaml\nunits:\n  - name: ${unit}\n    depends_on: []\n\`\`\`\n`,
       );
       expect(parsed.ok).toBe(true);
     }
 
+    expect(unitVerb(proj, "start", "2fa").rc).toBe(0);
+    writeUnitArtifacts(proj, "2fa");
+    expect(unitVerb(proj, "complete", "2fa").rc).toBe(0);
     expect(unitVerb(proj, "start", "api_v2").rc).toBe(0);
     writeUnitArtifacts(proj, "api_v2");
     expect(unitVerb(proj, "complete", "api_v2").rc).toBe(0);
     expect(unitVerb(proj, "start", "WebUI").rc).toBe(0);
+  });
+
+  test("backward jumps to inline stages keep lifecycle receipts under autonomy", () => {
+    constructionProject();
+    enableAutonomy();
+
+    const next = runNext(proj);
+    expect(next.out).toContain('"stage":"functional-design"');
+    expect(next.out).toContain('"unit":"unit-a"');
+    expect(unitVerb(proj, "start", "unit-a").rc).toBe(0);
+    writeUnitArtifacts(proj, "unit-a");
+    expect(unitVerb(proj, "complete", "unit-a").rc).toBe(0);
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
+  });
+
+  test("autonomous swarm stages still refuse interactive lifecycle receipts", () => {
+    constructionProject();
+    enableAutonomy();
+
+    const result = run(
+      STATE,
+      ["unit", "start", "--stage", "code-generation", "--unit", "unit-a"],
+      proj,
+    );
+    expect(result.rc).not.toBe(0);
+    expect(result.out).toContain("swarm referee");
   });
 
   test("authored DAG membership overrides a stale cached unit set", () => {
