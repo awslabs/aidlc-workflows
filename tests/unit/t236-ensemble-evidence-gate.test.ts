@@ -298,16 +298,26 @@ function recordReview(proj: string, unit?: string, graphPath?: string): void {
   if (!stage) throw new Error("user-stories missing from shipped graph");
   const fingerprint = reviewArtifactFingerprint(proj, stage, unit);
   if (!fingerprint) throw new Error("could not fingerprint user-stories fixture");
+  const identity = {
+    Stage: "user-stories",
+    Reviewer: "aidlc-product-lead-agent",
+    Iteration: "1",
+    ...(unit ? { Unit: unit } : {}),
+  };
+  appendAuditEvent(
+    proj,
+    "REVIEW_REQUESTED",
+    "2026-07-19T00:00:00.000Z",
+    identity,
+  );
   appendAuditEvent(
     proj,
     "REVIEW_COMPLETED",
-    `2026-07-19T00:00:${unit ? "01" : "00"}.000Z`,
+    "2026-07-19T00:00:01.000Z",
     {
-      Stage: "user-stories",
-      Reviewer: "aidlc-product-lead-agent",
+      ...identity,
       Verdict: "READY",
       "Artifact Fingerprint": fingerprint,
-      ...(unit ? { Unit: unit } : {}),
     },
   );
 }
