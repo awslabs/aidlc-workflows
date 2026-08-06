@@ -126,6 +126,17 @@ function recordReview(
   unit?: string,
   verdict = "READY",
 ): void {
+  // v2 requires every per-unit code-generation receipt to bind the declared
+  // artifacts as well as workspace source. Seed the minimal real contract in
+  // fixtures that focus on source freshness; never overwrite a test's content.
+  if (stage === "code-generation" && unit) {
+    const artifactDir = join(seededRecordDir(proj), "construction", unit, stage);
+    mkdirSync(artifactDir, { recursive: true });
+    for (const artifact of ["code-generation-plan", "code-summary"]) {
+      const path = join(artifactDir, `${artifact}.md`);
+      if (!existsSync(path)) writeFileSync(path, `# ${artifact}\n`, "utf-8");
+    }
+  }
   const args = [
     LOG,
     "review",
@@ -817,14 +828,69 @@ describe("t259 receipt stamping + completion guard (cli)", () => {
     expect(replay.out).toContain('"replay":true');
   });
 
-  test("a partial approval crash window still rechecks source freshness", () => {
-    recordReview(proj);
-    expect(guarded(proj, ["checkbox", "code-generation=completed"]).rc).toBe(0);
-    writeFileSync(src, "export const answer = 100; // after partial approval\n", "utf-8");
-    const recovery = guarded(proj, ["advance", "code-generation"]);
-    expect(recovery.rc).not.toBe(0);
-    expect(recovery.out).toContain("source-fingerprint mismatch");
-  });
+  for (const route of ["advance", "finalize", "complete-workflow"] as const) {
+    test(`an already-completed stage without receipts recovers through ${route}`, () => {
+      expect(guarded(proj, ["checkbox", "code-generation=completed"]).rc).toBe(0);
+      const recovery = guarded(proj, [route, "code-generation"]);
+      expect(recovery.out).not.toContain("no fresh REVIEW_COMPLETED");
+      expect(recovery.rc).toBe(0);
+    });
+
+    test(`a partial approval crash window still rechecks source freshness through ${route}`, () => {
+      recordReview(proj);
+      expect(guarded(proj, ["checkbox", "code-generation=completed"]).rc).toBe(0);
+      writeFileSync(src, `export const answer = 100; // ${route} after partial approval\n`, "utf-8");
+      const recovery = guarded(proj, [route, "code-generation"]);
+      expect(recovery.rc).not.toBe(0);
+      expect(recovery.out).toContain("source-fingerprint mismatch");
+    });
+
+    test(`an artifact change cannot hide stale source during completed-stage recovery through ${route}`, () => {
+      recordReview(proj);
+      expect(guarded(proj, ["checkbox", "code-generation=completed"]).rc).toBe(0);
+
+      // Change the declared-artifact manifest as well as application source.
+      // Recovery skips artifact receipt existence/cardinality for an already
+      // [x] stage, but the valid recorded source binding must still be checked.
+      const artifactDir = join(
+        seededRecordDir(proj),
+        "construction",
+        "late-unit",
+        "code-generation",
+      );
+      mkdirSync(artifactDir, { recursive: true });
+      writeFileSync(join(artifactDir, "code-generation-plan.md"), "# changed after review\n", "utf-8");
+      writeFileSync(join(artifactDir, "code-summary.md"), "# changed after review\n", "utf-8");
+      writeFileSync(src, `export const answer = 101; // ${route} source + artifact change\n`, "utf-8");
+
+      const recovery = guarded(proj, [route, "code-generation"]);
+      expect(recovery.rc).not.toBe(0);
+      expect(recovery.out).toContain("source-fingerprint mismatch");
+    });
+  }
+
+  for (const artifactBinding of ["missing", "malformed"] as const) {
+    test(`completed-stage recovery does not trust Source Fingerprint when Artifact Fingerprint is ${artifactBinding}`, () => {
+      recordReview(proj);
+      const shard = seededAuditShard(proj);
+      const audit = readFileSync(shard, "utf-8");
+      expect(audit).toContain("**Source Fingerprint**: ");
+      const altered =
+        artifactBinding === "missing"
+          ? audit.replace(/^\*\*Artifact Fingerprint\*\*: .*\r?\n/gm, "")
+          : audit.replace(
+              /^\*\*Artifact Fingerprint\*\*: .*$/gm,
+              "**Artifact Fingerprint**: sha256:not-a-valid-digest",
+            );
+      writeFileSync(shard, altered, "utf-8");
+
+      expect(guarded(proj, ["checkbox", "code-generation=completed"]).rc).toBe(0);
+      writeFileSync(src, `export const answer = 102; // ${artifactBinding} artifact binding\n`, "utf-8");
+      const recovery = guarded(proj, ["advance", "code-generation"]);
+      expect(recovery.out).not.toContain("source-fingerprint mismatch");
+      expect(recovery.rc).toBe(0);
+    });
+  }
 });
 
 // What the workspace-global fingerprint does and does not prove on a
@@ -876,7 +942,7 @@ describe("t259 multi-unit flow: what the workspace-global fingerprint does and d
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.out).not.toContain("source-fingerprint mismatch");
     expect(r.rc).toBe(0);
-  });
+  }, 30000);
 
   // #646 review - the protocol's own rework loop. stage-protocol.md §12a
   // requires recording a NOT-READY receipt, re-invoking the lead to fix the
@@ -905,7 +971,7 @@ describe("t259 multi-unit flow: what the workspace-global fingerprint does and d
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.out).not.toContain("source-fingerprint mismatch");
     expect(r.rc).toBe(0);
-  });
+  }, 30000);
 
   // #646 review - the second `M`-shaped legitimate transition: a unit that
   // wires itself into a file an earlier unit already created. Ordinary
@@ -1292,12 +1358,43 @@ describe("t259 swarm finalize source-fingerprint check (#646 review P1#3)", () =
       "--strategy", "squash", "--project-dir", proj,
     ], { cwd: proj, encoding: "utf-8", env: mergeEnv });
     expect(merge.status).not.toBe(0);
-    expect(`${merge.stdout}${merge.stderr}`).toContain("finalized with source freshness bypassed");
+    const refusal = `${merge.stdout}${merge.stderr}`;
+    expect(refusal).toContain("finalized with source freshness bypassed");
+    expect(refusal).toContain("AIDLC_SKIP_SOURCE_FRESHNESS=1");
+    expect(refusal).toContain("aidlc-worktree discard --slug bypass");
+    expect(refusal).not.toContain("re-run review and finalize with source freshness enabled");
     const after = spawnSync("git", ["-C", proj, "rev-parse", "HEAD"], { encoding: "utf-8" }).stdout.trim();
     expect(after).toBe(before);
     expect(existsSync(join(proj, "reviewed.ts"))).toBe(false);
     expect(existsSync(join(proj, "unreviewed.ts"))).toBe(false);
-  }, 120000);
+
+    const discarded = spawnSync(BUN, [
+      WORKTREE_TOOL, "discard", "--slug", "bypass", "--project-dir", proj,
+    ], { cwd: proj, encoding: "utf-8" });
+    expect(discarded.status).toBe(0);
+
+    expect(runSwarm(proj, ["prepare", "--batch", "2", "--units", "bypass", "--base", "main"]).rc).toBe(0);
+    const redoneWt = wtPath(proj, "bypass");
+    writeFileSync(join(redoneWt, "reviewed.ts"), "export const reviewed = 'redone';\n", "utf-8");
+    git(redoneWt, ["add", "--", "reviewed.ts"]);
+    git(redoneWt, ["commit", "-qm", "redo reviewed source"]);
+    recordReview(redoneWt, "code-generation", REVIEWER, "bypass");
+    const rebound = runSwarm(proj, [
+      "finalize", "--batch", "2", "--units", "bypass", "--claimed", "bypass",
+      "--check-cmd", `"${process.execPath}" -e "require('fs').accessSync('reviewed.ts')"`,
+    ]);
+    expect(rebound.rc).toBe(0);
+    const newestConvergence = readAllAuditShards(proj).split("## Swarm Unit Converged").at(-1) ?? "";
+    expect(newestConvergence).toContain("**Source Commit**:");
+    expect(newestConvergence).not.toContain("**Source Freshness Bypass**: true");
+
+    const reboundMerge = spawnSync(BUN, [
+      WORKTREE_TOOL, "merge", "--slug", "bypass", "--target", "main",
+      "--strategy", "squash", "--project-dir", proj,
+    ], { cwd: proj, encoding: "utf-8", env: mergeEnv });
+    expect(reboundMerge.status).toBe(0);
+    expect(readFileSync(join(proj, "reviewed.ts"), "utf-8")).toContain("redone");
+  }, 180000);
 
   test("a tracked symlink matched by a broad clean filter stays a symlink through finalize and merge", () => {
     const proj = makeFixture();

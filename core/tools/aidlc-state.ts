@@ -1271,14 +1271,12 @@ function verifyReviewerPrecondition(
     produces?: string[];
     optional_produces?: string[];
     produces_kinds?: Record<string, string[]>;
-  }
+  },
+  requireReceiptExistence = true,
 ): void {
   if (!stage.reviewer) return; // stage declares no reviewer — nothing to enforce
 
   const reviewer = stage.reviewer;
-  if (readAllAuditShards(pd).length === 0) {
-    reviewerPreconditionError(stage.slug, reviewer);
-  }
 
   // The fresh-receipt scan lives in aidlc-lib.ts (freshReviewReceipts) so the
   // review-freeze PreToolUse hook and this precondition read the SAME window:
@@ -1287,44 +1285,7 @@ function verifyReviewerPrecondition(
   // and per-unit write invalidation are all documented there.
   const receipts = freshReviewReceipts(pd, content, stage);
   const perUnit = stage.for_each === "unit-of-work";
-  const unitMajor =
-    perUnit && getField(content, "Construction Iteration")?.trim() === "unit-major";
 
-  // Unit-major may author a later stage's per-unit artifacts before that
-  // stage's STAGE_STARTED row exists. Its attempt floor therefore uses the
-  // current workflow, jumps, and gate rejections but ignores STAGE_STARTED.
-  // Stage-major and non-per-unit flows additionally floor at STAGE_STARTED.
-  //
-  // WORKFLOW_STARTED and STAGE_JUMPED floor deliberately stage-AGNOSTIC: any
-  // jump invalidates every stage's reviews, including stages the jump never
-  // re-opens. That over-invalidation is harmless (a stage that stays [x] never
-  // re-completes, so its stale floor is never consulted) and it is what closes
-  // the redo-jump hole: a backward jump re-opens stages WITHOUT emitting their
-  // GATE_REJECTED or (until re-entry) STAGE_STARTED, so a stage-scoped floor
-  // would accept the prior attempt's reviews. Fail-closed over precise.
-  let floorIdx = -1;
-  for (let i = 0; i < events.length; i++) {
-    const e = events[i];
-    if (e.event === "WORKFLOW_STARTED" || e.event === "STAGE_JUMPED") {
-      floorIdx = i;
-      continue;
-    }
-    if (auditBlockField(e.block, "Stage") !== stage.slug) continue;
-    if (e.event === "STAGE_STARTED" && !unitMajor) {
-      if (auditBlockField(e.block, "Workflow")?.startsWith("single-stage:")) continue;
-      floorIdx = i;
-    } else if (e.event === "GATE_REJECTED") {
-      floorIdx = i;
-    }
-  }
-
-  // Collect fresh matching terminal reviews after the attempt floor. A later
-  // declared-artifact write clears the matching receipt. For per-unit stages,
-  // the path's construction/<unit>/ segment scopes invalidation to that unit;
-  // an ambiguous matching path fails closed by clearing every unit receipt.
-  const recordedRepos = new Set(intentRepos(pd));
-  const reviewedUnits = new Set<string>();
-  let sawStageReview = false;
   // #629 / #646 - source-freshness binding. A receipt for a workspace_requires
   // stage (code-generation) carries the Source Fingerprint the reviewer
   // inspected (stamped by aidlc-log.ts review). Workspace source writes are
@@ -1370,42 +1331,11 @@ function verifyReviewerPrecondition(
   // aidlc-swarm.ts validates each receipt against its own worktree at
   // finalize instead (see reviewerReceiptError).
   let staleSourceReceipts = false;
-  const fingerprintedReceipts: string[] = []; // chronological order (oldest first)
   const sourceFreshnessOff = process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1";
   const settledSwarm = isSettledSwarmForArtifactGuard(pd, stage, content);
-  for (let i = floorIdx + 1; i < events.length; i++) {
-    const e = events[i];
-    if (e.event === "ARTIFACT_CREATED" || e.event === "ARTIFACT_UPDATED") {
-      const file = auditBlockField(e.block, "File");
-      if (!file) continue;
-      const targetUnit = producesArtifactUnit(stage, file, recordedRepos);
-      if (targetUnit === undefined) continue;
-      if (!perUnit) {
-        sawStageReview = false;
-      } else if (targetUnit === null) {
-        reviewedUnits.clear();
-      } else {
-        reviewedUnits.delete(targetUnit);
-      }
-      continue;
-    }
-    if (e.event !== "REVIEW_COMPLETED") continue;
-    if (auditBlockField(e.block, "Workflow")?.startsWith("single-stage:")) continue;
-    if (auditBlockField(e.block, "Stage") !== stage.slug) continue;
-    if (auditBlockField(e.block, "Reviewer") !== reviewer) continue;
-    const verdict = auditBlockField(e.block, "Verdict");
-    if (verdict !== "READY" && verdict !== "NOT-READY") continue;
-    const recordedFp = auditBlockField(e.block, "Source Fingerprint");
-    if (recordedFp && stage.workspace_requires && !sourceFreshnessOff && !settledSwarm) {
-      fingerprintedReceipts.push(recordedFp);
-    }
-    sawStageReview = true;
-    const unit = auditBlockField(e.block, "Unit");
-    if (unit) reviewedUnits.add(unit);
-  }
-  if (fingerprintedReceipts.length > 0) {
+  const newestFp = receipts.newestSourceFingerprint;
+  if (newestFp && stage.workspace_requires && !sourceFreshnessOff && !settledSwarm) {
     const currentSourceFp = workspaceSourceFingerprint(pd);
-    const newestFp = fingerprintedReceipts[fingerprintedReceipts.length - 1];
     // Three distinct ways a receipt fails to prove the current source is the
     // reviewed source, and all three refuse (#646 review). Previously only the
     // third did, so a receipt written while git was unreachable - or a
@@ -1422,10 +1352,21 @@ function verifyReviewerPrecondition(
           currentSourceFp === null || currentSourceFp !== newestFp;
     if (stale) {
       staleSourceReceipts = true;
-      reviewedUnits.clear();
-      sawStageReview = false;
     }
   }
+
+  // Recovery of an already-completed stage only needs to reject a recorded
+  // fingerprint that is now stale. Absence/cardinality of review receipts is
+  // enforced only while this transition is actually completing the stage.
+  if (!requireReceiptExistence) {
+    if (staleSourceReceipts) reviewerPreconditionError(stage.slug, reviewer, true);
+    return;
+  }
+
+  const sawStageReview = !staleSourceReceipts && receipts.stageVerdict !== null;
+  const reviewedUnits = staleSourceReceipts
+    ? new Set<string>()
+    : new Set(receipts.unitVerdicts.keys());
 
   if (!perUnit) {
     if (!sawStageReview) reviewerPreconditionError(stage.slug, reviewer, staleSourceReceipts);
@@ -1638,9 +1579,9 @@ function handleAdvance(args: string[]): void {
 
   // A true replay above is already fully applied and must remain idempotent.
   // A crash-window partial approval does not satisfy all four replay predicates,
-  // so it still reaches this freshness check and cannot use the completed
-  // checkbox as standing permission to skip review validation.
-  verifyReviewerPrecondition(pd, content, completedStage);
+  // so it still reaches the source comparison. An already-[x] recovery may lack
+  // receipts, but any recorded fingerprint still has to match.
+  verifyReviewerPrecondition(pd, content, completedStage, !alreadyMarkedCompleted);
 
   // Artifact guard (issue #366). Only enforce when THIS advance is the
   // transition that completes the stage - i.e. it was not already [x]. When
@@ -1763,8 +1704,9 @@ function handleFinalize(args: string[]): void {
   const alreadyMarkedCompleted =
     parseCheckboxes(content).find((c) => c.slug === completedSlug)?.state ===
     "completed";
-  // Freshness is not gated on the checkbox - see handleAdvance (#646 review).
-  verifyReviewerPrecondition(pd, content, completedStage);
+  // Already-[x] recovery skips receipt existence, but not a recorded source
+  // mismatch - see handleAdvance (#646 review).
+  verifyReviewerPrecondition(pd, content, completedStage, !alreadyMarkedCompleted);
   if (!alreadyMarkedCompleted) {
     verifyStageArtifacts(pd, completedStage);
     verifySummaryConfirmationPrecondition(pd, content, completedStage);
@@ -1884,8 +1826,9 @@ function handleCompleteWorkflow(args: string[]): void {
   // itself, so this skips the double-check on that path while still refusing a
   // direct `complete-workflow <active-slug>` that never produced artifacts. Runs
   // before any mutation so a refusal leaves state untouched.
-  // Freshness is not gated on the checkbox - see handleAdvance (#646 review).
-  verifyReviewerPrecondition(pd, content, completedStage);
+  // Already-[x] recovery skips receipt existence, but not a recorded source
+  // mismatch - see handleAdvance (#646 review).
+  verifyReviewerPrecondition(pd, content, completedStage, !alreadyMarkedCompleted);
   if (!alreadyMarkedCompleted) {
     verifyStageArtifacts(pd, completedStage);
     verifySummaryConfirmationPrecondition(pd, content, completedStage);

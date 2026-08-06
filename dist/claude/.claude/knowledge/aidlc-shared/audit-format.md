@@ -13,7 +13,7 @@ commands a stage or conductor invokes directly.
 
 All event names follow `SUBJECT_PAST_VERB` — every event answers "what happened?"
 
-## Event Registry (74 events, 19 categories)
+## Event Registry (77 events, 20 categories)
 
 ### Workflow Lifecycle (4 events)
 
@@ -73,16 +73,17 @@ All event names follow `SUBJECT_PAST_VERB` — every event answers "what happene
 | `SCOPE_DETECTED` | Auto-detected from freeform text | Timestamp, Detected scope, Input text, Source, Matched keywords (optional; present when `Source=keyword`) | `tools/aidlc-utility.ts detect-scope` |
 | `RECOMPOSED` | The adaptive composer re-shaped a running workflow's pending stages (suffix flips via `recompose`) | Timestamp, Scope, Stages skipped, Stages added, Stages in Scope | `tools/aidlc-utility.ts recompose` |
 
-### Interaction Events (6 events)
+### Interaction Events (7 events)
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
-| `DECISION_RECORDED` | Before presenting a non-gate structured question, to record the options shown | Timestamp, Stage, Decision, Options | `tools/aidlc-log.ts decision` |
+| `DECISION_RECORDED` | Before presenting a non-gate structured question, to record the options shown. Consolidated-summary prompts also carry checkpoint identity | Timestamp, Stage, Decision, Options; optional Checkpoint, Questions File, Unit, Workflow | `tools/aidlc-log.ts decision` |
 | `GATE_APPROVED` | Human approved at gate | Timestamp, Stage, User Input | `tools/aidlc-state.ts approve` |
 | `GATE_REJECTED` | Human requested changes | Timestamp, Stage, Feedback, optional `Recovered=true` (backfilled by the approve-time revision backstop) | `tools/aidlc-state.ts reject`, `tools/aidlc-state.ts approve` (backstop backfill) |
 | `QUESTION_ANSWERED` | Non-gate question answered by user | Timestamp, Stage, Details | `tools/aidlc-log.ts answer` |
+| `SUMMARY_CONFIRMATION_RECORDED` | Consolidated-summary choice recorded after the matching prompt and a fresh human turn; reserved from the public audit CLI | Timestamp, Stage, Details, Checkpoint, Questions File, Questions SHA-256; optional Unit, Workflow | `tools/aidlc-log.ts answer --checkpoint summary-confirmation` |
 | `REVIEW_REQUESTED` | Conductor dispatches the §12a reviewer sub-agent | Timestamp, Stage, Reviewer, optional Unit (per-unit stages), optional Iteration | `tools/aidlc-log.ts review` |
-| `REVIEW_COMPLETED` | Reviewer verdict read; gates the approval of a reviewer-bearing stage | Timestamp, Stage, Reviewer, Verdict, optional Unit (per-unit stages), optional Iteration, optional Source Fingerprint (`workspace_requires` stages only — a git-native content hash of the workspace source the reviewer inspected; completion routes refuse while the current source differs from the newest recorded fingerprint for the stage. Off-switch: `AIDLC_SKIP_SOURCE_FRESHNESS=1`) | `tools/aidlc-log.ts review --verdict` |
+| `REVIEW_COMPLETED` | Reviewer verdict read; gates the approval of a reviewer-bearing stage | Timestamp, Stage, Reviewer, Verdict, Artifact Fingerprint (`sha256:<hex>` over declared artifact paths and bytes), optional Unit (per-unit stages), optional Iteration, optional Source Fingerprint (`workspace_requires` stages only — a git-native content hash of the workspace source the reviewer inspected; binds the receipt to that source state so a later edit invalidates it. Off-switch: `AIDLC_SKIP_SOURCE_FRESHNESS=1`) | `tools/aidlc-log.ts review --verdict` |
 
 ### Artifact Events (3 events — hook-emitted)
 
@@ -101,11 +102,18 @@ the active space's shared `codekb/<repo>/` tree.
 |-------|------|-----------------|---------|
 | `SUBAGENT_COMPLETED` | Subagent task finishes | Timestamp, Agent Type, optional Agent ID, optional Message | `hooks/aidlc-log-subagent.ts` (SubagentStop) |
 
-### Reviewer Scope Events (1 event — hook-emitted)
+### Reviewer Enforcement Events (2 events - hook-emitted)
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
 | `REVIEWER_SCOPE_BLOCKED` | A per-unit reviewer's tool call was refused for reaching into sibling units' `construction/` paths (the §12a read-scope bound) | Timestamp, Tool, Target, Stage, Unit | `hooks/aidlc-reviewer-scope.ts` (PreToolUse) |
+| `REVIEW_FREEZE_BLOCKED` | A file-tool or shell `produces[]` write was refused because it would invalidate a fresh READY review receipt before the gate (the §12a terminal-receipt ordering) | Timestamp, Tool, Target, Stage, optional Unit | `hooks/aidlc-review-freeze.ts` (PreToolUse) |
+
+### Plan Approval Events (1 event — hook-emitted)
+
+| Event | When | Required Fields | Emitter |
+|-------|------|-----------------|---------|
+| `PLAN_APPROVAL_BLOCKED` | A code-generation developer-agent dispatch was refused because a targeted unit lacked a non-empty, explicitly approved `code-generation-plan.md` (stage Steps 2-3 must precede Step 4) | Timestamp, Tool, Target, Stage, Unit | `hooks/aidlc-plan-approval-guard.ts` (PreToolUse) |
 
 ### Utility Events (1 event)
 

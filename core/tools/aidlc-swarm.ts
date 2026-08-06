@@ -363,10 +363,10 @@ function reviewerReceiptError(
     currentArtifactFp === null ||
     recordedArtifactFp !== currentArtifactFp
   ) {
-    return (
+    return { error: (
       `claimed converged but no terminal REVIEW_COMPLETED for stage "${stage}", ` +
       `unit "${unit}", reviewer "${reviewer}" with a current artifact fingerprint exists after this Bolt started`
-    );
+    ) };
   }
 
   // #629/#646 - a workspace_requires stage's receipt carries the Source

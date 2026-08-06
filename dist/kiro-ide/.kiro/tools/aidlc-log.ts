@@ -19,7 +19,6 @@ import {
   humanActedSinceLastAnswer,
   humanPresenceGuardDisabled,
   isAutonomousMode,
-  loadStageGraphAll,
   parseCheckboxes,
   readAllAuditShards,
   recordDir,
@@ -556,8 +555,7 @@ function handleReview(args: string[]): void {
     // Recording the reason keeps the migration for genuinely old receipts - a
     // missing field still passes - while letting the guard refuse a new receipt
     // whose workspace has since become bindable.
-    const entry = loadStageGraphAll().find((s) => s.slug === flags.stage);
-    if (entry?.workspace_requires) {
+    if (stage.workspace_requires) {
       fields["Source Fingerprint"] =
         workspaceSourceFingerprint(pd) ?? UNBINDABLE_FINGERPRINT;
     }

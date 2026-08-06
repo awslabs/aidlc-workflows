@@ -338,7 +338,9 @@ function convergedSourceRecord(
     if (process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1") return null;
     errorWithSlug(
       slug,
-      "refusing to merge: this convergence was finalized with source freshness bypassed; re-run review and finalize with source freshness enabled",
+      `refusing to merge: this convergence was finalized with source freshness bypassed; ` +
+        `retry this merge with AIDLC_SKIP_SOURCE_FRESHNESS=1, or run ` +
+        `'aidlc-worktree discard --slug ${slug}' and redo the unit from prepare through review/finalize`,
     );
   }
   if (process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1") return null;

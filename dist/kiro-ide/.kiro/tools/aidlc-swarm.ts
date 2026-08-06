@@ -87,6 +87,7 @@ import {
   parseArgs,
   readAllAuditShards,
   readStateFile,
+  reviewArtifactFingerprint,
   reviewedSourceRef,
   resolveConstructionRepo,
   resolveProjectDir,
@@ -346,6 +347,25 @@ function reviewerReceiptError(
     return { error: (
       `claimed converged but no terminal REVIEW_COMPLETED for stage "${stage}", ` +
       `unit "${unit}", reviewer "${reviewer}" exists after this Bolt started`
+    ) };
+  }
+
+  const definition = resolveStage(stage);
+  const recordedArtifactFp = auditBlockField(latestTerminal, "Artifact Fingerprint");
+  const currentArtifactFp = definition
+    ? reviewArtifactFingerprint(worktreePath(projectDir, unit), definition, unit, {
+        requireRequiredArtifacts: true,
+      })
+    : null;
+  if (
+    recordedArtifactFp === null ||
+    !/^sha256:[0-9a-f]{64}$/.test(recordedArtifactFp) ||
+    currentArtifactFp === null ||
+    recordedArtifactFp !== currentArtifactFp
+  ) {
+    return { error: (
+      `claimed converged but no terminal REVIEW_COMPLETED for stage "${stage}", ` +
+      `unit "${unit}", reviewer "${reviewer}" with a current artifact fingerprint exists after this Bolt started`
     ) };
   }
 

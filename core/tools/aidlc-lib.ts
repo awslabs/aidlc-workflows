@@ -2954,6 +2954,11 @@ export interface FreshReviewReceipts {
    *  artifacts deletes the entry; an ambiguous matching path fails closed by
    *  clearing every unit entry. */
   unitVerdicts: Map<string, ReviewVerdict>;
+  /** Newest Source Fingerprint carried by a receipt with a syntactically valid
+   *  Artifact Fingerprint. Current artifact equality still controls verdict
+   *  freshness independently; fieldless migration receipts do not erase an
+   *  earlier fingerprinted receipt. */
+  newestSourceFingerprint: string | null;
 }
 
 interface ReviewFingerprintStage {
@@ -3139,7 +3144,11 @@ export function freshReviewReceipts(
     produces_kinds?: Record<string, string[]>;
   },
 ): FreshReviewReceipts {
-  const empty: FreshReviewReceipts = { stageVerdict: null, unitVerdicts: new Map() };
+  const empty: FreshReviewReceipts = {
+    stageVerdict: null,
+    unitVerdicts: new Map(),
+    newestSourceFingerprint: null,
+  };
   const reviewer = stage.reviewer;
   if (!reviewer) return empty;
   const audit = readAllAuditShards(projectDir);
@@ -3190,6 +3199,7 @@ export function freshReviewReceipts(
   const recordedRepos = new Set(intentRepos(projectDir));
   const unitVerdicts = new Map<string, ReviewVerdict>();
   let stageVerdict: ReviewVerdict | null = null;
+  let newestSourceFingerprint: string | null = null;
   for (let i = floorIdx + 1; i < events.length; i++) {
     const e = events[i];
     if (e.event === "ARTIFACT_CREATED" || e.event === "ARTIFACT_UPDATED") {
@@ -3214,10 +3224,24 @@ export function freshReviewReceipts(
     if (verdict !== "READY" && verdict !== "NOT-READY") continue;
     const unit = auditBlockField(e.block, "Unit") || undefined;
     const recordedFingerprint = auditBlockField(e.block, "Artifact Fingerprint");
-    const currentFingerprint = reviewArtifactFingerprint(projectDir, stage, unit);
     if (
       recordedFingerprint === null ||
-      !/^sha256:[0-9a-f]{64}$/.test(recordedFingerprint) ||
+      !/^sha256:[0-9a-f]{64}$/.test(recordedFingerprint)
+    ) {
+      continue;
+    }
+
+    // A syntactically valid artifact binding makes this a real post-migration
+    // review receipt, even when its declared artifacts no longer match. Keep
+    // its source binding available to already-completed-stage recovery: that
+    // path intentionally skips receipt existence/cardinality, but it must not
+    // turn a simultaneous artifact + source edit into "no receipt" and bypass
+    // the source-staleness comparison.
+    const sourceFingerprint = auditBlockField(e.block, "Source Fingerprint");
+    if (sourceFingerprint) newestSourceFingerprint = sourceFingerprint;
+
+    const currentFingerprint = reviewArtifactFingerprint(projectDir, stage, unit);
+    if (
       currentFingerprint === null ||
       recordedFingerprint !== currentFingerprint
     ) {
@@ -3227,7 +3251,7 @@ export function freshReviewReceipts(
     if (unit) unitVerdicts.set(unit, verdict);
   }
 
-  return { stageVerdict, unitVerdicts };
+  return { stageVerdict, unitVerdicts, newestSourceFingerprint };
 }
 
 // Private refs keep reviewed-source commits reachable until the Bolt is merged

@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { accessSync, appendFileSync, constants as fsConstants, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, appendFileSync, closeSync, constants as fsConstants, cpSync, existsSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve as resolvePath, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   resolveHarnessPath,
@@ -36,6 +36,10 @@ export interface StageEntry {
   condition?: string;
   reviewer?: string;
   reviewer_max_iterations?: number;
+  // Summary-confirmation policy for stages using the unified question flow.
+  // `required` means every execution owes a questions file and receipt;
+  // `if-present` enforces a receipt only when the conditional flow created one.
+  summary_confirmation?: "required" | "if-present";
   produces?: string[];
   // Artifacts the stage MAY write per unit; exempt from the per-unit
   // coverage check in aidlc-orchestrate.ts unitCovered. See GraphStage in
@@ -676,7 +680,64 @@ export interface TerminalCommand {
   args?: string[];
   error?: string;
   display?: string;
-  source: "read-only-flag" | "workspace-verb";
+  source: "read-only-flag" | "workspace-verb" | "plugin-verb";
+}
+
+export type PluginCommand =
+  | { kind: "not-plugin" }
+  | { kind: "help" }
+  | { kind: "error"; message: string }
+  | { kind: "run"; argv: string[] };
+
+// Parse the public `plugin` noun once for every entrypoint. The slash
+// orchestrator, Kiro's pre-LLM interceptor, and the binary dispatcher must all
+// agree that these are terminal utilities rather than freeform workflow text.
+export function parsePluginCommand(args: string[]): PluginCommand {
+  if (args[0] !== "plugin") return { kind: "not-plugin" };
+  const verb = args[1];
+  if (verb === "help" || verb === "-h" || verb === "--help") {
+    return { kind: "help" };
+  }
+  const target = verb === "select"
+    ? "select-plugins"
+    : verb === "list"
+      ? "plugin-list"
+      : verb === "sync"
+        ? "plugin-sync"
+        : undefined;
+  if (target !== undefined) {
+    return { kind: "run", argv: [target, ...args.slice(2)] };
+  }
+  const detail = verb ? `unknown verb '${verb}'` : "missing verb";
+  return {
+    kind: "error",
+    message: `aidlc: ${detail} for noun 'plugin'; try 'aidlc help --all'`,
+  };
+}
+
+function terminalCommandFromPluginCommand(
+  command: PluginCommand,
+  originalArgs: string[],
+): TerminalCommand | null {
+  if (command.kind === "not-plugin") return null;
+  if (command.kind === "help") {
+    return { subcommand: "help", display: originalArgs.join(" "), source: "plugin-verb" };
+  }
+  if (command.kind === "error") {
+    return {
+      subcommand: "error",
+      error: command.message,
+      display: originalArgs.join(" "),
+      source: "plugin-verb",
+    };
+  }
+  const [subcommand, ...tail] = command.argv;
+  return {
+    subcommand,
+    ...(tail.length > 0 ? { args: tail } : {}),
+    display: originalArgs.join(" "),
+    source: "plugin-verb",
+  };
 }
 
 // The allowlisted trailing flags `--doctor` accepts (diagnostic export). Kept
@@ -749,6 +810,10 @@ export function classifyTerminalCommand(args: string[]): TerminalCommand | null 
   // "help". Sole-token only: `help` inside a longer description stays freeform.
   if (args.length === 1 && (args[0] === "help" || args[0] === "-h")) {
     return { subcommand: "help", source: "read-only-flag" };
+  }
+  const pluginCommand = parsePluginCommand(args);
+  if (pluginCommand.kind !== "not-plugin") {
+    return terminalCommandFromPluginCommand(pluginCommand, args);
   }
   // Leading workspace nouns own the command. Any later read-only-looking token
   // is part of that workspace command's argv, not a mode switch, because the
@@ -1697,10 +1762,36 @@ export function listIntents(projectDir: string, space?: string): IntentInfo[] {
   return infos;
 }
 
+// Materialize the active-space cursor without overwriting a concurrent explicit
+// switch. A clone does not carry this gitignored file, so SessionStart and any
+// active-intent write recreate the resolved pointer on first use. Publish a
+// fully-written staged file with link(), whose no-replace install is atomic: if
+// a space switch wins the race, its value stays untouched.
+export function ensureActiveSpaceCursor(projectDir: string): void {
+  const space = activeSpace(projectDir);
+  const root = workspaceRoot(projectDir);
+  const cursor = join(root, ACTIVE_SPACE_POINTER);
+  const staged = join(root, `.aidlc-active-space-${process.pid}-${randomUUID()}.tmp`);
+  try {
+    mkdirSync(root, { recursive: true });
+    writeFileSync(staged, `${space}\n`, { encoding: "utf-8", flag: "wx" });
+    linkSync(staged, cursor);
+  } catch {
+    /* existing cursor won, or per-user state is unwritable */
+  } finally {
+    try {
+      unlinkSync(staged);
+    } catch {
+      /* staging file was never created or is already gone */
+    }
+  }
+}
+
 // Write the active-intent cursor for a space (gitignored per-user pointer).
-// Best-effort: the cursor dir is created if absent; a write failure is swallowed
-// (the cursor is per-user state, never the source of truth — the registry is).
+// Best-effort: the cursor dirs are created if absent; a write failure is
+// swallowed (the cursors are per-user state, never the source of truth).
 export function setActiveIntentCursor(projectDir: string, dirName: string, space?: string): void {
+  ensureActiveSpaceCursor(projectDir);
   const dir = intentsDir(projectDir, space);
   try {
     mkdirSync(dir, { recursive: true });
@@ -1734,7 +1825,10 @@ export function setActiveSpaceCursor(projectDir: string, name: string): void {
 // harness-neutral artifact; the session merely enriches the cursor on resume.
 export const SESSIONS_DIR = ".aidlc-sessions";
 
-function sessionsDir(projectDir: string): string {
+// The gitignored runtime scratch dir `aidlc/.aidlc-sessions/`. Exported because
+// aidlc-usage.ts writes the usage ledger and the persisted-transcript-path
+// pointers here, and the statusline/state consumers read the ledger back.
+export function sessionsDir(projectDir: string): string {
   return join(workspaceRoot(projectDir), SESSIONS_DIR);
 }
 
@@ -1771,6 +1865,20 @@ export function writeSessionIntentUuid(projectDir: string, sessionId: string, uu
     writeFileSync(path, `${uuid}\n`, "utf-8");
   } catch {
     /* per-user runtime state; best-effort */
+  }
+}
+
+// Clear a conversation's intent stamp when it deliberately continues on a
+// UUID-less legacy/orphan record. Without this, the old UUID keeps winning
+// usage ownership even though the live cursor no longer resolves to that
+// workflow.
+export function clearSessionIntentUuid(projectDir: string, sessionId: string): void {
+  const path = sessionRecordPath(projectDir, sessionId);
+  if (!path) return;
+  try {
+    unlinkSync(path);
+  } catch {
+    /* absent/unwritable per-user runtime state; best-effort */
   }
 }
 
@@ -2064,11 +2172,7 @@ export function migrateFlatLayout(projectDir: string): FlatMigrationResult | nul
       { uuid, slug, dirName: intentDirName, scope: undefined, repos: undefined, status: "in-flight" },
       space,
     );
-    try {
-      writeFileSync(join(intentsRoot, ACTIVE_INTENT_POINTER), `${intentDirName}\n`, "utf-8");
-    } catch {
-      /* cursor is per-user/gitignored; best-effort */
-    }
+    setActiveIntentCursor(projectDir, intentDirName, space);
 
     // (5) Write the `.migrated` marker LAST (the sole idempotency key).
     mkdirSync(workspaceRoot(projectDir), { recursive: true });
@@ -2189,7 +2293,12 @@ function cloneId(projectDir: string): string {
 // The resolution boundary is workflow-global (the most recent commit of ANY
 // gate), which is what makes a same-turn cascade across DIFFERENT stages refuse
 // correctly; there is no per-stage scoping.
-const GATE_RESOLUTION_EVENTS = new Set(["GATE_APPROVED", "GATE_REJECTED", "QUESTION_ANSWERED"]);
+const GATE_RESOLUTION_EVENTS = new Set([
+  "GATE_APPROVED",
+  "GATE_REJECTED",
+  "QUESTION_ANSWERED",
+  "SUMMARY_CONFIRMATION_RECORDED",
+]);
 export function humanActedSinceGate(projectDir: string): boolean {
   const audit = readAllAuditShards(projectDir);
   if (audit.length === 0) return true; // no ledger → no presence tracking → fail open
@@ -2236,6 +2345,415 @@ export function hasOpenGate(stateContent: string | null): boolean {
 // readability; both paths share one definition so the predicate cannot drift.
 export function humanActedSinceLastAnswer(projectDir: string): boolean {
   return humanActedSinceGate(projectDir);
+}
+
+// --- Consolidated-summary confirmation evidence ---
+//
+// The summary checkpoint is a human judgement that authorizes artifact
+// generation. Its markdown answer is useful context, but is not evidence by
+// itself: the conductor can write that text. The durable evidence is a
+// SUMMARY_CONFIRMATION_RECORDED row carrying this canonical Checkpoint field,
+// emitted by `aidlc-log.ts answer --checkpoint summary-confirmation` only after
+// a matching prompt record and a fresh HUMAN_TURN. The public audit CLI reserves
+// this event, so the conductor cannot mint it through `aidlc-audit append`.
+export const SUMMARY_CONFIRMATION_CHECKPOINT =
+  "Consolidated Summary Confirmation";
+
+export function summaryConfirmationGuardDisabled(): boolean {
+  return process.env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD === "1";
+}
+
+type SummaryConfirmationStage = Pick<
+  StageEntry,
+  | "slug"
+  | "name"
+  | "phase"
+  | "outputs"
+  | "produces"
+  | "optional_produces"
+  | "produces_kinds"
+  | "for_each"
+  | "summary_confirmation"
+>;
+
+export type SummaryConfirmationEvidence =
+  | { ok: true; required: boolean }
+  | { ok: false; message: string };
+
+interface SummaryQuestionFile {
+  path: string;
+  dir: string;
+  unit: string | null;
+}
+
+function stageDeclaresSummaryQuestions(
+  stage: SummaryConfirmationStage,
+): boolean {
+  return stage.summary_confirmation === "required";
+}
+
+function questionFilesInDir(
+  dir: string,
+  unit: string | null,
+): SummaryQuestionFile[] {
+  if (!existsSync(dir)) return [];
+  try {
+    return readdirSync(dir)
+      .filter((name) => name.endsWith("-questions.md"))
+      .sort()
+      .map((name) => ({ path: join(dir, name), dir, unit }));
+  } catch {
+    return [];
+  }
+}
+
+function summaryQuestionFiles(
+  projectDir: string,
+  stage: SummaryConfirmationStage,
+): SummaryQuestionFile[] {
+  const rec = recordDir(projectDir);
+  if (rec === null) return [];
+  if (!isPerUnitStage(stage)) {
+    return questionFilesInDir(join(rec, stage.phase, stage.slug), null);
+  }
+
+  const constructionDir = join(rec, "construction");
+  if (!existsSync(constructionDir)) return [];
+  const files: SummaryQuestionFile[] = [];
+  try {
+    for (const unit of readdirSync(constructionDir).sort()) {
+      files.push(
+        ...questionFilesInDir(
+          join(constructionDir, unit, stage.slug),
+          unit,
+        ),
+      );
+    }
+  } catch {
+    return [];
+  }
+  return files;
+}
+
+function summaryAnswerFromFile(path: string): string | null {
+  let body: string;
+  try {
+    body = readFileSync(path, "utf-8");
+  } catch {
+    return null;
+  }
+  const section = extractMarkdownSection(
+    body,
+    `## ${SUMMARY_CONFIRMATION_CHECKPOINT}`,
+  );
+  if (!section) return null;
+  const answers = [...section.matchAll(/^\[Answer\]:[ \t]*(.*)$/gm)];
+  if (answers.length !== 1) return null;
+  return answers[0][1].trim();
+}
+
+function summaryArtifactPaths(
+  stage: SummaryConfirmationStage,
+  question: SummaryQuestionFile,
+): string[] {
+  const names = [
+    ...(stage.produces ?? []),
+    ...(stage.optional_produces ?? []),
+  ].filter((name) => !name.endsWith("-questions"));
+  return names
+    .map((name) => join(question.dir, `${name}.md`))
+    .filter((path) => existsSync(path));
+}
+
+// Verify that every question-bearing iteration has a fresh human-backed
+// consolidated-summary receipt and that generated artifacts postdate it.
+// `workflow` identifies an isolated run; main-workflow callers omit it.
+export function checkSummaryConfirmationEvidence(
+  projectDir: string,
+  stage: SummaryConfirmationStage,
+  options: {
+    workflow?: string;
+    stateContent?: string | null;
+    unit?: string;
+  } = {},
+): SummaryConfirmationEvidence {
+  if (summaryConfirmationGuardDisabled()) {
+    return { ok: true, required: false };
+  }
+  if (
+    stage.phase === "initialization" ||
+    (
+      stage.phase === "construction" &&
+      options.stateContent &&
+      isAutonomousMode(options.stateContent)
+    )
+  ) {
+    return { ok: true, required: false };
+  }
+  if (stage.summary_confirmation === undefined) {
+    return { ok: true, required: false };
+  }
+
+  let questions = summaryQuestionFiles(projectDir, stage);
+  if (options.unit !== undefined) {
+    questions = questions.filter(
+      (question) => question.unit === options.unit,
+    );
+  }
+  const declared = stageDeclaresSummaryQuestions(stage);
+  if (questions.length === 0) {
+    if (!declared) return { ok: true, required: false };
+    const unitText = options.unit ? ` for unit "${options.unit}"` : "";
+    return {
+      ok: false,
+      message:
+        `Refusing to complete "${stage.slug}"${unitText}: its question flow has no ` +
+        `${stage.slug}-questions.md file. Create and answer the stage questions, ` +
+        `then record the consolidated summary checkpoint before generating artifacts.`,
+    };
+  }
+  if (
+    declared &&
+    isPerUnitStage(stage) &&
+    options.workflow === undefined &&
+    options.unit === undefined
+  ) {
+    const resolution = resolveBoltDag(projectDir);
+    if (resolution.state === "malformed") {
+      return {
+        ok: false,
+        message:
+          `Refusing to complete "${stage.slug}": its summary-confirmation unit ` +
+          `set cannot be resolved because unit-of-work-dependency.md is ${resolution.reason} ` +
+          `(${resolution.detail}).`,
+      };
+    }
+    if (resolution.state === "ok") {
+      const requiredUnits = resolution.units.filter((unit) =>
+        filterProducesByKind(
+          stage.produces_kinds,
+          stage.produces ?? [],
+          resolution.unitKinds?.get(unit) ?? null,
+        ).length > 0
+      );
+      const presentUnits = new Set(
+        questions
+          .map((question) => question.unit)
+          .filter((unit): unit is string => unit !== null),
+      );
+      const missing = requiredUnits.filter((unit) => !presentUnits.has(unit));
+      if (missing.length > 0) {
+        return {
+          ok: false,
+          message:
+            `Refusing to complete "${stage.slug}": ${missing.length} applicable ` +
+          `units have no questions file or summary confirmation (${missing.join(", ")}).`,
+        };
+      }
+      const requiredUnitSet = new Set(requiredUnits);
+      questions = questions.filter(
+        (question) =>
+          question.unit !== null && requiredUnitSet.has(question.unit),
+      );
+    }
+  }
+
+  const audit = readAllAuditShards(projectDir);
+  if (audit.length === 0) {
+    return {
+      ok: false,
+      message:
+        `Refusing to complete "${stage.slug}": no human-backed consolidated ` +
+        "summary confirmation receipt is recorded.",
+    };
+  }
+
+  const relevant = new Set([
+    "WORKFLOW_STARTED",
+    "STAGE_STARTED",
+    "STAGE_JUMPED",
+    "STAGE_COMPLETED",
+    "SUMMARY_CONFIRMATION_RECORDED",
+    "ARTIFACT_CREATED",
+    "ARTIFACT_UPDATED",
+  ]);
+  const events = audit
+    .replace(/\r\n/g, "\n")
+    .split(/\n---\n/)
+    .map((block, position) => ({
+      block,
+      position,
+      event: auditBlockField(block, "Event") ?? "",
+      timestamp: auditBlockField(block, "Timestamp") ?? "",
+    }))
+    .filter((entry) => relevant.has(entry.event))
+    .sort((a, b) =>
+      a.timestamp !== b.timestamp
+        ? (a.timestamp < b.timestamp ? -1 : 1)
+        : a.position - b.position
+    );
+
+  const workflow = options.workflow;
+  const unitMajor =
+    isPerUnitStage(stage) &&
+    getField(options.stateContent ?? "", "Construction Iteration")?.trim() ===
+      "unit-major";
+  let floor = -1;
+  for (let i = 0; i < events.length; i++) {
+    const entry = events[i];
+    const eventWorkflow = auditBlockField(entry.block, "Workflow");
+    if (workflow !== undefined) {
+      if (
+        entry.event === "STAGE_COMPLETED" &&
+        eventWorkflow === workflow &&
+        auditBlockField(entry.block, "Stage") === stage.slug
+      ) {
+        floor = i;
+      }
+      continue;
+    }
+    if (eventWorkflow?.startsWith("single-stage:")) continue;
+    if (
+      entry.event === "WORKFLOW_STARTED" ||
+      entry.event === "STAGE_JUMPED"
+    ) {
+      floor = i;
+      continue;
+    }
+    if (auditBlockField(entry.block, "Stage") !== stage.slug) continue;
+    if (entry.event === "STAGE_STARTED" && !unitMajor) {
+      floor = i;
+    }
+  }
+
+  if (workflow !== undefined && isPerUnitStage(stage)) {
+    let receiptFile: string | null = null;
+    for (let i = floor + 1; i < events.length; i++) {
+      const entry = events[i];
+      if (entry.event !== "SUMMARY_CONFIRMATION_RECORDED") continue;
+      if (auditBlockField(entry.block, "Stage") !== stage.slug) continue;
+      if (auditBlockField(entry.block, "Workflow") !== workflow) continue;
+      receiptFile = auditBlockField(entry.block, "Questions File");
+    }
+    if (receiptFile !== null) {
+      const matched = questions.find(
+        (question) =>
+          toPosix(relative(projectDir, question.path)) === receiptFile,
+      );
+      if (matched) questions = [{ ...matched, unit: null }];
+    } else if (questions.length === 1) {
+      questions = [{ ...questions[0], unit: null }];
+    }
+  }
+
+  for (const question of questions) {
+    const fileAnswer = summaryAnswerFromFile(question.path);
+    if (fileAnswer !== "Looks correct") {
+      return {
+        ok: false,
+        message:
+          `Refusing to complete "${stage.slug}": ${question.path} must contain ` +
+          "exactly one `[Answer]: Looks correct` in its Consolidated Summary " +
+          "Confirmation section.",
+      };
+    }
+
+    let receipt: (typeof events)[number] | null = null;
+    const questionRelative = toPosix(relative(projectDir, question.path));
+    for (let i = floor + 1; i < events.length; i++) {
+      const entry = events[i];
+      if (entry.event !== "SUMMARY_CONFIRMATION_RECORDED") continue;
+      if (auditBlockField(entry.block, "Stage") !== stage.slug) continue;
+      if (
+        auditBlockField(entry.block, "Checkpoint") !==
+          SUMMARY_CONFIRMATION_CHECKPOINT
+      ) {
+        continue;
+      }
+      const eventWorkflow = auditBlockField(entry.block, "Workflow");
+      if (workflow !== undefined) {
+        if (eventWorkflow !== workflow) continue;
+      } else if (eventWorkflow?.startsWith("single-stage:")) {
+        continue;
+      }
+      const eventUnit = auditBlockField(entry.block, "Unit");
+      if ((eventUnit ?? null) !== question.unit) continue;
+      if (
+        auditBlockField(entry.block, "Questions File") !== questionRelative
+      ) {
+        continue;
+      }
+      receipt = entry;
+    }
+    if (
+      receipt === null ||
+      auditBlockField(receipt.block, "Details") !== "Looks correct"
+    ) {
+      const unitText = question.unit ? ` for unit "${question.unit}"` : "";
+      return {
+        ok: false,
+        message:
+          `Refusing to complete "${stage.slug}"${unitText}: no fresh human-backed ` +
+          "consolidated summary confirmation is recorded. Present the summary, " +
+          "then run `aidlc-log.ts answer --checkpoint summary-confirmation " +
+          `--stage ${stage.slug}${question.unit ? ` --unit "${question.unit}"` : ""}` +
+          `${workflow ? " --single" : ""} --details "Looks correct"` +
+          " after the human responds.",
+      };
+    }
+
+    let currentHash: string;
+    try {
+      currentHash = createHash("sha256")
+        .update(readFileSync(question.path))
+        .digest("hex");
+    } catch {
+      currentHash = "";
+    }
+    if (
+      !currentHash ||
+      auditBlockField(receipt.block, "Questions SHA-256") !== currentHash
+    ) {
+      return {
+        ok: false,
+        message:
+          `Refusing to complete "${stage.slug}": ${question.path} changed after ` +
+          "the human confirmed its summary. Reset the confirmation, present the " +
+          "updated summary, and record a new response.",
+      };
+    }
+
+    const receiptIndex = events.indexOf(receipt);
+    for (const artifact of summaryArtifactPaths(stage, question)) {
+      const artifactAbs = resolvePath(artifact);
+      let lastWrite = -1;
+      for (let i = floor + 1; i < events.length; i++) {
+        const entry = events[i];
+        if (
+          entry.event !== "ARTIFACT_CREATED" &&
+          entry.event !== "ARTIFACT_UPDATED"
+        ) {
+          continue;
+        }
+        const file = auditBlockField(entry.block, "File");
+        if (!file) continue;
+        const resolved = resolvePath(projectDir, file);
+        if (resolved === artifactAbs) lastWrite = i;
+      }
+      if (lastWrite <= receiptIndex) {
+        return {
+          ok: false,
+          message:
+            `Refusing to complete "${stage.slug}": artifact ${artifact} has no ` +
+            "recorded native-tool write after the human's consolidated summary " +
+            "confirmation. Regenerate or re-save it after confirmation, then " +
+            "report completion again.",
+        };
+      }
+    }
+  }
+
+  return { ok: true, required: true };
 }
 
 // Read a `**Field**: value` line from one audit block (tolerates an optional
@@ -2315,6 +2833,425 @@ export function readAllAuditShards(projectDir: string, intent?: string, space?: 
 
 export function worktreePath(projectDir: string, boltSlug: string): string {
   return join(projectDir, ".aidlc", "worktrees", `bolt-${boltSlug}`);
+}
+
+// --- Fresh review receipts (the §12a completion precondition's scan) -----------
+//
+// ONE implementation, TWO consumers with opposite polarities:
+//   - aidlc-state.ts verifyReviewerPrecondition (approve/advance/finalize/
+//     complete-workflow) REFUSES completion when no fresh terminal receipt
+//     covers the stage/unit;
+//   - hooks/aidlc-review-freeze.ts REFUSES a produces[] write while a fresh
+//     READY receipt covers it (the write would invalidate the receipt and
+//     re-open the completion refusal - the receipt-invalidation loop).
+// Sharing the scan is load-bearing: if the two ever diverged, the hook could
+// block writes the engine would accept, or miss writes the engine will refuse.
+
+// The codekb stages - their produces live in the space-level codekb dir, keyed
+// by repo, NOT under a per-intent record dir. reverse-engineering is the sole
+// member; a future codekb stage joins this set (aidlc-orchestrate.ts and
+// aidlc-sensor.ts keep local mirrors - not exported from here historically).
+export const KNOWN_CODEKB_STAGES: ReadonlySet<string> = new Set([
+  "reverse-engineering",
+]);
+
+// True when a written File path (from an ARTIFACT_CREATED/ARTIFACT_UPDATED audit
+// row, or a PreToolUse file_path) is one of the stage's declared produces[]
+// artifacts. Matches on the path SUFFIX `/<slug>/<name>.md` rather than
+// resolving one absolute dir, so it covers BOTH the standard
+// <record>/<phase>/<slug>/ layout AND the per-unit construction/<unit>/<slug>/
+// layout without needing to know the {unit} segment. Codekb stages get their
+// own arm: their produces live DIRECTLY under a per-repo dir beneath the space
+// codekb root (codekb/<repo>/<name>.md) with no <slug> segment anywhere, so the
+// suffix idiom matches the codekb marker + one repo segment instead. When the
+// active intent records repos, that segment must belong to the recorded set so
+// a write to one repo's durable codekb cannot revise an unrelated intent. The
+// audit File field is stored forward-slash-normalised (aidlc-audit-logger.ts),
+// so the forward-slash matching is harness-neutral; we still normalise
+// defensively in case a caller passes a raw OS path.
+export function producesArtifactFile(
+  stage: { slug: string; produces?: string[] },
+  file: string,
+  recordedRepos: ReadonlySet<string>
+): boolean {
+  const produces = stage.produces ?? [];
+  if (produces.length === 0) return false;
+  const norm = file.replace(/\\/g, "/");
+  if (KNOWN_CODEKB_STAGES.has(stage.slug)) {
+    return produces.some((name) => {
+      const idx = norm.lastIndexOf(`/${name}.md`);
+      if (idx === -1 || idx + `/${name}.md`.length !== norm.length) return false;
+      // Exactly one <repo> segment between /codekb/ and /<name>.md.
+      const head = norm.slice(0, idx);
+      const repoSlash = head.lastIndexOf("/");
+      if (repoSlash === -1 || !head.slice(0, repoSlash).endsWith("/codekb")) return false;
+      const repo = head.slice(repoSlash + 1);
+      if (repo.length === 0) return false;
+      // An empty registry is the legacy projectDir-is-the-repo case. Keep the
+      // historical any-repo match: codekbRepoName's basename is a write-path
+      // default, not ownership evidence for durable files that may predate repo
+      // recording or have been written with an explicit repo target.
+      return recordedRepos.size === 0 || recordedRepos.has(repo);
+    });
+  }
+  return produces.some((name) => norm.endsWith(`/${stage.slug}/${name}.md`));
+}
+
+// Resolve the unit targeted by a declared produces[] write. `undefined` means
+// the file does not belong to this stage, `null` means a matching stage-level
+// artifact (or an ambiguous per-unit path), and a string names the per-unit
+// Construction target.
+export function producesArtifactUnit(
+  stage: {
+    slug: string;
+    for_each?: string;
+    produces?: string[];
+    optional_produces?: string[];
+  },
+  file: string,
+  recordedRepos: ReadonlySet<string>,
+): string | null | undefined {
+  const reviewedArtifacts = [
+    ...(stage.produces ?? []),
+    ...(stage.optional_produces ?? []),
+  ];
+  if (
+    !producesArtifactFile(
+      { slug: stage.slug, produces: reviewedArtifacts },
+      file,
+      recordedRepos,
+    )
+  ) {
+    return undefined;
+  }
+  if (stage.for_each !== "unit-of-work") return null;
+
+  const norm = file.replace(/\\/g, "/");
+  for (const name of reviewedArtifacts) {
+    const suffix = `/${stage.slug}/${name}.md`;
+    if (!norm.endsWith(suffix)) continue;
+    const parent = norm.slice(0, -suffix.length);
+    const marker = "/construction/";
+    const markerIdx = parent.lastIndexOf(marker);
+    if (markerIdx === -1) return null;
+    const unit = parent.slice(markerIdx + marker.length);
+    return unit.length > 0 && !unit.includes("/") ? unit : null;
+  }
+  return null;
+}
+
+export type ReviewVerdict = "READY" | "NOT-READY";
+
+export interface FreshReviewReceipts {
+  /** Verdict of the last fresh terminal receipt for the stage (any receipt,
+   *  unit-scoped included), or null when none survives. For NON-per-unit
+   *  stages a later declared-artifact write clears it; for per-unit stages it
+   *  mirrors the historical sawStageReview flag and is NOT cleared by unit
+   *  writes (only the floor resets it) - per-unit freshness lives in
+   *  unitVerdicts. */
+  stageVerdict: ReviewVerdict | null;
+  /** Last fresh verdict per unit. A later write to that unit's declared
+   *  artifacts deletes the entry; an ambiguous matching path fails closed by
+   *  clearing every unit entry. */
+  unitVerdicts: Map<string, ReviewVerdict>;
+  /** Newest Source Fingerprint carried by a receipt with a syntactically valid
+   *  Artifact Fingerprint. Current artifact equality still controls verdict
+   *  freshness independently; fieldless migration receipts do not erase an
+   *  earlier fingerprinted receipt. */
+  newestSourceFingerprint: string | null;
+}
+
+interface ReviewFingerprintStage {
+  slug: string;
+  phase: string;
+  for_each?: string;
+  produces?: string[];
+  optional_produces?: string[];
+  produces_kinds?: Record<string, string[]>;
+}
+
+interface ReviewArtifactEntry {
+  logicalPath: string;
+  path: string | null;
+  required: boolean;
+}
+
+function reviewArtifactEntries(
+  projectDir: string,
+  stage: ReviewFingerprintStage,
+  unit?: string,
+): ReviewArtifactEntry[] | null {
+  const artifactsForKind = (kind: string | null) => [
+    ...filterProducesByKind(stage.produces_kinds, stage.produces ?? [], kind).map(
+      (name) => ({ name, required: true }),
+    ),
+    ...filterProducesByKind(
+      stage.produces_kinds,
+      stage.optional_produces ?? [],
+      kind,
+    ).map((name) => ({ name, required: false })),
+  ];
+  const allArtifacts = artifactsForKind(null);
+
+  if (KNOWN_CODEKB_STAGES.has(stage.slug)) {
+    const root = dirname(codekbDir(projectDir, "_"));
+    let repos = intentRepos(projectDir);
+    if (repos.length === 0 && existsSync(root)) {
+      repos = readdirSync(root).filter((name) => {
+        try {
+          return statSync(join(root, name)).isDirectory();
+        } catch {
+          return false;
+        }
+      });
+    }
+    if (repos.length === 0) {
+      return allArtifacts.map((artifact) => ({
+        logicalPath: `codekb/*/${artifact.name}.md`,
+        path: null,
+        required: artifact.required,
+      }));
+    }
+    return repos.flatMap((repo) =>
+      allArtifacts.map((artifact) => ({
+        logicalPath: `codekb/${repo}/${artifact.name}.md`,
+        path: join(codekbDir(projectDir, repo), `${artifact.name}.md`),
+        required: artifact.required,
+      })),
+    );
+  }
+
+  const record = recordDir(projectDir);
+  if (record === null) return null;
+  if (stage.for_each !== "unit-of-work") {
+    return allArtifacts.map((artifact) => ({
+      logicalPath: `${stage.phase}/${stage.slug}/${artifact.name}.md`,
+      path: join(record, stage.phase, stage.slug, `${artifact.name}.md`),
+      required: artifact.required,
+    }));
+  }
+
+  let units: string[];
+  let unitKinds = new Map<string, string>();
+  const resolution = resolveBoltDag(projectDir);
+  if (unit) {
+    units = [unit];
+    if (resolution.state === "ok" && resolution.unitKinds !== null) {
+      unitKinds = resolution.unitKinds;
+    }
+  } else if (resolution.state === "ok") {
+    units = resolution.units;
+    unitKinds = resolution.unitKinds ?? new Map();
+  } else {
+    const construction = join(record, "construction");
+    units = existsSync(construction)
+      ? readdirSync(construction).filter((name) => {
+          try {
+            return statSync(join(construction, name)).isDirectory();
+          } catch {
+            return false;
+          }
+        })
+      : [];
+  }
+  if (units.length === 0) {
+    return allArtifacts.map((artifact) => ({
+      logicalPath: `construction/*/${stage.slug}/${artifact.name}.md`,
+      path: null,
+      required: artifact.required,
+    }));
+  }
+  return units.flatMap((name) =>
+    artifactsForKind(unitKinds.get(name) ?? null).map((artifact) => ({
+      logicalPath: `construction/${name}/${stage.slug}/${artifact.name}.md`,
+      path: join(record, "construction", name, stage.slug, `${artifact.name}.md`),
+      required: artifact.required,
+    })),
+  );
+}
+
+/**
+ * Content identity covered by a terminal review receipt. Paths are logical
+ * record-relative names, so an identical Bolt worktree survives merge/re-root;
+ * missing declared artifacts are explicit manifest entries, so creating one
+ * after review also invalidates the receipt.
+ */
+export function reviewArtifactFingerprint(
+  projectDir: string,
+  stage: ReviewFingerprintStage,
+  unit?: string,
+  options: { requireRequiredArtifacts?: boolean } = {},
+): string | null {
+  let entries: ReviewArtifactEntry[] | null;
+  try {
+    entries = reviewArtifactEntries(projectDir, stage, unit);
+  } catch {
+    return null;
+  }
+  if (entries === null) return null;
+
+  const manifest: Array<[string, string]> = [];
+  for (const entry of entries.sort((a, b) => a.logicalPath.localeCompare(b.logicalPath))) {
+    if (entry.path === null || !existsSync(entry.path)) {
+      if (entry.required && options.requireRequiredArtifacts === true) return null;
+      manifest.push([entry.logicalPath, "missing"]);
+      continue;
+    }
+    try {
+      const stat = statSync(entry.path);
+      if (!stat.isFile()) {
+        if (entry.required && options.requireRequiredArtifacts === true) return null;
+        manifest.push([entry.logicalPath, "not-file"]);
+        continue;
+      }
+      const digest = createHash("sha256").update(readFileSync(entry.path)).digest("hex");
+      manifest.push([entry.logicalPath, `sha256:${digest}`]);
+    } catch {
+      return null;
+    }
+  }
+  return `sha256:${createHash("sha256").update(JSON.stringify(manifest)).digest("hex")}`;
+}
+
+// Collect the fresh terminal review receipts for a stage from the audit
+// ledger. Builds ONE position-tiebroken event stream (the same interleave
+// idiom unrecordedRevisionSinceGateOpen uses) - a timestamp-only floor is
+// unsafe because isoTimestamp() is second-precision, so a review and the
+// reject that should invalidate it can share a timestamp and a `<` compare
+// would keep the stale review. Ordering by (timestamp, buffer position)
+// breaks that tie.
+//
+// The attempt floor: WORKFLOW_STARTED and STAGE_JUMPED floor deliberately
+// stage-AGNOSTIC - any jump invalidates every stage's reviews, including
+// stages the jump never re-opens. That over-invalidation is harmless (a stage
+// that stays [x] never re-completes, so its stale floor is never consulted)
+// and it is what closes the redo-jump hole: a backward jump re-opens stages
+// WITHOUT emitting their GATE_REJECTED or (until re-entry) STAGE_STARTED, so
+// a stage-scoped floor would accept the prior attempt's reviews. Fail-closed
+// over precise. Unit-major construction may author a later stage's per-unit
+// artifacts before that stage's STAGE_STARTED row exists, so its floor
+// ignores STAGE_STARTED; stage-major and non-per-unit flows floor on it.
+export function freshReviewReceipts(
+  projectDir: string,
+  stateContent: string,
+  stage: {
+    slug: string;
+    phase: string;
+    for_each?: string;
+    reviewer?: string;
+    produces?: string[];
+    optional_produces?: string[];
+    produces_kinds?: Record<string, string[]>;
+  },
+): FreshReviewReceipts {
+  const empty: FreshReviewReceipts = {
+    stageVerdict: null,
+    unitVerdicts: new Map(),
+    newestSourceFingerprint: null,
+  };
+  const reviewer = stage.reviewer;
+  if (!reviewer) return empty;
+  const audit = readAllAuditShards(projectDir);
+  if (audit.length === 0) return empty;
+
+  const RELEVANT = new Set([
+    "WORKFLOW_STARTED",
+    "STAGE_STARTED",
+    "STAGE_JUMPED",
+    "GATE_REJECTED",
+    "ARTIFACT_CREATED",
+    "ARTIFACT_UPDATED",
+    "REVIEW_COMPLETED",
+  ]);
+  const blocks = audit.replace(/\r\n/g, "\n").split(/\n---\n/);
+  const events: { pos: number; ts: string; event: string; block: string }[] = [];
+  for (let i = 0; i < blocks.length; i++) {
+    const ev = auditBlockField(blocks[i], "Event");
+    if (!ev || !RELEVANT.has(ev)) continue;
+    events.push({ pos: i, ts: auditBlockField(blocks[i], "Timestamp") ?? "", event: ev, block: blocks[i] });
+  }
+  events.sort((a, b) => (a.ts !== b.ts ? (a.ts < b.ts ? -1 : 1) : a.pos - b.pos));
+
+  const perUnit = stage.for_each === "unit-of-work";
+  const unitMajor =
+    perUnit && getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
+
+  let floorIdx = -1;
+  for (let i = 0; i < events.length; i++) {
+    const e = events[i];
+    if (e.event === "WORKFLOW_STARTED" || e.event === "STAGE_JUMPED") {
+      floorIdx = i;
+      continue;
+    }
+    if (auditBlockField(e.block, "Stage") !== stage.slug) continue;
+    if (e.event === "STAGE_STARTED" && !unitMajor) {
+      if (auditBlockField(e.block, "Workflow")?.startsWith("single-stage:")) continue;
+      floorIdx = i;
+    } else if (e.event === "GATE_REJECTED") {
+      floorIdx = i;
+    }
+  }
+
+  // Collect fresh matching terminal reviews after the attempt floor. A later
+  // declared-artifact write clears the matching receipt. For per-unit stages,
+  // the path's construction/<unit>/ segment scopes invalidation to that unit;
+  // an ambiguous matching path fails closed by clearing every unit receipt.
+  const recordedRepos = new Set(intentRepos(projectDir));
+  const unitVerdicts = new Map<string, ReviewVerdict>();
+  let stageVerdict: ReviewVerdict | null = null;
+  let newestSourceFingerprint: string | null = null;
+  for (let i = floorIdx + 1; i < events.length; i++) {
+    const e = events[i];
+    if (e.event === "ARTIFACT_CREATED" || e.event === "ARTIFACT_UPDATED") {
+      const file = auditBlockField(e.block, "File");
+      if (!file) continue;
+      const targetUnit = producesArtifactUnit(stage, file, recordedRepos);
+      if (targetUnit === undefined) continue;
+      if (!perUnit) {
+        stageVerdict = null;
+      } else if (targetUnit === null) {
+        unitVerdicts.clear();
+      } else {
+        unitVerdicts.delete(targetUnit);
+      }
+      continue;
+    }
+    if (e.event !== "REVIEW_COMPLETED") continue;
+    if (auditBlockField(e.block, "Workflow")?.startsWith("single-stage:")) continue;
+    if (auditBlockField(e.block, "Stage") !== stage.slug) continue;
+    if (auditBlockField(e.block, "Reviewer") !== reviewer) continue;
+    const verdict = auditBlockField(e.block, "Verdict");
+    if (verdict !== "READY" && verdict !== "NOT-READY") continue;
+    const unit = auditBlockField(e.block, "Unit") || undefined;
+    const recordedFingerprint = auditBlockField(e.block, "Artifact Fingerprint");
+    if (
+      recordedFingerprint === null ||
+      !/^sha256:[0-9a-f]{64}$/.test(recordedFingerprint)
+    ) {
+      continue;
+    }
+
+    // A syntactically valid artifact binding makes this a real post-migration
+    // review receipt, even when its declared artifacts no longer match. Keep
+    // its source binding available to already-completed-stage recovery: that
+    // path intentionally skips receipt existence/cardinality, but it must not
+    // turn a simultaneous artifact + source edit into "no receipt" and bypass
+    // the source-staleness comparison.
+    const sourceFingerprint = auditBlockField(e.block, "Source Fingerprint");
+    if (sourceFingerprint) newestSourceFingerprint = sourceFingerprint;
+
+    const currentFingerprint = reviewArtifactFingerprint(projectDir, stage, unit);
+    if (
+      currentFingerprint === null ||
+      recordedFingerprint !== currentFingerprint
+    ) {
+      continue;
+    }
+    stageVerdict = verdict;
+    if (unit) unitVerdicts.set(unit, verdict);
+  }
+
+  return { stageVerdict, unitVerdicts, newestSourceFingerprint };
 }
 
 // Private refs keep reviewed-source commits reachable until the Bolt is merged
@@ -3867,21 +4804,35 @@ const AUDIT_LOCK_EXIT_HANDLERS = new Map<string, () => void>();
 const AUDIT_LOCK_DEPTH = new Map<string, number>();
 
 // writeFileAtomic — non-corrupting variant of writeFileSync. Writes to a
-// sibling `<path>.tmp` then POSIX-renames into place atomically. Readers
+// writer-unique sibling temp then POSIX-renames into place atomically. Readers
 // of <path> see either the previous version or the new one — never a
 // half-written file. Pair with withAuditLock when concurrent writers
 // must serialise (rename alone defeats half-writes but not lost updates).
 //
 // Sibling temp keeps the rename on the same filesystem so it's a true
-// atomic rename (cross-fs renames degrade to copy-then-unlink). Cleans
-// up the temp file on write failure.
+// atomic rename (cross-fs renames degrade to copy-then-unlink). A unique,
+// exclusively-created temp prevents concurrent unlocked writers from
+// truncating or renaming each other's in-flight data. Cleans up only the temp
+// owned by this invocation on write/rename failure.
 export function writeFileAtomic(path: string, data: string): void {
-  const tmp = `${path}.tmp`;
+  const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  let fd: number | undefined;
+  let ownsTmp = false;
   try {
-    writeFileSync(tmp, data, "utf-8");
+    fd = openSync(tmp, "wx");
+    ownsTmp = true;
+    writeFileSync(fd, data, "utf-8");
+    closeSync(fd);
+    fd = undefined;
     renameSync(tmp, path);
+    ownsTmp = false;
   } catch (err) {
-    try { unlinkSync(tmp); } catch { /* tmp may already be gone */ }
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch { /* preserve the original error */ }
+    }
+    if (ownsTmp) {
+      try { unlinkSync(tmp); } catch { /* temp may already be gone */ }
+    }
     throw err;
   }
 }
@@ -4206,6 +5157,17 @@ function stageGraphPath(): string {
 // installed tool, which a prose agent cannot derive itself).
 export function scopeGridPath(): string {
   return process.env.AIDLC_SCOPE_GRID ?? join(resolveDataDir(), "scope-grid.json");
+}
+
+// The SHIPPED framework-default model-rates table read by aidlc-usage.ts:
+// `tools/data/model-rates.json`, beside the compiled stage-graph. This is the
+// default layer only - the AIDLC_MODEL_RATES override is read separately by
+// aidlc-usage.ts loadRates and layered ON TOP, so an install can both edit the
+// shipped file AND point AIDLC_MODEL_RATES at another. Absent in a dev checkout
+// (authored core/ carries no path resolution failure - the caller falls back to
+// the hardcoded DEFAULT_RATES).
+export function modelRatesPath(): string {
+  return join(resolveDataDir(), "model-rates.json");
 }
 
 // scope-mapping.json is retired. It survives ONLY as a test
@@ -5068,6 +6030,7 @@ export function emitStageFrontmatter(obj: Record<string, unknown>): string {
     "lead_agent",
     "support_agents",
     "mode",
+    "summary_confirmation",
     "reviewer",
     "reviewer_max_iterations",
     "for_each",
