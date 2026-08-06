@@ -33,10 +33,10 @@
 // "Request Changes" answer never count as approval.
 //
 // Fail-open outside the guarded dispatch: a missing or unreadable state file,
-// a current stage other than code-generation, malformed stdin, an unknown
-// tool, a non-developer subagent target, or any throw allows the call. Once a
-// code-generation developer dispatch is identified, missing or ambiguous
-// target evidence blocks. The deterministic off-switch
+// an active directive/current stage other than code-generation, malformed
+// stdin, an unknown tool, a non-developer subagent target, or any throw allows
+// the call. Once a code-generation developer dispatch is identified, missing
+// or ambiguous target evidence blocks. The deterministic off-switch
 // AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1 disables enforcement entirely (the
 // documented escape hatch for false-positive storms, mirroring the
 // reviewer-scope guard's off-switch). Every genuine block emits a
@@ -56,6 +56,7 @@ import {
   hooksHealthDir,
   isClaudeCodeHookInput,
   isoTimestamp,
+  readActiveDirectiveMarker,
   recordHookDrop,
   releaseAuditLock,
   resolveBoltDag,
@@ -188,15 +189,14 @@ function visibleMarkdownLines(body: string): string[] {
   return visible;
 }
 
-/**
- * True only when the latest Markdown section identified as "Plan Approval"
- * records the explicit "Approve Plan" response. The identifier may be in the
- * heading (`Q1: Plan Approval`) or the first content line under a conventional
- * numbered heading (`## Q1` followed by `Plan Approval`). Other answered
- * questions, "Request Changes", blank/reset tags, and examples inside comments
- * or code fences do not authorize generation.
- */
-export function questionsFileApproved(body: string): boolean {
+// Resolve the latest visible Markdown section identified as "Plan Approval".
+// The identifier may be in the heading (`Q1: Plan Approval`) or the first
+// content line under a conventional numbered heading (`## Q1` followed by
+// `Plan Approval`). Examples inside comments or code fences are already removed.
+function latestPlanApprovalAnswer(body: string): {
+  found: boolean;
+  answer: string | null;
+} {
   let inPlanApproval = false;
   let awaitingNumberedQuestionText = false;
   let foundPlanApproval = false;
@@ -228,7 +228,18 @@ export function questionsFileApproved(body: string): boolean {
     if (answer) latestAnswer = answer[1].trim();
   }
 
-  return foundPlanApproval && latestAnswer !== null && APPROVE_PLAN_RE.test(latestAnswer);
+  return { found: foundPlanApproval, answer: latestAnswer };
+}
+
+export function questionsFileApproved(body: string): boolean {
+  const latest = latestPlanApprovalAnswer(body);
+  return latest.found && latest.answer !== null && APPROVE_PLAN_RE.test(latest.answer);
+}
+
+/** True only when the latest visible Plan Approval section has a blank answer tag. */
+export function questionsFileHasPendingPlanApproval(body: string): boolean {
+  const latest = latestPlanApprovalAnswer(body);
+  return latest.found && latest.answer !== null && /^_*$/.test(latest.answer);
 }
 
 /**
@@ -387,7 +398,8 @@ export async function run(input: string): Promise<number> {
     if (!existsSync(statePath)) return 0; // no workflow - fail open
     const state = readFileSync(statePath, "utf-8");
     const currentStage = getField(state, "Current Stage") ?? "";
-    if (normalizeStageName(currentStage) !== GUARDED_STAGE) return 0;
+    const activeStage = readActiveDirectiveMarker(projectDir, state)?.stage ?? currentStage;
+    if (normalizeStageName(activeStage) !== GUARDED_STAGE) return 0;
 
     const recordDir = docsRoot(projectDir);
     units = gatherUnitEvidence(recordDir, knownUnits(projectDir, recordDir));
@@ -395,7 +407,7 @@ export async function run(input: string): Promise<number> {
       .filter((v): v is string => typeof v === "string")
       .join("\n");
     verdict = evaluatePlanApprovalDispatch(toolName, subagentType, promptText, {
-      currentStage,
+      currentStage: activeStage,
       units,
     });
   } catch (e) {

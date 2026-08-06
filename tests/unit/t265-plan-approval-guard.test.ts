@@ -15,6 +15,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   cpSync,
   existsSync,
@@ -31,6 +32,7 @@ import {
   blockReason,
   promptUnitMarkers,
   questionsFileApproved,
+  questionsFileHasPendingPlanApproval,
   normalizeStageName,
   type UnitEvidence,
 } from "../../dist/claude/.claude/hooks/aidlc-plan-approval-guard.ts";
@@ -252,6 +254,24 @@ describe("t265a plan-approval decision table", () => {
     expect(questionsFileApproved("")).toBe(false);
   });
 
+  test("only a blank visible Plan Approval section is a pending mandatory stop", () => {
+    expect(questionsFileHasPendingPlanApproval("## Plan Approval\n[Answer]:\n")).toBe(true);
+    expect(questionsFileHasPendingPlanApproval("## Q1\nPlan Approval\n[Answer]: ___\n")).toBe(
+      true,
+    );
+    expect(
+      questionsFileHasPendingPlanApproval("## Clarification\nWhich edge case?\n[Answer]:\n"),
+    ).toBe(false);
+    expect(
+      questionsFileHasPendingPlanApproval(
+        "<!--\n## Plan Approval\n[Answer]:\n-->\n## Clarification\n[Answer]:\n",
+      ),
+    ).toBe(false);
+    expect(
+      questionsFileHasPendingPlanApproval("## Plan Approval\n[Answer]: A. Approve Plan\n"),
+    ).toBe(false);
+  });
+
   test("blockReason names the scope and the stage steps", () => {
     const reason = blockReason(["todo-core"]);
     expect(reason).toContain("todo-core");
@@ -299,6 +319,20 @@ ${autonomy}
 - **Current Stage**: ${stage}
 `,
     "utf-8",
+  );
+}
+
+function seedActiveDirective(proj: string, stage: string, unit?: string): void {
+  const statePath = join(proj, RECORD_REL, "aidlc-state.md");
+  const state = readFileSync(statePath, "utf-8");
+  writeFileSync(
+    join(proj, RECORD_REL, ".aidlc-active-directive.json"),
+    `${JSON.stringify({
+      version: 1,
+      stage,
+      ...(unit ? { unit } : {}),
+      state_sha256: createHash("sha256").update(state, "utf-8").digest("hex"),
+    })}\n`,
   );
 }
 
@@ -410,6 +444,20 @@ describe("t265b hook lifecycle", () => {
     const proj = scratchProject();
     try {
       seedState(proj, { autonomy: "autonomous" });
+      seedUnit(proj, "todo-core", { plan: false });
+      expect(runHook(proj, DISPATCH("Implement todo-core")).code).toBe(2);
+      seedUnit(proj, "todo-core", { plan: true, answer: "A. Approve Plan" });
+      expect(runHook(proj, DISPATCH("Implement todo-core")).code).toBe(0);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("an interleaved code-generation directive stays guarded while Current Stage remains earlier", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj, { stage: "functional-design", autonomy: "autonomous" });
+      seedActiveDirective(proj, "code-generation", "todo-core");
       seedUnit(proj, "todo-core", { plan: false });
       expect(runHook(proj, DISPATCH("Implement todo-core")).code).toBe(2);
       seedUnit(proj, "todo-core", { plan: true, answer: "A. Approve Plan" });

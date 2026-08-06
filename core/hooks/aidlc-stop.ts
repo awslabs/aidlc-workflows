@@ -112,6 +112,7 @@ import {
   foldTranscriptIntoLedger,
   writeCurrentTranscriptPath,
 } from "../tools/aidlc-usage.ts";
+import { questionsFileHasPendingPlanApproval } from "./aidlc-plan-approval-guard.ts";
 
 const HOOK_NAME = "stop";
 
@@ -405,6 +406,7 @@ function hasPendingQuestion(
   slug: string,
   phase: string,
   unit?: string,
+  planApprovalOnly = false,
 ): boolean {
   if (slug.length === 0 || phase.length === 0) return false;
   const normalizedPhase = phase.toLowerCase();
@@ -415,7 +417,9 @@ function hasPendingQuestion(
   if (!existsSync(stageDirPath)) return false;
   let files: string[];
   try {
-    files = readdirSync(stageDirPath).filter((f) => f.endsWith("-questions.md"));
+    files = planApprovalOnly
+      ? readdirSync(stageDirPath).filter((f) => f === `${slug}-questions.md`)
+      : readdirSync(stageDirPath).filter((f) => f.endsWith("-questions.md"));
   } catch {
     return false;
   }
@@ -426,8 +430,12 @@ function hasPendingQuestion(
     } catch {
       continue;
     }
-    // An [Answer]: tag whose value (to end of line) is empty or underscores-only.
-    if (/\[Answer\]:[ \t]*_*[ \t]*$/m.test(body)) return true;
+    if (planApprovalOnly) {
+      if (questionsFileHasPendingPlanApproval(body)) return true;
+    } else if (/\[Answer\]:[ \t]*_*[ \t]*$/m.test(body)) {
+      // An [Answer]: tag whose value is empty or underscores-only.
+      return true;
+    }
   }
   return false;
 }
@@ -460,7 +468,14 @@ function isPendingQuestionStop(
     if (currentSlug.length === 0 || slug.length === 0) return false;
     const row = parseCheckboxes(stateContent).find((c) => c.slug === currentSlug);
     if (row?.state !== "in-progress") return false; // positive [-] only
-    return hasPendingQuestion(projectDir, slug, phase, unit);
+    return hasPendingQuestion(
+      projectDir,
+      slug,
+      phase,
+      unit,
+      unitMajorCodeGeneration &&
+        getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous",
+    );
   } catch {
     // Unparseable / odd content — fall through to decideBlock (never trap).
     return false;

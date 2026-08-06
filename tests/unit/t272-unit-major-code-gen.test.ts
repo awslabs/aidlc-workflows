@@ -58,6 +58,7 @@ resetAidlcEnv();
 const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
+const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 
 const RP = `aidlc/spaces/${DEFAULT_SPACE}/intents/${DEFAULT_RECORD_DIR}`;
 
@@ -226,23 +227,63 @@ function runReport(proj: string, args: string[]): Directive {
   }
 }
 
+function runStatusSync(proj: string, stage: string): void {
+  const r = spawnSync(
+    BUN,
+    [UTILITY, "set-status", "--stage", stage, "--project-dir", proj],
+    {
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        AIDLC_STATUSLINE_OWNER: `statusline:${process.pid}`,
+      },
+    },
+  );
+  if ((r.status ?? -1) !== 0) {
+    throw new Error(`status sync failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
+  }
+}
+
 function logReviewReady(proj: string, stage: string, unit: string): void {
-  const r = spawnSync(BUN, [
+  const args = [
     LOG,
     "review",
     "--stage", stage,
     "--reviewer", "aidlc-architecture-reviewer-agent",
     "--unit", unit,
     "--iteration", "1",
-    "--verdict", "READY",
     "--project-dir", proj,
-  ], { encoding: "utf-8" });
-  if ((r.status ?? -1) !== 0) {
-    throw new Error(`review log failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
+  ];
+  for (const suffix of [[], ["--verdict", "READY"]]) {
+    const r = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
+    if ((r.status ?? -1) !== 0) {
+      throw new Error(`review log failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
+    }
   }
 }
 
 describe("t272 code-generation joins the unit-major walk", () => {
+  test("task sync preserves the first-stage cursor, so the completed grid starts at its gate", () => {
+    const proj = seedProject();
+    seedBoltDag(proj, ["alpha"]);
+
+    for (const stage of BLOCK) {
+      const directive = runNext(proj);
+      expect(directive.stage).toBe(stage);
+      expect(directive.unit).toBe("alpha");
+      runStatusSync(proj, stage);
+      expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(
+        "- **Current Stage**: functional-design",
+      );
+      coverUnit(proj, "alpha", stage);
+      logReviewReady(proj, stage, "alpha");
+    }
+
+    const gate = runNext(proj);
+    expect(gate.stage).toBe("functional-design");
+    expect(gate.gate).toBe(true);
+  }, 60000);
+
   // 1: the full gate cascade is FIVE stages long and ends on code-generation.
   // From a fully-covered grid (code-gen included), approving each stage in
   // order walks Current Stage down the block; each intermediate `next`

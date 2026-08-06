@@ -1077,6 +1077,9 @@ describe("t121 aidlc-stop hook — forwarding-loop enforcement (migrated from t1
     seedActiveDirectiveMarker(proj, "code-generation", "alpha");
     expect(runStatusSync(proj, "code-generation")).toBe(0);
     const syncedState = readFileSync(seededStateFile(proj), "utf-8");
+    expect(syncedState).toContain("- **Current Stage**: functional-design");
+    expect(syncedState).toContain("- [-] functional-design — EXECUTE");
+    expect(syncedState).toContain("- [ ] code-generation — EXECUTE");
     const syncedMarker = JSON.parse(
       readFileSync(
         join(seededRecordDir(proj), ".aidlc-active-directive.json"),
@@ -1097,6 +1100,31 @@ describe("t121 aidlc-stop hook — forwarding-loop enforcement (migrated from t1
     );
     expect(r.rc).toBe(0);
     expect(r.out).toBe("");
+  }, 30000);
+
+  test("(f) autonomous unit-major generic code-generation question still blocks", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj, {
+      slug: "code-generation",
+      currentSlug: "functional-design",
+      phase: "construction",
+      autonomy: "autonomous",
+      iteration: "unit-major",
+      unit: "alpha",
+      questions: "# Code Generation Questions\n\n## Clarification\nWhich edge case?\n[Answer]:\n",
+    });
+    seedActiveDirectiveMarker(proj, "code-generation", "alpha");
+    expect(runStatusSync(proj, "code-generation")).toBe(0);
+    const r = runHook(
+      proj,
+      '{"stop_hook_active":false}',
+      "load-steering",
+      "",
+      "",
+      "code-generation",
+    );
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
   }, 30000);
 
   // =========================================================================
