@@ -30,7 +30,7 @@
 // the `next --args` wrapper is absent).
 //
 // FIXTURE DISCIPLINE: each case builds a fresh temp project via
-// createTestProject() + seedStateFile() (the .ts analogues of fixtures.sh's
+// createOrchestrationTestProject() + seedStateFile() (the .ts analogues of fixtures.sh's
 // create_test_project / seed_state_file), torn down in afterEach. resetAidlcEnv()
 // clears AWS_AIDLC_DEFAULT_SCOPE so a developer's exported value can't shadow the
 // fixtures — exactly the .sh's top-of-file reset_aidlc_env. The env-precedence
@@ -308,7 +308,7 @@ describe("t114 help-request routing", () => {
 
 describe("t114 plugin terminal routing", () => {
   test("plugin list preserves --json and never enters the workflow funnel", () => {
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
     const out = runNext(proj, ["plugin", "list", "--json"]).out;
     expect(out).toContain('"kind":"print"');
@@ -317,21 +317,21 @@ describe("t114 plugin terminal routing", () => {
   });
 
   test("plugin sync routes to the terminal utility", () => {
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     const out = runNext(proj, ["plugin", "sync"]).out;
     expect(out).toContain('"kind":"print"');
     expect(out).toContain("aidlc-utility.ts plugin-sync");
   });
 
   test("plugin select preserves the selected names", () => {
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     const out = runNext(proj, ["plugin", "select", "aidlc,test-pro"]).out;
     expect(out).toContain('"kind":"print"');
     expect(out).toContain("aidlc-utility.ts select-plugins aidlc,test-pro");
   });
 
   test("plugin help routes to global help", () => {
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     const out = runNext(proj, ["plugin", "help"]).out;
     expect(out).toContain('"kind":"print"');
     expect(out).toContain("aidlc-utility.ts help");
@@ -339,7 +339,7 @@ describe("t114 plugin terminal routing", () => {
   });
 
   test("missing and unknown plugin verbs are deterministic errors", () => {
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     const missing = runNext(proj, ["plugin"]).out;
     const unknown = runNext(proj, ["plugin", "remove"]).out;
     expect(missing).toContain('"kind":"error"');

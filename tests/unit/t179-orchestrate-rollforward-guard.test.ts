@@ -118,7 +118,7 @@ describe("t179 Branch 0: fresh latch -> done", () => {
   });
 
   test("1b: plugin latch renders the noun command without a leading --", () => {
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
     seedLatch(proj, 3, 3, "plugin list --json", "plugin-verb");
     const out = runNext(proj, []).out;
