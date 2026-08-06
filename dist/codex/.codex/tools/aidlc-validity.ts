@@ -1,49 +1,52 @@
 import { createHash } from "node:crypto";
-import {
-  existsSync,
-  readFileSync,
-  readdirSync,
-  statSync,
-} from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import {
   auditBlockField,
-  codekbDir,
-  codekbRepoName,
   getField,
-  intentRepos,
   parseCheckboxes,
   readAllAuditShards,
-  recordDir,
 } from "./aidlc-lib.js";
 import { loadGraph } from "./aidlc-graph.ts";
+import {
+  resolveArtifactInstances,
+  type ArtifactResolutionOptions,
+  type ArtifactInstance,
+} from "./aidlc-artifact-resolution.ts";
 
 /**
- * Optional field written on main-workflow STAGE_COMPLETED audit rows.
+ * Optional immutable receipt written on main-workflow STAGE_COMPLETED rows.
  *
- * The audit ledger is the immutable completion history. Current validity is a
- * read-only projection over the latest completion basis, the current artifact
- * tree, and the compiled stage graph. No second mutable stale-state file is
- * introduced.
+ * Execution state remains in aidlc-state.md. Current validity is projected from
+ * this receipt and the current artifact tree, so the implementation does not
+ * add a second mutable stale-state file that can drift independently.
  */
 export const VALIDATION_BASIS_FIELD = "Validation Basis";
-const VALIDATION_BASIS_SCHEMA = 1 as const;
-const KNOWN_CODEKB_STAGES: ReadonlySet<string> = new Set([
-  "reverse-engineering",
-]);
+const VALIDATION_BASIS_SCHEMA = 2 as const;
 
 export type StageValidityStatus = "stale" | "needs-revalidation";
 
-export interface ArtifactFingerprintMap {
-  [artifact: string]: string;
+/**
+ * Stage-level summary of the concrete artifact instances resolved at
+ * completion time. Runtime resolution remains instance-aware, but the audit
+ * receipt stores only deterministic aggregate fingerprints because validity is
+ * currently projected at stage granularity rather than per Unit.
+ */
+export interface ArtifactBasis {
+  artifact: string;
+  producer: string;
+  required: boolean;
+  instanceCount: number;
+  presentCount: number;
+  structureHash: string;
+  contentHash: string;
 }
 
 export interface StageValidationBasis {
   schema: typeof VALIDATION_BASIS_SCHEMA;
-  definition: string;
+  graphContract: string;
   projectType: "brownfield" | "greenfield" | null;
-  inputs: ArtifactFingerprintMap;
-  outputs: ArtifactFingerprintMap;
+  inputs: ArtifactBasis[];
+  outputs: ArtifactBasis[];
 }
 
 export interface StageValidityIssue {
@@ -57,17 +60,13 @@ export interface StageValidityIssue {
 export interface StageValidityInspection {
   issues: StageValidityIssue[];
   /**
-   * Completed stages whose current attempt predates validation-basis support.
-   * Migration is deliberately fail-open: these are observable but do not block
-   * routing until the stage completes again and records a basis.
+   * Completed stages whose current attempt has no schema-2 receipt. Existing
+   * workflows and the earlier schema-1 draft fail open until re-completion.
    */
   untracked: string[];
 }
 
-/**
- * Structural subset shared by StageEntry and GraphStage. Keeping this local
- * avoids widening either public graph API solely for validity projection.
- */
+/** Structural subset shared by StageEntry, GraphStage, and focused fixtures. */
 export interface StageValidityNode {
   slug: string;
   phase: string;
@@ -93,9 +92,20 @@ interface OrderedAuditEvent {
   position: number;
 }
 
-interface PropagationEdge {
+interface CompletionReceipts {
+  /** Receipt for the current attempt only; used to track completed checkboxes. */
+  current: Map<string, StageValidationBasis>;
+  /** Last schema-2 receipt, retained across STAGE_STARTED for propagation. */
+  latestKnown: Map<string, StageValidationBasis>;
+}
+
+interface ObservedDependency {
   to: string;
   artifact: string;
+}
+
+export interface CaptureStageValidationOptions {
+  resolution?: ArtifactResolutionOptions;
 }
 
 function sha256(value: string | Uint8Array): string {
@@ -120,11 +130,15 @@ function canonicalJson(value: unknown): string {
 }
 
 /**
- * Fingerprint only the part of a graph node that defines its validity contract.
- * Display names, agents, and generated harness paths are intentionally excluded
- * so a non-semantic packaging change does not invalidate every completed stage.
+ * Fingerprint the compiled graph contract relevant to artifact validity. This
+ * is deliberately named graphContract: it does not claim to hash the stage's
+ * prose body, model behaviour, source tree, CI, or deployment environment.
+ *
+ * requires_stage is excluded because v2 currently uses it for both semantic
+ * and ordering constraints. Treating every such edge as invalidating would be
+ * an unsound over-approximation until the graph carries an explicit kind.
  */
-function definitionFingerprint(stage: StageValidityNode): string {
+function graphContractFingerprint(stage: StageValidityNode): string {
   const contract = {
     slug: stage.slug,
     phase: stage.phase,
@@ -140,86 +154,98 @@ function definitionFingerprint(stage: StageValidityNode): string {
   return `sha256:${sha256(canonicalJson(contract))}`;
 }
 
-function toPosix(path: string): string {
-  return path.replaceAll("\\", "/");
+interface InstanceFingerprint {
+  instance: ArtifactInstance;
+  sha256: string;
+  present: boolean;
 }
 
-function safeSubdirectories(dir: string): string[] {
-  if (!existsSync(dir)) return [];
+function fingerprintInstance(instance: ArtifactInstance): InstanceFingerprint {
+  const path = instance.absolutePath;
+  if (!existsSync(path)) {
+    return { instance, sha256: "missing", present: false };
+  }
   try {
-    return readdirSync(dir, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name)
-      .sort();
-  } catch {
-    return [];
+    if (!statSync(path).isFile()) {
+      return { instance, sha256: "not-a-file", present: false };
+    }
+    return {
+      instance,
+      sha256: `sha256:${sha256(readFileSync(path))}`,
+      present: true,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      instance,
+      sha256: `unreadable:${sha256(message)}`,
+      present: false,
+    };
   }
 }
 
+function instanceKey(fingerprint: InstanceFingerprint): string {
+  return [
+    fingerprint.instance.unit ?? "",
+    fingerprint.instance.unitKind ?? "",
+    fingerprint.instance.relativePath,
+  ].join("\u0000");
+}
+
+function artifactBasisKey(basis: ArtifactBasis): string {
+  return [basis.artifact, basis.producer].join("\u0000");
+}
+
+function sortedArtifactBases(
+  bases: readonly ArtifactBasis[],
+): ArtifactBasis[] {
+  return [...bases].sort((left, right) =>
+    artifactBasisKey(left).localeCompare(artifactBasisKey(right)),
+  );
+}
+
 /**
- * Resolve every concrete Markdown file represented by one artifact vocabulary
- * name. This mirrors the three placement classes used by the v2 artifact guard:
- * codekb, per-unit Construction, and ordinary per-intent stage artifacts.
+ * Aggregate instance-aware runtime resolution into a compact stage-level
+ * receipt. structureHash changes when the resolved unit/path/kind set changes;
+ * contentHash changes when any observed instance appears, disappears, becomes
+ * unreadable, or changes content.
  */
-export function artifactFilesFor(
-  projectDir: string,
+function aggregateArtifactBasis(
   artifact: string,
-  owner: StageValidityNode,
-): string[] {
-  if (KNOWN_CODEKB_STAGES.has(owner.slug)) {
-    const root = dirname(codekbDir(projectDir, "_"));
-    const recorded = intentRepos(projectDir);
-    const discovered = safeSubdirectories(root);
-    const repos =
-      recorded.length > 0
-        ? [...recorded].sort()
-        : discovered.length > 0
-          ? discovered
-          : [codekbRepoName(projectDir)];
-    return repos.map((repo) => join(root, repo, `${artifact}.md`));
-  }
+  producer: string,
+  required: boolean,
+  instances: readonly ArtifactInstance[],
+): ArtifactBasis | null {
+  const fingerprints = instances
+    .map(fingerprintInstance)
+    .filter((fingerprint) => required || fingerprint.present)
+    .sort((left, right) => instanceKey(left).localeCompare(instanceKey(right)));
 
-  const record = recordDir(projectDir);
-  if (record === null) return [];
+  // An absent optional artifact was not an input/output of this completion.
+  // If it appears later, the current basis gains a new entry and the stage is
+  // directly invalidated.
+  if (!required && fingerprints.length === 0) return null;
 
-  if (owner.for_each === "unit-of-work") {
-    const construction = join(record, "construction");
-    return safeSubdirectories(construction)
-      .filter((unit) => existsSync(join(construction, unit, owner.slug)))
-      .map((unit) =>
-        join(construction, unit, owner.slug, `${artifact}.md`),
-      );
-  }
+  const structure = fingerprints.map(({ instance }) => ({
+    path: instance.relativePath,
+    unit: instance.unit,
+    unitKind: instance.unitKind,
+  }));
+  const content = fingerprints.map(({ instance, sha256: digest, present }) => ({
+    path: instance.relativePath,
+    sha256: digest,
+    present,
+  }));
 
-  return [join(record, owner.phase, owner.slug, `${artifact}.md`)];
-}
-
-/**
- * Hash path and content together. Missing candidate paths are part of the hash,
- * so deleting a required artifact or creating a formerly absent optional output
- * is visible as drift.
- */
-export function fingerprintArtifactFiles(
-  projectDir: string,
-  paths: readonly string[],
-): string {
-  if (paths.length === 0) return "missing";
-
-  const rows = [...new Set(paths)]
-    .sort()
-    .map((path) => {
-      const rel = toPosix(relative(projectDir, path));
-      if (!existsSync(path)) return `${rel}\u0000missing`;
-      try {
-        if (!statSync(path).isFile()) return `${rel}\u0000not-a-file`;
-        return `${rel}\u0000sha256:${sha256(readFileSync(path))}`;
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return `${rel}\u0000unreadable:${sha256(message)}`;
-      }
-    });
-
-  return `sha256:${sha256(rows.join("\n"))}`;
+  return {
+    artifact,
+    producer,
+    required,
+    instanceCount: fingerprints.length,
+    presentCount: fingerprints.filter((item) => item.present).length,
+    structureHash: `sha256:${sha256(canonicalJson(structure))}`,
+    contentHash: `sha256:${sha256(canonicalJson(content))}`,
+  };
 }
 
 function producersByArtifact(
@@ -239,6 +265,20 @@ function producersByArtifact(
   return result;
 }
 
+function uniqueProducer(
+  artifact: string,
+  producers: ReadonlyMap<string, readonly StageValidityNode[]>,
+): StageValidityNode {
+  const owners = producers.get(artifact) ?? [];
+  if (owners.length !== 1) {
+    throw new Error(
+      `Cannot capture validity for artifact "${artifact}": expected exactly ` +
+        `one producer, found ${owners.length}.`,
+    );
+  }
+  return owners[0];
+}
+
 function projectTypeFrom(
   stateContent: string,
 ): "brownfield" | "greenfield" | null {
@@ -246,57 +286,92 @@ function projectTypeFrom(
   return raw === "brownfield" || raw === "greenfield" ? raw : null;
 }
 
-function fingerprintArtifact(
-  projectDir: string,
-  artifact: string,
-  owners: readonly StageValidityNode[],
-): string {
-  const paths = owners.flatMap((owner) =>
-    artifactFilesFor(projectDir, artifact, owner),
-  );
-  return fingerprintArtifactFiles(projectDir, paths);
+function consumeIsApplicable(
+  conditionalOn: string | undefined,
+  projectType: "brownfield" | "greenfield" | null,
+): boolean {
+  return !conditionalOn || !projectType || conditionalOn === projectType;
 }
 
-/** Capture the artifact basis against which one stage is completed. */
+function captureInputBasis(
+  projectDir: string,
+  stage: StageValidityNode,
+  stages: readonly StageValidityNode[],
+  projectType: "brownfield" | "greenfield" | null,
+  options: CaptureStageValidationOptions,
+): ArtifactBasis[] {
+  const producers = producersByArtifact(stages);
+  const inputs: ArtifactBasis[] = [];
+
+  for (const consume of stage.consumes ?? []) {
+    if (!consumeIsApplicable(consume.conditional_on, projectType)) continue;
+    const required = consume.required !== false;
+    const owner = uniqueProducer(consume.artifact, producers);
+    const instances = resolveArtifactInstances(
+      projectDir,
+      consume.artifact,
+      owner,
+      options.resolution,
+    );
+    const basis = aggregateArtifactBasis(
+      consume.artifact,
+      owner.slug,
+      required,
+      instances,
+    );
+    if (basis) inputs.push(basis);
+  }
+  return sortedArtifactBases(inputs);
+}
+
+function captureOutputBasis(
+  projectDir: string,
+  stage: StageValidityNode,
+  options: CaptureStageValidationOptions,
+): ArtifactBasis[] {
+  const outputs: ArtifactBasis[] = [];
+  const required = new Set(stage.produces ?? []);
+  const optional = new Set(stage.optional_produces ?? []);
+  for (const artifact of [...required, ...optional]) {
+    const isRequired = required.has(artifact);
+    const instances = resolveArtifactInstances(
+      projectDir,
+      artifact,
+      stage,
+      options.resolution,
+    );
+    const basis = aggregateArtifactBasis(
+      artifact,
+      stage.slug,
+      isRequired,
+      instances,
+    );
+    if (basis) outputs.push(basis);
+  }
+  return sortedArtifactBases(outputs);
+}
+
+/** Capture a compact stage-level basis from concrete runtime instances. */
 export function captureStageValidationBasis(
   projectDir: string,
   stage: StageValidityNode,
   stateContent: string,
   stages: readonly StageValidityNode[] = loadGraph(),
+  options: CaptureStageValidationOptions = {},
 ): StageValidationBasis {
-  const producers = producersByArtifact(stages);
   const projectType = projectTypeFrom(stateContent);
-  const inputs: ArtifactFingerprintMap = {};
-  const outputs: ArtifactFingerprintMap = {};
-
-  for (const consume of stage.consumes ?? []) {
-    if (
-      consume.conditional_on &&
-      projectType &&
-      consume.conditional_on !== projectType
-    ) {
-      continue;
-    }
-    inputs[consume.artifact] = fingerprintArtifact(
-      projectDir,
-      consume.artifact,
-      producers.get(consume.artifact) ?? [],
-    );
-  }
-
-  for (const artifact of [
-    ...(stage.produces ?? []),
-    ...(stage.optional_produces ?? []),
-  ]) {
-    outputs[artifact] = fingerprintArtifact(projectDir, artifact, [stage]);
-  }
-
   return {
     schema: VALIDATION_BASIS_SCHEMA,
-    definition: definitionFingerprint(stage),
+    graphContract: graphContractFingerprint(stage),
     projectType,
-    inputs,
-    outputs,
+    inputs: captureInputBasis(
+      projectDir,
+      stage,
+      stages,
+      projectType,
+      options,
+    ),
+    outputs: captureOutputBasis(projectDir, stage, options),
   };
 }
 
@@ -306,20 +381,39 @@ export function stageValidationAuditFields(
   stage: StageValidityNode,
   stateContent: string,
   stages: readonly StageValidityNode[] = loadGraph(),
+  options: CaptureStageValidationOptions = {},
 ): Record<string, string> {
   return {
     [VALIDATION_BASIS_FIELD]: canonicalJson(
-      captureStageValidationBasis(projectDir, stage, stateContent, stages),
+      captureStageValidationBasis(
+        projectDir,
+        stage,
+        stateContent,
+        stages,
+        options,
+      ),
     ),
   };
 }
 
-function isStringRecord(value: unknown): value is Record<string, string> {
+function isArtifactBasis(value: unknown): value is ArtifactBasis {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return false;
   }
-  return Object.values(value as Record<string, unknown>).every(
-    (entry) => typeof entry === "string",
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.artifact === "string" &&
+    typeof candidate.producer === "string" &&
+    typeof candidate.required === "boolean" &&
+    Number.isInteger(candidate.instanceCount) &&
+    typeof candidate.instanceCount === "number" &&
+    candidate.instanceCount >= 0 &&
+    Number.isInteger(candidate.presentCount) &&
+    typeof candidate.presentCount === "number" &&
+    candidate.presentCount >= 0 &&
+    candidate.presentCount <= candidate.instanceCount &&
+    typeof candidate.structureHash === "string" &&
+    typeof candidate.contentHash === "string"
   );
 }
 
@@ -334,7 +428,7 @@ export function parseStageValidationBasis(
     }
     const candidate = parsed as Record<string, unknown>;
     if (candidate.schema !== VALIDATION_BASIS_SCHEMA) return null;
-    if (typeof candidate.definition !== "string") return null;
+    if (typeof candidate.graphContract !== "string") return null;
     if (
       candidate.projectType !== null &&
       candidate.projectType !== "brownfield" &&
@@ -342,15 +436,20 @@ export function parseStageValidationBasis(
     ) {
       return null;
     }
-    if (!isStringRecord(candidate.inputs) || !isStringRecord(candidate.outputs)) {
+    if (
+      !Array.isArray(candidate.inputs) ||
+      !candidate.inputs.every(isArtifactBasis) ||
+      !Array.isArray(candidate.outputs) ||
+      !candidate.outputs.every(isArtifactBasis)
+    ) {
       return null;
     }
     return {
       schema: VALIDATION_BASIS_SCHEMA,
-      definition: candidate.definition,
+      graphContract: candidate.graphContract,
       projectType: candidate.projectType,
-      inputs: candidate.inputs,
-      outputs: candidate.outputs,
+      inputs: sortedArtifactBases(candidate.inputs),
+      outputs: sortedArtifactBases(candidate.outputs),
     };
   } catch {
     return null;
@@ -389,43 +488,59 @@ function orderedMainWorkflowEvents(audit: string): OrderedAuditEvent[] {
   return workflowStart === -1 ? events : events.slice(workflowStart);
 }
 
-/**
- * Return the latest completion basis in each stage's current attempt.
- *
- * STAGE_STARTED starts a new attempt and clears the previous basis. A completion
- * with no basis also clears it, so a legacy completion cannot accidentally
- * inherit evidence from an older tracked attempt.
- */
-export function latestCompletionBasesFromAudit(
-  audit: string,
-): Map<string, StageValidationBasis> {
-  const bases = new Map<string, StageValidationBasis>();
+function completionReceiptsFromAudit(audit: string): CompletionReceipts {
+  const current = new Map<string, StageValidationBasis>();
+  const latestKnown = new Map<string, StageValidationBasis>();
+
   for (const event of orderedMainWorkflowEvents(audit)) {
     const stage = auditBlockField(event.block, "Stage");
     if (!stage) continue;
     if (event.event === "STAGE_STARTED") {
-      bases.delete(stage);
+      // The previous receipt still describes the dependency graph that may have
+      // fed later completed stages, but it is no longer current evidence for
+      // this stage's execution attempt.
+      current.delete(stage);
       continue;
     }
     if (event.event !== "STAGE_COMPLETED") continue;
     const basis = parseStageValidationBasis(
       auditBlockField(event.block, VALIDATION_BASIS_FIELD),
     );
-    if (basis) bases.set(stage, basis);
-    else bases.delete(stage);
+    if (basis) {
+      current.set(stage, basis);
+      latestKnown.set(stage, basis);
+    } else {
+      // A legacy/schema-1 completion supersedes any older tracked receipt.
+      current.delete(stage);
+      latestKnown.delete(stage);
+    }
   }
-  return bases;
+  return { current, latestKnown };
 }
 
-function mapChanges(
+/** Return schema-2 receipts for each stage's current attempt. */
+export function latestCompletionBasesFromAudit(
+  audit: string,
+): Map<string, StageValidationBasis> {
+  return completionReceiptsFromAudit(audit).current;
+}
+
+function artifactBasisChanges(
   label: "input" | "output",
-  before: ArtifactFingerprintMap,
-  after: ArtifactFingerprintMap,
+  before: readonly ArtifactBasis[],
+  after: readonly ArtifactBasis[],
 ): string[] {
-  const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+  const previous = new Map(before.map((item) => [artifactBasisKey(item), item]));
+  const current = new Map(after.map((item) => [artifactBasisKey(item), item]));
+  const keys = new Set([...previous.keys(), ...current.keys()]);
   const changes: string[] = [];
   for (const key of [...keys].sort()) {
-    if (before[key] !== after[key]) changes.push(`${label}:${key}`);
+    const left = previous.get(key);
+    const right = current.get(key);
+    if (canonicalJson(left) === canonicalJson(right)) continue;
+    const sample = right ?? left;
+    if (!sample) continue;
+    changes.push(`${label}:${sample.artifact}`);
   }
   return changes;
 }
@@ -435,65 +550,57 @@ export function diffStageValidationBasis(
   after: StageValidationBasis,
 ): string[] {
   const changes: string[] = [];
-  if (before.definition !== after.definition) changes.push("stage-definition");
+  if (before.graphContract !== after.graphContract) {
+    changes.push("graph-contract");
+  }
   if (before.projectType !== after.projectType) changes.push("project-type");
-  changes.push(...mapChanges("input", before.inputs, after.inputs));
-  changes.push(...mapChanges("output", before.outputs, after.outputs));
+  changes.push(...artifactBasisChanges("input", before.inputs, after.inputs));
+  changes.push(...artifactBasisChanges("output", before.outputs, after.outputs));
   return changes;
 }
 
-function propagationEdges(
-  stages: readonly StageValidityNode[],
-  projectType: "brownfield" | "greenfield" | null,
-): Map<string, PropagationEdge[]> {
-  const consumers = new Map<string, string[]>();
-  for (const stage of stages) {
-    for (const consume of stage.consumes ?? []) {
-      if (
-        consume.conditional_on &&
-        projectType &&
-        consume.conditional_on !== projectType
-      ) {
-        continue;
-      }
-      const list = consumers.get(consume.artifact) ?? [];
-      list.push(stage.slug);
-      consumers.set(consume.artifact, list);
+function observedDependencyEdges(
+  bases: ReadonlyMap<string, StageValidationBasis>,
+): Map<string, ObservedDependency[]> {
+  const edges = new Map<string, ObservedDependency[]>();
+  const seen = new Set<string>();
+  for (const [consumer, basis] of bases) {
+    for (const input of basis.inputs) {
+      const key = [input.producer, consumer, input.artifact].join("\u0000");
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const outgoing = edges.get(input.producer) ?? [];
+      outgoing.push({
+        to: consumer,
+        artifact: input.artifact,
+      });
+      edges.set(input.producer, outgoing);
     }
   }
-
-  const edges = new Map<string, PropagationEdge[]>();
-  for (const stage of stages) {
-    const outgoing: PropagationEdge[] = [];
-    for (const artifact of [
-      ...(stage.produces ?? []),
-      ...(stage.optional_produces ?? []),
-    ]) {
-      for (const consumer of consumers.get(artifact) ?? []) {
-        outgoing.push({ to: consumer, artifact });
-      }
-    }
-    edges.set(stage.slug, outgoing);
+  for (const outgoing of edges.values()) {
+    outgoing.sort((left, right) => {
+      const a = `${left.to}\u0000${left.artifact}`;
+      const b = `${right.to}\u0000${right.artifact}`;
+      return a.localeCompare(b);
+    });
   }
   return edges;
 }
 
 /**
- * Propagate stale roots through explicit artifact data dependencies.
- *
- * requires_stage is intentionally excluded: it is an execution-order edge and
- * does not prove that the downstream result semantically consumed the upstream
- * result. If ordering-only stages must invalidate one another, the graph should
- * grow an explicit invalidation contract rather than overloading ordering.
+ * Propagate stale roots through dependencies actually observed in schema-2
+ * completion receipts. A declared-but-missing optional consume is not an edge.
+ * requires_stage is not used because v2 does not yet distinguish semantic and
+ * ordering-only requires edges.
  */
 export function propagateStageInvalidation(
   stages: readonly StageValidityNode[],
   completedSlugs: ReadonlySet<string>,
   directReasons: ReadonlyMap<string, readonly string[]>,
-  projectType: "brownfield" | "greenfield" | null = null,
+  completionBases: ReadonlyMap<string, StageValidationBasis>,
 ): StageValidityIssue[] {
   const known = new Set(stages.map((stage) => stage.slug));
-  const edges = propagationEdges(stages, projectType);
+  const edges = observedDependencyEdges(completionBases);
   const issues = new Map<
     string,
     {
@@ -507,12 +614,16 @@ export function propagateStageInvalidation(
 
   for (const stage of stages) {
     const reasons = directReasons.get(stage.slug);
-    if (!reasons || !completedSlugs.has(stage.slug)) continue;
-    issues.set(stage.slug, {
-      direct: true,
-      reasons: new Set(reasons),
-      roots: new Set([stage.slug]),
-    });
+    if (!reasons) continue;
+    if (completedSlugs.has(stage.slug)) {
+      issues.set(stage.slug, {
+        direct: true,
+        reasons: new Set(reasons),
+        roots: new Set([stage.slug]),
+      });
+    }
+    // Reopened/in-progress roots still invalidate completed consumers that were
+    // based on their previous output receipt.
     queue.push({ slug: stage.slug, root: stage.slug });
   }
 
@@ -525,7 +636,8 @@ export function propagateStageInvalidation(
     for (const edge of edges.get(current.slug) ?? []) {
       if (!known.has(edge.to)) continue;
       const reason =
-        `depends on stale stage "${current.slug}" via artifact:${edge.artifact}`;
+        `depends on stale stage "${current.slug}" via ` +
+        `artifact:${edge.artifact}`;
       if (completedSlugs.has(edge.to)) {
         const existing = issues.get(edge.to);
         if (existing) {
@@ -539,9 +651,6 @@ export function propagateStageInvalidation(
           });
         }
       }
-      // Traverse through pending/in-progress nodes as well. A completed stage
-      // farther downstream can depend on a stale root through an intermediate
-      // stage that has already been reopened by a prior jump.
       queue.push({ slug: edge.to, root: current.root });
     }
   }
@@ -562,10 +671,9 @@ export function propagateStageInvalidation(
 }
 
 /**
- * Compare completed-stage audit receipts with the current artifact tree, then
- * propagate drift through produces-to-consumes edges. This function is pure
- * with respect to workflow state so aidlc-orchestrate.ts keeps its read-only
- * `next` invariant.
+ * Compare current completed-stage receipts with the current AI-DLC artifact
+ * tree, then propagate drift through observed stage-level dependencies.
+ * The function is read-only with respect to workflow state.
  */
 export function inspectStageValidity(
   projectDir: string,
@@ -580,49 +688,38 @@ export function inspectStageValidity(
   } = {},
 ): StageValidityInspection {
   const stages = options.stages ?? loadGraph();
+  const stageBySlug = new Map(stages.map((stage) => [stage.slug, stage]));
+  const completedSlugs = new Set(
+    parseCheckboxes(stateContent)
+      .filter((checkbox) => checkbox.state === "completed")
+      .map((checkbox) => checkbox.slug),
+  );
   const audit = options.audit ?? readAllAuditShards(projectDir);
-  const bases = latestCompletionBasesFromAudit(audit);
-  const checkboxRows = parseCheckboxes(stateContent);
-  const completed = new Set(
-    checkboxRows
-      .filter((row) => row.state === "completed")
-      .map((row) => row.slug),
-  );
-  // A SKIP row means the stage did not derive an output in this workflow. Do
-  // not use it as an invisible bridge between a stale producer and a later
-  // completed consumer. Pending/in-progress rows remain traversable because a
-  // backward jump may have reopened an intermediate while later completed rows
-  // still exist in state created by an older framework version.
-  const nonSkipped = new Set(
-    checkboxRows
-      .filter((row) => row.state !== "skipped")
-      .map((row) => row.slug),
-  );
-  const validityGraph = stages.filter((stage) => nonSkipped.has(stage.slug));
-  const direct = new Map<string, string[]>();
-  const untracked: string[] = [];
+  const receipts = completionReceiptsFromAudit(audit);
+  const directReasons = new Map<string, string[]>();
 
-  for (const stage of stages) {
-    if (!completed.has(stage.slug)) continue;
-    const baseline = bases.get(stage.slug);
-    if (!baseline) {
-      untracked.push(stage.slug);
-      continue;
-    }
+  for (const [slug, previous] of receipts.latestKnown) {
+    const stage = stageBySlug.get(slug);
+    if (!stage) continue;
     const current = options.currentBasis
       ? options.currentBasis(stage, stages)
       : captureStageValidationBasis(projectDir, stage, stateContent, stages);
-    const changes = diffStageValidationBasis(baseline, current);
-    if (changes.length > 0) direct.set(stage.slug, changes);
+    const changes = diffStageValidationBasis(previous, current);
+    if (changes.length > 0) directReasons.set(slug, changes);
   }
 
-  return {
-    issues: propagateStageInvalidation(
-      validityGraph,
-      completed,
-      direct,
-      projectTypeFrom(stateContent),
-    ),
-    untracked,
-  };
+  const issues = propagateStageInvalidation(
+    stages,
+    completedSlugs,
+    directReasons,
+    receipts.latestKnown,
+  );
+  const untracked = stages
+    .filter(
+      (stage) =>
+        completedSlugs.has(stage.slug) && !receipts.current.has(stage.slug),
+    )
+    .map((stage) => stage.slug);
+
+  return { issues, untracked };
 }

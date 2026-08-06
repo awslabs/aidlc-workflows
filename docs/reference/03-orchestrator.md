@@ -837,19 +837,21 @@ Construction and Operation stages MUST use standardized 2-option completion mess
 
 ## Completed-stage validity barrier
 
-`next` performs a read-only validity inspection immediately before the normal
-happy-path routing branch. It compares completed-stage audit evidence with the
-current artifact tree and propagates mismatches through active,
-project-type-applicable artifact-consumer edges.
-If a completed result is stale, the engine emits one error directive and does
-not route a later stage.
+Immediately before normal happy-path routing, `next` performs a read-only
+validity inspection. Runtime artifact instances are resolved through the active
+Bolt DAG, `produces_kinds`, and the shared canonical filename resolver, then
+compared through compact stage-level structure/content fingerprints.
+
+Direct mismatches project `stale`. Propagation follows artifact dependencies
+observed in completed consumer receipts, so absent optional inputs do not cause
+false invalidation. If any completed result is stale or needs revalidation, the
+engine emits one error directive and does not route a later stage.
 
 Recovery uses the existing explicit jump path:
 
 ```text
-/aidlc --stage <earliest-stale-stage>
+/aidlc --stage <earliest-affected-stage>
 ```
 
-The stage's next successful completion records a fresh validation basis. Older
-workflows whose completion events predate validation-basis support remain
-fail-open until those stages complete again.
+A successful re-completion writes a fresh receipt. Existing workflows and prior
+Draft receipt formats remain fail-open until their stages complete again.

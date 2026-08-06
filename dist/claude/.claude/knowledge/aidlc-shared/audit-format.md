@@ -287,15 +287,19 @@ The public `aidlc-audit.ts append` CLI is a diagnostic escape hatch, not the can
 
 ## Validation basis on `STAGE_COMPLETED`
 
-Main-workflow `STAGE_COMPLETED` entries may include:
+Main-workflow `STAGE_COMPLETED` entries may include a compact schema-2 receipt:
 
 ```text
-**Validation Basis**: {"schema":1,"definition":"sha256:...","projectType":"brownfield","inputs":{...},"outputs":{...}}
+**Validation Basis**: {"schema":2,"graphContract":"sha256:...","projectType":"brownfield","inputs":[{"artifact":"code-summary","producer":"code-generation","required":true,"instanceCount":12,"presentCount":12,"structureHash":"sha256:...","contentHash":"sha256:..."}],"outputs":[...]}
 ```
 
-The field is optional so existing ledgers remain readable. It is immutable proof
-of the artifact versions used by that completion. The orchestrator projects
-`stale` and `needs-revalidation` by comparing this proof with the current
-artifact tree; no second mutable validity field is required. A later
-`STAGE_STARTED` begins a new attempt and supersedes the previous receipt for
-routing purposes.
+The resolver first computes the concrete runtime artifact-instance set using
+the Bolt DAG, unit kinds, `produces_kinds`, and canonical filename aliases. The
+receipt then stores deterministic stage-level aggregate fingerprints rather
+than every Unit/path row. Optional inputs are included only when at least one
+instance was present at completion.
+
+The latest receipt remains useful as dependency evidence after a stage is
+reopened, while only a completion in the current attempt counts as current
+tracking for the stage itself. A schema-1, concrete-instance schema-2 Draft, or
+receipt-less completion fails open until the stage completes with this schema.

@@ -480,32 +480,35 @@ Specifically:
 
 ## Stage result validity projection
 
-A completed checkbox records that a stage ran successfully at a point in time.
-It does not by itself prove that the result still matches the stage's current
-inputs. Execution state and result validity are therefore separate concepts.
+A completed checkbox records execution history. It does not prove that the
+result still matches the runtime artifact instances used by that completion.
+Execution state and result validity are therefore separate concepts.
 
-When a main-workflow `STAGE_COMPLETED` event is emitted, the state tool adds an
-optional `Validation Basis` field containing a versioned JSON value. It
-fingerprints the stage's validity contract, applicable project type, consumed
-artifacts, and produced artifacts. The audit ledger is immutable completion
-evidence; no second mutable stale-state field is introduced.
+Each main-workflow `STAGE_COMPLETED` event may carry a schema-2 `Validation
+Basis`. Runtime resolution remains concrete and instance-aware: the active Bolt
+DAG expands per-unit artifacts, `produces_kinds` filters unit kinds, and the
+artifact-vocabulary filename mapping resolves collision-safe names such as
+`build-test-results` -> `test-results.md`.
 
-Before normal `next` routing, the orchestrator compares the latest basis for
-every completed stage with the current artifact tree. A direct mismatch projects
-that stage as `stale`. Staleness is propagated through authored
-`produces`/`optional_produces` to `consumes` edges, projecting completed
-consumers as `needs-revalidation`. Stages skipped by the active plan and
-project-type-inapplicable conditional consumes are excluded from propagation.
-`requires_stage` is intentionally excluded: execution ordering does not
-necessarily imply a data-validity dependency.
+The audit receipt remains compact because the current projection is stage-level,
+not Unit-level. For each observed canonical artifact it records the producer,
+required flag, instance/present counts, a structure hash over resolved
+path/unit/kind tuples, and a content hash over the corresponding file states.
 
-`next` remains read-only and refuses to route past stale completed results. The
-existing explicit stage jump (`/aidlc --stage <slug>`) is the recovery path. It
-re-enters the earliest affected stage while preserving the historical audit
-receipt that explains why the old completion became stale.
+Before normal `next` routing, the orchestrator recomputes each tracked basis.
+A mismatch projects the completed stage as `stale`. Downstream propagation uses
+artifact inputs actually recorded by completed consumers, not every possible
+static optional `consumes` declaration. A missing optional input therefore
+creates no edge; if it later appears, the consumer's own aggregate basis changes
+and becomes stale.
 
-Older completion events without a validation basis fail open for compatibility
-and are reported as untracked. They become tracked after a normal re-completion.
-This first implementation fingerprints AI-DLC Markdown artifacts. Arbitrary
-source-code, CI, deployment, and external-system validity need separate
-ownership and observation contracts.
+`requires_stage` is not treated as an invalidation edge because the current v2
+schema uses it for both semantic dependency and ordering. An explicit edge kind
+would be required before it can safely participate in validity propagation.
+
+The projection remains read-only. `next` refuses to route beyond stale completed
+results and directs the user to `/aidlc --stage <earliest-affected-stage>`.
+Schema-1 and receipt-less histories remain untracked/fail-open until a normal
+re-completion writes schema 2. The scope is AI-DLC Markdown artifact validity;
+source-code, Git-tree, CI, deployment, and external-system validity require
+separate ownership and observation contracts.

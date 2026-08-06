@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.64] - 2026-08-11
+
+Add dependency-aware validity projection for completed stages. No manual migration is required; existing audit ledgers remain compatible and become tracked when stages complete again.
+
+- Resolve canonical artifact aliases, active Bolt DAG units, and `produces_kinds` through one shared runtime resolver.
+- Record compact schema-2 structure/content fingerprints per observed canonical artifact.
+- Propagate revalidation through artifact inputs observed by completed consumers.
+- Preserve historical completion checkboxes while blocking routing past stale tracked AI-DLC artifacts.
+
 ## [2.5.63] - 2026-08-11
 
 AI-DLC now ships a Cursor harness (`dist/cursor/`) for Cursor IDE and Cursor CLI from one tree. Install it with `bun dist/cursor/install.ts <project>` and run `/aidlc` in chat or `agent -p "/aidlc ..."` headlessly. **Upgrade:** rerun the installer after refreshing `dist/cursor/`; it preserves project-owned configuration and selected-plugin state, refreshes framework routing data, removes unchanged framework files retired by the new release, and refuses symlinked targets or unresolved file collisions. Rebuild and reinstall any AIDLC Cursor plugins.

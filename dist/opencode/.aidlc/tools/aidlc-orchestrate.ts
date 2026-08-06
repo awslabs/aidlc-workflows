@@ -162,8 +162,9 @@ import {
 // and utility never imports this module - no cycle).
 import { inferScopeFromText } from "./aidlc-utility.ts";
 import { resolveHarnessPath, resolveHarnessRoot } from "./aidlc-runtime-paths.ts";
+import { artifactFileName } from "./aidlc-artifact-resolution.ts";
 import { inspectStageValidity } from "./aidlc-validity.ts";
-// AIDLC_STAGE_VALIDITY_PROJECTION_V1
+// AIDLC_STAGE_VALIDITY_PROJECTION_V2
 import {
   readRuleBundle,
   rulesContentEntries,
@@ -1383,13 +1384,13 @@ function resolveArtifactPath(
   // stem, mirroring relativeCodekbDir. Guarded on the ctx being present so a
   // ctx-less caller (defaults) falls through to the record-dir arms below.
   if (isCodekb(owner) && codekbCtx) {
-    return `${relativeCodekbDir(codekbCtx.projectDir, codekbCtx.codekbRepo, codekbCtx.space)}/${name}.md`;
+    return `${relativeCodekbDir(codekbCtx.projectDir, codekbCtx.codekbRepo, codekbCtx.space)}/${artifactFileName(name)}`;
   }
   const prefix = recordPrefix ?? relativeSpaceRecordPrefix();
   if (isPerUnit(owner)) {
-    return `${prefix}/construction/${unit}/${owner.slug}/${name}.md`;
+    return `${prefix}/construction/${unit}/${owner.slug}/${artifactFileName(name)}`;
   }
-  return `${prefix}/${owner.phase}/${owner.slug}/${name}.md`;
+  return `${prefix}/${owner.phase}/${owner.slug}/${artifactFileName(name)}`;
 }
 
 // Resolve a CONSUMED artifact's path. A consumed artifact lives under the stage
