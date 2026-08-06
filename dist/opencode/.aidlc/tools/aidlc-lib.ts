@@ -2286,12 +2286,12 @@ function cloneId(projectDir: string): string {
 // carries no execution-order information. Within one shard the timestamps are
 // non-decreasing and the position tiebreak preserves append order, which is what
 // makes same-second events (the common case: one human turn drives mint + gate +
-// resolution inside one second) resolve by execution order. When the DECIDING
-// pair — the latest human turn vs the latest resolution — shares one
-// second-precision timestamp across DIFFERENT shards, execution order is
-// unknowable and the check fails CLOSED (require a fresh turn) rather than let
-// shard-filename order pick a winner. Fail-open when no ledger exists (no
-// presence tracking yet on this harness).
+// resolution inside one second) resolve by execution order. When a candidate
+// latest human turn shares one second-precision timestamp with ANY latest
+// resolution in a DIFFERENT shard, execution order is unknowable and the check
+// fails CLOSED (require a fresh turn) rather than let shard-filename order pick
+// a winner. Fail-open when no ledger exists (no presence tracking yet on this
+// harness).
 //
 // The resolution boundary is workflow-global (the most recent gate approval,
 // rejection, answered question, summary confirmation, or autonomous grant).
@@ -2340,33 +2340,38 @@ export function humanActedSinceGate(projectDir: string): boolean {
     }
   }
   if (ledgerBytes === 0) return true; // no ledger → no presence tracking → fail open
-  events.sort((a, b) => {
-    if (a.ts !== b.ts) return a.ts < b.ts ? -1 : 1;
-    if (a.shard !== b.shard) return a.shard - b.shard; // deterministic, ambiguity handled below
-    return a.pos - b.pos;
-  });
-  let lastResolution = -1;
-  let lastHuman = -1;
-  for (let i = 0; i < events.length; i++) {
-    if (events[i].human) lastHuman = i;
-    else lastResolution = i;
-  }
-  if (lastHuman === -1) return false; // no human turn on record
-  if (lastHuman < lastResolution) return false; // last authority action consumed the turn
-  // The deciding comparison: the latest human turn vs the latest resolution.
-  // Same timestamp in DIFFERENT shards means execution order is unknowable
-  // (second-precision timestamps, filename-ordered shards) — fail closed and
-  // require a fresh turn rather than let a lexically-later stale HUMAN_TURN
-  // authorize. Same-shard ties keep append order (the common legit case: one
-  // human turn drives mint + gate + resolution inside one second).
-  if (
-    lastResolution !== -1 &&
-    events[lastHuman].ts === events[lastResolution].ts &&
-    events[lastHuman].shard !== events[lastResolution].shard
-  ) {
-    return false;
-  }
-  return true;
+  const humans = events.filter((event) => event.human);
+  if (humans.length === 0) return false; // no human turn on record
+  const resolutions = events.filter((event) => !event.human);
+  if (resolutions.length === 0) return true;
+
+  const latestHumanTimestamp = humans.reduce(
+    (latest, event) => (event.ts > latest ? event.ts : latest),
+    "",
+  );
+  const latestResolutionTimestamp = resolutions.reduce(
+    (latest, event) => (event.ts > latest ? event.ts : latest),
+    "",
+  );
+  if (latestHumanTimestamp > latestResolutionTimestamp) return true;
+  if (latestHumanTimestamp < latestResolutionTimestamp) return false;
+
+  // At equal second-precision timestamps, one turn must be provably after EVERY
+  // latest resolution. A same-shard append position proves that order; a
+  // resolution in any other shard remains unordered and therefore consumes the
+  // candidate turn fail-closed.
+  const latestHumans = humans.filter(
+    (event) => event.ts === latestHumanTimestamp,
+  );
+  const latestResolutions = resolutions.filter(
+    (event) => event.ts === latestResolutionTimestamp,
+  );
+  return latestHumans.some((human) =>
+    latestResolutions.every(
+      (resolution) =>
+        resolution.shard === human.shard && resolution.pos < human.pos,
+    )
+  );
 }
 
 // A cancelled / auto-resolved structured-question widget is NOT a human
@@ -5066,6 +5071,8 @@ export function swarmConvergedUnits(
 type UnitLifecycleRow = {
   ts: string;
   pos: number;
+  shard: string;
+  shardIndex: number;
   event: string;
   block: string;
   unit: string;
@@ -5089,21 +5096,74 @@ function currentUnitLifecycleRows(
     "UNIT_RESUMED",
     "UNIT_COMPLETED",
   ]);
-  const blocks = audit.replace(/\r\n/g, "\n").split(/\n---\n/);
   const rows: UnitLifecycleRow[] = [];
-  for (let i = 0; i < blocks.length; i++) {
-    const event = auditBlockField(blocks[i], "Event");
-    if (!event || !unitEvents.has(event)) continue;
-    if (auditBlockField(blocks[i], "Stage") !== slug) continue;
-    const ts = auditBlockField(blocks[i], "Timestamp") ?? "";
-    if (auditBlockField(blocks[i], "Run floor") !== floor) continue;
-    if (!unitMajor && startedAt && ts < startedAt) continue;
-    const unit = auditBlockField(blocks[i], "Unit");
+  for (const row of readAuditShardEvents(projectDir)) {
+    if (!unitEvents.has(row.event)) continue;
+    if (auditBlockField(row.block, "Stage") !== slug) continue;
+    if (auditBlockField(row.block, "Run floor") !== floor) continue;
+    if (!unitMajor && startedAt && row.timestamp < startedAt) continue;
+    const unit = auditBlockField(row.block, "Unit");
     if (!unit) continue;
-    rows.push({ ts, pos: i, event, block: blocks[i], unit });
+    rows.push({
+      ts: row.timestamp,
+      pos: row.pos,
+      shard: row.shard,
+      shardIndex: row.shardIndex,
+      event: row.event,
+      block: row.block,
+      unit,
+    });
   }
-  rows.sort((a, b) => (a.ts !== b.ts ? (a.ts < b.ts ? -1 : 1) : a.pos - b.pos));
-  return rows;
+  rows.sort((a, b) => {
+    if (a.ts !== b.ts) return a.ts < b.ts ? -1 : 1;
+    if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+    return a.pos - b.pos;
+  });
+
+  const reduced: UnitLifecycleRow[] = [];
+  for (let start = 0; start < rows.length;) {
+    let end = start + 1;
+    while (end < rows.length && rows[end].ts === rows[start].ts) end++;
+    const byUnit = new Map<string, UnitLifecycleRow[]>();
+    for (const row of rows.slice(start, end)) {
+      const unitRows = byUnit.get(row.unit) ?? [];
+      unitRows.push(row);
+      byUnit.set(row.unit, unitRows);
+    }
+    for (const unitRows of byUnit.values()) {
+      const latestByShard = new Map<string, UnitLifecycleRow>();
+      for (const row of unitRows) latestByShard.set(row.shard, row);
+      const candidates = [...latestByShard.values()];
+      if (candidates.length === 1) {
+        reduced.push(candidates[0]);
+        continue;
+      }
+      // Cross-shard rows in one second are causally unordered. Preserve the
+      // safest possible checkpoint: a possible pause blocks all progress; a
+      // possible start/resume keeps the unit unsettled; only unanimous terminal
+      // candidates settle it.
+      const rank = (event: string): number =>
+        event === "UNIT_PAUSED"
+          ? 2
+          : event === "UNIT_COMPLETED"
+            ? 0
+            : 1;
+      candidates.sort((a, b) => {
+        const rankDiff = rank(a.event) - rank(b.event);
+        if (rankDiff !== 0) return rankDiff;
+        if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+        return a.pos - b.pos;
+      });
+      reduced.push(candidates[candidates.length - 1]);
+    }
+    start = end;
+  }
+  reduced.sort((a, b) => {
+    if (a.ts !== b.ts) return a.ts < b.ts ? -1 : 1;
+    if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+    return a.pos - b.pos;
+  });
+  return reduced;
 }
 
 function unitMajorLifecycleMode(projectDir: string): boolean {
@@ -5161,9 +5221,12 @@ export function unitLifecycleReceiptsInUse(
 }
 
 // The active unit-lifecycle checkpoint for a stage: the LATEST UNIT_STARTED /
-// UNIT_PAUSED / UNIT_RESUMED / UNIT_COMPLETED row per unit (current attempt
-// only, same floor as unitCompletedReceipts), reduced to the unit whose latest
-// row is a non-terminal state. Returns the paused unit with its recorded
+// UNIT_PAUSED / UNIT_RESUMED / UNIT_COMPLETED checkpoint per unit (current
+// attempt only, same floor as unitCompletedReceipts), reduced to the unit whose
+// latest checkpoint is a non-terminal state. Same-shard ties retain append
+// order; unordered same-second cross-shard ties conservatively preserve pause,
+// then any other non-terminal state, before completion. Returns the paused unit
+// with its recorded
 // Reason / Next Action (for the resume path and the paused-first routing), or
 // the in-flight unit (started/resumed, not yet completed), or null when no
 // unit is mid-lifecycle. At most one unit can be non-terminal on the inline

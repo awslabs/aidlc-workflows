@@ -16,9 +16,9 @@
 //      (the ladder answer) and the grant CONSUMES the turn (a second
 //      escalation without a new turn refuses); de-escalation to gated never
 //      needs presence.
-//   3. humanActedSinceGate fails CLOSED when the deciding human-turn /
-//      resolution pair shares one second-precision timestamp across DIFFERENT
-//      shards (filename order carries no execution order), while same-shard
+//   3. humanActedSinceGate fails CLOSED when a candidate human turn shares one
+//      second-precision timestamp with any latest resolution in a DIFFERENT
+//      shard (filename order carries no execution order), while same-shard
 //      same-second sequences keep append order.
 //   4. Cancellation boilerplate is not a decision: `aidlc-log answer` refuses
 //      it as an interview answer (including the issue's named repro:
@@ -331,6 +331,32 @@ describe("t261 humanActedSinceGate cross-shard same-second ambiguity", () => {
     expect(humanActedSinceGate(proj)).toBe(false);
   });
 
+  test.each([
+    ["aaaa-approval.md", "zzzz-rejection-turn.md"],
+    ["zzzz-approval.md", "aaaa-rejection-turn.md"],
+  ])(
+    "every same-second cross-shard resolution must precede the human turn (%s, %s)",
+    (approvalShard, rejectionTurnShard) => {
+      proj = createTestProject();
+      seedStateFile(proj, join(FIXTURES, "state-construction.md"));
+      const auditDir = seededAuditDir(proj);
+      mkdirSync(auditDir, { recursive: true });
+      // The same-shard human turn follows the rejection, but the approval
+      // remains unordered relative to that turn in either filename order.
+      writeFileSync(
+        join(auditDir, approvalShard),
+        `# Audit\n${block("GATE_APPROVED", TS, "**Stage**: x\n")}`,
+        "utf-8",
+      );
+      writeFileSync(
+        join(auditDir, rejectionTurnShard),
+        `# Audit\n${block("GATE_REJECTED", TS, "**Stage**: x\n")}${block("HUMAN_TURN")}`,
+        "utf-8",
+      );
+      expect(humanActedSinceGate(proj)).toBe(false);
+    },
+  );
+
   test("same-shard same-second keeps append order (allow)", () => {
     proj = createTestProject();
     seedStateFile(proj, join(FIXTURES, "state-construction.md"));
@@ -339,6 +365,20 @@ describe("t261 humanActedSinceGate cross-shard same-second ambiguity", () => {
     writeFileSync(join(auditDir, "aaaa.md"), `# Audit\n${block("GATE_APPROVED", TS, "**Stage**: x\n")}`, "utf-8");
     appendFileSync(join(auditDir, "aaaa.md"), block("HUMAN_TURN"), "utf-8");
     expect(humanActedSinceGate(proj)).toBe(true);
+  });
+
+  test("same-shard same-second keeps append order (refuse)", () => {
+    proj = createTestProject();
+    seedStateFile(proj, join(FIXTURES, "state-construction.md"));
+    const auditDir = seededAuditDir(proj);
+    mkdirSync(auditDir, { recursive: true });
+    writeFileSync(join(auditDir, "aaaa.md"), `# Audit\n${block("HUMAN_TURN")}`, "utf-8");
+    appendFileSync(
+      join(auditDir, "aaaa.md"),
+      block("GATE_APPROVED", TS, "**Stage**: x\n"),
+      "utf-8",
+    );
+    expect(humanActedSinceGate(proj)).toBe(false);
   });
 
   test("a strictly-later cross-shard human turn allows", () => {

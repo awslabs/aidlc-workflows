@@ -372,6 +372,8 @@ describe("t260 single active unit", () => {
 });
 
 describe("t260 pause carries the checkpoint and hard-stops the engine", () => {
+  const TIE_TS = "2026-08-06T12:00:00Z";
+
   function pauseUnitA(): void {
     expect(unitVerb(proj, "start", "unit-a").rc).toBe(0);
     const p = unitVerb(proj, "pause", "unit-a", [
@@ -379,6 +381,23 @@ describe("t260 pause carries the checkpoint and hard-stops the engine", () => {
       "--next-action", "confirm token flow, then finish business-rules.md",
     ]);
     expect(p.rc).toBe(0);
+  }
+
+  function seedLifecycleShard(
+    name: string,
+    events: { event: string; timestamp?: string; extra?: string }[],
+  ): void {
+    mkdirSync(seededAuditDir(proj), { recursive: true });
+    const blocks = events.map(
+      ({ event, timestamp = TIE_TS, extra = "" }) =>
+        `\n## ${event}\n**Timestamp**: ${timestamp}\n**Event**: ${event}\n` +
+        `**Stage**: ${SLUG}\n**Unit**: unit-a\n**Run floor**: unstarted#0\n${extra}\n---\n`,
+    );
+    writeFileSync(
+      join(seededAuditDir(proj), name),
+      ["# AI-DLC Audit Log\n", ...blocks].join(""),
+      "utf-8",
+    );
   }
 
   test("pause requires reason + next-action and mirrors them into runtime state", () => {
@@ -415,6 +434,88 @@ describe("t260 pause carries the checkpoint and hard-stops the engine", () => {
     const state = readFileSync(seededStateFile(proj), "utf-8");
     expect(state).not.toContain("- **Status**: Completed");
     expect(activeUnitCheckpoint(proj, SLUG)?.state).toBe("in-progress");
+  });
+
+  test.each([
+    ["aaaa-paused.md", "zzzz-started.md"],
+    ["zzzz-paused.md", "aaaa-started.md"],
+  ])(
+    "same-second cross-shard pause wins over an unordered start (%s, %s)",
+    (pausedShard, startedShard) => {
+      constructionProject();
+      seedLifecycleShard(pausedShard, [
+        {
+          event: "UNIT_PAUSED",
+          extra: "**Reason**: waiting for review\n**Next Action**: confirm the contract\n",
+        },
+      ]);
+      seedLifecycleShard(startedShard, [{ event: "UNIT_STARTED" }]);
+
+      const checkpoint = activeUnitCheckpoint(proj, SLUG);
+      expect(checkpoint?.unit).toBe("unit-a");
+      expect(checkpoint?.state).toBe("paused");
+      expect(checkpoint?.reason).toBe("waiting for review");
+
+      writeUnitArtifacts(proj, "unit-a");
+      const completed = unitVerb(proj, "complete", "unit-a");
+      expect(completed.rc).not.toBe(0);
+      expect(completed.out).toContain("paused");
+    },
+  );
+
+  test("same-second cross-shard completion cannot override an unordered start", () => {
+    constructionProject();
+    seedLifecycleShard("aaaa-started.md", [{ event: "UNIT_STARTED" }]);
+    seedLifecycleShard("zzzz-completed.md", [{ event: "UNIT_COMPLETED" }]);
+
+    const checkpoint = activeUnitCheckpoint(proj, SLUG);
+    expect(checkpoint?.unit).toBe("unit-a");
+    expect(checkpoint?.state).toBe("in-progress");
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(false);
+  });
+
+  test("same-second cross-shard pause wins over an unordered resume", () => {
+    constructionProject();
+    seedLifecycleShard("aaaa-resumed.md", [{ event: "UNIT_RESUMED" }]);
+    seedLifecycleShard("zzzz-paused.md", [
+      {
+        event: "UNIT_PAUSED",
+        extra: "**Reason**: still blocked\n**Next Action**: wait for review\n",
+      },
+    ]);
+
+    const checkpoint = activeUnitCheckpoint(proj, SLUG);
+    expect(checkpoint?.state).toBe("paused");
+    expect(checkpoint?.reason).toBe("still blocked");
+  });
+
+  test("same-shard same-second lifecycle rows retain append order", () => {
+    constructionProject();
+    seedLifecycleShard("aaaa.md", [
+      {
+        event: "UNIT_PAUSED",
+        extra: "**Reason**: blocked\n**Next Action**: resume\n",
+      },
+      { event: "UNIT_RESUMED" },
+    ]);
+
+    expect(activeUnitCheckpoint(proj, SLUG)?.state).toBe("in-progress");
+  });
+
+  test("a strictly later lifecycle row overrides earlier cross-shard state", () => {
+    constructionProject();
+    seedLifecycleShard("aaaa-paused.md", [
+      {
+        event: "UNIT_PAUSED",
+        extra: "**Reason**: blocked\n**Next Action**: resume\n",
+      },
+    ]);
+    seedLifecycleShard("zzzz-completed.md", [
+      { event: "UNIT_COMPLETED", timestamp: "2026-08-06T12:00:01Z" },
+    ]);
+
+    expect(activeUnitCheckpoint(proj, SLUG)).toBeNull();
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
   });
 
   test("complete while paused refuses until an explicit resume", () => {

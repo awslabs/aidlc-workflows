@@ -282,7 +282,7 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 | `UNIT_STARTED` | `tools/aidlc-state.ts` | `unit start` — requires the exact stage/Unit pair currently routed by the engine, a safe Unit identifier from the authoritative DAG (including safe legacy spellings), and no other open Unit |
 | `UNIT_PAUSED` | `tools/aidlc-state.ts` | `unit pause` — requires `--reason` and `--next-action`; the engine routes the paused unit first and hard-stops until an explicit resume |
 | `UNIT_RESUMED` | `tools/aidlc-state.ts` | `unit resume` — only the currently-paused unit can resume |
-| `UNIT_COMPLETED` | `tools/aidlc-state.ts` | `unit complete` — verifies the unit's required artifacts are regular files before committing; all four lifecycle events carry an exact boundary-event/timestamp/ordinal `Run floor` (or a fail-closed cross-shard ambiguity token), receipt mode stays enabled across attempts, and the latest event per unit controls settlement, so stale or reopened units block the gate until they complete again |
+| `UNIT_COMPLETED` | `tools/aidlc-state.ts` | `unit complete` — verifies the unit's required artifacts are regular files before committing; all four lifecycle events carry an exact boundary-event/timestamp/ordinal `Run floor` (or a fail-closed cross-shard ambiguity token), receipt mode stays enabled across attempts, same-shard append order controls settlement, and unordered same-second cross-shard lifecycle ties preserve a possible pause or other non-terminal state, so stale, ambiguous, or reopened units block the gate until they complete again |
 
 ### Scope and configuration
 
