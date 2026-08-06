@@ -347,7 +347,7 @@ describe("t221 (a) evaluateReviewerScope decision table", () => {
     const reason = blockReason("construction/*/*/*.md", full);
     expect(reason).toContain("U03-scoring");
     expect(reason).toContain("construction/*/*/*.md");
-    expect(reason).toContain("contract paths");
+    expect(reason).toContain("the specific files you were handed");
   });
 
   test("parseDispatchRecord accepts the documented shape and rejects malformed records", () => {

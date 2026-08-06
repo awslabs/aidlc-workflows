@@ -6,10 +6,10 @@
 // birth seam end-to-end:
 //
 //   engine: `next --scope bugfix` over no state emits the run-then-continue
-//           workflow-birth `print` naming `intent-birth --scope bugfix` (the
+//           workflow-birth `print` naming `intent-create --scope bugfix` (the
 //           explicit-scope arm of the no-state split — the engine names the
 //           mutating move, never performs it);
-//   conductor: ACTS on the print — runs `aidlc-utility.ts intent-birth --scope bugfix`
+//   conductor: ACTS on the print — runs `aidlc-utility.ts intent-create --scope bugfix`
 //           and re-enters the loop;
 //   disk:   the born intent's aidlc-state.md (under aidlc/spaces/<space>/intents/
 //           <slug>-<id8>/, resolved by sdk-drive's per-intent readers) lands with
@@ -24,10 +24,10 @@
 //
 // Known-answer literals (read from the SHIPPED tools, not guessed):
 //   - birth print:  aidlc-orchestrate.ts:302/311 — names
-//                   `intent-birth --scope <scope>` and ends "re-run `next` to continue"
+//                   `intent-create --scope <scope>` and ends "re-run `next` to continue"
 //                   (P4: the retired `init` alias is gone)
-//   - birth summary: `State initialized:` (aidlc-utility.ts handleIntentBirth stdout, :2395)
-//   - state fields: State-Version-7 template (aidlc-utility.ts handleIntentBirth)
+//   - birth summary: `State initialized:` (aidlc-utility.ts handleIntentCreate stdout, :2395)
+//   - state fields: State-Version-7 template (aidlc-utility.ts handleIntentCreate)
 //
 // It SPENDS TOKENS — driveAidlc drives the real /aidlc on Opus/Bedrock. The
 // run stops the instant the birth tool-result lands (stopAfterToolResult), so
@@ -57,7 +57,7 @@ const STOP_AFTER_INIT = { toolName: "Bash", resultIncludes: INIT_STATE_SUMMARY }
 
 describe("t143 explicit-scope workflow birth (/aidlc --scope bugfix, sdk live)", () => {
   test(
-    "naming a scope on a fresh project births the workflow: engine print -> conductor intent-birth -> Scope=bugfix state on disk",
+    "naming a scope on a fresh project births the workflow: engine print -> conductor intent-create -> Scope=bugfix state on disk",
     async () => {
       const proj = setupIntegrationProject({
         noAidlcDocs: true,
@@ -75,11 +75,11 @@ describe("t143 explicit-scope workflow birth (/aidlc --scope bugfix, sdk live)",
         // tool-result carries the engine's JSON directive naming the birth move
         // for the explicitly named scope. (The directive JSON is the engine's
         // verbatim stdout — deterministic, never the LLM's rewording.) P4: the
-        // engine NAMES `intent-birth --scope <scope>` (the deterministic birth
+        // engine NAMES `intent-create --scope <scope>` (the deterministic birth
         // handler) — the retired `init` alias is gone (aidlc-orchestrate.ts:302).
-        assertToolResultContains(r, "Bash", `intent-birth --scope ${SCOPE}`);
+        assertToolResultContains(r, "Bash", `intent-create --scope ${SCOPE}`);
 
-        // (a, cont.) ... and ACTED on it: the named intent-birth tool ran and its
+        // (a, cont.) ... and ACTED on it: the named intent-create tool ran and its
         // summary landed as a tool-result.
         assertToolResultContains(r, "Bash", INIT_STATE_SUMMARY);
 

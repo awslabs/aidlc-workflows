@@ -83,7 +83,7 @@ with a fresh timestamp.
 | 4 | Never summarize user input -- pass exact option labels to the owning log or report tool; for automated stages use `N/A -- [reason]` |
 | 5 | One audit entry per interaction -- the log/state tools enforce single-event emission; never merge multiple events into one call |
 | 6 | At stage end, call `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"` (gated stages) or `report --stage <slug> --result completed` (Initialization). The engine flips `[?]`/`[-]` to `[x]`, emits `GATE_APPROVED` when gated, and emits `STAGE_COMPLETED` atomically through the state tool |
-| 7 | Mark previous stage task `completed` and current stage task `in_progress` with `activeForm` BEFORE work begins (the `sync-statusline` hook handles state syncing) |
+| 7 | Mark previous stage task `completed` and current stage task `in_progress` with `activeForm` BEFORE work begins (the `sync-workflow-state` hook handles state syncing) |
 | 8 | Use ONLY event types from `knowledge/aidlc-shared/audit-format.md` -- the state and log tools enforce this; never write directly to the `audit/` shards |
 | 9 | Do NOT hand-write lifecycle events or invoke lifecycle verbs on `aidlc-state.ts`. Report outcomes through `aidlc-orchestrate.ts`; the engine's internal state call emits the atomic audit rows |
 

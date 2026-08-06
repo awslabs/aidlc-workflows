@@ -3,7 +3,7 @@
 // t203: nested-project workspace detection + the greenfield advisory for
 // incremental scopes. Mechanism: none for the detectWorkspace cases (pure
 // in-process over hand-built temp trees), cli for the advisory cases (they
-// spawn the real intent-birth tool to observe its stderr). Technique:
+// spawn the real intent-create tool to observe its stderr). Technique:
 // known-answer.
 //
 // TWO fixes are pinned here.
@@ -22,7 +22,7 @@
 //   2. The GREENFIELD ADVISORY (#438). An incremental scope (bugfix/refactor/
 //      security-patch) presumes existing code. We do NOT override routing (an
 //      empty workspace genuinely has nothing to reverse-engineer, and forcing
-//      Brownfield would break the greenfield RE-skip pins). Instead intent-birth
+//      Brownfield would break the greenfield RE-skip pins). Instead intent-create
 //      writes a one-line stderr advisory when such a scope scans Greenfield,
 //      pointing the user at fixing Project Type or the layout. Routing is
 //      unchanged: reverse-engineering still greenfield-SKIPs.
@@ -30,7 +30,7 @@
 // detectWorkspace is a pure function of the directory tree, so each detection
 // case builds a FRESH mkdtemp dir, writes the signal files inline, and reads the
 // classified ScanResult back in-process. The advisory cases spawn the shipped
-// intent-birth tool against a scaffolded temp project and read its stderr. All
+// intent-create tool against a scaffolded temp project and read its stderr. All
 // temp dirs are removed in afterAll. NOTHING is written under tests/fixtures/**.
 
 import { afterAll, describe, expect, test } from "bun:test";
@@ -184,7 +184,7 @@ describe("t203 nested-project detection (the depth-1 fallback)", () => {
   });
 });
 
-// P4: intent-birth writes state into the born intent's per-intent record dir.
+// P4: intent-create writes state into the born intent's per-intent record dir.
 function recordDirOf(p: string): string {
   const spaceCursor = join(p, "aidlc", "active-space");
   const space = existsSync(spaceCursor)
@@ -207,7 +207,7 @@ function birth(scope: string): { stderr: string; stateFile: string } {
   tempDirs.push(p);
   const r = spawnSync(
     BUN,
-    [UTIL, "intent-birth", "--scope", scope, "--project-dir", p],
+    [UTIL, "intent-create", "--scope", scope, "--project-dir", p],
     { encoding: "utf-8" },
   );
   expect(r.status).toBe(0);

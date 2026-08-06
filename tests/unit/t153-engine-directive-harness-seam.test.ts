@@ -16,7 +16,7 @@
 // scope-change / config-change / jump directives would fail on 2 of 3 harnesses.
 //
 // This is the exact CRIT-class seam bug the dist-unified review found for the
-// rules dir (rulesSubdir). The merge-endgame re-homed v0.6.8's birthPrintDirective
+// rules dir (rulesSubdir). The merge-endgame re-homed v0.6.8's createPrintDirective
 // into core/, where main's original hardcoded `.claude/tools/aidlc-utility.ts`;
 // the port rewrote it to `${harnessDir()}/tools/...`. This test is the
 // determinism mechanism that proves no such literal re-enters a directive string

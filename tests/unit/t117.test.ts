@@ -282,31 +282,31 @@ describe("t117 resume branch", () => {
 // (.sh Tests 7-8)
 // ============================================================
 
-describe("t117 birth branch (P4: --init retired, engine names intent-birth)", () => {
+describe("t117 birth branch (P4: --init retired, engine names intent-create)", () => {
   // --- Test 7: a named scope over EXISTING state is NOT a birth ---
   // P4 removed the `--init` flag. A scope named over an existing workflow is a
   // resume/happy-path or a scope-change, never a birth — the engine must NOT
   // emit a birth print (the old "Use --force" re-init guard no longer exists
   // because there is no re-init move).
-  test("7: named scope over existing state → not a birth (no intent-birth print)", () => {
+  test("7: named scope over existing state → not a birth (no intent-create print)", () => {
     const p = proj("state-mid-ideation.md"); // feature scope state
     // Same scope as state → happy path (run the current stage), no birth.
     const r = next(["--scope", "feature"], p);
-    expect(r.out).not.toContain("intent-birth");
+    expect(r.out).not.toContain("intent-create");
     expect(r.out).not.toContain("Use --force to reinitialize");
   });
 
   // --- Test 8: a named scope on a clean workspace → birth print (no mutation) ---
-  // The engine NAMES the `intent-birth` move (read-only) and the conductor runs
+  // The engine NAMES the `intent-create` move (read-only) and the conductor runs
   // it; `next` itself must create NO state (mutation stays conductor-side).
-  test("8: named scope on a clean workspace → print naming intent-birth AND no state created", () => {
+  test("8: named scope on a clean workspace → print naming intent-create AND no state created", () => {
     const p = cleanProj(); // genuinely empty workspace (seeded record stripped)
     const r = next(["--scope", "poc"], p);
     expect(r.out).toContain('"kind":"print"');
     const d = directive(r.stdout);
     expect(d.kind).toBe("print");
-    // The named move is the deterministic intent-birth handler.
-    expect(d.message).toContain("intent-birth");
+    // The named move is the deterministic intent-create handler.
+    expect(d.message).toContain("intent-create");
     // File effect: `next` must NOT create state (mutation stays conductor-side).
     expect(existsSync(seededStateFile(p))).toBe(false);
   });

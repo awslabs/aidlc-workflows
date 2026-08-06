@@ -1,10 +1,10 @@
-// covers: hook:aidlc-sensor-fire
+// covers: hook:aidlc-run-sensors
 //
 // t95 — behavioural contract for the PostToolUse sensor-fire hook end-to-end.
 // Migrated from tests/integration/t95-sensor-fire-hook-feature.sh (TAP plan 19).
 // The .sh carried NO `# covers:` header; its subject is the shipped hook
-// dist/claude/.claude/hooks/aidlc-sensor-fire.ts, whose registry unit is
-// `hook:aidlc-sensor-fire` (the same id t131 credits).
+// dist/claude/.claude/hooks/aidlc-run-sensors.ts, whose registry unit is
+// `hook:aidlc-run-sensors` (the same id t131 credits).
 //
 // Mechanism: cli. A hook has no in-process arg surface — Claude Code drives it
 // by piping PostToolUse JSON on stdin with CLAUDE_PROJECT_DIR set, exactly as
@@ -20,7 +20,7 @@
 // (spawnSync, input: JSON) and asserts on the bytes / mtimes / exit code the
 // subprocess leaves behind. spawnCount = all.
 //
-// SOURCE UNDER TEST (dist/claude/.claude/hooks/aidlc-sensor-fire.ts):
+// SOURCE UNDER TEST (dist/claude/.claude/hooks/aidlc-run-sensors.ts):
 //   :43-44 SUBPROCESS_TIMEOUT_MS = Number(env.AIDLC_SENSOR_TIMEOUT_MS) || 90_000
 //          — the env-var seam the timeout case overrides (no source patch).
 //   (The old test-run-mode skip that appended to sensor-fire.skipped was removed
@@ -91,7 +91,7 @@ import {
 } from "../harness/fixtures.ts";
 
 const BUN = process.execPath; // the bun running this test
-const HOOK = join(AIDLC_SRC, "hooks", "aidlc-sensor-fire.ts");
+const HOOK = join(AIDLC_SRC, "hooks", "aidlc-run-sensors.ts");
 
 // P9 per-intent layout: the sensor-fire hook's active-workflow gate resolves
 // state via stateFilePath() and the audit trail via auditFilePath() — under the
@@ -278,7 +278,7 @@ function spawnArgvs(proj: string): string[][] {
 }
 
 function dropsPath(proj: string): string {
-  return join(seededRecordDir(proj), ".aidlc-hooks-health", "sensor-fire.drops");
+  return join(seededRecordDir(proj), ".aidlc-hooks-health", "run-sensors.drops");
 }
 
 describe("t95 sensor-fire hook — single & multi-entry fire (mechanism cli — spawnSync)", () => {
@@ -546,7 +546,7 @@ describe("t95 sensor-fire hook — heartbeat & skipped-file accounting (mechanis
       "intent.md",
     );
     runHook(proj, fp);
-    const hb = join(seededRecordDir(proj), ".aidlc-hooks-health", "sensor-fire.last");
+    const hb = join(seededRecordDir(proj), ".aidlc-hooks-health", "run-sensors.last");
     expect(existsSync(hb)).toBe(true);
     const m1 = statSync(hb).mtimeMs;
     Bun.sleepSync(1100); // isoTimestamp() has second granularity; advance > 1s.

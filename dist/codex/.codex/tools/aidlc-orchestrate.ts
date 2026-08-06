@@ -9,7 +9,7 @@
 // stage graph (data/stage-graph.json), then emits EXACTLY ONE typed Directive
 // (JSON) to stdout. `next` mutates no workflow state itself (state md5 is
 // unchanged across a `next` call) — including birth: on a fresh workspace it
-// NAMES the deterministic `intent-birth` move via a print directive (the
+// NAMES the deterministic `intent-create` move via a print directive (the
 // read-only-engine invariant), and the conductor runs that separate tool. The
 // directive's `kind` tells the conductor the single move to make next; the
 // conductor relays human choices
@@ -209,6 +209,23 @@ function emit(directive: Directive): void {
     directive.kind === "run-stage" && route
       ? transportRunStage(directive, route)
       : directive;
+  // Per-unit Construction beats: `unit` is attached by callers after the
+  // run-stage is built, so the builder's stage-entry line is wrong here (the
+  // stage was entered on the first unit, not on this one). Every path that sets
+  // `unit` funnels through here - stage-major, unit-major, the swarm settle, and
+  // the continue-token rehydration - so this is the one place the rule can hold.
+  //
+  // Silence was the original answer and it did not survive contact: a moment
+  // with no words is a moment the conductor fills, and what it reaches for is
+  // the loop's own bookkeeping (which pass this is, what the gate boolean now
+  // says). So a building beat gets ONE short line naming the two things that are
+  // real to the user: the stage and the unit. The settle beat stays silent
+  // because the gate ritual immediately owns that turn.
+  if (transported.kind === "run-stage" && transported.unit !== undefined) {
+    const line = narratePerUnitBeat(transported);
+    if (line === null) delete transported.narration;
+    else transported.narration = line;
+  }
   const result = validateDirective(transported);
   if (!result.valid) {
     console.error(
@@ -329,6 +346,160 @@ function toolErrorMessage(run: ToolRun): string {
   return raw.length > 0 ? raw : run.stdout.trim();
 }
 
+// --- Narration (the spoken line the conductor relays) ---
+//
+// Every line below is authored HERE, next to the facts, because the engine knows
+// them deterministically and the conductor does not have to guess. Left to
+// improvise, the conductor narrates what it can see - the tool it ran, the kind
+// it received, the routing it is following - which is the machinery, not the
+// user's project. These lines describe the work instead.
+//
+// House style for anything added here:
+//   - One sentence. Two only when the second one tells the user what to expect.
+//   - About the user's project, never about this framework's parts. No internal
+//     nouns: the reader has no engine, no directive, no dispatch, no conductor.
+//   - Present tense, first person, plain. "Setting up ...", "Starting ...".
+//   - Name real things by their real names: stage display names, scope names,
+//     and file paths are the user's landmarks and stay verbatim.
+//   - Say nothing a reader would have to already know the framework to parse.
+//
+// A line is deliberately ABSENT for beats that should be silent: rule-bundle
+// transport, per-unit iteration beats, and anything the user did not ask about.
+// Absence is the instruction to say nothing, and it is the common case.
+
+// The user-facing name for a phase. The graph's phase tokens are SHOUTED
+// machine values (IDEATION); spoken prose wants ordinary words.
+function phaseInWords(phase: string): string {
+  const normalized = phase.trim().toLowerCase();
+  if (normalized.length === 0) return "";
+  return normalized;
+}
+
+// The first run-stage of a workflow is the one place a spoken line can set the
+// whole frame: what kind of plan is running, and what the first real step is.
+// Later stages get the shorter per-stage line.
+function narrateStageEntry(
+  node: GraphStage,
+  scope: string,
+  isFirst: boolean,
+  gate: GateValue,
+): string {
+  const stageName = node.name;
+  if (isFirst) {
+    return (
+      `Starting the ${scope} plan for this project. First step is ${stageName}, ` +
+      `and I will stop for your review before anything is final.`
+    );
+  }
+  // Entering the build phase names a piece of vocabulary the user is about to
+  // see in their own artifacts (bolt-plan.md, and every later beat of this
+  // phase), so the line that introduces it defines it in the same breath. The
+  // definition is delivery-planning's own, said the way a colleague would say
+  // it. Said once, on the phase boundary; later Construction stages get the
+  // ordinary per-stage line.
+  if (isFirstConstructionStage(node, scope)) {
+    return (
+      `Starting the first Bolt now: one build pass over the code, tests and ` +
+      `checks for a piece of the work. First step is ${stageName}.`
+    );
+  }
+  // A non-gating stage runs straight through, so the line says so rather than
+  // leaving the user waiting for a prompt that is not coming.
+  if (gate === false) {
+    return `Next up: ${stageName}. This one runs through without needing your input.`;
+  }
+  // Who is in the room. On an inline stage the session adopts the lead's
+  // perspective and any supports as further perspectives, and that is worth one
+  // clause: the user is meeting colleagues by trade, which is a fact about their
+  // project's work, where "loaded the persona files" is a fact about ours.
+  return `Now working on ${stageName}, ${peopleClause(node)}.`;
+}
+
+// The trades participating in an inline stage, phrased as a person would:
+// "wearing the product manager hat, with the architect on hand". Falls back to
+// the phase clause when no trade resolves, so a stage never gets a broken line.
+function peopleClause(node: GraphStage): string {
+  const lead = roleInWords(node.lead_agent);
+  if (!lead) return `in the ${phaseInWords(node.phase)} phase`;
+  const supports = (node.support_agents ?? [])
+    .map(roleInWords)
+    .filter((trade) => trade.length > 0);
+  if (supports.length === 0) return `wearing the ${lead} hat`;
+  const list =
+    supports.length === 1
+      ? supports[0]
+      : `${supports.slice(0, -1).join(", ")} and ${supports[supports.length - 1]}`;
+  return `wearing the ${lead} hat, with the ${list} on hand`;
+}
+
+// A dispatched stage hands the work to a named specialist. The user cares that
+// someone with a particular focus is doing it, not that a Task call happened.
+function narrateSpecialistStage(node: GraphStage): string {
+  const role = roleInWords(node.lead_agent);
+  return role
+    ? `Bringing in the ${role} to work on ${node.name}.`
+    : `Now working on ${node.name}.`;
+}
+
+// The spoken line for ONE iteration of a per-unit Construction stage. Called
+// from emit(), the single choke point every unit-carrying directive passes
+// through, and deliberately the SHORTEST line in this file: the user is watching
+// the same stage name go past once per piece of work, so anything longer reads
+// as repetition. Two facts, both theirs: the stage, and which piece of their
+// work it is running for.
+//
+// null = say nothing. That is the settle beat (gate not false), where the stage
+// is fully built and the very next thing the conductor does is present the gate
+// ritual, which owns its own words. A line here would preface that with a
+// re-announcement of a stage the user has already watched run.
+//
+// The placeholder unit (a scope with no unit DAG) is not a real name, so it
+// falls back to the stage alone rather than saying the token out loud.
+function narratePerUnitBeat(directive: RunStageDirective): string | null {
+  if (directive.gate !== false) return null;
+  const unit = directive.unit;
+  if (unit === undefined || unit === UNIT_NAME_PLACEHOLDER) return null;
+  const stageName = nodeForSlug(directive.stage)?.name ?? directive.stage;
+  return `Now working on ${unit}: the ${stageName} pass.`;
+}
+
+// True when `node` is the FIRST in-scope Construction stage, i.e. the stage the
+// workflow crosses the Construction boundary on. Reuses the same resolution the
+// walking-skeleton gate uses (isSkeletonGateStage), so "the first Bolt" means
+// the same stage to the spoken line as it does to the gate.
+function isFirstConstructionStage(node: GraphStage, scope: string): boolean {
+  return isSkeletonGateStage(node, scope);
+}
+
+// Turn an agent filename into the TRADE a person would say out loud:
+// aidlc-architect-agent -> "architect", aidlc-product-agent -> "product manager".
+// The user is meeting a colleague, so the words are the ones a colleague would
+// use about themselves; a slug fragment like "product" or "aws platform" is not
+// one. Unmapped names fall back to the de-slugged fragment, and an unfamiliar
+// shape returns "" so the caller can drop the role clause rather than invent it.
+const TRADE_BY_ROLE: Readonly<Record<string, string>> = {
+  product: "product manager",
+  "product lead": "product lead",
+  design: "designer",
+  delivery: "delivery lead",
+  architect: "architect",
+  "architecture reviewer": "architecture reviewer",
+  "aws platform": "platform engineer",
+  compliance: "compliance specialist",
+  devsecops: "security engineer",
+  developer: "developer",
+  quality: "quality engineer",
+  "pipeline deploy": "release engineer",
+  operations: "operations engineer",
+};
+
+function roleInWords(agent: string): string {
+  const match = /^aidlc-(.+)-agent$/.exec(agent.trim());
+  if (!match) return "";
+  const fragment = match[1].replaceAll("-", " ");
+  return TRADE_BY_ROLE[fragment] ?? fragment;
+}
+
 // --- Terminal-directive constructors (the non-run-stage kinds) ---
 
 function askDirective(question: string): AskDirective {
@@ -352,7 +523,15 @@ function shellArg(value: string): string {
 // the slug it parked at; the Stop hook treats `parked` as a terminal allow so
 // the conductor can end its turn at a clean inter-stage boundary.
 function parkedDirective(reason: string, stage: string): ParkedDirective {
-  return { kind: "parked", reason, stage };
+  return {
+    kind: "parked",
+    reason,
+    stage,
+    // Parking is the one stop that a user could mistake for a crash, so the
+    // spoken line says the work is safe and names the way back in.
+    narration:
+      "Pausing here with everything saved. Run `/aidlc --resume` when you want to pick it back up.",
+  };
 }
 
 // The one-line ceremony preview for a scope, deterministic from the compiled
@@ -383,7 +562,7 @@ interface ParsedFlags {
   readOnlyArgs?: string[]; // allowlisted trailing args for the read-only flag (e.g. --doctor --export --output <dir>)
   resume?: boolean; // --resume: re-enter an existing workflow (resume choice)
   single?: boolean; // --single: run ONE stage under a synthetic workflow id, never touching the main pointer
-  newIntent?: boolean; // --new-intent: the conductor confirmed new-work alongside an active intent → emit the SAME birth directive (with the --label seam) the fresh-start path uses, instead of constructing intent-birth from SKILL.md prose
+  newIntent?: boolean; // --new-intent: the conductor confirmed new-work alongside an active intent → emit the SAME birth directive (with the --label seam) the fresh-start path uses, instead of constructing intent-create from SKILL.md prose
   intent?: string; // freeform request text (no leading --flag)
   workspaceCommand?: WorkspaceCommand; // leading workspace command (space/space-create/intent)
   pluginCommand?: Exclude<PluginCommand, { kind: "not-plugin" }>; // leading plugin noun: terminal list/sync/select/help/error
@@ -530,7 +709,7 @@ function parseNextFlags(args: string[]): ParsedFlags {
 // to START a workflow; there is nothing to run until an intent is born, and
 // birth is a mutation, so `next` (read-only) NAMES the move as a
 // run-then-continue print and the conductor runs it, then re-runs `next` to land
-// on the first stage. The named move is the deterministic `intent-birth` handler
+// on the first stage. The named move is the deterministic `intent-create` handler
 // (mint UUIDv7, create the intent dir, append intents.json, set active-intent,
 // emit WORKFLOW_STARTED/PHASE_STARTED into the new intent's audit) — the
 // read-only-engine invariant is preserved: the routing tool names, a separate
@@ -541,8 +720,8 @@ function parseNextFlags(args: string[]): ParsedFlags {
 // Branch 9 (explicit --scope flag) so the explicit-naming shapes emit identical
 // directives. The harness dir is resolved through harnessDir() so the directive
 // names the right tree on every harness (.claude/.kiro/.codex).
-function birthPrintDirective(scope: string, flags: ParsedFlags, description?: string): PrintDirective {
-  const cmd = [`intent-birth --scope ${scope}`];
+function createPrintDirective(scope: string, flags: ParsedFlags, description?: string): PrintDirective {
+  const cmd = [`intent-create --scope ${scope}`];
   let labelHint = "";
   if (description && description.length > 0) {
     // Shell-quote the freeform description so multi-word intents survive intact.
@@ -553,7 +732,7 @@ function birthPrintDirective(scope: string, flags: ParsedFlags, description?: st
     // without --label still births a sane name by truncating --arguments.)
     cmd.push(`--label "<2-3 word kebab essence>"`);
     labelHint =
-      ` Replace \`--label\` with a 2-3 word kebab essence of the description (e.g. "simple calc") — it becomes the readable record dir name.`;
+      ` Replace \`--label\` with a 2-3 word kebab essence of the description (e.g. "simple calc"), which becomes the readable folder name for this piece of work.`;
   }
   if (flags.depth) cmd.push(`--depth ${flags.depth}`);
   if (flags.testStrategy) cmd.push(`--test-strategy ${flags.testStrategy}`);
@@ -563,9 +742,16 @@ function birthPrintDirective(scope: string, flags: ParsedFlags, description?: st
   // Omit the parenthetical when the scope does not resolve (fixture trees).
   const clause = costClause(scope);
   const cost = clause ? ` (${clause})` : "";
-  return printDirective(
+  const directive = printDirective(
     `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${cmd.join(" ")}\` to start the workflow${cost}, then re-run \`next\` to continue.${labelHint}`,
   );
+  // The user named a scope (or one was inferred and confirmed), so the spoken
+  // line can say what is being set up and how much process that means, with the
+  // counts the compiled grid already gave us.
+  directive.narration = clause
+    ? `Setting up a ${scope} workflow for this: ${clause}.`
+    : `Setting up a ${scope} workflow for this.`;
+  return directive;
 }
 
 // The composer-dispatch print for a compose request (the adaptive-workflows
@@ -574,7 +760,7 @@ function birthPrintDirective(scope: string, flags: ParsedFlags, description?: st
 // approve/edit/reject gate); it never dispatches or writes itself. Two modes:
 //   - front (no state file): compose a scope from the prompt (or a scan
 //     report) BEFORE birth. The composer proposes; on approval the conductor
-//     continues into the normal intent-birth with the chosen scope.
+//     continues into the normal intent-create with the chosen scope.
 //   - in-flight (state file present): re-shape the RUNNING workflow's pending
 //     stages (SKIP / un-SKIP), which lands as suffix flips via the recompose
 //     verb - never a silent advance of the current stage.
@@ -612,9 +798,17 @@ function composeDispatchDirective(
   }
   parts.push(
     `The composer runs \`bun ${hd}/tools/aidlc-utility.ts detect --json\` (read-only scan + scope-registry paths), estimates the five entropy components (intent ambiguity, structural uncertainty, verification entropy, risk, unresolved assumptions) per its persona, and returns a structured proposal: mode matched|custom, scopeName, an ars block (the five component scores with method codekb|fallback), an arsRationale, the per-stage EXECUTE/SKIP grid, a per-SKIP rationale, a summary the validator computed, and two pre-rendered markdown tables (ARS scores with bands; per-stage decisions with reasoning).`,
-    "Render the proposal to the human as THREE blocks before the approve/edit/reject gate (see the composer block in SKILL.md): (1) the validator's summary line formatted \"<execute> stages EXECUTE / <skip> SKIP, <gates> approval gates\" plus scopeName and mode - use the validator's numbers verbatim, never recount by hand; (2) the composer's ARS score table verbatim, with its method line and arsRationale; (3) the composer's stage-decision table verbatim, with any fold advisories beneath it. Relay the composer's tables and numbers as returned - never recompute, collapse into prose, or drop them. Do NOT write any file and do NOT advance any stage before an explicit approval.",
+    "Render the proposal to the human as THREE blocks before the approve/edit/reject gate (see the composer block in SKILL.md), leading with plain language rather than the scores: (1) a two-or-three-sentence recommendation in your own words - what kind of change this looks like, how much process you suggest, and the steps in plain terms - followed by the validator's summary line formatted \"<execute> stages EXECUTE / <skip> SKIP, <gates> approval gates\" plus scopeName and mode (a matched stock scope stays matched: presentation never changes the composer's matched-vs-custom verdict, and a MATCHED proposal writes no scope file); (2) the composer's stage-decision table verbatim, with any fold advisories beneath it; (3) under a \"Scoring detail (advisory)\" heading, the composer's ARS score table verbatim with its method line and arsRationale. Relay the composer's tables and numbers as returned - never recompute, collapse into prose, or drop them. Do NOT write any file and do NOT advance any stage before an explicit approval.",
   );
-  return printDirective(parts.join(" "));
+  const directive = printDirective(parts.join(" "));
+  // This is the moment issue 682's reporter described: the user has asked for a
+  // plan and the framework goes quiet while it works one out. Say what is
+  // happening in their terms. In-flight means a plan is already running and only
+  // the not-yet-run steps are on the table.
+  directive.narration = inFlight
+    ? "Looking at what is left to do and working out which of the remaining steps still earn their place. I will show you the change before anything moves."
+    : "Working out which steps of the development process this piece of work actually needs, based on what you have asked for and what is already in the codebase. I will show you the plan before anything runs.";
+  return directive;
 }
 
 // Guard the birth gate against a DUPLICATE intent on a fresh clone of a
@@ -650,10 +844,10 @@ function intentPickPromptIfRecordsExist(
   const list = slugs.map((s) => `\`${s}\``).join(", ");
   const spaceLabel = space === "default" ? "" : ` in space "${space}"`;
   return askDirective(
-    `This workspace already has ${intents.length} intent${intents.length === 1 ? "" : "s"}${spaceLabel} but no active intent is selected ` +
-      `(the active-intent cursor is per-user and not cloned). ` +
-      `Pick one to work on with \`/aidlc intent <slug>\`: ${list}. ` +
-      "Selecting an intent sets the cursor; re-run `next` afterward to continue its workflow.",
+    `This project already has ${intents.length} piece${intents.length === 1 ? "" : "s"} of work in progress${spaceLabel}, and none is currently selected ` +
+      `(which one you are on is tracked per-person and does not travel with the repo). ` +
+      `Pick the one to work on with \`/aidlc intent <slug>\`: ${list}. ` +
+      "That selects it; re-run `next` afterward to carry on where it left off.",
   );
 }
 
@@ -959,14 +1153,14 @@ function readConstructionIteration(
 //               parse; the unit list is unknowable, callers surface an error
 //               instead of silently building one unit.
 // Pure in-memory: never writes the graph (next stays read-only); the
-// runtime-compile hook repairs the cache on the next transition.
+// rebuild-stage-graph hook repairs the cache on the next transition.
 type BoltBatchesResolution = BoltDagResolution;
 
 function resolveBoltBatches(projectDir: string): BoltBatchesResolution {
   const resolution = resolveBoltDag(projectDir);
   if (resolution.state === "ok" && resolution.healed) {
     process.stderr.write(
-      `aidlc-orchestrate: runtime-graph.json bolt_dag is missing or stale; recomputed ${resolution.batches.length} unit batch(es) from unit-of-work-dependency.md (check the runtime-compile hook)\n`,
+      `aidlc-orchestrate: runtime-graph.json bolt_dag is missing or stale; recomputed ${resolution.batches.length} unit batch(es) from unit-of-work-dependency.md (check the rebuild-stage-graph hook)\n`,
     );
   }
   return resolution;
@@ -1532,9 +1726,9 @@ function inlineContextRoster(
   const omitted = allPaths.length - paths.length;
   if (omitted > 0) {
     warnings.push(
-      `Warning: ${omitted} optional persona/knowledge path(s) were omitted because ` +
-        `inline_context_paths exceeded its ${INLINE_CONTEXT_PATHS_MAX_BYTES}-byte transport budget. ` +
-        "Reduce the configured knowledge file count; this stage will continue without the omitted optional context.",
+      `Warning: ${omitted} optional persona/knowledge path(s) were omitted because there was ` +
+        `no room to pass them all (inline_context_paths is capped at ${INLINE_CONTEXT_PATHS_MAX_BYTES} bytes). ` +
+        "Configure fewer knowledge files if this matters; the stage runs without the omitted optional context.",
     );
   }
   return { paths, warnings: boundedContextWarnings(warnings) };
@@ -1664,10 +1858,18 @@ function buildRunStageDirective(
   // `forcePersona` covers the isolated single-stage runner, whose directive is
   // always the conductor's first of that run regardless of state - attached
   // HERE (not by the caller after build) so the final run-stage is complete.
-  if (forcePersona || isFirstRunStageOfWorkflow(stateContent, node)) {
+  const firstOfWorkflow = isFirstRunStageOfWorkflow(stateContent, node);
+  if (forcePersona || firstOfWorkflow) {
     const persona = readConductorPersona();
     if (persona !== null) directive.conductor_persona = persona;
   }
+  // The spoken line for entering this stage. Attached here, where the scope and
+  // first-of-workflow facts are in hand; emit() drops it again on a per-unit
+  // iteration beat, because callers set `unit` after this builder returns.
+  directive.narration =
+    node.mode === "subagent" || node.mode === "pipeline"
+      ? narrateSpecialistStage(node)
+      : narrateStageEntry(node, scope, firstOfWorkflow, directive.gate);
   if (codekbCtx) {
     runStageRoutes.set(directive, {
       node,
@@ -1826,8 +2028,8 @@ function steeringTokenKey(
         return {
           key: null,
           error:
-            `The machine-local steering token key at "${path}" is invalid. ` +
-            "Delete it and run a fresh `next` to mint a replacement.",
+            `The local key file at "${path}" is corrupt, so this stage's rules cannot be loaded safely. ` +
+            "Delete that file and run a fresh `next`; a replacement is created automatically.",
         };
       }
       return { key, error: null };
@@ -1835,7 +2037,7 @@ function steeringTokenKey(
       return {
         key: null,
         error:
-          `Cannot read the machine-local steering token key at "${path}" ` +
+          `Cannot read the local key file at "${path}", so this stage's rules cannot be loaded ` +
           `(${errorMessage(error)}).`,
       };
     }
@@ -1860,7 +2062,7 @@ function steeringTokenKey(
     return {
       key: null,
       error:
-        `Cannot create the machine-local steering token key at "${path}" ` +
+        `Cannot create the local key file at "${path}", so this stage's rules cannot be loaded ` +
         `(${errorMessage(error)}). Fix the directory permissions, then run a fresh \`next\`.`,
     };
   }
@@ -2017,12 +2219,12 @@ function transportRunStage(
       requested.d !== directiveHash
     ) {
       return errorDirective(
-        "The stage or its rules changed during steering delivery. Run a fresh `next` to restart delivery from part 1.",
+        "This stage or its rules changed while they were being loaded, so what has arrived so far is stale. Run a fresh `next` to restart delivery from part 1.",
       );
     }
     if (requested.i > chunks.length) {
       return errorDirective(
-        "The steering continuation token is out of range. Run a fresh `next` to restart delivery from part 1.",
+        "This request asks for a part of the stage rules that does not exist. Run a fresh `next` to restart delivery from part 1.",
       );
     }
     if (requested.i === chunks.length) return directive;
@@ -2045,7 +2247,7 @@ function transportRunStage(
   if (!encoded.token) {
     return errorDirective(
       encoded.error ??
-        "Cannot protect the steering continuation token. Run a fresh `next` after repairing the machine-local runtime state.",
+        "This stage's rules cannot be loaded safely right now. Run a fresh `next` after repairing the local runtime files under `aidlc/`.",
     );
   }
   const load: LoadSteeringDirective = {
@@ -2306,7 +2508,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // (Branch 3 — the legacy `--init` flag — retired in P4. There is no longer a
   // user-facing `/aidlc --init`: the workspace shell ships in dist/ (SEED) and
   // the first intent is BORN, not scaffolded. Birth flows through the
-  // birthPrintDirective seam below — Branch 7b/9a name the `intent-birth` move
+  // createPrintDirective seam below — Branch 7b/9a name the `intent-create` move
   // for a resolved scope on a fresh workspace; Branch 8 surfaces the freeform
   // scope-confirm `ask` first. No `--init`/`--force` flag reaches the engine.)
 
@@ -2386,10 +2588,10 @@ function handleNext(args: string[], projectDir: string | undefined): void {
 
   // Branch 4a — --new-intent: the conductor recognized NEW WORK alongside an
   // already-active intent, ran the SKILL.md offer (AskUserQuestion), and the human
-  // confirmed. Rather than have the conductor CONSTRUCT the intent-birth command
+  // confirmed. Rather than have the conductor CONSTRUCT the intent-create command
   // from SKILL.md prose — a weak signal the live model dropped the --label seam on
   // (the 2nd/3rd intents truncated where the 1st, driven by this directive, got a
-  // clean LLM label) — the engine emits the SAME birthPrintDirective the fresh-
+  // clean LLM label) — the engine emits the SAME createPrintDirective the fresh-
   // start path (Branch 7b/9a) uses, so BOTH births carry the --label placeholder
   // identically. The human-yes gate already happened conductor-side; this is the
   // run-then-continue print that performs it. Precedes every continuation branch
@@ -2403,7 +2605,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     // back to the resolved scope only when no flag was passed. Both were already
     // validated above (Branch 3b validates flags.scope; the unknown-scope check
     // validates the resolved scope).
-    emit(birthPrintDirective(flags.scope ?? scope, flags, flags.intent));
+    emit(createPrintDirective(flags.scope ?? scope, flags, flags.intent));
     return;
   }
 
@@ -2525,7 +2727,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // `/aidlc bugfix Fix duplicate todos` both name a scope; the parser peels the
   // leading valid token into positionalScope and leaves any trailing prose in
   // flags.intent. Birth the positional scope and preserve that prose as the
-  // intent-birth --arguments value. An explicit --scope outranks this branch
+  // intent-create --arguments value. An explicit --scope outranks this branch
   // and reaches Branch 9a; --resume never births.
   if (
     !stateContent &&
@@ -2541,7 +2743,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       emit(pick);
       return;
     }
-    emit(birthPrintDirective(flags.positionalScope, flags, flags.intent));
+    emit(createPrintDirective(flags.positionalScope, flags, flags.intent));
     return;
   }
 
@@ -2578,8 +2780,8 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       const clause = costClause(inferred.scope);
       const cost = clause ? ` - ${clause}` : "";
       emit(askDirective(
-        `Starting a "${inferred.scope}" workflow for: "${flags.intent}"${cost}. ` +
-          "Confirm to proceed, name a different scope, or say \"compose\" for a tailored plan.",
+        `This looks like "${inferred.scope}" work, so I'd run the "${inferred.scope}" plan for: "${flags.intent}"${cost}. ` +
+          "Say go ahead, name a different plan, or say \"compose\" and I'll tailor one to this task.",
       ));
       return;
     }
@@ -2594,9 +2796,9 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       ? `bugfix = ${bf.execute} of ${bf.total} stages, poc = ${poc.execute}, feature = all ${feat.execute}`
       : fallbackExamples;
     emit(askDirective(
-      `No stock scope clearly fits: "${flags.intent}". ` +
-        "I can compose a tailored plan for this task (recommended: reply \"compose\"), " +
-        `or you can name a scope directly (e.g. ${examples}; see /aidlc --help for all).`,
+      `None of the ready-made plans is an obvious fit for: "${flags.intent}". ` +
+        "I can work out a plan tailored to this task (recommended: reply \"compose\"), " +
+        `or you can pick one directly (e.g. ${examples}; see /aidlc --help for the full list).`,
     ));
     return;
   }
@@ -2624,7 +2826,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     // flags.intent here is freeform feature text typed alongside an explicit
     // --scope (e.g. `/aidlc --scope feature "build the auth service"`) — thread
     // it as the born intent's description; a bare `--scope <s>` carries none.
-    emit(birthPrintDirective(scope, flags, flags.intent));
+    emit(createPrintDirective(scope, flags, flags.intent));
     return;
   }
   //
@@ -2697,6 +2899,10 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     emit({
       kind: "done",
       reason: `Workflow complete — no in-scope stage remains after ${currentSlug} (scope: ${scope}).`,
+      // The genuine end of the work. The other `done` emissions in this file are
+      // loop bookkeeping (a report landed, a read-only command already ran) and
+      // stay silent: the user did not ask about the round-trip.
+      narration: "That is everything on the plan. Your work is finished and written up.",
     });
     return;
   }
@@ -3455,7 +3661,7 @@ function emitForSlug(
 // `single:true` marker gives the conductor a typed branch before ordinary gate
 // handling; isolated runs have no main-workflow approval lifecycle.
 const SINGLE_INIT_ERROR =
-  "Cannot run an initialization stage with --single. Initialization is bootstrap (it births the intent + state); it runs automatically when you start a workflow (describe what to build, e.g. /aidlc \"build the auth service\").";
+  "Cannot run an initialization stage with --single. Initialization is bootstrap (it creates the intent + state); it runs automatically when you start a workflow (describe what to build, e.g. /aidlc \"build the auth service\").";
 
 function emitSingleRunStage(
   slug: string,
@@ -4420,7 +4626,7 @@ function handleResumeReport(
   }
   if (choice.includes("jump")) {
     emit(printDirective(
-      `Jump accepted. Ask the human which stage to jump to, then re-run \`next --stage <slug>\` — the engine resolves the direction and validates the target.`,
+      `Jump accepted. Ask the human which stage to jump to, then re-run \`next --stage <slug>\`; the direction and the target are worked out and checked for you.`,
     ));
     return;
   }
@@ -4711,7 +4917,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       return;
     }
     emit(printDirective(
-      `Recorded ${flags.result} for "${slug}" through the orchestration engine.`,
+      `Recorded ${flags.result} for "${slug}".`,
     ));
     return;
   }
@@ -4927,7 +5133,7 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
   const payload = decodeSteeringToken(token, pd);
   if (!payload || args.length !== 1) {
     emit(errorDirective(
-      "Invalid steering continuation token. Run a fresh `next` to restart delivery from part 1.",
+      "Invalid steering continuation token: this stage's rules cannot be loaded from where they left off. Run a fresh `next` to restart delivery from part 1.",
     ));
     return;
   }
@@ -4935,7 +5141,7 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
   const liveStateHash = liveState === null ? null : sha256(liveState);
   if (payload.a && payload.h !== liveStateHash) {
     emit(errorDirective(
-      "The workflow state changed during steering delivery. Run a fresh `next` to restart delivery from part 1.",
+      "The saved position moved on: the workflow state changed while this stage's rules were being loaded. Run a fresh `next` to restart delivery from part 1.",
     ));
     return;
   }
@@ -4948,7 +5154,7 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
   }
   if (payload.r !== steeringRouteHash(node, payload.c)) {
     emit(errorDirective(
-      "The stage route changed during steering delivery. Run a fresh `next` to restart delivery from part 1.",
+      "Which stage runs next has changed: the stage route changed while its rules were being loaded. Run a fresh `next` to restart delivery from part 1.",
     ));
     return;
   }

@@ -32,7 +32,7 @@ const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const RP = `aidlc/spaces/${DEFAULT_SPACE}/intents/${DEFAULT_RECORD_DIR}`;
 const SEP = "\u2014";
 const HEAL_NOTE =
-  "aidlc-orchestrate: runtime-graph.json bolt_dag is missing or stale; recomputed 2 unit batch(es) from unit-of-work-dependency.md (check the runtime-compile hook)";
+  "aidlc-orchestrate: runtime-graph.json bolt_dag is missing or stale; recomputed 2 unit batch(es) from unit-of-work-dependency.md (check the rebuild-stage-graph hook)";
 const FD_PRODUCES = [
   "business-logic-model",
   "business-rules",

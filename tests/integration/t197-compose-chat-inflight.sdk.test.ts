@@ -67,7 +67,7 @@ describe("t197 chat-first in-flight reshape (plain chat, no compose verb, sdk li
           cmd: [
             process.execPath,
             join(proj, ".claude", "tools", "aidlc-utility.ts"),
-            "intent-birth", "--scope", "feature", "--project-dir", proj,
+            "intent-create", "--scope", "feature", "--project-dir", proj,
           ],
           stdout: "pipe",
           stderr: "pipe",

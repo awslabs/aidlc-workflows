@@ -134,7 +134,7 @@ When only one option is viable, state why and skip the block.
 
 Hand completion to `stage-protocol.md` via
 `bun .claude/tools/aidlc-orchestrate.ts report --stage application-design --result <outcome>`.
-The engine owns all lifecycle transitions and advancement.
+That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
 ### Step 7: Present Completion & Request Approval
 

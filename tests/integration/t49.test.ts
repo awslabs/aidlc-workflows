@@ -282,7 +282,7 @@ beforeAll(() => {
   proj = createTestProject();
 
   // init --scope bugfix (the .sh's `bun "$UTIL" init --scope bugfix`).
-  const init = run(UTIL, ["intent-birth", "--scope", "bugfix"], proj);
+  const init = run(UTIL, ["intent-create", "--scope", "bugfix"], proj);
   expect(init.status).toBe(0);
   // P4: resolve the state path only AFTER init — birth creates the per-intent
   // record + active-intent cursor that statePath/recordDirOf follow. Computing

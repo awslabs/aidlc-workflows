@@ -96,7 +96,7 @@ Kiro IDE 1.x delivers hook context as **JSON on stdin** (snake_case:
 the `USER_PROMPT` environment variable with a camelCase equivalent, and the
 adapter accepts both). Captured PostToolUse write/shell events leave tool inputs
 empty on both channels, so their written path must be recovered from the result
-text and payload-free hooks (`runtime-compile`, `sync-statusline`) run from the
+text and payload-free hooks (`rebuild-stage-graph`, `sync-workflow-state`) run from the
 audit trail. Later 1.x builds populate some PreToolUse and delegation inputs;
 the adapter preserves those fields without depending on them.
 
@@ -111,12 +111,12 @@ touches neither channel and keeps its zero-latency path.
 |------|-------------------|---------|
 | `aidlc-session-start` | `SessionStart` | Injects workflow resume context once per session (the legacy pre-1.0 file stays wired to per-prompt `promptSubmit` — that generation has no session-start trigger) |
 | `aidlc-mint` | `UserPromptSubmit` | Records a human-turn event on every prompt (human-presence gate) |
-| `aidlc-stop` | `Stop` | Forwarding-loop audit (advisory-only; the Stop trigger cannot block on the IDE - enforcement relies on the conductor's own Stop protocol) |
+| `aidlc-continue-workflow` | `Stop` | Forwarding-loop audit (advisory-only; the Stop trigger cannot block on the IDE - enforcement relies on the conductor's own Stop protocol) |
 | `aidlc-block` | `PreToolUse` | Hard-blocks tool calls while an approval gate is open and no human has acted since (human-presence floor) |
-| `aidlc-audit-logger` | `PostToolUse` (`fs_write\|str_replace\|fs_append`) | Logs artifact create/update, then fires applicable sensors (path from the tool result) |
+| `aidlc-write-audit-log` | `PostToolUse` (`fs_write\|str_replace\|fs_append`) | Logs artifact create/update, then fires applicable sensors (path from the tool result) |
 | `aidlc-log-subagent` | `PostToolUse` (`^(subagent_.+\|invoke_sub_agent)$`) | Records `SUBAGENT_COMPLETED` with the delegate's identity. The matcher is broad so any delegate name reaches the adapter; the adapter drops the auxiliary `subagent_response` shell |
-| `aidlc-runtime-compile` | `PostToolUse` (`execute_bash`) | Recompiles the runtime graph (gated on the audit tail) |
-| `aidlc-sync-statusline` | `PostToolUse` (`execute_bash`) | Forward-only sync of `Current Stage` from the latest `STAGE_STARTED` in the audit (the IDE surfaces no task payload to parse) |
+| `aidlc-rebuild-stage-graph` | `PostToolUse` (`execute_bash`) | Recompiles the runtime graph (gated on the audit tail) |
+| `aidlc-sync-workflow-state` | `PostToolUse` (`execute_bash`) | Forward-only sync of `Current Stage` from the latest `STAGE_STARTED` in the audit (the IDE surfaces no task payload to parse) |
 
 `aidlc-session-end` has **no v2 registration**: the IDE's `Stop` trigger fires
 at the end of every assistant turn, not at conversation close, so registering

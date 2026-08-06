@@ -139,7 +139,7 @@ Generate the following in `<record>/construction/{unit-name}/infrastructure-desi
 
 Hand completion to `stage-protocol.md` via
 `bun .codex/tools/aidlc-orchestrate.ts report --stage infrastructure-design --result <outcome>`.
-The engine owns all lifecycle transitions and advancement.
+That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
 ### Step 8: Completion
 

@@ -434,7 +434,7 @@ describe("tui fixture runtime graph", () => {
         process.execPath,
         [
           join(projectDir, ".claude", "tools", "aidlc-utility.ts"),
-          "intent-birth",
+          "intent-create",
           "--scope",
           CUSTOM_SCOPE,
         ],

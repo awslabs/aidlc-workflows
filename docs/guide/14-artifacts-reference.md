@@ -10,6 +10,11 @@ directory structure, per-artifact descriptions, lifecycle, and git policy.
 
 ## Directory Tree
 
+This is the complete set of places an artifact can land, not what a fresh record
+looks like. Intent creation makes one folder per phase your scope runs (plus
+`verification/`); the rest appear as work happens, and a per-stage folder is
+created the first time that stage writes.
+
 ```
 aidlc/spaces/<space>/intents/<YYMMDD>-<label>/   # one record dir per intent
   aidlc-state.md                    # Workflow state (commit)
@@ -151,7 +156,7 @@ flowchart LR
 
 | Stage | Artifacts | Notes |
 |-------|-----------|-------|
-| 0.1 Workspace Scaffold | `scaffold-report.md` | Deterministic (runs inside `aidlc-utility intent-birth`) |
+| 0.1 Workspace Scaffold | `scaffold-report.md` | Deterministic (runs inside `aidlc-utility intent-create`) |
 | 0.2 Workspace Detection | `workspace-findings.md`, updates `aidlc-state.md` | Deterministic rule-based scanner |
 | 0.3 State Init | `state-init-summary.md` | Deterministic |
 

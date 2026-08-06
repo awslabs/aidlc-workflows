@@ -20,15 +20,15 @@
 //   - session-start emits {"additionalContext": "..."} — Kiro's context
 //     channel is plain stdout at exit 0, so the shim unwraps the JSON and
 //     prints the text.
-//   - stop emits {"decision":"block","reason":"..."} — Kiro's stop contract
+//   - continue-workflow emits {"decision":"block","reason":"..."} — Kiro's continue-workflow contract
 //     is IDENTICAL (verified live), so it passes through verbatim.
 //
 // Usage (registered in the conductor and delegated .kiro/agents/*.json configs):
 //   bun .kiro/hooks/aidlc-kiro-adapter.ts <target>
-// where <target> ∈ session-start | audit-and-sensors | runtime-compile |
-//                  state-sync | log-subagent | stop | verb-intercept |
-//                  pretool-block | state-transition-guard | reviewer-scope
-//                  | review-freeze | dispatch-rules
+// where <target> ∈ session-start | audit-and-sensors | rebuild-stage-graph |
+//                  sync-workflow-state | log-subagent | continue-workflow | verb-intercept |
+//                  guard-tool-call | state-transition-guard | plan-approval-guard |
+//                  reviewer-scope | review-freeze | deliver-stage-rules
 
 import {
   existsSync,
@@ -216,15 +216,15 @@ if (target === "verb-intercept") {
   // refuses unless a HUMAN_TURN was recorded since the last gate resolution; the
   // preToolUse block below is the exit-2 floor. Own try block, SEPARATE from the
   // turn-counter bump above (that is the roll-forward latch clock - a counter I/O
-  // failure must not skip the mint, or a genuine approval gets refused). Gated on
-  // workflow state existing (same self-gate as the core mint hook) so a prompt in
+  // failure must not skip the record-human-turn, or a genuine approval gets refused). Gated on
+  // workflow state existing (same self-gate as the core record-human-turn hook) so a prompt in
   // a project that never ran the framework does not scaffold audit shards.
   try {
     const cwd = projectDir;
     if (existsSync(stateFilePath(cwd))) {
       appendAuditEntry("HUMAN_TURN", {}, cwd);
     }
-  } catch { /* presence best-effort - mint never blocks the turn */ }
+  } catch { /* presence best-effort - record-human-turn never blocks the turn */ }
   if (cmd === null) {
     // Pure, explicit engine reads do not need the model to reconstruct the
     // first tool call. Dispatch them here with the exact recovered argv and
@@ -268,7 +268,7 @@ if (target === "verb-intercept") {
 
     // Kiro occasionally drops the entire expanded $ARGUMENTS vector and runs a
     // bare next even though both the agent prompt and skill say verbatim. Keep
-    // the intended first call in a turn-bound latch; pretool-block compares the
+    // the intended first call in a turn-bound latch; guard-tool-call compares the
     // shell-normalized argv and rejects a lossy call. A correct first next
     // consumes the latch, so subsequent loop iterations in this turn are bare.
     if (invocation.raw.length > 0) {
@@ -307,7 +307,7 @@ if (target === "verb-intercept") {
         if (cmd.subcommand === "help") return ["plugin", "help"];
       }
       if (cmd.subcommand === "space-create") return ["space", "create", ...forwarded];
-      if (cmd.subcommand === "intent-birth") return ["intent", "birth", ...forwarded];
+      if (cmd.subcommand === "intent-create") return ["intent", "create", ...forwarded];
       return [cmd.subcommand, ...forwarded];
     })();
     const utilArgs = [join(".kiro", "tools", "aidlc-utility.ts"), cmd.subcommand, ...forwarded];
@@ -350,7 +350,7 @@ if (target === "verb-intercept") {
   return 0;
 }
 
-// --- pretool-block: the preToolUse roll-forward backstop (matcher: execute_bash) ---
+// --- guard-tool-call: the preToolUse roll-forward backstop (matcher: execute_bash) ---
 //
 // Defense-in-depth behind the engine done-guard. The verb-intercept seam above
 // handles a read-only/nav command off-band and stamps aidlc/.aidlc-readonly-latch
@@ -365,7 +365,7 @@ if (target === "verb-intercept") {
 // conductor may retry within the turn; the next turn bumps the counter so the latch
 // goes stale and a legitimate advancing next runs). Advisory/fail-open: any
 // parse/read failure exits 0 and never blocks a real next.
-if (target === "pretool-block") {
+if (target === "guard-tool-call") {
   const cmdStr = String(kiro.tool_input?.command ?? "");
   const cwd = projectDir;
   const m = cmdStr.match(/aidlc-orchestrate\.ts\s+next\b([^\n]*)/);
@@ -434,7 +434,7 @@ if (target === "pretool-block") {
 
   if (isBareAdvancing && counter >= 0 && latchTurn === counter) {
     process.stderr.write(
-      "read-only/navigation command already handled this turn by the deterministic harness — do not advance the workflow. The output was already relayed; end the turn.\n",
+      "This was a read-only command and AIDLC already ran it this turn: do not advance the workflow. Its output has already been shown to the user; end the turn.\n",
     );
     return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
   }
@@ -562,7 +562,7 @@ if (target === "plan-approval-guard") {
 // The shim normalizes the alias payload (shell -> Bash {command}; read ->
 // Read {paths} from operations[]; write -> Write {path}) and forwards the
 // core hook's stderr + exit code verbatim - exit 2 + stderr is Kiro's
-// reject contract, the same channel pretool-block uses. Fail-open: a
+// reject contract, the same channel guard-tool-call uses. Fail-open: a
 // missing name (scoped_registration fallback) or an unspawnable core hook
 // allows the call.
 if (target === "reviewer-scope") {
@@ -666,7 +666,7 @@ if (target === "review-freeze") {
   return 0;
 }
 
-// --- dispatch-rules: exact conductor-to-worker steering ---------------------
+// --- deliver-stage-rules: exact conductor-to-worker steering ---------------------
 //
 // Kiro exposes subagent arguments to preToolUse hooks but does not support
 // updated tool input, and a block-with-retry contract deadlocks live: the
@@ -680,12 +680,12 @@ if (target === "review-freeze") {
 // (visible in the transcript and traces), never a block. The strict rewrite
 // path stays on the harnesses that support updatedInput (Claude, Codex,
 // opencode).
-if (target === "dispatch-rules") {
+if (target === "deliver-stage-rules") {
   if ((kiro.tool_name ?? "") !== "subagent") return 0;
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
   const command = executable
-    ? [executable, "hook", "dispatch-rules"]
-    : [process.execPath, join(HOOKS_DIR, "aidlc-dispatch-rules.ts")];
+    ? [executable, "hook", "deliver-stage-rules"]
+    : [process.execPath, join(HOOKS_DIR, "aidlc-deliver-stage-rules.ts")];
   const r = Bun.spawnSync(command, {
     stdin: Buffer.from(input, "utf-8"),
     cwd: projectDir,
@@ -754,7 +754,7 @@ function buildForward(): Forward {
       };
 
     case "audit-and-sensors": {
-      // postToolUse(write) → audit-logger THEN sensor-fire (both ship core).
+      // postToolUse(write) → write-audit-log THEN run-sensors (both ship core).
       if (tool !== "Write") return null;
       const filePath = (ti.path as string) ?? (ti.file_path as string) ?? "";
       if (!filePath) return null;
@@ -768,10 +768,10 @@ function buildForward(): Forward {
       };
     }
 
-    case "runtime-compile": {
+    case "rebuild-stage-graph": {
       if (tool !== "Bash") return null;
       return {
-        hook: "aidlc-runtime-compile.ts",
+        hook: "aidlc-rebuild-stage-graph.ts",
         input: {
           hook_event_name: "PostToolUse",
           tool_name: "Bash",
@@ -780,7 +780,7 @@ function buildForward(): Forward {
       };
     }
 
-    case "state-sync": {
+    case "sync-workflow-state": {
       // Kiro's todo_list is command-shaped. A `create` whose first task
       // description carries the stage-protocol "[slug]" suffix maps to the
       // Claude TaskUpdate in_progress transition the core hook keys on.
@@ -790,7 +790,7 @@ function buildForward(): Forward {
       const desc = tasks[0]?.task_description ?? "";
       if (!desc) return null;
       return {
-        hook: "aidlc-sync-statusline.ts",
+        hook: "aidlc-sync-workflow-state.ts",
         input: {
           hook_event_name: "PostToolUse",
           tool_name: "TaskUpdate",
@@ -813,7 +813,7 @@ function buildForward(): Forward {
       };
     }
 
-    case "stop":
+    case "continue-workflow":
       // Kiro provides neither stop_hook_active NOR a transcript_path, so the
       // core hook's run-mode-aware no-progress ceiling is the loop guard here
       // (it defaults stop_hook_active to false). With no transcript the core
@@ -822,7 +822,7 @@ function buildForward(): Forward {
       // autonomous Construction) instead, after one nudge rather than eight. The
       // {"decision":"block"} stdout contract is identical.
       return {
-        hook: "aidlc-stop.ts",
+        hook: "aidlc-continue-workflow.ts",
         input: { hook_event_name: "Stop", stop_hook_active: false },
       };
 
@@ -856,8 +856,8 @@ if (fwd === null) {
 if (fwd.hook === "__audit_and_sensors__") {
   // Two core hooks ride the same write event, in audit-then-sensors order
   // (mirrors the Claude settings.json registration). Both advisory: exit 0.
-  runCore("aidlc-audit-logger.ts", fwd.input);
-  runCore("aidlc-sensor-fire.ts", fwd.input);
+  runCore("aidlc-write-audit-log.ts", fwd.input);
+  runCore("aidlc-run-sensors.ts", fwd.input);
   return 0;
 }
 
@@ -877,7 +877,7 @@ if (target === "session-start") {
   return 0;
 }
 
-// stop (and any future passthrough target): forward stdout + exit code
+// continue-workflow (and any future passthrough target): forward stdout + exit code
 // verbatim — the {"decision":"block","reason"} contract is shared.
 if (result.stdout) process.stdout.write(result.stdout);
 return result.code;

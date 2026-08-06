@@ -168,7 +168,7 @@ evidence before presenting the human gate.
 Use stage-protocol.md completion template with completion emoji: :books:
 - Summary of personas and stories produced
 - Review path: `<record>/inception/user-stories/`
-- Structured approval question with options: Approve (continue to `directive.next_stage`) / Request Changes
+- Structured approval question with options: Approve / Request Changes. On the Approve option's description write `Continue to <next stage name>`, taking that name from the run-stage directive's `next_stage` field (`Complete workflow` when it is null) - the user sees the real stage name, never a field name.
 
 STOP for the human response. Report **Approve** with
 `--result approved --user-input "<exact choice>"`; report

@@ -18,13 +18,13 @@ const fills: OnboardingFills = {
 This project uses AI-DLC (AI-Driven Development Life Cycle) under the OpenAI
 Codex CLI harness (minimum version 0.145.0). Invoke the orchestrator skill with
 \`$aidlc\` (or \`/skills\` → aidlc) followed by a scope or project description.
-The deterministic engine, state machine, audit log, and referee are
-byte-identical to every other harness distribution; only the shell differs. Run
+The ordered steps, the approval gates, the written record, and the checks behind
+them are identical to every other AI-DLC install; only the CLI around them differs. Run
 \`$aidlc --status\` for progress, \`$aidlc --help\` for usage, \`$aidlc intent\`
 to list intents, \`$aidlc --doctor\` to validate setup, and
 \`$aidlc --stage <slug>\` / \`--phase <name>\` / \`--depth <level>\` /
 \`--test-strategy <level>\` / \`--review <class>\` for the usual overrides. Run \`$aidlc compose
-"<task>"\` to have the adaptive composer propose a tailored EXECUTE/SKIP plan
+"<task>"\` to get a plan tailored to that task
 (up front, from a scan report via \`--report <path>\`, or mid-workflow to
 re-shape the pending stages - every proposal stops at an approve/edit/reject
 gate).`,
@@ -37,7 +37,7 @@ gate).`,
     prereq_bullets_tail: `- **Permissions**: \`.codex/rules/default.rules\` (Starlark prefix rules) pre-allows the deterministic core's exact command prefixes — \`bun .codex/tools/\`, \`bun .codex/hooks/\`, and \`git worktree\`/\`commit\`/\`add\` — so workflows run without per-call prompts. The sandbox is \`workspace-write\`; commands outside the allowlist prompt.
 - **Personal overrides**: Settings in \`~/.codex/config.toml\` merge over the project \`.codex/config.toml\`. Put machine-specific overrides (model, AWS profile/region, environment variables) there to avoid changing the shared project config.`,
 
-    agents_note: `On Codex all 14 agent personas are transposed into \`.codex/agents/\` TOMLs (the conductor reads the persona \`.md\` bodies as prose); workers for the four dispatched stages (2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent), reviewer passes, and composer requests run through Codex subagent roles.`,
+    agents_note: `On Codex all 14 expert roles are transposed into \`.codex/agents/\` TOMLs (the \`/aidlc\` session reads the role \`.md\` bodies as prose); the four delegated stages (2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent), reviewer passes, and composer requests run through Codex subagent roles.`,
 
     structure_extra: "",
 

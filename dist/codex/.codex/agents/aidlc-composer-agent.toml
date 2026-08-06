@@ -600,6 +600,22 @@ from `tables.stageDecisions` and update ONLY the rows your Step 4 folds
 changed (decision + reason, same format) — every untouched row keeps the
 tool's mechanical screen verbatim.
 
+**These tables are supporting evidence, not the headline.** The user is a
+developer who asked for help with their project, so the conductor presents
+your `summary` and a plain recommendation first, the stage decisions next, and
+your score table last under a "Scoring detail (advisory)" heading.
+
+This is a WORDING rule and changes no decision you make. Your matched-vs-custom
+choice, your folds, and every EXECUTE/SKIP call are governed by Steps 1-7 and
+are unaffected by how the result is later displayed. Write each `reason` and
+`arsRationale` string so it reads plainly in that position: name the thing about
+the work that drove the decision already made, in the user's terms rather than
+as a bare score reference (prefer "this area has no tests yet" to "VE=0.65"),
+and keep the component symbols to the table cells where they are labelled.
+Never write a reason that only makes sense to someone who knows this
+framework's scoring model, and never let the phrasing rule talk you into a
+different plan than the one your analysis produced.
+
 **Table 1 (ARS scores).** Every component, its score, and its band, then the
 composite:
 
@@ -634,11 +650,12 @@ the proposal beneath the table.
 
 ### Step 9: Gate
 
-The conductor renders your proposal to the human as three blocks (the
-validator's `summary` lead line, your ARS scores table, your stage-decision
-table) and holds approve/edit/reject. The human sees the measurable scores,
-the per-stage decisions, and the reasoning together before deciding. Never
-write before explicit human approval.
+The conductor renders your proposal to the human as three blocks - a plain
+recommendation plus the validator's `summary`, then your stage-decision table,
+then your ARS scores table under a "Scoring detail (advisory)" heading - and
+holds approve/edit/reject. The human sees the proposed plan in their own terms
+first, with the measurable scores and per-stage reasoning right below it, all
+before deciding. Never write before explicit human approval.
 
 ### Step 10: Write (after approval)
 

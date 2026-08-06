@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-utility:intent-birth, subcommand:aidlc-utility:space-create, subcommand:aidlc-utility:space, subcommand:aidlc-utility:intent, file:skills/aidlc/SKILL.md
+// covers: subcommand:aidlc-utility:intent-create, subcommand:aidlc-utility:space-create, subcommand:aidlc-utility:space, subcommand:aidlc-utility:intent, file:skills/aidlc/SKILL.md
 //
 // t-journey-workspace.sdk.test.ts — the LIVE workspace journey, Claude-SDK
 // logic half (P10 / Stage E). This is the ONE phase that exercises the vision's
@@ -11,7 +11,7 @@
 // driveAidlc() is a fresh SDK session operating on the SAME persisted records —
 // the cross-session on-disk record state IS the proof of composition):
 //   1. `/aidlc "build auth across both repos"` on a fresh two-sibling-repo
-//      workspace → the engine names intent-birth, the conductor runs it, and the
+//      workspace → the engine names intent-create, the conductor runs it, and the
 //      intent auto-births spanning repo-a + repo-b. Asserted on disk: one
 //      intents.json row, repos == the SORTED set ["repo-a","repo-b"], a real
 //      UUIDv7, status "in-flight".
@@ -23,8 +23,8 @@
 //      beat, which combines badly with the in-turn forwarding loop). Asserted:
 //      both per-repo codekb dirs exist with content.
 //   3. birth a SECOND intent alongside the active one via the deterministic
-//      `intent-birth` verb (the engine has NO "offer a 2nd intent" directive on
-//      the logic path — it would advance A via Branch 10; intent-birth mints
+//      `intent-create` verb (the engine has NO "offer a 2nd intent" directive on
+//      the logic path — it would advance A via Branch 10; intent-create mints
 //      unconditionally, the shared cross-harness path). Asserted: two isolated
 //      registry rows + record dirs, distinct UUIDs, and A's state + audit shard
 //      byte-untouched by B's birth.
@@ -44,15 +44,15 @@
 //
 // DRIFT NOTE (verified @ this branch, surfaced for the runbook): the engine's
 // `next` flag parser (aidlc-orchestrate.ts parseNextFlags :249) does NOT
-// recognise `--repos`, and birthPrintDirective (:304) never threads it into the
-// named intent-birth command — so on the AUTO-BIRTH path the repo span is
+// recognise `--repos`, and createPrintDirective (:304) never threads it into the
+// named intent-create command — so on the AUTO-BIRTH path the repo span is
 // captured by SIBLING AUTO-DISCOVERY (resolveBirthRepoSet → discoverSiblingRepos,
 // lib:1299/1273), not by an explicit flag. Step 1 therefore drives the bare
 // `/aidlc "<desc>"` (no --repos, which would pollute the slug as a stray
 // positional) and relies on auto-discovery to capture both git-init'd siblings —
 // which is the genuine composed behaviour the vision promises (an intent spanning
 // the repos present in the workspace). The explicit `--repos` flag is honoured
-// only on a direct `intent-birth --repos` invocation (exercised by t164/unit).
+// only on a direct `intent-create --repos` invocation (exercised by t164/unit).
 //
 // Assertions stay at the JOURNEY level (on-disk record state + verbatim
 // tool-result bytes), tolerant of conversational variance — NEVER on
@@ -106,14 +106,14 @@ const UUIDV7_RE =
 const TEAM_B_SLUG = "teamb";
 
 /**
- * Build a prompt that makes the conductor run the deterministic intent-birth
+ * Build a prompt that makes the conductor run the deterministic intent-create
  * UTILITY directly (not route the request through `next`). WHY this matters: a
- * bare `/aidlc intent-birth …` slash command is parsed by the conductor as
+ * bare `/aidlc intent-create …` slash command is parsed by the conductor as
  * freeform input and fed to `aidlc-orchestrate.ts next`; with intent A ALREADY
  * active, the engine then advances/scope-changes A (Branch 10) instead of
  * birthing — a verified live failure: the conductor ran `scope-change --scope poc`
  * on A, rewriting A's state Scope feature→poc. The journey wants the
- * mints-unconditionally handler (aidlc-utility.ts intent-birth, :1995), so we
+ * mints-unconditionally handler (aidlc-utility.ts intent-create, :1995), so we
  * instruct the conductor to invoke that tool verbatim and NOT touch the active
  * intent. (This is the SKILL.md run-then-continue shape, named explicitly.)
  */
@@ -121,7 +121,7 @@ function birthToolPrompt(scope: string, args: string): string {
   return (
     `Run this exact command with the Bash tool and then stop — do NOT run \`next\`, ` +
     `do NOT advance or scope-change the currently active intent: ` +
-    `bun .claude/tools/aidlc-utility.ts intent-birth --scope ${scope} --arguments ${JSON.stringify(args)}`
+    `bun .claude/tools/aidlc-utility.ts intent-create --scope ${scope} --arguments ${JSON.stringify(args)}`
   );
 }
 
@@ -225,7 +225,7 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
             stopAfterToolResult: STOP_AFTER_BIRTH,
           },
         );
-        // The conductor acted on the engine's birth print: intent-birth ran and
+        // The conductor acted on the engine's birth print: intent-create ran and
         // its verbatim summary landed.
         assertToolResultContains(r1, "Bash", INIT_STATE_SUMMARY);
 
@@ -331,7 +331,7 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
         expect(workflowStartedCount(recordADir)).toBe(1);
 
         // --- Step 3: birth a SECOND intent alongside active A -----------------
-        // The deterministic shared path: the intent-birth utility mints
+        // The deterministic shared path: the intent-create utility mints
         // unconditionally (aidlc-utility.ts:1995). The engine has no "offer 2nd
         // intent" directive on the logic drivers; routed through `next` with A
         // active it would advance/scope-change A (Branch 10) — so we name the tool

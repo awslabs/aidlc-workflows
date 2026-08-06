@@ -105,7 +105,14 @@ describe("t234 adversarial review contract pins (reviewer-as-verifier)", () => {
       join(REPO_ROOT, "harness", "claude", "skills", "aidlc", "SKILL.md"),
       "utf-8",
     );
-    expect(skill).toContain("re-running the §12a reviewer step");
+    // The CONTRACT is that a revision touching a produces[] artifact re-runs the
+    // reviewer; the "§12a" label was dropped from this sentence deliberately (a
+    // section citation the model echoed into chat), so pin the obligation rather
+    // than the cross-reference. The other §12a citations in the SKILL, and t217's
+    // `Reviewer step (§12a)` pin, are untouched.
+    expect(skill).toContain(
+      "re-running the reviewer step when the revision changed a `produces[]` artifact",
+    );
   });
 
   test("product-lead persona restates the contract in domain voice", () => {

@@ -467,7 +467,7 @@ export type WorkspaceNoun = "intent" | "space";
 export const INTENT_VERBS: ReadonlySet<string> = new Set([
   "list",
   "switch",
-  "birth",
+  "create",
 ]);
 
 export const SPACE_VERBS: ReadonlySet<string> = new Set([
@@ -480,13 +480,19 @@ export const RESERVED_FUTURE: ReadonlySet<string> = new Set([
   "archive",
   "rename",
   "show",
+  // Retired verb, still reserved: `intent birth` was the create verb before it
+  // was renamed, so a record named "birth" could not exist in an install made
+  // while it was grammar. Keeping it reserved means such a record stays
+  // switch-reachable and doctor keeps flagging it, instead of the name silently
+  // becoming creatable and colliding.
+  "birth",
 ]);
 
 export type WorkspaceCommand =
   | { kind: "list"; noun: WorkspaceNoun; json: boolean }
   | { kind: "switch"; noun: WorkspaceNoun; name: string; explicit: boolean }
   | { kind: "create"; noun: "space"; name: string }
-  | { kind: "birth"; noun: "intent"; rest: string[] }
+  | { kind: "create-intent"; noun: "intent"; rest: string[] }
   | { kind: "help"; noun: WorkspaceNoun }
   | {
       kind: "error";
@@ -580,8 +586,8 @@ export function parseWorkspaceCommand(tokens: string[]): WorkspaceCommand {
       if (name === undefined) return missingWorkspaceName(noun, "switch");
       return { kind: "switch", noun, name, explicit: true };
     }
-    if (verbOrName === "birth") {
-      return { kind: "birth", noun, rest: tokens.slice(2) };
+    if (verbOrName === "create") {
+      return { kind: "create-intent", noun, rest: tokens.slice(2) };
     }
   }
 
@@ -609,8 +615,8 @@ export function workspaceCommandUtilityArgv(command: WorkspaceCommand): string[]
     case "switch":
       // Explicit `switch <name>` must forward the literal "switch" token so
       // the utility reads <name> as the switch target even when it shadows a
-      // verb (e.g. `intent switch birth` reaching a pre-existing intent named
-      // "birth" instead of re-reading "birth" as the birth verb). Bare-name
+      // verb (e.g. `intent switch create` reaching a pre-existing intent named
+      // "create" instead of re-reading "create" as the create verb). Bare-name
       // sugar (`space teamB`, explicit: false) is unaffected by that bug and
       // must keep the original 2-token shape: the utility's bare
       // `[noun, name]` form IS the switch (see handleIntent/handleSpace's
@@ -622,8 +628,8 @@ export function workspaceCommandUtilityArgv(command: WorkspaceCommand): string[]
         : [command.noun, command.name];
     case "create":
       return ["space-create", command.name];
-    case "birth":
-      return ["intent-birth", ...command.rest];
+    case "create-intent":
+      return ["intent-create", ...command.rest];
     case "help":
       return ["help"];
     case "error":
@@ -1005,7 +1011,7 @@ function shellCommandSegments(command: string): string[] {
   return segments;
 }
 
-// Classify commands for the runtime-compile hook's cheap PostToolUse gate.
+// Classify commands for the rebuild-stage-graph hook's cheap PostToolUse gate.
 // Transition matching stays intentionally lexical, but the recursion guard
 // only examines real unquoted shell-command segments.
 const runtimeCompileHarnessPattern = KNOWN_HARNESS_DIRS
@@ -1948,7 +1954,7 @@ export function findIntentByUuid(
 
 // --- Intent birth: the deterministic mutation behind the engine's directive ---
 //
-// birthIntent() is the single deterministic primitive the `intent-birth` tool
+// createIntent() is the single deterministic primitive the `intent-create` tool
 // handler calls: mint a UUIDv7, create the record dir, append the registry row,
 // set the active-intent cursor. It does NOT emit audit events or write the
 // aidlc-state.md body (the handler owns those, since they need the scope graph)
@@ -1966,7 +1972,7 @@ export interface BornIntent {
   space: string;
 }
 
-export function birthIntent(
+export function createIntent(
   projectDir: string,
   label: string,
   space: string,
@@ -1993,7 +1999,7 @@ export function birthIntent(
   // only treats a record dir as real once it holds an aidlc-state.md (the cursor
   // + lone-intent checks both gate on existsSync(<dir>/aidlc-state.md)). Birth
   // mkdir's the dir, but the full state body is written AFTER birth by the
-  // caller (handleIntentBirth, via the default-resolving writeStateFile). Write
+  // caller (handleIntentCreate, via the default-resolving writeStateFile). Write
   // a header-only stub here so the cursor resolves to THIS record between mint
   // and the full write — without it, activeIntent() returns null and the
   // post-birth state/audit writes leak to the flat fallback (a bootstrap gap).
@@ -2087,7 +2093,7 @@ export function migrateFlatLayout(projectDir: string): FlatMigrationResult | nul
     const uuid = uuidv7();
     const space = DEFAULT_SPACE;
     const intentsRoot = intentsDir(projectDir, space);
-    // SPIKE (date-prefix): same `<YYMMDD>-<short-label>` shape as birthIntent, with
+    // SPIKE (date-prefix): same `<YYMMDD>-<short-label>` shape as createIntent, with
     // a numeric-counter collision resolve.
     const intentDirName = resolveUniqueIntentDir(intentsRoot, intentDirNameBase(slug));
     const leaf = join(intentsRoot, intentDirName);
@@ -3070,7 +3076,7 @@ export const KNOWN_CODEKB_STAGES: ReadonlySet<string> = new Set([
 // suffix idiom matches the codekb marker + one repo segment instead. When the
 // active intent records repos, that segment must belong to the recorded set so
 // a write to one repo's durable codekb cannot revise an unrelated intent. The
-// audit File field is stored forward-slash-normalised (aidlc-audit-logger.ts),
+// audit File field is stored forward-slash-normalised (aidlc-write-audit-log.ts),
 // so the forward-slash matching is harness-neutral; we still normalise
 // defensively in case a caller passes a raw OS path.
 export function producesArtifactFile(
@@ -5384,7 +5390,7 @@ export function activeUnitCheckpoint(
 // the last STAGE_STARTED block is the most recent transition. The slug lives in
 // the block's `**Stage**:` field (appendAuditEntry writes the fields verbatim).
 // Payload-free derivation of "what stage are we on" — used by the Kiro IDE
-// sync-statusline path, where the hook receives no task payload and must read
+// sync-workflow-state path, where the hook receives no task payload and must read
 // the current stage from the audit tail instead.
 //
 // EXCLUDES synthetic `--single` stage-runner rows (Workflow: single-stage:<slug>)

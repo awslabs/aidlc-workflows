@@ -62,7 +62,7 @@ Runs individual stages in isolation with known workspace + state fixtures. Verif
 
 **What it tests:**
 - Preflight health gate: Claude CLI on PATH, AWS credentials valid, Claude responds (exit 0), response non-empty (preflight)
-- CLI tool utility handlers: intent-birth, --doctor, --status, --stage, --phase (integration)
+- CLI tool utility handlers: intent-create, --doctor, --status, --stage, --phase (integration)
 - Individual stages with greenfield/brownfield stubs, artifact verification (integration)
 
 **Run:** `bun tests/run-tests.ts --ci`

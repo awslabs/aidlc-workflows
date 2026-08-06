@@ -79,7 +79,7 @@ Create deployment execution log, smoke test results, health check validation rep
 
 Hand completion to `stage-protocol.md` via
 `bun .codex/tools/aidlc-orchestrate.ts report --stage deployment-execution --result <outcome>`.
-The engine owns all lifecycle transitions and advancement.
+That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
 ### Step 7: Present Completion & Request Approval
 

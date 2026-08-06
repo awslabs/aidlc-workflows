@@ -266,10 +266,10 @@ describe("t230 dispatcher route parity", () => {
       fixture: true,
     },
     {
-      name: "intent birth maps through workspace parser",
-      routerArgs: ["intent", "birth"],
+      name: "intent create maps through workspace parser",
+      routerArgs: ["intent", "create"],
       tool: "aidlc-utility.ts",
-      toolArgs: ["intent-birth"],
+      toolArgs: ["intent-create"],
     },
     {
       name: "space list maps through workspace parser",

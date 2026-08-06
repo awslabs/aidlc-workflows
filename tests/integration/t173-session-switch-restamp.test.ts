@@ -24,14 +24,14 @@
 // session_id) — the cross-process marker handoff is the whole point, so this
 // twin SPAWNS both real dist artifacts exactly as Claude Code drives them.
 //
-// SEEDING: birthIntent() mints two real per-intent records in space "default"
+// SEEDING: createIntent() mints two real per-intent records in space "default"
 // and moves the active-intent cursor between fires; the hook's no-state gate is
-// satisfied by birthIntent's header-only state stub (same pattern as t169).
+// satisfied by createIntent's header-only state stub (same pattern as t169).
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import {
-  birthIntent,
+  createIntent,
   setActiveIntentCursor,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
@@ -92,8 +92,8 @@ function util(p: string, target: string): { exitCode: number; stdout: string } {
 describe("t173 session switch re-stamp (mechanism cli — spawned hook + real intent switch)", () => {
   test("self-switch: resume of the switching conversation does NOT nag", () => {
     // Two real intents; cursor starts on A (auth-service).
-    const a = birthIntent(proj, "auth-service", "default", "feature");
-    const b = birthIntent(proj, "export-bug", "default", "feature");
+    const a = createIntent(proj, "auth-service", "default", "feature");
+    const b = createIntent(proj, "export-bug", "default", "feature");
     setActiveIntentCursor(proj, a.dirName, "default");
 
     // 1) STARTUP S1: marker → S1, stamp S1 → auth-service.
@@ -115,8 +115,8 @@ describe("t173 session switch re-stamp (mechanism cli — spawned hook + real in
   });
 
   test("foreign drift: a DIFFERENT session moving the cursor still nags us", () => {
-    const a = birthIntent(proj, "auth-service", "default", "feature");
-    const b = birthIntent(proj, "export-bug", "default", "feature");
+    const a = createIntent(proj, "auth-service", "default", "feature");
+    const b = createIntent(proj, "export-bug", "default", "feature");
     setActiveIntentCursor(proj, a.dirName, "default");
 
     // 1) STARTUP S1: marker → S1, stamp S1 → auth-service. Our conversation.

@@ -1,4 +1,4 @@
-// covers: function:activeIntentUuid function:findIntentByUuid function:readSessionIntentUuid function:writeSessionIntentUuid function:clearSessionIntentUuid
+// covers: function:activeIntentUuid function:createIntent function:findIntentByUuid function:readSessionIntentUuid function:writeSessionIntentUuid function:clearSessionIntentUuid
 //
 // t167 — the P8 session→intent helper layer behind the resume rebind (the
 // session-start hook composes these). Mechanism: none (pure in-process reads/
@@ -19,7 +19,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
   activeIntentUuid,
-  birthIntent,
+  createIntent,
   clearSessionIntentUuid,
   findIntentByUuid,
   readSessionIntentUuid,
@@ -63,7 +63,7 @@ describe("t167 session→intent helpers (mechanism none — pure in-process)", (
   });
 
   test("activeIntentUuid returns the active (lone) intent's uuid", () => {
-    const a = birthIntent(proj, "auth-service", "default", "feature");
+    const a = createIntent(proj, "auth-service", "default", "feature");
     expect(activeIntentUuid(proj, "default")).toBe(a.uuid);
   });
 
@@ -72,8 +72,8 @@ describe("t167 session→intent helpers (mechanism none — pure in-process)", (
   });
 
   test("activeIntentUuid follows the active-intent cursor among several", () => {
-    const a = birthIntent(proj, "first", "default", "feature");
-    const b = birthIntent(proj, "second", "default", "feature");
+    const a = createIntent(proj, "first", "default", "feature");
+    const b = createIntent(proj, "second", "default", "feature");
     setActiveIntentCursor(proj, a.dirName, "default");
     expect(activeIntentUuid(proj, "default")).toBe(a.uuid);
     setActiveIntentCursor(proj, b.dirName, "default");
@@ -81,8 +81,8 @@ describe("t167 session→intent helpers (mechanism none — pure in-process)", (
   });
 
   test("findIntentByUuid resolves a uuid to {space, slug} across spaces", () => {
-    birthIntent(proj, "in-default", "default", "feature");
-    const t = birthIntent(proj, "in-teamb", "teamB", "feature");
+    createIntent(proj, "in-default", "default", "feature");
+    const t = createIntent(proj, "in-teamb", "teamB", "feature");
     const found = findIntentByUuid(proj, t.uuid);
     expect(found).not.toBeNull();
     expect(found?.space).toBe("teamB");
@@ -90,7 +90,7 @@ describe("t167 session→intent helpers (mechanism none — pure in-process)", (
   });
 
   test("findIntentByUuid returns null for an unknown uuid (stale stamp)", () => {
-    birthIntent(proj, "real", "default", "feature");
+    createIntent(proj, "real", "default", "feature");
     expect(findIntentByUuid(proj, "00000000-0000-0000-0000-000000000000")).toBeNull();
   });
 });

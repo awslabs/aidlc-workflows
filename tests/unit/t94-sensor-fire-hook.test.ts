@@ -1,11 +1,11 @@
-// covers: hook:aidlc-sensor-fire, function:readActiveDirectiveMarker
+// covers: hook:aidlc-run-sensors, function:readActiveDirectiveMarker
 //
 // t94 — unit-level behavioural contract for the PostToolUse sensor-fire hook:
 // every GUARD and EARLY-EXIT branch of its 12-step flow. Migrated from
 // tests/unit/t94-sensor-fire-hook-unit.sh (TAP plan 18). The .sh carried NO
 // `# covers:` header; its subject is the shipped hook
-// dist/claude/.claude/hooks/aidlc-sensor-fire.ts, whose registry unit is
-// `hook:aidlc-sensor-fire` (the same id t95 and t131 credit). t94 is the
+// dist/claude/.claude/hooks/aidlc-run-sensors.ts, whose registry unit is
+// `hook:aidlc-run-sensors` (the same id t95 and t131 credit). t94 is the
 // guard/early-exit half (no-spawn proofs + heartbeat placement); t95 is the
 // dispatch/timeout/heartbeat-advance half — complementary subjects, one hook.
 //
@@ -27,7 +27,7 @@
 // dispatch loop never fired. The heartbeat file (sensor-fire.last) under
 // aidlc-docs/.aidlc-hooks-health/ is checked directly on disk.
 //
-// SOURCE UNDER TEST (dist/claude/.claude/hooks/aidlc-sensor-fire.ts):
+// SOURCE UNDER TEST (dist/claude/.claude/hooks/aidlc-run-sensors.ts):
 //   :53      TTY guard — process.stdin.isTTY -> exit 0.
 //   :59-67   stdin parse — malformed JSON / non-hook-shaped input -> exit 0.
 //   :73-74   empty tool_input.file_path -> exit 0.
@@ -101,7 +101,7 @@ import {
 } from "../harness/fixtures.ts";
 
 const BUN = process.execPath; // the bun running this test
-const HOOK = join(AIDLC_SRC, "hooks", "aidlc-sensor-fire.ts");
+const HOOK = join(AIDLC_SRC, "hooks", "aidlc-run-sensors.ts");
 const FRAMEWORK_GRAPH = join(AIDLC_SRC, "tools", "data", "stage-graph.json");
 
 // ISO-8601-ish prefix the .sh grepped for: YYYY-MM-DDThh:mm:ss... (isoTimestamp
@@ -210,7 +210,7 @@ function spawnLogPath(proj: string): string {
   return join(proj, ".spawn.log");
 }
 function heartbeatPath(proj: string): string {
-  return join(seededRecordDir(proj), ".aidlc-hooks-health", "sensor-fire.last");
+  return join(seededRecordDir(proj), ".aidlc-hooks-health", "run-sensors.last");
 }
 
 interface HookRun {
@@ -250,7 +250,7 @@ function inceptionMd(proj: string): string {
   return join(proj, "aidlc-docs", "inception", "x.md");
 }
 
-describe("t94 aidlc-sensor-fire hook — guards + early exits (migrated from t94-sensor-fire-hook-unit.sh, plan 18)", () => {
+describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94-sensor-fire-hook-unit.sh, plan 18)", () => {
   // ===========================================================================
   // Step 2-5 — input guards.
   // ===========================================================================

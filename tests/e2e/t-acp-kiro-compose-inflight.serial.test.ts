@@ -9,7 +9,7 @@
 //   seed:      a BORN-shape feature workflow (the state-initialization-done
 //              fixture: cursor at intent-capture, market-research +
 //              team-formation pending grid-EXECUTE ahead of it). Seeded from a
-//              fixture rather than a subprocess intent-birth so the deterministic
+//              fixture rather than a subprocess intent-create so the deterministic
 //              tier stays fixture-driven, the same posture the reviewer + front
 //              twins take (a spawned aidlc tool would reclassify this file's
 //              mechanism).

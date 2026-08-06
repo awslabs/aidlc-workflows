@@ -9,7 +9,7 @@
 //   drive:     `/aidlc compose "<task no stock scope fits>"` on a fresh project.
 //   conductor: dispatches the composer -> proposal -> approve/edit/reject gate
 //              (the answerScript approves) -> the composer writes the two
-//              scope files -> the conductor continues into intent-birth with
+//              scope files -> the conductor continues into intent-create with
 //              the composed scope - NO second /aidlc invocation.
 //   disk:      a composed scopes/aidlc-<name>.md + a scope-grid.json entry
 //              exist; a born intent's aidlc-state.md carries the composed
@@ -21,7 +21,7 @@
 // conversational variance - NEVER on assistantText:
 //   (a) a gate fired (askedQuestions >= 1);
 //   (b) the birth ran (`State initialized:` tool-result - only
-//       handleIntentBirth emits it);
+//       handleIntentCreate emits it);
 //   (c) a NEW scope .md landed in .claude/scopes/ (10 files, was 9) AND
 //       scope-grid.json gained its entry (10 keys, was 9) - BOTH files, the
 //       write contract;

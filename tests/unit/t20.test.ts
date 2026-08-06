@@ -107,7 +107,7 @@ interface CliResult {
 function init(p: string, ...extra: string[]): CliResult {
   const res = spawnSync(
     BUN,
-    [TOOL, "intent-birth", "--scope", "poc", "--project-dir", p, ...extra],
+    [TOOL, "intent-create", "--scope", "poc", "--project-dir", p, ...extra],
     { encoding: "utf-8" },
   );
   const stdout = res.stdout ?? "";
@@ -115,7 +115,7 @@ function init(p: string, ...extra: string[]): CliResult {
   return { status: res.status ?? -1, out: `${stdout}${stderr}`, stderr, stdout };
 }
 
-// P4: intent-birth writes state into the born intent's per-intent record dir
+// P4: intent-create writes state into the born intent's per-intent record dir
 // (aidlc/spaces/<space>/intents/<slug>-<id8>/), not the flat aidlc-docs/. Resolve
 // the record dir from the active-space + active-intent cursors, falling back to
 // the flat layout for a not-yet-born project.
@@ -348,7 +348,7 @@ describe("t20 aidlc-utility init — workspace scanner (migrated from t20-unit-w
 
   // --- Birth semantics (P4: --force/re-init guard retired) ---
   // The old --init guarded re-init ("already exists" error; --force to wipe).
-  // P4 retires that: each intent-birth births a NEW intent (the workspace can
+  // P4 retires that: each intent-create births a NEW intent (the workspace can
   // hold many), so a second birth succeeds and adds a second intent + a second
   // WORKFLOW_STARTED — no guard, no --force, no orphan-warning path.
   test("17-19: a second birth succeeds (new intent), adds a fresh WORKFLOW_STARTED — no re-init guard", () => {

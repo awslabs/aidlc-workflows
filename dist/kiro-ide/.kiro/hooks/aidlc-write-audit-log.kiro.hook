@@ -1,0 +1,1 @@
+{"version":"1.0.0","enabled":true,"name":"aidlc-write-audit-log","description":"Records every artifact you create or update in the workflow's audit log, then runs the checks that apply to that file.","when":{"type":"postToolUse","toolTypes":["write"]},"then":{"type":"runCommand","command":"bun .kiro/hooks/aidlc-kiro-adapter.ts audit-and-sensors"}}

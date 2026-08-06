@@ -109,7 +109,7 @@ function setupConstructionProject(scope: string): string {
   mkdirSync(join(proj, "aidlc-docs"), { recursive: true });
   const res = spawnSync(
     BUN,
-    [UTILITY, "intent-birth", "--project-dir", proj, "--force", "--scope", scope],
+    [UTILITY, "intent-create", "--project-dir", proj, "--force", "--scope", scope],
     { encoding: "utf-8" },
   );
   expect(res.status).toBe(0);

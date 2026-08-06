@@ -1,10 +1,10 @@
-// covers: hook:aidlc-audit-logger, function:appendAuditEntry
+// covers: hook:aidlc-write-audit-log, function:appendAuditEntry
 //
-// t07 — aidlc-audit-logger.ts PostToolUse hook behaviour. Migrated from
+// t07 — aidlc-write-audit-log.ts PostToolUse hook behaviour. Migrated from
 // tests/unit/t07-hook-audit-logger.sh (TAP plan 16). Mechanism: cli.
 //
 // WHY CLI (process-boundary, not in-process): the SUBJECT is a hook, not a
-// pure function. aidlc-audit-logger.ts reads PostToolUse JSON from STDIN
+// pure function. aidlc-write-audit-log.ts reads PostToolUse JSON from STDIN
 // (`await Bun.stdin.text()`), resolves its projectDir from the
 // CLAUDE_PROJECT_DIR env var OR by stripping `.claude/hooks` off its own
 // script path (resolveProjectDirFromHook), and self-gates with
@@ -80,7 +80,7 @@ import {
 } from "../harness/fixtures.ts";
 
 const BUN = process.execPath; // the bun running this test
-const HOOK = join(AIDLC_SRC, "hooks", "aidlc-audit-logger.ts");
+const HOOK = join(AIDLC_SRC, "hooks", "aidlc-write-audit-log.ts");
 
 let proj: string;
 
@@ -225,7 +225,7 @@ describe("t07 audit-logger PostToolUse hook (mechanism cli — spawned hook + st
   test("writes the audit-logger.last heartbeat [.sh test 7]", () => {
     const { recordRoot } = seedIntentShard(proj);
     fire(writeJson(join(recordRoot, "test.md")), proj);
-    const heartbeat = join(recordRoot, ".aidlc-hooks-health", "audit-logger.last");
+    const heartbeat = join(recordRoot, ".aidlc-hooks-health", "write-audit-log.last");
     expect(existsSync(heartbeat)).toBe(true);
   });
 
@@ -253,7 +253,7 @@ describe("t07 audit-logger PostToolUse hook (mechanism cli — spawned hook + st
     // is UNSET. Mirrors the .sh's cp of the hook + lib + audit.
     mkdirSync(join(proj, ".claude", "hooks"), { recursive: true });
     mkdirSync(join(proj, ".claude", "tools"), { recursive: true });
-    const localHook = join(proj, ".claude", "hooks", "aidlc-audit-logger.ts");
+    const localHook = join(proj, ".claude", "hooks", "aidlc-write-audit-log.ts");
     copyFileSync(HOOK, localHook);
     copyFileSync(
       join(AIDLC_SRC, "tools", "aidlc-lib.ts"),
@@ -268,7 +268,7 @@ describe("t07 audit-logger PostToolUse hook (mechanism cli — spawned hook + st
       join(proj, ".claude", "tools", "aidlc-audit.ts"),
     );
     fire(writeJson(join(recordRoot, "test.md")), proj, localHook, /* setEnv */ false);
-    const heartbeat = join(recordRoot, ".aidlc-hooks-health", "audit-logger.last");
+    const heartbeat = join(recordRoot, ".aidlc-hooks-health", "write-audit-log.last");
     expect(existsSync(heartbeat)).toBe(true);
   });
 

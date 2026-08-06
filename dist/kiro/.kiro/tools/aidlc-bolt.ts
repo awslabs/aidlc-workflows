@@ -460,7 +460,7 @@ function handleComplete(args: string[]): void {
   // Fragment-merge primitive. Removes the worktree's runtime-graph.json
   // fragment. Idempotent — fragment-absent is a clean no-op. The post-Bash
   // hook fires after this Bash invocation returns, sees AUDIT_MERGED in
-  // the last 3 audit blocks (per aidlc-runtime-compile.ts:87), and rebuilds
+  // the last 3 audit blocks (per aidlc-rebuild-stage-graph.ts:87), and rebuilds
   // main runtime-graph with instances[] populated for this slug.
   const fragmentMergeResult = spawnSibling(pd, "aidlc-runtime.ts", [
     "fragment-merge",

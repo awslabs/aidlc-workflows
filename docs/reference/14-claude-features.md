@@ -113,7 +113,7 @@ The conductor delegates to separate Claude instances via the Claude Code Task to
 | 2.4 User Stories | product lead plus parallel design/developer/quality mob | 4 participants | Bounded collaborative story elaboration with human judgment |
 | 3.5 Code Generation | `aidlc-developer-agent` | aidlc-developer-agent | Code writing benefits from clean context focused on the unit specification |
 
-Workspace detection (0.2) used to be a subagent; it now runs deterministically inside `aidlc-utility intent-birth`.
+Workspace detection (0.2) used to be a subagent; it now runs deterministically inside `aidlc-utility intent-create`.
 
 ### Agent Tiers (projected model + effort)
 

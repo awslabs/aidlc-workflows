@@ -447,7 +447,7 @@ export function setupTuiProject(opts: TuiProjectOptions = {}): string {
 
 /**
  * Compile the copied harness's runtime graph and ensure it contains the state
- * file's current stage. Seeded state fixtures bypass intent-birth and stage
+ * file's current stage. Seeded state fixtures bypass intent-create and stage
  * transitions, so append only the missing production audit rows, recompile,
  * and verify through the shipped `aidlc-runtime.ts read` command.
  */

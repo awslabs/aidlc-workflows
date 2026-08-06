@@ -26,7 +26,7 @@ no standalone meaning.
    `$ARGUMENTS`: forward any recognized flags
    (`--scope <name>`/`--depth <level>`/`--test-strategy <level>`)
    as-is, and pass any freeform description text via `--arguments "<text>"`
-   (`intent-birth` reads the description from the `--arguments` flag, NOT a
+   (`intent-create` reads the description from the `--arguments` flag, NOT a
    positional — forwarding it bare would silently drop it). ALSO derive a short
    **`--label`**: a 2-3 word kebab-case essence of what's being built
    (`"I would like to build a simple calculator application"` → `--label
@@ -36,7 +36,7 @@ no standalone meaning.
    tool then falls back to the scope token):
 
    ```bash
-   bun .aidlc/tools/aidlc-utility.ts intent-birth --arguments "<description>" --label "<2-3 word essence>"
+   bun .aidlc/tools/aidlc-utility.ts intent-create --arguments "<description>" --label "<2-3 word essence>"
    ```
 
    Pass `--scope <name>` **only if the user named one**; otherwise omit it and the engine picks the install's default scope. Omit `--arguments`

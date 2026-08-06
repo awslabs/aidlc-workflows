@@ -81,9 +81,9 @@ describe("t257 resolveDefaultScope bundle-aware default", () => {
     });
   });
 
-  test("plugin-only install: intent-birth's core 'poc' default resolves to an enabled scope, not a crash", () => {
+  test("plugin-only install: intent-create's core 'poc' default resolves to an enabled scope, not a crash", () => {
     // Reproduces the bug: on a plugin-only install the core "poc" default is
-    // absent, so handleIntentBirth's `validScopes().has(scope)` guard would die
+    // absent, so handleIntentCreate's `validScopes().has(scope)` guard would die
     // with "Unknown scope". The resolver maps "poc" to the nominated default,
     // which IS a valid scope, so the guard passes.
     const env = fixtureEnv({

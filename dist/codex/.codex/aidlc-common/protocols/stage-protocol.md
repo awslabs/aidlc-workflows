@@ -2,6 +2,64 @@
 
 MANDATORY: All stages follow this protocol. Referenced by every stage file.
 
+### Talking to the user (the voice contract)
+
+MANDATORY on every stage, every gate, every message the user reads. This
+governs the WORDS you say, never the mechanics you run: every step, tool call,
+audit event, and gate semantic in this protocol is unchanged by it.
+
+The person you are talking to is a software developer building THEIR project.
+They did not ask to learn this framework's internals; they asked for help
+shipping their work. So narrate the work, not the plumbing. "I'm working out
+which parts of the development process fit this change" lands; "the
+orchestration engine is resolving the compiled scope grid" does not.
+
+**Reserved internal vocabulary. These words are for your instructions, never
+for chat narration:** engine, directive, dispatch, conductor, harness, verb,
+scope grid, steering, forwarding loop, mint, birth, swarm, entropy, and the
+ARS component names (IAE, CSU, VE, R, UA). The user's project has none of
+these things.
+
+Say this instead:
+
+| Instead of | Say |
+|------------|-----|
+| the engine / the orchestration engine | the workflow, or just "I" |
+| the next directive | the next step |
+| dispatch the architect agent | hand this off to the architect, or bring in the architect |
+| your harness / the harness dir | your project setup |
+| birth / mint an intent | create (a workflow, a record) |
+| verify / validate the artifact | check it |
+| the compiled scope grid says | this workflow covers |
+
+**At gates**, three plain things in this order: what you produced, what the
+user should look at, and what happens after they approve. Name files by path
+so they can open them. Never explain the gate's machinery to justify asking.
+
+**Technical detail is welcome when the user asks for it, and required when you
+report an error** (they need the specific command or path to fix it). Even
+then the FIRST sentence is plain language; the specifics follow it.
+
+**In Construction, the loop's bookkeeping is internal.** This phase repeats the
+same stage once per piece of work, and the machinery that drives the repetition
+is the largest pile of internal detail in the framework: which pass of the
+iteration this is, what a continuation token carries, whether a gate has
+resolved yet and to what, what a stage's `produces` list came out as, whether a
+design stage applies to this piece of work at all. None of it is spoken, in any
+words. A plain-language retelling is not an improvement on it, because the
+problem was never the vocabulary: the user has no iteration and no gate
+boolean, so there is nothing here to tell them. What IS theirs is which piece
+of their work is being built and which stage is running on it, and on a
+re-entry the directive's `narration` value already says exactly that. Where a
+directive carries no line, one sentence naming the piece being built is the
+ceiling, and silence is the ordinary case.
+
+Two things this contract does NOT change. Print a message a tool tells you to
+print VERBATIM: those strings are the tool's own wording, not yours to
+paraphrase. And keep every audit event name, state marker, tool flag, file
+path, and stage slug exactly as written, in prose and in machine-facing
+sections alike.
+
 ### Structured questions (harness-neutral contract)
 
 Whenever this protocol or a stage file says **present a structured question**,
@@ -123,9 +181,9 @@ header: Autonomy
 multiSelect: false
 options:
   - label: Continue autonomously
-    description: Run remaining Bolts without gates. Failures still halt and ask.
+    description: Build the remaining Bolts without stopping to check in. I still stop and ask if something fails.
   - label: Gate every Bolt
-    description: Present an approval gate after each Bolt (or parallel batch).
+    description: Stop for your approval after each Bolt (or each parallel batch).
 ```
 
 - Record the answer in `aidlc-state.md` as `Construction Autonomy Mode: autonomous` or `Construction Autonomy Mode: gated` via `aidlc-bolt.ts set-autonomy --mode <choice>` (which emits `AUTONOMY_MODE_SET` itself).
@@ -167,14 +225,14 @@ options:
 
 Every stage ends with this 5-part structure:
 
-### Part 0: Enter the approval gate (mandatory — the engine records the held gate before the human answers it)
+### Part 0: Enter the approval gate (mandatory: the held gate is recorded before the human answers it)
 Entering the gate:
 1. Render Parts 1-2 (announcement, summary), then run the §13 learnings ritual as its own human turn — END YOUR TURN at its question. Its logged `QUESTION_ANSWERED` row must precede the gate's `STAGE_AWAITING_APPROVAL` (§13 step 3 is the contract; the gate is never opened in the same message as the learnings question).
-2. After the learnings answer is logged: `bun .codex/tools/aidlc-orchestrate.ts report --stage <slug> --result awaiting-approval` — the engine marks `[-]` → `[?]` and emits `STAGE_AWAITING_APPROVAL`. `/aidlc --status` now truthfully shows the held gate.
-3. Present Part 3 (the approval question). This is a lifecycle gate, not an interview question: do not call `aidlc-log.ts decision` or `aidlc-log.ts answer` for it.
+2. After the learnings answer is logged: `bun .codex/tools/aidlc-orchestrate.ts report --stage <slug> --result awaiting-approval` marks `[-]` -> `[?]` and emits `STAGE_AWAITING_APPROVAL`. `/aidlc --status` now truthfully shows the held gate. These are internal bookkeeping steps: run them, never narrate them. This step is bookkeeping the user has no stake in: **SAY:** nothing for it, not that a gate is being opened, not that anything is being recorded. Go from the learnings answer straight into the question below.
+3. Present Part 3 (the approval question). This is a lifecycle gate, not an interview question: do not call `aidlc-log.ts decision` or `aidlc-log.ts answer` for it. Word it per the voice contract at the top of this file: what you produced, what to look at, what happens next.
 4. Based on the user response:
-   - **Approve** → `bun .codex/tools/aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"`. The engine emits any missing `STAGE_AWAITING_APPROVAL`, then `GATE_APPROVED` + `STAGE_COMPLETED`, and auto-advances to the next in-scope stage (or completes the workflow on the final stage). No separate `advance` call required.
-   - **Request Changes** → `bun .codex/tools/aidlc-orchestrate.ts report --stage <slug> --result rejected --user-input "<feedback>"`. The engine emits `GATE_REJECTED` + `STAGE_REVISING`, marks `[?]` → `[R]`, and increments Revision Count. When the feedback already names what to change, revise immediately; ask a clarifying question first ONLY when the feedback is genuinely ambiguous, and ask it as a structured question with concrete options drawn from the artifact (never an open-ended freeform prompt — a driver or scripted session that answers only structured questions must be able to progress the revision loop). When the revision changed a `produces[]` artifact and the directive carries a reviewer, re-run the §12a reviewer step before reporting revised — fresh dispatch record, fresh `## Review` verdict replacing the stale one; the NOT-READY lead-alone loop and its iteration budget apply as at first entry. (The §13 learnings ritual runs once per stage and is not re-run.) Then call `bun .codex/tools/aidlc-orchestrate.ts report --stage <slug> --result revised` to emit a fresh `STAGE_AWAITING_APPROVAL` and mark `[R]` → `[?]` — always re-present the gate after the revision; never leave the stage parked in `[R]` waiting on further conversation.
+   - **Approve** → `bun .codex/tools/aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"`. That call emits any missing `STAGE_AWAITING_APPROVAL`, then `GATE_APPROVED` + `STAGE_COMPLETED`, and auto-advances to the next in-scope stage (or completes the workflow on the final stage). No separate `advance` call required.
+   - **Request Changes** → `bun .codex/tools/aidlc-orchestrate.ts report --stage <slug> --result rejected --user-input "<feedback>"`. That call emits `GATE_REJECTED` + `STAGE_REVISING`, marks `[?]` → `[R]`, and increments Revision Count. When the feedback already names what to change, revise immediately; ask a clarifying question first ONLY when the feedback is genuinely ambiguous, and ask it as a structured question with concrete options drawn from the artifact (never an open-ended freeform prompt — a driver or scripted session that answers only structured questions must be able to progress the revision loop). When the revision changed a `produces[]` artifact and the directive carries a reviewer, re-run the §12a reviewer step before reporting revised — fresh dispatch record, fresh `## Review` verdict replacing the stale one; the NOT-READY lead-alone loop and its iteration budget apply as at first entry. (The §13 learnings ritual runs once per stage and is not re-run.) Then call `bun .codex/tools/aidlc-orchestrate.ts report --stage <slug> --result revised` to emit a fresh `STAGE_AWAITING_APPROVAL` and mark `[R]` → `[?]` — always re-present the gate after the revision; never leave the stage parked in `[R]` waiting on further conversation.
    - **Accept as-is** (after 3 rejection cycles) → same as Approve; include `--user-input "Accept as-is after N cycles"`.
 
 ### Part 1: Announcement (mandatory)
@@ -194,9 +252,9 @@ Structured bullet-point summary of what was produced:
   | requirements-analysis-questions.md | 5 questions, all answered |
   ```
 - For the FIRST completion message of a session (typically Requirements Analysis or Workspace Detection), include:
-  "**Project depth**: [Minimal/Standard/Comprehensive] — depth adapts artifact detail.
-  **Test strategy**: [Minimal/Standard/Comprehensive] — test strategy controls test volume.
-  You can request different depth or test strategy at any approval gate."
+  "**Project depth**: [Minimal/Standard/Comprehensive]: how much detail I write into each document.
+  **Test strategy**: [Minimal/Standard/Comprehensive]: how many tests I write.
+  Ask me to change either one at any approval gate."
 
 ### Part 3: Review + Approval (mandatory)
 ```markdown
@@ -217,10 +275,11 @@ in-scope progress with overall shown parenthetically:
 ```
 Progress: [X]/[S] in-scope stages complete ([N]/32 overall) | [phase-N]/[phase-total] [Phase]. Next: [Next Stage Name]
 ```
-Where `S` = total `EXECUTE` stages for the current scope, derived from the
-compiled scope grid. Use `bun .codex/tools/aidlc-utility.ts
-scope-table` when you need the current totals; never carry a hand-maintained
-per-scope count table in this protocol.
+Keep this format exactly as shown. `S` = the number of stages this workflow
+actually runs, read from the current scope's compiled totals. Use `bun
+.codex/tools/aidlc-utility.ts scope-table` when you need those
+totals; never carry a hand-maintained per-scope count table in this protocol,
+and never narrate where the number came from.
 
 Example (full-scope): "Progress: 13/32 overall | 3/7 IDEATION stages complete. Next: Approval & Handoff"
 Example (reduced-scope): "Progress: 5/8 in-scope stages complete (7/32 overall) | 2/3 CONSTRUCTION. Next: Build & Test"
@@ -704,6 +763,15 @@ Each stage specifies its lead and supporting agents. To load a persona:
 
 Some stages use multiple agents (e.g., Feasibility uses aidlc-architect-agent + aidlc-aws-platform-agent + aidlc-compliance-agent). How the support agents participate is governed by the directive's `mode` — the stage's communication topology — never by the mere presence of `support_agents`. The roles are constant across topologies: the **lead agent** owns the stage's `produces[]` artifacts, **support agents** collaborate as real participants who write their own work, and the `reviewer` (§12a, when declared) verifies from outside afterwards. The orchestrator is the bus on every topology: every exchange between participants is a dispatch it makes and a return it carries. Agents do NOT invoke each other — only the orchestrator delegates.
 
+**What the user hears while an ensemble runs.** These handoffs happen inside a stage, past the reach of a directive's `narration`, so the sentences are written here. Only the double-quoted text is spoken; fill the `[bracketed]` slots and drop the brackets.
+
+- Handing a specific question to one specialist - **SAY:** "Let me bring in the [trade] on [the specific question, in plain terms]."
+- Starting a chain where each specialist builds on the last - **SAY:** "The [first trade] takes a look first, then the [next trade] builds on what comes back."
+- Convening several specialists at once - **SAY:** "Getting the [trade] and [trade] to weigh in on this together."
+- A specialist's work has come back and you are folding it in - **SAY:** nothing. Integration is the work, not an event.
+
+Trades, never agent names, files, or slugs: product manager, product lead, designer, delivery lead, architect, architecture reviewer, platform engineer, compliance specialist, security engineer, developer, quality engineer, release engineer, operations engineer. Nothing is said about handing off as a mechanism, briefs, context paths, rule bundles, contribution files, identity markers, blindness between participants, rounds, or which topology the stage declares. The user is meeting colleagues; that setup is ours, not theirs. A topology that does not apply is never mentioned either.
+
 **Who writes what (mirrors a real working session — everyone writes; the owner collates and edits):**
 
 - Each dispatched support agent WRITES its own **contribution file** at `<record>/<phase>/<stage>/contributions/<agent-slug>.md` (per-unit stages: under the unit's stage dir). Separate files per agent, so parallel dispatch never conflicts. The file's FIRST line is the identity marker verbatim: `**Collaborator:** <agent-slug>`, followed by `## Contribution` (the substantive content, written to be integrable) and `## Positions` (`AGREE:` / `OBJECT:` bullets with one-line rationales; `None` = full agreement).
@@ -991,9 +1059,9 @@ To prevent context overflow in subagent calls:
 ### Subagent failure recovery
 If a Task tool call fails (timeout, error, or returns truncated/incomplete output):
 1. **Retry once** with a reduced context prompt — summarize inception-phase artifacts instead of including full content, pass only the current unit's design artifacts
-2. If the retry also fails, **inform the user** and offer two options via a structured question:
-   - "Run inline" — execute the stage work directly in the orchestrator conversation (slower but avoids subagent issues)
-   - "Skip and revisit" — mark the stage as incomplete and continue; return to it later
+2. If the retry also fails, **tell the user plainly what failed** and offer two options via a structured question:
+   - "Run it here": do the stage's work in this conversation instead of handing it off; slower, but it sidesteps whatever is failing
+   - "Skip and revisit": leave the stage unfinished, keep going, and come back to it later
 3. Log the failure and resolution in `<record>/audit/<host>-<clone>.md` using the Error log format
 
 ---
@@ -1010,6 +1078,17 @@ The directive's `review_class` field tells you HOW the review runs - the engine 
 
 - **`adversarial`** - the refute-and-repair loop below, up to `reviewer_max_iterations` passes with lead fixes between them. The default for Construction stages, where findings are machine-checkable and fix loops converge.
 - **`advisory`** - ONE review pass as decision support for the human gate (`reviewer_max_iterations` is 1). Whatever the verdict, do NOT re-invoke the lead and do NOT re-run the reviewer: record the terminal receipt, proceed to §13, and quote the reviewer's findings VERBATIM at the approval gate for the human to triage. The default for the human-gated ideation/inception prose stages, where readiness is a judgment call that belongs to the human at the gate.
+
+### What the user hears from this section
+
+A directive's `narration` value covers entering a stage; it cannot reach inside one, and this check happens inside. So three sentences are written for it here, and each is the whole of what the user hears at that moment. Only the double-quoted text is ever spoken; fill the `[bracketed]` slots and drop the brackets.
+
+- Before the check - **SAY:** "Let me have the [reviewer's trade] check this over before you see it."
+- Findings came back and you are fixing them - **SAY:** "Fair points came back, let me tighten [the specific thing, in plain terms] and re-check." Once per round, never once per finding.
+- Concerns remain after the last round - **SAY:** "I had this checked [N] times and [N] concern[s] are still open. They are in the artifact and I will flag them at the decision below, so you can judge whether they matter."
+- A revision changed the work, so the check runs again - **SAY:** "Those changes are in. Let me get them checked over again before you look."
+
+Everything else in this section is silent. Nothing is said about invoking, handing off, sub-agents, iterations, budgets, receipts, dispatch records, the exempt list, or a verdict as a token: the user hears "a second look", never "the reviewer returned NOT-READY". Nor is the trigger for a re-check explained in the framework's terms: which declared outputs an edit touched, whether a recorded verdict is now stale, and what has to be re-recorded are all internal, so the sentence above is the whole of it. Name the trade, never the agent's file or slug. When the field is absent this check does not run, and that is not something the user hears either, in any wording: go straight to the next thing you actually do. Reasoning aloud about whether a branch applies is the surest way to leak internal vocabulary, because the only words for it are internal ones.
 
 ### Flow
 
@@ -1073,7 +1152,7 @@ The directive's `review_class` field tells you HOW the review runs - the engine 
      - Return to step 1 (re-invoke reviewer)
    - **NOT-READY** and iterations exhausted:
      - Proceed to approval gate with unresolved findings noted:
-       "Reviewer found issues after N iterations. Presenting with unresolved findings for your decision."
+       "I had this reviewed N times and some concerns are still open. Here they are, so you can decide whether they matter."
 
 The reviewer also re-runs on the Part 0 revision path: when a human rejection
 leads to a revision that changes a `produces[]` artifact, re-run this step

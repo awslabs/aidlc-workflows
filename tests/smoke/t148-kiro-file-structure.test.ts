@@ -293,7 +293,7 @@ describe("t148 dist/kiro file structure", () => {
       .map((h) => h.command)
       .sort();
     expect(subagentCommands).toEqual([
-      "bun .kiro/hooks/aidlc-kiro-adapter.ts dispatch-rules",
+      "bun .kiro/hooks/aidlc-kiro-adapter.ts deliver-stage-rules",
       "bun .kiro/hooks/aidlc-kiro-adapter.ts plan-approval-guard",
     ]);
     const matchers = (hooks.postToolUse ?? []).map((h) => h.matcher).sort();

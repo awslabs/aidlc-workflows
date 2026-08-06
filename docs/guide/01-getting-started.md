@@ -303,8 +303,8 @@ Run the health check to confirm everything is in place:
 
 ```
 ✓ bun installed (required for CLI tools and hooks)
-✓ aidlc-audit-logger.ts present
-✓ aidlc-sync-statusline.ts present
+✓ aidlc-write-audit-log.ts present
+✓ aidlc-sync-workflow-state.ts present
 ✓ aidlc-validate-state.ts present
 ✓ aidlc-log-subagent.ts present
 ✓ aidlc-session-start.ts present

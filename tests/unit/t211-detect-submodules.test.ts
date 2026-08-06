@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-utility:intent-birth
+// covers: subcommand:aidlc-utility:intent-create
 //
 // The workspace scanner's SIXTH brownfield signal: a parseable .gitmodules at
 // the workspace root with >= 1 valid submodule path entry classifies the
@@ -6,8 +6,8 @@
 // Before this, a submodule-only workspace scanned Greenfield -> reverse-
 // engineering auto-skipped -> every design stage ran blind.
 //
-// Two mechanisms, one covers id (intent-birth, mechanism cli):
-//  - CLI-boundary cases spawn `bun aidlc-utility.ts intent-birth --scope poc
+// Two mechanisms, one covers id (intent-create, mechanism cli):
+//  - CLI-boundary cases spawn `bun aidlc-utility.ts intent-create --scope poc
 //    --project-dir <p>` (t20's pattern) and read the state file / audit shard /
 //    stdout — the observable contract of the birth pipeline (scan -> state +
 //    audit + stdout warning).
@@ -48,11 +48,11 @@ interface CliResult {
   stderr: string;
 }
 
-/** Spawn `bun aidlc-utility.ts intent-birth --scope poc --project-dir <p>`. */
+/** Spawn `bun aidlc-utility.ts intent-create --scope poc --project-dir <p>`. */
 function birth(p: string): CliResult {
   const res = spawnSync(
     BUN,
-    [TOOL, "intent-birth", "--scope", "poc", "--project-dir", p],
+    [TOOL, "intent-create", "--scope", "poc", "--project-dir", p],
     { encoding: "utf-8" },
   );
   return {
@@ -108,7 +108,7 @@ const GITMODULES_TWO = `[submodule "services/api"]
 \turl = https://example.com/web.git
 `;
 
-describe("t211 aidlc-utility intent-birth — git submodules as a brownfield signal", () => {
+describe("t211 aidlc-utility intent-create — git submodules as a brownfield signal", () => {
   // --- Case 1: .gitmodules + empty dirs -> Brownfield, RE stays EXECUTE, warned ---
   test("1: uninitialized submodules classify Brownfield with warning + RE EXECUTE", () => {
     const p = proj();

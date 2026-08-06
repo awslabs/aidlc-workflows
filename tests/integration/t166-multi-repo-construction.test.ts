@@ -15,11 +15,11 @@
 // root is NOT a git repo (the multi-repo model — there is no privileged repo to
 // host the framework). Sibling code repos (`repo-a/`, `repo-b/`) are immediate
 // children, each its own git on `main`. The intent's repo set is captured by
-// spawning the real `intent-birth --repos ...` handler, which sets the
+// spawning the real `intent-create --repos ...` handler, which sets the
 // active-intent cursor + writes intents.json.repos — exactly what the
 // construction-path repo resolution reads. All temp dirs cleaned in afterAll.
 //
-// TIMEOUT DISCIPLINE (mirrors t78): the heavy tool spawns (intent-birth runs the
+// TIMEOUT DISCIPLINE (mirrors t78): the heavy tool spawns (intent-create runs the
 // full scope→stage state build; git init/commit per repo) run at the DESCRIBE-body
 // level, NOT inside test() — so the 5s per-test default only ever wraps the cheap
 // assertions, never the multi-second setup chain.
@@ -106,7 +106,7 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
     const proj = freshWorkspace();
     makeSiblingRepo(proj, "repo-a");
     makeSiblingRepo(proj, "repo-b");
-    const birth = runUtil(proj, "intent-birth", "--scope", "feature", "--repos", "repo-a,repo-b");
+    const birth = runUtil(proj, "intent-create", "--scope", "feature", "--repos", "repo-a,repo-b");
     const created = runWorktree(proj, "create", "--slug", "alpha", "--base", "main", "--repo", "repo-a");
 
     test("birth records the two-repo set", () => {
@@ -128,7 +128,7 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
     const proj = freshWorkspace();
     makeSiblingRepo(proj, "repo-a");
     makeSiblingRepo(proj, "repo-b");
-    runUtil(proj, "intent-birth", "--scope", "feature", "--repos", "repo-a,repo-b");
+    runUtil(proj, "intent-create", "--scope", "feature", "--repos", "repo-a,repo-b");
     const created = runWorktree(proj, "create", "--slug", "beta", "--base", "main");
 
     test("exits non-zero with a 'spans N repos' message", () => {
@@ -145,7 +145,7 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
     const proj = freshWorkspace();
     makeSiblingRepo(proj, "repo-a");
     makeSiblingRepo(proj, "repo-b");
-    runUtil(proj, "intent-birth", "--scope", "feature", "--repos", "repo-a,repo-b");
+    runUtil(proj, "intent-create", "--scope", "feature", "--repos", "repo-a,repo-b");
     const created = runWorktree(proj, "create", "--slug", "gamma", "--base", "main", "--repo", "repo-c");
 
     test("exits non-zero with a 'not in this intent's repo set' message", () => {
@@ -158,7 +158,7 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
     const proj = freshWorkspace();
     const repoA = makeSiblingRepo(proj, "repo-a");
     makeSiblingRepo(proj, "repo-b");
-    runUtil(proj, "intent-birth", "--scope", "feature", "--repos", "repo-a,repo-b");
+    runUtil(proj, "intent-create", "--scope", "feature", "--repos", "repo-a,repo-b");
     runWorktree(proj, "create", "--slug", "delta", "--base", "main", "--repo", "repo-a");
     // Make a commit on the bolt branch IN THE WORKTREE so the squash has content.
     const wt = worktreeDir(proj, "delta");
@@ -190,7 +190,7 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
   describe("single-repo intent infers the lone repo", () => {
     const proj = freshWorkspace();
     makeSiblingRepo(proj, "solo");
-    runUtil(proj, "intent-birth", "--scope", "feature", "--repos", "solo");
+    runUtil(proj, "intent-create", "--scope", "feature", "--repos", "solo");
     const inferred = runWorktree(proj, "create", "--slug", "epsilon", "--base", "main");
     const explicit = runWorktree(proj, "create", "--slug", "zeta", "--base", "main", "--repo", "solo");
 
@@ -216,7 +216,7 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
     git(proj, "config", "user.name", "t");
     git(proj, "commit", "-q", "-m", "init", "--allow-empty");
     // Birth with NO --repos and no sibling repos → no repos row recorded.
-    const birth = runUtil(proj, "intent-birth", "--scope", "poc");
+    const birth = runUtil(proj, "intent-create", "--scope", "poc");
     const created = runWorktree(proj, "create", "--slug", "legacy", "--base", "main");
 
     test("birth records no repos row", () => {
@@ -243,7 +243,7 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
     const proj = freshWorkspace();
     makeSiblingRepo(proj, "repo-a");
     makeSiblingRepo(proj, "repo-b");
-    runUtil(proj, "intent-birth", "--scope", "feature", "--repos", "repo-a,repo-b");
+    runUtil(proj, "intent-create", "--scope", "feature", "--repos", "repo-a,repo-b");
     const prepared = runSwarm(
       proj, "prepare", "--batch", "1", "--units", "swarmunit", "--base", "main", "--repo", "repo-a",
     );
@@ -263,7 +263,7 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
     const proj = freshWorkspace();
     makeSiblingRepo(proj, "repo-a");
     makeSiblingRepo(proj, "repo-b");
-    runUtil(proj, "intent-birth", "--scope", "feature", "--repos", "repo-a,repo-b");
+    runUtil(proj, "intent-create", "--scope", "feature", "--repos", "repo-a,repo-b");
     const prepared = runSwarm(proj, "prepare", "--batch", "1", "--units", "orphanunit", "--base", "main");
 
     test("exits non-zero with a 'spans 2 repos' message", () => {

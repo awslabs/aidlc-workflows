@@ -103,7 +103,7 @@ function countCompletedCheckboxes(stateText: string): number {
 describe("t70 /aidlc birth on a greenfield stub (sdk)", () => {
   // -------------------------------------------------------------------------
   // P4: the user-facing --init is retired; naming a scope on a fresh workspace
-  // BIRTHS the first intent (the engine NAMES intent-birth, the conductor runs
+  // BIRTHS the first intent (the engine NAMES intent-create, the conductor runs
   // it). The deterministic birth tool classifies the greenfield-todo stub and
   // writes aidlc-state.md into the BORN intent's record. Every .sh state-grep is
   // re-expressed against the on-disk per-intent state fields / the typed audit

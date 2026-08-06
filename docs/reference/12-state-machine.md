@@ -35,13 +35,13 @@ stateDiagram-v2
 
 **Status values:** `Running`, `Completed`.
 
-A workflow starts when the first intent is born (`aidlc-utility intent-birth`, auto-invoked on the first `/aidlc` or via `/aidlc-init`) and ends when the last in-scope stage's approval gate closes. There is no `Paused` status and no `Waiting for Approval` status — approval is a stage-level concern, pause has no UX.
+A workflow starts when the first intent is born (`aidlc-utility intent-create`, auto-invoked on the first `/aidlc` or via `/aidlc-init`) and ends when the last in-scope stage's approval gate closes. There is no `Paused` status and no `Waiting for Approval` status — approval is a stage-level concern, pause has no UX.
 
 A workflow's `Running` state persists across Claude Code sessions. You start a workflow on Monday, stop the session, resume on Tuesday — the workflow is still `Running`; the *session* ended and a new one started.
 
 | Transition | Trigger | Emitter |
 |---|---|---|
-| `[*] -> Running` | `aidlc-utility intent-birth` | `tools/aidlc-utility.ts` |
+| `[*] -> Running` | `aidlc-utility intent-create` | `tools/aidlc-utility.ts` |
 | `Running -> Completed` | Final stage outcome reported through `aidlc-orchestrate.ts report` | `tools/aidlc-state.ts` (internal emitter) |
 
 ---
@@ -72,14 +72,14 @@ Phase state is tracked in the `## Phase Progress` section of `aidlc-state.md`. I
 
 | Transition | Trigger | Emitter |
 |---|---|---|
-| seed (`Verified`/`Active`/`Pending`/`Skipped`) | `aidlc-utility intent-birth` | `tools/aidlc-utility.ts` |
+| seed (`Verified`/`Active`/`Pending`/`Skipped`) | `aidlc-utility intent-create` | `tools/aidlc-utility.ts` |
 | `Active -> Verified` | Stage completion/skip reported through `aidlc-orchestrate.ts` at a phase boundary; forward `aidlc-jump execute` | `tools/aidlc-state.ts` (internal emitter), `tools/aidlc-jump.ts` |
 | `Pending -> Active` (boundary) | Engine routes after a reported outcome, or `aidlc-jump execute` | `tools/aidlc-state.ts` (internal emitter), `tools/aidlc-jump.ts` |
 | `Pending -> Skipped` (jumped over) | forward `aidlc-jump execute` past a whole phase | `tools/aidlc-jump.ts` |
 | `Verified/Active -> Pending` reset | backward `aidlc-jump execute` (reset phases with EXECUTE stages) | `tools/aidlc-jump.ts` |
 | `Pending <-> Skipped` re-derivation | `aidlc-utility scope-change` / `recompose` (not-yet-reached rows only) | `tools/aidlc-utility.ts` |
 
-At the init→post-init hand-off, `aidlc-utility intent-birth` itself emits `PHASE_COMPLETED + PHASE_VERIFIED + PHASE_STARTED + STAGE_STARTED` after the final init stage so the audit trail captures the transition instead of going silent between birth and the first `advance`.
+At the init→post-init hand-off, `aidlc-utility intent-create` itself emits `PHASE_COMPLETED + PHASE_VERIFIED + PHASE_STARTED + STAGE_STARTED` after the final init stage so the audit trail captures the transition instead of going silent between birth and the first `advance`.
 
 ---
 
@@ -300,8 +300,8 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 
 | Event | Emitter | Notes |
 |---|---|---|
-| `ARTIFACT_CREATED` | `hooks/aidlc-audit-logger.ts` | Write to net-new path — distinguished from UPDATED via `mtimeMs == birthtimeMs` stat check |
-| `ARTIFACT_UPDATED` | `hooks/aidlc-audit-logger.ts` | Edit tool or Write overwriting existing file |
+| `ARTIFACT_CREATED` | `hooks/aidlc-write-audit-log.ts` | Write to net-new path — distinguished from UPDATED via `mtimeMs == birthtimeMs` stat check |
+| `ARTIFACT_UPDATED` | `hooks/aidlc-write-audit-log.ts` | Edit tool or Write overwriting existing file |
 | `ARTIFACT_REUSED` | `tools/aidlc-state.ts` | `reuse-artifact` subcommand — keep/modify/redo decisions |
 
 ### Construction Bolts
@@ -321,7 +321,7 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 | `SESSION_RESUMED` | `hooks/aidlc-session-start.ts` | `source=resume` |
 | `SESSION_COMPACTED` | `hooks/aidlc-validate-state.ts` | Emitted at PreCompact (not at next SessionStart) to avoid duplication |
 | `SESSION_ENDED` | `hooks/aidlc-session-end.ts` | Includes `Reason` field from Claude Code |
-| `HUMAN_TURN` | `hooks/aidlc-mint-presence.ts` (+ per-harness prompt-submit adapters) | One per real human prompt or answered question widget; the approval/interview gate requires one since the last gate resolution |
+| `HUMAN_TURN` | `hooks/aidlc-record-human-turn.ts` (+ per-harness prompt-submit adapters) | One per real human prompt or answered question widget; the approval/interview gate requires one since the last gate resolution |
 | `SUBAGENT_COMPLETED` | `hooks/aidlc-log-subagent.ts` | Records subagent completion via SubagentStop hook |
 | `REVIEWER_SCOPE_BLOCKED` | `hooks/aidlc-reviewer-scope.ts` | A per-unit reviewer's tool call refused for reaching into sibling units' `construction/` paths (the §12a read-scope bound); one row per refusal |
 | `REVIEW_FREEZE_BLOCKED` | `hooks/aidlc-review-freeze.ts` | A file-tool or shell `produces[]` write refused because it would invalidate a fresh READY review receipt before the gate (the §12a terminal-receipt ordering); one row per refusal |

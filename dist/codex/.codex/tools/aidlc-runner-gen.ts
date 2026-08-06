@@ -182,10 +182,10 @@ that flag without this skill.
 }
 
 // Render the `/aidlc-init` runner: a thin wrapper over the deterministic
-// `intent-birth` move (which runs the whole initialization phase — mint the
+// `intent-create` move (which runs the whole initialization phase — mint the
 // intent + detect the workspace + build state — in one call). This is the
 // init-phase analogue of the per-stage runners: opt-in packaging over a path
-// the engine already names at birth. It drives `intent-birth`, NOT
+// the engine already names at birth. It drives `intent-create`, NOT
 // `--stage … --single`, so the stage-runner drift guard (which keys on the
 // `--stage`+`--single` marker) never counts it. There is no user-facing
 // `/aidlc --init` (P4): the workspace shell ships in dist/ and the engine
@@ -219,7 +219,7 @@ no standalone meaning.
    \`$ARGUMENTS\`: forward any recognized flags
    (\`--scope <name>\`/\`--depth <level>\`/\`--test-strategy <level>\`)
    as-is, and pass any freeform description text via \`--arguments "<text>"\`
-   (\`intent-birth\` reads the description from the \`--arguments\` flag, NOT a
+   (\`intent-create\` reads the description from the \`--arguments\` flag, NOT a
    positional — forwarding it bare would silently drop it). ALSO derive a short
    **\`--label\`**: a 2-3 word kebab-case essence of what's being built
    (\`"I would like to build a simple calculator application"\` → \`--label
@@ -229,7 +229,7 @@ no standalone meaning.
    tool then falls back to the scope token):
 
    \`\`\`bash
-   bun ${harnessDir()}/tools/aidlc-utility.ts intent-birth --arguments "<description>" --label "<2-3 word essence>"
+   bun ${harnessDir()}/tools/aidlc-utility.ts intent-create --arguments "<description>" --label "<2-3 word essence>"
    \`\`\`
 
    Pass \`--scope <name>\` **only if the user named one**; otherwise omit it and the engine picks the install's default scope. Omit \`--arguments\`

@@ -177,8 +177,8 @@ and the engine **auto-births** the first intent on your first `/aidlc` (or when
 you describe what to build). Birth runs the three Initialization stages
 (Workspace Scaffold, Workspace Detection, State Init) as a single deterministic
 tool call: it creates the intent's record dir at
-`aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (the `audit/` shard dir, the
-per-phase artifact dirs, `verification/`) and the empty space-level
+`aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (the `audit/` shard dir, an
+artifact dir for each phase the scope runs, `verification/`) and the empty space-level
 `aidlc/knowledge/` directory, runs a rule-based workspace scan, and writes that
 intent's `aidlc-state.md` with the scope plan.
 It logs the init-sequence events (`WORKFLOW_STARTED`, `WORKSPACE_SCAFFOLDED`,
@@ -197,7 +197,7 @@ code repo (each an immediate child directory with a `.git`), the birth step
 records the set of repos the intent touches in its `intents.json` row. By default
 it **auto-discovers** every sibling repo; to scope an intent to a specific subset,
 the birth tool accepts `--repos a,b` (a comma-separated list of repo directory
-names). These are flags of the deterministic `aidlc-utility intent-birth` step the
+names). These are flags of the deterministic `aidlc-utility intent-create` step the
 engine runs for you — not `/aidlc` flags you type. During Construction, each git
 operation (worktree, swarm, Bolt) targets one repo; the conductor passes
 `--repo <name>` to anchor it, required only when an intent spans more than one
@@ -287,8 +287,8 @@ When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** sect
 
 ```
 ✓ bun installed (required for CLI tools and hooks)
-✓ aidlc-audit-logger.ts present
-✓ aidlc-sync-statusline.ts present
+✓ aidlc-write-audit-log.ts present
+✓ aidlc-sync-workflow-state.ts present
 ✓ aidlc-validate-state.ts present
 ✓ aidlc-log-subagent.ts present
 ✓ aidlc-session-start.ts present

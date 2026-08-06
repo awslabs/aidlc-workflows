@@ -302,10 +302,10 @@ export const ROUTES: readonly Route[] = [
     group: "intent",
     kind: "custom",
     classification: "translation",
-    verbs: ["list", "switch", "<name>", "birth"],
+    verbs: ["list", "switch", "<name>", "create"],
     custom: "workspace",
-    human: [{ command: "intent [list|switch|birth]", summary: "list, switch, or create intent context" }],
-    all: ["list [--json]", "switch <name>", "<name>", "birth [args]"],
+    human: [{ command: "intent [list|switch|create]", summary: "list, switch, or create intent context" }],
+    all: ["list [--json]", "switch <name>", "<name>", "create [args]"],
   },
   {
     id: "space",

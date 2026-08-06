@@ -18,17 +18,17 @@
 // none reachable by importing a function. So this twin SPAWNS the real shipped
 // hook the same way Claude Code's SessionStart drives it (same pattern as t10).
 //
-// SEEDING: birthIntent() (aidlc-lib.ts) mints two real per-intent records in
+// SEEDING: createIntent() (aidlc-lib.ts) mints two real per-intent records in
 // space "default" and sets the active-intent cursor; setActiveIntentCursor()
 // moves the cursor between the START fire and the RESUME fire to simulate the
-// drift. The hook gates on stateFilePath existing, which birthIntent satisfies
+// drift. The hook gates on stateFilePath existing, which createIntent satisfies
 // (it writes a header-only state stub bound to the active cursor).
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  birthIntent,
+  createIntent,
   intentsRegistryPath,
   readIntentRegistry,
   readSessionIntentUuid,
@@ -79,11 +79,11 @@ function fire(p: string, source: string, sessionId: string): FireResult {
 
 describe("t169 session-start resume rebind (mechanism cli — spawned hook + cursor drift)", () => {
   test("startup stamps the working intent; resume after a cursor move OFFERS a rebind", () => {
-    // Two real intents in the default space. birthIntent leaves the cursor on
+    // Two real intents in the default space. createIntent leaves the cursor on
     // the LAST born (export-bug). Move it to auth-service so the conversation
     // starts bound to auth-service.
-    const a = birthIntent(proj, "auth-service", "default", "feature");
-    const b = birthIntent(proj, "export-bug", "default", "feature");
+    const a = createIntent(proj, "auth-service", "default", "feature");
+    const b = createIntent(proj, "export-bug", "default", "feature");
     setActiveIntentCursor(proj, a.dirName, "default"); // cursor → auth-service
 
     // 1) STARTUP: this conversation (session "S1") stamps auth-service's uuid.
@@ -109,7 +109,7 @@ describe("t169 session-start resume rebind (mechanism cli — spawned hook + cur
   });
 
   test("resume with the cursor UNCHANGED offers nothing (no false positive)", () => {
-    const a = birthIntent(proj, "billing", "default", "feature");
+    const a = createIntent(proj, "billing", "default", "feature");
     setActiveIntentCursor(proj, a.dirName, "default");
     // Startup stamps billing; cursor stays on billing.
     fire(proj, "startup", "S2");
@@ -119,7 +119,7 @@ describe("t169 session-start resume rebind (mechanism cli — spawned hook + cur
   });
 
   test("resume with NO prior stamp (fresh session id) offers nothing", () => {
-    const a = birthIntent(proj, "search", "default", "feature");
+    const a = createIntent(proj, "search", "default", "feature");
     setActiveIntentCursor(proj, a.dirName, "default");
     // A resume for a session that never fired startup here → no stamp → no offer.
     const resumed = fire(proj, "resume", "NEVER-STAMPED");
@@ -143,14 +143,14 @@ describe("t169 session-start resume rebind (mechanism cli — spawned hook + cur
   });
 
   test("resume onto a UUID-less orphan clears the prior workflow stamp", () => {
-    const old = birthIntent(proj, "registered-work", "default", "feature");
+    const old = createIntent(proj, "registered-work", "default", "feature");
     setActiveIntentCursor(proj, old.dirName, "default");
     fire(proj, "startup", "S4");
     expect(readSessionIntentUuid(proj, "S4")).toBe(old.uuid);
 
     // Keep the old intent registered so the hook can offer a rebind, but move
     // the live cursor to an orphan record whose registry row no longer exists.
-    const orphan = birthIntent(proj, "orphan-work", "orphan-space", "feature");
+    const orphan = createIntent(proj, "orphan-work", "orphan-space", "feature");
     setActiveIntentCursor(proj, orphan.dirName, "orphan-space");
     setActiveSpaceCursor(proj, "orphan-space");
     rmSync(intentsRegistryPath(proj, "orphan-space"));
@@ -163,11 +163,11 @@ describe("t169 session-start resume rebind (mechanism cli — spawned hook + cur
   });
 
   test("resume after the prior intent was deleted restamps the live workflow", () => {
-    const old = birthIntent(proj, "deleted-work", "default", "feature");
+    const old = createIntent(proj, "deleted-work", "default", "feature");
     setActiveIntentCursor(proj, old.dirName, "default");
     fire(proj, "startup", "S5");
 
-    const live = birthIntent(proj, "live-work", "default", "feature");
+    const live = createIntent(proj, "live-work", "default", "feature");
     const registry = readIntentRegistry(proj, "default")
       .filter((entry) => entry.uuid !== old.uuid);
     writeFileSync(

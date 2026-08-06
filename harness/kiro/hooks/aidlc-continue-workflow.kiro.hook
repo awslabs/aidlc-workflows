@@ -1,0 +1,1 @@
+{"version":"1.0.0","enabled":true,"name":"aidlc-continue-workflow","description":"Keeps a running workflow moving: when the assistant tries to end its turn with work still pending, this reminds it to finish the current step.","when":{"type":"agentStop"},"then":{"type":"runCommand","command":"bun .kiro/hooks/aidlc-kiro-adapter.ts continue-workflow"}}

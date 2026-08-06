@@ -144,7 +144,7 @@ If `aidlc-state.md` exists but cannot be parsed (missing required sections, inva
    - If `<record>/inception/application-design/` has design docs, mark design stages complete
    - If application code exists matching story designs, mark code gen stages complete
 4. Set "Current Status" to the first stage that lacks artifact evidence
-5. Inform the user: "State file was corrupted. Rebuilt from artifacts. Please verify the recovered state."
+5. Tell the user: "The file tracking this workflow's progress was damaged, so I rebuilt it from the documents already on disk. Please check that the recovered progress looks right before we continue."
 
 ### Missing artifact recovery
 If a stage references prior artifacts that do not exist on disk:
@@ -152,7 +152,7 @@ If a stage references prior artifacts that do not exist on disk:
 2. Check whether the producing stage is on the active scope's path at all (SKIP stages never produce). If the producer is SKIP for this scope, the artifact is absent BY DESIGN — this is not an error and re-running the producer is not an option. Proceed with the stage's documented fallback (work from the requirements, the code knowledge base, or the workspace's existing configuration, per the stage body), or, if the human has the artifact from elsewhere, they may provide it manually at the expected path. Do not invent the missing artifact's content and do not treat the gap as a failure.
 3. If the producer IS on the scope path, check if it is marked complete in state
 4. If marked complete but artifacts missing:
-   - Inform the user: "Stage [X] is marked complete but its artifacts are missing."
+   - Tell the user: "[X] is recorded as finished, but the files it should have produced are not on disk."
    - Offer two options: re-run the stage, or provide the artifacts manually
 5. If not marked complete, simply run the stage normally
 

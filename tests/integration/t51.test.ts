@@ -102,7 +102,7 @@ function readAudit(p: string): string {
 
 /** init --scope bugfix (mirrors the .sh bootstrap, L78-79). */
 function runInit(proj: string): void {
-  const res = spawnSync(BUN, [UTIL, "intent-birth", "--scope", "bugfix", "--project-dir", proj], {
+  const res = spawnSync(BUN, [UTIL, "intent-create", "--scope", "bugfix", "--project-dir", proj], {
     encoding: "utf-8",
     env: { ...process.env, AIDLC_WORKFLOW_INTENT: "bugfix parity test" },
   });

@@ -134,14 +134,14 @@ describe("t214 compose offer carries the example counts (no feature-workflow tra
 });
 
 describe("t214 birth print carries the cost parenthetical", () => {
-  test("next bugfix prints intent-birth AND the computed cost", () => {
+  test("next bugfix prints intent-create AND the computed cost", () => {
     proj = createTestProject();
     // A genuinely empty workspace births instead of prompting to pick (t198:208).
     removeWorkspaceRecord(proj);
     const d = directiveOf(runNext(proj, ["bugfix"]).out);
     expect(d.kind).toBe("print");
     const m = String(d.message);
-    expect(m).toContain("intent-birth --scope bugfix");
+    expect(m).toContain("intent-create --scope bugfix");
     const bf = counts(GRID.bugfix.stages);
     expect(m).toContain(`(${bf.execute} of ${bf.total} stages, ${bf.gates} approval gates`);
   });

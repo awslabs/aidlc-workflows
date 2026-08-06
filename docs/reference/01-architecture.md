@@ -160,11 +160,11 @@ If any of the three is false, default to per-workflow-only.
 
 **Inline stages** -- The conductor reads the lead agent's flat file (e.g., `agents/aidlc-architect-agent.md`) and knowledge from `knowledge/[agent]/` for persona framing, then executes the stage directly in conversation. This allows real-time user interaction: asking questions, resolving ambiguity, and iterating on artifacts before approval.
 
-Twenty-eight stages use inline execution, including all three Initialization stages (Workspace Scaffold, Workspace Detection, State Init — all run deterministically inside `aidlc-utility intent-birth`), all Ideation stages, five Inception stages (Requirements Analysis, Refined Mockups, Application Design, Units Generation, Delivery Planning), six Construction stages (Functional Design, NFR Requirements, NFR Design, Infrastructure Design, Build and Test, CI Pipeline), and all Operation stages. Note: Build and Test (3.6) runs once after all units are complete, not per-unit.
+Twenty-eight stages use inline execution, including all three Initialization stages (Workspace Scaffold, Workspace Detection, State Init — all run deterministically inside `aidlc-utility intent-create`), all Ideation stages, five Inception stages (Requirements Analysis, Refined Mockups, Application Design, Units Generation, Delivery Planning), six Construction stages (Functional Design, NFR Requirements, NFR Design, Infrastructure Design, Build and Test, CI Pipeline), and all Operation stages. Note: Build and Test (3.6) runs once after all units are complete, not per-unit.
 
 **Subagent stages** -- The conductor prepares context (prior artifacts, project description, workspace findings) and delegates to a Claude Code Task tool subagent. The subagent executes autonomously and returns a structured summary. This is used for stages that benefit from focused, independent work without user interaction during execution. If a subagent call fails, the conductor retries once with a reduced-context prompt, then offers the user inline execution or skip-and-revisit as fallback options.
 
-Four stages use dispatched execution: Reverse Engineering (2.1, `mode: pipeline` — developer scan then architect synthesis-and-write), Practices Discovery (2.2, `mode: subagent` — pipeline-deploy lead draft, mutually blind quality/developer/devsecops spokes, human interview, lead integration), User Stories (2.4, `mode: mob` — product lead draft plus design/developer/quality contribution rounds), and Code Generation (3.5, focused developer subagent). The complete topology is 28 inline / 2 subagent / 1 pipeline / 1 mob. Workspace Detection (0.2) runs deterministically inside `aidlc-utility intent-birth`, not as a subagent.
+Four stages use dispatched execution: Reverse Engineering (2.1, `mode: pipeline` — developer scan then architect synthesis-and-write), Practices Discovery (2.2, `mode: subagent` — pipeline-deploy lead draft, mutually blind quality/developer/devsecops spokes, human interview, lead integration), User Stories (2.4, `mode: mob` — product lead draft plus design/developer/quality contribution rounds), and Code Generation (3.5, focused developer subagent). The complete topology is 28 inline / 2 subagent / 1 pipeline / 1 mob. Workspace Detection (0.2) runs deterministically inside `aidlc-utility intent-create`, not as a subagent.
 
 ```mermaid
 flowchart LR
@@ -292,8 +292,8 @@ dist/claude/.claude/
 +-- CLAUDE.md
 +-- settings.json
 +-- hooks/
-|   +-- aidlc-audit-logger.ts
-|   +-- aidlc-sync-statusline.ts
+|   +-- aidlc-write-audit-log.ts
+|   +-- aidlc-sync-workflow-state.ts
 |   +-- aidlc-validate-state.ts
 |   +-- aidlc-log-subagent.ts
 |   +-- aidlc-session-start.ts

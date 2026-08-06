@@ -345,7 +345,7 @@ describe("t242 state-transition ownership guard", () => {
     );
     expect(r.status).toBe(1);
     expect(`${r.stdout}${r.stderr}`).toContain(
-      "status synchronization is owned by the sync-statusline hook",
+      "status synchronization is owned by the sync-workflow-state hook",
     );
   });
 

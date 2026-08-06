@@ -39,12 +39,12 @@ The conductor passes `$ARGUMENTS` to the engine's first `next` verbatim — it n
 
 When the argument matches one of the 9 known scopes (`enterprise`, `feature`, `mvp`, `poc`, `bugfix`, `refactor`, `infra`, `security-patch`, `workshop`):
 
-An explicitly named scope on a fresh workspace (no intent yet — no `aidlc-state.md` under `aidlc/spaces/*/intents/*/`) **births the first intent**: the engine's `next` emits a run-then-continue `print` directive naming `aidlc-utility.ts intent-birth --scope <scope>` (threading any `--depth` / `--test-strategy` / `--review` flags onto the named command); the conductor runs it and re-runs `next` to land on the first stage. Both naming shapes — the bare positional (`/aidlc bugfix`) and the explicit flag (`/aidlc --scope bugfix`) — emit the identical birth print. Describing what to build (`/aidlc "build the auth service"`) also births. A bare `/aidlc` with no explicitly named scope and no description does NOT birth (an env- or default-resolved scope is not a birth signal); it emits the no-state error directing the user to describe what to build or name a scope.
+An explicitly named scope on a fresh workspace (no intent yet — no `aidlc-state.md` under `aidlc/spaces/*/intents/*/`) **births the first intent**: the engine's `next` emits a run-then-continue `print` directive naming `aidlc-utility.ts intent-create --scope <scope>` (threading any `--depth` / `--test-strategy` / `--review` flags onto the named command); the conductor runs it and re-runs `next` to land on the first stage. Both naming shapes — the bare positional (`/aidlc bugfix`) and the explicit flag (`/aidlc --scope bugfix`) — emit the identical birth print. Describing what to build (`/aidlc "build the auth service"`) also births. A bare `/aidlc` with no explicitly named scope and no description does NOT birth (an env- or default-resolved scope is not a birth signal); it emits the no-state error directing the user to describe what to build or name a scope.
 
 1. Reads guardrails from `aidlc/spaces/<active-space>/memory/`.
 2. Asks the user "What would you like to build?"
 3. Determines stages to execute per the Scope-to-Stage Mapping.
-4. Executes the Initialization phase (workspace-scaffold, workspace-detection, state-init) as a single deterministic `aidlc-utility intent-birth` call. The welcome message is rendered at session start via `companyAnnouncements` in `settings.json`.
+4. Executes the Initialization phase (workspace-scaffold, workspace-detection, state-init) as a single deterministic `aidlc-utility intent-create` call. The welcome message is rendered at session start via `companyAnnouncements` in `settings.json`.
 5. Creates stage-level tasks for all in-scope stages. The first stage is set to `in_progress`; the rest are `pending`. Stages not in scope get no task at all.
 6. Begins the first post-initialization stage.
 
@@ -117,9 +117,9 @@ Overrides the test volume strategy (minimal, standard, comprehensive) independen
 
 ### Intent birth -- the Initialization phase
 
-There is no separate scaffold command (the earlier `init` flag was retired; the workspace shell ships pre-built in `dist/<harness>/`). The three Initialization stages (workspace-scaffold, workspace-detection, state-init) run deterministically inside `aidlc-utility intent-birth` — auto-invoked on the first `/aidlc` (or `/aidlc <description>`), or explicitly via the `/aidlc-init` packaging. Birth mints the intent's record dir at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` with state initialised, scope routing applied, and the workflow positioned at the first post-Initialization stage:
+There is no separate scaffold command (the earlier `init` flag was retired; the workspace shell ships pre-built in `dist/<harness>/`). The three Initialization stages (workspace-scaffold, workspace-detection, state-init) run deterministically inside `aidlc-utility intent-create` — auto-invoked on the first `/aidlc` (or `/aidlc <description>`), or explicitly via the `/aidlc-init` packaging. Birth mints the intent's record dir at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` with state initialised, scope routing applied, and the workflow positioned at the first post-Initialization stage:
 
-1. Creates the record dir tree (idempotent -- skips existing directories/files): the `audit/` shard dir, stage artifact directories (empty), and the verification directory.
+1. Creates the record dir tree (idempotent -- skips existing directories/files): the `audit/` shard dir, one empty artifact directory per phase the scope runs (a phase with no EXECUTE stage under the active scope gets none, matching the `PHASE_SKIPPED` events in step 4), and the verification directory. Per-stage directories are not pre-created; a stage's directory appears when it first writes an artifact.
 2. Creates the empty space-level `aidlc/knowledge/` directory (a sibling of the space's `intents/`). It is free-form with no fixed file set — birth seeds no per-agent subdirectories and no READMEs; the team adds files itself.
 3. Scans the workspace and writes the intent's `aidlc-state.md` with the actual phase (e.g., `IDEATION` for `--scope feature`), the resolved scope, and the stage plan derived from the compiled scope grid (`scope-grid.json`, the transpose of each stage's `scopes:` frontmatter).
 4. Emits the full event sequence: `WORKFLOW_STARTED`, `WORKSPACE_SCAFFOLDED`, `WORKSPACE_SCANNED`, `WORKSPACE_INITIALISED`, `PHASE_STARTED` for the first executing phase, `STAGE_STARTED` + `STAGE_COMPLETED` for each Initialization stage, plus `PHASE_SKIPPED` events for any phases the scope skips.
@@ -381,7 +381,7 @@ its lead inline and dispatches only its support agents:
 | 2.4 User Stories | mob | lead inline; `aidlc-design-agent` + `aidlc-developer-agent` + `aidlc-quality-agent` in parallel | 4 participants | The lead drafts; mutually blind collaborators write contribution files; the lead integrates before the gate |
 | 3.5 Code Generation | subagent | `aidlc-developer-agent` | aidlc-developer-agent | Code writing benefits from clean context focused on unit specification |
 
-Workspace detection (0.2) used to be a subagent. It is now a deterministic rule-based scanner inside `aidlc-utility intent-birth`; rules are documented in `aidlc-common/stages/initialization/workspace-detection.md`.
+Workspace detection (0.2) used to be a subagent. It is now a deterministic rule-based scanner inside `aidlc-utility intent-create`; rules are documented in `aidlc-common/stages/initialization/workspace-detection.md`.
 
 The 6-step process:
 
@@ -562,7 +562,7 @@ Tasks are created at the stage level -- one task per stage in scope. Tasks exist
 
 Tasks are created in phase batches:
 
-- **INITIALIZATION**: All Initialization stage tasks (workspace-scaffold, workspace-detection, state-init) created before `aidlc-utility intent-birth` runs. The tool completes all three stages in one call; tasks flip to completed after the tool returns.
+- **INITIALIZATION**: All Initialization stage tasks (workspace-scaffold, workspace-detection, state-init) created before `aidlc-utility intent-create` runs. The tool completes all three stages in one call; tasks flip to completed after the tool returns.
 - **IDEATION**: All Ideation stage tasks created before stage 1.1 begins.
 - **INCEPTION**: All Inception stage tasks created before stage 2.1 begins.
 - **CONSTRUCTION**: Tasks created based on the execution plan from Delivery Planning. Per-unit stage tasks are created for each unit, plus cross-cutting tasks.
@@ -725,9 +725,9 @@ Complete reference of all 32 stages with execution metadata. The welcome message
 
 ## Appendix B: Hook Reference
 
-The framework hooks are registered project-wide in `settings.json` (the v0.6.0 hooks-move; they self-gate when no workflow is active). Three of them are detailed below. The rest, including `aidlc-sensor-fire.ts`, `aidlc-sync-statusline.ts`, and `aidlc-runtime-compile.ts`, are covered in [Hooks and Tools](06-hooks-and-tools.md), which carries the authoritative hook list and full source-level documentation for all of them.
+The framework hooks are registered project-wide in `settings.json` (the v0.6.0 hooks-move; they self-gate when no workflow is active). Three of them are detailed below. The rest, including `aidlc-run-sensors.ts`, `aidlc-sync-workflow-state.ts`, and `aidlc-rebuild-stage-graph.ts`, are covered in [Hooks and Tools](06-hooks-and-tools.md), which carries the authoritative hook list and full source-level documentation for all of them.
 
-### PostToolUse: audit-logger.ts
+### PostToolUse: aidlc-write-audit-log.ts
 
 - **Matcher**: `Write|Edit`
 - **Trigger**: Every Write or Edit Claude Code tool call during the skill session.

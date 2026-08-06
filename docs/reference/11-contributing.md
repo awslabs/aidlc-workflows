@@ -119,7 +119,7 @@ For handlers that benefit from agent reasoning (filesystem scanning, decision-ma
 2. **Statusline update** -- If the active intent's `aidlc-state.md` exists, temporarily set `Current Stage` to describe the running utility (e.g., `running health check`), then restore the original value when done. The `aidlc-statusline.ts` hook reads this field for the terminal status bar.
 3. **Audit logging** -- Invoke the appropriate tool subcommand (e.g., `bun .claude/tools/aidlc-utility.ts <handler>` that calls `appendAuditEntry` internally). Never hand-write `**Event**:` markdown blocks from LLM prose — see [State Machine: Forbidden patterns](12-state-machine.md).
 
-The `intent-birth` handler is fully deterministic: all three init stages (workspace-scaffold, workspace-detection, state-init) run inside a single `aidlc-utility intent-birth` call. The welcome message is rendered at session start via `companyAnnouncements` in `settings.json` and is not a stage.
+The `intent-create` handler is fully deterministic: all three init stages (workspace-scaffold, workspace-detection, state-init) run inside a single `aidlc-utility intent-create` call. The welcome message is rendered at session start via `companyAnnouncements` in `settings.json` and is not a stage.
 
 ## Adding a Scope
 
@@ -159,7 +159,7 @@ A scope is authored as a file (its identity) plus a per-stage membership tag. Th
 
 3. **Recompile + regenerate the scope-table** — `bun .claude/tools/aidlc-graph.ts compile` transposes the `scopes:` tags into `tools/data/scope-grid.json`. Then `bun .claude/tools/aidlc-utility.ts scope-table` prints the canonical Markdown region for SKILL.md's compiled scope table. Keep the region between the `<!-- BEGIN: compiled ... -->` / `<!-- END: compiled ... -->` markers generated, then run `bun .claude/tools/aidlc-graph.ts compile --check` and `bun .claude/tools/aidlc-utility.ts scope-table --check` to confirm exit 0 (no drift).
 
-4. **Verify the scope resolves** - `bun core/tools/aidlc-utility.ts intent-birth --scope hotfix --project-dir /tmp/scope-smoke` should succeed and produce a state file with `Scope: hotfix`.
+4. **Verify the scope resolves** - `bun core/tools/aidlc-utility.ts intent-create --scope hotfix --project-dir /tmp/scope-smoke` should succeed and produce a state file with `Scope: hotfix`.
 
 5. **Verify `doctor` accepts it as an env default** — `AWS_AIDLC_DEFAULT_SCOPE=hotfix bun aidlc-utility.ts doctor` should report the env var as valid.
 
@@ -241,7 +241,7 @@ Agent metadata (display name, example knowledge files) is read from each agent's
 
 2. **Verify the agent is discovered** — `bun -e "import { loadAgents } from 'core/tools/aidlc-lib.ts'; console.log(loadAgents().find(a => a.slug === '<slug>-agent'));"` should print the new agent's metadata.
 
-3. **Verify intent birth creates the space knowledge dir** — `bun core/tools/aidlc-utility.ts intent-birth --scope poc --project-dir /tmp/agent-smoke` should create the empty space-level `aidlc/knowledge/` directory (a sibling of the space's `intents/`). Birth does not seed per-agent subdirectories or READMEs — the team creates `aidlc/knowledge/<slug>-agent/` itself when it has content.
+3. **Verify intent birth creates the space knowledge dir** — `bun core/tools/aidlc-utility.ts intent-create --scope poc --project-dir /tmp/agent-smoke` should create the empty space-level `aidlc/knowledge/` directory (a sibling of the space's `intents/`). Birth does not seed per-agent subdirectories or READMEs — the team creates `aidlc/knowledge/<slug>-agent/` itself when it has content.
 
 4. **Verify the statusline renders** — seed a state file with `Active Agent: <slug>-agent` and invoke the statusline hook; the output should include the display name after the `--` separator.
 

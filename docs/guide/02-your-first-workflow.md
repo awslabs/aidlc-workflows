@@ -39,20 +39,25 @@ while keeping you in control at every decision point.
 
 ## Initialization Phase (Automatic)
 
-The three initialization stages run deterministically inside `aidlc-utility intent-birth`, a single tool call that completes in well under a second. You do not interact with initialization; it auto-births the first intent into the active space and bootstraps its record dir for the workflow.
+The three initialization stages run deterministically inside `aidlc-utility intent-create`, a single tool call that completes in well under a second. You do not interact with initialization; it auto-births the first intent into the active space and bootstraps its record dir for the workflow.
 
 ### Stage 0.1: Workspace Scaffold
 
-The framework births the first intent and creates its record dir at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (the `<space>` is `default` unless you use a named space):
+The framework creates the first intent and its record dir at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (the `<space>` is `default` unless you use a named space). It creates one folder per phase your scope actually runs, so the record shows the plan rather than every phase that exists. A `feature` scope runs all five; a `bugfix` scope skips Ideation and Operation, so those folders never appear:
 
 ```
-Intent born — record dir scaffolded:
-  aidlc/spaces/default/intents/<YYMMDD>-<label>/initialization/   (3 stage artifact dirs)
-  aidlc/spaces/default/intents/<YYMMDD>-<label>/ideation/         (7 stage artifact dirs)
-  ...
+Intent created, record dir at aidlc/spaces/default/intents/<YYMMDD>-<label>/
+  initialization/
+  inception/
+  construction/
+  verification/
 Space-level dirs ensured:
-  aidlc/spaces/default/knowledge/                             (team knowledge — empty; you add files)
+  aidlc/spaces/default/knowledge/    (team knowledge, empty; you add files)
 ```
+
+Per-stage folders are not created up front. A stage's folder (for example
+`inception/requirements-analysis/`) appears the first time that stage writes an
+artifact, so the record only ever lists work that produced something.
 
 ### Stage 0.2: Workspace Detection
 
@@ -218,7 +223,7 @@ sequenceDiagram
 
 ### Subagent Delegation
 
-Four stages dispatch to background subagents — 2.1 Reverse Engineering (pipeline: developer scan, then architect synthesis-and-write), 2.2 Practices Discovery (subagent hub-and-spoke: lead draft, three mutually blind support reviews, human interview, lead integration), 2.4 User Stories (mob: collaborators contribute in parallel, and judgment-call disagreements may surface to you mid-stage), and 3.5 Code Generation (subagent). Practices Discovery deliberately brings you into the room between the spokes and final integration; the User Stories mob may also surface judgment calls mid-stage. Workspace detection (0.2) runs deterministically inside `aidlc-utility intent-birth` rather than as a subagent.
+Four stages dispatch to background subagents — 2.1 Reverse Engineering (pipeline: developer scan, then architect synthesis-and-write), 2.2 Practices Discovery (subagent hub-and-spoke: lead draft, three mutually blind support reviews, human interview, lead integration), 2.4 User Stories (mob: collaborators contribute in parallel, and judgment-call disagreements may surface to you mid-stage), and 3.5 Code Generation (subagent). Practices Discovery deliberately brings you into the room between the spokes and final integration; the User Stories mob may also surface judgment calls mid-stage. Workspace detection (0.2) runs deterministically inside `aidlc-utility intent-create` rather than as a subagent.
 
 ```mermaid
 sequenceDiagram

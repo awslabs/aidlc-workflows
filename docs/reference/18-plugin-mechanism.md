@@ -105,7 +105,7 @@ The steps (identical regardless of trigger):
 3. **Merge contributions** — every active contribution to a stage is folded into the target stage's source (§6): structural surfaces set-unioned, prose fragments spliced at their anchors.
 4. **Compile** — `aidlc-graph compile` regenerates `stage-graph.json` + `scope-grid.json`; the orchestrator routes entirely off those, so a plugin stage runs the moment it is composed — no prose or skill edit needed.
 
-Because composition is one N-way merge (not a sequence of independent overlays), **two plugins that both contribute to the same stage are genuinely merged** — structural additions set-union, prose fragments order deterministically — rather than one silently overwriting the other. The runtime stays **read-only** with respect to composition: all merging happens at compose time, never per session. The merge edits **stage source** (not the compiled JSON), so it is **durable** across any later `aidlc-graph compile` (e.g. the runtime-compile hook) and **idempotent** — re-running on every SessionStart composes nothing new.
+Because composition is one N-way merge (not a sequence of independent overlays), **two plugins that both contribute to the same stage are genuinely merged** — structural additions set-union, prose fragments order deterministically — rather than one silently overwriting the other. The runtime stays **read-only** with respect to composition: all merging happens at compose time, never per session. The merge edits **stage source** (not the compiled JSON), so it is **durable** across any later `aidlc-graph compile` (e.g. the rebuild-stage-graph hook) and **idempotent** — re-running on every SessionStart composes nothing new.
 
 ## 5. Selection
 

@@ -1,0 +1,11 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "aidlc-continue-workflow",
+      "trigger": "Stop",
+      "description": "Records whether a running workflow still had pending work when the assistant stopped. Advisory only on Kiro IDE: its Stop trigger cannot block a turn, so keeping the workflow moving relies on the conductor's own Stop protocol.",
+      "action": { "type": "command", "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts continue-workflow" }
+    }
+  ]
+}

@@ -16,7 +16,7 @@
 //   (a) NEGATIVE — the retired `/aidlc --init` command (a bare `--init` flag
 //       token; `git init`/`npm init` are NOT the aidlc command, same predicate as
 //       t174) must be ABSENT from every shipped conductor SKILL.
-//   (b) POSITIVE — the workspace-anchor vocabulary (`intent-birth`, `--repo`,
+//   (b) POSITIVE — the workspace-anchor vocabulary (`intent-create`, `--repo`,
 //       "offer a second intent", "intent and space verbs") must be PRESENT in
 //       every shipped conductor SKILL. Catches a future fork that drops `--init`
 //       yet still lacks the new verbs.
@@ -58,10 +58,23 @@ const BARE_INIT = /(^|[^-\w])--init\b/;
 
 // The workspace-anchor conductor vocabulary every shipped SKILL must define.
 const REQUIRED_TOKENS = [
-  "intent-birth", // run-then-continue birth verb (replaced `init`)
+  "intent-create", // run-then-continue birth verb (replaced `init`)
   "--repo", // multi-repo swarm prepare flag
   "offer a second intent", // P4-completion new-work conductor prose
   "intent and space verbs", // frontmatter utilities tail
+];
+
+// The narration layer: the engine authors a spoken line on the directive and
+// every harness relays it. The failure this pins is asymmetric and silent - the
+// field is emitted harness-independently (aidlc-orchestrate.ts), so a SKILL that
+// lacks the relay rule drops it on the floor and the harness keeps narrating its
+// own internals with nothing red. That is exactly how it shipped Claude-only
+// before this pin existed.
+const NARRATION_TOKENS = [
+  "narration", // the field name the relay rule is written around
+  "**Quiet in between.**", // the resting-state rule between tool calls
+  "**SAY:**", // the marker whose quoted text is the only speakable prose
+  "the very first turn", // the one moment no carrier reaches
 ];
 
 const LEARNINGS_QUESTION_TOKENS = [
@@ -163,6 +176,37 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       }
     }
     expect(missing).toEqual([]);
+  });
+
+  test("every shipped conductor SKILL relays engine-authored narration", () => {
+    const missing: string[] = [];
+    for (const rel of skills) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      for (const tok of NARRATION_TOKENS) {
+        if (!body.includes(tok)) missing.push(`${rel}  missing: ${tok}`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
+  test("the narration rule is worded identically across every harness", () => {
+    // Byte-alignment, not just presence: the rule is authored once and ported,
+    // so a per-harness reword is drift. Extracted by its own anchors rather than
+    // line numbers, which move as each SKILL gains harness-specific prose.
+    const blocks = new Map<string, string[]>();
+    for (const rel of skills) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const start = body.indexOf("**Saying what is happening");
+      const end = body.indexOf("**Isolated stage-runner branch.**");
+      expect(start, `${rel} lacks the narration rule`).toBeGreaterThan(-1);
+      expect(end, `${rel} lacks the isolated-run anchor`).toBeGreaterThan(start);
+      const block = body.slice(start, end).trim();
+      const seen = blocks.get(block) ?? [];
+      seen.push(rel);
+      blocks.set(block, seen);
+    }
+    // One distinct block text => every harness agrees.
+    expect([...blocks.values()].map((v) => v.sort())).toHaveLength(1);
   });
 
   test("every shipped conductor SKILL requires a valid two-option learning question", () => {

@@ -830,7 +830,7 @@ export function consumersOf(artifact: string): GraphStage[] {
  *  would yield spurious missing-section findings. The per-sensor
  *  required-sections script gets only --stage/--output-path and so cannot know
  *  the stage's artifact set — the dispatcher (aidlc-sensor.ts) and the
- *  PostToolUse fire hook (aidlc-sensor-fire.ts) both hold the GraphStage and
+ *  PostToolUse fire hook (aidlc-run-sensors.ts) both hold the GraphStage and
  *  thread this filtered set so a resolved template applies ONLY to a
  *  declared-prose artifact. Lives here so both invocation sites derive it
  *  identically without importing the dispatcher (whose top-level main() would

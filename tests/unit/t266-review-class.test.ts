@@ -216,7 +216,7 @@ describe("t266 review class", () => {
     );
     expect(birth.status).toBe(0);
     expect(String(birth.directive?.message)).toContain(
-      "intent-birth --scope feature --review none",
+      "intent-create --scope feature --review none",
     );
 
     const active = projectWithState();
@@ -290,12 +290,12 @@ describe("t266 review class", () => {
     }
   });
 
-  test("intent-birth and scope-change persist and audit --review", () => {
+  test("intent-create and scope-change persist and audit --review", () => {
     const fresh = createTestProject();
     tempDirs.push(fresh);
     seedAidlcMemory(fresh);
     const born = runUtility(fresh, [
-      "intent-birth",
+      "intent-create",
       "--scope",
       "feature",
       "--review",

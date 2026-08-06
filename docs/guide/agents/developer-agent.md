@@ -6,7 +6,7 @@ The aidlc-developer-agent is your senior software developer. It translates archi
 
 The aidlc-developer-agent leads the Reverse Engineering code scan and Code Generation, and is a dispatched collaborator in both Inception ensembles: it examines code-pattern evidence in the Practices Discovery hub-and-spoke and provides the implementability voice in the User Stories mob. Code Generation runs as a focused subagent. It has Bash access for running build tools, package managers, and test commands.
 
-Workspace Detection (0.2) used to be led by the aidlc-developer-agent as a subagent; it now runs deterministically inside `aidlc-utility intent-birth` as a rule-based scanner. The aidlc-developer-agent is no longer involved in Initialization.
+Workspace Detection (0.2) used to be led by the aidlc-developer-agent as a subagent; it now runs deterministically inside `aidlc-utility intent-create` as a rule-based scanner. The aidlc-developer-agent is no longer involved in Initialization.
 
 ## Stages Led
 

@@ -53,7 +53,7 @@ describe("t196 in-flight recompose journey (/aidlc compose mid-workflow, sdk liv
           cmd: [
             process.execPath,
             join(proj, ".claude", "tools", "aidlc-utility.ts"),
-            "intent-birth", "--scope", "feature", "--project-dir", proj,
+            "intent-create", "--scope", "feature", "--project-dir", proj,
           ],
           stdout: "pipe",
           stderr: "pipe",

@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-utility:intent-birth
+// covers: subcommand:aidlc-utility:intent-create
 //
 // t21b.test.ts — SDK-harness port of tests/integration/t21b-integration-init-idempotent.sh
 // (plan 6), REWRITTEN for the P4 contract. Drives a SECOND workflow birth on a
@@ -18,18 +18,18 @@
 // --force. This file is rewritten to the NEW contract: drive a scope twice and
 // prove the second birth adds a distinct, second intent record + a fresh
 // WORKFLOW_STARTED, without clobbering the first. (Mirrors tests/unit/t20.test.ts
-// "17-19" and tests/integration/t165-intent-birth-p4.test.ts new-work-while-active.)
+// "17-19" and tests/integration/t165-intent-create-p4.test.ts new-work-while-active.)
 //
 // The birth path is gate-free (it prints state and STOPs), so
 // there is no auto-approve to drop.
 //
 // THE TWO-BIRTH JOURNEY (verified against the SHIPPED handler):
 //   birth 1: `/aidlc --scope poc "first thing"` on a fresh workspace -> the engine
-//            NAMES intent-birth, the conductor runs it; handleIntentBirth mints
+//            NAMES intent-create, the conductor runs it; handleIntentCreate mints
 //            the first per-intent record + writes its state + emits WORKFLOW_STARTED
 //            (utility.ts:2065) into that record's audit shard. Baseline captured.
 //   birth 2: `/aidlc --scope feature "second thing"` -> a SECOND birth. There is NO
-//            re-init guard (handleIntentBirth has no "already exists" die() — a
+//            re-init guard (handleIntentCreate has no "already exists" die() — a
 //            second birth just mints another intent). It adds a SECOND record dir
 //            and points the active-intent cursor at it, with its own
 //            WORKFLOW_STARTED. The FIRST record survives untouched.
@@ -55,15 +55,15 @@
 //          workflow start), proving a second workflow truly began.
 //
 // Known-answer literals (read from the SHIPPED handler, not guessed):
-//   - birth dispatch:            engine NAMES `intent-birth --scope <scope>` (aidlc-orchestrate.ts:302)
-//   - NO re-init guard:          handleIntentBirth (aidlc-utility.ts:1986) — no "already exists" die()
-//   - second birth mints a 2nd intent:  birthIntent appends a 2nd registry row + record dir + cursor flip
+//   - birth dispatch:            engine NAMES `intent-create --scope <scope>` (aidlc-orchestrate.ts:302)
+//   - NO re-init guard:          handleIntentCreate (aidlc-utility.ts:1986) — no "already exists" die()
+//   - second birth mints a 2nd intent:  createIntent appends a 2nd registry row + record dir + cursor flip
 //   - WORKFLOW_STARTED on every birth:  aidlc-utility.ts:2065
 //   - State initialized summary: "State initialized:" (aidlc-utility.ts:2376)
 //   - init-stage [x] markers:    "[x] workspace-scaffold" (init phase marker always [x])
 //
 // It SPENDS TOKENS — birth 1 drives the real /aidlc on Opus/Bedrock (×1); birth 2
-// invokes the deterministic intent-birth tool directly (the no-re-init-guard
+// invokes the deterministic intent-create tool directly (the no-re-init-guard
 // contract is a tool contract, not a live-conductor journey — see the birth-2
 // note below). Generous per-test timeout so a hung canUseTool fails LOUD.
 
@@ -160,7 +160,7 @@ describe("t21b /aidlc second-birth (no re-init guard) (sdk)", () => {
         // but the deterministic CONTRACT under test (the retired-guard subject of
         // this port) is that the birth HANDLER itself has NO re-init guard: invoke
         // it directly, exactly as the conductor would when the human chose "start a
-        // new intent". A second `intent-birth` SUCCEEDS (exit 0), never the old
+        // new intent". A second `intent-create` SUCCEEDS (exit 0), never the old
         // "Use --force to reinitialize" rejection. (The live conductor's new-work
         // Y/n offer is exercised by the orchestration journey; here we pin the
         // tool's no-guard birth, which is what the .sh's --force case really tested.)
@@ -168,7 +168,7 @@ describe("t21b /aidlc second-birth (no re-init guard) (sdk)", () => {
           "bun",
           [
             join(proj, ".claude", "tools", "aidlc-utility.ts"),
-            "intent-birth",
+            "intent-create",
             "--scope",
             "feature",
             "--arguments",

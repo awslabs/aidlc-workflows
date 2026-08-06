@@ -221,7 +221,7 @@ shapes.
 Both drivers run the same five per-Unit stages and converge against the same
 project check. The difference is purely how the parallel work is dispatched. The
 runaway backstop lives in the harness's **Stop-hook ceiling**
-(`core/hooks/aidlc-stop.ts`, the `blockCap()` / `defaultBlockCap()` pair, exposed
+(`core/hooks/aidlc-continue-workflow.ts`, the `blockCap()` / `defaultBlockCap()` pair, exposed
 as `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`), outside the swarm tool itself. On this
 autonomous-Construction path the default ceiling is **8 blocks** (the interactive
 default is 2; an explicit `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` overrides both). The

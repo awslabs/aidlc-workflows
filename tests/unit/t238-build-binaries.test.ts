@@ -126,7 +126,7 @@ describe("t238 build-binaries release builder", () => {
     for (const name of [
       "runtime-assets",
       "sensor-list",
-      "sensor-fire",
+      "run-sensors",
       "graph-compile-check",
       "packaged-runtime-immutable",
       "validate-outputs",

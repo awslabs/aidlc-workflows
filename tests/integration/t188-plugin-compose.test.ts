@@ -781,7 +781,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(existsSync(auditLockDir(proj))).toBe(false);
   }, TIMEOUT_MS);
 
-  test("intent-birth and recompose wait beyond the default budget behind a live workspace holder", async () => {
+  test("intent-create and recompose wait beyond the default budget behind a live workspace holder", async () => {
     const proj = mkdtempSync(join(tmp, "syn-utility-wait-"));
     cpSync(CLAUDE_DIST, join(proj, ".claude"), { recursive: true });
     const utility = join(proj, ".claude", "tools", "aidlc-utility.ts");
@@ -792,7 +792,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     };
     const initialBirth = spawnSync(
       BUN,
-      [utility, "intent-birth", "--scope", "feature", "--project-dir", proj],
+      [utility, "intent-create", "--scope", "feature", "--project-dir", proj],
       { cwd: proj, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000, env },
     );
     expect(initialBirth.status).toBe(0);
@@ -803,7 +803,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
         cmd: [
           BUN,
           utility,
-          "intent-birth",
+          "intent-create",
           "--scope",
           "feature",
           "--label",

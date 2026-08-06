@@ -67,7 +67,7 @@ Create competitive analysis, market trends report, build-vs-buy assessment, and 
 
 Hand completion to `stage-protocol.md` via
 `bun .codex/tools/aidlc-orchestrate.ts report --stage market-research --result <outcome>`.
-The engine owns all lifecycle transitions and advancement.
+That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
 ### Step 7: Present Completion & Request Approval
 

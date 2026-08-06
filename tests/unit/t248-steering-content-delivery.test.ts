@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:continue, hook:aidlc-dispatch-rules
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:continue, hook:aidlc-deliver-stage-rules
 //
 // Deterministic stage-rule delivery. Rules cross the engine boundary through
 // bounded load-steering directives before run-stage; optional persona/knowledge
@@ -139,7 +139,7 @@ function runDispatchHook(
 ): { code: number; stdout: string; stderr: string } {
   const result = spawnSync(
     BUN,
-    [join(proj, ".claude", "hooks", "aidlc-dispatch-rules.ts")],
+    [join(proj, ".claude", "hooks", "aidlc-deliver-stage-rules.ts")],
     {
       cwd: proj,
       input: JSON.stringify({
@@ -781,9 +781,9 @@ describe("t248 deterministic steering delivery", () => {
 
     expect(result.code).toBe(2);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("dispatch hook response");
+    expect(result.stderr).toContain("attaching them to a subagent");
     expect(result.stderr).toContain("output limit");
-    expect(result.stderr).toContain("refused before writing partial JSON");
+    expect(result.stderr).toContain("nothing partial was written");
   });
 
   test("dispatch stage resolution: Current Stage outranks an incidental slug mention", () => {

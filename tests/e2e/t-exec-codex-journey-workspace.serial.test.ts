@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-utility:intent-birth, subcommand:aidlc-utility:space-create, subcommand:aidlc-utility:space, file:skills/aidlc/SKILL.md
+// covers: subcommand:aidlc-utility:intent-create, subcommand:aidlc-utility:space-create, subcommand:aidlc-utility:space, file:skills/aidlc/SKILL.md
 //
 // t-exec-codex-journey-workspace.serial.test.ts — the LIVE workspace journey,
 // Codex-exec logic half (P10 / Stage E). Proves the SAME composed §0 promise the
@@ -22,7 +22,7 @@
 // auto-discovery on the auto-birth path — see the SDK leg's DRIFT NOTE):
 //   1. `/aidlc "build auth across both repos"` → auto-birth A spanning both repos.
 //   2. (cheaper variant) reverse-engineering writes per-repo codekb — no swarm.
-//   3. `/aidlc intent-birth …` → a 2nd isolated intent; A untouched.
+//   3. `/aidlc intent-create …` → a 2nd isolated intent; A untouched.
 //   4. `/aidlc space-create teamB` → `/aidlc space teamB` → birth there; no leak.
 //   5. `/aidlc space default` → A still resumable.
 //
@@ -70,8 +70,8 @@ const UUIDV7_RE =
 // aidlc-lib.ts:463), so the SPACE DIR + cursor + registry key are "teamb".
 const TEAM_B_SLUG = "teamb";
 
-/** Prompt the conductor to run the deterministic intent-birth UTILITY directly
- *  (not route via `next`). A bare `/aidlc intent-birth …` is parsed as freeform
+/** Prompt the conductor to run the deterministic intent-create UTILITY directly
+ *  (not route via `next`). A bare `/aidlc intent-create …` is parsed as freeform
  *  and fed to `next`; with intent A active the engine advances/scope-changes A
  *  instead of birthing (a verified SDK failure rewrote A's Scope). Naming the
  *  exact .codex/tools command hits the mints-unconditionally handler. */
@@ -79,7 +79,7 @@ function birthToolPrompt(scope: string, args: string): string {
   return (
     `Run this exact command with the shell and then stop — do NOT run \`next\`, ` +
     `do NOT advance or scope-change the currently active intent: ` +
-    `bun .codex/tools/aidlc-utility.ts intent-birth --scope ${scope} --arguments ${JSON.stringify(args)}`
+    `bun .codex/tools/aidlc-utility.ts intent-create --scope ${scope} --arguments ${JSON.stringify(args)}`
   );
 }
 
@@ -288,7 +288,7 @@ describe("t-exec-codex-journey-workspace (live codex-exec multi-repo·intent·sp
         expect(workflowStartedCount(recordADir)).toBe(1);
 
         // --- Step 3: a SECOND isolated intent alongside A --------------------
-        // Name the intent-birth tool directly (mints unconditionally) so the
+        // Name the intent-create tool directly (mints unconditionally) so the
         // conductor does not route via `next` and advance/scope-change A.
         const r3 = execCodex(root, home, birthToolPrompt("poc", "build a standalone metrics dashboard"));
         expect(r3.rc).toBe(0);

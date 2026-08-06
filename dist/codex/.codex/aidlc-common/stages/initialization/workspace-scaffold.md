@@ -2,7 +2,7 @@
 slug: workspace-scaffold
 phase: initialization
 execution: ALWAYS
-condition: Ensure-exists the per-intent record and artifact dirs — idempotent (creates on demand, skips existing)
+condition: Ensure-exists the per-intent record and in-scope phase dirs, idempotent (creates on demand, skips existing)
 lead_agent: orchestrator
 support_agents: []
 mode: inline
@@ -21,12 +21,12 @@ scopes:
   - security-patch
   - workshop
 inputs: none (first stage after session start)
-outputs: the per-intent record tree (stage artifact dirs + verification dir) and the space-level knowledge/ dir
+outputs: the per-intent record tree (one dir per in-scope phase + verification dir) and the space-level knowledge/ dir
 ---
 
 # Workspace Scaffold
 
-Runs deterministically inside `aidlc-utility intent-birth`. The workspace shell ships in `dist/` (the SEED); birth only ensure-exists the per-intent record and artifact dirs (creates them on demand, idempotent). Kept as reference for audit event semantics.
+Runs deterministically inside `aidlc-utility intent-create`. The workspace shell ships in `dist/` (the SEED); creation only ensure-exists the per-intent record and its in-scope phase dirs (creates them on demand, idempotent). Kept as reference for audit event semantics.
 
 MANDATORY: Follow stage-protocol.md for state tracking and audit logging.
 
@@ -50,30 +50,37 @@ in one intent's record. The agent personas read team knowledge from
 the team creates them; birth does not. (The engine's per-agent METHODOLOGY
 knowledge ships separately and read-only under `.codex/knowledge/`.)
 
-### Step 3: Ensure Stage Artifact Directories
+### Step 3: Ensure Phase Artifact Directories
 
-Ensure-exists the empty per-intent stage artifact directories under the active
-intent's record dir `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (no READMEs) —
+Ensure-exists the empty per-intent phase artifact directories under the active
+intent's record dir `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (no READMEs),
 idempotent (created on demand):
 
-- `<record>/initialization/` — workspace-scaffold/, workspace-detection/, state-init/
-- `<record>/ideation/` — intent-capture/, market-research/, feasibility/, scope-definition/, team-formation/, rough-mockups/, approval-handoff/
-- `<record>/inception/` — requirements-analysis/, user-stories/, refined-mockups/, application-design/, units-generation/, delivery-planning/
-- `<record>/construction/` — build-and-test/, ci-pipeline/
-- `<record>/operation/` — deployment-pipeline/, environment-provisioning/, deployment-execution/, observability-setup/, incident-response/, performance-validation/, feedback-optimization/
-- `<record>/verification/`
+- one directory per phase the SCOPE RUNS: `<record>/initialization/`, and each of
+  `ideation/`, `inception/`, `construction/`, `operation/` that holds at least one
+  EXECUTE stage under the active scope
+- `<record>/verification/` (scope-independent)
 
-`reverse-engineering/` is deliberately absent from the inception list: that
-stage writes its 9 deliverables to the space-level per-repo store
-`aidlc/spaces/<space>/codekb/<repo>/` — one shared view per repo, rewritten
-by each brownfield rerun — not into the intent record. The stage's own
-`memory.md` diary still lands at `<record>/inception/reverse-engineering/`,
-created on demand when the stage runs; this scaffold simply does not
-pre-create that directory. See the stage file for the write paths.
+A phase the scope excludes entirely gets NO directory. An empty `operation/` in a
+bugfix record would read as work that was planned and skipped, when that phase was
+never in the plan; the phases that appear are exactly the phases the workflow will
+run, and the audit trail's `PHASE_SKIPPED` events name the rest.
+
+Per-STAGE directories are NOT created here. A stage's directory
+(`<record>/<phase>/<slug>/`) appears when that stage first writes an artifact, so
+the record only ever shows stages that produced something. This is also why
+`reverse-engineering/` never appears up front: that stage writes its 9
+deliverables to the space-level per-repo store `aidlc/spaces/<space>/codekb/<repo>/`
+(one shared view per repo, rewritten by each brownfield rerun), not into the intent
+record, and only its own `memory.md` diary lands at
+`<record>/inception/reverse-engineering/` when the stage runs. See the stage file
+for the write paths.
 
 ### Step 4: Display Confirmation
 
-List the created directory structure for user awareness.
+Confirm in one plain line that the workspace is ready and name the single
+directory the user's work will live in. Do not print the directory tree: the
+folder layout is framework housekeeping, not something they need to read.
 
 ### Step 5: Update State and Audit
 
@@ -86,8 +93,8 @@ This stage has NO approval gate — it auto-proceeds to the next stage (workspac
 
 ## Sensors
 
-This stage runs deterministic setup logic inside `aidlc-utility intent-birth` —
-it ensure-exists the per-intent record and artifact dirs and emits state events. No
+This stage runs deterministic setup logic inside `aidlc-utility intent-create` —
+it ensure-exists the per-intent record and its in-scope phase dirs and emits state events. No
 agent-authored markdown lands here, so the frontmatter `sensors:` list
 is empty.
 

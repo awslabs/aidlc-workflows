@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-utility:intent-birth, subcommand:aidlc-utility:space-create, subcommand:aidlc-utility:space, file:skills/aidlc/SKILL.md
+// covers: subcommand:aidlc-utility:intent-create, subcommand:aidlc-utility:space-create, subcommand:aidlc-utility:space, file:skills/aidlc/SKILL.md
 //
 // t-acp-kiro-journey-workspace.serial.test.ts — the LIVE workspace journey,
 // Kiro-ACP logic half (P10 / Stage E). Proves the SAME composed §0 promise the
@@ -19,12 +19,12 @@
 //   * Beats 1-3. Beat 3 (birth a 2nd intent alongside active A) is the conductor's
 //     AUTHORIZED offer→confirm routing (SKILL.md § "New work while an intent is
 //     active": on a genuine new-work prose it renders an offer, and on the human's
-//     "Yes" it runs `intent-birth` DIRECTLY — "the same run-then-continue shape the
+//     "Yes" it runs `intent-create` DIRECTLY — "the same run-then-continue shape the
 //     print directive already uses"). That does NOT fight the forwarding override in
 //     agents/aidlc.json, so the production conductor births the 2nd intent over a
 //     keepAlive multi-turn ACP session: turn 1 auto-births A, turn 2 (new-work)
 //     stops at the offer's compare-read (`intent --json`), turn 3 (confirm) stops
-//     at the birth. Live-verified: turn 3 ran `intent-birth` directly; A's state
+//     at the birth. Live-verified: turn 3 ran `intent-create` directly; A's state
 //     was byte-unchanged.
 //
 //   * Beats 4-5 (space-create teamB · switch · birth into teamB · switch back) now
@@ -43,7 +43,7 @@
 //     pair for space-create/space/space default, never a `next`-advances-A). The
 //     teamB birth (4c) rides the same engine seam: in teamB (zero intents) a
 //     `/aidlc --scope poc "<desc>"` hits the birth gate (Branch 9a →
-//     birthPrintDirective ~:1231) which prints `intent-birth …`; the conductor runs
+//     createPrintDirective ~:1231) which prints `intent-create …`; the conductor runs
 //     it. Each space verb is its own single-turn driveKiroAcp call (ACP is
 //     single-turn; stopAfterToolTitle catches the named tool's output). This proves
 //     the ACP SURFACE carries the space-switch + isolated-birth mutations live
@@ -267,11 +267,11 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
           session: conductor,
           prompt: `/aidlc --scope feature "build auth across both repos"`,
           timeoutMs: VERB_DRIVE_MS,
-          stopAfterToolTitle: /aidlc-utility\.ts intent-birth/,
+          stopAfterToolTitle: /aidlc-utility\.ts intent-create/,
           keepAlive: true,
         });
         const out1 = r1.toolCalls
-          .filter((t) => t.title.includes("aidlc-utility.ts intent-birth"))
+          .filter((t) => t.title.includes("aidlc-utility.ts intent-create"))
           .map((t) => t.output.join(""))
           .join("");
         expect(out1).toContain("State initialized:");
@@ -347,14 +347,14 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
           ),
         ).toBe(true);
         // Turn 3b: confirm. The conductor routes through `next --new-intent`,
-        // then acts on the engine's intent-birth print. The inferred scope is
+        // then acts on the engine's intent-create print. The inferred scope is
         // non-deterministic; assert only the registry shape and A's integrity.
         const offerR2 = await driveKiroAcp({
           projectDir: root,
           session: offer,
           prompt: "Yes — start a second intent for the metrics dashboard.",
           timeoutMs: VERB_DRIVE_MS,
-          stopAfterToolTitle: /aidlc-utility\.ts intent-birth/,
+          stopAfterToolTitle: /aidlc-utility\.ts intent-create/,
           keepAlive: true,
         });
         expect(offerR2.toolCallIssues).toEqual([]);
@@ -420,8 +420,8 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
         expect(activeSpace(root)).toBe(TEAM_B_SLUG);
 
         // 4c: birth into teamB via the conductor's birth gate — in teamB (zero
-        // intents) a `/aidlc --scope poc "<desc>"` hits Branch 9a → birthPrintDirective
-        // → the conductor runs `intent-birth …` directly. knowledge/ now PRESENT
+        // intents) a `/aidlc --scope poc "<desc>"` hits Branch 9a → createPrintDirective
+        // → the conductor runs `intent-create …` directly. knowledge/ now PRESENT
         // (lazy ensure on first birth); teamB holds its 1 intent, default still holds
         // its 2 (no cross-space leak).
         const birthTeamB = await driveKiroAcp({
@@ -429,7 +429,7 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
           session: space,
           prompt: `/aidlc --scope poc "teamB onboarding flow"`,
           timeoutMs: VERB_DRIVE_MS,
-          stopAfterToolTitle: /aidlc-utility\.ts intent-birth/,
+          stopAfterToolTitle: /aidlc-utility\.ts intent-create/,
           keepAlive: true,
         });
         expect(birthTeamB.toolCallIssues).toEqual([]);

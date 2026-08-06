@@ -12,7 +12,7 @@
 //   seed:   a BORN-shape feature workflow (the state-initialization-done
 //           fixture: cursor at intent-capture, market-research + team-formation
 //           pending grid-EXECUTE ahead of it). Seeded from a fixture rather than
-//           a subprocess intent-birth so the deterministic tier stays
+//           a subprocess intent-create so the deterministic tier stays
 //           fixture-driven, the same posture the front + reviewer twins take.
 //   beat 1: codex exec `/aidlc compose "drop market research and team formation
 //           ..."` - the conductor dispatches the composer, proposes SKIP flips,
@@ -104,7 +104,7 @@ const SKIP_REASON = skipReason();
 // git-initialized, Bedrock provider + project trust + hook trust pre-seed), plus
 // the sibling aidlc/ workspace shell and a fixture-seeded BORN feature record
 // (the running workflow this journey re-shapes). Seeding from a fixture keeps
-// the deterministic tier fixture-driven - no subprocess intent-birth.
+// the deterministic tier fixture-driven - no subprocess intent-create.
 function setupCodexProject(): { proj: string; home: string; root: string } {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "codex-exec-")));
   const proj = join(root, "proj");

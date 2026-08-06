@@ -74,7 +74,7 @@ Result prose is identical on both channels (`toolResult` on 0.12,
 
 ## Consequences for each hook
 
-- **audit-logger / sensor-fire** — recoverable: scrape the file path from
+- **write-audit-log / run-sensors** — recoverable: scrape the file path from
   the result prose, resolve to absolute, feed the core hooks the Claude-shaped
   `{tool_input:{file_path}}`. When no path can be extracted the adapter splits
   two cases rather than logging both: prose recognised as a **failed** write is
@@ -84,11 +84,11 @@ Result prose is identical on both channels (`toolResult` on 0.12,
   other unmatched wording record a visible hook-drop (never a silent no-op) —
   that is the invisible-decay case the drop log exists to surface. Conflating
   them made `--doctor` report degradation on healthy workspaces.
-- **runtime-compile** — the shell command is unrecoverable, so the IDE path
+- **rebuild-stage-graph** — the shell command is unrecoverable, so the IDE path
   drops the command filter and gates purely on the audit tail (with an mtime
   idempotency guard so a lingering transition — e.g. after `WORKFLOW_COMPLETED`
   — does not recompile on every subsequent shell command).
-- **sync-statusline** — the IDE gives no task payload, so it derives the current
+- **sync-workflow-state** — the IDE gives no task payload, so it derives the current
   stage from the latest `STAGE_STARTED` in the audit tail. This is a
   **forward-only** mirror: it never rewinds `Current Stage` to a completed or
   skipped stage, and never fires when the workflow is not `Running` (guards
@@ -119,4 +119,4 @@ Result prose is identical on both channels (`toolResult` on 0.12,
 The extractor trims trailing whitespace/newlines before matching and strips a
 trailing parenthetical from the `str_replace` form. `fs_write` maps to `Write`;
 `str_replace`/`fs_append` map to `Edit` (both target an existing file → the core
-audit-logger records `ARTIFACT_UPDATED`).
+write-audit-log records `ARTIFACT_UPDATED`).

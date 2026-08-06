@@ -5,7 +5,7 @@
     "name": "Workspace Scaffold",
     "phase": "initialization",
     "execution": "ALWAYS",
-    "condition": "Ensure-exists the per-intent record and artifact dirs — idempotent (creates on demand, skips existing)",
+    "condition": "Ensure-exists the per-intent record and in-scope phase dirs, idempotent (creates on demand, skips existing)",
     "lead_agent": "orchestrator",
     "support_agents": [],
     "mode": "inline",
@@ -25,7 +25,7 @@
       "workshop"
     ],
     "inputs": "none (first stage after session start)",
-    "outputs": "the per-intent record tree (stage artifact dirs + verification dir) and the space-level knowledge/ dir",
+    "outputs": "the per-intent record tree (one dir per in-scope phase + verification dir) and the space-level knowledge/ dir",
     "rules_in_context": [
       {
         "path": "aidlc/spaces/default/memory/org.md",

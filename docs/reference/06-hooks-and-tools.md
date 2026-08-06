@@ -10,24 +10,24 @@ This chapter documents the hook system architecture, all seventeen hook scripts,
 
 This implementation uses seventeen hook scripts in `.claude/hooks/`. All seventeen are TypeScript (run via `bun`). All seventeen are **project-wide** — registered in `settings.json` (the statusline via the top-level `statusLine` key, the other sixteen via the `hooks` block), they fire regardless of which skill is active. They were previously split (six declared in `aidlc/SKILL.md` frontmatter as skill-scoped, the rest project-wide); v0.6.0 moved the skill-scoped six into `settings.json` so every entry point — the orchestrator, each packaged scope/stage runner, and any hand-written customer runner — inherits the deterministic spine with no per-runner `hooks:` block.
 
-Eleven of the seventeen are **non-blocking**. Six are **flow-altering**: the `Stop` hook keeps the forwarding loop running, the dispatch-rules hook attaches exact active-stage rules to subagent briefs where the harness supports input rewriting, the plan-approval guard refuses premature code-generation dispatches, the reviewer-scope hook refuses sibling-unit reviewer access, the review-freeze hook refuses a produces[] write that would void a fresh READY review receipt before the gate, and the state-transition guard refuses direct lifecycle calls that bypass `aidlc-orchestrate.ts report`.
+Eleven of the seventeen are **non-blocking**. Six are **flow-altering**: the `Stop` hook keeps the forwarding loop running, the deliver-stage-rules hook attaches exact active-stage rules to subagent briefs where the harness supports input rewriting, the plan-approval guard refuses premature code-generation dispatches, the reviewer-scope hook refuses sibling-unit reviewer access, the review-freeze hook refuses a produces[] write that would void a fresh READY review receipt before the gate, and the state-transition guard refuses direct lifecycle calls that bypass `aidlc-orchestrate.ts report`.
 
 ```
 .claude/hooks/
-+-- mint-presence.ts     # UserPromptSubmit + PostToolUse AskUserQuestion (project-wide, settings.json, TypeScript)
-+-- dispatch-rules.ts    # PreToolUse Task|Agent (project-wide, settings.json, TypeScript, flow-altering)
++-- record-human-turn.ts     # UserPromptSubmit + PostToolUse AskUserQuestion (project-wide, settings.json, TypeScript)
++-- deliver-stage-rules.ts    # PreToolUse Task|Agent (project-wide, settings.json, TypeScript, flow-altering)
 +-- plan-approval-guard.ts # PreToolUse Task (project-wide, settings.json, TypeScript, flow-altering)
 +-- state-transition-guard.ts # PreToolUse Bash (project-wide, settings.json, TypeScript, flow-altering)
 +-- reviewer-scope.ts    # PreToolUse file/search/shell tools (project-wide, settings.json, TypeScript, flow-altering)
 +-- review-freeze.ts     # PreToolUse file-write tools (project-wide, settings.json, TypeScript, flow-altering)
-+-- audit-logger.ts      # PostToolUse Write|Edit (project-wide, settings.json, TypeScript)
-+-- sensor-fire.ts       # PostToolUse Write|Edit (project-wide, settings.json, TypeScript)
-+-- sync-statusline.ts   # PostToolUse TaskUpdate (project-wide, settings.json, TypeScript)
-+-- runtime-compile.ts   # PostToolUse Bash (project-wide, settings.json, TypeScript)
++-- write-audit-log.ts      # PostToolUse Write|Edit (project-wide, settings.json, TypeScript)
++-- run-sensors.ts       # PostToolUse Write|Edit (project-wide, settings.json, TypeScript)
++-- sync-workflow-state.ts   # PostToolUse TaskUpdate (project-wide, settings.json, TypeScript)
++-- rebuild-stage-graph.ts   # PostToolUse Bash (project-wide, settings.json, TypeScript)
 +-- fold-usage.ts        # PreToolUse + PostToolUse (project-wide, settings.json, TypeScript, Claude-only producer)
 +-- validate-state.ts    # PreCompact (project-wide, settings.json, TypeScript)
 +-- log-subagent.ts      # SubagentStop (project-wide, settings.json, TypeScript)
-+-- aidlc-stop.ts        # Stop (project-wide, settings.json, TypeScript, flow-altering)
++-- aidlc-continue-workflow.ts        # Stop (project-wide, settings.json, TypeScript, flow-altering)
 +-- session-start.ts     # SessionStart (project-wide, settings.json, TypeScript)
 +-- session-end.ts       # SessionEnd (project-wide, settings.json, TypeScript)
 +-- aidlc-statusline.ts  # statusLine (project-wide, settings.json, TypeScript)
@@ -37,20 +37,20 @@ Eleven of the seventeen are **non-blocking**. Six are **flow-altering**: the `St
 
 | Hook | Event | Scoping | Matcher | Purpose |
 |------|-------|---------|---------|---------|
-| `mint-presence.ts` | UserPromptSubmit + PostToolUse | Project-wide (settings.json) | (empty) / `AskUserQuestion` | Record a `HUMAN_TURN` event on every real human prompt and on every answered `AskUserQuestion` widget (gate approvals and interview answers are widget clicks, not typed prompts); the approval/interview gate checks the ledger and requires one since the last gate resolution so a model under autopilot cannot fabricate an approval with no human having acted |
-| `dispatch-rules.ts` | PreToolUse | Project-wide (settings.json) | `Task\|Agent` | **Flow-altering.** Resolve the dispatched stage's substantive active-space rules and append their exact bytes to every AI-DLC subagent brief. Rewrites Claude, Codex, and opencode inputs; Kiro CLI cannot rewrite tool arguments, so an incomplete brief proceeds with an advisory warning (Kiro CLI agents preload the active memory tree through `resources`; an unloadable required rule still blocks with repair guidance). Kiro IDE uses always-included workspace steering with live memory-file references. Idempotent when the exact bundle is already present |
+| `record-human-turn.ts` | UserPromptSubmit + PostToolUse | Project-wide (settings.json) | (empty) / `AskUserQuestion` | Record a `HUMAN_TURN` event on every real human prompt and on every answered `AskUserQuestion` widget (gate approvals and interview answers are widget clicks, not typed prompts); the approval/interview gate checks the ledger and requires one since the last gate resolution so a model under autopilot cannot fabricate an approval with no human having acted |
+| `deliver-stage-rules.ts` | PreToolUse | Project-wide (settings.json) | `Task\|Agent` | **Flow-altering.** Resolve the dispatched stage's substantive active-space rules and append their exact bytes to every AI-DLC subagent brief. Rewrites Claude, Codex, and opencode inputs; Kiro CLI cannot rewrite tool arguments, so an incomplete brief proceeds with an advisory warning (Kiro CLI agents preload the active memory tree through `resources`; an unloadable required rule still blocks with repair guidance). Kiro IDE uses always-included workspace steering with live memory-file references. Idempotent when the exact bundle is already present |
 | `plan-approval-guard.ts` | PreToolUse | Project-wide (settings.json) | `Task` | **Flow-altering.** Enforce code-generation's plan-before-generation ordering (stage Steps 2-4) deterministically: while the active directive (or Current Stage fallback) is code-generation, a Task dispatch targeting `aidlc-developer-agent` is refused (exit 2 + a redirecting stderr reason) unless its one explicit `AIDLC-UNIT: <unit>` marker identifies a known unit with a non-empty `code-generation-plan.md` on disk AND a Plan Approval question recording the explicit "Approve Plan" response. Each refusal emits `PLAN_APPROVAL_BLOCKED`; missing, conflicting, or unknown markers block instead of guessing from prompt prose. `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` disables enforcement |
 | `state-transition-guard.ts` | PreToolUse | Project-wide (settings.json) | `Bash` | **Flow-altering.** Refuse direct `aidlc-state.ts` lifecycle verbs and redirect the conductor to `aidlc-orchestrate.ts report`; read-only and specialized recovery/configuration verbs remain available |
 | `reviewer-scope.ts` | PreToolUse | Project-wide (settings.json) | `Read\|Edit\|Write\|Glob\|Grep\|Bash` | **Flow-altering.** Enforce the per-unit reviewer read-scope bound (stage-protocol §12a) deterministically: while the conductor's reviewer dispatch record (`<record>/.aidlc-reviewer-dispatch.json`) is fresh, the dispatched reviewer's tool calls that reach into sibling units' `construction/` paths — file reads/writes and grep/glob/shell patterns spanning siblings — are refused (exit 2 + a redirecting stderr reason) unless the target is on the record's exempt list. Each refusal emits `REVIEWER_SCOPE_BLOCKED`. Fail-open on every ambiguity; `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1` disables enforcement |
 | `review-freeze.ts` | PreToolUse | Project-wide (settings.json) | `Read\|Edit\|Write\|Glob\|Grep\|Bash` (self-filters to mutation-capable calls) | **Flow-altering.** Enforce the §12a terminal-receipt ordering deterministically: a Write/Edit or shell mutation targeting a reviewer-bearing, not-yet-completed stage's declared `produces[]` artifact is refused (exit 2 + a redirecting stderr reason) while a fresh READY review receipt covers it. Shell writes are inspected before execution because they do not pass through the Write/Edit audit feed and would otherwise preserve a stale receipt over changed bytes. Shares the engine's exact receipt scan (`freshReviewReceipts` in `aidlc-lib.ts`), so a recorded gate rejection, jump, or workflow restart lifts the freeze automatically and a NOT-READY verdict never freezes. Each refusal emits `REVIEW_FREEZE_BLOCKED`. Fail-open on every ambiguity; `AIDLC_DISABLE_REVIEW_FREEZE_HOOK=1` disables enforcement |
-| `audit-logger.ts` | PostToolUse | Project-wide (settings.json) | `Write\|Edit` | Auto-log artifact writes to the `audit/` shards |
-| `sensor-fire.ts` | PostToolUse | Project-wide (settings.json) | `Write\|Edit` | Fire the active directive stage's resolved Sensors on matching writes (advisory; never blocks); a state-bound per-intent marker preserves attribution when unit-major execution runs ahead of `Current Stage` |
-| `sync-statusline.ts` | PostToolUse | Project-wide (settings.json) | `TaskUpdate` | Auto-sync state file on stage task activation |
-| `runtime-compile.ts` | PostToolUse | Project-wide (settings.json) | `Bash` | Recompile `runtime-graph.json` on transition-class audit emits |
+| `write-audit-log.ts` | PostToolUse | Project-wide (settings.json) | `Write\|Edit` | Auto-log artifact writes to the `audit/` shards |
+| `run-sensors.ts` | PostToolUse | Project-wide (settings.json) | `Write\|Edit` | Fire the active directive stage's resolved Sensors on matching writes (advisory; never blocks); a state-bound per-intent marker preserves attribution when unit-major execution runs ahead of `Current Stage` |
+| `sync-workflow-state.ts` | PostToolUse | Project-wide (settings.json) | `TaskUpdate` | Auto-sync state file on stage task activation |
+| `rebuild-stage-graph.ts` | PostToolUse | Project-wide (settings.json) | `Bash` | Recompile `runtime-graph.json` on transition-class audit emits |
 | `fold-usage.ts` | PreToolUse + PostToolUse | Project-wide (settings.json) | (empty) | **Claude-only.** Fold the transcript's new token usage into the durable usage ledger every llm call: PreToolUse seals the completing main call and, before an engine boundary, every completed subagent call so lifecycle rollups are current; PostToolUse supplies the normal holdback fallback. Observe-only, never blocks; the Claude-Code transcript reader is wired only in the Claude harness, so on Kiro/Codex/opencode no producer runs and the ledger stays empty (every usage consumer degrades to no-data). `AIDLC_DISABLE_USAGE_TRACKING=1` disables it. See "Token usage and cost tracking" below |
 | `validate-state.ts` | PreCompact | Project-wide (settings.json) | (empty) | Validate state file, write recovery breadcrumb |
 | `log-subagent.ts` | SubagentStop | Project-wide (settings.json) | (empty) | Log subagent completion events |
-| `aidlc-stop.ts` | Stop | Project-wide (settings.json) | (empty) | **Flow-altering.** Enforce the forwarding loop on turn-end: run `aidlc-orchestrate next`; on `done` or `parked` allow the stop, on a pending directive block the stop and inject the next move back via `reason`. Allows the stop (human-wait carve-out) when the current stage is awaiting approval (`[?]`), being revised (`[R]`), `[-]` in-progress with an unanswered question in the active directive's canonical or per-unit `<slug>-questions.md`, or the ending turn was conversational (the human's last prompt was answered with no workflow-engine call, read from the harness transcript). The conversational carve-out remains suppressed under autonomous Construction; the pending-question carve-out is also suppressed except for unit-major code-generation's mandatory Plan Approval. Recursion-bounded (no-progress counter + `stop_hook_active` under `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`; default 2 in an interactive run and 8 under autonomous Construction). No-op outside an AIDLC workflow |
+| `aidlc-continue-workflow.ts` | Stop | Project-wide (settings.json) | (empty) | **Flow-altering.** Enforce the forwarding loop on turn-end: run `aidlc-orchestrate next`; on `done` or `parked` allow the stop, on a pending directive block the stop and inject the next move back via `reason`. Allows the stop (human-wait carve-out) when the current stage is awaiting approval (`[?]`), being revised (`[R]`), `[-]` in-progress with an unanswered question in the active directive's canonical or per-unit `<slug>-questions.md`, or the ending turn was conversational (the human's last prompt was answered with no workflow-engine call, read from the harness transcript). The conversational carve-out remains suppressed under autonomous Construction; the pending-question carve-out is also suppressed except for unit-major code-generation's mandatory Plan Approval. Recursion-bounded (no-progress counter + `stop_hook_active` under `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`; default 2 in an interactive run and 8 under autonomous Construction). No-op outside an AIDLC workflow |
 | `session-start.ts` | SessionStart | Project-wide (settings.json) | (empty) | Inject workflow context on session resume |
 | `session-end.ts` | SessionEnd | Project-wide (settings.json) | (empty) | Emit `SESSION_ENDED` audit event on graceful exit |
 | `aidlc-statusline.ts` | statusLine | Project-wide (settings.json) | -- | Show real-time progress in terminal |
@@ -72,7 +72,7 @@ All seventeen TypeScript hooks:
 ```mermaid
 sequenceDiagram
     participant CC as Claude Code
-    participant AL as audit-logger.ts
+    participant AL as write-audit-log.ts
     participant VS as validate-state.ts
     participant LS as log-subagent.ts
     participant SS as session-start.ts
@@ -113,18 +113,18 @@ sequenceDiagram
 
 ## Workflow-Spine Hooks
 
-These six hooks (the audit/sensor/statusline/runtime-compile/state-validation/subagent spine) are registered project-wide in `settings.json`. They are always on, but each **self-gates**: it early-exits when there is no active workflow (`aidlc-state.md` / the active intent's `audit/` shard absent), so audit logging and state sync never clutter non-AI-DLC sessions. Before v0.6.0 they were declared in `aidlc/SKILL.md` frontmatter (skill-scoped); the move to `settings.json` lets every entry point — the orchestrator and every packaged or hand-written runner — inherit the spine without copying a `hooks:` block.
+These six hooks (the audit/sensor/statusline/rebuild-stage-graph/state-validation/subagent spine) are registered project-wide in `settings.json`. They are always on, but each **self-gates**: it early-exits when there is no active workflow (`aidlc-state.md` / the active intent's `audit/` shard absent), so audit logging and state sync never clutter non-AI-DLC sessions. Before v0.6.0 they were declared in `aidlc/SKILL.md` frontmatter (skill-scoped); the move to `settings.json` lets every entry point — the orchestrator and every packaged or hand-written runner — inherit the spine without copying a `hooks:` block.
 
-### PostToolUse: audit-logger.ts
+### PostToolUse: write-audit-log.ts
 
-**Source:** `.claude/hooks/aidlc-audit-logger.ts`
+**Source:** `.claude/hooks/aidlc-write-audit-log.ts`
 **Trigger:** After every `Write` or `Edit` Claude Code tool call (matcher: `"Write|Edit"`)
 **Purpose:** Auto-log artifact writes to the intent's `audit/` shards
 
 **Processing steps:**
 
 1. **Project directory resolution:** Resolves `$CLAUDE_PROJECT_DIR` with fallback to script path derivation and CWD detection.
-2. **Health heartbeat:** Writes UTC timestamp to `.aidlc-hooks-health/audit-logger.last`.
+2. **Health heartbeat:** Writes UTC timestamp to `.aidlc-hooks-health/write-audit-log.last`.
 3. **JSON parsing:** Reads stdin, extracts `tool_name` and `tool_input.file_path`.
 4. **Path filtering:** Skips files not under the intent's record dir. Skips the `audit/` shards themselves (avoids recursion).
 5. **Audit file guard:** Exits silently if the active intent's `audit/` shard does not exist (the framework creates it).
@@ -132,19 +132,19 @@ These six hooks (the audit/sensor/statusline/runtime-compile/state-validation/su
 7. **Atomic locking:** Uses `mkdir`-based lock in the system temp directory (`os.tmpdir()`) with 3-retry loop (100ms delay). The hash isolates locks per project.
 8. **Log entry:** Appends a canonical `ARTIFACT_CREATED` (for Write to a net-new path) or `ARTIFACT_UPDATED` (for Edit, or Write overwriting existing) event via `appendAuditEntry`. Fields: Timestamp, Event, Tool, File, Context.
 
-### PostToolUse: sync-statusline.ts
+### PostToolUse: sync-workflow-state.ts
 
-**Source:** `.claude/hooks/aidlc-sync-statusline.ts`
+**Source:** `.claude/hooks/aidlc-sync-workflow-state.ts`
 **Trigger:** After every `TaskUpdate` call (matcher: `"TaskUpdate"`)
 **Purpose:** Auto-sync `aidlc-state.md` when a stage task becomes `in_progress`
 
 **Processing steps:**
 
-1. **Project directory resolution:** Same multi-fallback pattern as audit-logger.ts.
+1. **Project directory resolution:** Same multi-fallback pattern as write-audit-log.ts.
 2. **Status filter:** Only fires when `status` is `in_progress`. Exits silently for `completed`, `pending`, etc.
 3. **activeForm filter:** Exits silently if no `activeForm` field or no `[slug]` suffix pattern.
 4. **State file guard:** Exits silently if `aidlc-state.md` does not exist (pre-init).
-5. **Health heartbeat:** Writes to `.aidlc-hooks-health/sync-statusline.last`.
+5. **Health heartbeat:** Writes to `.aidlc-hooks-health/sync-workflow-state.last`.
 6. **State sync:** Calls `bun aidlc-utility.ts set-status --stage <slug>` (normally updates Phase, Stage, Agent, and checkbox). For a valid interleaved unit-major directive, it updates the transient status fields and marker digest while preserving the durable first-stage cursor, `In Progress`, and checkbox.
 
 **Design notes:**
@@ -152,25 +152,25 @@ These six hooks (the audit/sensor/statusline/runtime-compile/state-validation/su
 - The hook calls the existing `set-status` subcommand — no new code path needed.
 - When the activated slug matches the state-bound active-directive marker, `set-status` refreshes that marker's state digest while preserving its unit. For an interleaved unit-major directive it also leaves `Current Stage`, `In Progress`, and the durable cursor checkbox unchanged, so the completed-grid gate cascade still begins at the block's first stage.
 
-### PostToolUse: sensor-fire.ts
+### PostToolUse: run-sensors.ts
 
-**Source:** `.claude/hooks/aidlc-sensor-fire.ts`
+**Source:** `.claude/hooks/aidlc-run-sensors.ts`
 **Trigger:** After every `Write` or `Edit` Claude Code tool call (matcher: `"Write|Edit"`)
 **Purpose:** Fire the active stage's compile-resolved Sensors on matching writes (advisory; never blocks)
 
 **Processing steps:**
 
-1. **Project directory resolution:** Same multi-fallback pattern as audit-logger.ts.
+1. **Project directory resolution:** Same multi-fallback pattern as write-audit-log.ts.
 2. **Audit + state guards:** Exits silently if the `audit/` shard or `aidlc-state.md` does not exist (pre-init).
 3. **Active-stage read:** The engine atomically records each final validated `run-stage` in the active intent's gitignored `.aidlc-active-directive.json`, bound to the exact `aidlc-state.md` SHA-256. Task activation refreshes the digest only when its slug matches the marker, preserving a per-unit directive's unit while rejecting unrelated state changes. The hook uses that stage while the digest matches, then reads its `sensors_applicable` array from `stage-graph.json`. This keeps unit-major code-generation diagnostics under `code-generation` even while the durable cursor remains on an earlier design stage. An isolated `--single` directive replaces any main-workflow marker and a successful `report --single` clears it. A missing, malformed, stale, or graph-unknown marker falls back to `Current Stage`.
 4. **Dispatch:** For each applicable Sensor, spawns `aidlc-sensor.ts fire <id> --stage <slug> --output-path <path>`. The dispatcher applies each Sensor's `matches` glob hook-side; a non-matching write is skipped. Outcomes are advisory — the hook never blocks the write.
-5. **Health heartbeat:** Writes `.aidlc-hooks-health/sensor-fire.last` on a fire, so the doctor can distinguish a healthy idle hook from a silent failure.
+5. **Health heartbeat:** Writes `.aidlc-hooks-health/run-sensors.last` on a fire, so the doctor can distinguish a healthy idle hook from a silent failure.
 
 See [Sensor System](07-sensor-system.md) for the manifest schema and the fire lifecycle.
 
-### PostToolUse: runtime-compile.ts
+### PostToolUse: rebuild-stage-graph.ts
 
-**Source:** `.claude/hooks/aidlc-runtime-compile.ts`
+**Source:** `.claude/hooks/aidlc-rebuild-stage-graph.ts`
 **Trigger:** After every `Bash` Claude Code tool call (matcher: `"Bash"`)
 **Purpose:** Recompile `runtime-graph.json` when a transition-class audit event has just landed
 
@@ -178,7 +178,7 @@ See [Sensor System](07-sensor-system.md) for the manifest schema and the fire li
 
 1. **Command filter:** Only `bun .claude/tools/aidlc-(state|jump|bolt|utility).ts` invocations pass the early exit. `aidlc-runtime.ts` is rejected explicitly (recursion guard).
 2. **Audit-existence guard:** Exits cleanly before init (no `audit/` shard yet).
-3. **Health heartbeat:** Writes `.aidlc-hooks-health/runtime-compile.last`.
+3. **Health heartbeat:** Writes `.aidlc-hooks-health/rebuild-stage-graph.last`.
 4. **Tail-read:** Splits the merged `audit/` shards on `\n---\n` and takes the last 3 blocks (the upper bound a single `approve` call appends).
 5. **Event-class filter:** Recompiles only when one of the last 3 blocks carries `GATE_APPROVED`, `STAGE_STARTED`, `STAGE_AWAITING_APPROVAL`, `AUDIT_MERGED`, or `WORKFLOW_COMPLETED`. Exits on no match.
 6. **Dispatch:** Spawns `bun aidlc-runtime.ts compile`. On non-zero exit, records a hook drop for `--doctor`; never blocks the parent Bash call.
@@ -210,12 +210,12 @@ See [Runtime Graph](13-runtime-graph.md) for the compile lifecycle and the locke
 
 **Processing steps:**
 
-1. **Project directory resolution:** Same multi-fallback pattern as audit-logger.ts.
+1. **Project directory resolution:** Same multi-fallback pattern as write-audit-log.ts.
 2. **Health heartbeat:** Writes to `.aidlc-hooks-health/log-subagent.last`.
 3. **JSON parsing:** Extracts `agent_type` (defaults to `"unknown"`), `agent_id`, and `last_assistant_message` (truncated to 200 characters).
 4. **Audit file guard:** Exits silently if the `audit/` shard does not exist.
 5. **Entry assembly:** Emits canonical `SUBAGENT_COMPLETED` event via `appendAuditEntry`. Fields: Timestamp, Event, Agent Type, and optionally Agent ID and truncated Message.
-6. **Atomic locking:** Same `mkdir`-based pattern as audit-logger.ts (unified in `lib.ts`) but with a separate lock name to avoid contention.
+6. **Atomic locking:** Same `mkdir`-based pattern as write-audit-log.ts (unified in `lib.ts`) but with a separate lock name to avoid contention.
 
 **Fires for every dispatched agent:**
 - Stage 2.1 (Reverse Engineering, `mode: pipeline`) -- fires twice per repo: `aidlc-developer-agent` code scan, then `aidlc-architect-agent` synthesis
@@ -226,9 +226,9 @@ Workspace detection (0.2) used to be a subagent; it now runs deterministically i
 
 ---
 
-### Stop: aidlc-stop.ts
+### Stop: aidlc-continue-workflow.ts
 
-**Source:** `.claude/hooks/aidlc-stop.ts`
+**Source:** `.claude/hooks/aidlc-continue-workflow.ts`
 **Trigger:** When the conductor tries to end its turn (matcher: empty = always, while `/aidlc` is active)
 **Purpose:** Enforce the interactive forwarding loop — keep it running until the engine reports the workflow is `done`
 
@@ -250,7 +250,7 @@ This is one of the framework's five flow-altering hooks, alongside the four PreT
 **Recursion guard — a stuck block can never trap the session.** A block that re-fires forever is the one way a hook could trap a turn, so recursion is bounded two ways, both native:
 
 - **`stop_hook_active`** — Claude Code sets this true when the current stop is itself the product of a prior Stop-hook block. The hook reads it as a signal that it is already inside a blocked sequence.
-- **A no-progress counter** - the hook persists a small record under `<record>/.aidlc-stop-hook/block-count.json` (in the intent's record dir), keyed on the workflow's *progress signature* (Current Stage slug + audit-tail length). A `report` that advances the workflow changes that signature, so the counter resets - a healthy loop is never throttled. When the signature is unchanged across consecutive blocks (no report ran), the counter increments. Once the no-progress streak reaches the ceiling - `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`, whose default is **run-mode aware: 2 in an interactive run and 8 under autonomous Construction** (interactive 2 so a chatting or pausing human is released after one nudge; autonomous 8 so an unattended loop, with no human to release it, runs to completion before letting go) - the hook **releases** the turn (allows the stop), so a stuck loop always lets go. An explicit `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` overrides both defaults.
+- **A no-progress counter** - the hook persists a small record under `<record>/.aidlc-continue-workflow-hook/block-count.json` (in the intent's record dir), keyed on the workflow's *progress signature* (Current Stage slug + audit-tail length). A `report` that advances the workflow changes that signature, so the counter resets - a healthy loop is never throttled. When the signature is unchanged across consecutive blocks (no report ran), the counter increments. Once the no-progress streak reaches the ceiling - `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`, whose default is **run-mode aware: 2 in an interactive run and 8 under autonomous Construction** (interactive 2 so a chatting or pausing human is released after one nudge; autonomous 8 so an unattended loop, with no human to release it, runs to completion before letting go) - the hook **releases** the turn (allows the stop), so a stuck loop always lets go. An explicit `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` overrides both defaults.
 
 **Human-wait carve-out - an interactive gate is not punished.** Four cases where the conductor ends its turn *because* it is waiting on the human (or is simply conversational) are handled so the hook never spams the nudge:
 
@@ -259,13 +259,13 @@ This is one of the framework's five flow-altering hooks, alongside the four PreT
 - **A mid-stage clarifying question is not free either.** Such a question parks the stage at `[-]` in-progress — the same checkbox state as a lazy quit, so `[-]` alone cannot be carved out. But the conductor must create a `<slug>-questions.md` with blank `[Answer]:` tags before asking (stage protocol §3), so an unanswered tag is a positive signal that a question is pending. The hook checks the canonical `<record>/<phase>/<slug>/` directory, or for a per-unit Construction directive, the exact `<record>/construction/<unit>/<slug>/` named by `next`; it does not accept a stale question from another unit. When the current `[-]` stage's questions file has an unanswered tag, the hook allows the stop. This is **strictly gated** under autonomous Construction (`Construction Autonomy Mode: autonomous`): only unit-major code-generation's exact, visible Plan Approval section with a blank/underscore-only answer tag is allowed to stop; a generic clarification question keeps the unattended loop running. Every other miss — no file, all answered, another unit, or a read/parse error — falls through to the cap-bounded block, so a genuine mid-stage quit is still nudged. (Immediate mitigation for any residual case: `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP=1`.)
 - **A conversational turn is not free either.** During an active workflow a human who just wants to chat (ask a question, discuss a decision) should not be nudged back into the loop. The hook reads the harness transcript and allows the stop when the most recent genuine human prompt was answered with **no** workflow-engine engagement - the conductor ran neither `aidlc-orchestrate` nor `aidlc-state` since that prompt. A read-only query (`--status`, `--doctor`, `--help`, `--version`) does **not** count as engagement, so "what stage am I on?" answered with `--status` still qualifies as chat. Claude and Codex deliver `transcript_path` on the Stop payload; **Kiro and opencode deliver none** (opencode's `session.idle` event carries no transcript), so on those harnesses this carve-out is inert and the run-mode-aware interactive cap (2) is the release path that lets a chatting human go after one nudge instead of eight. This is **strictly gated and fail-closed**: it never fires under autonomous Construction, and a missing or unreadable transcript, no human prompt found, or any engine call in the responding turn falls through to the cap-bounded block, so a conductor that engaged the workflow and then quit mid-loop is still nudged. It only ever ALLOWS - it can never block more.
 
-> **Contrast with the sensor-fire hook's advisory contract.** `aidlc-sensor-fire.ts` carries an explicit *never-block* contract (it never returns `{decision: block}`, asserted by `t95` Case 7). That is *that hook's* advisory contract, not a framework-wide ban on blocking. The `Stop` hook's use of `block` for loop enforcement is a different, sanctioned contract.
+> **Contrast with the run-sensors hook's advisory contract.** `aidlc-run-sensors.ts` carries an explicit *never-block* contract (it never returns `{decision: block}`, asserted by `t95` Case 7). That is *that hook's* advisory contract, not a framework-wide ban on blocking. The `Stop` hook's use of `block` for loop enforcement is a different, sanctioned contract.
 
 ---
 
-### PreToolUse: aidlc-dispatch-rules.ts
+### PreToolUse: aidlc-deliver-stage-rules.ts
 
-**Source:** `.claude/hooks/aidlc-dispatch-rules.ts`
+**Source:** `.claude/hooks/aidlc-deliver-stage-rules.ts`
 **Trigger:** Before AI-DLC subagent calls (`Task` or `Agent` on Claude; adapter equivalents on other harnesses)
 **Purpose:** Preserve exact active-stage rules across the conductor-to-worker boundary
 
@@ -331,7 +331,7 @@ This is one of the framework's five flow-altering hooks and one of its four `Pre
 
 **Decision.** For each write target the hook checks, against every reviewer-bearing stage that is not yet completed or skipped in the state file: does the path match a declared `produces[]`/`optional_produces[]` artifact (the engine's own suffix matcher, `producesArtifactUnit`), and does a fresh READY receipt currently cover it (`freshReviewReceipts` - the SAME scan the engine's completion precondition reads, shared in `aidlc-lib.ts` so the freeze window and the refusal window cannot diverge)? Freshness requires both the audit chronology and an exact current artifact fingerprint. Per-unit stages freeze only the reviewed unit's artifacts; an ambiguous per-unit path freezes if any unit holds a READY receipt. A NOT-READY verdict never freezes (the repair loop must edit), and a recorded gate rejection, jump, workflow restart, audited write, or content mismatch invalidates the receipt. Blocks emit a `REVIEW_FREEZE_BLOCKED` audit row (Tool, Target, Stage, optional Unit) and signal via **exit 2 + a redirecting stderr reason** that names the sanctioned routes: present the gate and quote suggestions there, or reject at the gate to reopen the artifact.
 
-**Shell writes.** The audit-logger hook that feeds the engine's invalidation scan is a Write/Edit PostToolUse hook, so a file mutation delivered as a shell command would otherwise be invisible and leave a stale READY receipt covering changed bytes. The freeze therefore extracts output-redirection targets and operands of common mutation commands before Bash executes. Read-only shell calls produce no targets and pass.
+**Shell writes.** The write-audit-log hook that feeds the engine's invalidation scan is a Write/Edit PostToolUse hook, so a file mutation delivered as a shell command would otherwise be invisible and leave a stale READY receipt covering changed bytes. The freeze therefore extracts output-redirection targets and operands of common mutation commands before Bash executes. Read-only shell calls produce no targets and pass.
 
 **Identity: none.** Unlike reviewer-scope there is no agent gate - any produces[] write voids a fresh READY receipt regardless of who makes it (conductor applying suggestions, a re-dispatched lead, a stray subagent).
 
@@ -422,7 +422,7 @@ The audit trail (the intent's `audit/` shards) uses the event taxonomy defined i
 | **Initialization** | 3 | `WORKSPACE_SCAFFOLDED`, `WORKSPACE_SCANNED`, `WORKSPACE_INITIALISED` | `aidlc-utility.ts intent-birth` |
 | **Navigation** | 4 | `SCOPE_CHANGED`, `SCOPE_DETECTED`, `DEPTH_CHANGED`, `TEST_STRATEGY_CHANGED` | `aidlc-utility.ts` |
 | **Interaction** | 7 | `DECISION_RECORDED`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `SUMMARY_CONFIRMATION_RECORDED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED` | `aidlc-log.ts`, `aidlc-state.ts` |
-| **Artifact** | 3 | `ARTIFACT_CREATED`, `ARTIFACT_UPDATED`, `ARTIFACT_REUSED` | audit-logger hook, `aidlc-state.ts reuse-artifact` |
+| **Artifact** | 3 | `ARTIFACT_CREATED`, `ARTIFACT_UPDATED`, `ARTIFACT_REUSED` | write-audit-log hook, `aidlc-state.ts reuse-artifact` |
 | **Subagent** | 1 | `SUBAGENT_COMPLETED` | log-subagent hook |
 | **Reviewer enforcement** | 2 | `REVIEWER_SCOPE_BLOCKED`, `REVIEW_FREEZE_BLOCKED` | reviewer-scope hook, review-freeze hook |
 | **Plan approval** | 1 | `PLAN_APPROVAL_BLOCKED` | plan-approval-guard hook |
@@ -464,7 +464,7 @@ A stage reported as skipped emits `STAGE_SKIPPED` instead of
 
 | Source | Events | When |
 |--------|--------|------|
-| `audit-logger.ts` | `ARTIFACT_CREATED` / `ARTIFACT_UPDATED` | Every Write/Edit to the intent's record dir (except the `audit/` shards) |
+| `write-audit-log.ts` | `ARTIFACT_CREATED` / `ARTIFACT_UPDATED` | Every Write/Edit to the intent's record dir (except the `audit/` shards) |
 | `log-subagent.ts` | `SUBAGENT_COMPLETED` | Any subagent stop |
 | `reviewer-scope.ts` | `REVIEWER_SCOPE_BLOCKED` | A per-unit reviewer's tool call refused for sibling-unit access (PreToolUse) |
 | `review-freeze.ts` | `REVIEW_FREEZE_BLOCKED` | A `produces[]` write refused for voiding a fresh READY review receipt before the gate (PreToolUse) |
@@ -539,7 +539,7 @@ bun .claude/tools/aidlc-utility.ts <subcommand>
 | `config-change` | Write active workflow config. Dispatcher form: `/aidlc config set depth <value>`, `/aidlc config set test-strategy <value>`, or `/aidlc config set review <value>`. | `DEPTH_CHANGED`, `TEST_STRATEGY_CHANGED`, `REVIEW_CLASS_CHANGED` |
 | `plugin-list` | List installed plugins with enabled/disabled state; `--json` emits `plugins` plus `selectionActive`. | none |
 | `plugin-sync` | Compose installed plugin roots by running each plugin's `hooks/compose.ts`; no roots is a clean no-op. | none |
-| `set-status` | Low-level state-field sync (called by `sync-statusline.ts` hook on TaskUpdate) | — |
+| `set-status` | Low-level state-field sync (called by `sync-workflow-state.ts` hook on TaskUpdate) | — |
 | `detect-scope` | Record a scope-detection event during freeform handling. Two modes: `--scope <s> --input <text> [--source freeform\|keyword\|env\|cli]` (explicit), or `--from-text --input <text>` (inference via `inferScopeFromText` — reads each scope's `keywords` from its `.claude/scopes/*.md` frontmatter with word-boundary matching, alphabetical tie-break, `>5`-word fallback to `feature`). Modes are mutually exclusive. Audit event includes optional `Matched keywords` field when a keyword fires. | `SCOPE_DETECTED` |
 | `detect` | Read-only composer scan (the dispatched composer's first call): prints the stock scope registry, the compiled stage graph summary, and the paths a composed scope's two files must land at, as JSON (`--json`). Mutates nothing. | — |
 | `recompose` | In-flight plan re-shape: `--skip <slug,...>` / `--add <slug,...>` flips PENDING ahead-of-cursor stages' plan suffixes on the live state file, under the audit lock. Validates strictly (a starved required input, a frozen/behind-cursor stage, a walking-skeleton anchor move, a non-Running workflow, or autonomous Construction all reject) and rebuilds the derived state fields. | `RECOMPOSED` |
@@ -574,7 +574,7 @@ Routes a Sensor invocation: it validates inputs, resolves the manifest and stage
 | `describe <id>` | Print one Sensor's manifest fields (command, default severity, `matches` glob, optional timeout, manifest path) | — |
 | `fire <id> --stage <slug> --output-path <path>` | Fire a Sensor against an output file | `SENSOR_FIRED` then one of `SENSOR_PASSED` / `SENSOR_FAILED` / `SENSOR_BUDGET_OVERRIDE` |
 
-The dispatcher exits non-zero only on its own invocation errors (unknown id, missing flag, `matches` mismatch). A Sensor *outcome* — pass, fail, timeout, or any script error — is advisory: the CLI still exits 0 and always closes the `SENSOR_FIRED` row with a paired terminal row. Failures write a detail file to `<record>/.aidlc-sensors/<stage>/<id>-<fire-id>.md` (in the intent's record dir) race-free (`wx`-flag write + rename). The same dispatcher is driven by the `aidlc-sensor-fire.ts` PostToolUse hook on every matching `Write` / `Edit`.
+The dispatcher exits non-zero only on its own invocation errors (unknown id, missing flag, `matches` mismatch). A Sensor *outcome* — pass, fail, timeout, or any script error — is advisory: the CLI still exits 0 and always closes the `SENSOR_FIRED` row with a paired terminal row. Failures write a detail file to `<record>/.aidlc-sensors/<stage>/<id>-<fire-id>.md` (in the intent's record dir) race-free (`wx`-flag write + rename). The same dispatcher is driven by the `aidlc-run-sensors.ts` PostToolUse hook on every matching `Write` / `Edit`.
 
 ### `aidlc-learnings.ts` — Learning-gate tool
 
@@ -598,7 +598,7 @@ Materialises the intent's `runtime-graph.json`, the data-plane mirror of `stage-
 | `fragment-fork --slug <slug>` | Byte-copy main's `runtime-graph.json` into a Bolt worktree (one-shot). Called by `aidlc-bolt.ts start --worktree` | — |
 | `fragment-merge --slug <slug>` | Remove the worktree fragment (idempotent). Called by `aidlc-bolt.ts complete --merge` | — |
 
-Re-running `compile` against the same audit produces a byte-equivalent graph. It is invoked automatically by the `aidlc-runtime-compile.ts` PostToolUse Bash hook on every transition-class audit emit (`GATE_APPROVED`, `STAGE_STARTED`, `STAGE_AWAITING_APPROVAL`, `AUDIT_MERGED`, `WORKFLOW_COMPLETED`); manual invocation is a debug surface. The `fragment-fork` / `fragment-merge` primitives ride on the existing fork/merge audit boundaries (`STATE_FORKED` + `AUDIT_FORKED`, `STATE_MERGED` + `AUDIT_MERGED`) and emit no events of their own. All subcommands accept `--project-dir <path>`.
+Re-running `compile` against the same audit produces a byte-equivalent graph. It is invoked automatically by the `aidlc-rebuild-stage-graph.ts` PostToolUse Bash hook on every transition-class audit emit (`GATE_APPROVED`, `STAGE_STARTED`, `STAGE_AWAITING_APPROVAL`, `AUDIT_MERGED`, `WORKFLOW_COMPLETED`); manual invocation is a debug surface. The `fragment-fork` / `fragment-merge` primitives ride on the existing fork/merge audit boundaries (`STATE_FORKED` + `AUDIT_FORKED`, `STATE_MERGED` + `AUDIT_MERGED`) and emit no events of their own. All subcommands accept `--project-dir <path>`.
 
 ---
 

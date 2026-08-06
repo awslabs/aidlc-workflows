@@ -10,16 +10,16 @@ const fills: OnboardingFills = {
   slots: {
     title_block: `# Project Name <!-- Replace with your project name -->
 
-This project uses AI-DLC (AI-Driven Development Life Cycle) for structured development, running on the **Kiro IDE harness**. The workspace shell ships in \`.kiro/\` (no setup command); the engine auto-births the first intent when you describe what to build. Run \`/aidlc\` followed by a scope or project description to begin. Run \`/aidlc --doctor\` to validate your setup, \`/aidlc --version\` to print the framework version, \`/aidlc --stage <slug>\` to jump to a specific stage, \`/aidlc --phase <name>\` to jump to a phase, \`/aidlc --depth <level>\` to override depth, \`/aidlc --test-strategy <level>\` to override test volume, \`/aidlc --review <class>\` to cap stage reviews (adversarial, advisory, none). Run \`/aidlc compose "<task>"\` to have the adaptive composer propose a tailored EXECUTE/SKIP plan (works up front, from a scan report via \`--report <path>\`, and mid-workflow to re-shape the pending stages - every proposal stops at an approve/edit/reject gate).`,
+This project uses AI-DLC (AI-Driven Development Life Cycle) for structured development, running on the **Kiro IDE harness**. The workspace shell ships in \`.kiro/\` (no setup command); describe what you want to build and it sets up the workflow for you. Run \`/aidlc\` followed by a scope or project description to begin. Run \`/aidlc --doctor\` to validate your setup, \`/aidlc --version\` to print the framework version, \`/aidlc --stage <slug>\` to jump to a specific stage, \`/aidlc --phase <name>\` to jump to a phase, \`/aidlc --depth <level>\` to override depth, \`/aidlc --test-strategy <level>\` to override test volume, \`/aidlc --review <class>\` to cap stage reviews (adversarial, advisory, none). Run \`/aidlc compose "<task>"\` to get a plan tailored to that task (works up front, from a scan report via \`--report <path>\`, and mid-workflow to re-shape the pending stages - every proposal stops at an approve/edit/reject gate).`,
 
     prereq_bullets: `- **Kiro IDE**: Sign in and select Claude Opus 4.8 as the chat model before starting a workflow.
-- **bun**: Required for the CLI tools and hook scripts (state management, audit logging, orchestration engine). Install via \`curl -fsSL https://bun.sh/install | bash\`. \`bun\` must be on your PATH for the non-interactive shells the harness spawns — these source \`~/.zshenv\` (zsh) or \`~/.bashrc\` (bash), NOT \`~/.zshrc\`.
-- **Activation**: Open the project in Kiro IDE and invoke \`/aidlc\`; the command loads the shipped \`skills/aidlc/SKILL.md\` conductor. The \`.kiro/hooks/aidlc-*.json\` v2 hook files register in the IDE's Agent Hooks panel.
-- **Permissions**: delegation-target agent \`.md\` files receive the IDE-native read/write/shell grants they need. The conductor's approval gates and your IDE permission settings remain the control boundary.`,
+- **bun**: Required for the CLI tools and hook scripts (tracking progress, writing the decision log, deciding what runs next). Install via \`curl -fsSL https://bun.sh/install | bash\`. \`bun\` must be on your PATH for the non-interactive shells the harness spawns — these source \`~/.zshenv\` (zsh) or \`~/.bashrc\` (bash), NOT \`~/.zshrc\`.
+- **Activation**: Open the project in Kiro IDE and invoke \`/aidlc\`; the command loads the shipped \`skills/aidlc/SKILL.md\`, which drives the workflow. The \`.kiro/hooks/aidlc-*.json\` v2 hook files register in the IDE's Agent Hooks panel.
+- **Permissions**: delegation-target agent \`.md\` files receive the IDE-native read/write/shell grants they need. The approval gates plus your IDE permission settings remain the control boundary.`,
 
     prereq_bullets_tail: "",
 
-    agents_note: `On Kiro IDE the \`/aidlc\` command loads \`skills/aidlc/SKILL.md\` as the conductor. The full 14-persona roster supplies workers for the four dispatched stages (2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent), reviewer passes, and composer requests through Markdown personas with IDE-native tool grants; the shipped agent-v1 JSON files and \`settings/cli.json\` are CLI-only compatibility surfaces and do not select an IDE default agent.`,
+    agents_note: `On Kiro IDE the \`/aidlc\` command loads \`skills/aidlc/SKILL.md\`, which drives the workflow. The full 14-role roster supplies the four delegated stages (2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent), reviewer passes, and composer requests through Markdown personas with IDE-native tool grants; the shipped agent-v1 JSON files and \`settings/cli.json\` are CLI-only compatibility surfaces and do not select an IDE default agent.`,
 
     structure_extra: "",
 
@@ -27,7 +27,7 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
 
     sections_before_resumption: `## What's different on this harness
 
-This is the same AI-DLC core that ships to every harness — one deterministic engine, state machine, audit trail, and stage set, rendered onto Kiro IDE. On Kiro IDE:
+This is the same AI-DLC core that ships to every harness: the same ordered steps, the same approval gates, and the same written record of what was decided, rendered onto Kiro IDE. On Kiro IDE:
 
 - Approval gates and questions render as **numbered prose options** (no structured-question widget); the questions FILE with \`[Answer]:\` tags remains the source of truth.
 - There is **no statusline** and **no welcome message**; use \`/aidlc --status\` and the progress lines at gates.

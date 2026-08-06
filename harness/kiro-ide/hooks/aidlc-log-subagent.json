@@ -5,7 +5,7 @@
       "name": "aidlc-log-subagent",
       "trigger": "PostToolUse",
       "matcher": "^(subagent_.+|invoke_sub_agent)$",
-      "description": "Logs sub-agent completion to audit trail.",
+      "description": "Records in the audit log when a specialist agent finishes its part of a stage.",
       "action": { "type": "command", "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts log-subagent" }
     }
   ]

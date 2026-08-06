@@ -173,7 +173,7 @@ Mirroring the reference recipe, here is the workflow end to end.
    and the agent→examples table do not regenerate themselves (see what does NOT
    validate, below).
 
-The full recipe — with the discovery, intent-birth, and statusline verification
+The full recipe — with the discovery, intent-create, and statusline verification
 commands — is in [Contributing: Adding an Agent](../reference/11-contributing.md#adding-an-agent).
 To change an existing agent's tools, tier, or stage assignments rather than add
 one, see [Agent System: How to Modify an Agent](../reference/05-agent-system.md#how-to-modify-an-agent).

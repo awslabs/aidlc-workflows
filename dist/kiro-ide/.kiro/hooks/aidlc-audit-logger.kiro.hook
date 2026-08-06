@@ -1,1 +1,0 @@
-{"version":"1.0.0","enabled":true,"name":"aidlc-audit-logger","description":"Logs artifact create/update events on file writes to aidlc-docs/.","when":{"type":"postToolUse","toolTypes":["write"]},"then":{"type":"runCommand","command":"bun .kiro/hooks/aidlc-kiro-adapter.ts audit-and-sensors"}}

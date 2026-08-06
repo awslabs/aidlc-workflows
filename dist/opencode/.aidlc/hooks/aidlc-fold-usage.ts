@@ -43,7 +43,7 @@ import {
 } from "../tools/aidlc-usage.ts";
 
 // The Current Stage slug from the state file - a minimal substring match,
-// replicating aidlc-stop.ts's currentStageSlug so byStage keys agree. Returns ""
+// replicating aidlc-continue-workflow.ts's currentStageSlug so byStage keys agree. Returns ""
 // when the field is absent.
 function currentStageSlug(stateContent: string): string {
   const stageMatch = stateContent.match(/Current Stage\*{0,2}:?\s*`?([^\n`]*)`?/);
@@ -95,7 +95,7 @@ async function main(): Promise<void> {
 
   if (!transcriptPath) process.exit(0);
 
-  // Derive the current stage the same way aidlc-stop.ts does: read the state
+  // Derive the current stage the same way aidlc-continue-workflow.ts does: read the state
   // file directly. Absent state => null so byStage is not polluted.
   let currentStage: string | null = null;
   try {

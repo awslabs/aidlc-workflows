@@ -148,7 +148,7 @@ work, once, behind the 2.7 approval gate) is what keeps the hook-fired
 ## 3. Compile lifecycle
 
 The compile is invoked by the PostToolUse Bash hook
-(`.claude/hooks/aidlc-runtime-compile.ts`) on every transition-class
+(`.claude/hooks/aidlc-rebuild-stage-graph.ts`) on every transition-class
 audit emit. The hook fires on every `Bash` tool call from the
 conductor and filters cheaply:
 
@@ -157,7 +157,7 @@ conductor and filters cheaply:
    (recursion guard); `aidlc-log.ts` emits only chatty in-stage events;
    `aidlc-worktree.ts` emits only WORKTREE_* events.
 2. **Audit-existence guard** — exit if the intent's `audit/` shard doesn't exist yet.
-3. **Heartbeat** — write `<record>/.aidlc-hooks-health/runtime-compile.last`
+3. **Heartbeat** — write `<record>/.aidlc-hooks-health/rebuild-stage-graph.last`
    for doctor's silent-hook detection.
 4. **Last-3-block tail-read** — split `audit.md` on `\n---\n`, take the
    last 3 entries.

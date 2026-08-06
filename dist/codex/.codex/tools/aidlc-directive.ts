@@ -37,6 +37,28 @@ import { isPlainObject } from "./aidlc-lib.ts";
 export const GATE_UNRESOLVED = "unresolved" as const;
 export type GateValue = boolean | typeof GATE_UNRESOLVED;
 
+// narration: the OPTIONAL spoken line for a directive, authored by the engine
+// and relayed by the conductor. It is a presentation field: it carries no
+// routing meaning, every kind may omit it, and dropping it changes nothing
+// about what the framework does.
+//
+// WHY THE ENGINE AUTHORS IT: the engine already knows, deterministically, which
+// stage this is, what scope resolved, what it just decided, and what comes
+// next. The conductor does not need to infer any of that to describe it, and
+// when it does infer it, it describes the mechanism it can see (the tool call,
+// the directive kind, the routing) rather than the user's project. Authoring the
+// sentence where the facts live makes the spoken line deterministic too, and
+// leaves the conductor a relay instead of an improviser - the same move the
+// framework already made for rule delivery, where prose compliance failed and
+// deterministic injection replaced it.
+//
+// This field is legal on EVERY kind (see NARRATION_FIELD in the allowed-key
+// sets) so a new emission point can carry a line without a schema change. Keep
+// values to one sentence, two at most: a load-steering directive's rule payload
+// is chunked against DIRECTIVE_MAX_BYTES with limited headroom, so narration is
+// never the thing that pushes a directive over transport budget.
+export type NarrationField = string;
+
 // The 10 kinds, keyed on the `kind` discriminator.
 export type DirectiveKind =
   | "load-steering"
@@ -57,6 +79,8 @@ export type DirectiveKind =
 // surfaced as conversational progress.
 export interface LoadSteeringDirective {
   kind: "load-steering";
+  /** Optional spoken line for the user; presentation only (see NarrationField). */
+  narration?: NarrationField;
   stage: string;
   bundle: string;
   part: number;
@@ -73,6 +97,8 @@ export interface LoadSteeringDirective {
 // paths at emit time; the conductor never re-derives them).
 export interface RunStageDirective {
   kind: "run-stage";
+  /** Optional spoken line for the user; presentation only (see NarrationField). */
+  narration?: NarrationField;
   stage: string;
   phase: string;
   lead_agent: string;
@@ -171,6 +197,8 @@ export interface RunStageDirective {
 // run-stage field PLUS `worker` (the named worker the conductor Tasks).
 export interface DispatchSubagentDirective {
   kind: "dispatch-subagent";
+  /** Optional spoken line for the user; presentation only (see NarrationField). */
+  narration?: NarrationField;
   stage: string;
   phase: string;
   lead_agent: string;
@@ -199,6 +227,8 @@ export interface DispatchSubagentDirective {
 // includes them whenever the swarm stage declares a reviewer.
 export interface InvokeSwarmDirective {
   kind: "invoke-swarm";
+  /** Optional spoken line for the user; presentation only (see NarrationField). */
+  narration?: NarrationField;
   units: string[];
   stage?: string;
   stage_file?: string;
@@ -224,6 +254,8 @@ export interface InvokeSwarmDirective {
 // approval gate. The conductor surfaces judgement to the human here.
 export interface PresentGateDirective {
   kind: "present-gate";
+  /** Optional spoken line for the user; presentation only (see NarrationField). */
+  narration?: NarrationField;
   stage: string;
   phase: string;
   memory_path: string;
@@ -235,12 +267,16 @@ export interface PresentGateDirective {
 // answer back via report.
 export interface AskDirective {
   kind: "ask";
+  /** Optional spoken line for the user; presentation only (see NarrationField). */
+  narration?: NarrationField;
   question: string;
 }
 
 // print — print verbatim and stop (status / help / doctor / version).
 export interface PrintDirective {
   kind: "print";
+  /** Optional spoken line for the user; presentation only (see NarrationField). */
+  narration?: NarrationField;
   message: string;
 }
 
@@ -248,6 +284,8 @@ export interface PrintDirective {
 // guard, malformed stage file). The message is shown to the user verbatim.
 export interface ErrorDirective {
   kind: "error";
+  /** Optional spoken line for the user; presentation only (see NarrationField). */
+  narration?: NarrationField;
   message: string;
 }
 
@@ -255,6 +293,8 @@ export interface ErrorDirective {
 // why the loop ended.
 export interface DoneDirective {
   kind: "done";
+  /** Optional spoken line for the user; presentation only (see NarrationField). */
+  narration?: NarrationField;
   reason: string;
 }
 
@@ -266,6 +306,8 @@ export interface DoneDirective {
 // `done` (issue #367). `stage` names the slug the workflow parked at.
 export interface ParkedDirective {
   kind: "parked";
+  /** Optional spoken line for the user; presentation only (see NarrationField). */
+  narration?: NarrationField;
   reason: string;
   stage: string;
 }
@@ -374,17 +416,30 @@ const ERROR_FIELDS = ["kind", "message"] as const;
 const DONE_FIELDS = ["kind", "reason"] as const;
 const PARKED_FIELDS = ["kind", "reason", "stage"] as const;
 
+// `narration` is legal on EVERY kind, so it is folded into each allowed-key set
+// centrally rather than repeated in ten literals. A presentation field carries no
+// per-kind meaning: the conductor speaks it when present and works silently when
+// absent, on any kind. Folding it here also means a future emission point can
+// attach a line without touching this file.
+const NARRATION_FIELD = "narration" as const;
+
+// Every kind's set gains `narration`, so the per-kind literals above stay the
+// record of what is kind-SPECIFIC and this one helper adds what is universal.
+function withNarration(fields: readonly string[]): readonly string[] {
+  return [...fields, NARRATION_FIELD];
+}
+
 const KNOWN_FIELDS_BY_KIND: Readonly<Record<DirectiveKind, readonly string[]>> = {
-  "load-steering": LOAD_STEERING_FIELDS,
-  "run-stage": RUN_STAGE_FIELDS,
-  "dispatch-subagent": DISPATCH_SUBAGENT_FIELDS,
-  "invoke-swarm": INVOKE_SWARM_FIELDS,
-  "present-gate": PRESENT_GATE_FIELDS,
-  ask: ASK_FIELDS,
-  print: PRINT_FIELDS,
-  error: ERROR_FIELDS,
-  done: DONE_FIELDS,
-  parked: PARKED_FIELDS,
+  "load-steering": withNarration(LOAD_STEERING_FIELDS),
+  "run-stage": withNarration(RUN_STAGE_FIELDS),
+  "dispatch-subagent": withNarration(DISPATCH_SUBAGENT_FIELDS),
+  "invoke-swarm": withNarration(INVOKE_SWARM_FIELDS),
+  "present-gate": withNarration(PRESENT_GATE_FIELDS),
+  ask: withNarration(ASK_FIELDS),
+  print: withNarration(PRINT_FIELDS),
+  error: withNarration(ERROR_FIELDS),
+  done: withNarration(DONE_FIELDS),
+  parked: withNarration(PARKED_FIELDS),
 };
 
 // --- Validator ---
@@ -427,6 +482,12 @@ export function validateDirective(obj: unknown): ValidationResult {
       errors.push(`${kind}: unknown key: ${key}`);
     }
   }
+
+  // Rule 3b: narration is legal on every kind, so it is type-checked once here
+  // rather than in each of the ten switch arms. Optional: absent is the normal
+  // case and never an error; present-but-not-a-string is, because the conductor
+  // would otherwise be handed a non-sentence to speak.
+  checkOptionalString(o, NARRATION_FIELD, kind, errors);
 
   // Rule 4-6: per-kind required-field presence + type checks, with specific,
   // kind-aware messages.

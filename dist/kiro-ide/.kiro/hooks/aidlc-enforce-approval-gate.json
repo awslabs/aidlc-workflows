@@ -1,0 +1,11 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "aidlc-enforce-approval-gate",
+      "trigger": "PreToolUse",
+      "description": "Stops the assistant from acting while the workflow is waiting for your approval, until you have actually replied.",
+      "action": { "type": "command", "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts enforce-approval-gate" }
+    }
+  ]
+}

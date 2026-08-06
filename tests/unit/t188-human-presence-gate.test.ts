@@ -1,4 +1,4 @@
-// covers: cli:aidlc-state(approve,gate-start), cli:aidlc-orchestrate(report), cli:aidlc-log(answer), audit:SUMMARY_CONFIRMATION_RECORDED, function:handleApprove, function:handleGateStart, function:handleAnswer, function:humanActedSinceGate, function:humanActedSinceLastAnswer, function:hasOpenGate, function:isAutonomousMode, function:humanPresenceGuardDisabled, function:checkSummaryConfirmationEvidence, function:summaryConfirmationGuardDisabled, file:hooks/aidlc-mint-presence.ts
+// covers: cli:aidlc-state(approve,gate-start), cli:aidlc-orchestrate(report), cli:aidlc-log(answer), audit:SUMMARY_CONFIRMATION_RECORDED, function:handleApprove, function:handleGateStart, function:handleAnswer, function:humanActedSinceGate, function:humanActedSinceLastAnswer, function:hasOpenGate, function:isAutonomousMode, function:humanPresenceGuardDisabled, function:checkSummaryConfirmationEvidence, function:summaryConfirmationGuardDisabled, file:hooks/aidlc-record-human-turn.ts
 //
 // t188 - human-presence approval gate (ledger-event design).
 //

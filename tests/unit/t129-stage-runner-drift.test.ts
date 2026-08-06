@@ -315,8 +315,8 @@ describe("t129 stage-runner drift guard (migrated from t129-stage-runner-drift.s
 
   // ===========================================================================
   // Test 7 — the /aidlc-init wrapper routes a freeform description via the
-  // `--arguments` FLAG, not a bare $ARGUMENTS positional. intent-birth reads the
-  // description from `--arguments` (handleIntentBirth, flags.arguments), so a
+  // `--arguments` FLAG, not a bare $ARGUMENTS positional. intent-create reads the
+  // description from `--arguments` (handleIntentCreate, flags.arguments), so a
   // runner that forwarded $ARGUMENTS verbatim would silently DROP the description
   // (only a recognized flag like --scope would survive). Pin the shipped init
   // SKILL.md so a regression to the old verbatim-forward shape is caught.
@@ -325,7 +325,7 @@ describe("t129 stage-runner drift guard (migrated from t129-stage-runner-drift.s
     const initSkill = readFileSync(join(SKILLS_DIR, "aidlc-init", "SKILL.md"), "utf-8");
     // It names the --arguments flag for the description text.
     expect(initSkill).toContain("--arguments");
-    // And it no longer forwards $ARGUMENTS verbatim to intent-birth (the bug).
-    expect(initSkill).not.toContain("intent-birth $ARGUMENTS");
+    // And it no longer forwards $ARGUMENTS verbatim to intent-create (the bug).
+    expect(initSkill).not.toContain("intent-create $ARGUMENTS");
   });
 });

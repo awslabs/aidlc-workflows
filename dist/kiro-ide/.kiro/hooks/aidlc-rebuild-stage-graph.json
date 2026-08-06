@@ -1,0 +1,12 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "aidlc-rebuild-stage-graph",
+      "trigger": "PostToolUse",
+      "matcher": "execute_bash",
+      "description": "Rebuilds the compiled plan of remaining stages after the workflow moves, so routing decisions use current state.",
+      "action": { "type": "command", "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts rebuild-stage-graph" }
+    }
+  ]
+}

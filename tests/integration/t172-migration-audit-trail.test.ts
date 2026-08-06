@@ -1,6 +1,6 @@
-// covers: function:migrateFlatLayout, function:auditShards, function:readAllAuditShards, function:auditShardDir, function:auditShardName, subcommand:aidlc-utility:intent-birth
+// covers: function:migrateFlatLayout, function:auditShards, function:readAllAuditShards, function:auditShardDir, function:auditShardName, subcommand:aidlc-utility:intent-create
 //
-// Mechanism: cli (spawned dist intent-birth) + in-process pure-function asserts
+// Mechanism: cli (spawned dist intent-create) + in-process pure-function asserts
 // against the dist lib audit readers.
 //
 // Blocker B2 regression — migration must PRESERVE the pre-migration audit trail.
@@ -83,7 +83,7 @@ const FLAT_AUDIT = [
 ].join("\n");
 
 describe("t172 migration preserves the pre-migration audit trail (B2)", () => {
-  test("intent-birth relocates the flat audit.md into the shard layout so its events stay readable", () => {
+  test("intent-create relocates the flat audit.md into the shard layout so its events stay readable", () => {
     // Seed a flat (pre-workspace) project: aidlc-docs/aidlc-state.md (with a
     // Project field) + a POPULATED aidlc-docs/audit.md (real event blocks).
     const flat = join(proj, "aidlc-docs");
@@ -96,7 +96,7 @@ describe("t172 migration preserves the pre-migration audit trail (B2)", () => {
     writeFileSync(join(flat, "audit.md"), FLAT_AUDIT, "utf-8");
 
     // Migrate via the real handler (under the real workspace lock).
-    const r = util(["intent-birth", "--scope", "feature"]);
+    const r = util(["intent-create", "--scope", "feature"]);
     expect(r.status).toBe(0);
 
     // One migrated record carrying the flat state.

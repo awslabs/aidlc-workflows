@@ -3,13 +3,13 @@
 This project uses AI-DLC (AI-Driven Development Life Cycle) under the OpenAI
 Codex CLI harness (minimum version 0.145.0). Invoke the orchestrator skill with
 `$aidlc` (or `/skills` → aidlc) followed by a scope or project description.
-The deterministic engine, state machine, audit log, and referee are
-byte-identical to every other harness distribution; only the shell differs. Run
+The ordered steps, the approval gates, the written record, and the checks behind
+them are identical to every other AI-DLC install; only the CLI around them differs. Run
 `$aidlc --status` for progress, `$aidlc --help` for usage, `$aidlc intent`
 to list intents, `$aidlc --doctor` to validate setup, and
 `$aidlc --stage <slug>` / `--phase <name>` / `--depth <level>` /
 `--test-strategy <level>` / `--review <class>` for the usual overrides. Run `$aidlc compose
-"<task>"` to have the adaptive composer propose a tailored EXECUTE/SKIP plan
+"<task>"` to get a plan tailored to that task
 (up front, from a scan report via `--report <path>`, or mid-workflow to
 re-shape the pending stages - every proposal stops at an approve/edit/reject
 gate).
@@ -25,18 +25,31 @@ gate).
 - **Permissions**: `.codex/rules/default.rules` (Starlark prefix rules) pre-allows the deterministic core's exact command prefixes — `bun .codex/tools/`, `bun .codex/hooks/`, and `git worktree`/`commit`/`add` — so workflows run without per-call prompts. The sandbox is `workspace-write`; commands outside the allowlist prompt.
 - **Personal overrides**: Settings in `~/.codex/config.toml` merge over the project `.codex/config.toml`. Put machine-specific overrides (model, AWS profile/region, environment variables) there to avoid changing the shared project config.
 
+## What AI-DLC does for you
+
+AI-DLC walks a piece of work from idea to shipped code in ordered steps, and
+stops to ask you for approval at each one. You describe what you want built; it
+works out how much process the change needs, asks the questions it actually
+needs answered, writes the design and code, and keeps a written record of what
+was decided and why. Nothing advances past a step without your say-so, and you
+can change the plan, the depth, or the direction at any approval point.
+
+The sections below describe where it keeps things in this project. You do not
+need to read them to start: run the command in the header above and answer the
+questions.
+
 ## AI-DLC Structure
 
 - **Skill**: `.agents/skills/aidlc/` — Orchestrator (`SKILL.md`), stage protocol, and the stage files across the phase directories (the enabled set depends on the composed plugins: see the compiled `.codex/tools/data/stage-graph.json` or run `$aidlc --doctor`)
 - **Session skills** (read-only, user-invocable): `.agents/skills/aidlc-session-cost/`, `.agents/skills/aidlc-replay/`, `.agents/skills/aidlc-outcomes-pack/` — typed as `$aidlc-session-cost`, `$aidlc-replay`, `$aidlc-outcomes-pack`. Each pulls every count from `bun .codex/tools/aidlc-runtime.ts summary --json` (no LLM-side counting). Classified `read-only`: they never advance the workflow stage pointer and never emit audit events. `aidlc-session-cost` and `aidlc-replay` print to the terminal only; `aidlc-outcomes-pack` is the only one that writes a file (`OUTCOMES.md`).
-- **Stage-runner skills** (user-invocable): `.agents/skills/aidlc-<stage>/` — one per runnable core stage, typed as `$aidlc-<stage>` (e.g. `$aidlc-application-design`, `$aidlc-code-generation`); plugin-owned stages use their bare plugin-prefixed command name. Each runs that single stage in isolation via the engine's `--single` mode (`aidlc-orchestrate next --stage <slug> --single`) and **never advances your main workflow's `Current Stage`** — a single-stage run is isolated by design (the tool refuses to advance the main workflow). They are opt-in packaging: the same stage is reachable via `$aidlc --stage <slug> --single` without a runner. The runner set is generated from the compiled stage graph by `bun .codex/tools/aidlc-runner-gen.ts write` and kept in sync by its `check` drift guard, so adding a stage file and regenerating adds its runner. The three bootstrap **initialization** stages ship no per-stage runner (they have no standalone meaning); the whole initialization phase is packaged as `$aidlc-init`, which mints the first intent and builds its state in one step. (This is opt-in packaging: the engine normally auto-births the first intent the moment you describe what to build — no separate initialization command is needed.)
-- **Agents**: `.codex/agents/` — the base framework ships 14 agents: 11 domain-expert personas (product, design, delivery, architect, aws-platform, compliance, devsecops, developer, quality, pipeline-deploy, operations), 2 review-only agents (product-lead, architecture-reviewer), and the adaptive-workflows composer. A plugin install may add more; the enabled set is discovered from the files present under that directory. On Codex all 14 agent personas are transposed into `.codex/agents/` TOMLs (the conductor reads the persona `.md` bodies as prose); workers for the four dispatched stages (2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent), reviewer passes, and composer requests run through Codex subagent roles.
+- **Stage-runner skills** (user-invocable): `.agents/skills/aidlc-<stage>/` — one per runnable core stage, typed as `$aidlc-<stage>` (e.g. `$aidlc-application-design`, `$aidlc-code-generation`); plugin-owned stages use their bare plugin-prefixed command name. Each runs that single stage in isolation via the engine's `--single` mode (`aidlc-orchestrate next --stage <slug> --single`) and **never advances your main workflow's `Current Stage`** — a single-stage run is isolated by design (the tool refuses to advance the main workflow). They are opt-in packaging: the same stage is reachable via `$aidlc --stage <slug> --single` without a runner. The runner set is generated from the compiled stage graph by `bun .codex/tools/aidlc-runner-gen.ts write` and kept in sync by its `check` drift guard, so adding a stage file and regenerating adds its runner. The three bootstrap **initialization** stages ship no per-stage runner (they have no standalone meaning); the whole initialization phase is packaged as `$aidlc-init`, which creates the first workflow record and its starting state in one step. (This is opt-in packaging: describing what to build normally sets up the first piece of work by itself — no separate initialization command is needed.)
+- **Agents**: `.codex/agents/` — the base framework ships 14 agents: 11 domain-expert personas (product, design, delivery, architect, aws-platform, compliance, devsecops, developer, quality, pipeline-deploy, operations), 2 review-only agents (product-lead, architecture-reviewer), and the adaptive-workflows composer. A plugin install may add more; the enabled set is discovered from the files present under that directory. On Codex all 14 expert roles are transposed into `.codex/agents/` TOMLs (the `/aidlc` session reads the role `.md` bodies as prose); the four delegated stages (2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent), reviewer passes, and composer requests run through Codex subagent roles.
 - **Method/rules**: `aidlc/spaces/<active-space>/memory/` — Layered files authored once at the workspace root, read by each harness via its native include (no copy into `.codex/`): `org.md` (framework defaults + organisation-wide guardrails), `team.md` (this team's affirmed practices), `project.md` (project-specific specialisation), plus `phases/<phase>.md` for ideation, inception, construction, and operation (initialization is bootstrap-only and ships no rule file). Resolution is a strict-additive five-layer chain — `org → team → project → phase → stage` — where every applicable rule appears in `rules_in_context` at runtime. Conflicts (narrower contradicting broader policy) are rejected at the §13 learning admission check before the learning reaches disk. See `docs/reference/01-architecture.md` § "Configuration layers" and `docs/reference/08-rule-system.md` for the schema.
-- **Sensors**: `.codex/sensors/` — Deterministic verification manifests (advisory). Ships with framework defaults (`aidlc-claim-sources.md`, `aidlc-required-sections.md`, `aidlc-upstream-coverage.md`, `aidlc-linter.md`, `aidlc-type-check.md`); forks may add custom `aidlc-<id>.md` manifests. Stages declare which sensors fire via the frontmatter `sensors: [<id>]` list — a pull import resolved at compile time. The PostToolUse hook reads the compile-resolved `sensors_applicable` array off the stage graph node.
+- **Sensors**: `.codex/sensors/`: automatic checks that run against what gets written (they report, they never block). Ships with framework defaults (`aidlc-claim-sources.md`, `aidlc-required-sections.md`, `aidlc-upstream-coverage.md`, `aidlc-linter.md`, `aidlc-type-check.md`); forks may add custom `aidlc-<id>.md` manifests. Stages declare which sensors fire via the frontmatter `sensors: [<id>]` list — a pull import resolved at compile time. The PostToolUse hook reads the compile-resolved `sensors_applicable` array off the stage graph node.
 - **Knowledge**: `.codex/knowledge/` — Methodology reference. Per-agent under `aidlc-<agent>-agent/` subfolders; `aidlc-shared/` holds cross-agent material. Ships with framework.
 - **Team Knowledge**: `aidlc/spaces/<active-space>/knowledge/` — User-managed team and domain knowledge, a space-level sibling of `memory/`/`codekb/`/`intents/` that accumulates across every intent in the space. Free-form and empty at bootstrap (no fixed file set, no seeded READMEs); the engine ensure-exists the empty dir on your first `$aidlc`. Agents read `aidlc/spaces/<active-space>/knowledge/aidlc-shared/` (all agents) and `aidlc/spaces/<active-space>/knowledge/<agent>/` (that agent) if the team creates them.
-- **Tools**: `.codex/tools/` — Deterministic CLI tools (TypeScript, run via bun). All framework files prefixed `aidlc-*.ts`. They cover state management, audit emission, the orchestration engine (`aidlc-orchestrate.ts` with exactly four subcommands: `next`, `continue`, `report`, and `park`; `continue` is internal steering transport), graph compile, runner generation, sensor firing, the §13 learnings gate (`aidlc-learnings.ts`), and the swarm convergence referee (`aidlc-swarm.ts`).
-- **Hooks**: `.codex/hooks/` — Framework hooks for audit emission, session lifecycle, state sync, state validation, subagent tracking, and statusline rendering. All framework files prefixed `aidlc-*.ts`.
+- **Tools**: `.codex/tools/`: small command-line programs (TypeScript, run via bun) that do the parts which must be exact rather than judged: tracking where the workflow is, writing the decision log, deciding what runs next (`aidlc-orchestrate.ts`, with exactly four subcommands: `next`, `continue`, `report`, and `park`; `continue` is internal steering transport), running the automatic checks, recording what the team learned (`aidlc-learnings.ts`), and refereeing parallel Construction work (`aidlc-swarm.ts`). All framework files prefixed `aidlc-*.ts`.
+- **Hooks**: `.codex/hooks/`: scripts your CLI runs automatically at set moments, so the decision log, saved progress, and status display stay correct without anyone remembering to update them. All framework files prefixed `aidlc-*.ts`.
 
 ## Plugins
 
@@ -45,7 +58,7 @@ AI-DLC is open-world. Plugins under `plugins/<name>/` contribute additional stag
 ## Conventions
 
 - All artifacts go under the active intent's record dir — `aidlc/spaces/<active-space>/intents/<slug>-<id8>/` (shorthand `<record>/`) — beneath the neutral `aidlc/` workspace roof; application code goes to the workspace root (or a sibling repo). Single-team users only ever see `spaces/default/`.
-- Each stage keeps an observation diary at `<record>/<phase>/<stage>/memory.md`, auto-created from a template at stage start and maintained by the orchestrator — never hand-edited
+- Each stage keeps an observation diary at `<record>/<phase>/<stage>/memory.md`, auto-created from a template at stage start and kept up to date automatically as the stage runs, never hand-edited
 - Use emojis as defined in skill/stage files — reproduce them exactly
 - Validate Mermaid diagram syntax before writing; include text fallback
 - Validate all generated content for character escaping issues
@@ -66,7 +79,7 @@ This is the same AI-DLC core that ships to every harness, rendered onto Codex CL
 
 ## Session Resumption
 
-On startup, resolve the active intent (the `aidlc/spaces/<active-space>/intents/active-intent` cursor) and check for its `<record>/aidlc-state.md`. If found, load prior context and offer to resume from last checkpoint. (A brand-new workspace has no intent yet — the engine auto-births the first one on your first `$aidlc`.)
+On startup, resolve the active intent (the `aidlc/spaces/<active-space>/intents/active-intent` cursor) and check for its `<record>/aidlc-state.md`. If found, load prior context and offer to resume from last checkpoint. (A brand-new project has no work recorded yet; the first `$aidlc` creates that record for you.)
 ## Git Integration
 
 Commit the `aidlc/` workspace tree — the record (state, the per-clone audit shards under `<record>/audit/`, `intents.json`), memory, codekb, and knowledge are all version-controlled. The shipped `.gitignore` excludes the per-user cursors and machine-local runtime (these may be per-clone or contain sensitive data):

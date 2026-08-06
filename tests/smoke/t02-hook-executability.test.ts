@@ -25,16 +25,16 @@
 // project CLAUDE.md and t01-file-structure.sh:20-29 enumerate.
 //
 // Old TAP -> new test parity (1:1, one test() per .sh assert_file_exists row):
-//   .sh:11 aidlc-audit-logger.ts present    -> "hook present: aidlc-audit-logger.ts"
-//   .sh:12 aidlc-sensor-fire.ts present     -> "hook present: aidlc-sensor-fire.ts"
-//   .sh:13 aidlc-sync-statusline.ts present -> "hook present: aidlc-sync-statusline.ts"
-//   .sh:14 aidlc-runtime-compile.ts present -> "hook present: aidlc-runtime-compile.ts"
+//   .sh:11 aidlc-write-audit-log.ts present    -> "hook present: aidlc-write-audit-log.ts"
+//   .sh:12 aidlc-run-sensors.ts present     -> "hook present: aidlc-run-sensors.ts"
+//   .sh:13 aidlc-sync-workflow-state.ts present -> "hook present: aidlc-sync-workflow-state.ts"
+//   .sh:14 aidlc-rebuild-stage-graph.ts present -> "hook present: aidlc-rebuild-stage-graph.ts"
 //   .sh:15 aidlc-validate-state.ts present  -> "hook present: aidlc-validate-state.ts"
 //   .sh:16 aidlc-log-subagent.ts present    -> "hook present: aidlc-log-subagent.ts"
 //   .sh:17 aidlc-session-start.ts present   -> "hook present: aidlc-session-start.ts"
 //   .sh:18 aidlc-session-end.ts present     -> "hook present: aidlc-session-end.ts"
 //   .sh:19 aidlc-statusline.ts present      -> "hook present: aidlc-statusline.ts"
-//   .sh:20 aidlc-stop.ts present (Stop hook)-> "hook present: aidlc-stop.ts"
+//   .sh:20 aidlc-continue-workflow.ts present (Stop hook)-> "hook present: aidlc-continue-workflow.ts"
 
 import { describe, expect, test } from "bun:test";
 import { existsSync, statSync } from "node:fs";
@@ -47,20 +47,20 @@ const HOOKS_DIR = join(AIDLC_SRC, "hooks");
 // mint-presence hook added after the migration. All .ts, run via bun — the .sh
 // title notes no executable bit is needed.
 const HOOKS = [
-  "aidlc-audit-logger.ts",
-  "aidlc-sensor-fire.ts",
-  "aidlc-sync-statusline.ts",
-  "aidlc-runtime-compile.ts",
+  "aidlc-write-audit-log.ts",
+  "aidlc-run-sensors.ts",
+  "aidlc-sync-workflow-state.ts",
+  "aidlc-rebuild-stage-graph.ts",
   "aidlc-validate-state.ts",
   "aidlc-log-subagent.ts",
   "aidlc-session-start.ts",
   "aidlc-session-end.ts",
   "aidlc-statusline.ts",
-  "aidlc-stop.ts",
+  "aidlc-continue-workflow.ts",
   // Records a HUMAN_TURN on UserPromptSubmit.
-  "aidlc-mint-presence.ts",
+  "aidlc-record-human-turn.ts",
   // Attaches exact active-stage rules at the subagent dispatch boundary.
-  "aidlc-dispatch-rules.ts",
+  "aidlc-deliver-stage-rules.ts",
   // Blocks direct lifecycle mutations that bypass orchestrate report.
   "aidlc-state-transition-guard.ts",
   // Enforces the per-unit reviewer read-scope bound on PreToolUse.

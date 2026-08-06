@@ -137,7 +137,7 @@ NOTE: This artifact describes topology only. It does NOT pick a single "recommen
 
 Hand completion to `stage-protocol.md` via
 `bun .codex/tools/aidlc-orchestrate.ts report --stage units-generation --result <outcome>`.
-The engine owns all lifecycle transitions and advancement.
+That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
 ### Step 8: Present Completion & Request Approval
 
