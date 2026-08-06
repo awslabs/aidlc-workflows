@@ -308,10 +308,19 @@ function handleCreate(args: string[]): void {
 // never went through the swarm has none and passes straight through, and a
 // convergence row from before this field existed carries no fingerprint and
 // keeps the pre-existing behaviour. Off-switch: AIDLC_SKIP_SOURCE_FRESHNESS=1.
-interface ConvergedSourceRecord {
+interface BoundConvergedSourceRecord {
+  kind: "bound";
   fingerprint: string;
   commit: string;
 }
+
+interface BypassedConvergedSourceRecord {
+  kind: "bypass";
+}
+
+type ConvergedSourceRecord =
+  | BoundConvergedSourceRecord
+  | BypassedConvergedSourceRecord;
 
 function convergedSourceRecord(
   pd: string,
@@ -335,7 +344,7 @@ function convergedSourceRecord(
     if (bypass !== "true") {
       errorWithSlug(slug, `refusing to merge: invalid Source Freshness Bypass marker "${bypass}"`);
     }
-    if (process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1") return null;
+    if (process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1") return { kind: "bypass" };
     errorWithSlug(
       slug,
       `refusing to merge: this convergence was finalized with source freshness bypassed; ` +
@@ -357,7 +366,7 @@ function convergedSourceRecord(
   if (!commit) {
     errorWithSlug(slug, "refusing to merge: the source-bound convergence row has no immutable Source Commit; re-run finalize");
   }
-  return { fingerprint, commit };
+  return { kind: "bound", fingerprint, commit };
 }
 
 function assertConvergedSourceUnchanged(
@@ -365,7 +374,7 @@ function assertConvergedSourceUnchanged(
   wtPath: string,
   record: ConvergedSourceRecord | null,
 ): string | null {
-  if (!record) return null;
+  if (!record || record.kind === "bypass") return null;
   const current = workspaceSourceFingerprint(wtPath);
   if (current === null || current !== record.fingerprint) {
     errorWithSlug(
@@ -418,11 +427,43 @@ function handleMerge(args: string[]): void {
   const wtPath = worktreePath(pd, slug);
   const branchName = `bolt-${slug}`;
   const sourceRecord = convergedSourceRecord(pd, slug, flags.intent, flags.space);
-  if (sourceRecord && strategy === "rebase") {
+  if (sourceRecord?.kind === "bound" && strategy === "rebase") {
     errorWithSlug(
       slug,
       "refusing to rebase a source-bound convergence: rebase before review/finalize, then merge the immutable reviewed commit",
     );
+  }
+  if (sourceRecord?.kind === "bypass") {
+    const applicationStatus = runGit([
+      "status",
+      "--porcelain=v1",
+      "--untracked-files=all",
+      "--ignored=matching",
+    ], wtPath);
+    if (!applicationStatus.ok) {
+      errorWithSlug(
+        slug,
+        `cannot inspect bypassed application source: ${applicationStatus.stderr.trim() || `exit ${applicationStatus.code}`}`,
+      );
+    }
+    const applicationLines = applicationStatus.stdout
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .filter((line) => {
+        const path = line.slice(3);
+        if (path.startsWith("aidlc/")) return false;
+        if (path.startsWith(".aidlc/")) return false;
+        return !/(?:^|\/)aidlc\/spaces\/[^/]+\/intents\/.*\/\.aidlc-sensors(?:\/|$)/.test(
+          path,
+        );
+      });
+    if (applicationLines.length > 0) {
+      const detail = applicationLines.join(", ");
+      errorWithSlug(
+        slug,
+        `refusing to merge: the bypassed Bolt has uncommitted or ignored application paths not represented by its branch (${detail}); commit, remove, or discard those paths before retrying`,
+      );
+    }
   }
 
   // Rebase requires a remote for <target>. The remote-existence check is
@@ -469,7 +510,16 @@ function handleMerge(args: string[]): void {
   // This is the last guard before source mutation. The convergence selector is
   // the requested intent/space, and the returned target is an immutable commit
   // object rather than the movable bolt-<slug> branch.
-  const mergeTarget = assertConvergedSourceUnchanged(slug, wtPath, sourceRecord) ?? branchName;
+  let mergeTarget = assertConvergedSourceUnchanged(slug, wtPath, sourceRecord) ?? branchName;
+  let bypassBranchOid = "";
+  if (sourceRecord?.kind === "bypass" && strategy !== "rebase") {
+    const branchOid = runGit(["rev-parse", `${branchName}^{commit}`], repoCwd);
+    if (!branchOid.ok || !branchOid.stdout.trim()) {
+      errorWithSlug(slug, "cannot resolve the bypassed Bolt branch commit");
+    }
+    bypassBranchOid = branchOid.stdout.trim();
+    mergeTarget = bypassBranchOid;
+  }
 
   let commitSha = "";
   // conflictCwd records which checkout the conflicting state lives in:
@@ -538,7 +588,12 @@ function handleMerge(args: string[]): void {
           `git rebase failed: ${r.stderr.trim() || `exit ${r.code}`}`
         );
       }
-      const ff = runGit(["merge", "--ff-only", mergeTarget], repoCwd);
+      const ffTarget =
+        sourceRecord?.kind === "bypass"
+          ? currentSha(wtPath)
+          : mergeTarget;
+      if (sourceRecord?.kind === "bypass") bypassBranchOid = ffTarget;
+      const ff = runGit(["merge", "--ff-only", ffTarget], repoCwd);
       if (!ff.ok) {
         errorWithSlug(
           slug,
@@ -572,11 +627,24 @@ function handleMerge(args: string[]): void {
   // "merge failed entirely" from "merge landed, cleanup orphan remains"
   // — these need different recovery actions.
   const cleanupTag = `[merge-succeeded:${commitSha}]`;
+  if (sourceRecord?.kind === "bypass") {
+    const currentBranchOid = runGit(["rev-parse", `${branchName}^{commit}`], repoCwd);
+    if (
+      !bypassBranchOid ||
+      !currentBranchOid.ok ||
+      currentBranchOid.stdout.trim() !== bypassBranchOid
+    ) {
+      errorWithSlug(
+        slug,
+        `${cleanupTag} bypassed Bolt branch changed during the merge; worktree and branch preserved`,
+      );
+    }
+  }
   // A swarm snapshot does not move the Bolt branch, so reviewed application
   // files may still be modified/untracked in this disposable checkout. Once
-  // that exact immutable commit has landed, align the checkout to it before
-  // the existing remove+delete cleanup.
-  if (sourceRecord) {
+  // that immutable source has landed, align the checkout to it before forced
+  // removal.
+  if (sourceRecord?.kind === "bound") {
     const align = runGit(["reset", "--hard", mergeTarget], wtPath);
     if (!align.ok) {
       errorWithSlug(
@@ -584,14 +652,79 @@ function handleMerge(args: string[]): void {
         `${cleanupTag} reviewed-source cleanup reset failed: ${align.stderr.trim() || `exit ${align.code}`}`,
       );
     }
+  } else if (sourceRecord?.kind === "bypass") {
+    // Finalization writes framework metadata into the Bolt even when source
+    // freshness is bypassed. Remove only that known residue so ordinary
+    // worktree removal can still protect uncommitted application source.
+    const frameworkPaths = [
+      ":(top)aidlc/",
+      ":(top).aidlc/",
+      ":(glob)**/aidlc/spaces/*/intents/**/.aidlc-sensors/**",
+    ];
+    for (const frameworkPath of frameworkPaths) {
+      const tracked = runGit(["ls-files", "-z", "--", frameworkPath], wtPath);
+      if (!tracked.ok) {
+        errorWithSlug(
+          slug,
+          `${cleanupTag} bypass cleanup path enumeration failed: ${tracked.stderr.trim() || `exit ${tracked.code}`}`,
+        );
+      }
+      if (tracked.stdout.length === 0) continue;
+      const restore = runGit(
+        ["checkout", "--force", "HEAD", "--", frameworkPath],
+        wtPath,
+      );
+      if (!restore.ok) {
+        errorWithSlug(
+          slug,
+          `${cleanupTag} bypass cleanup reset failed: ${restore.stderr.trim() || `exit ${restore.code}`}`,
+        );
+      }
+    }
+    const clean = runGit(["clean", "-ffdx", "--", ...frameworkPaths], wtPath);
+    if (!clean.ok) {
+      errorWithSlug(
+        slug,
+        `${cleanupTag} bypass cleanup failed: ${clean.stderr.trim() || `exit ${clean.code}`}`,
+      );
+    }
+    const remainingApplicationStatus = runGit([
+      "status",
+      "--porcelain=v1",
+      "--untracked-files=all",
+      "--ignored=matching",
+    ], wtPath);
+    if (!remainingApplicationStatus.ok) {
+      errorWithSlug(
+        slug,
+        `${cleanupTag} cannot recheck bypassed application source: ${remainingApplicationStatus.stderr.trim() || `exit ${remainingApplicationStatus.code}`}`,
+      );
+    }
+    const remainingApplicationLines = remainingApplicationStatus.stdout
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .filter((line) => {
+        const path = line.slice(3);
+        if (path.startsWith("aidlc/")) return false;
+        if (path.startsWith(".aidlc/")) return false;
+        return !/(?:^|\/)aidlc\/spaces\/[^/]+\/intents\/.*\/\.aidlc-sensors(?:\/|$)/.test(
+          path,
+        );
+      });
+    if (remainingApplicationLines.length > 0) {
+      errorWithSlug(
+        slug,
+        `${cleanupTag} application source changed during the bypassed merge; worktree preserved`,
+      );
+    }
   }
   // A raw-byte snapshot can remain permanently "modified" under its own lossy
   // clean filter even after reset (Git re-cleans the raw index blob for status).
-  // The successful hard reset to the already-merged immutable object above
-  // authorizes forced removal of this disposable swarm checkout; ordinary Bolt
-  // cleanup is unchanged.
+  // The successful hard reset to the immutable source above authorizes forced
+  // removal of that bound checkout. Bypassed and ordinary Bolt cleanup remains
+  // non-forced so application source cannot be discarded silently.
   const rm = runGit(
-    sourceRecord
+    sourceRecord?.kind === "bound"
       ? ["worktree", "remove", "--force", wtPath]
       : ["worktree", "remove", wtPath],
     repoCwd,
@@ -602,7 +735,13 @@ function handleMerge(args: string[]): void {
       `${cleanupTag} worktree remove failed: ${rm.stderr.trim() || `exit ${rm.code}`}`
     );
   }
-  const del = runGit(["branch", "-D", branchName], repoCwd);
+  const del =
+    sourceRecord?.kind === "bypass"
+      ? runGit(
+          ["update-ref", "-d", `refs/heads/${branchName}`, bypassBranchOid],
+          repoCwd,
+        )
+      : runGit(["branch", "-D", branchName], repoCwd);
   if (!del.ok) {
     errorWithSlug(
       slug,

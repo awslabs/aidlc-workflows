@@ -1396,6 +1396,173 @@ describe("t259 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     expect(readFileSync(join(proj, "reviewed.ts"), "utf-8")).toContain("redone");
   }, 180000);
 
+  test("a bypassed convergence merges when the source merge repeats the switch", () => {
+    const proj = makeFixture();
+    runSwarm(proj, ["prepare", "--batch", "1", "--units", "bypass-switch", "--base", "main"]);
+    const wt = wtPath(proj, "bypass-switch");
+    writeFileSync(join(wt, "reviewed.ts"), "export const reviewed = true;\n", "utf-8");
+    git(wt, ["add", "--", "reviewed.ts"]);
+    git(wt, ["commit", "-qm", "reviewed source"]);
+    recordReview(wt, "code-generation", REVIEWER, "bypass-switch");
+
+    const finalized = runSwarm(
+      proj,
+      [
+        "finalize",
+        "--batch",
+        "1",
+        "--units",
+        "bypass-switch",
+        "--claimed",
+        "bypass-switch",
+        "--check-cmd",
+        `"${process.execPath}" -e "require('fs').accessSync('reviewed.ts')"`,
+      ],
+      { AIDLC_SKIP_SOURCE_FRESHNESS: "1" },
+    );
+    expect(finalized.rc).toBe(0);
+    const convergence = readAllAuditShards(proj).split("## Swarm Unit Converged").at(-1) ?? "";
+    expect(convergence).toContain("**Source Freshness Bypass**: true");
+
+    writeFileSync(join(wt, "after-finalize.ts"), "export const afterFinalize = true;\n", "utf-8");
+    git(wt, ["add", "--", "after-finalize.ts"]);
+    git(wt, ["commit", "-qm", "source advanced under explicit bypass"]);
+    const refused = spawnSync(BUN, [
+      WORKTREE_TOOL, "merge", "--slug", "bypass-switch", "--target", "main",
+      "--strategy", "squash", "--project-dir", proj,
+    ], { cwd: proj, encoding: "utf-8" });
+    expect(refused.status).not.toBe(0);
+    expect(`${refused.stdout}${refused.stderr}`).toContain(
+      "retry this merge with AIDLC_SKIP_SOURCE_FRESHNESS=1",
+    );
+    expect(existsSync(wt)).toBe(true);
+
+    const merge = spawnSync(
+      BUN,
+      [
+        WORKTREE_TOOL,
+        "merge",
+        "--slug",
+        "bypass-switch",
+        "--target",
+        "main",
+        "--strategy",
+        "squash",
+        "--project-dir",
+        proj,
+      ],
+      {
+        cwd: proj,
+        encoding: "utf-8",
+        env: { ...process.env, AIDLC_SKIP_SOURCE_FRESHNESS: "1" },
+      },
+    );
+    expect(merge.status, `${merge.stdout}${merge.stderr}`).toBe(0);
+    expect(readFileSync(join(proj, "reviewed.ts"), "utf-8")).toContain("reviewed");
+    expect(readFileSync(join(proj, "after-finalize.ts"), "utf-8")).toContain("afterFinalize");
+  }, 120000);
+
+  test("bypass cleanup preserves untracked and ignored application source", () => {
+    const proj = makeFixture();
+    runSwarm(proj, ["prepare", "--batch", "1", "--units", "bypass-dirty", "--base", "main"]);
+    const wt = wtPath(proj, "bypass-dirty");
+    writeFileSync(
+      join(wt, ".gitignore"),
+      `${readFileSync(join(wt, ".gitignore"), "utf-8")}ignored-source.ts\n`,
+      "utf-8",
+    );
+    writeFileSync(join(wt, "reviewed.ts"), "export const reviewed = true;\n", "utf-8");
+    git(wt, ["add", "--", ".gitignore", "reviewed.ts"]);
+    git(wt, ["commit", "-qm", "reviewed source"]);
+    recordReview(wt, "code-generation", REVIEWER, "bypass-dirty");
+    const finalized = runSwarm(
+      proj,
+      [
+        "finalize",
+        "--batch",
+        "1",
+        "--units",
+        "bypass-dirty",
+        "--claimed",
+        "bypass-dirty",
+        "--check-cmd",
+        `"${process.execPath}" -e "require('fs').accessSync('reviewed.ts')"`,
+      ],
+      { AIDLC_SKIP_SOURCE_FRESHNESS: "1" },
+    );
+    expect(finalized.rc).toBe(0);
+
+    writeFileSync(
+      join(wt, "uncommitted.ts"),
+      "export const uncommitted = 'must survive cleanup';\n",
+      "utf-8",
+    );
+    const merge = spawnSync(
+      BUN,
+      [
+        WORKTREE_TOOL,
+        "merge",
+        "--slug",
+        "bypass-dirty",
+        "--target",
+        "main",
+        "--strategy",
+        "squash",
+        "--project-dir",
+        proj,
+      ],
+      {
+        cwd: proj,
+        encoding: "utf-8",
+        env: { ...process.env, AIDLC_SKIP_SOURCE_FRESHNESS: "1" },
+      },
+    );
+    const output = `${merge.stdout}${merge.stderr}`;
+    expect(merge.status).not.toBe(0);
+    expect(output).toContain("uncommitted or ignored application paths");
+    expect(output).not.toContain("[merge-succeeded:");
+    expect(existsSync(wt)).toBe(true);
+    expect(readFileSync(join(wt, "uncommitted.ts"), "utf-8")).toContain("must survive cleanup");
+    expect(existsSync(join(proj, "reviewed.ts"))).toBe(false);
+    expect(existsSync(join(proj, "uncommitted.ts"))).toBe(false);
+
+    rmSync(join(wt, "uncommitted.ts"));
+    writeFileSync(
+      join(wt, "ignored-source.ts"),
+      "export const ignored = 'must also survive cleanup';\n",
+      "utf-8",
+    );
+    const ignoredMerge = spawnSync(
+      BUN,
+      [
+        WORKTREE_TOOL,
+        "merge",
+        "--slug",
+        "bypass-dirty",
+        "--target",
+        "main",
+        "--strategy",
+        "squash",
+        "--project-dir",
+        proj,
+      ],
+      {
+        cwd: proj,
+        encoding: "utf-8",
+        env: { ...process.env, AIDLC_SKIP_SOURCE_FRESHNESS: "1" },
+      },
+    );
+    const ignoredOutput = `${ignoredMerge.stdout}${ignoredMerge.stderr}`;
+    expect(ignoredMerge.status).not.toBe(0);
+    expect(ignoredOutput).toContain("uncommitted or ignored application paths");
+    expect(ignoredOutput).not.toContain("[merge-succeeded:");
+    expect(existsSync(wt)).toBe(true);
+    expect(readFileSync(join(wt, "ignored-source.ts"), "utf-8")).toContain(
+      "must also survive cleanup",
+    );
+    expect(existsSync(join(proj, "ignored-source.ts"))).toBe(false);
+  }, 120000);
+
   test("a tracked symlink matched by a broad clean filter stays a symlink through finalize and merge", () => {
     const proj = makeFixture();
     git(proj, ["config", "core.symlinks", "true"]);
