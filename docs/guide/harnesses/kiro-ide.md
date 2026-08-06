@@ -42,15 +42,26 @@ git checkout v2
 
 ```bash
 mkdir -p your-project/.kiro your-project/aidlc
+# Safe on fresh installs; required when upgrading from v2.5.56 or earlier.
+for retired_hook in \
+  audit-logger block mint runtime-compile stop sync-statusline
+do
+  rm -f \
+    "your-project/.kiro/hooks/aidlc-${retired_hook}.json" \
+    "your-project/.kiro/hooks/aidlc-${retired_hook}.kiro.hook"
+done
 cp -R dist/kiro-ide/.kiro/. your-project/.kiro/
 cp -R dist/kiro-ide/aidlc/. your-project/aidlc/     # the workspace shell (spaces/default/memory) — a sibling of .kiro/, not inside it
 cp dist/kiro-ide/AGENTS.md your-project/AGENTS.md   # merge if you already have one
 ```
 
-The `cp -R <src>/. <dst>/` form copies the tree **contents** — it works the
-same whether `your-project/.kiro` already exists (an upgrade) or not (a fresh
-install). A plain `cp -r dist/kiro-ide/.kiro your-project/.kiro` nests a second
-`.kiro` inside an existing `.kiro/` and the IDE never sees the new files.
+The removal loop is the v2.5.57 hook-name migration. An overlay copy cannot
+delete retired registrations; leaving them in place would register both the old
+and new names. The loop is a no-op on a fresh install. After that cleanup, the
+`cp -R <src>/. <dst>/` form copies the tree **contents** whether
+`your-project/.kiro` already exists or not. A plain
+`cp -r dist/kiro-ide/.kiro your-project/.kiro` nests a second `.kiro` inside an
+existing `.kiro/` and the IDE never sees the new files.
 
 The `aidlc/` directory is the workspace shell — it ships the pre-built
 `aidlc/spaces/default/memory/` method tree the engine reads. It is a **sibling**

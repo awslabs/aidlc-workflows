@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const AUTHORED_HOOKS = join(REPO_ROOT, "harness", "kiro-ide", "hooks");
 const DIST_HOOKS = join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "hooks");
+const KIRO_IDE_GUIDE = join(REPO_ROOT, "docs", "guide", "harnesses", "kiro-ide.md");
 
 interface HookEntry {
   name: string;
@@ -58,6 +59,15 @@ const EXPECTED_LEGACY_FILES = [
   "aidlc-session-start.kiro.hook",
   "aidlc-continue-workflow.kiro.hook",
   "aidlc-sync-workflow-state.kiro.hook",
+];
+
+const RETIRED_HOOK_BASENAMES = [
+  "audit-logger",
+  "block",
+  "mint",
+  "runtime-compile",
+  "stop",
+  "sync-statusline",
 ];
 
 function parseHookJson(dir: string, file: string): HookFile {
@@ -141,5 +151,22 @@ describe("t245 Kiro IDE hook registrations (v2 schema contract)", () => {
         expect(existsSync(join(DIST_HOOKS, legacy))).toBe(true);
       });
     }
+  });
+
+  test("upgrade instructions remove retired hook registrations before overlaying the new tree", () => {
+    const guide = readFileSync(KIRO_IDE_GUIDE, "utf-8");
+    const cleanupStart = guide.indexOf("for retired_hook in");
+    const overlayCopy = guide.indexOf("cp -R dist/kiro-ide/.kiro/.");
+
+    expect(cleanupStart).toBeGreaterThanOrEqual(0);
+    expect(overlayCopy).toBeGreaterThan(cleanupStart);
+
+    const cleanup = guide.slice(cleanupStart, overlayCopy);
+    for (const basename of RETIRED_HOOK_BASENAMES) {
+      expect(cleanup).toContain(basename);
+    }
+    expect(cleanup).toMatch(
+      /rm -f \\\n\s+"your-project\/\.kiro\/hooks\/aidlc-\$\{retired_hook\}\.json" \\\n\s+"your-project\/\.kiro\/hooks\/aidlc-\$\{retired_hook\}\.kiro\.hook"/,
+    );
   });
 });
