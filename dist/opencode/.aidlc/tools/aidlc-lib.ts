@@ -4881,12 +4881,11 @@ export function loadStageGraphAll(): StageEntry[] {
   return parsed;
 }
 
-// Per-scope prose metadata read from each .claude/scopes/*.md frontmatter:
-// name/depth/keywords/description (+ optional testStrategy). Core scopes use
+// Per-scope metadata read from each .claude/scopes/*.md frontmatter: identity,
+// defaults, routing metadata, and the optional review cap. Core scopes use
 // aidlc-<name>.md; plugin scopes use <plugin>-<name>.md, with the frontmatter
-// name matching the filename stem.
-// This is the depth/keywords/description half of a ScopeDefinition; the
-// EXECUTE/SKIP `.stages` half comes from the compiled grid. Cached.
+// name matching the filename stem. The EXECUTE/SKIP `.stages` half of a
+// ScopeDefinition comes from the compiled grid. Cached.
 interface ScopeMetadata {
   name: string;
   plugin?: string;

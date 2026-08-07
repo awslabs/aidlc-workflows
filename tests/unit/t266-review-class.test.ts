@@ -275,6 +275,21 @@ describe("t266 review class", () => {
     }
   });
 
+  test("bare --review rejects a missing value instead of retaining the prior policy", () => {
+    const active = projectWithState();
+    for (const args of [
+      ["--review"],
+      ["--review", "--resume"],
+    ]) {
+      const result = runOrchestrateNext(ORCHESTRATE, active, args);
+      expect(result.status, args.join(" ")).toBe(0);
+      expect(result.directive?.kind, args.join(" ")).toBe("error");
+      expect(String(result.directive?.message), args.join(" ")).toContain(
+        "--review requires <adversarial|advisory|none>",
+      );
+    }
+  });
+
   test("intent-birth and scope-change persist and audit --review", () => {
     const fresh = createTestProject();
     tempDirs.push(fresh);

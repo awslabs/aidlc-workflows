@@ -352,6 +352,7 @@ interface ParsedFlags {
   newScope?: boolean; // --new-scope: force the composer to SYNTHESIZE a custom scope even when a stock scope matches
   report?: string; // --report <path>: compose from a scan report (the composer triages the file)
   projectDir?: string;
+  parseError?: string;
 }
 
 // Extract the flags the `next` decision rule consumes. --project-dir is pulled
@@ -441,9 +442,14 @@ function parseNextFlags(args: string[]): ParsedFlags {
     } else if (a === "--test-strategy" && i + 1 < args.length) {
       flags.testStrategy = args[i + 1];
       i++;
-    } else if (a === "--review" && i + 1 < args.length) {
-      flags.review = args[i + 1];
-      i++;
+    } else if (a === "--review") {
+      const value = args[i + 1];
+      if (value === undefined || value.startsWith("--")) {
+        flags.parseError = "--review requires <adversarial|advisory|none>.";
+      } else {
+        flags.review = value;
+        i++;
+      }
     } else if (a === "--new-scope") {
       flags.newScope = true;
     } else if (a === "--report" && i + 1 < args.length) {
@@ -2030,6 +2036,11 @@ function nodeForSlug(slug: string): GraphStage | undefined {
 // workflow state.
 function handleNext(args: string[], projectDir: string | undefined): void {
   const flags = parseNextFlags(args);
+
+  if (flags.parseError) {
+    emit(errorDirective(flags.parseError));
+    return;
+  }
 
   // Review changes mutate workflow configuration. Compound modes that return
   // before the config branch cannot silently discard the flag; require callers
