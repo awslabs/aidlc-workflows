@@ -155,6 +155,12 @@ The stack defaults to **`c5.4xlarge`** — the proven size for the full `--all -
 
 Before running unfiltered live-capable levels (integration or e2e), the runner executes `tests/integration/t19.test.ts` as a gate. It drives a tiny real turn through the **Claude Agent SDK** (the same live path the integration tier uses) and asserts only on deterministic surfaces. If the preflight fails, deterministic files still run and Claude-dependent files are skipped with per-file `SKIP` entries.
 
+The SDK driver gives each `driveAidlc()` call an ephemeral `CLAUDE_CONFIG_DIR`
+and disables session persistence. Live tests therefore leave the user's
+`~/.claude.json` and Claude transcripts untouched, including when the home
+directory is read-only inside a command sandbox. A per-call
+`env.CLAUDE_CONFIG_DIR` remains available for focused calibration.
+
 | Assertion | Surface | On fail |
 |-----------|---------|---------|
 | AWS credentials valid | `aws sts get-caller-identity` exits 0 (PASS-by-skip when the `aws` CLI is absent) | bail — Bedrock needs IAM auth |
