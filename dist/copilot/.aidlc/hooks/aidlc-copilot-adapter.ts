@@ -24,7 +24,7 @@
 //   3. SubagentStart arrives camelCase (agentName, sessionId — live-verified
 //      quirk) while every other PascalCase-registered event arrives
 //      snake_case. Field reads tolerate both casings.
-//   4. The pre-tool BLOCK channel is stdout JSON, not exit-2/stderr: the core
+//   4. The guard-tool-call BLOCK channel is stdout JSON, not exit-2/stderr: the core
 //      guards answer exit 2 + reason on stderr, and the shim converts that
 //      into {"hookSpecificOutput": {"hookEventName": "PreToolUse",
 //      "permissionDecision": "deny", "permissionDecisionReason": ...}} — the
@@ -46,9 +46,9 @@
 // self-filters on tool_name instead.
 //
 // Usage: bun {{HARNESS_DIR}}/hooks/aidlc-copilot-adapter.ts <target>
-// where <target> ∈ session-start | mint | pre-tool |
+// where <target> ∈ session-start | record-human-turn | guard-tool-call |
 //                  post-tool | validate-state | subagent-start |
-//                  log-subagent | stop
+//                  log-subagent | continue-workflow
 
 import { createHash } from "node:crypto";
 import {
@@ -102,9 +102,9 @@ export async function run(
     try {
       copilot = JSON.parse(input) as CopilotHookInput;
     } catch {
-      // Advisory and pre-tool hooks fail open. Stop is enforcement: its core
+      // Advisory and tool-guard hooks fail open. Stop is enforcement: its core
       // hook deliberately tolerates malformed stdin and still checks state.
-      if (target !== "stop") return 0;
+      if (target !== "continue-workflow") return 0;
     }
   }
 
@@ -181,7 +181,7 @@ export async function run(
   const isApplyPatch = rawToolName === "apply_patch" || rawToolName === "applyPatch";
 
   // Re-serialize the payload with the canonical tool_name so verbatim pipes
-  // (Bash → guards, runtime-compile) carry the name the core hooks match on.
+  // (Bash → guards, rebuild-stage-graph) carry the name the core hooks match on.
   const canonicalInput = (() => {
     if (!rawToolName) return input;
     try {
@@ -563,9 +563,9 @@ export async function run(
       return 0;
     }
 
-    case "mint": {
+    case "record-human-turn": {
       // UserPromptSubmit: record HUMAN_TURN (human-presence gate). Same
-      // self-gate as the core mint hook: no workflow state, no scaffolding.
+      // self-gate as the core record-human-turn hook: no workflow state, no scaffolding.
       try {
         if (existsSync(stateFilePath(projectDir))) {
           appendAuditEntry("HUMAN_TURN", {}, projectDir);
@@ -576,14 +576,14 @@ export async function run(
       return 0;
     }
 
-    case "pre-tool": {
+    case "guard-tool-call": {
       // ONE registration serves all matcher-free PreToolUse controls. Custom
       // agent dispatches first receive the exact active-stage rule bundle.
       // Copilot consumes the shared hookSpecificOutput.updatedInput envelope
       // directly, so no adapter-specific reshaping is needed.
       if (toolName.toLowerCase() === "agent") {
         const dispatch = runCoreWithStderr(
-          "aidlc-dispatch-rules.ts",
+          "aidlc-deliver-stage-rules.ts",
           canonicalInput,
         );
         if (dispatch.code === 2) {
@@ -755,15 +755,15 @@ export async function run(
             tool_name: target.toolName,
             tool_input: { file_path: target.filePath },
           });
-          runCore("aidlc-audit-logger.ts", fwd);
-          runCore("aidlc-sensor-fire.ts", fwd);
+          runCore("aidlc-write-audit-log.ts", fwd);
+          runCore("aidlc-run-sensors.ts", fwd);
         }
         return 0;
       }
       if (toolName === "Bash") {
         // The shell tool with tool_input.command — the core hook's exact
         // contract (canonicalized name for the IDE's run_in_terminal).
-        runCore("aidlc-runtime-compile.ts", canonicalInput);
+        runCore("aidlc-rebuild-stage-graph.ts", canonicalInput);
       }
       return 0;
     }
@@ -844,10 +844,10 @@ export async function run(
       return 0;
     }
 
-    case "stop": {
+    case "continue-workflow": {
       // Emit both host dialects: CLI reads the top-level Claude fields; VS Code
       // reads the same decision under hookSpecificOutput.
-      const r = runCore("aidlc-stop.ts", input);
+      const r = runCore("aidlc-continue-workflow.ts", input);
       if (r.stdout) {
         try {
           const parsed = JSON.parse(r.stdout) as Record<string, unknown>;

@@ -258,12 +258,12 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       appendInteractionEvent(dir, "STAGE_STARTED", "requirements-analysis");
       appendInteractionEvent(dir, "DECISION_RECORDED", "requirements-analysis");
 
-      const waiting = runAdapter(dir, "stop", FIXTURES.stop);
+      const waiting = runAdapter(dir, "continue-workflow", FIXTURES.stop);
       expect(waiting.code).toBe(0);
       expect(waiting.stdout.trim()).toBe("");
 
       appendInteractionEvent(dir, "QUESTION_ANSWERED", "requirements-analysis");
-      const resolved = runAdapter(dir, "stop", FIXTURES.stop);
+      const resolved = runAdapter(dir, "continue-workflow", FIXTURES.stop);
       expect(resolved.code).toBe(0);
       expect(
         (JSON.parse(resolved.stdout) as { decision?: string }).decision,

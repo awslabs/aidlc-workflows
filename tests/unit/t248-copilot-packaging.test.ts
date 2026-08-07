@@ -117,7 +117,7 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
     }
     expect(wiring.hooks.PreToolUse).toHaveLength(1);
     expect(String(wiring.hooks.PreToolUse[0]?.bash)).toContain(
-      "aidlc-copilot-adapter.ts pre-tool",
+      "aidlc-copilot-adapter.ts guard-tool-call",
     );
     expect(events).not.toContain("SessionEnd");
   });
@@ -160,7 +160,7 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
     expect(orchestrator).toContain("directive.continue_token");
     expect(orchestrator).toContain("The orchestration engine emits eight kinds today");
     expect(orchestrator).toContain("rules as the accumulated `load-steering` bundle");
-    expect(existsSync(join(ENGINE, "hooks", "aidlc-dispatch-rules.ts"))).toBe(true);
+    expect(existsSync(join(ENGINE, "hooks", "aidlc-deliver-stage-rules.ts"))).toBe(true);
     const questionRendering = readFileSync(
       join(SHELL, "skills", "aidlc", "question-rendering.md"),
       "utf-8",
@@ -182,7 +182,7 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
     try {
       cpSync(COPILOT_ROOT, project, { recursive: true });
       rmSync(join(project, ".aidlc", "hooks", "aidlc-state-transition-guard.ts"));
-      rmSync(join(project, ".aidlc", "hooks", "aidlc-dispatch-rules.ts"));
+      rmSync(join(project, ".aidlc", "hooks", "aidlc-deliver-stage-rules.ts"));
       rmSync(join(project, ".aidlc", "hooks", "aidlc-plan-approval-guard.ts"));
       rmSync(join(project, ".aidlc", "hooks", "aidlc-review-freeze.ts"));
       rmSync(join(project, "AGENTS.md"));
@@ -208,7 +208,7 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
       const output = `${result.stdout}${result.stderr}`;
       expect(result.status).not.toBe(0);
       expect(output).toContain("✗  aidlc-state-transition-guard.ts present");
-      expect(output).toContain("✗  aidlc-dispatch-rules.ts present");
+      expect(output).toContain("✗  aidlc-deliver-stage-rules.ts present");
       expect(output).toContain("✗  aidlc-plan-approval-guard.ts present");
       expect(output).toContain("✗  aidlc-review-freeze.ts present");
       expect(output).toContain("✗  AGENTS.md present (onboarding + method imports)");

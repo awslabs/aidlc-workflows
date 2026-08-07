@@ -40,13 +40,13 @@ import type { EmitContext } from "../../scripts/manifest-types.ts";
 // ---------------------------------------------------------------------------
 const HOOK_WIRING: Array<{ event: string; target: string; timeoutSec: number }> = [
   { event: "SessionStart", target: "session-start", timeoutSec: 30 },
-  { event: "UserPromptSubmit", target: "mint", timeoutSec: 30 },
-  { event: "PreToolUse", target: "pre-tool", timeoutSec: 30 },
+  { event: "UserPromptSubmit", target: "record-human-turn", timeoutSec: 30 },
+  { event: "PreToolUse", target: "guard-tool-call", timeoutSec: 30 },
   { event: "PostToolUse", target: "post-tool", timeoutSec: 30 },
   { event: "PreCompact", target: "validate-state", timeoutSec: 30 },
   { event: "SubagentStart", target: "subagent-start", timeoutSec: 30 },
   { event: "SubagentStop", target: "log-subagent", timeoutSec: 30 },
-  { event: "Stop", target: "stop", timeoutSec: 60 },
+  { event: "Stop", target: "continue-workflow", timeoutSec: 60 },
 ];
 
 function emitHooksJson(harnessDir: string): string {

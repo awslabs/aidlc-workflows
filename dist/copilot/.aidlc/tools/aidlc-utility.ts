@@ -1319,10 +1319,10 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
       tsHooks.push(
         "aidlc-state-transition-guard",
         "aidlc-reviewer-scope",
-        "aidlc-stop",
-        "aidlc-sensor-fire",
-        "aidlc-runtime-compile",
-        "aidlc-dispatch-rules",
+        "aidlc-continue-workflow",
+        "aidlc-run-sensors",
+        "aidlc-rebuild-stage-graph",
+        "aidlc-deliver-stage-rules",
         "aidlc-plan-approval-guard",
         "aidlc-review-freeze",
       );

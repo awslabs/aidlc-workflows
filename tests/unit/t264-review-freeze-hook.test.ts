@@ -419,7 +419,7 @@ describe("t264 (c) harness registration", () => {
     expect(adapter.split('case "review-freeze"')[1]).toContain("Delete File|Move to");
   });
 
-  test("Copilot's shared pre-tool adapter invokes review-freeze", () => {
+  test("Copilot's shared tool guard invokes review-freeze", () => {
     const adapter = readFileSync(
       join(REPO_ROOT, "harness", "copilot", "hooks", "aidlc-copilot-adapter.ts"),
       "utf-8",

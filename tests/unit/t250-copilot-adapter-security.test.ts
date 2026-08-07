@@ -4,12 +4,12 @@
 //
 // Ported from PR #680's t146 onto THIS fork's PR #657 adapter, whose contract
 // differs in load-bearing ways the assertions here respect:
-//   - Targets are #657's dispatch names (mint / pre-tool / post-tool /
+//   - Targets use the purpose-based names (record-human-turn / guard-tool-call / post-tool /
 //     validate-state / subagent-start / log-subagent / session-{start,end} /
-//     stop), NOT #680's PascalCase-ish names.
+//     continue-workflow), not host event names.
 //   - Tool NAMES are #657's live-captured aliases (run_in_terminal,
 //     insert_edit_into_file, read_file, ...), normalized to Bash/Edit/Read.
-//   - The pre-tool BLOCK channel is stdout deny-JSON at exit 0 (difference #4
+//   - The guard-tool-call BLOCK channel is stdout deny-JSON at exit 0 (difference #4
 //     in the adapter header), NOT exit 2 — so test 11 asserts the
 //     permissionDecision:"deny" projection, not a propagated exit code.
 //   - The engine ships at .aidlc/{hooks,tools} (the opencode layout): the
@@ -25,7 +25,7 @@
 // WHY SUBPROCESS. Fail-open is an exit-code contract; only a real subprocess
 // exercises process.exit()/uncaught-throw faithfully.
 //
-// covers: file:hooks/aidlc-reviewer-scope.ts, file:hooks/aidlc-state-transition-guard.ts, file:hooks/aidlc-plan-approval-guard.ts, file:hooks/aidlc-review-freeze.ts, file:hooks/aidlc-audit-logger.ts
+// covers: file:hooks/aidlc-reviewer-scope.ts, file:hooks/aidlc-state-transition-guard.ts, file:hooks/aidlc-plan-approval-guard.ts, file:hooks/aidlc-review-freeze.ts, file:hooks/aidlc-write-audit-log.ts
 
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
@@ -58,29 +58,29 @@ const ADAPTER_SRC = join(
 const CORE_HOOKS = [
   "aidlc-session-start.ts",
   "aidlc-session-end.ts",
-  "aidlc-dispatch-rules.ts",
+  "aidlc-deliver-stage-rules.ts",
   "aidlc-plan-approval-guard.ts",
   "aidlc-review-freeze.ts",
   "aidlc-state-transition-guard.ts",
   "aidlc-reviewer-scope.ts",
-  "aidlc-audit-logger.ts",
-  "aidlc-sensor-fire.ts",
-  "aidlc-runtime-compile.ts",
+  "aidlc-write-audit-log.ts",
+  "aidlc-run-sensors.ts",
+  "aidlc-rebuild-stage-graph.ts",
   "aidlc-validate-state.ts",
   "aidlc-log-subagent.ts",
-  "aidlc-stop.ts",
+  "aidlc-continue-workflow.ts",
 ];
 
 // #657 dispatch targets (aidlc.json wires the adapter with one of these).
 const TARGETS = [
   "session-start",
-  "mint",
-  "pre-tool",
+  "record-human-turn",
+  "guard-tool-call",
   "post-tool",
   "validate-state",
   "subagent-start",
   "log-subagent",
-  "stop",
+  "continue-workflow",
 ];
 
 /** A recording stub: append stdin to <capture>/<hook>.jsonl, exit `exitCode`.
@@ -101,7 +101,7 @@ function stubHookBody(hookName: string, exitCode = 0, stderr = ""): string {
 }
 
 // Minimal stubs for the adapter's two static tool imports (../tools/*). The
-// mint target reads stateFilePath() + appendAuditEntry(); neither is a security
+// record-human-turn reads stateFilePath() + appendAuditEntry(); neither is a security
 // surface here, so the stubs are inert (state file absent → no append).
 const AUDIT_TOOL_STUB = `export function appendAuditEntry(_k: string, _d: unknown, _p: string): void {}\n`;
 const LIB_TOOL_STUB = `import { join } from "node:path";
@@ -254,11 +254,11 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         const r = runAdapter(s, t, "{ this is not json");
         expect(r.code).toBe(0);
       }
-      for (const hook of CORE_HOOKS.filter((name) => name !== "aidlc-stop.ts")) {
+      for (const hook of CORE_HOOKS.filter((name) => name !== "aidlc-continue-workflow.ts")) {
         expect(reached(s.captureDir, hook)).toBe(0);
       }
-      expect(reached(s.captureDir, "aidlc-stop.ts")).toBe(1);
-      expect(readFileSync(join(s.captureDir, "aidlc-stop.ts.jsonl"), "utf-8")).toBe(
+      expect(reached(s.captureDir, "aidlc-continue-workflow.ts")).toBe(1);
+      expect(readFileSync(join(s.captureDir, "aidlc-continue-workflow.ts.jsonl"), "utf-8")).toBe(
         "{ this is not json\n",
       );
     } finally {
@@ -280,10 +280,10 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
 
   // --- Fail-open on unknown / unmapped tool names (guidance §1.1) ------------
 
-  test("3: an unmapped tool name allows without dispatch (pre-tool)", () => {
+  test("3: an unmapped tool name allows without dispatch (guard-tool-call)", () => {
     const s = scratch();
     try {
-      const r = runAdapter(s, "pre-tool", {
+      const r = runAdapter(s, "guard-tool-call", {
         hook_event_name: "PreToolUse",
         tool_name: "run_notebook_cell", // not in the alias map
         tool_input: { command: "rm -rf /" },
@@ -305,8 +305,8 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         tool_input: { path: "x" },
       });
       expect(r.code).toBe(0);
-      expect(reached(s.captureDir, "aidlc-audit-logger.ts")).toBe(0);
-      expect(reached(s.captureDir, "aidlc-sensor-fire.ts")).toBe(0);
+      expect(reached(s.captureDir, "aidlc-write-audit-log.ts")).toBe(0);
+      expect(reached(s.captureDir, "aidlc-run-sensors.ts")).toBe(0);
     } finally {
       s.cleanup();
     }
@@ -329,10 +329,10 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
 
   // --- Path confinement (RT-0002, guidance §1.1/§3) --------------------------
 
-  test("6: absolute file_path OUTSIDE the project is not forwarded (pre-tool)", () => {
+  test("6: absolute file_path OUTSIDE the project is not forwarded (guard-tool-call)", () => {
     const s = scratch();
     try {
-      const r = runAdapter(s, "pre-tool", {
+      const r = runAdapter(s, "guard-tool-call", {
         hook_event_name: "PreToolUse",
         tool_name: "insert_edit_into_file", // → Edit
         tool_input: { path: "/etc/passwd" },
@@ -355,8 +355,8 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         tool_input: { path: "../../../../etc/shadow" },
       });
       expect(r.code).toBe(0);
-      expect(reached(s.captureDir, "aidlc-audit-logger.ts")).toBe(0);
-      expect(reached(s.captureDir, "aidlc-sensor-fire.ts")).toBe(0);
+      expect(reached(s.captureDir, "aidlc-write-audit-log.ts")).toBe(0);
+      expect(reached(s.captureDir, "aidlc-run-sensors.ts")).toBe(0);
     } finally {
       s.cleanup();
     }
@@ -371,7 +371,7 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         tool_input: { path: "src/legit.ts" },
       });
       expect(r.code).toBe(0);
-      expect(reached(s.captureDir, "aidlc-audit-logger.ts")).toBe(1);
+      expect(reached(s.captureDir, "aidlc-write-audit-log.ts")).toBe(1);
     } finally {
       s.cleanup();
     }
@@ -390,7 +390,7 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         tool_input: { path: sibling },
       });
       expect(r.code).toBe(0);
-      expect(reached(s.captureDir, "aidlc-audit-logger.ts")).toBe(0);
+      expect(reached(s.captureDir, "aidlc-write-audit-log.ts")).toBe(0);
     } finally {
       s.cleanup();
     }
@@ -405,7 +405,7 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
       writeFileSync(externalFile, "export const secret = true;\n", "utf-8");
       symlinkSync(externalFile, linkedFile, "file");
 
-      const r = runAdapter(s, "pre-tool", {
+      const r = runAdapter(s, "guard-tool-call", {
         hook_event_name: "PreToolUse",
         tool_name: "read_file",
         tool_input: { path: linkedFile },
@@ -431,8 +431,8 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         tool_input: { path: join(linkedDir, "prospective.ts") },
       });
       expect(r.code).toBe(0);
-      expect(reached(s.captureDir, "aidlc-audit-logger.ts")).toBe(0);
-      expect(reached(s.captureDir, "aidlc-sensor-fire.ts")).toBe(0);
+      expect(reached(s.captureDir, "aidlc-write-audit-log.ts")).toBe(0);
+      expect(reached(s.captureDir, "aidlc-run-sensors.ts")).toBe(0);
     } finally {
       s.cleanup();
       rmSync(outside, { recursive: true, force: true });
@@ -458,7 +458,7 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         tool_input: { input: patch },
       };
 
-      const before = runAdapter(s, "pre-tool", payload);
+      const before = runAdapter(s, "guard-tool-call", payload);
       expect(before.code).toBe(0);
       const expected = [
         ["src/added.ts", "Write"],
@@ -482,7 +482,7 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         hook_event_name: "PostToolUse",
       });
       expect(after.code).toBe(0);
-      for (const hook of ["aidlc-audit-logger.ts", "aidlc-sensor-fire.ts"]) {
+      for (const hook of ["aidlc-write-audit-log.ts", "aidlc-run-sensors.ts"]) {
         const targets = capturedInputs(s.captureDir, hook)
           .map((entry) => [
             (entry.tool_input as { file_path?: string } | undefined)?.file_path ?? "",
@@ -514,7 +514,7 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         .map((path) => resolve(s.projectRoot, path))
         .sort();
 
-      expect(runAdapter(s, "pre-tool", payload).code).toBe(0);
+      expect(runAdapter(s, "guard-tool-call", payload).code).toBe(0);
       expect(
         capturedInputs(s.captureDir, "aidlc-review-freeze.ts")
           .map((entry) =>
@@ -538,7 +538,7 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
           hook_event_name: "PostToolUse",
         }).code,
       ).toBe(0);
-      for (const hook of ["aidlc-audit-logger.ts", "aidlc-sensor-fire.ts"]) {
+      for (const hook of ["aidlc-write-audit-log.ts", "aidlc-run-sensors.ts"]) {
         const calls = capturedInputs(s.captureDir, hook);
         expect(
           calls.map((entry) =>
@@ -559,7 +559,7 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
     const s = scratch();
     try {
       const evil = "echo pwned > /tmp/t250-should-not-exist; rm -rf ~";
-      runAdapter(s, "pre-tool", {
+      runAdapter(s, "guard-tool-call", {
         hook_event_name: "PreToolUse",
         tool_name: "run_in_terminal", // → Bash
         tool_input: { command: evil },
@@ -590,7 +590,7 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         stubHookBody("aidlc-state-transition-guard.ts", 2, "blocked: engine-owned transition"),
         "utf-8",
       );
-      const r = runAdapter(s, "pre-tool", {
+      const r = runAdapter(s, "guard-tool-call", {
         hook_event_name: "PreToolUse",
         tool_name: "run_in_terminal", // → Bash
         tool_input: { command: "bun .aidlc/tools/aidlc-state.ts reject x" },
@@ -618,7 +618,7 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         stubHookBody("aidlc-plan-approval-guard.ts", 2, "plan approval required"),
         "utf-8",
       );
-      const r = runAdapter(s, "pre-tool", {
+      const r = runAdapter(s, "guard-tool-call", {
         hook_event_name: "PreToolUse",
         tool_name: "agent",
         tool_input: {
@@ -641,7 +641,7 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
       expect(
         (forwarded.tool_input as { subagent_type?: string }).subagent_type,
       ).toBe("aidlc-developer-agent");
-      expect(reached(s.captureDir, "aidlc-dispatch-rules.ts")).toBe(1);
+      expect(reached(s.captureDir, "aidlc-deliver-stage-rules.ts")).toBe(1);
     } finally {
       s.cleanup();
     }
@@ -651,11 +651,11 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
     const s = scratch();
     try {
       writeFileSync(
-        join(s.hooksDir, "aidlc-dispatch-rules.ts"),
-        stubHookBody("aidlc-dispatch-rules.ts", 2, "mandatory rules unavailable"),
+        join(s.hooksDir, "aidlc-deliver-stage-rules.ts"),
+        stubHookBody("aidlc-deliver-stage-rules.ts", 2, "mandatory rules unavailable"),
         "utf-8",
       );
-      const r = runAdapter(s, "pre-tool", {
+      const r = runAdapter(s, "guard-tool-call", {
         hook_event_name: "PreToolUse",
         tool_name: "agent",
         tool_input: {
@@ -679,7 +679,7 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         stubHookBody("aidlc-review-freeze.ts", 2, "review receipt is frozen"),
         "utf-8",
       );
-      const r = runAdapter(s, "pre-tool", {
+      const r = runAdapter(s, "guard-tool-call", {
         hook_event_name: "PreToolUse",
         tool_name: "run_in_terminal",
         tool_input: { command: "printf changed > artifact.md" },
@@ -706,7 +706,7 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         stubHookBody("aidlc-reviewer-scope.ts", 2, "outside reviewer scope"),
         "utf-8",
       );
-      const r = runAdapter(s, "pre-tool", {
+      const r = runAdapter(s, "guard-tool-call", {
         hook_event_name: "PreToolUse",
         tool_name: "run_in_terminal",
         tool_input: { command: "printf changed > artifact.md" },
@@ -728,7 +728,7 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         stubHookBody("aidlc-reviewer-scope.ts", 1, "boom"),
         "utf-8",
       );
-      const r = runAdapter(s, "pre-tool", {
+      const r = runAdapter(s, "guard-tool-call", {
         hook_event_name: "PreToolUse",
         tool_name: "read_file", // → Read (in-project path so it forwards)
         tool_input: { path: "src/foo.ts" },
@@ -778,7 +778,7 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         agents.map((agent) => agent.id).sort(),
       );
 
-      runAdapter(s, "pre-tool", {
+      runAdapter(s, "guard-tool-call", {
         hook_event_name: "PreToolUse",
         session_id: hostSessionId,
         tool_name: "read_file",
@@ -847,7 +847,7 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
       }
 
       for (const session_id of [first.session_id, second.session_id]) {
-        runAdapter(s, "pre-tool", {
+        runAdapter(s, "guard-tool-call", {
           hook_event_name: "PreToolUse",
           session_id,
           tool_name: "read_file",
@@ -863,7 +863,7 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         ...first,
       });
       for (const session_id of [first.session_id, second.session_id]) {
-        runAdapter(s, "pre-tool", {
+        runAdapter(s, "guard-tool-call", {
           hook_event_name: "PreToolUse",
           session_id,
           tool_name: "read_file",

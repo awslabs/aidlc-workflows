@@ -262,7 +262,7 @@ describe("t242 state-transition ownership guard", () => {
         "bun .claude/tools/aidlc.ts intent switch other-intent",
         "aidlc.ts intent switch",
       ],
-      ["bun .claude/tools/aidlc.ts intent birth", "aidlc.ts intent birth"],
+      ["bun .claude/tools/aidlc.ts intent create", "aidlc.ts intent create"],
       [
         "bun .claude/tools/aidlc.ts space create other-space",
         "aidlc.ts space create",
@@ -278,6 +278,10 @@ describe("t242 state-transition ownership guard", () => {
       [
         "bun .claude/tools/aidlc-utility.ts --project-dir /tmp space-create other-space",
         "aidlc-utility.ts space-create",
+      ],
+      [
+        "bun .claude/tools/aidlc-utility.ts intent-create --scope feature",
+        "aidlc-utility.ts intent-create",
       ],
       ["aidlc next --resume", "aidlc next"],
       ["aidlc continue steering-token", "aidlc continue"],

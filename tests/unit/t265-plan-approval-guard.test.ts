@@ -572,7 +572,7 @@ describe("t265c registrations", () => {
     expect(hooksJson).toContain("aidlc-codex-adapter.ts plan-approval-guard");
   });
 
-  test("copilot: the shared pre-tool adapter invokes the plan-approval guard", () => {
+  test("copilot: the shared tool guard invokes the plan-approval guard", () => {
     const adapter = readFileSync(
       join(REPO_ROOT, "harness", "copilot", "hooks", "aidlc-copilot-adapter.ts"),
       "utf-8",

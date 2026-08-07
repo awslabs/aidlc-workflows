@@ -12,16 +12,16 @@
     "UserPromptSubmit": [
       {
         "type": "command",
-        "bash": "bun .aidlc/hooks/aidlc-copilot-adapter.ts mint",
-        "powershell": "bun .aidlc/hooks/aidlc-copilot-adapter.ts mint",
+        "bash": "bun .aidlc/hooks/aidlc-copilot-adapter.ts record-human-turn",
+        "powershell": "bun .aidlc/hooks/aidlc-copilot-adapter.ts record-human-turn",
         "timeoutSec": 30
       }
     ],
     "PreToolUse": [
       {
         "type": "command",
-        "bash": "bun .aidlc/hooks/aidlc-copilot-adapter.ts pre-tool",
-        "powershell": "bun .aidlc/hooks/aidlc-copilot-adapter.ts pre-tool",
+        "bash": "bun .aidlc/hooks/aidlc-copilot-adapter.ts guard-tool-call",
+        "powershell": "bun .aidlc/hooks/aidlc-copilot-adapter.ts guard-tool-call",
         "timeoutSec": 30
       }
     ],
@@ -60,8 +60,8 @@
     "Stop": [
       {
         "type": "command",
-        "bash": "bun .aidlc/hooks/aidlc-copilot-adapter.ts stop",
-        "powershell": "bun .aidlc/hooks/aidlc-copilot-adapter.ts stop",
+        "bash": "bun .aidlc/hooks/aidlc-copilot-adapter.ts continue-workflow",
+        "powershell": "bun .aidlc/hooks/aidlc-copilot-adapter.ts continue-workflow",
         "timeoutSec": 60
       }
     ]

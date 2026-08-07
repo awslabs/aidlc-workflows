@@ -721,7 +721,7 @@ function workspaceMutation(prefix: string, args: string[]): string | null {
   if (workspace.kind === "switch") {
     return `${prefix} ${workspace.noun} ${workspace.explicit ? "switch" : workspace.name}`;
   }
-  if (workspace.kind === "birth") return `${prefix} intent birth`;
+  if (workspace.kind === "create-intent") return `${prefix} intent create`;
   if (workspace.kind === "create") {
     return `${prefix} ${args[0] === "space-create" ? "space-create" : "space create"}`;
   }
@@ -760,7 +760,7 @@ function delegatedUtilityCommand(
   const { positional } = parseArgs(rawArgs);
   const verb = positional[0] ?? "";
   if (
-    ["scope-change", "config-change", "recompose", "intent-birth", "state-init", "space-create"]
+    ["scope-change", "config-change", "recompose", "intent-create", "state-init", "space-create"]
       .includes(verb)
   ) {
     return `${prefix} ${verb}`;

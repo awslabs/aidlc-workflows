@@ -1,20 +1,20 @@
 // t249-copilot-adapter: the Copilot stdin shim normalizes live-captured
 // payloads into the core hooks' contract.
 //
-// covers: file:hooks/aidlc-stop.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-audit-logger.ts, file:hooks/aidlc-log-subagent.ts, file:hooks/aidlc-session-end.ts, file:hooks/aidlc-dispatch-rules.ts, file:hooks/aidlc-plan-approval-guard.ts, file:hooks/aidlc-review-freeze.ts
+// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-write-audit-log.ts, file:hooks/aidlc-log-subagent.ts, file:hooks/aidlc-session-end.ts, file:hooks/aidlc-deliver-stage-rules.ts, file:hooks/aidlc-plan-approval-guard.ts, file:hooks/aidlc-review-freeze.ts
 //
 // WHAT. Each case pipes a fixture from tests/fixtures/copilot-hook-payloads/
 // (field-verbatim captures off Copilot CLI 1.0.74, sanitized for publication) into
 // the generated Copilot adapter inside a scratch project carrying an active
 // workflow state, then asserts the observable core-hook effect:
-//   stop           → block fields at top level for CLI and under
+//   continue-workflow → block fields at top level for CLI and under
 //                    hookSpecificOutput for VS Code; silent with no state.
 //   session-start  → additionalContext at top level for CLI and under
 //                    hookSpecificOutput for VS Code.
-//   pre-tool deny  → a guard block (core exit 2 + stderr) converts to the
+//   guard-tool-call deny → a guard block (core exit 2 + stderr) converts to the
 //                    {"hookSpecificOutput":{"permissionDecision":"deny"}}
 //                    stdout JSON with exit 0 — Copilot's only deny channel.
-//   pre-tool remap → Copilot's `path` file-tool key reaches the core hooks
+//   guard-tool-call remap → Copilot's `path` file-tool key reaches the core hooks
 //                    as `file_path` (the shim re-keys).
 //   post-tool      → a Write into the record lands ARTIFACT_CREATED in the
 //                    audit; a foreign tool_name is a no-op (self-filtering
@@ -193,7 +193,7 @@ function runAdapter(
 describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
   test("1: stop with active workflow blocks in both CLI and VS Code output shapes", () => {
     const dir = scratchProject(true);
-    const r = runAdapter(dir, "stop", withCwd(FIXTURES.stop, dir));
+    const r = runAdapter(dir, "continue-workflow", withCwd(FIXTURES.stop, dir));
     const parsed = JSON.parse(r.stdout) as {
       decision?: string;
       reason?: string;
@@ -208,7 +208,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
 
   test("2: stop without workflow state is a silent allow", () => {
     const dir = scratchProject(false);
-    const r = runAdapter(dir, "stop", withCwd(FIXTURES.stop, dir));
+    const r = runAdapter(dir, "continue-workflow", withCwd(FIXTURES.stop, dir));
     expect(r.code).toBe(0);
     expect(r.stdout.trim()).toBe("");
   });
@@ -218,12 +218,12 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     appendInteractionEvent(dir, "STAGE_STARTED", "requirements-analysis");
     appendInteractionEvent(dir, "DECISION_RECORDED", "requirements-analysis");
 
-    const waiting = runAdapter(dir, "stop", withCwd(FIXTURES.stop, dir));
+    const waiting = runAdapter(dir, "continue-workflow", withCwd(FIXTURES.stop, dir));
     expect(waiting.code).toBe(0);
     expect(waiting.stdout.trim()).toBe("");
 
     appendInteractionEvent(dir, "QUESTION_ANSWERED", "requirements-analysis");
-    const resolved = runAdapter(dir, "stop", withCwd(FIXTURES.stop, dir));
+    const resolved = runAdapter(dir, "continue-workflow", withCwd(FIXTURES.stop, dir));
     expect(resolved.code).toBe(0);
     expect(
       (JSON.parse(resolved.stdout) as { decision?: string }).decision,
@@ -243,7 +243,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(parsed.hookSpecificOutput?.additionalContext).toBe(parsed.additionalContext);
   });
 
-  test("4: pre-tool guard block converts to the permissionDecision deny JSON", () => {
+  test("4: guard-tool-call block converts to the permissionDecision deny JSON", () => {
     const dir = scratchProject(true);
     // A direct lifecycle call on aidlc-state.ts is exactly what the
     // state-transition guard refuses (exit 2 + reason on stderr in core).
@@ -254,7 +254,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       },
       dir,
     );
-    const r = runAdapter(dir, "pre-tool", payload);
+    const r = runAdapter(dir, "guard-tool-call", payload);
     expect(r.code).toBe(0);
     const parsed = JSON.parse(r.stdout) as {
       hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string };
@@ -263,9 +263,9 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(parsed.hookSpecificOutput?.permissionDecisionReason?.length ?? 0).toBeGreaterThan(0);
   });
 
-  test("5: pre-tool allows an ordinary command silently", () => {
+  test("5: guard-tool-call allows an ordinary command silently", () => {
     const dir = scratchProject(true);
-    const r = runAdapter(dir, "pre-tool", withCwd(FIXTURES.preToolUse_bash, dir));
+    const r = runAdapter(dir, "guard-tool-call", withCwd(FIXTURES.preToolUse_bash, dir));
     expect(r.code).toBe(0);
     expect(r.stdout.trim()).toBe("");
   });
@@ -280,7 +280,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       prompt:
         "Run .aidlc/aidlc-common/stages/inception/user-stories.md and write the contribution.",
     };
-    const first = runAdapter(dir, "pre-tool", {
+    const first = runAdapter(dir, "guard-tool-call", {
       hook_event_name: "PreToolUse",
       cwd: dir,
       tool_name: "agent",
@@ -302,7 +302,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(prompt.match(/AIDLC_DISPATCH_RULES_BEGIN/g)?.length).toBe(1);
     expect(updated.agent).toBe("aidlc-product-agent");
 
-    const camel = runAdapter(dir, "pre-tool", {
+    const camel = runAdapter(dir, "guard-tool-call", {
       hook_event_name: "PreToolUse",
       cwd: dir,
       toolName: "Agent",
@@ -322,7 +322,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       "AIDLC_DISPATCH_RULES_BEGIN",
     );
 
-    const idempotent = runAdapter(dir, "pre-tool", {
+    const idempotent = runAdapter(dir, "guard-tool-call", {
       hook_event_name: "PreToolUse",
       cwd: dir,
       toolName: "Agent",
@@ -338,7 +338,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       recursive: true,
     });
     rmSync(join(dir, "aidlc", "spaces", "default", "memory", "org.md"));
-    const result = runAdapter(dir, "pre-tool", {
+    const result = runAdapter(dir, "guard-tool-call", {
       hook_event_name: "PreToolUse",
       cwd: dir,
       tool_name: "agent",
@@ -367,7 +367,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     mkdirSync(dirname(artifact), { recursive: true });
     writeFileSync(artifact, "# Intent\n", "utf-8");
     // The live capture's tool_input carries Copilot's `path` key — the shim
-    // must re-key it to file_path for the core audit-logger.
+    // must re-key it to file_path for the core write-audit-log hook.
     const payload = withCwd(
       { ...FIXTURES.preToolUse_write, tool_input: { path: artifact, file_text: "# Intent\n" } },
       dir,
@@ -438,7 +438,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     // spike, T6b/T12). The ledger must resolve the identity and the core
     // reviewer-scope hook must convert the block to the deny JSON.
     const sibling = join(record, "construction", "U02", "functional-design", "design.md");
-    const r = runAdapter(dir, "pre-tool", {
+    const r = runAdapter(dir, "guard-tool-call", {
       hook_event_name: "PreToolUse",
       session_id: "toolu_test0000000000000001",
       cwd: dir,
@@ -459,7 +459,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       session_id: cliHostSessionId,
       agent_name: "aidlc-architecture-reviewer-agent",
     });
-    const after = runAdapter(dir, "pre-tool", {
+    const after = runAdapter(dir, "guard-tool-call", {
       hook_event_name: "PreToolUse",
       session_id: "toolu_test0000000000000002",
       cwd: dir,
@@ -474,7 +474,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const dir = scratchProject(true);
     // VS Code's documented shell tool name with a blocked lifecycle command:
     // the alias table must canonicalize runTerminalCommand -> Bash.
-    const r = runAdapter(dir, "pre-tool", {
+    const r = runAdapter(dir, "guard-tool-call", {
       hook_event_name: "PreToolUse",
       session_id: "11111111-2222-4333-8444-555555555555",
       cwd: dir,
@@ -573,7 +573,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     });
 
     const sibling = join(record, "construction", "U02", "functional-design", "design.md");
-    const blocked = runAdapter(dir, "pre-tool", {
+    const blocked = runAdapter(dir, "guard-tool-call", {
       hook_event_name: "PreToolUse",
       session_id: hostSessionId,
       cwd: dir,
@@ -593,7 +593,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     });
     expect(readAudit(dir)).toContain("aidlc-architecture-reviewer-agent");
 
-    const allowed = runAdapter(dir, "pre-tool", {
+    const allowed = runAdapter(dir, "guard-tool-call", {
       hook_event_name: "PreToolUse",
       session_id: hostSessionId,
       cwd: dir,
@@ -627,7 +627,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     });
 
     const sibling = join(record, "construction", "U02", "code", "sibling.ts");
-    const result = runAdapter(dir, "pre-tool", {
+    const result = runAdapter(dir, "guard-tool-call", {
       hook_event_name: "PreToolUse",
       session_id: hostSessionId,
       cwd: dir,
@@ -667,7 +667,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     });
 
     const search = (query: string) =>
-      runAdapter(dir, "pre-tool", {
+      runAdapter(dir, "guard-tool-call", {
         hook_event_name: "PreToolUse",
         session_id: hostSessionId,
         cwd: dir,
@@ -723,7 +723,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       "bun .aidlc/tools/aidlc-utility.ts space other-space",
       "bun .aidlc/tools/aidlc-utility.ts space-create other-space",
     ]) {
-      const blocked = runAdapter(dir, "pre-tool", {
+      const blocked = runAdapter(dir, "guard-tool-call", {
         hook_event_name: "PreToolUse",
         session_id: identity.session_id,
         cwd: dir,
@@ -749,7 +749,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       "bun .aidlc/tools/aidlc-utility.ts space list",
       "bun .aidlc/tools/aidlc-utility.ts --project-dir /tmp space list",
     ]) {
-      const allowed = runAdapter(dir, "pre-tool", {
+      const allowed = runAdapter(dir, "guard-tool-call", {
         hook_event_name: "PreToolUse",
         session_id: identity.session_id,
         cwd: dir,
@@ -764,7 +764,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       cwd: dir,
       ...identity,
     });
-    const conductor = runAdapter(dir, "pre-tool", {
+    const conductor = runAdapter(dir, "guard-tool-call", {
       hook_event_name: "PreToolUse",
       session_id: identity.session_id,
       cwd: dir,
@@ -792,7 +792,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       });
     }
 
-    const blocked = runAdapter(dir, "pre-tool", {
+    const blocked = runAdapter(dir, "guard-tool-call", {
       hook_event_name: "PreToolUse",
       session_id: hostSession,
       cwd: dir,
@@ -838,13 +838,13 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(readAudit(dir)).toContain("SESSION_ENDED");
   });
 
-  test("12: mint records HUMAN_TURN only when workflow state exists", () => {
+  test("12: record-human-turn records HUMAN_TURN only when workflow state exists", () => {
     const withStateDir = scratchProject(true);
-    runAdapter(withStateDir, "mint", withCwd(FIXTURES.userPromptSubmit, withStateDir));
+    runAdapter(withStateDir, "record-human-turn", withCwd(FIXTURES.userPromptSubmit, withStateDir));
     expect(readAudit(withStateDir)).toContain("HUMAN_TURN");
 
     const noStateDir = scratchProject(false);
-    const r = runAdapter(noStateDir, "mint", withCwd(FIXTURES.userPromptSubmit, noStateDir));
+    const r = runAdapter(noStateDir, "record-human-turn", withCwd(FIXTURES.userPromptSubmit, noStateDir));
     expect(r.code).toBe(0);
     expect(readAudit(noStateDir)).toBe("");
   });
