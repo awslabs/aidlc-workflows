@@ -553,6 +553,44 @@ process.stdout.write(JSON.stringify({ decision: "block", reason: "continue" }) +
     expect(prompts[0].text).toContain("continue");
   });
 
+  test("session idle forwards the session id to the Stop hook", async () => {
+    const root = freshProject();
+    const stopInput = join(root, "stop-input.json");
+    writeHook(
+      root,
+      "aidlc-session-start.ts",
+      `await Bun.stdin.text();
+process.stdout.write(JSON.stringify({ additionalContext: "active" }) + "\\n");
+`,
+    );
+    writeHook(root, "aidlc-record-human-turn.ts", "await Bun.stdin.text();\n");
+    writeHook(
+      root,
+      "aidlc-continue-workflow.ts",
+      `import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(stopInput)}, await Bun.stdin.text(), "utf-8");
+`,
+    );
+
+    const { client } = fakeClient();
+    const adapter = await createAdapter({ client, directory: root });
+    await adapter["chat.message"](
+      { sessionID: "main" },
+      { parts: [{ type: "text", text: "start" }] },
+    );
+    await adapter.event({
+      event: {
+        type: "session.idle",
+        properties: { sessionID: "main" },
+      },
+    });
+
+    const payload = JSON.parse(readFileSync(stopInput, "utf-8")) as {
+      session_id?: string;
+    };
+    expect(payload.session_id).toBe("main");
+  });
+
   test("turn-one idle reaches the real Stop hook when workflow state is born during the turn", async () => {
     const root = freshInstalledProject();
     const { client, prompts } = fakeClient();

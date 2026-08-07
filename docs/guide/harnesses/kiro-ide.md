@@ -103,19 +103,22 @@ routes through the shared `aidlc-kiro-adapter.ts` shim, which normalizes the
 IDE's hook event into the shape the byte-shared core hooks expect.
 
 Kiro IDE 1.x delivers hook context as **JSON on stdin** (snake_case:
-`{ tool_name, tool_input, tool_response }`; the older 0.12 builds instead set
+`{ session_id, tool_name, tool_input, tool_response }`; the older 0.12 builds instead set
 the `USER_PROMPT` environment variable with a camelCase equivalent, and the
 adapter accepts both). Captured PostToolUse write/shell events leave tool inputs
 empty on both channels, so their written path must be recovered from the result
 text and payload-free hooks (`rebuild-stage-graph`, `sync-workflow-state`) run from the
 audit trail. The graph-rebuild route also retains the shell result and modern
 `session_id` so a successful first `intent-create` binds to the invoking
-session. Later 1.x builds populate some
+session. SessionStart also persists that identity under the gitignored runtime
+session directory so payload-free Stop/agentStop adapter calls can forward the
+same session instead of falling back to a synthetic legacy ID. Later 1.x builds populate some
 PreToolUse and delegation inputs; the adapter preserves those fields without
 depending on them.
 
 The payload acquisition is **gated to payload-dependent targets**
-(`audit-and-sensors`, `log-subagent`, `rebuild-stage-graph`). A non-empty `USER_PROMPT` is consumed
+(`audit-and-sensors`, `log-subagent`, `rebuild-stage-graph`) plus `session-start`
+for its modern `session_id`. A non-empty `USER_PROMPT` is consumed
 immediately on 0.12 builds (which open stdin without ever writing); otherwise
 the adapter reads the 1.x stdin channel with a 2s broken-channel ceiling.
 Every other target - including `block`, which fires on every `PreToolUse` -

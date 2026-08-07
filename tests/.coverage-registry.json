@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 539,
+    "total": 543,
     "enumeratedByClass": {
-      "function": 293,
+      "function": 297,
       "audit": 82,
       "scope": 9,
       "stage": 32,
@@ -1268,6 +1268,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:clearSessionIntentHandoff",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -2826,6 +2833,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:readSessionIntentHandoff",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:readSessionIntentUuid",
       "minMechanism": "none",
       "coveredBy": [
@@ -3267,6 +3281,13 @@
     {
       "unitClass": "function",
       "unitId": "function:sensorsDir",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:SESSION_INTENT_HANDOFF_TTL_MS",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -3850,6 +3871,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:writeSessionIntentHandoff",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",

@@ -289,11 +289,11 @@ describe("classifyTerminalCommand() — non-terminal inputs return null", () => 
     expect(classifyTerminalCommand(["--scope", "mvp"])).toBeNull();
   });
 
-  test("intent birth stays on the engine/conductor shell path", () => {
+  test("intent create stays on the engine/conductor shell path", () => {
     expect(
       classifyTerminalCommand([
         "intent",
-        "birth",
+        "create",
         "--scope",
         "poc",
         "--arguments",

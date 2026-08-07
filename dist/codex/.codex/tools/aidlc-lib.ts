@@ -1895,6 +1895,90 @@ export function clearSessionIntentUuid(projectDir: string, sessionId: string): v
   }
 }
 
+export const SESSION_INTENT_HANDOFF_TTL_MS = 5 * 60 * 1000;
+
+export interface SessionIntentHandoff {
+  fromIntentUuid: string;
+  toIntentUuid: string;
+  issuedAtMs: number;
+}
+
+function sessionIntentHandoffPath(projectDir: string, sessionId: string): string {
+  const recordPath = sessionRecordPath(projectDir, sessionId);
+  return recordPath ? `${recordPath}.handoff.json` : "";
+}
+
+// Record the exact second-intent boundary for the session that created it.
+// This receipt is transient and one-shot: the Stop hook validates both UUIDs
+// before allowing the old conversation to end, then clears it.
+export function writeSessionIntentHandoff(
+  projectDir: string,
+  sessionId: string,
+  fromIntentUuid: string,
+  toIntentUuid: string,
+): void {
+  const path = sessionIntentHandoffPath(projectDir, sessionId);
+  if (!path || !fromIntentUuid || !toIntentUuid || fromIntentUuid === toIntentUuid) return;
+  try {
+    mkdirSync(sessionsDir(projectDir), { recursive: true });
+    writeFileSync(
+      path,
+      `${JSON.stringify({
+        fromIntentUuid,
+        toIntentUuid,
+        issuedAtMs: Date.now(),
+      } satisfies SessionIntentHandoff)}\n`,
+      "utf-8",
+    );
+  } catch {
+    /* per-user runtime state; best-effort */
+  }
+}
+
+export function readSessionIntentHandoff(
+  projectDir: string,
+  sessionId: string,
+): SessionIntentHandoff | null {
+  const path = sessionIntentHandoffPath(projectDir, sessionId);
+  if (!path) return null;
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
+    if (
+      parsed !== null &&
+      typeof parsed === "object" &&
+      "fromIntentUuid" in parsed &&
+      typeof (parsed as { fromIntentUuid?: unknown }).fromIntentUuid === "string" &&
+      "toIntentUuid" in parsed &&
+      typeof (parsed as { toIntentUuid?: unknown }).toIntentUuid === "string" &&
+      "issuedAtMs" in parsed &&
+      typeof (parsed as { issuedAtMs?: unknown }).issuedAtMs === "number"
+    ) {
+      const handoff = parsed as SessionIntentHandoff;
+      if (
+        handoff.fromIntentUuid.length > 0 &&
+        handoff.toIntentUuid.length > 0 &&
+        handoff.fromIntentUuid !== handoff.toIntentUuid &&
+        Number.isFinite(handoff.issuedAtMs)
+      ) {
+        return handoff;
+      }
+    }
+  } catch {
+    // Missing or malformed runtime receipt.
+  }
+  return null;
+}
+
+export function clearSessionIntentHandoff(projectDir: string, sessionId: string): void {
+  const path = sessionIntentHandoffPath(projectDir, sessionId);
+  if (!path) return;
+  try {
+    unlinkSync(path);
+  } catch {
+    /* absent/unwritable per-user runtime state; best-effort */
+  }
+}
+
 // The "current session" marker: a FIXED-name file inside the sessions dir naming
 // the most-recently-active session id. The per-session STAMP above is keyed by
 // session_id (which only the hook sees); a CLI tool like `/aidlc intent <slug>`

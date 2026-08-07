@@ -42,8 +42,9 @@
 //     STAGE_STARTED slug from the audit tail (no task payload needed).
 //   - log-subagent: recovers the delegate's identity from the result prose or
 //     the 1.x `subagent_<agent>` tool name, plus the message (#459/#543).
-//   - session-start/session-end/stop: no payload needed; build the same
-//     fixed inputs as before.
+//   - session-start: retain the modern session_id (or the legacy synthetic id)
+//     in workspace-local runtime state.
+//   - session-end/stop: read that retained identity without probing payload.
 //
 // session-start emits {"additionalContext": "..."} — Kiro's context channel is
 // plain stdout at exit 0, so the shim unwraps the JSON and prints the text.
@@ -68,10 +69,11 @@ import {
   markHumanTurn,
   recordHookDrop,
   resolveProjectDirFromHook,
+  sessionsDir,
   stateFilePath,
 } from "../tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -103,6 +105,7 @@ const PAYLOAD_TARGETS = new Set([
 ]);
 const INPUT_TARGETS = new Set([...PAYLOAD_TARGETS, "session-start"]);
 const LEGACY_SESSION_ID = "kiro-ide-legacy-current";
+const KIRO_IDE_SESSION_FILE = ".kiro-ide-current-session";
 
 export async function run(
   target: string,
@@ -177,6 +180,35 @@ hookDebug(projectDir, "kiro-adapter", "invoked", {
   sessionId: ide.sessionId ?? "",
   toolResult: (ide.toolResult ?? "").slice(0, 160),
 });
+
+// Modern SessionStart is the last Kiro IDE boundary that carries session_id;
+// later agentStop/Stop hooks are payload-free. Persist the effective identity
+// under the existing gitignored session runtime dir so separate adapter
+// processes can forward one stable id to both core lifecycle hooks. A legacy
+// promptSubmit writes the synthetic id, replacing any stale modern value from a
+// prior IDE generation in the same workspace.
+function rememberKiroIdeSessionId(sessionId: string): void {
+  if (!sessionId) return;
+  try {
+    const dir = sessionsDir(projectDir);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, KIRO_IDE_SESSION_FILE), `${sessionId}\n`, "utf-8");
+  } catch {
+    // Per-user runtime state; the payload-free hooks retain the legacy fallback.
+  }
+}
+
+function rememberedKiroIdeSessionId(): string {
+  try {
+    const sessionId = readFileSync(
+      join(sessionsDir(projectDir), KIRO_IDE_SESSION_FILE),
+      "utf-8",
+    ).trim();
+    return sessionId || LEGACY_SESSION_ID;
+  } catch {
+    return LEGACY_SESSION_ID;
+  }
+}
 
 // --- mint: record a HUMAN_TURN event on prompt submit ---
 //
@@ -353,17 +385,20 @@ function buildForward(): Forward {
   }
 
   switch (target) {
-    case "session-start":
+    case "session-start": {
       // Modern IDE payloads carry session_id. Legacy promptSubmit does not, so
       // use one workspace-local synthetic id for its promptSubmit/agentStop pair.
+      const sessionId = ide.sessionId?.trim() || LEGACY_SESSION_ID;
+      rememberKiroIdeSessionId(sessionId);
       return {
         hook: "aidlc-session-start.ts",
         input: {
           hook_event_name: "SessionStart",
           source: "startup",
-          session_id: ide.sessionId ?? LEGACY_SESSION_ID,
+          session_id: sessionId,
         },
       };
+    }
 
     case "audit-and-sensors": {
       // postToolUse(write) → write-audit-log THEN run-sensors (both ship core).
@@ -571,9 +606,15 @@ function buildForward(): Forward {
       // former. On this harness that changes which record
       // `continue-workflow.drops` gets and whether the counter advances — not
       // what the human sees.
+      // Forward the identity retained at SessionStart so the core hook can
+      // consume session-scoped post-create handoff state.
       return {
         hook: "aidlc-continue-workflow.ts",
-        input: { hook_event_name: "Stop", stop_hook_active: false },
+        input: {
+          hook_event_name: "Stop",
+          stop_hook_active: false,
+          session_id: rememberedKiroIdeSessionId(),
+        },
       };
 
     case "session-end":
@@ -582,7 +623,7 @@ function buildForward(): Forward {
         input: {
           hook_event_name: "SessionEnd",
           reason: "agent_stop",
-          session_id: LEGACY_SESSION_ID,
+          session_id: rememberedKiroIdeSessionId(),
         },
       };
 

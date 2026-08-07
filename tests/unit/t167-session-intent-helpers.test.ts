@@ -19,11 +19,14 @@ import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import {
   activeIntentUuid,
+  clearSessionIntentHandoff,
   createIntent,
   clearSessionIntentUuid,
   findIntentByUuid,
+  readSessionIntentHandoff,
   readSessionIntentUuid,
   setActiveIntentCursor,
+  writeSessionIntentHandoff,
   writeSessionIntentUuid,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
@@ -60,6 +63,19 @@ describe("t167 session→intent helpers (mechanism none — pure in-process)", (
     writeSessionIntentUuid(proj, "S-clear", "uuid-old");
     clearSessionIntentUuid(proj, "S-clear");
     expect(readSessionIntentUuid(proj, "S-clear")).toBeNull();
+  });
+
+  test("session handoff receipts round-trip and clear independently of ownership", () => {
+    writeSessionIntentUuid(proj, "S-handoff", "uuid-old");
+    writeSessionIntentHandoff(proj, "S-handoff", "uuid-old", "uuid-new");
+    expect(readSessionIntentHandoff(proj, "S-handoff")).toMatchObject({
+      fromIntentUuid: "uuid-old",
+      toIntentUuid: "uuid-new",
+    });
+
+    clearSessionIntentHandoff(proj, "S-handoff");
+    expect(readSessionIntentHandoff(proj, "S-handoff")).toBeNull();
+    expect(readSessionIntentUuid(proj, "S-handoff")).toBe("uuid-old");
   });
 
   test("activeIntentUuid returns the active (lone) intent's uuid", () => {

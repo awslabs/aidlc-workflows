@@ -42,6 +42,14 @@ const UTIL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utilit
 const ORCH = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-orchestrate.ts");
 const SESSION_START = join(REPO_ROOT, "dist", "claude", ".claude", "hooks", "aidlc-session-start.ts");
 const SESSION_END = join(REPO_ROOT, "dist", "claude", ".claude", "hooks", "aidlc-session-end.ts");
+const CONTINUE_WORKFLOW = join(
+  REPO_ROOT,
+  "dist",
+  "claude",
+  ".claude",
+  "hooks",
+  "aidlc-continue-workflow.ts",
+);
 const REBUILD_STAGE_GRAPH = join(
   REPO_ROOT,
   "dist",
@@ -95,15 +103,20 @@ function next(args: string[], p = proj): Run {
   return { status: r.exitCode, stdout, out: `${stdout}${r.stderr.toString()}` };
 }
 
-function fireHook(hook: string, payload: Record<string, unknown>, p = proj): number {
+function runHook(hook: string, payload: Record<string, unknown>, p = proj): Run {
   const r = Bun.spawnSync({
     cmd: [BUN, hook],
     stdin: new TextEncoder().encode(JSON.stringify(payload)),
-    stdout: "ignore",
-    stderr: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
     env: { ...process.env, CLAUDE_PROJECT_DIR: p },
   });
-  return r.exitCode;
+  const stdout = r.stdout.toString();
+  return { status: r.exitCode, stdout, out: `${stdout}${r.stderr.toString()}` };
+}
+
+function fireHook(hook: string, payload: Record<string, unknown>, p = proj): number {
+  return runHook(hook, payload, p).status;
 }
 
 function bindCreatedSession(sessionId: string, created: Run, p = proj): number {
@@ -397,6 +410,17 @@ describe("t164 --new-intent birth directive hands off to a fresh session", () =>
     expect(second).not.toBeNull();
     expect(second).not.toBe(first);
 
+    // The real Stop hook must honor the explicit post-create handoff instead of
+    // consulting the newly active intent and forcing this old conversation back
+    // into its pending workflow.
+    const stop = runHook(CONTINUE_WORKFLOW, {
+      hook_event_name: "Stop",
+      stop_hook_active: false,
+      session_id: "handoff-session-1",
+    });
+    expect(stop.status).toBe(0);
+    expect(stop.stdout.trim()).toBe("");
+
     expect(
       fireHook(SESSION_END, {
         reason: "clear",
@@ -445,8 +469,9 @@ describe("t164 --new-intent birth directive hands off to a fresh session", () =>
     );
     expect(existsSync(join(sessions, "session-b"))).toBe(false);
 
-    // B has no ownership evidence. Its end must not fall back to A's active
-    // cursor, while A's exact binding still routes its own end correctly.
+    // B has no ownership or handoff evidence. SessionEnd must not fall back to
+    // A's active cursor.
+    expect(existsSync(join(sessions, "session-b.handoff.json"))).toBe(false);
     expect(
       fireHook(SESSION_END, { reason: "logout", session_id: "session-b" }),
     ).toBe(0);

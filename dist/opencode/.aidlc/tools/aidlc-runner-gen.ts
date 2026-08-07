@@ -234,7 +234,7 @@ no standalone meaning.
 
    Pass \`--scope <name>\` only if the user named one; otherwise omit it and the
    engine picks the install's default scope. If the user gave neither a scope nor
-   a description, do not run a bare \`intent-birth\`: ask what they want to build
+   a description, do not run a bare \`intent-create\`: ask what they want to build
    or which scope to use. When only a scope was supplied, omit \`--arguments\` and
    \`--label\`. Print the tool's output and stop. This does not advance a stage;
    run \`/aidlc\` afterwards to continue.
@@ -654,9 +654,9 @@ continuation; the escape hatch is \`next --new-intent\`.
   bun ${harnessDir()}/tools/aidlc-orchestrate.ts next --new-intent --scope <the confirmed scope> "<the new-work description>"
   \`\`\`
 
-  The engine returns a \`print\` directive naming the \`intent-birth\` command
+  The engine returns a \`print\` directive naming the \`intent-create\` command
   (with the \`--label "<2-3 word kebab essence>"\` placeholder). Act on it exactly
-  as the loop's \`print\` handling describes: run the birth, then, because this is
+  as the loop's \`print\` handling describes: create the intent, then, because this is
   a NEW, unrelated intent and this session still carries the previous intent's
   context, **STOP** and follow the directive's hand-off: tell the user to start a
   fresh session (${freshSessionFlow}) and invoke \`${entrySkill}\` to begin the

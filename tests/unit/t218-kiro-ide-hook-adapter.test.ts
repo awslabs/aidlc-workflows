@@ -311,25 +311,94 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     }
   });
 
-  test("7c: modern post-shell creation binds the exact invoking session", () => {
+  test("7c: modern session identity survives second-intent handoff into payload-free Stop and SessionEnd", () => {
     const dir = scratchProject(true);
     try {
-      const expected = readIntentRegistry(dir)[0]?.uuid;
-      const result =
-        `Output:\nIntent created: ${DEFAULT_RECORD_DIR} (space: default)\n\nExit Code: 0`;
-      const r = runIdeStdin(
+      const sessionId = "sess_t218";
+      const originalUuid = readIntentRegistry(dir)[0]?.uuid;
+      const start = runIdeStdin(
+        dir,
+        "session-start",
+        ctx1x("", "", "SessionStart"),
+      );
+      expect(start.code).toBe(0);
+      expect(
+        readFileSync(
+          join(dir, "aidlc", ".aidlc-sessions", ".kiro-ide-current-session"),
+          "utf-8",
+        ).trim(),
+      ).toBe(sessionId);
+
+      expect(originalUuid).toBeDefined();
+      expect(
+        readFileSync(
+          join(dir, "aidlc", ".aidlc-sessions", sessionId),
+          "utf-8",
+        ).trim(),
+      ).toBe(originalUuid);
+
+      const create = spawnSync(
+        "bun",
+        [
+          join(dir, ".kiro", "tools", "aidlc-utility.ts"),
+          "intent-create",
+          "--scope",
+          "bugfix",
+          "--arguments",
+          "new handoff work",
+          "--project-dir",
+          dir,
+        ],
+        {
+          cwd: dir,
+          encoding: "utf-8",
+          env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
+          timeout: 30_000,
+        },
+      );
+      expect(create.status).toBe(0);
+      const result = `Output:\n${create.stdout}\n\nExit Code: 0`;
+      const bind = runIdeStdin(
         dir,
         "rebuild-stage-graph",
         ctx1x("execute_bash", result),
       );
-      expect(r.code).toBe(0);
-      expect(expected).toBeDefined();
+      expect(bind.code).toBe(0);
       expect(
         readFileSync(
-          join(dir, "aidlc", ".aidlc-sessions", "sess_t218"),
+          join(dir, "aidlc", ".aidlc-sessions", sessionId),
           "utf-8",
         ).trim(),
-      ).toBe(expected);
+      ).toBe(originalUuid);
+
+      const createdUuid = readIntentRegistry(dir).find(
+        (intent) => intent.uuid !== originalUuid,
+      )?.uuid;
+      expect(createdUuid).toBeDefined();
+      const handoffPath = join(
+        dir,
+        "aidlc",
+        ".aidlc-sessions",
+        `${sessionId}.handoff.json`,
+      );
+      expect(JSON.parse(readFileSync(handoffPath, "utf-8"))).toMatchObject({
+        fromIntentUuid: originalUuid,
+        toIntentUuid: createdUuid,
+      });
+
+      const stop = runIde(dir, "continue-workflow", null);
+      expect(stop.code).toBe(0);
+      expect(stop.stdout.trim()).toBe("");
+      expect(existsSync(handoffPath)).toBe(false);
+
+      const before = readAudit(dir).split("SESSION_ENDED").length - 1;
+      const end = runIde(dir, "session-end", null);
+      expect(end.code).toBe(0);
+      const after = readAudit(dir).split("SESSION_ENDED").length - 1;
+      expect(after - before).toBe(1);
+      expect(
+        existsSync(join(seededRecordDir(dir), ".aidlc-hooks-health", "session-end.last")),
+      ).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

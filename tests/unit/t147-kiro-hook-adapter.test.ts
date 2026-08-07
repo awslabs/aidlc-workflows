@@ -35,7 +35,12 @@ import {
 import { hostname, tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createIntent } from "../../core/tools/aidlc-lib.ts";
+import {
+  createIntent,
+  readIntentRegistry,
+  writeSessionIntentHandoff,
+  writeSessionIntentUuid,
+} from "../../core/tools/aidlc-lib.ts";
 import {
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
@@ -215,7 +220,27 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
-  test("1a: plan-approval guard blocks an unapproved developer stage", () => {
+  test("1a: stop forwards session identity and allows an exact post-create handoff", () => {
+    const dir = scratchProject(true);
+    try {
+      const original = readIntentRegistry(dir)[0];
+      const created = createIntent(dir, "new-work", "default", "bugfix");
+      const sessionId = "kiro-handoff-session";
+      writeSessionIntentUuid(dir, sessionId, original.uuid);
+      writeSessionIntentHandoff(dir, sessionId, original.uuid, created.uuid);
+
+      const r = runAdapter(dir, "continue-workflow", {
+        ...FIXTURES.stop as Record<string, unknown>,
+        session_id: sessionId,
+      });
+      expect(r.code).toBe(0);
+      expect(r.stdout.trim()).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("1b: plan-approval guard blocks an unapproved developer stage", () => {
     const dir = scratchProject(true);
     try {
       seedUnapprovedCodeGeneration(dir, "todo-core");

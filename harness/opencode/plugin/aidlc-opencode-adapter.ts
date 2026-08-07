@@ -630,7 +630,11 @@ export default async ({
       try {
         const res = await runCore(
           "aidlc-continue-workflow.ts",
-          { hook_event_name: "Stop", stop_hook_active: false },
+          {
+            hook_event_name: "Stop",
+            stop_hook_active: false,
+            session_id: sessionID,
+          },
           directory,
         );
         try {

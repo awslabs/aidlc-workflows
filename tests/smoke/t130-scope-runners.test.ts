@@ -198,6 +198,8 @@ describe("t130 scope-runners — structural conformance of the shipped first-bat
       expect(body).toContain("Starting unrelated new work?");
       expect(body).toContain("AskUserQuestion");
       expect(body).toContain("next --new-intent --scope <the confirmed scope>");
+      expect(body).toContain("`intent-create` command");
+      expect(body).not.toContain("`intent-birth`");
       // The offer defaults the proposed scope to THIS runner's baked scope
       // (same-flavour follow-up) while allowing a different one, so the runner's
       // own scope is named in the offer prose. (Asserted on newline-collapsed
@@ -213,6 +215,8 @@ describe("t130 scope-runners — structural conformance of the shipped first-bat
       // STRONGER: the on-disk bytes match the generator's own render.
       const rendered = renderRunner(scope, DISCOVERED[scope]?.description ?? "");
       expect(rendered).toContain("next --new-intent --scope <the confirmed scope>");
+      expect(rendered).toContain("`intent-create` command");
+      expect(rendered).not.toContain("`intent-birth`");
       expect(rendered.replace(/\s+/g, " ")).toContain(`baked \`${scope}\``);
       expect(rendered).toContain("/clear");
     });

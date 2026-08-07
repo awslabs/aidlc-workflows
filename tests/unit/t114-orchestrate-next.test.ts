@@ -516,7 +516,7 @@ describe("t114 parked branch (#367)", () => {
       "fix the unrelated login bug",
     ]).out;
     expect(valid).toContain('"kind":"print"');
-    expect(valid).toContain("intent-birth --scope bugfix");
+    expect(valid).toContain("intent-create --scope bugfix");
     expect(valid).not.toContain('"kind":"parked"');
 
     const missing = runNext(proj, ["--new-intent", "--scope", "bugfix"]).out;

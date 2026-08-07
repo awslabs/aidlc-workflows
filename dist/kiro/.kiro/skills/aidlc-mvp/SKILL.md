@@ -58,9 +58,9 @@ continuation; the escape hatch is `next --new-intent`.
   bun .kiro/tools/aidlc-orchestrate.ts next --new-intent --scope <the confirmed scope> "<the new-work description>"
   ```
 
-  The engine returns a `print` directive naming the `intent-birth` command
+  The engine returns a `print` directive naming the `intent-create` command
   (with the `--label "<2-3 word kebab essence>"` placeholder). Act on it exactly
-  as the loop's `print` handling describes: run the birth, then, because this is
+  as the loop's `print` handling describes: create the intent, then, because this is
   a NEW, unrelated intent and this session still carries the previous intent's
   context, **STOP** and follow the directive's hand-off: tell the user to start a
   fresh session (exit or restart Kiro CLI and start a new session) and invoke `/aidlc` to begin the

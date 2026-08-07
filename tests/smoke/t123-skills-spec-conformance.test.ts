@@ -169,6 +169,8 @@ describe("t123 (smoke) skills-spec conformance — every shipped skill set", () 
       const entrySkill = harness.name === "codex" ? "$aidlc" : "/aidlc";
       expect(runner).toContain(`Packaging over \`${entrySkill} --scope bugfix\``);
       expect(runner).toContain(`invoke \`${entrySkill}\` to begin the`);
+      expect(runner).toContain("`intent-create` command");
+      expect(runner).not.toContain("`intent-birth`");
       expect(runner).toContain("**STOP**");
       expect(runner).toContain("fresh session");
       expect(runner).toContain(FRESH_SESSION_TEXT[harness.name]);

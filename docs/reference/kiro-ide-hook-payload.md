@@ -27,8 +27,9 @@ whose stdin never closes). When that variable is empty, it reads stdin for the
 1.x channel, raced against a broken-channel timeout. The production default is
 2s; a positive `AIDLC_IDE_STDIN_TIMEOUT_MS` value overrides the ceiling in
 milliseconds for diagnostics and deterministic latency tests. Both field
-spellings are accepted. Acquisition is gated to the two payload-dependent
-targets (`audit-and-sensors`, `log-subagent`); every other target (including
+spellings are accepted. Acquisition is gated to the three payload-dependent
+targets (`audit-and-sensors`, `log-subagent`, `rebuild-stage-graph`) plus
+`session-start` for its modern `session_id`; every other target (including
 the per-tool-call `block` floor) touches neither channel and keeps its
 zero-latency path.
 
@@ -107,8 +108,12 @@ Result prose is identical on both channels (`toolResult` on 0.12,
   so agent-authored result prose cannot misattribute the audit row — and falls
   back to the `**Reviewer:**` / `**Agent:**` result marker from #459, which is
   the only identity signal on the 0.12 `invoke_sub_agent` shape.
-- **session-start / session-end / stop / mint / block** — need no payload;
-  they never read stdin.
+- **session-start** — reads the modern `session_id` and persists it under the
+  gitignored runtime session directory; the legacy channel records its stable
+  synthetic ID instead.
+- **session-end / stop / mint / block** — need no payload and never read stdin.
+  Session-end and Stop reuse the identity persisted by SessionStart, with the
+  legacy synthetic ID only as the fallback.
 
 ## toolResult path-extraction patterns
 

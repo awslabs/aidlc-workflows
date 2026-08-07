@@ -41,6 +41,7 @@ import {
   resolveProjectDirFromHook,
   runtimeGraphPath,
   harnessDir,
+  writeSessionIntentHandoff,
   writeSessionIntentUuid,
 } from "../tools/aidlc-lib.ts";
 
@@ -56,7 +57,7 @@ function bindCreatedIntentToInvokingSession(
   parsed: ClaudeCodeHookInput,
 ): void {
   const sessionId = parsed.session_id;
-  if (!sessionId || readSessionIntentUuid(projectDir, sessionId)) return;
+  if (!sessionId) return;
   const command = parsed.tool_input?.command ?? "";
   const ideAuditMode = (parsed.tool_input?.source ?? "") === "ide-audit-sync";
   if (!ideAuditMode && !/(?:intent-create|intent\s+create)/.test(command)) return;
@@ -76,16 +77,23 @@ function bindCreatedIntentToInvokingSession(
   if (!match) return;
 
   const [, dirName, space] = match;
-  const born = listIntents(projectDir, space).find(
+  const created = listIntents(projectDir, space).find(
     (intent) => intent.dirName === dirName,
   );
+  const existingUuid = readSessionIntentUuid(projectDir, sessionId);
   hookDebug(projectDir, "rebuild-stage-graph", "session-bind", {
     sessionId,
     dirName,
     space,
-    resolvedUuid: born?.uuid ?? "",
+    resolvedUuid: created?.uuid ?? "",
+    existingUuid: existingUuid ?? "",
   });
-  if (born?.uuid) writeSessionIntentUuid(projectDir, sessionId, born.uuid);
+  if (!created?.uuid) return;
+  if (existingUuid) {
+    writeSessionIntentHandoff(projectDir, sessionId, existingUuid, created.uuid);
+    return;
+  }
+  writeSessionIntentUuid(projectDir, sessionId, created.uuid);
 }
 
 export async function run(input: string): Promise<number> {

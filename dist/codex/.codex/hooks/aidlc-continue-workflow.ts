@@ -108,7 +108,9 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  activeIntentUuid,
   auditFilePath,
+  clearSessionIntentHandoff,
   composeMarkerPath,
   COMPOSE_MARKER_TTL_MS,
   docsRoot,
@@ -120,6 +122,8 @@ import {
   isoTimestamp,
   parseCheckboxes,
   readActiveDirectiveMarker,
+  readSessionIntentHandoff,
+  readSessionIntentUuid,
   recordHookDrop,
   resolveProjectDirFromHook,
   stageDir,
@@ -127,6 +131,7 @@ import {
   stopHookDir,
   STOP_HOOK_PROBE_ENV,
   turnMarkersShowConversational,
+  SESSION_INTENT_HANDOFF_TTL_MS,
   harnessDir,
 } from "../tools/aidlc-lib.ts";
 import {
@@ -1038,6 +1043,35 @@ try {
   // Malformed JSON (or empty): proceed with stopHookActive=false and no
   // transcript. The engine read below still governs whether work is pending; the
   // counter still bounds any block. We never crash on bad input.
+}
+
+// A confirmed second intent deliberately moves the shared cursor before this
+// old conversation ends. The PostToolUse hook writes an exact per-session
+// receipt for that transition. Allow only when the receipt is fresh, the
+// session still owns the original intent, and the created intent is still the
+// active cursor; an unrelated concurrent cursor change satisfies none of these.
+if (sessionId) {
+  const handoff = readSessionIntentHandoff(projectDir, sessionId);
+  if (handoff) {
+    const now = Date.now();
+    const fresh =
+      handoff.issuedAtMs <= now &&
+      now - handoff.issuedAtMs <= SESSION_INTENT_HANDOFF_TTL_MS;
+    const exactBoundary =
+      fresh &&
+      readSessionIntentUuid(projectDir, sessionId) === handoff.fromIntentUuid &&
+      activeIntentUuid(projectDir) === handoff.toIntentUuid;
+    clearSessionIntentHandoff(projectDir, sessionId);
+    if (exactBoundary) {
+      resetGuard(projectDir);
+      recordHookDrop(
+        projectDir,
+        HOOK_NAME,
+        "allowing stop at the exact post-create fresh-session handoff boundary",
+      );
+      return allowStop();
+    }
+  }
 }
 
 // Usage bookkeeping - persist the live transcript path and fold its new turns
