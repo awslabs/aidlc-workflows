@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-swarm:prepare, subcommand:aidlc-swarm:check, subcommand:aidlc-swarm:finalize, audit:SWARM_STARTED, audit:SWARM_DEGRADED, audit:SWARM_UNIT_CONVERGED, audit:SWARM_UNIT_FAILED, audit:SWARM_BATON_RETURNED, audit:SWARM_COMPLETED
+// covers: subcommand:aidlc-swarm:prepare, subcommand:aidlc-swarm:check, subcommand:aidlc-swarm:finalize, function:boltSlugForUnit, audit:SWARM_STARTED, audit:SWARM_DEGRADED, audit:SWARM_UNIT_CONVERGED, audit:SWARM_UNIT_FAILED, audit:SWARM_BATON_RETURNED, audit:SWARM_COMPLETED
 //
 // CLI-contract port of tests/e2e/t134-swarm-referee.sh (TAP plan 13),
 // mechanism = cli. The .sh exercises aidlc-swarm.ts — the STATELESS convergence
@@ -86,12 +86,14 @@ import {
   DEFAULT_RECORD_DIR,
   FIXTURES_DIR,
   cleanupWorktreeFixture,
+  seedBoltDag,
   seededAuditDir,
   seededAuditShard,
   seededRecordDir,
   seededStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
+import { boltSlugForUnit } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath;
 const SWARM_TOOL = join(AIDLC_SRC, "tools", "aidlc-swarm.ts");
@@ -152,9 +154,9 @@ function makeSwarmFixture(): string {
   return proj;
 }
 
-/** The per-unit worktree path the tool derives (aidlc-lib worktreePath). */
-function wtPath(proj: string, slug: string): string {
-  return join(proj, ".aidlc", "worktrees", `bolt-${slug}`);
+/** The per-unit worktree path the swarm derives from its internal Bolt slug. */
+function wtPath(proj: string, unit: string): string {
+  return join(proj, ".aidlc", "worktrees", `bolt-${boltSlugForUnit(unit)}`);
 }
 
 interface RefResult {
@@ -344,6 +346,127 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
       .find((b) => b.includes("**Event**: SWARM_UNIT_CONVERGED"));
     expect(convergedBlock).toContain("**Stage**: functional-design");
     expect(convergedBlock).toContain("**Run floor**: unstarted#0");
+  }, 120000);
+
+  test("1b legacy-safe Unit names complete the autonomous swarm lifecycle", () => {
+    const proj = makeSwarmFixture();
+    const unit = "2fa";
+    const boltSlug = boltSlugForUnit(unit);
+    expect(boltSlug).toBe("unit-2fa-46897518ceceb41f");
+    expect(boltSlug).toMatch(/^[a-z][a-z0-9-]*$/);
+    expect(boltSlug).not.toBe(unit);
+    expect(boltSlug.length).toBeLessThanOrEqual(64);
+    expect(boltSlugForUnit("unit-a")).toBe("unit-a");
+    expect(boltSlugForUnit("api_v2")).toMatch(/^[a-z][a-z0-9-]*$/);
+    expect(boltSlugForUnit("WebUI")).toMatch(/^[a-z][a-z0-9-]*$/);
+    expect(boltSlugForUnit("api_v2")).not.toBe(boltSlugForUnit("api.v2"));
+    expect(() => boltSlugForUnit("../escape")).toThrow("Invalid Unit name");
+
+    seedBoltDag(proj, [unit, boltSlug], [[unit], [boltSlug]]);
+    const collision = runRef(proj, [
+      "prepare",
+      "--batch",
+      "1",
+      "--units",
+      unit,
+      "--base",
+      "main",
+    ]);
+    expect(collision.rc).not.toBe(0);
+    expect(existsSync(wtPath(proj, unit))).toBe(false);
+
+    const failedUnit = "WebUI";
+    seedBoltDag(proj, [unit, failedUnit], [[unit], [failedUnit]]);
+    const prepared = runRef(proj, [
+      "prepare",
+      "--batch",
+      "1",
+      "--units",
+      unit,
+      "--base",
+      "main",
+    ]);
+    expect(prepared.rc).toBe(0);
+    expect(JSON.parse(prepared.out).units[0].worktree_path).toBe(wtPath(proj, unit));
+    expect(auditBody(wtPath(proj, unit))).toContain(`**Bolt slug**: ${boltSlug}`);
+
+    writeFileSync(join(wtPath(proj, unit), "impl.txt"), "done\n");
+    logWorktreeReview(proj, unit);
+    expect(runRef(proj, ["check", unit, "--check-cmd", "test -f impl.txt"]).rc).toBe(0);
+
+    const finalized = runRef(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      unit,
+      "--claimed",
+      unit,
+      "--check-cmd",
+      "test -f impl.txt",
+    ]);
+    expect(finalized.rc).toBe(0);
+    expect(JSON.parse(finalized.out).converged).toBe(1);
+    expect(auditBody(proj)).toContain(`**Unit name**: ${unit}`);
+
+    expect(
+      runRef(proj, [
+        "prepare",
+        "--batch",
+        "2",
+        "--units",
+        failedUnit,
+        "--base",
+        "main",
+      ]).rc,
+    ).toBe(0);
+    const failed = runRef(proj, [
+      "finalize",
+      "--batch",
+      "2",
+      "--units",
+      failedUnit,
+      "--claimed",
+      failedUnit,
+      "--check-cmd",
+      "test -f impl.txt",
+    ]);
+    expect(failed.rc).toBe(2);
+    const failedBlock = auditBody(proj)
+      .split("\n---\n")
+      .find(
+        (block) =>
+          block.includes("**Event**: BOLT_FAILED") &&
+          block.includes(`**Failed Bolt**: ${failedUnit}`),
+      );
+    expect(failedBlock).toContain(`**Bolt slug**: ${boltSlugForUnit(failedUnit)}`);
+  }, 120000);
+
+  test("1c malformed authoritative DAG refuses before worktree creation", () => {
+    const proj = makeSwarmFixture();
+    const dependencyDir = join(
+      seededRecordDir(proj),
+      "inception",
+      "units-generation",
+    );
+    mkdirSync(dependencyDir, { recursive: true });
+    writeFileSync(
+      join(dependencyDir, "unit-of-work-dependency.md"),
+      "# Dependencies\n\n```yaml\nunits:\n  - name: ../escape\n    depends_on: []\n```\n",
+      "utf-8",
+    );
+
+    const prepared = runRef(proj, [
+      "prepare",
+      "--batch",
+      "1",
+      "--units",
+      "alpha",
+      "--base",
+      "main",
+    ]);
+    expect(prepared.rc).not.toBe(0);
+    expect(existsSync(wtPath(proj, "alpha"))).toBe(false);
   }, 120000);
 
   test("14a stale finalize is refused before merge after the stage attempt changes", () => {

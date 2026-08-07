@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 527,
+    "total": 528,
     "enumeratedByClass": {
-      "function": 281,
+      "function": 282,
       "audit": 82,
       "scope": 9,
       "stage": 32,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 129,
+      "function": 130,
       "audit": 40,
       "scope": 9,
       "stage": 9,
@@ -1172,6 +1172,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:boltSlugForUnit",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/e2e/t134-swarm-referee.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",

@@ -3900,6 +3900,27 @@ export function validateUnitName(name: string): string | null {
   return null;
 }
 
+// The autonomous swarm composes Bolt/worktree primitives whose slug contract is
+// deliberately narrower than the legacy Unit-name contract. Preserve modern
+// lowercase kebab names byte-for-byte; map any other safe legacy Unit name to a
+// deterministic, readable, collision-resistant internal slug. The original
+// Unit name remains the user/audit identity.
+export function boltSlugForUnit(name: string): string {
+  const unitNameError = validateUnitName(name);
+  if (unitNameError) throw new Error(unitNameError);
+  if (validateBoltSlug(name) === null) return name;
+
+  const digest = createHash("sha256").update(name).digest("hex").slice(0, 16);
+  let stem = name
+    .toLowerCase()
+    .replace(/[._]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (!/^[a-z]/.test(stem)) stem = `unit-${stem}`;
+  stem = stem.slice(0, BOLT_SLUG_MAX_LENGTH - digest.length - 1).replace(/-+$/g, "");
+  return `${stem}-${digest}`;
+}
+
 export function isRegularFile(path: string): boolean {
   try {
     return statSync(path).isFile();

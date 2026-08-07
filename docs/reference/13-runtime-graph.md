@@ -46,7 +46,7 @@ interface RuntimeGraph {
 }
 
 interface BoltDag {
-  units: { name: string; depends_on: string[]; kind?: string }[]; // verbatim from the authored edge block; new names use lowercase kebab-case, while safe legacy single-segment names beginning with a digit or containing uppercase letters, underscores, or dots remain accepted; kind (service|spec|ui|packaging|library) present only when the edge block tags the unit
+  units: { name: string; depends_on: string[]; kind?: string }[]; // verbatim from the authored edge block; new names use lowercase kebab-case, while safe legacy single-segment names beginning with a digit or containing uppercase letters, underscores, or dots remain accepted (the swarm derives a separate internal Bolt slug); kind (service|spec|ui|packaging|library) present only when the edge block tags the unit
   batches: string[][];            // topological levels; each level = units whose deps are all satisfied by prior levels; level entries sorted lexicographically (deterministic)
 }
 

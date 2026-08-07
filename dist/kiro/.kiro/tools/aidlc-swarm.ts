@@ -82,6 +82,7 @@ import { appendAuditEntry } from "./aidlc-audit.ts";
 import {
   auditBlockField,
   auditShardDir,
+  boltSlugForUnit,
   findAllEvents,
   getField,
   isRegularFile,
@@ -93,9 +94,11 @@ import {
   readStateFile,
   relativeRecordDir,
   reviewArtifactFingerprint,
+  resolveBoltDag,
   resolveConstructionRepo,
   resolveProjectDir,
   resolveStage,
+  validateUnitName,
   worktreeAuditFilePath,
   worktreePath,
   worktreeRuntimeGraphPath,
@@ -231,7 +234,7 @@ function verdictFor(
   checkCmd: string,
   testFile?: string
 ): Verdict {
-  const wt = worktreePath(projectDir, unit);
+  const wt = worktreePath(projectDir, swarmBoltSlug(unit));
   if (!existsSync(wt)) {
     return { exists: false, converged: false, tampered: false };
   }
@@ -297,7 +300,8 @@ function reviewerReceiptError(
   stage: string,
   reviewer: string,
 ): string | null {
-  const audit = readAllAuditShards(worktreePath(projectDir, unit));
+  const boltSlug = swarmBoltSlug(unit);
+  const audit = readAllAuditShards(worktreePath(projectDir, boltSlug));
   if (!audit) {
     return `claimed converged but worktree audit is missing; expected a terminal review by ${reviewer}`;
   }
@@ -322,7 +326,7 @@ function reviewerReceiptError(
   for (let i = 0; i < events.length; i++) {
     if (
       events[i].event === "BOLT_STARTED" &&
-      auditBlockField(events[i].block, "Bolt slug") === unit
+      auditBlockField(events[i].block, "Bolt slug") === boltSlug
     ) {
       boltStart = i;
     }
@@ -344,7 +348,7 @@ function reviewerReceiptError(
     if (!definition) continue;
     const recordedFingerprint = auditBlockField(event.block, "Artifact Fingerprint");
     const currentFingerprint = reviewArtifactFingerprint(
-      worktreePath(projectDir, unit),
+      worktreePath(projectDir, boltSlug),
       definition,
       unit,
       { requireRequiredArtifacts: true },
@@ -480,7 +484,7 @@ function emitSwarmCompleted(
 function emitBoltFailed(pd: string, unit: string, errorSummary: string): void {
   runTool(
     "aidlc-bolt.ts",
-    ["fail", "--name", unit, "--slug", unit, "--error", errorSummary],
+    ["fail", "--name", unit, "--slug", swarmBoltSlug(unit), "--error", errorSummary],
     pd
   );
 }
@@ -501,6 +505,18 @@ function handlePrepare(rest: string[]): void {
   if (units.length === 0) {
     fail("--units resolved to an empty list");
   }
+  const dag = resolveBoltDag(projectDir);
+  if (dag.state === "malformed") {
+    fail(
+      `prepare cannot resolve the authoritative unit DAG: ${dag.reason} ` +
+        `(${dag.detail}). Fix unit-of-work-dependency.md before starting the swarm.`,
+    );
+  }
+  const slugUniverse =
+    dag.state === "ok"
+      ? [...new Set([...dag.units, ...units])]
+      : units;
+  assertUniqueSwarmBoltSlugs(slugUniverse);
 
   // P7: the construction repo this batch targets. resolveConstructionRepo errors
   // on a multi-repo intent with no --repo (forwarded as the batch failure), infers
@@ -551,9 +567,10 @@ function handlePrepare(rest: string[]): void {
   // create/merge/discard never re-resolve to a different repo than prepare chose.
   const repoArgs = repoName ? ["--repo", repoName] : [];
   for (const unit of units) {
+    const boltSlug = swarmBoltSlug(unit);
     const created = runTool(
       "aidlc-worktree.ts",
-      ["create", "--slug", unit, "--base", base, ...repoArgs],
+      ["create", "--slug", boltSlug, "--base", base, ...repoArgs],
       projectDir
     );
     if (!created.ok) {
@@ -577,7 +594,7 @@ function handlePrepare(rest: string[]): void {
     }
     const started = runTool(
       "aidlc-bolt.ts",
-      ["start", "--worktree", "--slug", unit, "--batch", flags.batch, "--name", unit, ...repoArgs],
+      ["start", "--worktree", "--slug", boltSlug, "--batch", flags.batch, "--name", unit, ...repoArgs],
       projectDir
     );
     if (!started.ok) {
@@ -622,6 +639,7 @@ function handleCheck(rest: string[]): void {
   if (!unit) {
     fail("check requires a unit name (positional `check <unit>` or --unit <unit>)");
   }
+  swarmBoltSlug(unit);
   if (!flags["check-cmd"]) {
     fail("check requires --check-cmd <shell command; exit 0 = converged>");
   }
@@ -674,6 +692,7 @@ function handleFinalize(rest: string[]): void {
   // The universe of units in the batch; defaults to the claimed set when the
   // conductor passes only --claimed (then declined-unit accounting is a no-op).
   const allUnits = flags.units ? splitCsv(flags.units) : claimed.slice();
+  for (const unit of new Set([...allUnits, ...claimed])) swarmBoltSlug(unit);
   const claimedSet = new Set(claimed);
   const testFile = flags["test-file"];
   const checkCmd = flags["check-cmd"];
@@ -696,6 +715,7 @@ function handleFinalize(rest: string[]): void {
         fail(`--reasons entry must be <unit>=<reason>: "${pair}"`);
       }
       const unit = pair.slice(0, eq).trim();
+      swarmBoltSlug(unit);
       const reason = pair.slice(eq + 1).trim() as FailureReason;
       if (!DECLINED_REASONS.includes(reason)) {
         fail(`--reasons reason for "${unit}" must be one of: ${DECLINED_REASONS.join(", ")}`);
@@ -810,10 +830,11 @@ function handleFinalize(rest: string[]): void {
   // pinned at the composed surface by the worktree-merge tests.
   const mergeFailures: { unit: string; detail: string }[] = [];
   for (const unit of [...genuine].sort()) {
-    runTool("aidlc-bolt.ts", ["release-merge", "--slug", unit], projectDir);
+    const boltSlug = swarmBoltSlug(unit);
+    runTool("aidlc-bolt.ts", ["release-merge", "--slug", boltSlug], projectDir);
     const merged = runTool(
       "aidlc-bolt.ts",
-      ["complete", "--merge", "--slug", unit, "--batch", batch, "--name", unit],
+      ["complete", "--merge", "--slug", boltSlug, "--batch", batch, "--name", unit],
       projectDir
     );
     if (!merged.ok) {
@@ -871,6 +892,27 @@ function splitCsv(value: string): string[] {
     .split(",")
     .map((u) => u.trim())
     .filter((u) => u !== "");
+}
+
+function swarmBoltSlug(unit: string): string {
+  const unitNameError = validateUnitName(unit);
+  if (unitNameError) fail(unitNameError);
+  return boltSlugForUnit(unit);
+}
+
+function assertUniqueSwarmBoltSlugs(units: string[]): void {
+  const owners = new Map<string, string>();
+  for (const unit of units) {
+    const boltSlug = swarmBoltSlug(unit);
+    const existing = owners.get(boltSlug);
+    if (existing && existing !== unit) {
+      fail(
+        `Units "${existing}" and "${unit}" resolve to the same internal Bolt slug ` +
+          `"${boltSlug}". Rename one Unit before starting the autonomous swarm.`,
+      );
+    }
+    owners.set(boltSlug, unit);
+  }
 }
 
 function currentSwarmAttempt(projectDir: string): SwarmAttemptStamp | null {
@@ -938,7 +980,8 @@ function legacyPreparedSwarmAttempt(
   batch: string,
   unit: string,
 ): SwarmAttemptStamp | null {
-  const wt = worktreePath(projectDir, unit);
+  const boltSlug = swarmBoltSlug(unit);
+  const wt = worktreePath(projectDir, boltSlug);
   const recordPrefix = relativeRecordDir(projectDir);
   const wtState = worktreeStateFilePath(wt, recordPrefix);
   const wtAudit = worktreeAuditFilePath(wt, recordPrefix, projectDir);
@@ -961,7 +1004,7 @@ function legacyPreparedSwarmAttempt(
     return null;
   }
   const fork = findAllEvents(worktreeAudit, "AUDIT_FORKED")
-    .filter((event) => auditBlockField(event.block, "Bolt slug") === unit)
+    .filter((event) => auditBlockField(event.block, "Bolt slug") === boltSlug)
     .at(-1);
   const boundaryRaw = fork ? auditBlockField(fork.block, "Fork Boundary") : null;
   const sourceHash = fork ? auditBlockField(fork.block, "Source Audit Hash") : null;
@@ -1004,13 +1047,13 @@ function legacyPreparedSwarmAttempt(
     if (
       event === "BOLT_STARTED" &&
       auditBlockField(block, "Batch number") === batch &&
-      auditBlockField(block, "Bolt slug") === unit
+      auditBlockField(block, "Bolt slug") === boltSlug
     ) {
       boltStarts.push(index);
     }
     if (
       event === "STATE_FORKED" &&
-      auditBlockField(block, "Bolt slug") === unit
+      auditBlockField(block, "Bolt slug") === boltSlug
     ) {
       stateForks.push(index);
     }
