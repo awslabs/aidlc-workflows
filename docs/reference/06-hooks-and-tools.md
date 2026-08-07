@@ -326,6 +326,14 @@ Delegated agents retain ordinary shell access for artifact work, builds,
 validation, and read-only state inspection; they return their result to the
 main conductor, which alone owns workflow lifecycle and gates.
 
+The command-position parser recursively normalizes recognized execution
+wrappers (`command`, `exec`, `time`, `env`, `nice`, and `nohup`) before applying
+that boundary, including nested wrappers. Literal `eval` payloads are inspected
+recursively and simple harmless commands remain available; an `eval` payload
+containing shell expansion or escape syntax is refused because the hook cannot
+determine the resulting command before execution. Unsupported platform-specific
+wrapper options and `env -S` expansion syntax fail closed for the same reason.
+
 ---
 
 ### PreToolUse: aidlc-reviewer-scope.ts

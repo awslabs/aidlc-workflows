@@ -227,6 +227,21 @@ describe("t242 state-transition ownership guard", () => {
       ['env -S "aidlc next --resume"', "aidlc next"],
       ['env -S"aidlc next --resume"', "aidlc next"],
       ['env --split-string="aidlc next --resume"', "aidlc next"],
+      ["env env aidlc next --resume", "aidlc next"],
+      ["command env env aidlc next --resume", "aidlc next"],
+      ["env --block-signal env aidlc next --resume", "aidlc next"],
+      ["env --list-signal-handling aidlc next --resume", "aidlc next"],
+      ["env -P >out /usr/bin aidlc next --resume", "aidlc next"],
+      ["nice aidlc next --resume", "aidlc next"],
+      ["nohup aidlc next --resume", "aidlc next"],
+      ["env >out aidlc next --resume", "aidlc next"],
+      ["env -u >out PATH aidlc next --resume", "aidlc next"],
+      ['env -S >out "aidlc next --resume"', "aidlc next"],
+      ["nice >out aidlc next --resume", "aidlc next"],
+      ["nice -n >out 5 aidlc next --resume", "aidlc next"],
+      ["nohup 2>/dev/null aidlc next --resume", "aidlc next"],
+      ["exec -a >out aidlc-alias aidlc next --resume", "aidlc next"],
+      ['eval -- "aidlc next --resume"', "aidlc next"],
       ["time -p aidlc next --resume", "aidlc next"],
       ["bash -c $'aidlc next --resume'", "aidlc next"],
       ["aidlc \\\nnext --resume", "aidlc next"],
@@ -319,9 +334,29 @@ describe("t242 state-transition ownership guard", () => {
       "echo ok # ; aidlc next --resume",
       "cat <<'EOF'\n$(aidlc next --resume)\nEOF",
       "command -v aidlc next --resume",
+      "eval true",
+      'eval "echo ok"',
+      "env -0 aidlc next --resume",
+      "nice --adjustment=bogus aidlc next --resume",
+      "nice --help",
+      "nohup --version",
     ]) {
       expect(delegatedLifecycleCommand(command), command).toBeNull();
     }
+    expect(delegatedLifecycleCommand('eval "$command"')).toBe(
+      "dynamic eval shell command beyond guard inspection",
+    );
+    expect(delegatedLifecycleCommand(String.raw`eval 'printf %s \$HOME'`)).toBe(
+      "dynamic eval shell command beyond guard inspection",
+    );
+    expect(
+      delegatedLifecycleCommand("eval \"$(printf 'aidlc next --resume')\""),
+    ).toBe(
+      "dynamic eval shell command beyond guard inspection",
+    );
+    expect(delegatedLifecycleCommand(String.raw`env -S 'aidlc\_next --resume'`)).toBe(
+      "execution wrapper beyond guard inspection",
+    );
     expect(
       delegatedLifecycleCommand(
         "echo 'bun .claude/tools/aidlc-orchestrate.ts next --resume'",
@@ -370,6 +405,30 @@ describe("t242 state-transition ownership guard", () => {
     });
     expect(conductor.status).toBe(0);
     expect(conductor.stderr).toBe("");
+  });
+
+  test("the hook blocks delegated lifecycle commands behind execution wrappers", () => {
+    for (const command of [
+      "env env aidlc next --resume",
+      "command env env aidlc next --resume",
+      "nice aidlc next --resume",
+      "nohup aidlc next --resume",
+    ]) {
+      const delegated = spawnSync(process.execPath, [HOOK], {
+        input: JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command },
+          agent_type: "aidlc-product-lead-agent",
+        }),
+        encoding: "utf-8",
+        env: unownedEnv(),
+      });
+      expect(delegated.status, command).toBe(2);
+      expect(delegated.stderr, command).toContain(
+        "workflow lifecycle and routing are conductor-owned",
+      );
+    }
   });
 
   test("large heredoc writes stay fast (whitespace-quadratic regression pin)", () => {

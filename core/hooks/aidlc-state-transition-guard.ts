@@ -359,6 +359,7 @@ function executableSubstitutions(command: string): {
       if (end >= command.length) continue;
       bodies.push(command.slice(i + 1, end));
       maskRange(chars, i, end);
+      chars[i] = "$";
       i = end;
       continue;
     }
@@ -367,6 +368,7 @@ function executableSubstitutions(command: string): {
       if (end < 0) continue;
       bodies.push(command.slice(i + 2, end));
       maskRange(chars, i, end);
+      chars[i] = "$";
       i = end;
     }
   }
@@ -472,9 +474,17 @@ function commandBasename(command: string | undefined): string {
   return (command ?? "").replace(/\\/g, "/").split("/").at(-1) ?? "";
 }
 
+const UNINSPECTABLE_EXECUTION_WRAPPER = "__aidlc_uninspectable_execution_wrapper__";
+
 function executableArgv(segment: string): string[] {
-  const words = shellWords(segment);
+  let words = shellWords(segment);
   let cursor = 0;
+  const skipRedirections = (): void => {
+    while (/^\d*(?:<<<|<<-?|<>|>>?|<|>\||<&|>&)/.test(words[cursor] ?? "")) {
+      const redirection = words[cursor++];
+      if (/^\d*(?:<<<|<<-?|<>|>>?|<|>\||<&|>&)$/.test(redirection)) cursor++;
+    }
+  };
   const skipPrefixes = (): void => {
     let previous = -1;
     while (cursor !== previous) {
@@ -486,71 +496,172 @@ function executableArgv(segment: string): string[] {
       ) {
         cursor++;
       }
-      while (/^\d*(?:<<<|<<-?|<>|>>?|<|>\||<&|>&)/.test(words[cursor] ?? "")) {
-        const redirection = words[cursor++];
-        if (/^\d*(?:<<<|<<-?|<>|>>?|<|>\||<&|>&)$/.test(redirection)) cursor++;
-      }
+      skipRedirections();
       while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[cursor] ?? "")) cursor++;
     }
   };
-  skipPrefixes();
-  if (commandBasename(words[cursor]) === "time") {
-    cursor++;
-    while ((words[cursor] ?? "").startsWith("-")) {
-      const option = words[cursor++];
-      if (["-f", "--format", "-o", "--output"].includes(option)) cursor++;
-    }
-    skipPrefixes();
-  }
-  while (["command", "exec"].includes(commandBasename(words[cursor]))) {
-    const prefix = commandBasename(words[cursor]);
-    cursor++;
-    while ((words[cursor] ?? "").startsWith("-")) {
-      const option = words[cursor++];
-      if (prefix === "command" && /[vV]/.test(option.replace(/^-+/, ""))) return [];
-      if (prefix === "exec" && option === "-a") cursor++;
-    }
-    skipPrefixes();
-  }
-  if (commandBasename(words[cursor]) === "env") {
-    cursor++;
-    while (cursor < words.length) {
-      const word = words[cursor];
-      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) {
-        cursor++;
-        continue;
+
+  let allowShellPrefixes = true;
+  while (cursor < words.length) {
+    if (allowShellPrefixes) skipPrefixes();
+    else skipRedirections();
+    allowShellPrefixes = false;
+    const wrapper = commandBasename(words[cursor]);
+
+    if (wrapper === "time") {
+      cursor++;
+      while ((words[cursor] ?? "").startsWith("-")) {
+        const option = words[cursor++];
+        if (["-f", "--format", "-o", "--output"].includes(option)) {
+          skipRedirections();
+          if (cursor >= words.length) return [];
+          cursor++;
+        }
       }
-      if (word === "--") {
+      allowShellPrefixes = true;
+      continue;
+    }
+
+    if (wrapper === "command" || wrapper === "exec") {
+      cursor++;
+      while (cursor < words.length) {
+        skipRedirections();
+        const option = words[cursor] ?? "";
+        if (option === "--") {
+          cursor++;
+          break;
+        }
+        if (!option.startsWith("-")) break;
+        if (wrapper === "command") {
+          if (/[vV]/.test(option.replace(/^-+/, ""))) return [];
+          if (!/^-p+$/.test(option)) return [];
+          cursor++;
+          continue;
+        }
+        if (option === "-a") {
+          cursor++;
+          skipRedirections();
+          if (cursor >= words.length) return [];
+          cursor++;
+          continue;
+        }
+        if (!/^-[cl]+$/.test(option)) return [];
         cursor++;
+      }
+      allowShellPrefixes = true;
+      continue;
+    }
+
+    if (wrapper === "env") {
+      cursor++;
+      while (cursor < words.length) {
+        skipRedirections();
+        if (cursor >= words.length) break;
+        const word = words[cursor];
+        if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) {
+          cursor++;
+          continue;
+        }
+        if (word === "--") {
+          cursor++;
+          break;
+        }
+        const splitOptionIndex = cursor;
+        let split: string | null = null;
+        let splitRestIndex = cursor + 1;
+        if (word.startsWith("-S") && word.length > 2) {
+          split = word.slice(2);
+        } else if (word.startsWith("--split-string=")) {
+          split = word.slice("--split-string=".length);
+        } else if (word === "-S" || word === "--split-string") {
+          cursor++;
+          skipRedirections();
+          split = words[cursor] ?? "";
+          splitRestIndex = cursor + 1;
+        }
+        if (split !== null) {
+          if (/[\\$`#]/.test(split)) return [UNINSPECTABLE_EXECUTION_WRAPPER];
+          words = [
+            ...words.slice(0, splitOptionIndex),
+            ...shellWords(split),
+            ...words.slice(splitRestIndex),
+          ];
+          cursor = splitOptionIndex;
+          continue;
+        }
+        if (["-u", "--unset", "-C", "--chdir", "-P"].includes(word)) {
+          cursor++;
+          skipRedirections();
+          if (cursor >= words.length) return [];
+          cursor++;
+          continue;
+        }
+        if (
+          /^-(?:u|C).+/.test(word) ||
+          /^(?:--unset|--chdir)=.+/.test(word) ||
+          /^-[iv]+$/.test(word) ||
+          word === "-" ||
+          ["--ignore-environment", "--debug", "--list-signal-handling"].includes(word) ||
+          /^--(?:block|default|ignore)-signal(?:=.*)?$/.test(word)
+        ) {
+          cursor++;
+          continue;
+        }
+        if (word === "-0" || word === "--null") return [];
+        if (word === "--help" || word === "--version") return [];
+        if (word.startsWith("-")) return [UNINSPECTABLE_EXECUTION_WRAPPER];
         break;
       }
-      if (word.startsWith("-S") && word.length > 2) {
-        return [...shellWords(word.slice(2)), ...words.slice(cursor + 1)];
-      }
-      if (word.startsWith("--split-string=")) {
-        return [
-          ...shellWords(word.slice("--split-string=".length)),
-          ...words.slice(cursor + 1),
-        ];
-      }
-      if (word === "-S" || word === "--split-string") {
-        return [
-          ...shellWords(words[cursor + 1] ?? ""),
-          ...words.slice(cursor + 2),
-        ];
-      }
-      if (["-u", "--unset", "-C", "--chdir"].includes(word)) {
-        cursor += 2;
-        continue;
-      }
-      if (word.startsWith("-")) {
-        cursor++;
-        continue;
-      }
-      break;
+      continue;
     }
+
+    if (wrapper === "nice") {
+      cursor++;
+      while (cursor < words.length) {
+        skipRedirections();
+        if (cursor >= words.length) break;
+        const word = words[cursor];
+        if (word === "--") {
+          cursor++;
+          break;
+        }
+        if (word === "--help" || word === "--version") return [];
+        if (word === "-n" || word === "--adjustment") {
+          cursor++;
+          skipRedirections();
+          if (!/^[+-]?\d+$/.test(words[cursor] ?? "")) return [];
+          cursor++;
+          continue;
+        }
+        if (
+          /^-n[+-]?\d+$/.test(word) ||
+          /^--adjustment=[+-]?\d+$/.test(word) ||
+          /^--?\d+$/.test(word)
+        ) {
+          cursor++;
+          continue;
+        }
+        if (word.startsWith("-")) return [];
+        break;
+      }
+      continue;
+    }
+
+    if (wrapper === "nohup") {
+      cursor++;
+      const word = words[cursor] ?? "";
+      if (word === "--help" || word === "--version") return [];
+      if (word === "--") {
+        cursor++;
+      } else if (word.startsWith("-")) {
+        return [];
+      }
+      continue;
+    }
+
+    break;
   }
-  skipPrefixes();
+
   return words.slice(cursor);
 }
 
@@ -670,9 +781,19 @@ function delegatedLifecycleCommandAtDepth(command: string, depth: number): strin
   for (const segment of shellCommandSegments(substitutions.masked)) {
     const argv = executableArgv(segment);
     const executable = commandBasename(argv[0]);
+    if (executable === UNINSPECTABLE_EXECUTION_WRAPPER) {
+      return "execution wrapper beyond guard inspection";
+    }
     if (executable === "eval") {
-      const nested = delegatedLifecycleCommandAtDepth(argv.slice(1).join(" "), depth + 1);
-      return nested ?? "eval shell command beyond guard inspection";
+      const evalArgs = argv.slice(1);
+      if (evalArgs[0] === "--") evalArgs.shift();
+      const evalCommand = evalArgs.join(" ");
+      const nested = delegatedLifecycleCommandAtDepth(evalCommand, depth + 1);
+      if (nested !== null) return nested;
+      if (/[$`\\]/.test(segment)) {
+        return "dynamic eval shell command beyond guard inspection";
+      }
+      continue;
     }
     if (/^(?:ba|da|a|k|z)?sh(?:\.exe)?$/.test(executable)) {
       for (let i = 1; i < argv.length; i++) {

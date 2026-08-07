@@ -11,6 +11,7 @@ Adds GitHub Copilot as a first-class harness for both Copilot CLI and VS Code ag
 * Copilot loads the engine's bounded `load-steering` directives before stage work and injects the exact active-stage rule bundle into delegated custom-agent briefs through the shared deliver-stage-rules guard.
 * Copilot plugin composition and selection emit agents and runners under `.github/{agents,skills}`; `/aidlc --doctor`, compiled runtime probing, binary assets, space switching, and release tests now cover Copilot alongside the existing harnesses.
 * The shared Copilot hook manifest omits VS Code's unsupported `SessionEnd`; both hosts reconcile the prior session on the next `SessionStart`.
+* Delegated lifecycle enforcement now normalizes nested `env`, `command`, `nice`, and `nohup` execution wrappers; simple harmless `eval` commands remain allowed, while dynamic/escaped eval and uninspectable wrapper syntax fail closed.
 * New deterministic coverage includes Copilot packaging, adapter, security, plugin, doctor, and cross-harness regression tests plus the `AIDLC_COPILOT_EXEC_LIVE=1`-gated status journey.
 
 ## [2.5.59] - 2026-08-08
