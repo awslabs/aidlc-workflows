@@ -76,16 +76,28 @@
 //   5. A CONVERSATIONAL turn ends with the human's last prompt answered and NO
 //      workflow-engine engagement (the conductor ran neither aidlc-orchestrate
 //      nor aidlc-state since that prompt). Issue #365's broader reading: a human
-//      who just wants to CHAT mid-workflow should not be nudged at all. We read
-//      the harness transcript (Claude / Codex deliver `transcript_path` on the
-//      Stop payload; Kiro delivers none, so this carve-out is inert there and
-//      the run-mode-aware cap above is its safety net) and ALLOW the stop when
-//      the most recent genuine human prompt was answered with zero engine calls
-//      (isConversationalStop below). POSITIVE-CONFIRMATION only and fail-closed:
-//      it never fires under autonomous Construction, and any engine call in the
-//      responding turn, an unreadable transcript, no human prompt found, or any
+//      who just wants to CHAT mid-workflow should not be nudged at all. We ALLOW
+//      the stop when the most recent genuine human prompt was answered with zero
+//      engine calls (isConversationalStop below). ONE predicate, TWO evidence
+//      sources: the harness TRANSCRIPT where the Stop payload delivers
+//      `transcript_path` (Claude, Codex), and the `.aidlc-human-turn` vs
+//      `.aidlc-engine-touch` MARKER mtimes where it does not (Kiro IDE, Kiro CLI,
+//      opencode — these expose no turn history to a hook at all, so the framework
+//      writes the two facts itself on the mint and engine seams). The marker path
+//      depends on the engine skipping its touch for this hook's OWN `next` probe
+//      (STOP_HOOK_PROBE_ENV); without that the predicate would be false forever.
+//      POSITIVE-CONFIRMATION only and fail-closed on both paths: it never fires
+//      under autonomous Construction, and any engine call in the responding turn,
+//      an unreadable transcript, a missing marker, no human prompt found, or any
 //      parse miss falls through to the cap-bounded block. It only ever ALLOWS;
 //      it can never block more.
+//        NOT FULL PARITY. The marker path answers the same question more
+//        COARSELY than the transcript: it is blind to aidlc-jump / aidlc-bolt /
+//        aidlc-swarm and the mutating aidlc-state verbs, which the transcript
+//        DOES count as engagement, because none of those tools touch the engine
+//        marker. A conductor that jumps the pointer and then quits is released
+//        here and blocked on Claude. Narrow but real; see the coverage-gap note
+//        on markEngineTouch in aidlc-lib.ts.
 //
 // No-op outside AIDLC. The frontmatter Stop matcher scopes this to the `aidlc`
 // skill, but we defend here too: with no active workflow (no aidlc-state.md
@@ -113,6 +125,8 @@ import {
   stageDir,
   stateFilePath,
   stopHookDir,
+  STOP_HOOK_PROBE_ENV,
+  turnMarkersShowConversational,
   harnessDir,
 } from "../tools/aidlc-lib.ts";
 import {
@@ -774,11 +788,37 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
   return true;
 }
 
-// The tier-3 carve-out decision: not autonomous, a transcript was delivered, and
-// it shows a conversational ending turn. `transcriptPath`/`format` come from the
-// Stop payload (Claude / Codex); both are absent on Kiro, where this returns
-// false and the low interactive cap handles the chat case instead.
+// The tier-3 carve-out decision: not autonomous, and the ending turn is
+// positively confirmed conversational by whichever evidence the harness offers.
+//
+// TWO READINGS OF ONE PREDICATE. The question is identical in both — "was the
+// human's most recent prompt answered with zero workflow-engine calls?" — only
+// the evidence differs:
+//
+//   - TRANSCRIPT (Claude, Codex): the Stop payload carries `transcript_path`, so
+//     the turn history is read directly and classified per tool call. Highest
+//     fidelity; preferred whenever available.
+//   - MARKER mtimes (Kiro IDE, Kiro CLI, opencode): these harnesses deliver NO
+//     transcript and expose no turn history to a hook at all, so the same
+//     predicate is reconstructed from two files the framework already writes on
+//     the relevant seams — `.aidlc-human-turn` (the UserPromptSubmit mint) and
+//     `.aidlc-engine-touch` (every advancing aidlc-orchestrate invocation). A
+//     human turn NEWER than the last engine advance is the marker spelling of
+//     "answered with zero engine calls".
+//
+// Before the marker path existed this returned false on every transcript-free
+// harness, so tier 3 was inert there and the low interactive cap was the only
+// net — meaning exactly one spurious forwarding-loop nudge per conversational
+// detour, on the very interaction AI-DLC wants to encourage (a human
+// interrogating the process mid-stage).
+//
+// POSITIVE-CONFIRMATION AND FAIL-CLOSED on both paths, unchanged: an autonomous
+// Construction run, a missing/unreadable transcript, a missing/unreadable marker,
+// no human prompt found, or ANY engine engagement in the responding turn all
+// return false and fall through to the cap-bounded block. This function can only
+// ever ALLOW a stop; it can never cause one to block.
 function isConversationalStop(
+  projectDir: string,
   stateContent: string,
   transcriptPath: string | null,
   format: "claude" | "codex",
@@ -787,7 +827,10 @@ function isConversationalStop(
     if (getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous") {
       return false; // autonomy guard: keep the loop alive
     }
-    if (transcriptPath === null || transcriptPath.length === 0) return false;
+    if (transcriptPath === null || transcriptPath.length === 0) {
+      // No transcript delivered — fall back to the marker mtimes.
+      return turnMarkersShowConversational(projectDir);
+    }
     return transcriptIsConversational(transcriptPath, format);
   } catch {
     // Unparseable / odd content: fall through to decideBlock (never trap).
@@ -821,11 +864,21 @@ function runEngineNextDirective(projectDir: string): EngineDirective | null {
   // returns with a non-zero/absent exitCode (and sets `proc.error`), which the
   // null-return below treats as "engine could not be consulted" → fail OPEN
   // (allow the stop). Mirrors aidlc-run-sensors.ts's bounded spawn.
+  //
+  // STOP_HOOK_PROBE_ENV MARKS THIS SPAWN AS THE HOOK'S OWN PROBE, and that is
+  // load-bearing for the conversational carve-out — not a debug nicety. The
+  // engine touches `.aidlc-engine-touch` on every advancing invocation, and the
+  // transcript-free carve-out below asks "is the last human turn newer than the
+  // last engine touch?". This consultation runs on EVERY stop, so without the
+  // marker it would refresh the engine mtime first and the answer would be `no`
+  // forever: tier 3 would look implemented and never fire. markEngineTouch() is a
+  // no-op when it sees this env var (aidlc-lib.ts).
   const proc = Bun.spawnSync({
     cmd: ["bun", enginePath, "next", "--project-dir", projectDir],
     stdout: "pipe",
     stderr: "pipe",
     timeout: ENGINE_TIMEOUT_MS,
+    env: { ...process.env, [STOP_HOOK_PROBE_ENV]: "1" },
   });
   if (proc.exitCode !== 0) return null;
   const stdout = new TextDecoder().decode(proc.stdout).trim();
@@ -954,9 +1007,9 @@ try {
 // Parse the Stop-hook input. Garbage / empty stdin must NOT crash and must NOT
 // trap the turn (fail open). We read `stop_hook_active` (the recursion bound)
 // and `transcript_path` (the conversational carve-out, tier 3). Claude and Codex
-// both deliver `transcript_path`; Kiro delivers neither, so transcriptPath stays
-// null there and the conversational carve-out is inert (the low interactive cap
-// handles chat instead).
+// both deliver `transcript_path`; Kiro and opencode deliver neither, so
+// transcriptPath stays null there and the carve-out reads the turn-shape markers
+// instead (see isConversationalStop).
 let stopHookActive = false;
 let transcriptPath: string | null = null;
 // The conversation id Claude Code stamps on Stop input - used to key the
@@ -1138,15 +1191,15 @@ if (isPendingComposeStop(projectDir, stateContent)) {
 // Conversational carve-out (tier 3, issue #365 broader reading): the ending turn
 // answered the human's most recent prompt with NO workflow-engine engagement, so
 // the human was just chatting mid-workflow, allow the stop instead of nudging
-// them back into the loop. Reads the harness transcript (Claude / Codex deliver
-// `transcript_path`; Kiro delivers none, so this is inert there and the low
-// interactive cap below releases a chatting human after one nudge). Strictly
-// gated and fail-closed (see isConversationalStop): no transcript, no human
-// prompt, ANY engine call in the responding turn, an autonomous run, or any read
-// error falls through to the cap-bounded block below, so a conductor that
-// engaged the workflow and then quit mid-loop (and every autonomous run) is
-// still nudged.
-if (isConversationalStop(stateContent, transcriptPath, transcriptFormat)) {
+// them back into the loop. Two evidence sources for one predicate: the harness
+// transcript where it is delivered (Claude / Codex), and the `.aidlc-human-turn`
+// vs `.aidlc-engine-touch` mtime comparison where it is not (Kiro IDE, Kiro CLI,
+// opencode). Strictly gated and fail-closed (see isConversationalStop): no
+// evidence, no human prompt, ANY engine call in the responding turn, an
+// autonomous run, or any read error falls through to the cap-bounded block below,
+// so a conductor that engaged the workflow and then quit mid-loop (and every
+// autonomous run) is still nudged.
+if (isConversationalStop(projectDir, stateContent, transcriptPath, transcriptFormat)) {
   recordHookDrop(
     projectDir,
     HOOK_NAME,
