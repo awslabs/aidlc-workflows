@@ -43,6 +43,17 @@ entropy, failure cost, or verification weakness more than it costs.
 2. **Report** (scan input): read the user-supplied report file (e.g.
    SonarQube-style JSON), triage findings into auto-fixable vs
    human-decision, estimate risk, and compose a compact fix-and-ship grid.
+   Score for a FIX, not a project: the report IS the captured intent, so the
+   ideation framing stages (intent-capture, market-research, feasibility,
+   scope-definition, team-formation, rough-mockups, approval-handoff) are
+   answered by its existence - screen them out rather than scoring them in.
+   VE covers verifying the FIX (each finding's fix ships with its regression
+   test); missing project infrastructure (no test suite, no CI) is
+   PRE-EXISTING debt the report did not ask you to erect - it justifies
+   ci-pipeline/practices-discovery only when the fix cannot ship without
+   them. A code-findings report lands in stock `bugfix` (or
+   `security-patch` when a hotspot must deploy) unless it contains work no
+   stock incremental scope covers.
 3. **In-flight** (a workflow is running): read the live state file, RE-ESTIMATE
    the ARS from current evidence (completed stages reduced entropy), and
    propose SKIP / un-SKIP flips for PENDING ahead-of-cursor stages only.
@@ -454,7 +465,7 @@ and name that trigger in the rationale.
 | requirements-analysis | intent-capture (+ application-design absorbs spec) | IAE ≤ 0.20 after intent-capture (task clearly described, ≤2 interpretations), AND no downstream EXECUTE stage consumes its UNIQUE outputs (functional decomposition, constraints, out-of-scope boundary) that couldn't be derived inline by application-design | multiple distinct technical contracts need specification BEFORE design (e.g. embedding API, error taxonomy, acceptance criteria), OR regulatory/compliance context demands a standalone reviewed requirements artifact, OR ≥3 personas with conflicting acceptance criteria, OR application-design is SKIPPED |
 
 When you fold a stage whose output a downstream EXECUTE stage nominally consumes,
-expect the validator (Step 7, lenient mode) to flag a starved input as an
+expect the validator (Step 6, lenient mode) to flag a starved input as an
 advisory. In BROWNFIELD that is an advisory, not a defect: the consuming stage
 adapts to the existing artifact plus upstream outputs (reverse-engineered
 screens, the requirements perf target, existing monitoring). Disclose these
@@ -539,27 +550,9 @@ gate.
 
 ---
 
-### Step 6: Read the Repertoire and Match or Synthesize
+### Step 6: Validate and Read the Distance
 
-Read the grid at the printed `scopeGridPath` (a single JSON file containing all
-stock scope grids). Compare your ARS-derived grid against stock scopes using a
-simple diff-count: for each stock scope, count how many stages differ from your
-proposed grid.
-
-**Efficiency rule**: Do NOT read individual scope `.md` files under `scopesDir`
-unless the diff count is ≤2 for a candidate scope (you need to check its depth
-to confirm compatibility). The grid JSON contains the complete EXECUTE/SKIP data;
-the `.md` files only add depth and keywords metadata.
-
-- If a stock scope matches within ±2 stage flips AND has a compatible depth,
-  propose the stock scope. It's pre-validated and well-understood.
-- If no stock scope fits (diff > 2 for all), synthesize a custom grid. Do NOT
-  read the individual `.md` files — you already know no stock scope matches.
-- `--new-scope` forces synthesis even on an obvious match.
-
-### Step 7: Validate
-
-Write the proposed grid to a temp file and run:
+Write your ARS-derived grid to a temp file and run:
 ```
 bun {{HARNESS_DIR}}/tools/aidlc-graph.ts validate-grid --proposal <path> --project-type <greenfield|brownfield>
 ```
@@ -568,6 +561,38 @@ Lenient mode for a front/report proposal; for an IN-FLIGHT proposal add
 a starved required input rejects, so catch it here, before the gate).
 Exit 1 = rejected grid. Fix or withdraw the SKIP. Never show an invalid grid.
 Copy the validator's `summary` field into the proposal VERBATIM.
+
+The validator's `nearest_stock` field ranks every stock scope by grid distance
+from YOUR proposal (`{scope, diff, differs}`, ascending). The match decision
+routes on that number - never on your own diff-count of the grids.
+
+### Step 7: Match or Synthesize (on the validator's number)
+
+TWO deterministic distances exist by now: the `ars` tool's `nearestScopes`
+(stock distance of the MECHANICAL screen grid, before your folds) and
+validate-grid's `nearest_stock` (stock distance of YOUR proposal). The match
+rule uses the SMALLER of the two best distances:
+
+- If either distance is `<= 2` for a scope whose depth is compatible, propose
+  that stock scope: set `mode: "matched"`, `scopeName` to the stock name, and
+  **adopt the stock grid verbatim as your proposal's `grid`**. Any flips or
+  folds between your grid and the stock grid are dropped - note each in the
+  `rationale` array ("folded into stock <name>: <slug> stays <action>") so
+  the human can pull it back at the gate. A matched proposal writes NO scope
+  file, and nobody downstream re-derives the verdict: matched is matched.
+- **Fold discipline**: a fold that saves a stage but forfeits a stock match
+  is a bad trade - it swaps a pre-validated, well-understood scope for a
+  custom scope the user owns forever. When the mechanical screen sits within
+  2 flips of a stock scope, route to that scope instead of folding further
+  away from it.
+- To confirm depth compatibility, read that one scope's `.md` under
+  `scopesDir`. **Efficiency rule**: never read scope `.md` files otherwise -
+  the grid JSON has the complete EXECUTE/SKIP data; the `.md` files only add
+  depth and keywords metadata.
+- If both distances are `> 2` (or the depth is incompatible), synthesize:
+  set `mode: "custom"` and keep your grid. Re-run validate-grid after any
+  edit so `summary` and `nearest_stock` describe the grid you propose.
+- `--new-scope` forces synthesis even on an obvious match.
 
 ### Step 8: Propose
 

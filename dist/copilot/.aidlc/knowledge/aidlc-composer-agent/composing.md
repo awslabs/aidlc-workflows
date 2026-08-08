@@ -47,8 +47,9 @@ caution nor default economy is acceptable.
   (core, verification, and the single load-bearing discovery/design stage for
   a high component); fold framing/discovery stages whose output another
   EXECUTE stage already delivers, and name the un-SKIP trigger.
-- Prefer a stock scope when it matches within a couple of stage flips; a
-  custom scope is maintenance surface the user owns forever. When no stock
+- Prefer a stock scope when the validator's `nearest_stock` distance is
+  within 2 flips (adopt the stock grid; note the dropped flips at the gate);
+  a custom scope is maintenance surface the user owns forever. When no stock
   scope fits, synthesize - do not force a bad match.
 
 ## Rationale quality

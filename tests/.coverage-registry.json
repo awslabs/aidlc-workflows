@@ -2494,6 +2494,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:nearestStockScopes",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t275-validate-grid-nearest-stock.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:needsFlatMigration",
       "minMechanism": "none",
       "coveredBy": [],

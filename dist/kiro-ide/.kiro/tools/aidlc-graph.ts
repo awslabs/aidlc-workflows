@@ -207,6 +207,11 @@ export interface ScopeValidation {
   // counts). The composer copies this into its proposal verbatim so the gate the
   // human sees leads with numbers the validator computed, not an LLM recount.
   summary?: ScopeCostSummary;
+  // Stock scopes ranked by grid distance from the validated proposal. The
+  // matched-vs-custom verdict routes on nearest_stock[0].diff (match when
+  // <= 2 and depth is compatible), so the routing is the validator's number,
+  // not an LLM recount of the grids.
+  nearest_stock?: Array<{ scope: string; diff: number; differs: string[] }>;
 }
 
 // --- Module-local state ---
@@ -1000,6 +1005,27 @@ export function subgraphForScope(scope: string): GraphStage[] {
     .sort((a, b) => numericStageOrder(a.number, b.number));
 }
 
+/** Rank every stock scope by grid distance from the given EXECUTE/SKIP grid:
+ *  `{scope, diff, differs}` sorted by diff then name. Only slugs present in
+ *  the stock scope's own grid are compared, so a partial input grid is
+ *  measured over its overlap. Shared by `ars` (against the mechanical screen
+ *  grid) and `validate-grid` (against the composer's proposal) — the stock
+ *  match decision routes on this number, not on LLM judgment. */
+export function nearestStockScopes(
+  grid: Record<string, "EXECUTE" | "SKIP">
+): Array<{ scope: string; diff: number; differs: string[] }> {
+  return Object.entries(loadScopeGrid())
+    .map(([scope, def]) => {
+      const differs: string[] = [];
+      for (const [slug, action] of Object.entries(def.stages)) {
+        const mine = grid[slug];
+        if (mine !== undefined && mine !== action) differs.push(slug);
+      }
+      return { scope, diff: differs.length, differs };
+    })
+    .sort((a, b) => a.diff - b.diff || a.scope.localeCompare(b.scope));
+}
+
 /** Resolve a scope's plan: the EXECUTE/SKIP slice over the full graph in
  *  numeric order, shaped `{slug, phase, action}` — byte-identical to
  *  lib.ts's stagesInScope() / the legacy scope-mapping-derived plan. The
@@ -1159,7 +1185,13 @@ export function validateGrid(
   const summary = gridCostSummary(
     grid as Record<string, "EXECUTE" | "SKIP">,
   );
-  return { valid: errors.length === 0, errors, advisories, summary };
+  // Distance to each stock scope travels with the validation for the same
+  // reason as summary: the match decision must ride the validator's numbers.
+  // Unknown slugs already errored above; the ranking measures the overlap.
+  const nearest_stock = nearestStockScopes(
+    grid as Record<string, "EXECUTE" | "SKIP">,
+  );
+  return { valid: errors.length === 0, errors, advisories, summary, nearest_stock };
 }
 
 /** Check proposed (granted-at-the-gate) keywords against the keywords the
@@ -2448,16 +2480,7 @@ export function computeArs(
   // Nearest stock scopes by grid diff count against the mechanical screen
   // grid. The composer's folded grid may differ - this is the deterministic
   // starting signal, not the proposal.
-  const nearestScopes = Object.entries(loadScopeGrid())
-    .map(([scope, def]) => {
-      const differs: string[] = [];
-      for (const [slug, action] of Object.entries(def.stages)) {
-        const mine = screenGrid[slug];
-        if (mine !== undefined && mine !== action) differs.push(slug);
-      }
-      return { scope, diff: differs.length, differs };
-    })
-    .sort((a, b) => a.diff - b.diff || a.scope.localeCompare(b.scope));
+  const nearestScopes = nearestStockScopes(screenGrid);
 
   const arsScores = [
     "| Component | Symbol | Score | Band |",

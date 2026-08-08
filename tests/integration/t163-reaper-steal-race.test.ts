@@ -15,9 +15,12 @@
 //
 // THE INVARIANT WITH TEETH: seed ONE stale (dead-PID) lock, fire N processes that
 // each try a single 0-retry acquire. The reaper is mutually exclusive: EXACTLY
-// ONE process reclaims + acquires; the winner then HOLDS (stays alive) so every
-// other sees a live, under-age holder it must not rob → LOST. >1 winner means a
-// reaper robbed a live holder. Repeated over GENERATIONS for stability.
+// ONE process reclaims + acquires, reporting the seeded owner's PID; the winner
+// then HOLDS (stays alive). Spawn-to-acquire latency is unbounded, so a contender
+// may legitimately arrive after that winner exits and report a dead real-PID
+// predecessor. Those serial-chain wins are allowed. A winner that reports its
+// predecessor was STILL ALIVE after the steal robbed a live holder and fails the
+// invariant. Repeated over GENERATIONS for stability.
 //
 // HONESTY (read before trusting this as a FIX-3 regression test): empirically
 // this assertion holds on BOTH the pre-fix reaper (the prior "re-read stamp then
@@ -55,55 +58,123 @@ const LIB = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-lib.ts"
 // identical, this just mirrors the real fork/merge per-intent lock).
 const INTENT = "auth-aaaaaaaa";
 const SPACE = "default";
+const STALE_OWNER_PID = 2_000_000_000;
+const HOLD_MS = 5000;
 
 let proj: string;
 let driver: string;
 
 // A tiny driver that does ONE 0-retry acquireAuditLock against the seeded stale
-// lock and prints exactly "WON" (acquired) or "LOST" (could not). 0 retries so a
-// contender that loses the steal does NOT then mkdir the freed dir on a later
-// loop turn — we want a single, honest "did THIS process reclaim the stale lock"
-// signal per process. The reaper still fires on the first EEXIST.
+// lock and prints exactly "WON <reaped-pid> <aliveAfterSteal>" (acquired) or
+// "LOST" (could not). 0 retries means a contender that loses the steal does NOT
+// then mkdir the freed dir on a later loop turn. The reaper still fires on the
+// first EEXIST.
 //
-// A WINNER then SLEEPS (HOLD_MS) BEFORE exiting — and stays ALIVE the whole time.
-// This is load-bearing: a winner that exited immediately would leave a lock whose
-// owner PID is now DEAD, which the NEXT contender would (correctly) reap as a dead
-// lock and itself win — a SERIAL chain of legitimate re-acquisitions, not the
-// concurrent double-steal the test means to catch. By staying alive while the
-// losers run their single 0-retry attempt, the winner presents a LIVE, under-age
-// holder the reaper must refuse — so a SECOND winner can only arise from the
-// steal-race the CAS closes (robbing a live holder), which is exactly the bug
-// under test. The losers (0 retries) fail fast and exit well before HOLD_MS.
-const DRIVER_SRC = (libPath: string, pd: string, intent: string, space: string): string =>
+// Each contender reads owner.json immediately before acquiring. That read has a
+// benign race: a process can observe the seeded PID, lose, then resume after a
+// winner exits and legitimately reap that winner's real-PID lock. A winner-only
+// predecessor ledger resolves that stale observation: the first winner reports
+// the seeded sentinel and records its PID; each later winner reports the prior
+// winner's real PID. After acquire, the winner resolves that predecessor before
+// probing it with process.kill(pid, 0); probing the raw observation would revive
+// the benign read/acquire race. Dead predecessors prove legitimate serial
+// re-acquisition; an alive predecessor proves the winner robbed a live holder.
+//
+// A WINNER then SLEEPS (HOLD_MS) BEFORE exiting. The hold widens the observation
+// window so an overlapping winner probes a predecessor that is still alive. It
+// does NOT assume every spawned contender reaches acquire within HOLD_MS: a late
+// contender may correctly reap a dead winner and report aliveAfterSteal=false.
+const DRIVER_SRC = (
+  libPath: string,
+  pd: string,
+  intent: string,
+  space: string,
+  evidenceState: string,
+  evidenceLock: string,
+): string =>
   [
-    `import { acquireAuditLock } from ${JSON.stringify(libPath)};`,
+    `import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";`,
+    `import { join } from "node:path";`,
+    `import { acquireAuditLock, auditLockDir } from ${JSON.stringify(libPath)};`,
+    `const lockDir = auditLockDir(${JSON.stringify(pd)}, ${JSON.stringify(intent)}, ${JSON.stringify(space)});`,
+    `let observedPid: number | null = null;`,
+    `try { observedPid = JSON.parse(readFileSync(join(lockDir, "owner.json"), "utf-8")).pid; } catch {}`,
     `const won = acquireAuditLock(${JSON.stringify(pd)}, 0, 1, ${JSON.stringify(intent)}, ${JSON.stringify(space)});`,
-    `process.stdout.write(won ? "WON" : "LOST");`,
+    `if (!won) { process.stdout.write("LOST"); process.exit(0); }`,
+    `for (;;) {`,
+    `  try { mkdirSync(${JSON.stringify(evidenceLock)}); break; }`,
+    `  catch { Bun.sleepSync(1); }`,
+    `}`,
+    `let reapedPid: number;`,
+    `try {`,
+    `  const predecessorPid = JSON.parse(readFileSync(${JSON.stringify(evidenceState)}, "utf-8")).pid;`,
+    `  const observationMatches = observedPid === predecessorPid;`,
+    `  reapedPid = observationMatches && observedPid !== null ? observedPid : predecessorPid;`,
+    `  writeFileSync(${JSON.stringify(evidenceState)}, JSON.stringify({ pid: process.pid }), "utf-8");`,
+    `} finally {`,
+    `  rmSync(${JSON.stringify(evidenceLock)}, { recursive: true, force: true });`,
+    `}`,
+    `let aliveAfterSteal = false;`,
+    `try { process.kill(reapedPid, 0); aliveAfterSteal = true; } catch {}`,
+    `process.stdout.write(\`WON \${reapedPid} \${aliveAfterSteal}\`);`,
     // A winner holds (stays alive) so concurrent losers see a LIVE holder they
     // must not rob; the harness rm's the dir between generations.
-    `if (won) { Bun.sleepSync(800); }`,
+    `Bun.sleepSync(${HOLD_MS});`,
     `process.exit(0);`,
   ].join("\n");
+
+function evidenceStatePath(): string {
+  return join(proj, "reap-evidence.json");
+}
+
+function evidenceLockPath(): string {
+  return join(proj, "reap-evidence.lock");
+}
 
 /** Seed a DEAD-PID, OVER-AGE stale lock at the per-intent bucket. */
 function seedStaleLock(): string {
   const lockDir = auditLockDir(proj, INTENT, SPACE);
   rmSync(lockDir, { recursive: true, force: true });
   mkdirSync(lockDir, { recursive: true });
+  rmSync(evidenceLockPath(), { recursive: true, force: true });
+  writeFileSync(evidenceStatePath(), JSON.stringify({ pid: STALE_OWNER_PID }), "utf-8");
   // pid is an unlikely-live high value (ESRCH → dead owner), startedAtMs far in
   // the past (over the tightened stale threshold the test sets via env).
   writeFileSync(
     join(lockDir, "owner.json"),
-    JSON.stringify({ pid: 2_000_000_000, startedAtMs: 0 }),
+    JSON.stringify({ pid: STALE_OWNER_PID, startedAtMs: 0 }),
     "utf-8",
   );
   return lockDir;
 }
 
+interface WinnerEvidence {
+  reapedPid: number;
+  aliveAfterSteal: boolean;
+}
+
+function winnerEvidence(outputs: string[]): WinnerEvidence[] {
+  const winners: WinnerEvidence[] = [];
+  for (const output of outputs) {
+    const match = /^WON (\d+) (true|false)$/.exec(output.trim());
+    if (match) {
+      winners.push({
+        reapedPid: Number(match[1]),
+        aliveAfterSteal: match[2] === "true",
+      });
+    }
+  }
+  return winners;
+}
+
 beforeEach(() => {
   proj = mkdtempSync(join(tmpdir(), "aidlc-t163-"));
   driver = join(proj, "reap-driver.ts");
-  writeFileSync(driver, DRIVER_SRC(LIB, proj, INTENT, SPACE), "utf-8");
+  writeFileSync(
+    driver,
+    DRIVER_SRC(LIB, proj, INTENT, SPACE, evidenceStatePath(), evidenceLockPath()),
+    "utf-8",
+  );
 });
 
 afterEach(() => {
@@ -123,7 +194,9 @@ describe("t163 reaper steal-race — exactly one process reclaims a stale lock (
   // -------------------------------------------------------------------------
   test("N concurrent contenders against one stale lock — exactly one wins, every generation", async () => {
     const N = 12;
-    const GENERATIONS = 8;
+    // Five 5-second holds keep the load-bearing winner lifetime comfortably
+    // inside the 120-second timeout while retaining repeated contention coverage.
+    const GENERATIONS = 5;
     // The seeded lock is reclaimable because its owner PID is DEAD (ESRCH) — the
     // reaper reclaims a dead owner regardless of age. So we keep the stale
     // threshold LARGE (10 min): the winner's own freshly-acquired lock (its real,
@@ -149,10 +222,13 @@ describe("t163 reaper steal-race — exactly one process reclaims a stale lock (
       );
       await Promise.all(procs.map((p) => p.exited));
       const outs = await Promise.all(procs.map((p) => new Response(p.stdout).text()));
-      const wins = outs.filter((o) => o.trim() === "WON").length;
-      // EXACTLY ONE reclaim. >1 means the steal robbed a fresh holder (the race);
-      // 0 would mean the reaper failed to reclaim a provably-dead lock at all.
-      expect(wins).toBe(1);
+      const winners = winnerEvidence(outs);
+      const seededWinners = winners.filter(({ reapedPid }) => reapedPid === STALE_OWNER_PID);
+      const liveHolderRobberies = winners.filter(({ aliveAfterSteal }) => aliveAfterSteal);
+      // Exactly one winner belongs to the seeded lock. Additional dead real-PID
+      // predecessors are legitimate serial chains; a live predecessor is theft.
+      expect(seededWinners).toHaveLength(1);
+      expect(liveHolderRobberies).toHaveLength(0);
       // Clean the winner's held lock before the next generation.
       rmSync(auditLockDir(proj, INTENT, SPACE), { recursive: true, force: true });
     }
@@ -182,7 +258,7 @@ describe("t163 reaper steal-race — exactly one process reclaims a stale lock (
     );
     await Promise.all(procs.map((p) => p.exited));
     const outs = await Promise.all(procs.map((p) => new Response(p.stdout).text()));
-    const wins = outs.filter((o) => o.trim() === "WON").length;
+    const wins = winnerEvidence(outs).length;
     // The live, under-age holder is never robbed → no contender acquires.
     expect(wins).toBe(0);
     // The original live lock dir is intact (the CAS restore never destroyed it).

@@ -171,7 +171,7 @@ describe("t-tui-kiro-bugfix-scope (brownfield bugfix journey, numbered-prose gat
           answers += 1;
         }
         expect(answers).toBeGreaterThan(0);
-        expect(answerState.summaryConfirmed).toBe(true);
+        expect(answerState.confirmedSummaries.size).toBeGreaterThanOrEqual(1);
         expect(answerState.learningsAnswered).toBeGreaterThanOrEqual(2);
         expect(answerState.approvalsAnswered).toBeGreaterThanOrEqual(2);
         expect(completedCount(sandbox)).toBeGreaterThanOrEqual(5);
