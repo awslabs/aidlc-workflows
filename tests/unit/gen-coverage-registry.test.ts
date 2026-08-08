@@ -753,6 +753,8 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
   const EXPECTED_NONE_TO_CLI = [
     "unit/t150-codex-packaging.test.ts",
     "unit/t220-tier-projection-module.test.ts",
+    // Spawns the real session-start hook and the real engine `next`.
+    "unit/t275-completed-workflow-new-intent-path.test.ts",
     "unit/t233-upstream-coverage-matching.test.ts",
     "unit/t231-handler-additions.test.ts",
     "unit/t238-build-binaries.test.ts",

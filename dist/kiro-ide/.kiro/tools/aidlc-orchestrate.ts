@@ -2941,14 +2941,31 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     stateContent,
   );
   if (!next) {
-    // No stage left to run — the workflow is complete.
+    // No stage left to run — the workflow is complete. NAME the new-work move
+    // rather than stopping at the fact: a completed intent is a finished record,
+    // never a container to re-enter, so `done` is a dead end for a caller who
+    // just asked for new work. Every scope runner forwards freeform text into
+    // `next` and ends its loop on `done` (aidlc-runner-gen.ts), so without this
+    // signpost `/feature <request>` after a close-out answers "workflow
+    // complete" to someone who was starting — and the only path onward,
+    // `--new-intent` → `intent-birth`, appears in no directive, no help text and
+    // no runner. The stronger clause fires when freeform text WAS supplied,
+    // because that caller is demonstrably not just checking status.
+    const askedForWork = (flags.intent ?? "").trim().length > 0;
+    const newIntentCmd = `bun ${harnessDir()}/tools/aidlc-orchestrate.ts next --new-intent`;
     emit({
       kind: "done",
-      reason: `Workflow complete — no in-scope stage remains after ${currentSlug} (scope: ${scope}).`,
+      reason:
+        `Workflow complete — no in-scope stage remains after ${currentSlug} (scope: ${scope}).` +
+        (askedForWork
+          ? ` The caller supplied new-work text, which a completed workflow cannot absorb — start a NEW intent alongside this one with \`${newIntentCmd} --scope ${scope} "${flags.intent?.trim()}"\`, then act on the \`intent-birth\` directive it returns.`
+          : ` To start new work, birth a new intent: \`${newIntentCmd} --scope <scope> "<what to build>"\`. To revisit finished work, \`aidlc-utility.ts intent list\` / \`intent switch <name>\` (read-only — a completed intent cannot be resumed).`),
       // The genuine end of the work. The other `done` emissions in this file are
       // loop bookkeeping (a report landed, a read-only command already ran) and
       // stay silent: the user did not ask about the round-trip.
-      narration: "That is everything on the plan. Your work is finished and written up.",
+      narration: askedForWork
+        ? "That plan is finished, so what you just asked for needs a new one — this workflow is closed and cannot take it on. I can start a second one alongside it."
+        : "That is everything on the plan. Your work is finished and written up. Starting something new means a new workflow alongside this one, since a finished one cannot be reopened.",
     });
     return;
   }

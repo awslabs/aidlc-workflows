@@ -259,6 +259,31 @@ try {
   // Drift check failed, never block startup over an advisory.
 }
 
+// Resume guidance, keyed on the status we just read. This line used to name a
+// four-option menu — "the standard resume options (Resume / Redo / Jump / Start
+// Fresh)" — that is defined NOWHERE else in the framework: "Start Fresh" occurs
+// in no other file, and "Redo" is defined elsewhere as the intra-stage
+// Keep/Modify/Redo gate loop (stage-protocol.md), a different mechanism, so a
+// conductor that went looking found a definition that actively misled it. The fix
+// removes the dangling half rather than defining it in a second place that would
+// drift from this one.
+//
+// Keying on status also closes a real dead end: "Resume / Redo / Jump" are
+// meaningless once the workflow is complete. A completed intent is a finished
+// record, never a container to re-enter, so the only honest move is to birth a
+// new intent — and that move appeared in no hook message, no directive, and no
+// help text.
+const resumeLine =
+  status === "Completed"
+    ? "This workflow is COMPLETE — there is nothing to resume, and a completed intent cannot be re-entered. " +
+      "If the user is starting new work, birth a new intent alongside this one: " +
+      `\`bun ${harnessDir()}/tools/aidlc-orchestrate.ts next --new-intent --scope <scope> "<what to build>"\`, ` +
+      "then act on the `intent-birth` directive it returns. " +
+      `To browse or switch to another intent: \`bun ${harnessDir()}/tools/aidlc-utility.ts intent list\` / \`intent switch <name>\`. ` +
+      'Do NOT answer a request to start working with "the workflow is complete" — that is the fact, not the next move.'
+    : "On resume: offer the user Resume (re-run `next`), Jump (`next --stage <slug>` / `next --phase <name>`), " +
+      'or start unrelated new work as a second intent (`next --new-intent --scope <scope> "<what to build>"`).';
+
 const context = `AIDLC WORKFLOW ACTIVE
 ${rebindOffer}Scope: ${scope}
 Lifecycle Phase: ${phase}
@@ -267,7 +292,7 @@ Status: ${status}
 Active Agent: ${agent}
 Last Completed: ${last}
 Next Action: ${next}
-${unitLine}${recovery}${driftNote}On resume: offer the user the standard resume options (Resume / Redo / Jump / Start Fresh). Check the active intent's aidlc-state.md for full context.
+${unitLine}${recovery}${driftNote}${resumeLine} Check the active intent's aidlc-state.md for full context.
 
 FORWARDING-LOOP DISCIPLINE (non-negotiable — the engine owns ALL routing):
 - The engine binary (\`aidlc-orchestrate.ts\`) is the ONLY authority on the next move. You run it, you do EXACTLY what its one directive says, you commit with \`report\`, you repeat. You never re-derive routing yourself.

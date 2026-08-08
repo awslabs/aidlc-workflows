@@ -4106,6 +4106,10 @@
         {
           "file": "tests/unit/t228-hook-run-exports.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t275-completed-workflow-new-intent-path.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
