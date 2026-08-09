@@ -107,22 +107,23 @@ Kiro IDE 1.x delivers hook context as **JSON on stdin** (snake_case:
 the `USER_PROMPT` environment variable with a camelCase equivalent, and the
 adapter accepts both). Captured PostToolUse write/shell events leave tool inputs
 empty on both channels, so their written path must be recovered from the result
-text and payload-free hooks (`rebuild-stage-graph`, `sync-workflow-state`) run from the
-audit trail. The graph-rebuild route also retains the shell result and modern
-`session_id` so a successful first `intent-create` binds to the invoking
-session. SessionStart also persists that identity under the gitignored runtime
-session directory so payload-free Stop/agentStop adapter calls can forward the
-same session instead of falling back to a synthetic legacy ID. Later 1.x builds populate some
-PreToolUse and delegation inputs; the adapter preserves those fields without
-depending on them.
+text and audit-tail hooks (`rebuild-stage-graph`, `sync-workflow-state`) run
+from the audit trail. The graph-rebuild route also retains the shell result and session
+identity so a successful `intent-create` binds to the invoking session: modern
+events carry the exact `session_id`, while the legacy channel reuses the
+synthetic identity retained by SessionStart. Modern Stop likewise prefers its
+event-local `session_id`, preventing one concurrent chat from consuming
+another chat's post-create handoff; legacy agentStop falls back to the retained
+identity. Later 1.x builds populate some PreToolUse and delegation inputs; the
+adapter preserves those fields without depending on them.
 
 The payload acquisition is **gated to payload-dependent targets**
 (`audit-and-sensors`, `log-subagent`, `rebuild-stage-graph`) plus `session-start`
-for its modern `session_id`. A non-empty `USER_PROMPT` is consumed
-immediately on 0.12 builds (which open stdin without ever writing); otherwise
-the adapter reads the 1.x stdin channel with a 2s broken-channel ceiling.
-Every other target - including `block`, which fires on every `PreToolUse` -
-touches neither channel and keeps its zero-latency path.
+and `continue-workflow` for their modern `session_id`. A non-empty
+`USER_PROMPT` is consumed immediately on 0.12 builds (which open stdin without
+ever writing); otherwise the adapter reads the 1.x stdin channel with a 2s
+broken-channel ceiling. Every other target - including `block`, which fires on
+every `PreToolUse` - touches neither channel and keeps its zero-latency path.
 
 | Hook | Trigger (matcher) | Purpose |
 |------|-------------------|---------|

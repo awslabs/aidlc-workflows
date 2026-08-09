@@ -4,15 +4,14 @@
 //   - IDE 1.x: JSON on STDIN, snake_case { tool_name, tool_input,
 //     tool_response } — no success flag; USER_PROMPT arrives empty. PostToolUse
 //     write/shell captures have empty tool_input, while later builds populate
-//     some PreToolUse/delegation inputs. Read only for the two payload-dependent
-//     targets (audit-and-sensors, log-subagent), raced against a 2s ceiling.
+//     some PreToolUse/delegation inputs. Read only for the three payload targets
+//     plus SessionStart/Stop identity, raced against a 2s ceiling.
 //   - IDE 0.12: JSON in the USER_PROMPT env var, camelCase { toolName,
 //     toolArgs, toolResult, toolSuccess }; stdin was opened but never
 //     written/closed. A non-empty USER_PROMPT is consumed immediately, without
 //     probing stdin.
 // Either way the adapter scrapes the written file path out of the result prose
-// and drives the payload-free hooks (rebuild-stage-graph, sync-workflow-state) off the
-// audit tail.
+// and drives the audit-tail hooks (rebuild-stage-graph, sync-workflow-state).
 //
 // covers: file:hooks/aidlc-sync-workflow-state.ts, file:hooks/aidlc-write-audit-log.ts, file:hooks/aidlc-rebuild-stage-graph.ts
 //
@@ -181,9 +180,14 @@ function ctx(toolName: string, toolResult: string): string {
 /** The 1.x PostToolUse payload shape, field-verbatim from the live 1.0.165
  *  capture: snake_case, empty tool_input for write/shell, no success flag,
  *  session/cwd metadata. Later builds populate some other event inputs. */
-function ctx1x(toolName: string, toolResponse: string, eventName = "PostToolUse"): string {
+function ctx1x(
+  toolName: string,
+  toolResponse: string,
+  eventName = "PostToolUse",
+  sessionId = "sess_t218",
+): string {
   return JSON.stringify({
-    session_id: "sess_t218",
+    session_id: sessionId,
     hook_event_name: eventName,
     cwd: "/tmp/t218",
     tool_name: toolName,
@@ -399,6 +403,140 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
       expect(
         existsSync(join(seededRecordDir(dir), ".aidlc-hooks-health", "session-end.last")),
       ).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("7d: legacy intent creation binds through the remembered synthetic session identity", () => {
+    const dir = scratchProject(false);
+    try {
+      rmSync(intentsDirOf(dir, DEFAULT_SPACE), { recursive: true, force: true });
+      const sessionId = "kiro-ide-legacy-current";
+      expect(runIde(dir, "session-start", null).code).toBe(0);
+
+      const create = spawnSync(
+        "bun",
+        [
+          join(dir, ".kiro", "tools", "aidlc-utility.ts"),
+          "intent-create",
+          "--scope",
+          "bugfix",
+          "--arguments",
+          "legacy create work",
+          "--project-dir",
+          dir,
+        ],
+        {
+          cwd: dir,
+          encoding: "utf-8",
+          env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
+          timeout: 30_000,
+        },
+      );
+      expect(create.status).toBe(0);
+      const bind = runIde(
+        dir,
+        "rebuild-stage-graph",
+        ctx("execute_bash", `Output:\n${create.stdout}\n\nExit Code: 0`),
+      );
+      expect(bind.code).toBe(0);
+
+      const createdUuid = readIntentRegistry(dir)[0]?.uuid;
+      expect(createdUuid).toBeDefined();
+      expect(
+        readFileSync(
+          join(dir, "aidlc", ".aidlc-sessions", sessionId),
+          "utf-8",
+        ).trim(),
+      ).toBe(createdUuid);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("7e: Stop prefers its event session identity over the latest SessionStart", () => {
+    const dir = scratchProject(true);
+    try {
+      const sessionOne = "sess_t218_one";
+      const sessionTwo = "sess_t218_two";
+      const originalUuid = readIntentRegistry(dir)[0]?.uuid;
+      expect(originalUuid).toBeDefined();
+      expect(
+        runIdeStdin(
+          dir,
+          "session-start",
+          ctx1x("", "", "SessionStart", sessionOne),
+        ).code,
+      ).toBe(0);
+
+      const create = spawnSync(
+        "bun",
+        [
+          join(dir, ".kiro", "tools", "aidlc-utility.ts"),
+          "intent-create",
+          "--scope",
+          "bugfix",
+          "--arguments",
+          "session one handoff",
+          "--project-dir",
+          dir,
+        ],
+        {
+          cwd: dir,
+          encoding: "utf-8",
+          env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
+          timeout: 30_000,
+        },
+      );
+      expect(create.status).toBe(0);
+      expect(
+        runIdeStdin(
+          dir,
+          "rebuild-stage-graph",
+          ctx1x(
+            "execute_bash",
+            `Output:\n${create.stdout}\n\nExit Code: 0`,
+            "PostToolUse",
+            sessionOne,
+          ),
+        ).code,
+      ).toBe(0);
+
+      const handoffPath = join(
+        dir,
+        "aidlc",
+        ".aidlc-sessions",
+        `${sessionOne}.handoff.json`,
+      );
+      expect(existsSync(handoffPath)).toBe(true);
+
+      expect(
+        runIdeStdin(
+          dir,
+          "session-start",
+          ctx1x("", "", "SessionStart", sessionTwo),
+        ).code,
+      ).toBe(0);
+      expect(
+        readFileSync(
+          join(dir, "aidlc", ".aidlc-sessions", ".kiro-ide-current-session"),
+          "utf-8",
+        ).trim(),
+      ).toBe(sessionTwo);
+
+      const stop = runIdeStdin(
+        dir,
+        "continue-workflow",
+        JSON.stringify({
+          session_id: sessionOne,
+          hook_event_name: "Stop",
+          cwd: dir,
+        }),
+      );
+      expect(stop.code).toBe(0);
+      expect(stop.stdout.trim()).toBe("");
+      expect(existsSync(handoffPath)).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

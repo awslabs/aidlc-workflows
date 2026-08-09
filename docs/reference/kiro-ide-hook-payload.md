@@ -29,9 +29,9 @@ whose stdin never closes). When that variable is empty, it reads stdin for the
 milliseconds for diagnostics and deterministic latency tests. Both field
 spellings are accepted. Acquisition is gated to the three payload-dependent
 targets (`audit-and-sensors`, `log-subagent`, `rebuild-stage-graph`) plus
-`session-start` for its modern `session_id`; every other target (including
-the per-tool-call `block` floor) touches neither channel and keeps its
-zero-latency path.
+`session-start` and `continue-workflow` for their modern `session_id`; every
+other target (including the per-tool-call `block` floor) touches neither
+channel and keeps its zero-latency path.
 
 `VSCODE_IPC_HOOK` / `VSCODE_PID` are also present in the IDE (absent on the
 CLI), but the adapter keys off the payload channels above.
@@ -89,8 +89,10 @@ Result prose is identical on both channels (`toolResult` on 0.12,
   drops the command filter and gates purely on the audit tail (with an mtime
   idempotency guard so a lingering transition — e.g. after `WORKFLOW_COMPLETED`
   — does not recompile on every subsequent shell command). The shell result and
-  modern `session_id` are still forwarded: when the result names a successful
-  `intent-create`, the shared hook binds that exact session to the created record.
+  session identity are still forwarded: modern events use their exact
+  `session_id`, while the legacy channel uses the synthetic identity retained by
+  SessionStart. When the result names a successful `intent-create`, the shared
+  hook binds that session to the created record.
 - **sync-workflow-state** — the IDE gives no task payload, so it derives the current
   stage from the latest `STAGE_STARTED` in the audit tail. This is a
   **forward-only** mirror: it never rewinds `Current Stage` to a completed or
@@ -111,9 +113,13 @@ Result prose is identical on both channels (`toolResult` on 0.12,
 - **session-start** — reads the modern `session_id` and persists it under the
   gitignored runtime session directory; the legacy channel records its stable
   synthetic ID instead.
-- **session-end / stop / mint / block** — need no payload and never read stdin.
-  Session-end and Stop reuse the identity persisted by SessionStart, with the
-  legacy synthetic ID only as the fallback.
+- **stop** — reads the modern Stop event's `session_id` and prefers it over the
+  workspace-global SessionStart marker, so concurrent chats consume only their
+  own post-create handoff receipts. Legacy agentStop and broken modern channels
+  fall back to the retained identity.
+- **session-end / mint / block** — need no payload and never read stdin.
+  Session-end reuses the identity persisted by SessionStart, with the legacy
+  synthetic ID as the fallback.
 
 ## toolResult path-extraction patterns
 

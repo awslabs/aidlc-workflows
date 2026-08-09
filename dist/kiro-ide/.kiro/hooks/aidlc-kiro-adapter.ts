@@ -27,10 +27,11 @@
 //   4. The tool name arrives as the IDE tool name: `fs_write`, `str_replace`,
 //      `fs_append`, `execute_bash`, etc.
 //
-// Payload acquisition is GATED to the two tool-payload targets plus
-// session-start, which reads only the modern session_id. Every other target is
-// payload-independent and never touches stdin — block fires on EVERY PreToolUse,
-// and a 2s stall on a never-closing stdin there would be felt on every tool call.
+// Payload acquisition is GATED to the three tool-payload targets plus the
+// lifecycle boundaries that carry modern session identity (SessionStart and
+// Stop). Every other target is payload-independent and never touches stdin —
+// block fires on EVERY PreToolUse, and a 2s stall on a never-closing stdin
+// there would be felt on every tool call.
 //
 // Consequences, by target:
 //   - audit-and-sensors: scrape the written file path from toolResult prose
@@ -44,7 +45,9 @@
 //     the 1.x `subagent_<agent>` tool name, plus the message (#459/#543).
 //   - session-start: retain the modern session_id (or the legacy synthetic id)
 //     in workspace-local runtime state.
-//   - session-end/stop: read that retained identity without probing payload.
+//   - stop: prefer the event-local modern session_id; use retained identity for
+//     the legacy channel and broken modern payloads.
+//   - session-end: read retained identity without probing payload.
 //
 // session-start emits {"additionalContext": "..."} — Kiro's context channel is
 // plain stdout at exit 0, so the shim unwraps the JSON and prints the text.
@@ -95,7 +98,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-// The two targets whose forward depends on the tool payload. Every other
+// The three targets whose forward depends on the tool payload. Every other
 // target builds a fixed input (or reads only the filesystem), so it skips
 // payload acquisition entirely and keeps its zero-latency path.
 const PAYLOAD_TARGETS = new Set([
@@ -103,7 +106,8 @@ const PAYLOAD_TARGETS = new Set([
   "log-subagent",
   "rebuild-stage-graph",
 ]);
-const INPUT_TARGETS = new Set([...PAYLOAD_TARGETS, "session-start"]);
+const SESSION_ID_TARGETS = new Set(["session-start", "continue-workflow"]);
+const INPUT_TARGETS = new Set([...PAYLOAD_TARGETS, ...SESSION_ID_TARGETS]);
 const LEGACY_SESSION_ID = "kiro-ide-legacy-current";
 const KIRO_IDE_SESSION_FILE = ".kiro-ide-current-session";
 
@@ -181,12 +185,11 @@ hookDebug(projectDir, "kiro-adapter", "invoked", {
   toolResult: (ide.toolResult ?? "").slice(0, 160),
 });
 
-// Modern SessionStart is the last Kiro IDE boundary that carries session_id;
-// later agentStop/Stop hooks are payload-free. Persist the effective identity
-// under the existing gitignored session runtime dir so separate adapter
-// processes can forward one stable id to both core lifecycle hooks. A legacy
-// promptSubmit writes the synthetic id, replacing any stale modern value from a
-// prior IDE generation in the same workspace.
+// Persist the effective SessionStart identity under the existing gitignored
+// runtime dir so separate adapter processes can forward it to payload-free
+// SessionEnd and use it when a legacy or broken-channel Stop has no event-local
+// session_id. A legacy promptSubmit writes the synthetic id, replacing any
+// stale modern value from a prior IDE generation in the same workspace.
 function rememberKiroIdeSessionId(sessionId: string): void {
   if (!sessionId) return;
   try {
@@ -194,7 +197,7 @@ function rememberKiroIdeSessionId(sessionId: string): void {
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, KIRO_IDE_SESSION_FILE), `${sessionId}\n`, "utf-8");
   } catch {
-    // Per-user runtime state; the payload-free hooks retain the legacy fallback.
+    // Per-user runtime state; lifecycle hooks retain the legacy fallback.
   }
 }
 
@@ -488,7 +491,7 @@ function buildForward(): Forward {
           hook_event_name: "PostToolUse",
           tool_name: "Bash",
           tool_input: { command: "", source: "ide-audit-sync" },
-          ...(ide.sessionId ? { session_id: ide.sessionId } : {}),
+          session_id: ide.sessionId?.trim() || rememberedKiroIdeSessionId(),
           tool_response: ide.toolResult ?? "",
         },
       };
@@ -606,14 +609,16 @@ function buildForward(): Forward {
       // former. On this harness that changes which record
       // `continue-workflow.drops` gets and whether the counter advances — not
       // what the human sees.
-      // Forward the identity retained at SessionStart so the core hook can
-      // consume session-scoped post-create handoff state.
+      // Modern Stop carries the exact chat identity. Prefer it over the
+      // workspace-global SessionStart marker so concurrent chats cannot consume
+      // one another's post-create handoff receipt; retain the marker for legacy
+      // agentStop and broken modern channels.
       return {
         hook: "aidlc-continue-workflow.ts",
         input: {
           hook_event_name: "Stop",
           stop_hook_active: false,
-          session_id: rememberedKiroIdeSessionId(),
+          session_id: ide.sessionId?.trim() || rememberedKiroIdeSessionId(),
         },
       };
 
