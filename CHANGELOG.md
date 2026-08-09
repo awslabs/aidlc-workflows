@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.60] - 2026-08-09
+Puts the continue token ahead of the rules payload in the load-steering block message, so a harness that truncates hook output cannot cut off the one instruction that advances the chain. A rule bundle runs to many KB — 16,583 chars across 37 entries measured on a stock install — and with the token emitted last, truncation left the reader a wall of rules that were already on disk and ambient, no token, and therefore nothing to act on; the engine then re-emitted load-steering on the next turn, indefinitely. Observed live as seven identical deliveries with no progress, each costing the full payload in context. **Upgrade:** re-copy your `dist/<harness>/` shell into the project. No command, flag, or output-format changes.
+* `continuationReason()` in the continue-workflow hook now leads with the `continue "<token>"` command and the follow-the-chain instruction, then carries the `rules_content` payload. The wording of each clause is unchanged; only the order is.
+* Re-running `next` was never a recovery for the truncated case: the chain's position lives in the token, so `next` returns the head of the chain with the same token every time. Draining a stuck chain required reading the token out of the directive JSON by hand.
+* Truncated rule text is recoverable — the method files are on disk and reach the model through each harness's always-on include regardless — whereas a truncated token is not. The ordering follows from that asymmetry, not from any size change.
+* `t121` gains an ordering assertion (index of token < index of payload), verified failing against the previous order before the fix.
+
 ## [2.5.59] - 2026-08-08
 
 Gives the Stop hook's conversational carve-out a second evidence source, so it stops counting a purely conversational turn mid-stage as a no-progress block on harnesses that deliver no transcript. Asking why an earlier decision was made, or reading code without advancing the workflow, previously fell through to the cap-bounded block on Kiro IDE, Kiro CLI, and opencode: the carve-out read its answer off the harness transcript, and only Claude Code and Codex deliver `transcript_path`. What that costs the user depends on the host — see the second bullet, because it is not the same everywhere. **Upgrade:** copy the tree CONTENTS for your harness, e.g. `mkdir -p your-project/.kiro && cp -R dist/kiro-ide/.kiro/. your-project/.kiro/` into your project.

@@ -785,6 +785,30 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     );
     expect(parsed.reason).toContain("keep following each load-steering step");
     expect(parsed.reason).toContain("Do not summarise or narrate these rule chunks");
+
+    // ORDER IS LOAD-BEARING: the continue token must precede the rules payload.
+    //
+    // A bundle runs to many KB — 16,583 chars across 37 entries measured on a
+    // stock install — and a harness may truncate hook output. With the token
+    // last, truncation removes the one instruction that advances the chain, so
+    // the reader sees a wall of rules, concludes correctly that they are already
+    // on disk and ambient, and does nothing; the engine then re-emits
+    // load-steering on the next turn, forever. Observed in a real session:
+    // seven identical deliveries, no progress, each costing the full payload in
+    // context. Re-running `next` is not a recovery either — the chain's position
+    // lives in the token, so `next` returns the head of the chain with the same
+    // token every time, and draining it needs the token read out of the JSON by
+    // hand.
+    //
+    // Truncated rule text is recoverable: the method files are on disk and reach
+    // the model through each harness's always-on include anyway. A truncated
+    // token is not. So the actionable instruction leads.
+    const reasonText = parsed.reason ?? "";
+    const tokenAt = reasonText.indexOf('continue "steering-token-495"');
+    const payloadAt = reasonText.indexOf('"path":"aidlc/spaces/default/memory/org.md"');
+    expect(tokenAt).toBeGreaterThanOrEqual(0);
+    expect(payloadAt).toBeGreaterThanOrEqual(0);
+    expect(tokenAt).toBeLessThan(payloadAt);
   }, 30000);
 
   // =========================================================================

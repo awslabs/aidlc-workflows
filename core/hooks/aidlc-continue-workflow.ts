@@ -923,13 +923,29 @@ function continuationReason(
   const where = stage.length > 0 ? ` for "${stage}"` : "";
   if (kind === "load-steering" && continueToken) {
     const exactContent = JSON.stringify(rulesContent ?? []);
+    // ORDER IS LOAD-BEARING: the continue token goes BEFORE the payload.
+    //
+    // A rules bundle is large — 16,583 chars across 37 entries measured on a
+    // stock install — and a harness may truncate hook output. With the token
+    // last, truncation removes the one instruction that advances the chain, so
+    // the reader sees a wall of rules, concludes correctly that they are already
+    // on disk and ambient, and does nothing; the engine then re-emits
+    // load-steering on the next turn, forever. Observed in a real session: seven
+    // identical deliveries, no progress, each one costing the full payload in
+    // context. Re-running `next` is not a recovery either — the chain's position
+    // lives in the token, so `next` returns the head of the chain with the same
+    // token every time.
+    //
+    // Truncated rule text is recoverable (the method files are on disk and reach
+    // the model through the harness's always-on include anyway). A truncated
+    // token is not. So the actionable instruction leads. t121 pins the ordering.
     return (
-      `The AIDLC workflow still has rules to load${where}. ` +
-      "Apply every path/text entry in this exact `rules_content` payload before continuing:\n\n" +
-      `${exactContent}\n\nThen run ` +
+      `The AIDLC workflow still has rules to load${where}. Run ` +
       `\`bun ${harnessDir()}/tools/aidlc-orchestrate.ts continue "${continueToken}"\` ` +
       "and keep following each load-steering step it returns until it answers `run-stage`. " +
-      "Do not summarise or narrate these rule chunks to the user."
+      "Do not summarise or narrate these rule chunks to the user. " +
+      "Apply every path/text entry in this exact `rules_content` payload as you go:\n\n" +
+      `${exactContent}`
     );
   }
   return (
