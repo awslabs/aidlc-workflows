@@ -138,6 +138,7 @@ const FRESH_SESSION_TOKENS: Record<string, string[]> = {
   kiro: ["restart Kiro CLI", "`/aidlc`"],
   "kiro-ide": ["new Kiro IDE chat", "`/aidlc`"],
   opencode: ["restart OpenCode", "`/aidlc`"],
+  copilot: ["new Copilot CLI session", "new VS Code agent chat", "`/aidlc`"],
 };
 
 function stageTableRows(body: string): string[] {

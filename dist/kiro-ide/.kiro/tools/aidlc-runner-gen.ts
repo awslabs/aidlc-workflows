@@ -583,6 +583,9 @@ export function renderRunner(scope: string, description: string): string {
     if (harnessName === "kiro") return "exit or restart Kiro CLI and start a new session";
     if (harnessName === "kiro-ide") return "open a new Kiro IDE chat";
     if (harnessName === "opencode") return "exit or restart OpenCode and start a new session";
+    if (harnessName === "copilot") {
+      return "start a new Copilot CLI session or open a new VS Code agent chat";
+    }
     if (activeHarnessDir === ".claude") return "use `/clear` (or restart Claude Code)";
     if (activeHarnessDir === ".codex") return "exit or restart Codex CLI and start a new session";
     if (activeHarnessDir === ".kiro") {

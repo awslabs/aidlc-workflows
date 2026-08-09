@@ -202,6 +202,17 @@ function applyReviewOverride(
 // These workspace transactions can legitimately queue behind a full plugin
 // compose (compile + runner regeneration), so they share its ~60s lock budget.
 const WORKSPACE_MUTATION_LOCK_RETRIES = 600;
+const INTENT_CREATE_VALUE_FLAGS = [
+  "scope",
+  "arguments",
+  "label",
+  "depth",
+  "test-strategy",
+  "review",
+  "repos",
+  "project-dir",
+] as const;
+const INTENT_CREATE_DESCRIPTIVE_FLAGS = ["scope", "arguments", "label"] as const;
 const NO_STATE_FILE_MESSAGE =
   "No state file found. Start a workflow first by describing what to build (/aidlc \"build the auth service\").";
 const INIT_TRANSITION_MESSAGE =
@@ -220,6 +231,26 @@ function die(msg: string): never {
   const pd = resolveProjectDir(errorProjectDirArg);
   const command = `aidlc-utility ${args.join(" ")}`.trim();
   emitError(pd, "aidlc-utility", command, msg);
+}
+
+function validateIntentCreateFlagValues(
+  flags: Record<string, string>,
+  missingValueFlags: ReadonlySet<string>,
+): void {
+  const invalid = INTENT_CREATE_VALUE_FLAGS.filter(
+    (name) =>
+      missingValueFlags.has(name) ||
+      (flags[name] !== undefined && flags[name].trim().length === 0),
+  );
+  if (invalid.length > 0) {
+    die(
+      `intent-create refused: ${invalid.map((name) => `--${name}`).join(", ")} ` +
+        `${invalid.length === 1 ? "requires" : "require"} a nonblank value.`,
+    );
+  }
+  for (const name of INTENT_CREATE_VALUE_FLAGS) {
+    if (flags[name] !== undefined) flags[name] = flags[name].trim();
+  }
 }
 
 // Thin wrapper around the canonical appendAuditEntry. All events must be in
@@ -3740,6 +3771,20 @@ function ensureWorkspaceDirs(projectDir: string, scope: string): void {
 // the BORN intent's record (the active-intent cursor set first makes the
 // default-resolving state/audit helpers resolve there).
 function handleIntentCreate(projectDir: string, flags: Record<string, string>): void {
+  // Creation mutates the registry and active cursor. Refuse an invocation that
+  // carries no meaningful scope or description instead of minting a default
+  // record from an accidental bare command.
+  if (!INTENT_CREATE_DESCRIPTIVE_FLAGS.some((name) => flags[name])) {
+    die(
+      "intent-create refused: no --scope, --arguments, or --label given. Creation " +
+        "is a mutation and a bare invocation mints a garbage default-scope " +
+        "intent. Start work via `/aidlc \"<what to build>\"` (the engine names " +
+        "the create move for you) or `/aidlc-init [--scope <name>] <description>`; " +
+        "to invoke this tool directly, pass at least `--scope <name>` (and " +
+        "ideally `--arguments \"<description>\" --label \"<2-3 word essence>\"`).",
+    );
+  }
+
   // Default when --scope is omitted; selection-aware so a plugin-only install
   // (where the core "poc" default is deselected) resolves to its nominated
   // freeform default instead of crashing with "Unknown scope".
@@ -3850,7 +3895,8 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
         `"${slug}" is a reserved name and cannot be an intent label. Pick a label that describes the work.`
       );
     }
-    createIntent(projectDir, slug, activeSpace(projectDir), scope, repos);
+    const space = activeSpace(projectDir);
+    createIntent(projectDir, slug, space, scope, repos);
 
     const ts = isoTimestamp();
 
@@ -4329,7 +4375,11 @@ function printSpaceListing(projectDir: string, asJson: boolean): void {
 // include — only a space does). The <name> matches a record dir name exactly,
 // or a slug (when unambiguous within the space). --json on the bare list emits
 // the structured query shape.
-function handleIntent(projectDir: string, positional: string[], flags: Record<string, string>): void {
+function handleIntent(
+  projectDir: string,
+  positional: string[],
+  flags: Record<string, string>,
+): void {
   const asJson = flags.json === "true";
   const verbOrTarget = positional[1];
   if (verbOrTarget === "list") {
@@ -5849,9 +5899,8 @@ function handleResolveEnvScope(): void {
 export async function main(argv: string[]): Promise<void> {
   const rawArgs = argv;
   errorArgs = [...rawArgs];
-  const { positional, flags } = parseArgs(rawArgs);
+  const { positional, flags, bareFlags, blankFlags } = parseArgs(rawArgs);
   const subcommand = positional[0];
-  errorProjectDirArg = flags["project-dir"];
   if (
     (subcommand === "intent-create" || subcommand === "init") &&
     (flags.help === "true" || rawArgs.includes("-h"))
@@ -5863,6 +5912,17 @@ export async function main(argv: string[]): Promise<void> {
         "[--project-dir <path>]\n",
     );
     return;
+  }
+  const isIntentCreate =
+    subcommand === "intent-create" ||
+    subcommand === "init" ||
+    (subcommand === "intent" && positional[1] === "create");
+  const missingValueFlags = new Set([...bareFlags, ...blankFlags]);
+  errorProjectDirArg = missingValueFlags.has("project-dir")
+    ? undefined
+    : flags["project-dir"];
+  if (isIntentCreate) {
+    validateIntentCreateFlagValues(flags, missingValueFlags);
   }
   const projectDir = resolveProjectDir(flags["project-dir"]);
 

@@ -828,6 +828,11 @@ export function classifyTerminalCommand(args: string[]): TerminalCommand | null 
   // public grammar promises leading-token semantics.
   const workspaceCommand = parseWorkspaceCommand(args);
   if (workspaceCommand.kind !== "not-workspace") {
+    // Intent creation mutates workflow state and must remain on the normal
+    // engine/conductor/shell path. In particular, Kiro's prompt interceptor has
+    // no session_id, while the shell PostToolUse event does; executing creation
+    // off-band would make exact session ownership impossible.
+    if (workspaceCommand.kind === "create-intent") return null;
     return terminalCommandFromWorkspaceCommand(workspaceCommand, args);
   }
   for (let i = 0; i < args.length; i++) {
@@ -1890,6 +1895,90 @@ export function clearSessionIntentUuid(projectDir: string, sessionId: string): v
   }
 }
 
+export const SESSION_INTENT_HANDOFF_TTL_MS = 5 * 60 * 1000;
+
+export interface SessionIntentHandoff {
+  fromIntentUuid: string;
+  toIntentUuid: string;
+  issuedAtMs: number;
+}
+
+function sessionIntentHandoffPath(projectDir: string, sessionId: string): string {
+  const recordPath = sessionRecordPath(projectDir, sessionId);
+  return recordPath ? `${recordPath}.handoff.json` : "";
+}
+
+// Record the exact second-intent boundary for the session that created it.
+// This receipt is transient and one-shot: the Stop hook validates both UUIDs
+// before allowing the old conversation to end, then clears it.
+export function writeSessionIntentHandoff(
+  projectDir: string,
+  sessionId: string,
+  fromIntentUuid: string,
+  toIntentUuid: string,
+): void {
+  const path = sessionIntentHandoffPath(projectDir, sessionId);
+  if (!path || !fromIntentUuid || !toIntentUuid || fromIntentUuid === toIntentUuid) return;
+  try {
+    mkdirSync(sessionsDir(projectDir), { recursive: true });
+    writeFileSync(
+      path,
+      `${JSON.stringify({
+        fromIntentUuid,
+        toIntentUuid,
+        issuedAtMs: Date.now(),
+      } satisfies SessionIntentHandoff)}\n`,
+      "utf-8",
+    );
+  } catch {
+    /* per-user runtime state; best-effort */
+  }
+}
+
+export function readSessionIntentHandoff(
+  projectDir: string,
+  sessionId: string,
+): SessionIntentHandoff | null {
+  const path = sessionIntentHandoffPath(projectDir, sessionId);
+  if (!path) return null;
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
+    if (
+      parsed !== null &&
+      typeof parsed === "object" &&
+      "fromIntentUuid" in parsed &&
+      typeof (parsed as { fromIntentUuid?: unknown }).fromIntentUuid === "string" &&
+      "toIntentUuid" in parsed &&
+      typeof (parsed as { toIntentUuid?: unknown }).toIntentUuid === "string" &&
+      "issuedAtMs" in parsed &&
+      typeof (parsed as { issuedAtMs?: unknown }).issuedAtMs === "number"
+    ) {
+      const handoff = parsed as SessionIntentHandoff;
+      if (
+        handoff.fromIntentUuid.length > 0 &&
+        handoff.toIntentUuid.length > 0 &&
+        handoff.fromIntentUuid !== handoff.toIntentUuid &&
+        Number.isFinite(handoff.issuedAtMs)
+      ) {
+        return handoff;
+      }
+    }
+  } catch {
+    // Missing or malformed runtime receipt.
+  }
+  return null;
+}
+
+export function clearSessionIntentHandoff(projectDir: string, sessionId: string): void {
+  const path = sessionIntentHandoffPath(projectDir, sessionId);
+  if (!path) return;
+  try {
+    unlinkSync(path);
+  } catch {
+    /* absent/unwritable per-user runtime state; best-effort */
+  }
+}
+
 // The "current session" marker: a FIXED-name file inside the sessions dir naming
 // the most-recently-active session id. The per-session STAMP above is keyed by
 // session_id (which only the hook sees); a CLI tool like `/aidlc intent <slug>`
@@ -1937,18 +2026,23 @@ export function activeIntentUuid(projectDir: string, space?: string): string | n
   return match?.uuid ? match.uuid : null;
 }
 
-// Resolve an intent UUID to its registry row across EVERY space (a conversation
-// may have been working an intent in a different space than the active one).
-// Returns the {space, slug} of the first match, or null when the uuid names no
-// known intent (a stale stamp from a since-deleted intent → no rebind offer).
+// Resolve an intent UUID to its record across EVERY space (a conversation may
+// have been working an intent in a different space than the active one).
+// Returns the logical slug plus the exact on-disk record dir. The latter is
+// required by explicit path/audit selectors: modern record dirs are date-
+// prefixed and cannot be reconstructed from the slug alone.
 export function findIntentByUuid(
   projectDir: string,
   uuid: string,
-): { space: string; slug: string } | null {
+): { space: string; slug: string; dirName: string } | null {
   if (!uuid) return null;
   for (const sp of listSpaces(projectDir)) {
-    const row = readIntentRegistry(projectDir, sp.name).find((e) => e.uuid === uuid);
-    if (row) return { space: sp.name, slug: row.slug };
+    const intent = listIntents(projectDir, sp.name).find(
+      (entry) => entry.uuid === uuid && entry.dirName !== null,
+    );
+    if (intent?.dirName) {
+      return { space: sp.name, slug: intent.slug, dirName: intent.dirName };
+    }
   }
   return null;
 }
@@ -4152,6 +4246,7 @@ export interface ClaudeCodeHookInput {
   };
   reason?: string;
   source?: string;
+  session_id?: string;
   prompt?: string;
   agent_type?: string;
   agent_id?: string;
@@ -7170,18 +7265,24 @@ export function escapeRegex(str: string): string {
 export function parseArgs(args: string[]): {
   positional: string[];
   flags: Record<string, string>;
+  bareFlags: Set<string>;
+  blankFlags: Set<string>;
 } {
   const positional: string[] = [];
   const flags: Record<string, string> = {};
+  const bareFlags = new Set<string>();
+  const blankFlags = new Set<string>();
   let i = 0;
   while (i < args.length) {
     if (args[i].startsWith("--")) {
       const key = args[i].slice(2);
       if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
         flags[key] = args[i + 1];
+        if (args[i + 1].trim().length === 0) blankFlags.add(key);
         i += 2;
       } else {
         flags[key] = "true";
+        bareFlags.add(key);
         i++;
       }
     } else {
@@ -7189,7 +7290,7 @@ export function parseArgs(args: string[]): {
       i++;
     }
   }
-  return { positional, flags };
+  return { positional, flags, bareFlags, blankFlags };
 }
 
 // --- Repeated field collection for --field key=value ---

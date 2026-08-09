@@ -39,6 +39,9 @@ no standalone meaning.
    bun .aidlc/tools/aidlc-utility.ts intent-create --arguments "<description>" --label "<2-3 word essence>"
    ```
 
-   Pass `--scope <name>` **only if the user named one**; otherwise omit it and the engine picks the install's default scope. Omit `--arguments`
-   and `--label` when the user gave no description. Print the tool's output and
-   stop. This does not advance a stage; run `/aidlc` afterwards to continue.
+   Pass `--scope <name>` only if the user named one; otherwise omit it and the
+   engine picks the install's default scope. If the user gave neither a scope nor
+   a description, do not run a bare `intent-create`: ask what they want to build
+   or which scope to use. When only a scope was supplied, omit `--arguments` and
+   `--label`. Print the tool's output and stop. This does not advance a stage;
+   run `/aidlc` afterwards to continue.

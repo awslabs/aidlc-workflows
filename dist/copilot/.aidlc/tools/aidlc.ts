@@ -1028,7 +1028,13 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
     let input = "";
     if (action.harness !== "kiro-ide") {
       input = await readStdin();
-    } else if (action.target === "audit-and-sensors" || action.target === "log-subagent") {
+    } else if (
+      action.target === "audit-and-sensors" ||
+      action.target === "log-subagent" ||
+      action.target === "rebuild-stage-graph" ||
+      action.target === "session-start" ||
+      action.target === "continue-workflow"
+    ) {
       // Mirror the adapter entry point's dual-generation channel contract.
       // IDE 0.12 provides USER_PROMPT and leaves stdin open forever, so consume
       // a non-empty env payload immediately. IDE 1.x leaves USER_PROMPT empty

@@ -116,6 +116,7 @@ const FRESH_SESSION_TEXT: Record<string, string> = {
   kiro: "exit or restart Kiro CLI and start a new session",
   "kiro-ide": "open a new Kiro IDE chat",
   opencode: "exit or restart OpenCode and start a new session",
+  copilot: "start a new Copilot CLI session or open a new VS Code agent chat",
 };
 
 /**

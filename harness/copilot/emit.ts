@@ -109,6 +109,7 @@ export default function emit(ctx: EmitContext): void {
   // already wrote tools/data/stage-graph.json there; core/ carries no
   // compiled JSON). The codex idiom, never reimplemented.
   process.env.AIDLC_HARNESS_DIR = harnessDir;
+  process.env.AIDLC_HARNESS_NAME = "copilot";
   const gen = require(join(distRoot, harnessDir, "tools", "aidlc-runner-gen.ts")) as {
     runnableStages: () => Array<{ slug: string }>;
     renderStageRunner: (node: { slug: string }) => string;
