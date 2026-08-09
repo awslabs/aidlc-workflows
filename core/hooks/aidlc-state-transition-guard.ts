@@ -417,6 +417,7 @@ function shellCommandSegments(command: string): string[] {
   const segments: string[] = [];
   let start = 0;
   let quote: "'" | '"' | null = null;
+  let parameterExpansionDepth = 0;
   let escaped = false;
   const push = (end: number): void => {
     const segment = command.slice(start, end).trim();
@@ -434,6 +435,15 @@ function shellCommandSegments(command: string): string[] {
     }
     if (quote !== null) {
       if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "$" && command[i + 1] === "{") {
+      parameterExpansionDepth++;
+      i++;
+      continue;
+    }
+    if (parameterExpansionDepth > 0) {
+      if (ch === "}") parameterExpansionDepth--;
       continue;
     }
     if (ch === "'" || ch === '"') {
@@ -830,6 +840,9 @@ function delegatedLifecycleCommandAtDepth(command: string, depth: number): strin
       }
       argv = [resolved[0], ...argv.slice(1)];
     }
+    if ((argv[0] ?? "").includes("$")) {
+      return "dynamic executable beyond guard inspection";
+    }
     const executable = commandBasename(argv[0]);
     if (executable === UNINSPECTABLE_EXECUTION_WRAPPER) {
       return "execution wrapper beyond guard inspection";
@@ -869,6 +882,9 @@ function delegatedLifecycleCommandAtDepth(command: string, depth: number): strin
               return "dynamic shell command beyond guard inspection";
             }
             nestedCommand = value;
+          }
+          if (nestedCommand.includes("$")) {
+            return "dynamic shell command beyond guard inspection";
           }
           const nested = delegatedLifecycleCommandAtDepth(nestedCommand, depth + 1);
           if (nested !== null) return nested;

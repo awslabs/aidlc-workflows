@@ -56,6 +56,7 @@ cite two answers without a separator stop being reported as ungrounded.
   Definitions with a destination on the following line still resolve links
   document-wide without making their block eligible for the definition-only
   skip.
+
 ## [2.5.57] - 2026-08-07
 
 AI-DLC now speaks to you in your project's terms rather than its own. Three things a user reported all came from the same place: the assistant narrated its internals, hook names and messages described plumbing instead of purpose, and a new workflow opened with folders it was never going to use. Chat messages, approval gates, the composer's plan proposal, scope questions, error messages, and the onboarding doc are rewritten in plain developer terms; the sentences between steps are now written by the framework and relayed rather than improvised, with silence as the resting state; seven hooks and the intent-creation command are renamed to say what they do; and a record dir now contains only the phases your scope actually runs. Behavior is unchanged throughout: every stage, approval gate, audit event, and tool flag is identical, and the tests pinning those mechanics still pass.

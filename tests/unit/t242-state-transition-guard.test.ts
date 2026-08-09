@@ -306,6 +306,13 @@ describe("t242 state-transition ownership guard", () => {
       ['sh -c -- "aidlc next --resume"', "aidlc next"],
       ['cmd="aidlc next --resume"; bash -c "$cmd"', "aidlc next"],
       ['cmd=aidlc; "$cmd" next --resume', "aidlc next"],
+      [`cmd=aidlc; \${cmd} next --resume`, "aidlc next"],
+      [`"\${cmd:-aidlc}" next --resume`, "dynamic executable beyond guard inspection"],
+      [
+        `bash -c "\${cmd:-aidlc next --resume}"`,
+        "dynamic shell command beyond guard inspection",
+      ],
+      ['c=aidlc; d=$c; "$d" next --resume', "dynamic executable beyond guard inspection"],
     ] as const) {
       expect(delegatedLifecycleCommand(command), command).toBe(expected);
     }
@@ -433,6 +440,10 @@ describe("t242 state-transition ownership guard", () => {
       'sh -c -- "aidlc next --resume"',
       'cmd="aidlc next --resume"; bash -c "$cmd"',
       'cmd=aidlc; "$cmd" next --resume',
+      `cmd=aidlc; \${cmd} next --resume`,
+      `"\${cmd:-aidlc}" next --resume`,
+      `bash -c "\${cmd:-aidlc next --resume}"`,
+      'c=aidlc; d=$c; "$d" next --resume',
     ]) {
       const delegated = spawnSync(process.execPath, [HOOK], {
         input: JSON.stringify({
