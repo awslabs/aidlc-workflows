@@ -362,7 +362,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
       );
       expect(create.status).toBe(0);
       const result = `Output:\n${create.stdout}\n\nExit Code: 0`;
-      const bind = runIdeStdin(
+      const bind = runIdeDispatcherStdin(
         dir,
         "rebuild-stage-graph",
         ctx1x("execute_bash", result),
@@ -456,89 +456,98 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
   });
 
   test("7e: Stop prefers its event session identity over the latest SessionStart", () => {
-    const dir = scratchProject(true);
-    try {
-      const sessionOne = "sess_t218_one";
-      const sessionTwo = "sess_t218_two";
-      const originalUuid = readIntentRegistry(dir)[0]?.uuid;
-      expect(originalUuid).toBeDefined();
-      expect(
-        runIdeStdin(
-          dir,
-          "session-start",
-          ctx1x("", "", "SessionStart", sessionOne),
-        ).code,
-      ).toBe(0);
+    for (const entry of [
+      { label: "direct", run: runIdeStdin },
+      { label: "dispatcher", run: runIdeDispatcherStdin },
+    ]) {
+      const dir = scratchProject(true);
+      try {
+        const sessionOne = "sess_t218_one";
+        const sessionTwo = "sess_t218_two";
+        const originalUuid = readIntentRegistry(dir)[0]?.uuid;
+        expect(originalUuid, entry.label).toBeDefined();
+        expect(
+          runIdeStdin(
+            dir,
+            "session-start",
+            ctx1x("", "", "SessionStart", sessionOne),
+          ).code,
+          entry.label,
+        ).toBe(0);
 
-      const create = spawnSync(
-        "bun",
-        [
-          join(dir, ".kiro", "tools", "aidlc-utility.ts"),
-          "intent-create",
-          "--scope",
-          "bugfix",
-          "--arguments",
-          "session one handoff",
-          "--project-dir",
-          dir,
-        ],
-        {
-          cwd: dir,
-          encoding: "utf-8",
-          env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
-          timeout: 30_000,
-        },
-      );
-      expect(create.status).toBe(0);
-      expect(
-        runIdeStdin(
-          dir,
-          "rebuild-stage-graph",
-          ctx1x(
-            "execute_bash",
-            `Output:\n${create.stdout}\n\nExit Code: 0`,
-            "PostToolUse",
-            sessionOne,
-          ),
-        ).code,
-      ).toBe(0);
+        const create = spawnSync(
+          "bun",
+          [
+            join(dir, ".kiro", "tools", "aidlc-utility.ts"),
+            "intent-create",
+            "--scope",
+            "bugfix",
+            "--arguments",
+            "session one handoff",
+            "--project-dir",
+            dir,
+          ],
+          {
+            cwd: dir,
+            encoding: "utf-8",
+            env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
+            timeout: 30_000,
+          },
+        );
+        expect(create.status, entry.label).toBe(0);
+        expect(
+          runIdeStdin(
+            dir,
+            "rebuild-stage-graph",
+            ctx1x(
+              "execute_bash",
+              `Output:\n${create.stdout}\n\nExit Code: 0`,
+              "PostToolUse",
+              sessionOne,
+            ),
+          ).code,
+          entry.label,
+        ).toBe(0);
 
-      const handoffPath = join(
-        dir,
-        "aidlc",
-        ".aidlc-sessions",
-        `${sessionOne}.handoff.json`,
-      );
-      expect(existsSync(handoffPath)).toBe(true);
-
-      expect(
-        runIdeStdin(
+        const handoffPath = join(
           dir,
-          "session-start",
-          ctx1x("", "", "SessionStart", sessionTwo),
-        ).code,
-      ).toBe(0);
-      expect(
-        readFileSync(
-          join(dir, "aidlc", ".aidlc-sessions", ".kiro-ide-current-session"),
-          "utf-8",
-        ).trim(),
-      ).toBe(sessionTwo);
+          "aidlc",
+          ".aidlc-sessions",
+          `${sessionOne}.handoff.json`,
+        );
+        expect(existsSync(handoffPath), entry.label).toBe(true);
 
-      const stop = runIdeStdin(
-        dir,
-        "continue-workflow",
-        JSON.stringify({
-          session_id: sessionOne,
-          hook_event_name: "Stop",
-          cwd: dir,
-        }),
-      );
-      expect(stop.code).toBe(0);
-      expect(stop.stdout.trim()).toBe("");
-      expect(existsSync(handoffPath)).toBe(false);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
+        expect(
+          runIdeStdin(
+            dir,
+            "session-start",
+            ctx1x("", "", "SessionStart", sessionTwo),
+          ).code,
+          entry.label,
+        ).toBe(0);
+        expect(
+          readFileSync(
+            join(dir, "aidlc", ".aidlc-sessions", ".kiro-ide-current-session"),
+            "utf-8",
+          ).trim(),
+          entry.label,
+        ).toBe(sessionTwo);
+
+        const stop = entry.run(
+          dir,
+          "continue-workflow",
+          JSON.stringify({
+            session_id: sessionOne,
+            hook_event_name: "Stop",
+            cwd: dir,
+          }),
+        );
+        expect(stop.code, entry.label).toBe(0);
+        expect(stop.stdout.trim(), entry.label).toBe("");
+        expect(existsSync(handoffPath), entry.label).toBe(false);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     }
   });
 
