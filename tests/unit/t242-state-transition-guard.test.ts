@@ -287,6 +287,8 @@ describe("t242 state-transition ownership guard", () => {
       ["aidlc continue steering-token", "aidlc continue"],
       ["aidlc report --result resumed --user-input 1", "aidlc report"],
       ["aidlc state unpark", "aidlc state unpark"],
+      ["aidlc scope change --scope mvp", "aidlc scope change"],
+      ["aidlc config-change --depth comprehensive", "aidlc config-change"],
       ["aidlc intent other-intent", "aidlc intent other-intent"],
       ["aidlc space other-space", "aidlc space other-space"],
       ["aidlc --project-dir /tmp space-create other-space", "aidlc space-create"],
@@ -301,6 +303,9 @@ describe("t242 state-transition ownership guard", () => {
       ],
       ["result=`aidlc next --resume`", "aidlc next"],
       ["cat <<EOF\n$(aidlc next --resume)\nEOF", "aidlc next"],
+      ['sh -c -- "aidlc next --resume"', "aidlc next"],
+      ['cmd="aidlc next --resume"; bash -c "$cmd"', "aidlc next"],
+      ['cmd=aidlc; "$cmd" next --resume', "aidlc next"],
     ] as const) {
       expect(delegatedLifecycleCommand(command), command).toBe(expected);
     }
@@ -347,6 +352,12 @@ describe("t242 state-transition ownership guard", () => {
     ]) {
       expect(delegatedLifecycleCommand(command), command).toBeNull();
     }
+    expect(delegatedLifecycleCommand('bash -c "$unresolved"')).toBe(
+      "dynamic shell command beyond guard inspection",
+    );
+    expect(delegatedLifecycleCommand('"$unresolved" --version')).toBe(
+      "dynamic executable beyond guard inspection",
+    );
     expect(delegatedLifecycleCommand('eval "$command"')).toBe(
       "dynamic eval shell command beyond guard inspection",
     );
@@ -411,12 +422,17 @@ describe("t242 state-transition ownership guard", () => {
     expect(conductor.stderr).toBe("");
   });
 
-  test("the hook blocks delegated lifecycle commands behind execution wrappers", () => {
+  test("the hook blocks delegated lifecycle commands behind wrappers and literal variables", () => {
     for (const command of [
       "env env aidlc next --resume",
       "command env env aidlc next --resume",
       "nice aidlc next --resume",
       "nohup aidlc next --resume",
+      "aidlc scope change --scope mvp",
+      "aidlc config-change --depth comprehensive",
+      'sh -c -- "aidlc next --resume"',
+      'cmd="aidlc next --resume"; bash -c "$cmd"',
+      'cmd=aidlc; "$cmd" next --resume',
     ]) {
       const delegated = spawnSync(process.execPath, [HOOK], {
         input: JSON.stringify({

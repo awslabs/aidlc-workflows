@@ -32,6 +32,7 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
   copyFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -873,6 +874,38 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
       forwarded = capturedInputs(s.captureDir, "aidlc-reviewer-scope.ts");
       expect(forwarded.at(-2)?.agent_type).toBeUndefined();
       expect(forwarded.at(-1)?.agent_type).toBe(second.agent_type);
+    } finally {
+      s.cleanup();
+    }
+  });
+
+  test("19: an interrupted process's stale ledger lock is reclaimed", () => {
+    const s = scratch();
+    try {
+      const lockDir = `${s.ledgerPath}.lock`;
+      mkdirSync(lockDir);
+      writeFileSync(
+        join(lockDir, "owner.json"),
+        JSON.stringify({
+          pid: 999_999,
+          acquiredAt: Date.now() - 60_000,
+          token: "stale-owner",
+        }),
+        "utf-8",
+      );
+
+      const result = runAdapter(s, "subagent-start", {
+        hook_event_name: "SubagentStart",
+        session_id: "vscode-stale-lock-session",
+        agent_id: "reviewer-after-recovery",
+        agent_type: "aidlc-reviewer-after-recovery-agent",
+      });
+
+      expect(result.code).toBe(0);
+      expect(ledgerEntries(s).map((entry) => entry.subagentId)).toContain(
+        "reviewer-after-recovery",
+      );
+      expect(existsSync(lockDir)).toBe(false);
     } finally {
       s.cleanup();
     }

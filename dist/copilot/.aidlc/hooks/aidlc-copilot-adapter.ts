@@ -50,7 +50,7 @@
 //                  post-tool | validate-state | subagent-start |
 //                  log-subagent | continue-workflow
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   existsSync,
   lstatSync,
@@ -59,6 +59,7 @@ import {
   realpathSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -415,6 +416,8 @@ export async function run(
     `aidlc-copilot-subagents-${createHash("sha256").update(projectDir).digest("hex").slice(0, 16)}.json`,
   );
   const LEDGER_LOCK = `${LEDGER}.lock`;
+  const LEDGER_LOCK_OWNER = join(LEDGER_LOCK, "owner.json");
+  const LEDGER_LOCK_STALE_MS = 30_000;
 
   interface LedgerEntry {
     hostSessionId: string;
@@ -424,21 +427,70 @@ export async function run(
     ts: number;
   }
 
-  function acquireLedgerLock(): boolean {
+  interface LedgerLockOwner {
+    pid: number;
+    acquiredAt: number;
+    token: string;
+  }
+
+  function readLedgerLockOwner(): LedgerLockOwner | null {
+    try {
+      const parsed = JSON.parse(readFileSync(LEDGER_LOCK_OWNER, "utf-8")) as unknown;
+      if (
+        typeof parsed !== "object" ||
+        parsed === null ||
+        typeof (parsed as LedgerLockOwner).pid !== "number" ||
+        typeof (parsed as LedgerLockOwner).acquiredAt !== "number" ||
+        typeof (parsed as LedgerLockOwner).token !== "string"
+      ) {
+        return null;
+      }
+      return parsed as LedgerLockOwner;
+    } catch {
+      return null;
+    }
+  }
+
+  function reclaimStaleLedgerLock(): boolean {
+    try {
+      const owner = readLedgerLockOwner();
+      const acquiredAt = owner?.acquiredAt ?? statSync(LEDGER_LOCK).mtimeMs;
+      if (Date.now() - acquiredAt < LEDGER_LOCK_STALE_MS) return false;
+      rmSync(LEDGER_LOCK, { recursive: true, force: true });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function acquireLedgerLock(): string | null {
     for (let attempt = 0; attempt < 200; attempt++) {
       try {
         mkdirSync(LEDGER_LOCK);
-        return true;
+        const owner: LedgerLockOwner = {
+          pid: process.pid,
+          acquiredAt: Date.now(),
+          token: randomUUID(),
+        };
+        try {
+          writeFileSync(LEDGER_LOCK_OWNER, JSON.stringify(owner), "utf-8");
+          return owner.token;
+        } catch {
+          rmSync(LEDGER_LOCK, { recursive: true, force: true });
+          return null;
+        }
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") return false;
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") return null;
+        if (reclaimStaleLedgerLock()) continue;
         Bun.sleepSync(10);
       }
     }
-    return false;
+    return null;
   }
 
-  function releaseLedgerLock(): void {
+  function releaseLedgerLock(token: string): void {
     try {
+      if (readLedgerLockOwner()?.token !== token) return;
       rmSync(LEDGER_LOCK, { recursive: true, force: true });
     } catch {
       // Identity correlation is best effort; never trap a host hook.
@@ -483,22 +535,24 @@ export async function run(
   }
 
   function readLedger(): LedgerEntry[] {
-    if (!acquireLedgerLock()) return [];
+    const lockToken = acquireLedgerLock();
+    if (!lockToken) return [];
     try {
       return readLedgerUnlocked();
     } finally {
-      releaseLedgerLock();
+      releaseLedgerLock(lockToken);
     }
   }
 
   function updateLedger(update: (entries: LedgerEntry[]) => void): void {
-    if (!acquireLedgerLock()) return;
+    const lockToken = acquireLedgerLock();
+    if (!lockToken) return;
     try {
       const entries = readLedgerUnlocked();
       update(entries);
       writeLedgerUnlocked(entries);
     } finally {
-      releaseLedgerLock();
+      releaseLedgerLock(lockToken);
     }
   }
 

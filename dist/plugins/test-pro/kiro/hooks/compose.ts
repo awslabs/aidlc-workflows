@@ -632,13 +632,19 @@ function copilotNativeAgentPrecheck(dst: string): CopyPrecheck {
     }
     const fm = frontmatter(ctx.content);
     const disallowed = fm.match(/^disallowedTools:\s*(.*?)\s*$/m)?.[1];
-    if (disallowed && !/^\s*Task\s*$/i.test(disallowed)) {
+    if (!disallowed) {
+      recordDrop(
+        `plugin "${PLUGIN_NAME}" agent file "${ctx.rel}" must declare disallowedTools: Task for Copilot; not copied`,
+      );
+      return false;
+    }
+    if (!/^\s*Task\s*$/i.test(disallowed)) {
       recordDrop(
         `plugin "${PLUGIN_NAME}" agent file "${ctx.rel}" cannot project disallowedTools "${disallowed}" to Copilot; not copied`,
       );
       return false;
     }
-    if (disallowed && /^tools:/m.test(fm)) {
+    if (/^tools:/m.test(fm)) {
       recordDrop(
         `plugin "${PLUGIN_NAME}" agent file "${ctx.rel}" declares both tools and disallowedTools; Copilot projection would be ambiguous`,
       );
@@ -792,6 +798,7 @@ function pluginShipsViableNativeAgent(agent: string): boolean {
   const declaredPlugin = frontmatter(content).match(/^plugin:\s*(.+)$/m)?.[1].trim();
   if (declaredPlugin?.startsWith("aidlc-")) return false;
   const disallowed = frontmatter(content).match(/^disallowedTools:\s*(.*?)\s*$/m)?.[1];
+  if (IS_COPILOT && !disallowed) return false;
   if (disallowed && !/^\s*Task\s*$/i.test(disallowed)) return false;
   if (IS_COPILOT && disallowed && /^tools:/m.test(frontmatter(content))) return false;
   const rosterDir = nativeAgentsDir();

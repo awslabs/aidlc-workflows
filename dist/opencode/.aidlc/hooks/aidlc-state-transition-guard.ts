@@ -736,10 +736,24 @@ function delegatedDispatcherCommand(
   const group = args[0] ?? "";
   const verb = args[1] ?? "";
   if (
-    ["next", "continue", "report", "park", "--resume", "--scope", "compose", "recompose", "init"]
-      .includes(group)
+    [
+      "next",
+      "continue",
+      "report",
+      "park",
+      "--resume",
+      "--scope",
+      "scope-change",
+      "config-change",
+      "compose",
+      "recompose",
+      "init",
+    ].includes(group)
   ) {
     return `${prefix} ${group}`;
+  }
+  if (group === "scope" && verb === "change") {
+    return `${prefix} scope change`;
   }
   if (group === "state" && DELEGATED_STATE_MUTATIONS.has(verb)) {
     return `${prefix} state ${verb}`;
@@ -768,6 +782,17 @@ function delegatedUtilityCommand(
   return workspaceMutation(prefix, positional);
 }
 
+function assignment(word: string): { name: string; value: string } | null {
+  const match = word.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s);
+  return match ? { name: match[1], value: match[2] } : null;
+}
+
+function variableReference(word: string): string | null {
+  return word.match(/^\$([A-Za-z_][A-Za-z0-9_]*)$/)?.[1] ??
+    word.match(/^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/)?.[1] ??
+    null;
+}
+
 function delegatedLifecycleCommandAtDepth(command: string, depth: number): string | null {
   if (depth > 8) return "nested shell command beyond guard inspection limit";
   const heredocBodies = heredocSubstitutionBodies(command);
@@ -778,8 +803,33 @@ function delegatedLifecycleCommandAtDepth(command: string, depth: number): strin
     if (nested !== null) return nested;
   }
 
+  // Only standalone literal assignments survive into later command segments.
+  // Resolve those values where possible; fail closed when a delegated
+  // executable or shell command remains dynamically indeterminate.
+  const assignments = new Map<string, string>();
   for (const segment of shellCommandSegments(substitutions.masked)) {
-    const argv = executableArgv(segment);
+    const segmentWords = shellWords(segment);
+    const segmentAssignments = segmentWords.map(assignment);
+    if (
+      segmentAssignments.length > 0 &&
+      segmentAssignments.every((candidate) => candidate !== null)
+    ) {
+      for (const candidate of segmentAssignments) {
+        if (candidate) assignments.set(candidate.name, candidate.value);
+      }
+      continue;
+    }
+
+    let argv = executableArgv(segment);
+    const executableVariable = variableReference(argv[0] ?? "");
+    if (executableVariable !== null) {
+      const value = assignments.get(executableVariable);
+      const resolved = value === undefined ? [] : shellWords(value);
+      if (resolved.length !== 1) {
+        return "dynamic executable beyond guard inspection";
+      }
+      argv = [resolved[0], ...argv.slice(1)];
+    }
     const executable = commandBasename(argv[0]);
     if (executable === UNINSPECTABLE_EXECUTION_WRAPPER) {
       return "execution wrapper beyond guard inspection";
@@ -789,6 +839,12 @@ function delegatedLifecycleCommandAtDepth(command: string, depth: number): strin
       if (evalArgs[0] === "--") evalArgs.shift();
       const evalCommand = evalArgs.join(" ");
       const nested = delegatedLifecycleCommandAtDepth(evalCommand, depth + 1);
+      if (
+        nested === "dynamic executable beyond guard inspection" ||
+        nested === "dynamic shell command beyond guard inspection"
+      ) {
+        return "dynamic eval shell command beyond guard inspection";
+      }
       if (nested !== null) return nested;
       if (/[$`\\]/.test(segment)) {
         return "dynamic eval shell command beyond guard inspection";
@@ -803,7 +859,18 @@ function delegatedLifecycleCommandAtDepth(command: string, depth: number): strin
           continue;
         }
         if (option === "-c" || /^-[A-Za-z]*c[A-Za-z]*$/.test(option)) {
-          const nested = delegatedLifecycleCommandAtDepth(argv[i + 1] ?? "", depth + 1);
+          let commandIndex = i + 1;
+          if (argv[commandIndex] === "--") commandIndex++;
+          let nestedCommand = argv[commandIndex] ?? "";
+          const commandVariable = variableReference(nestedCommand);
+          if (commandVariable !== null) {
+            const value = assignments.get(commandVariable);
+            if (value === undefined) {
+              return "dynamic shell command beyond guard inspection";
+            }
+            nestedCommand = value;
+          }
+          const nested = delegatedLifecycleCommandAtDepth(nestedCommand, depth + 1);
           if (nested !== null) return nested;
           break;
         }

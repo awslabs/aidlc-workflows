@@ -280,6 +280,36 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(body).not.toMatch(/^(model|tier|effort|disallowedTools):/m);
     expect(body).toContain("aidlc/spaces/default/memory/");
 
+    const unsafePlugin = join(tmp, "plugin", "copilot-missing-disallowed-tools");
+    cpSync(pluginCopilot, unsafePlugin, { recursive: true });
+    const unsafeAgent = join(unsafePlugin, "agents", "test-pro-metrics-agent.md");
+    writeFileSync(
+      unsafeAgent,
+      readFileSync(unsafeAgent, "utf-8").replace(/^disallowedTools:.*\r?\n/m, ""),
+      "utf-8",
+    );
+    const unsafeProject = mkdtempSync(join(tmp, "copilot-unsafe-agent-"));
+    cpSync(COPILOT_DIST, unsafeProject, { recursive: true });
+    const unsafeCompose = spawnSync(BUN, [join(unsafePlugin, "hooks", "compose.ts")], {
+      cwd: unsafeProject,
+      encoding: "utf-8",
+      timeout: TIMEOUT_MS - 5_000,
+      env: {
+        ...env,
+        PLUGIN_ROOT: unsafePlugin,
+        AIDLC_PROJECT_DIR: unsafeProject,
+      },
+    });
+    if (unsafeCompose.status !== 0) {
+      throw new Error(`unsafe Copilot compose failed: ${unsafeCompose.stderr}`);
+    }
+    expect(
+      existsSync(join(unsafeProject, ".github", "agents", "test-pro-metrics-agent.md")),
+    ).toBe(false);
+    expect(hookDrops(unsafeProject)).toContain(
+      "must declare disallowedTools: Task for Copilot",
+    );
+
     const select = spawnSync(
       BUN,
       [join(copilotProject, ".aidlc", "tools", "aidlc-utility.ts"), "select-plugins", "aidlc"],
