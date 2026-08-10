@@ -50,6 +50,12 @@ function bugfixPlusTwo(): Record<string, "EXECUTE" | "SKIP"> {
   return grid;
 }
 
+function featureMinus(...slugs: string[]): Record<string, "EXECUTE" | "SKIP"> {
+  const grid = { ...loadScopeGrid().feature.stages };
+  for (const slug of slugs) grid[slug] = "SKIP";
+  return grid;
+}
+
 describe("t275 nearestStockScopes (in-process, shipped grid)", () => {
   test("a verbatim stock grid ranks its own scope first at diff 0", () => {
     const ranked = nearestStockScopes(loadScopeGrid().bugfix.stages);
@@ -135,6 +141,46 @@ describe("t275 nearestStockScopes (in-process, shipped grid)", () => {
       /update EVERY row whose decision differs\s+from the final proposal grid/,
     );
   });
+
+  test("in-flight feature minus two preserves the requested delta despite a nearby stock grid", () => {
+    const proposed = featureMinus("market-research", "team-formation");
+    const validation = validateGrid(proposed, { strict: true });
+    expect(validation.valid).toBe(true);
+    expect(validation.summary?.execute).toBe(30);
+    expect(validation.summary?.skip).toBe(2);
+    expect(validation.nearest_stock?.[0]).toEqual({
+      scope: "enterprise",
+      diff: 2,
+      differs: ["market-research", "team-formation"],
+    });
+
+    const contract = readFileSync(COMPOSER_AGENT, "utf-8");
+    expect(contract).toContain("In-flight branch - never match or synthesize");
+    expect(contract).toContain('Set `mode: "in-flight"`');
+    expect(contract).toContain("NEVER adopt a stock grid");
+    expect(contract).toContain("`changes.skip` / `changes.add` slug arrays");
+  });
+
+  test("final folded distance is the sole authority when the mechanical grid was nearer stock", () => {
+    const mechanical = featureMinus("market-research", "team-formation");
+    const final = featureMinus(
+      "market-research",
+      "team-formation",
+      "rough-mockups",
+    );
+    expect(validateGrid(mechanical).nearest_stock?.[0]?.diff).toBe(2);
+    expect(validateGrid(final).nearest_stock?.[0]?.diff).toBe(3);
+
+    const contract = readFileSync(COMPOSER_AGENT, "utf-8");
+    const step7 = contract.slice(
+      contract.indexOf("### Step 7:"),
+      contract.indexOf("### Step 8:"),
+    );
+    expect(step7).toContain("Route solely on");
+    expect(step7).toContain("The mechanical screen's distance never overrides");
+    expect(step7).not.toContain("SMALLER");
+    expect(step7).not.toContain("If either distance");
+  });
 });
 
 describe("t275 validate-grid CLI carries nearest_stock", () => {
@@ -184,6 +230,39 @@ describe("t275 validate-grid CLI carries nearest_stock", () => {
       expect(body.nearest_stock[0].diff).toBe(
         Object.keys(loadScopeGrid().bugfix.stages).length,
       );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("composer-authored grid entries are excluded from nearest_stock", () => {
+    const dir = mkdtempSync(join(tmpdir(), "aidlc-t275-composed-"));
+    try {
+      const gridPath = join(dir, "scope-grid.json");
+      const proposal = join(dir, "p.json");
+      const shippedGrid = JSON.parse(
+        readFileSync(join(AIDLC_SRC, "tools", "data", "scope-grid.json"), "utf-8"),
+      ) as Record<string, { stages: Record<string, "EXECUTE" | "SKIP"> }>;
+      shippedGrid["aaa-composed"] = {
+        stages: { ...shippedGrid.bugfix.stages },
+      };
+      writeFileSync(gridPath, JSON.stringify(shippedGrid), "utf-8");
+      writeFileSync(proposal, JSON.stringify(shippedGrid.bugfix.stages), "utf-8");
+
+      const r = spawnSync(
+        BUN,
+        [GRAPH_TOOL, "validate-grid", "--proposal", proposal],
+        {
+          encoding: "utf-8",
+          env: { ...process.env, AIDLC_SCOPE_GRID: gridPath },
+        },
+      );
+      expect(r.status).toBe(0);
+      const body = JSON.parse(r.stdout) as {
+        nearest_stock: Array<{ scope: string; diff: number; differs: string[] }>;
+      };
+      expect(body.nearest_stock[0]).toEqual({ scope: "bugfix", diff: 0, differs: [] });
+      expect(body.nearest_stock.some((row) => row.scope === "aaa-composed")).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

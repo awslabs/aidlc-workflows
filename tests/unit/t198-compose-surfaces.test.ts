@@ -166,6 +166,10 @@ describe("t198 mid-flow compose -> in-flight dispatch, not an advance", () => {
     expect(d.kind).toBe("print");
     expect(String(d.message)).toContain("aidlc-composer-agent");
     expect(String(d.message)).toContain("RUNNING workflow");
+    expect(String(d.message)).toContain("mode in-flight");
+    expect(String(d.message)).toContain("stock-distance rankings are advisory only");
+    expect(String(d.message)).toContain("changes.skip and changes.add");
+    expect(String(d.message)).toContain("Never write scope registry files");
     // The counterfactual: a guard-less engine routes this to the current
     // run-stage. Pin the absence.
     expect(d.kind).not.toBe("run-stage");

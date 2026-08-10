@@ -207,10 +207,12 @@ export interface ScopeValidation {
   // counts). The composer copies this into its proposal verbatim so the gate the
   // human sees leads with numbers the validator computed, not an LLM recount.
   summary?: ScopeCostSummary;
-  // Stock scopes ranked by grid distance from the validated proposal. The
-  // matched-vs-custom verdict routes on nearest_stock[0].diff (match when
-  // <= 2 and depth is compatible), so the routing is the validator's number,
-  // not an LLM recount of the grids.
+  // Graph/plugin-authored stock scopes ranked by grid distance from the
+  // validated proposal; composer-authored entries are excluded. A front/report
+  // matched-vs-custom verdict routes on nearest_stock[0].diff (match when <= 2
+  // and depth is compatible), so the routing is the final validator's number,
+  // not an LLM recount or the earlier mechanical screen. In-flight treats the
+  // ranking as advisory and preserves the running plan.
   nearest_stock?: Array<{ scope: string; diff: number; differs: string[] }>;
 }
 
@@ -1005,17 +1007,23 @@ export function subgraphForScope(scope: string): GraphStage[] {
     .sort((a, b) => numericStageOrder(a.number, b.number));
 }
 
-/** Rank every stock scope by grid distance from the given EXECUTE/SKIP grid:
- *  `{scope, diff, differs}` sorted by diff then name. Distance covers the union
- *  of proposal and stock keys, so missing proposal stages and unknown extras
- *  are differences rather than invisible overlap. Shared by `ars` (against the
- *  complete mechanical screen grid) and `validate-grid` (against the composer's
- *  proposal) — the stock match decision routes on this number, not on LLM
- *  judgment. */
+/** Rank every graph/plugin-authored stock scope by grid distance from the given
+ *  EXECUTE/SKIP grid: `{scope, diff, differs}` sorted by diff then name.
+ *  Composer-authored entries appended to scope-grid.json are deliberately
+ *  excluded. Distance covers the union of proposal and stock keys, so missing
+ *  proposal stages and unknown extras are differences rather than invisible
+ *  overlap. Shared by `ars` (against the complete mechanical screen grid) and
+ *  `validate-grid` (against the composer's proposal); only the latter is a
+ *  front/report stock-match authority. */
 export function nearestStockScopes(
   grid: Record<string, "EXECUTE" | "SKIP">
 ): Array<{ scope: string; diff: number; differs: string[] }> {
+  const stockScopeNames = stageDeclaredScopeNames(loadGraph());
   return Object.entries(loadScopeGrid())
+    // Composer-authored scopes are appended only to scope-grid.json; no stage
+    // declares them. They remain runnable but must never become stock-match
+    // candidates for an unrelated later composition.
+    .filter(([scope]) => stockScopeNames.has(scope))
     .map(([scope, def]) => {
       const differs: string[] = [];
       const slugs = new Set([

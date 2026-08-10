@@ -3,10 +3,12 @@ All notable changes to this project will be documented in this file.
 
 ## [2.5.64] - 2026-08-10
 
-Closes the remaining composed-workflow routing and verification gaps. Stock matches now present exactly the grid that will run, incomplete model-produced grids cannot match a stock scope, and mid-flow new-work questions carry one typed continuation contract with a named scope. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+Closes the remaining composed-workflow routing and verification gaps. Stock matches now present exactly the grid that will run, incomplete model-produced grids cannot match a stock scope, in-flight recomposition preserves the running plan, and mid-flow new-work questions carry one typed continuation contract with a named scope. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
 
 * `aidlc-graph.ts validate-grid` now requires one explicit EXECUTE/SKIP entry for every compiled stage, and stock-distance calculation counts missing and extra keys instead of treating a partial grid as an exact match.
 * The adaptive composer revalidates an adopted stock grid and rebuilds its summary and stage-decision table from that final grid. Editing a matched stock plan converts it to a custom plan so the approved edits are persisted.
+* Front/report stock matching now routes solely on `validate-grid.nearest_stock` for the final proposal; the earlier mechanical ARS distance is advisory and cannot erase evidence-driven folds. In-flight proposals use `mode: in-flight`, preserve the current scope/depth and frozen actions, and pass exact `changes.skip` / `changes.add` arrays to `recompose` instead of adopting or writing a scope.
+* `nearest_stock` now ranks only graph/plugin-authored scopes. Composer-authored entries remain runnable in `scope-grid.json` but cannot become stock-match candidates for later unrelated work.
 * Mid-flow new-work offers now emit `ask_type: "new-work-routing"` with `response_route: "next"`, `new_work_description`, and `proposed_scope`; every harness uses that typed route instead of the ordinary report path, including rich prose that falls back to the selected default scope.
 * Concurrency and live-journey regressions now fail on contender crashes or malformed evidence, require actual persona reads and coherent completed-stage advancement, and verify that the new-work offer was rendered before confirmation. Persona files named by `inline_context_paths` are now a blocking load precondition across every harness, including the mob lead before drafting or support dispatch.
 

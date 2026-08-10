@@ -105,6 +105,15 @@ const ENSEMBLE_TOKENS = [
   '--result skipped --reason "<specific reason>"',
 ];
 
+const COMPOSER_ROUTE_TOKENS = [
+  "**Composition-moment authority.**",
+  "apply ONLY to front/report composition",
+  "mode: in-flight",
+  "`nearest_stock` is advisory",
+  "`changes.skip` / `changes.add` arrays",
+  "no stock grid or scope-registry write is allowed",
+];
+
 const KIRO_TASK_LIST_TOKEN =
   '{command:"create", task_list_description:"...", tasks:[{task_description:"..."}]}';
 
@@ -187,6 +196,17 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     for (const rel of skills) {
       const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
       for (const tok of REQUIRED_TOKENS) {
+        if (!body.includes(tok)) missing.push(`${rel}  missing: ${tok}`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
+  test("every shipped conductor SKILL separates in-flight deltas from stock routing", () => {
+    const missing: string[] = [];
+    for (const rel of skills) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      for (const tok of COMPOSER_ROUTE_TOKENS) {
         if (!body.includes(tok)) missing.push(`${rel}  missing: ${tok}`);
       }
     }

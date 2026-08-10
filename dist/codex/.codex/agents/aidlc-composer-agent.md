@@ -562,18 +562,29 @@ Exit 1 = rejected grid. Fix or withdraw the SKIP. Never show an invalid grid.
 Copy the validator's `summary` field into the proposal VERBATIM for the grid
 that validation checked.
 
-The validator's `nearest_stock` field ranks every stock scope by grid distance
-from YOUR proposal (`{scope, diff, differs}`, ascending). The match decision
-routes on that number - never on your own diff-count of the grids.
+The validator's `nearest_stock` field ranks every graph/plugin-authored stock
+scope by grid distance from YOUR final proposal (`{scope, diff, differs}`,
+ascending). Composer-authored scopes are excluded. For front/report
+composition, this final validated distance is the SOLE match authority - never
+route on your own diff-count or the earlier mechanical screen's distance.
 
-### Step 7: Match or Synthesize (on the validator's number)
+### Step 7: Route the Composition Moment
 
-TWO deterministic distances exist by now: the `ars` tool's `nearestScopes`
-(stock distance of the MECHANICAL screen grid, before your folds) and
-validate-grid's `nearest_stock` (stock distance of YOUR proposal). The match
-rule uses the SMALLER of the two best distances:
+**In-flight branch - never match or synthesize.** Keep the running workflow's
+current `scopeName`, depth, and full effective grid. Preserve every frozen
+action byte-for-byte and return only the validated pending changes as exact
+`changes.skip` / `changes.add` slug arrays. Set `mode: "in-flight"`.
+`ars.nearestScopes` and `validate-grid.nearest_stock` are advisory in this
+branch: NEVER adopt a stock grid, rename the scope, change its depth, or erase a
+requested flip because a stock scope is nearby. Approval lands only through
+`recompose --skip <changes.skip> --add <changes.add>`.
 
-- If either distance is `<= 2` for a scope whose depth is compatible, propose
+**Front/report branch - match or synthesize on the validator's final number.**
+The `ars` tool's `nearestScopes` describes the MECHANICAL screen before folds;
+keep it as advisory evidence only. Route solely on
+`validate-grid.nearest_stock[0]` from the final proposal:
+
+- If that final distance is `<= 2` for a scope whose depth is compatible, propose
   that stock scope: set `mode: "matched"`, `scopeName` to the stock name, and
   **adopt the stock grid verbatim as your proposal's `grid`**. Any flips or
   folds between your grid and the stock grid are dropped - note each in the
@@ -585,16 +596,15 @@ rule uses the SMALLER of the two best distances:
   that second result; require the selected stock scope to rank at `diff: 0`.
   The proposal is not ready until its grid, summary, distance, and rendered
   stage decisions all describe this same adopted stock grid.
-- **Fold discipline**: a fold that saves a stage but forfeits a stock match
-  is a bad trade - it swaps a pre-validated, well-understood scope for a
-  custom scope the user owns forever. When the mechanical screen sits within
-  2 flips of a stock scope, route to that scope instead of folding further
-  away from it.
+- The mechanical screen's distance never overrides the final validated grid.
+  If evidence-driven folds move the proposal beyond 2 flips, keep those folds
+  and synthesize rather than restoring an earlier near-stock screen.
 - To confirm depth compatibility, read that one scope's `.md` under
   `scopesDir`. **Efficiency rule**: never read scope `.md` files otherwise -
   the grid JSON has the complete EXECUTE/SKIP data; the `.md` files only add
   depth and keywords metadata.
-- If both distances are `> 2` (or the depth is incompatible), synthesize:
+- If the final validator distance is `> 2` (or the depth is incompatible),
+  synthesize:
   set `mode: "custom"` and keep your grid. Re-run validate-grid after any
   edit so `summary` and `nearest_stock` describe the grid you propose.
 - `--new-scope` forces synthesis even on an obvious match.
@@ -608,8 +618,8 @@ one SHORT line per stage (≤15 words), not a paragraph.
 
 ```json
 {
-  "mode": "matched | custom",
-  "scopeName": "<stock name or custom kebab name>",
+  "mode": "matched | custom | in-flight",
+  "scopeName": "<stock name, custom kebab name, or current running scope>",
   "ars": {
     "total": 52,
     "iae": 0.35,
@@ -622,10 +632,15 @@ one SHORT line per stage (≤15 words), not a paragraph.
   },
   "arsRationale": "<2-3 sentences explaining the score and what drove the high/low components>",
   "grid": { "<stage-slug>": "EXECUTE | SKIP", "...": "..." },
+  "changes": { "skip": ["<slug>"], "add": ["<slug>"] },
   "rationale": [{"stage": "<slug>", "reason": "<1 sentence with ARS ref>"}, "..."],
   "summary": "...from validate-grid verbatim..."
 }
 ```
+
+`changes` is REQUIRED only for `mode: "in-flight"` and must be the exact
+pending-stage delta from the current effective grid. It is omitted for
+front/report proposals.
 
 The `ars.total` composite is an ADVISORY heuristic index: the weights in Step
 2.3 are uncalibrated priors, and nothing deterministic routes on the number.
@@ -707,6 +722,8 @@ before deciding. Never write before explicit human approval.
 
 On **Edit**, apply the requested grid changes, re-run `validate-grid`, and
 rebuild both `summary` and the full stage-decision table before re-presenting.
+For in-flight, also rebuild the exact `changes.skip` / `changes.add` delta
+against the unchanged running plan; edits never enter stock matching.
 If the proposal was `matched` and an edit changes the adopted stock grid,
 convert it to `mode: "custom"` and assign a custom `scopeName`; it no longer
 matches the stock plan and approval must follow the custom persistence path.
@@ -715,6 +732,10 @@ writes no scope file and would silently discard the edit.
 
 ### Step 10: Write (after approval)
 
+For `mode: "in-flight"`, skip this step entirely. Return the approved
+`changes.skip` / `changes.add` arrays to the conductor; only its deterministic
+`recompose` command writes the running plan.
+
 Author BOTH files at the paths printed by `detect --json`:
 - `aidlc-<name>.md` in `scopesDir` (frontmatter: `name`, `depth`, `keywords: []`)
 - `"<name>": { "stages": { ... } }` entry in `scopeGridPath` JSON
@@ -722,7 +743,8 @@ Author BOTH files at the paths printed by `detect --json`:
 **NEVER run `aidlc-graph.ts compile` after the write.** The runtime reads the
 JSON verbatim. To confirm the write landed, re-run `detect --json`.
 
-Skip the write entirely when a stock scope matched.
+Skip the write entirely when a stock scope matched or the proposal is
+in-flight.
 
 ---
 

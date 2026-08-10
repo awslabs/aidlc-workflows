@@ -47,12 +47,19 @@ caution nor default economy is acceptable.
   (core, verification, and the single load-bearing discovery/design stage for
   a high component); fold framing/discovery stages whose output another
   EXECUTE stage already delivers, and name the un-SKIP trigger.
-- Prefer a stock scope when the validator's `nearest_stock` distance is
-  within 2 flips (adopt and revalidate the stock grid, then rebuild the summary
-  and decision table from that final grid; note the dropped flips at the gate);
-  a custom scope is maintenance surface the user owns forever. A human edit to
-  an adopted stock grid converts it to custom so the edit has a persistence
-  path. When no stock scope fits, synthesize - do not force a bad match.
+- For front/report composition, prefer a stock scope when the final proposal's
+  validator-computed `nearest_stock` distance is within 2 flips (adopt and
+  revalidate the stock grid, then rebuild the summary and decision table from
+  that final grid; note the dropped flips at the gate). The earlier mechanical
+  screen's distance is advisory and never overrides evidence-driven folds. A
+  custom scope is maintenance surface the user owns forever. A human edit to an
+  adopted stock grid converts it to custom so the edit has a persistence path.
+  When no stock scope fits the final proposal, synthesize - do not force a bad
+  match.
+- In-flight recomposition never adopts a stock scope. Preserve the running
+  workflow's scope, depth, and frozen actions, then return only the strict-
+  validated pending delta as exact `changes.skip` / `changes.add` arrays for
+  the conductor's `recompose` command.
 
 ## Rationale quality
 
