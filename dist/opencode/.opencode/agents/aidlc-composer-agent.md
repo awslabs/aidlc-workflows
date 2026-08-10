@@ -561,7 +561,8 @@ Lenient mode for a front/report proposal; for an IN-FLIGHT proposal add
 `--strict` (the same strict check the recompose verb re-runs after approval -
 a starved required input rejects, so catch it here, before the gate).
 Exit 1 = rejected grid. Fix or withdraw the SKIP. Never show an invalid grid.
-Copy the validator's `summary` field into the proposal VERBATIM.
+Copy the validator's `summary` field into the proposal VERBATIM for the grid
+that validation checked.
 
 The validator's `nearest_stock` field ranks every stock scope by grid distance
 from YOUR proposal (`{scope, diff, differs}`, ascending). The match decision
@@ -581,6 +582,11 @@ rule uses the SMALLER of the two best distances:
   `rationale` array ("folded into stock <name>: <slug> stays <action>") so
   the human can pull it back at the gate. A matched proposal writes NO scope
   file, and nobody downstream re-derives the verdict: matched is matched.
+  **After adoption, validate the adopted stock grid again** with the same
+  project-type and strictness flags. Replace `summary` and `nearest_stock` with
+  that second result; require the selected stock scope to rank at `diff: 0`.
+  The proposal is not ready until its grid, summary, distance, and rendered
+  stage decisions all describe this same adopted stock grid.
 - **Fold discipline**: a fold that saves a stage but forfeits a stock match
   is a bad trade - it swaps a pre-validated, well-understood scope for a
   custom scope the user owns forever. When the mechanical screen sits within
@@ -636,9 +642,13 @@ recompute or reconstruct anything, so what you return is exactly what the
 human sees: if a table is missing from your output, it is missing at the
 gate. Do NOT hand-render the numbers: both tables come from the `ars` tool's
 `tables` output. Copy `tables.arsScores` (Table 1) verbatim. Start Table 2
-from `tables.stageDecisions` and update ONLY the rows your Step 4 folds
-changed (decision + reason, same format) — every untouched row keeps the
-tool's mechanical screen verbatim.
+from `tables.stageDecisions`, then update EVERY row whose decision differs
+from the final proposal grid (decision + reason, same format). That includes
+Step 4 folds and every Step 7 stock-adoption change. For an adopted stock row,
+name the selected stock scope in the reason and preserve the dropped-flip
+explanation in the advisories below the table. Every untouched row keeps the
+tool's mechanical screen verbatim. Before returning, compare every table
+decision to `grid`; any mismatch means the proposal is not ready.
 
 **These tables are supporting evidence, not the headline.** The user is a
 developer who asked for help with their project, so the conductor presents
@@ -696,6 +706,14 @@ then your ARS scores table under a "Scoring detail (advisory)" heading - and
 holds approve/edit/reject. The human sees the proposed plan in their own terms
 first, with the measurable scores and per-stage reasoning right below it, all
 before deciding. Never write before explicit human approval.
+
+On **Edit**, apply the requested grid changes, re-run `validate-grid`, and
+rebuild both `summary` and the full stage-decision table before re-presenting.
+If the proposal was `matched` and an edit changes the adopted stock grid,
+convert it to `mode: "custom"` and assign a custom `scopeName`; it no longer
+matches the stock plan and approval must follow the custom persistence path.
+Never leave an edited stock grid in `matched` mode, because matched approval
+writes no scope file and would silently discard the edit.
 
 ### Step 10: Write (after approval)
 

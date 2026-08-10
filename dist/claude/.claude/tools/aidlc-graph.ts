@@ -1006,20 +1006,24 @@ export function subgraphForScope(scope: string): GraphStage[] {
 }
 
 /** Rank every stock scope by grid distance from the given EXECUTE/SKIP grid:
- *  `{scope, diff, differs}` sorted by diff then name. Only slugs present in
- *  the stock scope's own grid are compared, so a partial input grid is
- *  measured over its overlap. Shared by `ars` (against the mechanical screen
- *  grid) and `validate-grid` (against the composer's proposal) — the stock
- *  match decision routes on this number, not on LLM judgment. */
+ *  `{scope, diff, differs}` sorted by diff then name. Distance covers the union
+ *  of proposal and stock keys, so missing proposal stages and unknown extras
+ *  are differences rather than invisible overlap. Shared by `ars` (against the
+ *  complete mechanical screen grid) and `validate-grid` (against the composer's
+ *  proposal) — the stock match decision routes on this number, not on LLM
+ *  judgment. */
 export function nearestStockScopes(
   grid: Record<string, "EXECUTE" | "SKIP">
 ): Array<{ scope: string; diff: number; differs: string[] }> {
   return Object.entries(loadScopeGrid())
     .map(([scope, def]) => {
       const differs: string[] = [];
-      for (const [slug, action] of Object.entries(def.stages)) {
-        const mine = grid[slug];
-        if (mine !== undefined && mine !== action) differs.push(slug);
+      const slugs = new Set([
+        ...Object.keys(def.stages),
+        ...Object.keys(grid),
+      ]);
+      for (const slug of slugs) {
+        if (grid[slug] !== def.stages[slug]) differs.push(slug);
       }
       return { scope, diff: differs.length, differs };
     })
@@ -1131,6 +1135,15 @@ export function validateGrid(
       );
     }
   }
+  const missingSlugs = graph
+    .map((stage) => stage.slug)
+    .filter((slug) => !(slug in grid));
+  if (missingSlugs.length > 0) {
+    errors.push(
+      `Grid is missing ${missingSlugs.length} compiled stage entr${missingSlugs.length === 1 ? "y" : "ies"}: ` +
+        `${missingSlugs.join(", ")}. Every compiled stage must be explicitly EXECUTE or SKIP.`,
+    );
+  }
 
   const onPath = new Set(
     Object.entries(grid)
@@ -1187,7 +1200,8 @@ export function validateGrid(
   );
   // Distance to each stock scope travels with the validation for the same
   // reason as summary: the match decision must ride the validator's numbers.
-  // Unknown slugs already errored above; the ranking measures the overlap.
+  // Unknown and missing slugs already errored above; the ranking still counts
+  // them so an invalid partial grid can never look like an exact stock match.
   const nearest_stock = nearestStockScopes(
     grid as Record<string, "EXECUTE" | "SKIP">,
   );

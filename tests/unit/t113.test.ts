@@ -121,6 +121,17 @@ function ask(): Record<string, unknown> {
   return { kind: "ask", question: "Resume from the last checkpoint, or start fresh?" };
 }
 
+function newWorkRoutingAsk(): Record<string, unknown> {
+  return {
+    kind: "ask",
+    ask_type: "new-work-routing",
+    response_route: "next",
+    question: "Continue, start separate work, or reshape the plan?",
+    new_work_description: "build a standalone metrics dashboard",
+    proposed_scope: "feature",
+  };
+}
+
 function print(): Record<string, unknown> {
   return { kind: "print", message: "AIDLC framework version 0.0.0" };
 }
@@ -190,6 +201,27 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
 
   test("ask well-formed -> VALID", () => {
     expect(validateDirective(ask()).valid).toBe(true);
+  });
+
+  test("new-work-routing ask carries its direct next response contract", () => {
+    expect(validateDirective(newWorkRoutingAsk()).valid).toBe(true);
+  });
+
+  test("new-work-routing ask rejects a report response route", () => {
+    expect(
+      errs({ ...newWorkRoutingAsk(), response_route: "report" }),
+    ).toContain('ask: new-work-routing response_route must be "next"');
+  });
+
+  test("new-work route metadata requires the typed ask subtype", () => {
+    expect(
+      errs({
+        ...ask(),
+        response_route: "next",
+        new_work_description: "standalone dashboard",
+        proposed_scope: "feature",
+      }),
+    ).toContain('ask: response_route requires ask_type "new-work-routing"');
   });
 
   test("print well-formed -> VALID", () => {

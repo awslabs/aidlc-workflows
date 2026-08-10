@@ -68,7 +68,6 @@ const APPROVE_ALL = {
 interface Directive {
   kind?: string;
   message?: string;
-  inline_context_paths?: unknown;
 }
 
 function userStoriesState(projectDir: string): string {
@@ -299,22 +298,6 @@ function inputMentions(result: CapturedToolResult, value: string): boolean {
   return JSON.stringify(result.input).includes(value);
 }
 
-function inlineContextDelivers(
-  result: CapturedToolResult | undefined,
-  value: string,
-): boolean {
-  if (!result) return false;
-  try {
-    const directive = JSON.parse(result.resultText.trim()) as Directive;
-    return (
-      Array.isArray(directive.inline_context_paths) &&
-      directive.inline_context_paths.includes(value)
-    );
-  } catch {
-    return false;
-  }
-}
-
 function shellCommand(result: CapturedToolResult): string | undefined {
   if (result.toolName !== "Bash" && result.toolName !== "Shell") return undefined;
   return typeof result.input.command === "string"
@@ -491,18 +474,16 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
             `.claude/agents/${support}.md`,
           );
         }
-        // Lead persona presence may be evidenced by an explicit Read or by
-        // structured inline_context_paths delivery on run-stage. The SDK can
-        // retain inline context without issuing a redundant Read tool call.
+        // inline_context_paths is only the manifest. The conductor contract
+        // requires it to read each inline persona before stage work.
         const leadPersonaPath = ".claude/agents/aidlc-product-agent.md";
         expect(
-          inlineContextDelivers(runStage, leadPersonaPath) ||
-            result.toolResults.some(
-              (toolResult) =>
-                toolResult.toolName === "Read" &&
-                inputMentions(toolResult, leadPersonaPath),
-            ),
-          "the inline mob lead persona was neither delivered nor read",
+          result.toolResults.some(
+            (toolResult) =>
+              toolResult.toolName === "Read" &&
+              inputMentions(toolResult, leadPersonaPath),
+          ),
+          "the conductor did not read the inline mob lead persona",
         ).toBe(true);
 
         // Round 1 dispatched every declared support. Each brief names the

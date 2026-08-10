@@ -261,16 +261,32 @@ export interface PresentGateDirective {
   memory_path: string;
 }
 
-// ask — render a specific structured question (resume choice, scope
-// confirmation, the autonomy ladder). The engine never calls AskUserQuestion
-// itself; it emits `ask` and stops, the conductor renders it and feeds the
-// answer back via report.
-export interface AskDirective {
+// ask — render a specific structured question. Most asks return through report.
+// The new-work-routing subtype is different: it classifies prose that has not
+// started stage work, so its answer routes through `next` and must never be
+// recorded as a stage report.
+interface AskDirectiveBase {
   kind: "ask";
   /** Optional spoken line for the user; presentation only (see NarrationField). */
   narration?: NarrationField;
   question: string;
 }
+
+export interface ReportAskDirective extends AskDirectiveBase {
+  ask_type?: undefined;
+  response_route?: undefined;
+  new_work_description?: undefined;
+  proposed_scope?: undefined;
+}
+
+export interface NewWorkRoutingAskDirective extends AskDirectiveBase {
+  ask_type: "new-work-routing";
+  response_route: "next";
+  new_work_description: string;
+  proposed_scope: string;
+}
+
+export type AskDirective = ReportAskDirective | NewWorkRoutingAskDirective;
 
 // print — print verbatim and stop (status / help / doctor / version).
 export interface PrintDirective {
@@ -410,7 +426,14 @@ const INVOKE_SWARM_FIELDS = [
   "repo",
 ] as const;
 const PRESENT_GATE_FIELDS = ["kind", "stage", "phase", "memory_path"] as const;
-const ASK_FIELDS = ["kind", "question"] as const;
+const ASK_FIELDS = [
+  "kind",
+  "question",
+  "ask_type",
+  "response_route",
+  "new_work_description",
+  "proposed_scope",
+] as const;
 const PRINT_FIELDS = ["kind", "message"] as const;
 const ERROR_FIELDS = ["kind", "message"] as const;
 const DONE_FIELDS = ["kind", "reason"] as const;
@@ -537,6 +560,34 @@ export function validateDirective(obj: unknown): ValidationResult {
       break;
     case "ask":
       checkString(o, "question", kind, errors);
+      checkOptionalString(o, "ask_type", kind, errors);
+      checkOptionalString(o, "response_route", kind, errors);
+      checkOptionalString(o, "new_work_description", kind, errors);
+      checkOptionalString(o, "proposed_scope", kind, errors);
+      if ("ask_type" in o && o.ask_type !== "new-work-routing") {
+        errors.push(
+          `${kind}: ask_type must be one of new-work-routing, got ${String(o.ask_type)}`,
+        );
+      }
+      if (o.ask_type === "new-work-routing") {
+        if (o.response_route !== "next") {
+          errors.push(`${kind}: new-work-routing response_route must be "next"`);
+        }
+        checkString(o, "new_work_description", kind, errors);
+        checkString(o, "proposed_scope", kind, errors);
+      } else {
+        for (const field of [
+          "response_route",
+          "new_work_description",
+          "proposed_scope",
+        ] as const) {
+          if (field in o) {
+            errors.push(
+              `${kind}: ${field} requires ask_type "new-work-routing"`,
+            );
+          }
+        }
+      }
       break;
     case "print":
       checkString(o, "message", kind, errors);

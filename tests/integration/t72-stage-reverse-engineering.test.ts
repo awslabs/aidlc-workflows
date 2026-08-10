@@ -39,10 +39,9 @@
 //   7 RE artifacts have markdown headings
 //       -> >= 1 artifact matches /^#/m (the .sh's grep -l "^#").
 //   8/9/13 RE completion + advance + completed count
-//       -> RE's checkbox is [-], [?], or [x] (started, awaiting approval, or
-//          completed) AND Current Stage is RE or a later row in the state file's
-//          own compiled order. On overshoot, the audit trail must also contain
-//          RE's STAGE_AWAITING_APPROVAL or STAGE_COMPLETED event. This pins the
+//       -> while Current Stage is RE, its checkbox is [-], [?], or [x]. If the
+//          cursor advanced beyond RE, the checkbox must be [x] AND the audit
+//          trail must contain RE's STAGE_COMPLETED event. This pins a coherent
 //          durable journey outcome without racing the live cursor.
 //   10 RE mentions component/module structure (3, 4, 5, 11 domain-word probes)
 //       -> NOT a hard word grep (LLM-authored RE output varies; the .sh tied these
@@ -241,20 +240,19 @@ describe("t72 /aidlc reverse-engineering brownfield (sdk)", () => {
         const currentStage = readStateField(state, "Current Stage");
         const currentIndex = rows.findIndex((row) => row.slug === currentStage);
         expect(targetIndex).toBeGreaterThanOrEqual(0);
-        expect(["-", "?", "x"]).toContain(rows[targetIndex]?.marker);
         expect(currentIndex).toBeGreaterThanOrEqual(targetIndex);
 
-        // On the overshoot path, pin the immutable gate/completion event too.
-        // The failing trace's report committed gate-start + approve before the
-        // later AskUserQuestion rendered, so this evidence exists when the live
-        // cursor has already moved beyond RE.
+        // A cursor still on RE may be in progress, awaiting approval, or
+        // completed. A cursor beyond RE proves advancement and therefore
+        // requires both the completed marker and the terminal audit event.
         if (currentIndex > targetIndex) {
           const audit = readAllAuditShards(proj);
-          expect(
-            ["STAGE_AWAITING_APPROVAL", "STAGE_COMPLETED"].some((event) =>
-              auditHasStageEvent(audit, event, TARGET_SLUG),
-            ),
-          ).toBe(true);
+          expect(rows[targetIndex]?.marker).toBe("x");
+          expect(auditHasStageEvent(audit, "STAGE_COMPLETED", TARGET_SLUG)).toBe(
+            true,
+          );
+        } else {
+          expect(["-", "?", "x"]).toContain(rows[targetIndex]?.marker);
         }
       } finally {
         cleanupTestProject(proj);

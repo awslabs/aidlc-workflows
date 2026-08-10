@@ -29,7 +29,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -41,6 +41,7 @@ import { AIDLC_SRC } from "../harness/fixtures.ts";
 
 const BUN = process.execPath;
 const GRAPH_TOOL = join(AIDLC_SRC, "tools", "aidlc-graph.ts");
+const COMPOSER_AGENT = join(AIDLC_SRC, "agents", "aidlc-composer-agent.md");
 
 function bugfixPlusTwo(): Record<string, "EXECUTE" | "SKIP"> {
   const grid = { ...loadScopeGrid().bugfix.stages };
@@ -85,6 +86,55 @@ describe("t275 nearestStockScopes (in-process, shipped grid)", () => {
     expect(r.nearest_stock?.[0]?.scope).toBe("bugfix");
     expect(r.nearest_stock?.[0]?.diff).toBe(2);
   });
+
+  test("an empty grid is invalid and cannot rank as an exact stock match", () => {
+    const stageCount = Object.keys(loadScopeGrid().bugfix.stages).length;
+    const r = validateGrid({});
+    expect(r.valid).toBe(false);
+    expect(r.errors.join("\n")).toContain(
+      `Grid is missing ${stageCount} compiled stage entries`,
+    );
+    expect(r.nearest_stock?.[0]?.diff).toBe(stageCount);
+    expect(nearestStockScopes({})[0].diff).toBe(stageCount);
+  });
+
+  test("a partial stock grid counts the omitted stage as a difference", () => {
+    const partial = { ...loadScopeGrid().bugfix.stages };
+    delete partial["intent-capture"];
+    const r = validateGrid(partial);
+    expect(r.valid).toBe(false);
+    expect(r.errors.join("\n")).toContain(
+      "Grid is missing 1 compiled stage entry: intent-capture",
+    );
+    expect(r.nearest_stock?.[0]).toEqual({
+      scope: "bugfix",
+      diff: 1,
+      differs: ["intent-capture"],
+    });
+  });
+
+  test("stock adoption revalidates the 9-stage proposal as the 7-stage bugfix grid", () => {
+    const proposed = validateGrid(bugfixPlusTwo());
+    const adopted = validateGrid(loadScopeGrid().bugfix.stages);
+    expect(proposed.summary?.execute).toBe(9);
+    expect(adopted.summary?.execute).toBe(7);
+    expect(adopted.nearest_stock?.[0]).toEqual({
+      scope: "bugfix",
+      diff: 0,
+      differs: [],
+    });
+
+    const contract = readFileSync(COMPOSER_AGENT, "utf-8");
+    expect(contract).toContain(
+      "After adoption, validate the adopted stock grid again",
+    );
+    expect(contract).toContain(
+      'convert it to `mode: "custom"`',
+    );
+    expect(contract).toMatch(
+      /update EVERY row whose decision differs\s+from the final proposal grid/,
+    );
+  });
 });
 
 describe("t275 validate-grid CLI carries nearest_stock", () => {
@@ -108,6 +158,32 @@ describe("t275 validate-grid CLI carries nearest_stock", () => {
         "ci-pipeline",
         "practices-discovery",
       ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the CLI rejects an empty proposal instead of reporting a zero-stage match", () => {
+    const dir = mkdtempSync(join(tmpdir(), "aidlc-t275-empty-"));
+    try {
+      const proposal = join(dir, "p.json");
+      writeFileSync(proposal, "{}", "utf-8");
+      const r = spawnSync(
+        BUN,
+        [GRAPH_TOOL, "validate-grid", "--proposal", proposal],
+        { encoding: "utf-8" },
+      );
+      expect(r.status).toBe(1);
+      const body = JSON.parse(r.stdout) as {
+        valid: boolean;
+        errors: string[];
+        nearest_stock: Array<{ diff: number }>;
+      };
+      expect(body.valid).toBe(false);
+      expect(body.errors.join("\n")).toContain("compiled stage entries");
+      expect(body.nearest_stock[0].diff).toBe(
+        Object.keys(loadScopeGrid().bugfix.stages).length,
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

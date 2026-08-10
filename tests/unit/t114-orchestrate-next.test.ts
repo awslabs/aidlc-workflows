@@ -567,7 +567,20 @@ describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
     proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
     const out = runNext(proj, ["a completely separate standalone metrics dashboard"]).out;
+    const directive = JSON.parse(out) as {
+      ask_type?: string;
+      response_route?: string;
+      question?: string;
+      new_work_description?: string;
+      proposed_scope?: string;
+    };
     expect(out).toContain('"kind":"ask"');
+    expect(directive.ask_type).toBe("new-work-routing");
+    expect(directive.response_route).toBe("next");
+    expect(directive.new_work_description).toBe(
+      "a completely separate standalone metrics dashboard",
+    );
+    expect(directive.proposed_scope).toBeTruthy();
     // The ask names the active work and echoes the typed prose.
     expect(out).toContain("already in progress");
     expect(out).toContain("standalone metrics dashboard");
@@ -575,6 +588,9 @@ describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
     expect(out).toContain("continue");
     expect(out).toContain("Yes, set it up alongside");
     expect(out).toContain("plan");
+    expect(directive.question).toContain(
+      `as "${directive.proposed_scope}" work`,
+    );
   });
 
   test("keyword-matching prose names the scope a confirmed new intent would get", () => {
@@ -583,6 +599,7 @@ describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
     const out = runNext(proj, ["fix the broken login button"]).out;
     expect(out).toContain('"kind":"ask"');
     expect(out).toContain('as \\"bugfix\\" work');
+    expect(out).toContain('"proposed_scope":"bugfix"');
   });
 
   test("bare next still advances the current stage (no ask without prose)", () => {

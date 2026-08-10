@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.64] - 2026-08-10
+
+Closes the remaining composed-workflow routing and verification gaps. Stock matches now present exactly the grid that will run, incomplete model-produced grids cannot match a stock scope, and mid-flow new-work questions carry one typed continuation contract with a named scope. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* `aidlc-graph.ts validate-grid` now requires one explicit EXECUTE/SKIP entry for every compiled stage, and stock-distance calculation counts missing and extra keys instead of treating a partial grid as an exact match.
+* The adaptive composer revalidates an adopted stock grid and rebuilds its summary and stage-decision table from that final grid. Editing a matched stock plan converts it to a custom plan so the approved edits are persisted.
+* Mid-flow new-work offers now emit `ask_type: "new-work-routing"` with `response_route: "next"`, `new_work_description`, and `proposed_scope`; every harness uses that typed route instead of the ordinary report path, including rich prose that falls back to the selected default scope.
+* Concurrency and live-journey regressions now fail on contender crashes or malformed evidence, require actual persona reads and coherent completed-stage advancement, and verify that the new-work offer was rendered before confirmation.
+
 ## [2.5.63] - 2026-08-09
 
 Composed-workflow fixes and a test-suite hardening pass. The adaptive composer's stock-match decision is now a validator-computed number instead of a model's own grid comparison, so approving a plan that matched a stock scope no longer mints a surprise custom scope file in your project; `/aidlc --stage <slug> --single` no longer stalls waiting for a confirmation on stages that asked no questions; and describing new work mid-flow now deterministically produces a routing question. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.

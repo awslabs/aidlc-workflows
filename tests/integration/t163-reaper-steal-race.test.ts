@@ -44,7 +44,14 @@
 // cleaned between generations. Nothing is written under tests/fixtures/**.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { auditLockDir } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -216,12 +223,23 @@ describe("t163 reaper steal-race — exactly one process reclaims a stale lock (
         Bun.spawn({
           cmd: [BUN, driver],
           stdout: "pipe",
-          stderr: "ignore",
+          stderr: "pipe",
           env,
         }),
       );
-      await Promise.all(procs.map((p) => p.exited));
+      const statuses = await Promise.all(procs.map((p) => p.exited));
       const outs = await Promise.all(procs.map((p) => new Response(p.stdout).text()));
+      const errs = await Promise.all(procs.map((p) => new Response(p.stderr).text()));
+      for (let i = 0; i < procs.length; i++) {
+        expect(
+          statuses[i],
+          `contender ${i} exited nonzero\nstdout: ${outs[i]}\nstderr: ${errs[i]}`,
+        ).toBe(0);
+        expect(
+          outs[i].trim(),
+          `contender ${i} returned malformed evidence\nstderr: ${errs[i]}`,
+        ).toMatch(/^(?:LOST|WON \d+ (?:true|false))$/);
+      }
       const winners = winnerEvidence(outs);
       const seededWinners = winners.filter(({ reapedPid }) => reapedPid === STALE_OWNER_PID);
       const liveHolderRobberies = winners.filter(({ aliveAfterSteal }) => aliveAfterSteal);
@@ -251,17 +269,36 @@ describe("t163 reaper steal-race — exactly one process reclaims a stale lock (
       JSON.stringify({ pid: process.pid, startedAtMs: now }),
       "utf-8",
     );
+    // A broken reaper that steals this live holder must still be able to report
+    // its predecessor. Without this seed the child throws before printing WON,
+    // and a zero-winner assertion can pass on the crash.
+    rmSync(evidenceLockPath(), { recursive: true, force: true });
+    writeFileSync(evidenceStatePath(), JSON.stringify({ pid: process.pid }), "utf-8");
     const env = { ...process.env, AIDLC_LOCK_STALE_MS: "600000" }; // 10 min
     const N = 12;
     const procs = Array.from({ length: N }, () =>
-      Bun.spawn({ cmd: [BUN, driver], stdout: "pipe", stderr: "ignore", env }),
+      Bun.spawn({ cmd: [BUN, driver], stdout: "pipe", stderr: "pipe", env }),
     );
-    await Promise.all(procs.map((p) => p.exited));
+    const statuses = await Promise.all(procs.map((p) => p.exited));
     const outs = await Promise.all(procs.map((p) => new Response(p.stdout).text()));
+    const errs = await Promise.all(procs.map((p) => new Response(p.stderr).text()));
+    for (let i = 0; i < procs.length; i++) {
+      expect(
+        statuses[i],
+        `contender ${i} exited nonzero\nstdout: ${outs[i]}\nstderr: ${errs[i]}`,
+      ).toBe(0);
+      expect(
+        outs[i].trim(),
+        `contender ${i} returned malformed evidence\nstderr: ${errs[i]}`,
+      ).toMatch(/^(?:LOST|WON \d+ (?:true|false))$/);
+    }
     const wins = winnerEvidence(outs).length;
     // The live, under-age holder is never robbed → no contender acquires.
     expect(wins).toBe(0);
-    // The original live lock dir is intact (the CAS restore never destroyed it).
+    // The original live lock, not merely a replacement directory, is intact.
     expect(existsSync(lockDir)).toBe(true);
+    expect(
+      JSON.parse(readFileSync(join(lockDir, "owner.json"), "utf-8")).pid,
+    ).toBe(process.pid);
   }, 60000);
 });

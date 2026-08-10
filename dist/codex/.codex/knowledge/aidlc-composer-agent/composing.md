@@ -48,9 +48,11 @@ caution nor default economy is acceptable.
   a high component); fold framing/discovery stages whose output another
   EXECUTE stage already delivers, and name the un-SKIP trigger.
 - Prefer a stock scope when the validator's `nearest_stock` distance is
-  within 2 flips (adopt the stock grid; note the dropped flips at the gate);
-  a custom scope is maintenance surface the user owns forever. When no stock
-  scope fits, synthesize - do not force a bad match.
+  within 2 flips (adopt and revalidate the stock grid, then rebuild the summary
+  and decision table from that final grid; note the dropped flips at the gate);
+  a custom scope is maintenance surface the user owns forever. A human edit to
+  an adopted stock grid converts it to custom so the edit has a persistence
+  path. When no stock scope fits, synthesize - do not force a bad match.
 
 ## Rationale quality
 

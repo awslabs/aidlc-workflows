@@ -535,6 +535,21 @@ function askDirective(question: string): AskDirective {
   return { kind: "ask", question };
 }
 
+function newWorkRoutingAskDirective(
+  question: string,
+  description: string,
+  proposedScope: string,
+): AskDirective {
+  return {
+    kind: "ask",
+    ask_type: "new-work-routing",
+    response_route: "next",
+    question,
+    new_work_description: description,
+    proposed_scope: proposedScope,
+  };
+}
+
 function printDirective(message: string): PrintDirective {
   return { kind: "print", message };
 }
@@ -848,7 +863,7 @@ function composeDispatchDirective(
   }
   parts.push(
     `The composer runs \`bun ${hd}/tools/aidlc-utility.ts detect --json\` (read-only scan + scope-registry paths), estimates the five entropy components (intent ambiguity, structural uncertainty, verification entropy, risk, unresolved assumptions) per its persona, and returns a structured proposal: mode matched|custom, scopeName, an ars block (the five component scores with method codekb|fallback), an arsRationale, the per-stage EXECUTE/SKIP grid, a per-SKIP rationale, a summary the validator computed, and two pre-rendered markdown tables (ARS scores with bands; per-stage decisions with reasoning).`,
-    "Render the proposal to the human as THREE blocks before the approve/edit/reject gate (see the composer block in SKILL.md), leading with plain language rather than the scores: (1) a two-or-three-sentence recommendation in your own words - what kind of change this looks like, how much process you suggest, and the steps in plain terms - followed by the validator's summary line formatted \"<execute> stages EXECUTE / <skip> SKIP, <gates> approval gates\" plus scopeName and mode (the composer's mode is FINAL: it routed matched-vs-custom on the validator's nearest_stock distance, a matched proposal already carries the stock grid verbatim, and neither presentation nor your own comparison of grids ever changes the verdict - never re-derive it, and a MATCHED proposal writes no scope file); (2) the composer's stage-decision table verbatim, with any fold advisories beneath it; (3) under a \"Scoring detail (advisory)\" heading, the composer's ARS score table verbatim with its method line and arsRationale. Relay the composer's tables and numbers as returned - never recompute, collapse into prose, or drop them. Do NOT write any file and do NOT advance any stage before an explicit approval.",
+    "Render the proposal to the human as THREE blocks before the approve/edit/reject gate (see the composer block in SKILL.md), leading with plain language rather than the scores: (1) a two-or-three-sentence recommendation in your own words - what kind of change this looks like, how much process you suggest, and the steps in plain terms - followed by the validator's summary line formatted \"<execute> stages EXECUTE / <skip> SKIP, <gates> approval gates\" plus scopeName and mode (the composer's mode is FINAL for the grid it returned: it routed matched-vs-custom on the validator's nearest_stock distance, a matched proposal already carries the revalidated stock grid verbatim, and neither presentation nor your own comparison of grids ever changes the verdict - never re-derive it, and a MATCHED proposal writes no scope file; if the human edits that stock grid, re-dispatch the composer, which must convert it to CUSTOM and revalidate before re-presenting); (2) the composer's stage-decision table verbatim, with any fold advisories beneath it; (3) under a \"Scoring detail (advisory)\" heading, the composer's ARS score table verbatim with its method line and arsRationale. Relay the composer's tables and numbers as returned - never recompute, collapse into prose, or drop them. Do NOT write any file and do NOT advance any stage before an explicit approval.",
   );
   const directive = printDirective(parts.join(" "));
   // This is the moment issue 682's reporter described: the user has asked for a
@@ -2959,17 +2974,18 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       (getField(stateContent, "Current Stage") ?? "").trim() ||
       "the active workflow";
     // Name the scope a confirmed new intent would get (the same pure
-    // keyword inference Branch 8 uses) so the single ask carries everything
-    // the offer needs: active work, the new text, the proposed scope, and a
-    // "Yes"-led affirmative. No hit → the confirm path composes/infers.
+    // inference Branch 8 uses) so the single ask carries everything the offer
+    // needs: active work, the new text, the proposed scope, and a "Yes"-led
+    // affirmative. inferScopeFromText always returns a deterministic scope,
+    // including its selection-aware fallback for rich prose.
     const inferred = inferScopeFromText(flags.intent);
-    const asScope =
-      inferred.source === "keyword" ? ` as "${inferred.scope}" work` : "";
-    emit(askDirective(
+    emit(newWorkRoutingAskDirective(
       `Work is already in progress on: "${activeLabel}". You said: "${flags.intent}". ` +
         `Is this (1) part of that work - continue it; (2) a separate new piece of work - ` +
-        `Yes, set it up alongside${asScope} without touching the current one; ` +
+        `Yes, set it up alongside the current one as "${inferred.scope}" work without changing it; ` +
         "or (3) a change to how the remaining plan is shaped?",
+      flags.intent,
+      inferred.scope,
     ));
     return;
   }

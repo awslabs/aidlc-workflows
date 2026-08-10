@@ -8,10 +8,11 @@
 // SEQUENCE of single-turn driveKiroAcp invocations against one shared on-disk
 // workspace root, each bounded by stopAfterToolTitle at a tool boundary.
 //
-// The assertable surfaces are the verbatim tool output (tool_call_update text) +
-// the on-disk record state read straight off the workspace root. NEVER the prose,
-// and NEVER the inferred scope (the conductor infers a new intent's scope from the
-// new-work text — non-deterministic; the invariants below do not depend on it).
+// The assertable surfaces are primarily verbatim tool output (tool_call_update
+// text) + on-disk state. Beat 3a additionally checks the assistant's rendered
+// routing question because that user-visible offer is the behavior under test;
+// it uses broad semantic clauses and never pins exact wording. The inferred
+// scope remains outside the invariant.
 //
 // ALL FIVE beats drive through the PRODUCTION `aidlc` conductor (live-verified on
 // this branch, kiro-cli 2.7.0):
@@ -353,6 +354,20 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
           keepAlive: true,
         });
         expect(offerR1.toolCallIssues).toEqual([]);
+        expect(offerR1.stopReason).toBe("end_turn");
+        const renderedOffer = offerR1.assistantText.toLowerCase();
+        expect(
+          renderedOffer,
+          `new-work turn did not render a continuation route: ${offerR1.assistantText}`,
+        ).toMatch(/part of|continue/);
+        expect(
+          renderedOffer,
+          `new-work turn did not render a separate-work route: ${offerR1.assistantText}`,
+        ).toMatch(/separate|second intent|new (?:piece of )?work/);
+        expect(
+          renderedOffer,
+          `new-work turn did not render a reshape route: ${offerR1.assistantText}`,
+        ).toMatch(/reshape|re-shape|remaining plan|change.*plan/);
         // OUTCOME pins, not tool-surface pins: live conductors compare via
         // `intent --json`, a registry read, or the engine ask - all legitimate.
         // What the offer turn must NOT do is deterministic: no birth (never
