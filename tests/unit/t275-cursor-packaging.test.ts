@@ -1,4 +1,4 @@
-// t250-cursor-packaging: dist/cursor parity + drift guard + shell shape.
+// t275-cursor-packaging: dist/cursor parity + drift guard + shell shape.
 //
 // covers: file:tools/aidlc-lib.ts, function:runnerFrontmatterAdditions
 //
@@ -57,7 +57,7 @@ function* walk(dir: string): Generator<string> {
   }
 }
 
-describe("t250 dist/cursor packaging parity + shell shape", () => {
+describe("t275 dist/cursor packaging parity + shell shape", () => {
   test("1: committed dist/cursor matches the packaging script (drift guard)", () => {
     const r = spawnSync("bun", [PACKAGE_SCRIPT, "cursor", "--check"], {
       encoding: "utf-8",
@@ -216,7 +216,7 @@ describe("t250 dist/cursor packaging parity + shell shape", () => {
   });
 
   test("8: doctor recognizes a pristine dist/cursor install (adapter + wiring checks)", () => {
-    const root = mkdtempSync(join(tmpdir(), "t250-cursor-doctor-"));
+    const root = mkdtempSync(join(tmpdir(), "t275-cursor-doctor-"));
     try {
       const project = join(root, "project");
       cpSync(CURSOR_ROOT, project, { recursive: true });
@@ -246,7 +246,7 @@ describe("t250 dist/cursor packaging parity + shell shape", () => {
   });
 
   test("9: Cursor installer merges shared surfaces without overwriting project files", () => {
-    const root = mkdtempSync(join(tmpdir(), "t250-cursor-install-"));
+    const root = mkdtempSync(join(tmpdir(), "t275-cursor-install-"));
     const project = join(root, "project");
     try {
       const cursorDir = join(project, ".cursor");
@@ -321,7 +321,7 @@ describe("t250 dist/cursor packaging parity + shell shape", () => {
   });
 
   test("10: Cursor installer refuses malformed shared config before copying", () => {
-    const root = mkdtempSync(join(tmpdir(), "t250-cursor-install-malformed-"));
+    const root = mkdtempSync(join(tmpdir(), "t275-cursor-install-malformed-"));
     const project = join(root, "project");
     try {
       mkdirSync(join(project, ".cursor"), { recursive: true });
@@ -341,7 +341,7 @@ describe("t250 dist/cursor packaging parity + shell shape", () => {
   });
 
   test("11: Cursor installer refuses unresolved file collisions before copying", () => {
-    const root = mkdtempSync(join(tmpdir(), "t250-cursor-install-collision-"));
+    const root = mkdtempSync(join(tmpdir(), "t275-cursor-install-collision-"));
     const project = join(root, "project");
     try {
       mkdirSync(join(project, ".cursor", "rules"), { recursive: true });
@@ -374,7 +374,7 @@ describe("t250 dist/cursor packaging parity + shell shape", () => {
   });
 
   test("13: Cursor installer migrates only verified pre-receipt files", () => {
-    const root = mkdtempSync(join(tmpdir(), "t250-cursor-upgrade-"));
+    const root = mkdtempSync(join(tmpdir(), "t275-cursor-upgrade-"));
     const project = join(root, "project");
     try {
       const stagedDist = join(root, "cursor-dist");
@@ -519,7 +519,7 @@ describe("t250 dist/cursor packaging parity + shell shape", () => {
   });
 
   test("16: receipt-backed reinstall recompiles explicit plugin selection against upgraded core", () => {
-    const root = mkdtempSync(join(tmpdir(), "t250-cursor-selection-reinstall-"));
+    const root = mkdtempSync(join(tmpdir(), "t275-cursor-selection-reinstall-"));
     const project = join(root, "project");
     try {
       const installer = join(CURSOR_ROOT, "install.ts");
@@ -594,7 +594,7 @@ describe("t250 dist/cursor packaging parity + shell shape", () => {
   });
 
   test("17: reinstall restores missing Cursor surfaces for the active space", () => {
-    const root = mkdtempSync(join(tmpdir(), "t250-cursor-active-restore-"));
+    const root = mkdtempSync(join(tmpdir(), "t275-cursor-active-restore-"));
     const project = join(root, "project");
     try {
       const installer = join(CURSOR_ROOT, "install.ts");

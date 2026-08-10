@@ -3208,7 +3208,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/unit/t250-cursor-packaging.test.ts",
+          "file": "tests/unit/t275-cursor-packaging.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -3988,7 +3988,7 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/unit/t251-cursor-adapter.test.ts",
+          "file": "tests/unit/t276-cursor-adapter.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -4056,7 +4056,7 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/unit/t251-cursor-adapter.test.ts",
+          "file": "tests/unit/t276-cursor-adapter.test.ts",
           "mechanism": "cli"
         }
       ],

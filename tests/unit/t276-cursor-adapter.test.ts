@@ -1,4 +1,4 @@
-// t251-cursor-adapter: pipe live-captured Cursor hook payloads through the
+// t276-cursor-adapter: pipe live-captured Cursor hook payloads through the
 // authored adapter (run() export) against a seeded project and assert the
 // Claude-shaped conversions on the wire.
 //
@@ -198,7 +198,7 @@ function projectWithReadyReview(): { project: string; artifact: string } {
   return { project, artifact };
 }
 
-describe("t251 cursor adapter payload conversion", () => {
+describe("t276 cursor adapter payload conversion", () => {
   test("1: sessionStart re-keys core additionalContext to Cursor's additional_context", () => {
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");
