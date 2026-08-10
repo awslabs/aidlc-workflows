@@ -150,6 +150,8 @@ instead - [Running on Kiro CLI](harnesses/kiro-cli.md),
 [Running on Codex CLI](harnesses/codex-cli.md),
 [AI-DLC on opencode](harnesses/opencode.md), or
 [AI-DLC on GitHub Copilot](harnesses/copilot.md) - each covers the prerequisites
+[AI-DLC on Cursor](harnesses/cursor.md), or
+[AI-DLC on opencode](harnesses/opencode.md) - each covers the prerequisites
 and post-copy steps that differ.
 
 The `cp` commands below run from a clone of this repository on the `v2`
@@ -216,6 +218,17 @@ cp dist/codex/AGENTS.md   your-project/AGENTS.md   # or merge into yours
 ```
 
 Then continue in [AI-DLC on Codex CLI](harnesses/codex-cli.md): the project must be a **git repository**, and the install is not complete until the `.gitignore` entries and the hook trust pre-seed from that chapter are applied.
+
+</details>
+
+<details markdown="1">
+<summary><strong>Cursor</strong></summary>
+
+```bash
+bun dist/cursor/install.ts your-project
+```
+
+Then continue in [AI-DLC on Cursor](harnesses/cursor.md) for IDE and CLI usage, hook behavior, permissions, and installer refresh rules.
 
 </details>
 

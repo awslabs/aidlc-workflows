@@ -8,8 +8,9 @@
 // failure is caught and logged to the hooks-health file instead of swallowed by
 // `2>/dev/null || true`.
 //
-// Runs on SessionStart (Claude/Codex) or via the Kiro .kiro.hook. Harness-agnostic:
-//   PLUGIN_ROOT   ← CLAUDE_PLUGIN_ROOT | PLUGIN_ROOT | AIDLC_PLUGIN_ROOT
+// Runs on SessionStart (Claude/Codex/Cursor) or via the Kiro .kiro.hook. Harness-agnostic:
+//   PLUGIN_ROOT   ← CLAUDE_PLUGIN_ROOT | PLUGIN_ROOT | AIDLC_PLUGIN_ROOT |
+//                   this file's parent plugin directory
 //   PROJECT_DIR   ← CLAUDE_PROJECT_DIR | AIDLC_PROJECT_DIR | PWD  (Codex unsets the first)
 //   HARNESS_LEAF  ← AIDLC_HARNESS_DIR  (".claude" default)
 //
@@ -28,13 +29,20 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { basename, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 const PLUGIN_ROOT =
-  process.env.CLAUDE_PLUGIN_ROOT || process.env.PLUGIN_ROOT || process.env.AIDLC_PLUGIN_ROOT || "";
+  process.env.CLAUDE_PLUGIN_ROOT ||
+  process.env.PLUGIN_ROOT ||
+  process.env.AIDLC_PLUGIN_ROOT ||
+  dirname(dirname(fileURLToPath(import.meta.url)));
 const PROJECT_DIR = resolve(
-  process.env.CLAUDE_PROJECT_DIR || process.env.AIDLC_PROJECT_DIR || process.env.PWD || process.cwd(),
+  process.env.CLAUDE_PROJECT_DIR ||
+    process.env.AIDLC_PROJECT_DIR ||
+    process.env.PWD ||
+    process.cwd(),
 );
 const HARNESS_LEAF = process.env.AIDLC_HARNESS_DIR || ".claude";
 const HARNESS_DIR = join(PROJECT_DIR, HARNESS_LEAF);
@@ -126,6 +134,7 @@ function pluginNameFromRoot(): string {
     ".claude-plugin",
     ".codex-plugin",
     ".opencode-plugin",
+    ".cursor-plugin",
     ".plugin",
     ".kiro-plugin",
   ]) {
@@ -370,11 +379,6 @@ export async function compose(): Promise<void> {
 if (!existsSync(join(HARNESS_DIR, "tools", "aidlc-graph.ts"))) {
   return; // not an AIDLC project — nothing to do (no drop: not our project)
 }
-if (!PLUGIN_ROOT) {
-  recordDrop("plugin root env not set (CLAUDE_PLUGIN_ROOT/PLUGIN_ROOT/AIDLC_PLUGIN_ROOT)");
-  await flushDrops();
-  return;
-}
 // A set-but-wrong PLUGIN_ROOT (e.g. a mistyped path from a hand-run command)
 // would otherwise pass the non-empty check and then find nothing to copy/merge —
 // a silent no-op. Record it so it surfaces in --doctor rather than looking clean.
@@ -595,6 +599,16 @@ function projectOpencodeAgentMemory(raw: string): string {
     .replaceAll(".aidlc/rules/aidlc-team.md", "aidlc/spaces/default/memory/team.md")
     .replaceAll(".aidlc/rules/aidlc-project.md", "aidlc/spaces/default/memory/project.md")
     .replaceAll(".aidlc/rules/", "aidlc/spaces/default/memory/");
+}
+
+function projectCursorNativeAgent({ file, content }: CopyContext): string {
+  const m = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
+  if (!m) throw new Error(`${file}: plugin agent has no closed frontmatter block`);
+  const fm = m[1]
+    .split(/\r?\n/)
+    .filter((line) => !/^(?:model|tier|effort|variant):/.test(line))
+    .join("\n");
+  return content.replace(m[0], () => `---\n${fm}\n---\n`);
 }
 
 function opencodeNativeAgentPrecheck(dst: string): CopyPrecheck {
@@ -1376,9 +1390,13 @@ try {
     changed = copyTreeNoClobber(join(PLUGIN_ROOT, "stages"), STAGES_DIR, "stage", stagePrecheck) || changed;
     const scopesDir = join(HARNESS_DIR, "scopes");
     const agentsDir = join(HARNESS_DIR, "agents");
+    const pluginAgentsDir =
+      HARNESS_LEAF === ".cursor"
+        ? join(PLUGIN_ROOT, "aidlc", "agents")
+        : join(PLUGIN_ROOT, "agents");
     changed = copyTreeNoClobber(join(PLUGIN_ROOT, "scopes"), scopesDir, "scopes", installedNameCollisionPrecheck(scopesDir, "scopes")) || changed;
     changed = copyTreeNoClobber(
-      join(PLUGIN_ROOT, "agents"),
+      pluginAgentsDir,
       agentsDir,
       "agents",
       combinePrechecks(
@@ -1387,7 +1405,9 @@ try {
       ),
       HARNESS_LEAF === ".aidlc"
         ? ({ content }) => projectOpencodeAgentMemory(content)
-        : undefined,
+        : HARNESS_LEAF === ".cursor"
+          ? projectCursorNativeAgent
+          : undefined,
     ) || changed;
     if (IS_OPENCODE) {
       const rosterDir = nativeAgentsDir();

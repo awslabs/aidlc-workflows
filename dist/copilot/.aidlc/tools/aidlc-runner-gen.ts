@@ -66,6 +66,7 @@ import {
   loadScopeMetadataAll,
   loadStageGraphAll,
   pluginsEnabled,
+  runnerFrontmatterAdditions,
   scopeGridPath,
 } from "./aidlc-lib.ts";
 import { type GraphStage, loadGraph } from "./aidlc-graph.ts";
@@ -119,6 +120,11 @@ function stageSlugs(): string[] {
 // initialization phase via `/aidlc --init`, NOT a single stage.
 const INIT_RUNNER_DIR = "aidlc-init";
 
+function nativeRunnerFrontmatter(): string {
+  const lines = runnerFrontmatterAdditions();
+  return lines.length > 0 ? `${lines.join("\n")}\n` : "";
+}
+
 // Render the ~6-line runner shell for one stage. The body is intentionally thin:
 // it states what the runner does and the one command it drives. It does NOT
 // load the conductor persona (the engine bakes it into the first `next`), and it
@@ -146,6 +152,7 @@ description: >
   stops. The main workflow's Current Stage is never touched.
 argument-hint: ""
 user-invocable: true
+${nativeRunnerFrontmatter()}\
 ---
 
 # AI-DLC Stage Runner — ${node.slug}
@@ -201,6 +208,7 @@ description: >
   packaging over that move. Pass \`--scope <name>\` to seed the initial scope, or a freeform description of what to build.
 argument-hint: "[--scope <name>] [description]"
 user-invocable: true
+${nativeRunnerFrontmatter()}\
 ---
 
 # AI-DLC — start a workflow (birth the first intent)
@@ -267,6 +275,7 @@ description: >
   composer even when a stock scope would match.
 argument-hint: "[description | --report <path> | --new-scope]"
 user-invocable: true
+${nativeRunnerFrontmatter()}\
 ---
 
 # AI-DLC - compose a workflow plan
@@ -606,6 +615,7 @@ description: >
   without this skill.
 argument-hint: "[description | --status | --stage <slug|#> | --phase <name|#>]"
 user-invocable: true
+${nativeRunnerFrontmatter()}\
 ---
 
 # AI-DLC — ${scope} scope

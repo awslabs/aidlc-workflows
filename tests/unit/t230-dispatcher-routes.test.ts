@@ -699,6 +699,15 @@ describe("t230 dispatcher hook routing", () => {
       expect(codex.path.endsWith("aidlc-codex-adapter.ts")).toBe(true);
     }
 
+    const cursor = resolveAction(["adapter", "cursor", "validate-state"]);
+    expect(cursor.type).toBe("adapter");
+    if (cursor.type === "adapter") {
+      expect(cursor.harness).toBe("cursor");
+      expect(cursor.target).toBe("validate-state");
+      expect(cursor.extraArgs).toEqual([]);
+      expect(cursor.path.endsWith("aidlc-cursor-adapter.ts")).toBe(true);
+    }
+
     const kiro = resolveAction([
       "adapter",
       "kiro",

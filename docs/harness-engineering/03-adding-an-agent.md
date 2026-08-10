@@ -98,6 +98,8 @@ in the agent's knowledge files, as with delivery plans, CI/CD YAML, and
 runbook scaffolding -- templated is the one tier that steps effort down (on
 Claude Code, Codex, and opencode; on Kiro and Copilot all tiers inherit the session model
 and effort, so the tier changes nothing there). When
+Claude Code, Codex, and opencode; on Kiro and Cursor all tiers inherit the
+session model and effort, so the tier changes nothing there). When
 in doubt, use `judgment`: the projection table (and a project's `tier_cap`)
 can always step cost down later, but a persona authored too low silently
 under-reasons. See [Agent System](../reference/05-agent-system.md) for the

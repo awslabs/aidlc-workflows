@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 const MODULE_TOOLS_DIR = dirname(fileURLToPath(import.meta.url));
 const MODULE_HARNESS_ROOT = join(MODULE_TOOLS_DIR, "..");
-const KNOWN_HARNESSES = [".claude", ".kiro", ".codex", ".aidlc"] as const;
+const KNOWN_HARNESSES = [".claude", ".kiro", ".codex", ".cursor", ".aidlc"] as const;
 
 export interface HarnessLocation {
   harnessDir?: string;
@@ -91,6 +91,7 @@ export function runtimeHarnessName(
   if (harnessDir === ".aidlc") return "opencode";
   if (harnessDir === ".codex") return "codex";
   if (harnessDir === ".kiro") return "kiro";
+  if (harnessDir === ".cursor") return "cursor";
   return "claude";
 }
 

@@ -475,6 +475,15 @@ describe("t264 (c) harness registration", () => {
     expect(plugin).toContain("review-freeze: this write would invalidate");
   });
 
+  test("Cursor adapter runs review-freeze in its fail-closed preToolUse guard chain", () => {
+    const adapter = readFileSync(
+      join(REPO_ROOT, "harness", "cursor", "hooks", "aidlc-cursor-adapter.ts"),
+      "utf-8",
+    );
+    expect(adapter).toContain('file: "aidlc-review-freeze.ts"');
+    expect(adapter).toContain('input: claudeShaped("PreToolUse", reviewerToolName)');
+  });
+
   test("Kiro IDE ships the hook body but NO registration (prose-only harness)", () => {
     // The body lands via the whole-dir hooks copy; no .kiro.hook wiring file
     // consumes it (PreToolUse tool inputs are not uniformly available there).

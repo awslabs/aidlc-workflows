@@ -2,8 +2,8 @@
 //
 // t123 (smoke) — Agent-Skills-spec structural conformance over EVERY shipped
 // harness's declared skill root. Migrated from
-// tests/smoke/t123-skills-spec-conformance.sh (TAP plan: 1 dir-count guard +
-// 5 structural assertions per skill = 1 + 5×38 = 191 assertions).
+// tests/smoke/t123-skills-spec-conformance.sh (one dir-count guard plus five
+// structural assertions per skill; Cursor adds three native utility skills).
 //
 // Mechanism: none. There is no tool / process / argv seam under test — the
 // subject IS the on-disk shape of each shipped skill set and the bytes of each
@@ -20,6 +20,7 @@
 // Subject under test (each shipped skill set + each SKILL.md):
 //   dist/<harness>/<skill-root>/<skill>/SKILL.md, for the DERIVED expected set:
 //     - 4 base skills (orchestrator + 3 read-only session skills)
+//     - 3 Cursor-only utility shortcuts on the Cursor harness
 //     - the generator's default-batch scope-runners (imported here, not
 //       hardcoded)
 //     - one aidlc-<slug> per RUNNABLE compiled stage (every stage whose
@@ -39,8 +40,8 @@
 // shipped set EQUALS that derived set.
 //
 // Old TAP -> new test parity (1:1, no guarantee dropped; several STRONGER):
-//   .sh test 1 (dir-count: shipped set == base 4 + 4 scope-runners +
-//       29 stage-runners + aidlc-init, sorted assert_eq)
+//   .sh test 1 (dir-count: shipped set == the common generated/base set plus
+//       any harness-native skills, sorted assert_eq)
 //         -> "shipped skill set == derived expected set (sorted, exact)"
 //            STRONGER: asserts the two sorted arrays equal element-by-element
 //            (toEqual), not just the joined string the .sh compared.
@@ -102,7 +103,7 @@ const INIT_RUNNER_SKILL = "aidlc-init";
 // `/aidlc compose ...` (the adaptive composer's typeable entry).
 const COMPOSE_RUNNER_SKILL = "aidlc-compose";
 
-const EXPECTED_SKILLS = [
+const COMMON_EXPECTED_SKILLS = [
   ...BASE_SKILLS,
   ...SCOPE_RUNNER_SKILLS,
   ...RUNNER_SKILLS,
@@ -113,11 +114,20 @@ const EXPECTED_SKILLS = [
 const FRESH_SESSION_TEXT: Record<string, string> = {
   claude: "use `/clear` (or restart Claude Code)",
   codex: "exit or restart Codex CLI and start a new session",
+  cursor: "exit or restart the current harness and start a new session",
   kiro: "exit or restart Kiro CLI and start a new session",
   "kiro-ide": "open a new Kiro IDE chat",
   opencode: "exit or restart OpenCode and start a new session",
   copilot: "start a new Copilot CLI session or open a new VS Code agent chat",
 };
+const CURSOR_SHORTCUT_SKILLS = ["aidlc-jump", "aidlc-scope", "aidlc-status"];
+
+function expectedSkills(harnessName: string): string[] {
+  return [
+    ...COMMON_EXPECTED_SKILLS,
+    ...(harnessName === "cursor" ? CURSOR_SHORTCUT_SKILLS : []),
+  ].sort();
+}
 
 /**
  * Discover the shipped skill set: every directory under the skills dir that
@@ -147,7 +157,7 @@ function frontmatterName(text: string): string {
 describe("t123 (smoke) skills-spec conformance — every shipped skill set", () => {
   for (const harness of HARNESS_MATRIX) {
     test(`${harness.name}: shipped skill set == derived expected set (sorted, exact)`, () => {
-      expect(discoveredSkills(harness.skillsRoot)).toEqual(EXPECTED_SKILLS);
+      expect(discoveredSkills(harness.skillsRoot)).toEqual(expectedSkills(harness.name));
     });
 
     test(`${harness.name}: generated runners invoke the manifest harness dir`, () => {
@@ -188,7 +198,7 @@ describe("t123 (smoke) skills-spec conformance — every shipped skill set", () 
 // exactly the .sh's `for skill in $(echo "$EXPECTED_SKILLS" | ... | sort)`.
 describe("t123 (smoke) skills-spec conformance — per-skill SKILL.md invariants", () => {
   for (const harness of HARNESS_MATRIX) {
-    for (const skill of EXPECTED_SKILLS) {
+    for (const skill of expectedSkills(harness.name)) {
       const file = join(harness.skillsRoot, skill, "SKILL.md");
 
       test(`${harness.name}/${skill}: SKILL.md exists`, () => {

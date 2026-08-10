@@ -9,6 +9,19 @@ All AI-DLC commands start with the orchestrator invocation. This chapter is a co
 > the [Kiro CLI](harnesses/kiro-cli.md), [Kiro IDE](harnesses/kiro-ide.md),
 > [Codex CLI](harnesses/codex-cli.md), [opencode](harnesses/opencode.md), and
 > [GitHub Copilot](harnesses/copilot.md) harness guides.
+> Cursor, and opencode you type `/aidlc`; on Codex CLI it is `$aidlc` (or
+> `/skills` → aidlc). The flags and behaviour below are identical either way —
+> only the prefix changes. The examples use `/aidlc`; substitute `$aidlc` on
+> Codex. See the [Kiro CLI](harnesses/kiro-cli.md),
+> [Kiro IDE](harnesses/kiro-ide.md), [Codex CLI](harnesses/codex-cli.md),
+> [Cursor](harnesses/cursor.md), and [opencode](harnesses/opencode.md) harness
+> guides.
+
+> **Cursor shortcuts.** Cursor also exposes `/aidlc-status`,
+> `/aidlc-jump --stage <slug|#>` (or `--phase <name|#>`), and
+> `/aidlc-scope <name>` as native skills. They package the matching `/aidlc`
+> forms below and use the same engine; they are aliases, not alternate state
+> paths.
 
 ---
 

@@ -50,6 +50,7 @@ nav = [
       "guide/harnesses/kiro-cli.md",
       "guide/harnesses/kiro-ide.md",
       "guide/harnesses/codex-cli.md",
+      "guide/harnesses/cursor.md",
       "guide/harnesses/opencode.md",
     ] },
     { "Help and Examples" = [

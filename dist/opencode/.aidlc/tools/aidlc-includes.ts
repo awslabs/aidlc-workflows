@@ -9,6 +9,7 @@
 //   • Kiro IDE — an always-included steering file with live file references.
 //   • Codex — the AIDLC_RULES_DIR env var in config.toml.
 //   • opencode — the `instructions` glob in the project-root opencode.json.
+//   • Cursor — standing + phase read pointers in <harness>/rules/*.mdc.
 //
 // These surfaces stay COMMITTED (each carries load-bearing engine wiring beyond
 // the include — Kiro's agent JSON holds the conductor prompt + hook block,
@@ -184,6 +185,48 @@ export function repointHarnessIncludes(projectDir: string, space?: string): stri
       const raw = readSafe(stubPath);
       if (raw !== null) {
         repointFile(stubPath, join(harness, "rules", "aidlc.md"), raw, sp, repointClaudeStub, written);
+      }
+    }
+    return written;
+  }
+
+  if (harness === ".cursor") {
+    // Cursor — every .cursor/rules/*.mdc method pointer lists plain paths
+    // (Cursor rules have no @-import expansion); rewrite the space segment in
+    // each one. The persona files in .cursor/agents/ carry active-space memory
+    // paths in their bodies exactly like opencode's.
+    const rulesDir = join(harnessRoot, "rules");
+    if (existsSync(rulesDir)) {
+      for (const name of readdirSync(rulesDir).sort()) {
+        if (!name.endsWith(".mdc")) continue;
+        const p = join(rulesDir, name);
+        const raw = readSafe(p);
+        if (raw === null) continue;
+        repointFile(
+          p,
+          join(harness, "rules", name),
+          raw,
+          sp,
+          repointOpencodeAgentMemory,
+          written,
+        );
+      }
+    }
+    const agentsDir = join(harnessRoot, "agents");
+    if (existsSync(agentsDir)) {
+      for (const name of readdirSync(agentsDir).sort()) {
+        if (!name.endsWith(".md")) continue;
+        const p = join(agentsDir, name);
+        const raw = readSafe(p);
+        if (raw === null) continue;
+        repointFile(
+          p,
+          join(harness, "agents", name),
+          raw,
+          sp,
+          repointOpencodeAgentMemory,
+          written,
+        );
       }
     }
     return written;

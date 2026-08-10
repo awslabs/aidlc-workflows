@@ -602,6 +602,17 @@ describe("t265c registrations", () => {
     expect(plugin).toContain("aidlc-plan-approval-guard.ts");
   });
 
+  test("cursor: the adapter runs the guard before recording a Task spawn", () => {
+    const adapter = readFileSync(
+      join(REPO_ROOT, "harness", "cursor", "hooks", "aidlc-cursor-adapter.ts"),
+      "utf-8",
+    );
+    const guard = adapter.indexOf('blockedByGuard("aidlc-plan-approval-guard.ts"');
+    const ledger = adapter.indexOf("recordSpawn(sub)", guard);
+    expect(guard).toBeGreaterThan(-1);
+    expect(ledger).toBeGreaterThan(guard);
+  });
+
   test("kiro-ide: no registration ships; the SKILL documents the prose-only bound", () => {
     const ideHooks = join(REPO_ROOT, "harness", "kiro-ide", "hooks");
     expect(existsSync(join(ideHooks, "aidlc-plan-approval-guard.kiro.hook"))).toBe(false);

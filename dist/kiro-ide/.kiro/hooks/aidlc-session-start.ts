@@ -10,6 +10,9 @@
 //   resume  — /resume from a prior session
 //   clear   — /clear used to start anew within an existing session
 //   compact — session resuming after context compaction
+// The Cursor adapter additionally sends `rebind_check: true` with source=resume
+// on beforeSubmitPrompt because Cursor's sessionStart has no resume source.
+// That internal probe emits no session event and returns only a rebind offer.
 //
 // Mapping (SESSION_COMPACTED is emitted by validate-state.ts PreCompact,
 // NOT here — firing it twice would pollute the audit trail):
@@ -55,6 +58,10 @@ const projectDir = resolveProjectDirFromHook(import.meta.url);
 // before the first intent is born; retaining its id lets intent-birth stamp that
 // session to the new record without inventing session ownership in the tool.
 let source = "startup";
+let rebindCheckOnly = false;
+// The conversation id Claude Code stamps on every hook input. Used to key the
+// per-session→intent record (resume rebind below); "" when absent (a TTY/empty
+// invocation) — the rebind logic no-ops without it.
 let sessionId = "";
 // The live transcript path, if the host pipes it on SessionStart. Persisted
 // below so the statusline/state tools can find the transcript even before the
@@ -72,6 +79,7 @@ if (!process.stdin.isTTY) {
           if (typeof rawObj.transcript_path === "string") {
             transcriptPath = rawObj.transcript_path;
           }
+          rebindCheckOnly = rawObj.rebind_check === true;
         } else {
           source = "unknown";
         }
@@ -123,9 +131,11 @@ writeFileSync(join(healthDir, "session-start.last"), isoTimestamp(), "utf-8");
 // audit-existence guard — the state-file guard above is the sole "workflow
 // is active" check.
 let eventType: string | null = null;
-if (source === "startup" || source === "clear") eventType = "SESSION_STARTED";
-else if (source === "resume") eventType = "SESSION_RESUMED";
-else if (source === "malformed") eventType = "SESSION_STARTED"; // visible via Source field
+if (!rebindCheckOnly) {
+  if (source === "startup" || source === "clear") eventType = "SESSION_STARTED";
+  else if (source === "resume") eventType = "SESSION_RESUMED";
+  else if (source === "malformed") eventType = "SESSION_STARTED"; // visible via Source field
+}
 // compact / unknown: no emission — compact is owned by PreCompact hook
 
 if (eventType) {
@@ -199,6 +209,18 @@ if (sessionId) {
     // Compact/unknown session events still need stable SessionEnd attribution.
     writeSessionIntentUuid(projectDir, sessionId, liveUuid);
   }
+}
+
+// Cursor can only surface this probe through beforeSubmitPrompt's blocking
+// user_message channel. Consume a real drift after returning it so the next
+// submission can either run the named switch command (Yes) or continue on the
+// live intent (No) instead of receiving the same warning forever.
+if (rebindCheckOnly) {
+  if (rebindOffer) {
+    if (liveUuid) writeSessionIntentUuid(projectDir, sessionId, liveUuid);
+    process.stdout.write(`${JSON.stringify({ additionalContext: rebindOffer })}\n`);
+  }
+  return 0;
 }
 
 // Read and parse state file for context injection

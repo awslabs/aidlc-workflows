@@ -375,6 +375,10 @@ describe("t266 conversation-language rule layer", () => {
           surface = join(harness.distRoot, "AGENTS.md");
           required = `@${MEMORY_DIR}/org.md`;
           break;
+        case "cursor-rule":
+          surface = join(harness.engineRoot, "rules", "aidlc.mdc");
+          required = `- ${MEMORY_DIR}/org.md`;
+          break;
         case "kiro-steering":
           // The IDE's real surface: an always-included steering file whose
           // #[[file:...]] references pull the live memory tree in verbatim.
@@ -410,6 +414,12 @@ describe("t266 conversation-language rule layer", () => {
         expect(
           /^---\n(?:.*\n)*?inclusion:\s*always\n(?:.*\n)*?---/.test(body),
           `${harness.name}'s steering file declares inclusion: always`,
+        ).toBe(true);
+      }
+      if (include === "cursor-rule") {
+        expect(
+          /^---\n(?:.*\n)*?alwaysApply:\s*true\n(?:.*\n)*?---/.test(body),
+          `${harness.name}'s standing rule declares alwaysApply: true`,
         ).toBe(true);
       }
 

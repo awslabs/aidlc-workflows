@@ -594,7 +594,7 @@ function replaceGeneratedRegion(
   if (after !== before) writeFileSync(path, after, "utf-8");
 }
 
-function regenerateSelectionSurfaces(projectDir: string): void {
+export function regenerateSelectionSurfaces(projectDir: string): void {
   runBunTool(projectDir, "aidlc-graph.ts", ["compile"], "aidlc-graph compile");
   resetSelectionSensitiveCaches();
   const skillsDir = resolveSkillsPath([], { mutable: true, projectDir });
@@ -1358,6 +1358,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
         "aidlc-review-freeze",
       );
     }
+    if (harness === ".cursor") tsHooks.push("aidlc-cursor-adapter");
     for (const h of tsHooks) {
       const hookPath = join(projectDir, harness, "hooks", `${h}.ts`);
       results.push({
@@ -1557,6 +1558,24 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
       label:
         "headless runs: set GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1 for `copilot -p` sessions — repo hooks are off by default in prompt mode",
     });
+  } else if (harness === ".cursor") {
+    // Cursor: hooks.json (the hook wiring), cli.json (permissions), and the
+    // standing + phase method rule pointers are all inside .cursor/.
+    for (const [file, what, from] of [
+      ["hooks.json", "hook wiring", "dist/cursor/.cursor/hooks.json"],
+      ["cli.json", "Shell(bun) permission pre-approval", "dist/cursor/.cursor/cli.json"],
+      ["rules/aidlc.mdc", "standing method rule (alwaysApply read instruction)", "dist/cursor/.cursor/rules/aidlc.mdc"],
+      ["rules/aidlc-phase-ideation.mdc", "Ideation phase rule (agent-decided read instruction)", "dist/cursor/.cursor/rules/aidlc-phase-ideation.mdc"],
+      ["rules/aidlc-phase-inception.mdc", "Inception phase rule (agent-decided read instruction)", "dist/cursor/.cursor/rules/aidlc-phase-inception.mdc"],
+      ["rules/aidlc-phase-construction.mdc", "Construction phase rule (agent-decided read instruction)", "dist/cursor/.cursor/rules/aidlc-phase-construction.mdc"],
+      ["rules/aidlc-phase-operation.mdc", "Operation phase rule (agent-decided read instruction)", "dist/cursor/.cursor/rules/aidlc-phase-operation.mdc"],
+    ] as const) {
+      results.push({
+        pass: existsSync(join(projectDir, harness, file)),
+        label: `${file} present (${what})`,
+        fix: `copy from \`${from}\``,
+      });
+    }
   } else if (harness === ".aidlc") {
     // opencode: the wiring config is the project-root opencode.json/jsonc
     // (permissions + the method-include instructions glob) plus the /aidlc
@@ -1585,7 +1604,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
   // 4b. Dual-harness coexistence (D-11): another harness tree installed AND a
   // workflow active is supported-but-untested — warn (advisory pass with a
   // visible label), never block.
-  const otherTrees = [".claude", ".kiro", ".codex", ".aidlc"].filter(
+  const otherTrees = [".claude", ".kiro", ".codex", ".aidlc", ".cursor"].filter(
     (h) => h !== harness && existsSync(join(projectDir, h, "tools", "aidlc-lib.ts")),
   );
   if (
@@ -3238,6 +3257,7 @@ const SCAN_EXCLUDE = new Set([
   ".codex",
   ".opencode",
   ".aidlc",
+  ".cursor",
   "aidlc-docs",
   "node_modules",
   ".git",

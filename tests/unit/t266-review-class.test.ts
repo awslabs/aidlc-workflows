@@ -145,6 +145,7 @@ describe("t266 review class", () => {
       "dist/kiro-ide/.kiro/tools/data/stage-graph.json",
       "dist/codex/.codex/tools/data/stage-graph.json",
       "dist/opencode/.aidlc/tools/data/stage-graph.json",
+      "dist/cursor/.cursor/tools/data/stage-graph.json",
     ];
     for (const rel of graphs) {
       const graph = JSON.parse(read(rel)) as Array<{
@@ -348,6 +349,7 @@ describe("t266 review class", () => {
       "harness/kiro-ide/skills/aidlc/SKILL.md",
       "harness/codex/skills/aidlc/SKILL.md",
       "harness/opencode/skills/aidlc/SKILL.md",
+      "harness/cursor/skills/aidlc/SKILL.md",
       "dist/claude/.claude/skills/aidlc/SKILL.md",
     ];
     for (const rel of skills) {

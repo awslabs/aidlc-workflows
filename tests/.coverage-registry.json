@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 543,
+    "total": 544,
     "enumeratedByClass": {
-      "function": 297,
+      "function": 298,
       "audit": 82,
       "scope": 9,
       "stage": 32,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 140,
+      "function": 141,
       "audit": 40,
       "scope": 9,
       "stage": 9,
@@ -3204,6 +3204,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:runnerFrontmatterAdditions",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t250-cursor-packaging.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:runtimeGraphPath",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3974,6 +3986,10 @@
         {
           "file": "tests/unit/t13-hook-input-robustness.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t251-cursor-adapter.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -4037,6 +4053,10 @@
       "coveredBy": [
         {
           "file": "tests/unit/t228-hook-run-exports.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t251-cursor-adapter.test.ts",
           "mechanism": "cli"
         }
       ],

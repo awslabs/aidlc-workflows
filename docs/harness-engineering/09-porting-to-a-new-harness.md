@@ -2,6 +2,7 @@
 
 AI-DLC ships from **one core, many harnesses** — today Claude Code, Kiro CLI, Kiro IDE,
 Codex CLI, opencode, and GitHub Copilot, and the set is open. The hand-authored source is a
+Codex CLI, Cursor, and opencode, and the set is open. The hand-authored source is a
 harness-neutral `core/` plus a thin `harness/<name>/` surface per CLI; the
 packager (`scripts/package.ts`) regenerates each committed `dist/<harness>/`
 tree. Adding another harness is **one directory and one manifest row** — the

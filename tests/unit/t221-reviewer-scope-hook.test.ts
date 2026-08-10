@@ -652,6 +652,35 @@ describe("t221 (c) harness registration and protocol prose", () => {
     }
   });
 
+  test("Cursor hooks.json wires the adapter's guards target on preToolUse", () => {
+    const harnesses = HARNESS_MATRIX.filter(
+      (harness) => harness.capabilities.reviewerScopeRegistration === "cursor-hooks",
+    );
+    expect(harnesses.length).toBeGreaterThan(0);
+    for (const harness of harnesses) {
+      // Cursor's schema is camelCase and matcher-free; the single "guards"
+      // target runs the state-transition guard AND the reviewer-scope bound
+      // (adapter-ordered, mirroring the Claude settings.json registration).
+      const wiring = JSON.parse(
+        readFileSync(join(harness.engineRoot, "hooks.json"), "utf-8"),
+      ) as { hooks: Record<string, Array<{ command: string }>> };
+      const pre = wiring.hooks.preToolUse ?? [];
+      expect(
+        pre.some(
+          (h) =>
+            h.command ===
+            `bun ${harness.manifest.harnessDir}/hooks/aidlc-cursor-adapter.ts guards`,
+        ),
+      ).toBe(true);
+      const adapter = readFileSync(
+        join(harness.engineRoot, "hooks", "aidlc-cursor-adapter.ts"),
+        "utf-8",
+      );
+      expect(adapter).toContain("aidlc-reviewer-scope.ts");
+      expect(adapter).toContain("aidlc-state-transition-guard.ts");
+    }
+  });
+
   test("stage-protocol 12a carries the dispatch-record write (step 1) and delete (step 3)", () => {
     const body = readFileSync(
       join(AIDLC_SRC, "aidlc-common", "protocols", "stage-protocol.md"),

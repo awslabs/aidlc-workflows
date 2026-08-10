@@ -4,6 +4,7 @@
 
 AI-DLC is a methodology, and this implementation ships it working out of the box
 on the harness you use — Claude Code, Kiro CLI, Kiro IDE, Codex CLI, opencode, or GitHub Copilot: 14 agents
+on the harness you use — Claude Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, or opencode: 14 agents
 (11 domain experts, 2 reviewers, and the composer), 32 stages, 9 scopes, a set
 of rules and sensors. This guide is for the person who
 wants to **reshape** that methodology — change which stages run, add an agent for
@@ -116,6 +117,8 @@ agents under `core/agents/`, scopes, rules, sensors, knowledge, tools, hooks).
 The per-harness `dist/<harness>/` trees you actually run (`dist/claude/.claude/`,
 `dist/kiro/.kiro/`, `dist/kiro-ide/.kiro/`, `dist/codex/`, `dist/opencode/`, and
 `dist/copilot/`) are **generated**
+`dist/kiro/.kiro/`, `dist/kiro-ide/.kiro/`, `dist/codex/`, `dist/cursor/`, and
+`dist/opencode/`) are **generated**
 from `core/` plus a thin `harness/<name>/` surface, and they are
 **drift-guarded** — a hand-edit there is rejected by CI. The loop is always:
 

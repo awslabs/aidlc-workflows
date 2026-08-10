@@ -151,6 +151,14 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
         // native include (both Copilot surfaces expand @-imports).
         const agentsMd = readFileSync(harness.onboardingDist, "utf-8");
         expect(agentsMd, harness.name).toContain("@aidlc/spaces/default/memory/org.md");
+      } else if (harness.capabilities.memoryInclude === "cursor-rule") {
+        // Cursor: the alwaysApply rule lists the method files as plain paths
+        // (no @-import expansion on Cursor); the sessionStart hook injects the
+        // live workflow context. AGENTS.md is the auto-read rules file.
+        const rule = readFileSync(join(harness.engineRoot, "rules", "aidlc.mdc"), "utf-8");
+        expect(rule).toContain("alwaysApply: true");
+        expect(rule).toContain("aidlc/spaces/default/memory/org.md");
+        expect(existsSync(harness.onboardingDist)).toBe(true);
       } else {
         // opencode: the instructions glob in the project-root opencode.json is
         // the native include surface; AGENTS.md is the auto-read rules file.

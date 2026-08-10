@@ -4,7 +4,7 @@
   "allowed": [
     {
       "file": "docs/reference/14-claude-features.md",
-      "text": "| **Standing rules** (the layer chain) | `aidlc/spaces/<active-space>/memory/` (via `.claude/rules/aidlc.md` @-import stub) | `aidlc/spaces/<active-space>/memory/` (via agent resources) | `aidlc/spaces/<active-space>/memory/` (via always-included steering live references) | `aidlc/spaces/<active-space>/memory/` (via `AIDLC_RULES_DIR`) | `aidlc/spaces/<active-space>/memory/` (via `instructions` glob) | `aidlc/spaces/<active-space>/memory/` (via `AGENTS.md` @-imports) |",
+      "text": "| **Standing rules** (the layer chain) | `aidlc/spaces/<active-space>/memory/` (via `.claude/rules/aidlc.md` @-import stub) | `aidlc/spaces/<active-space>/memory/` (via agent resources) | `aidlc/spaces/<active-space>/memory/` (via always-included steering live references) | `aidlc/spaces/<active-space>/memory/` (via `AIDLC_RULES_DIR`) | `aidlc/spaces/<active-space>/memory/` (via `instructions` glob) | `aidlc/spaces/<active-space>/memory/` (via `AGENTS.md` @-imports) | `aidlc/spaces/<active-space>/memory/` (always-applied `rules/aidlc.mdc` standing pointer + four agent-decided phase pointers) |",
       "why": "native-include mapping: names the .claude/rules/aidlc.md @-import stub that pulls the relocated memory tree (correct, not stale)"
     },
     {
@@ -39,7 +39,7 @@
     },
     {
       "file": "docs/harness-engineering/06-sensors.md",
-      "text": "`**/{aidlc-docs,intents}/**` \u2014 the per-intent record tree, with the legacy",
+      "text": "`**/{aidlc-docs,intents}/**` — the per-intent record tree, with the legacy",
       "why": "sensor matches-glob value (the shipped framework glob, post-P9)"
     },
     {

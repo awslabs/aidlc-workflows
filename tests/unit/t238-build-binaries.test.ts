@@ -112,6 +112,7 @@ describe("t238 build-binaries release builder", () => {
     for (const harness of [
       "claude",
       "codex",
+      "cursor",
       "kiro",
       "kiro-ide",
       "copilot",
@@ -141,6 +142,7 @@ describe("t238 build-binaries release builder", () => {
       "stage-table-check",
       "scope-table-check",
       "runtime-codex",
+      "runtime-cursor",
       "runtime-kiro",
       "runtime-kiro-ide",
       "runtime-copilot",
@@ -161,6 +163,7 @@ describe("t238 build-binaries release builder", () => {
       "hook-review-freeze",
       "statusline",
       "adapter-codex-validate-state",
+      "adapter-cursor-validate-state",
       "routed-project-dir",
     ]) {
       expect(gate(native, name).ok, name).toBe(true);

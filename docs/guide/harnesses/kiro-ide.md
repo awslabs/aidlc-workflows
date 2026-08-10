@@ -217,4 +217,4 @@ going with the neutral chapters:
 - [Scopes, Depth, and Test Strategy](../05-scopes-and-depth.md) — right-sizing a run.
 - [Glossary](../glossary.md) — every term defined.
 
-Other harnesses: [AI-DLC on Codex CLI](codex-cli.md) · [the harness family index](README.md).
+Other harnesses: [AI-DLC on Codex CLI](codex-cli.md) · [AI-DLC on Cursor](cursor.md) · [the harness family index](README.md).

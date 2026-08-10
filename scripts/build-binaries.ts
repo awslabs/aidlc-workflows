@@ -81,6 +81,7 @@ const RUNTIME_ASSET_ROOT = join(REPO_ROOT, "dist", "claude", ".claude");
 const RUNTIME_DISTRIBUTIONS = [
   "claude",
   "codex",
+  "cursor",
   "kiro",
   "kiro-ide",
   "copilot",
@@ -1190,6 +1191,50 @@ function codexAdapterGate(artifact: string): GateResult {
   }
 }
 
+function cursorAdapterGate(artifact: string): GateResult {
+  const project = mkdtempSync(join(tmpdir(), "aidlc-binary-cursor-"));
+  try {
+    cpSync(join(REPO_ROOT, "dist", "cursor", ".cursor"), join(project, ".cursor"), {
+      recursive: true,
+    });
+    const input = JSON.stringify({
+      hook_event_name: "preCompact",
+      workspace_roots: [project],
+      conversation_id: `binary-gate-${Date.now()}`,
+      session_id: `binary-gate-${Date.now()}`,
+    });
+    const result = run(artifact, ["adapter", "cursor", "validate-state"], {
+      cwd: project,
+      env: { ...process.env, PATH: "" },
+      input,
+      timeoutMs: 30_000,
+    });
+    const output = `${result.stdout}\n${result.stderr}`;
+    const heartbeat = join(
+      project,
+      "aidlc",
+      "spaces",
+      "default",
+      "intents",
+      ".aidlc-hooks-health",
+      "validate-state.last",
+    );
+    return commandGate(
+      "adapter-cursor-validate-state",
+      result,
+      result.status === 0 &&
+        existsSync(heartbeat) &&
+        !/not available|Cannot find module|\/\$bunfs\/|unknown command/.test(output),
+      {
+        expected: "Cursor adapter invokes validate-state",
+        actual: existsSync(heartbeat) ? "heartbeat written" : result.stderr.trim(),
+      },
+    );
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+}
+
 function routedProjectDirGate(artifact: string): GateResult {
   const cwdProject = mkdtempSync(join(tmpdir(), "aidlc-binary-route-cwd-"));
   const targetProject = installedProject("aidlc-binary-route-target-");
@@ -1540,6 +1585,7 @@ function buildTarget(target: TargetConfig): TargetResult {
       ["gen", "scope-table", "--check"],
     ));
     result.gates.push(harnessRuntimeGate(actual.artifact, "codex", ".codex"));
+    result.gates.push(harnessRuntimeGate(actual.artifact, "cursor", ".cursor"));
     result.gates.push(harnessRuntimeGate(actual.artifact, "kiro", ".kiro"));
     result.gates.push(harnessRuntimeGate(actual.artifact, "kiro-ide", ".kiro"));
     result.gates.push(harnessRuntimeGate(actual.artifact, "copilot", ".aidlc"));
@@ -1600,6 +1646,7 @@ function buildTarget(target: TargetConfig): TargetResult {
     result.gates.push(codexAdapterGate(actual.artifact));
     result.gates.push(planApprovalAdapterGate(actual.artifact, "codex"));
     result.gates.push(planApprovalAdapterGate(actual.artifact, "kiro"));
+    result.gates.push(cursorAdapterGate(actual.artifact));
     result.gates.push(routedProjectDirGate(actual.artifact));
   } else {
     result.gates.push(sizeGate(result.bytes));

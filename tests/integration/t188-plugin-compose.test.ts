@@ -17,9 +17,9 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   acquireAuditLock,
@@ -42,6 +42,7 @@ const OPENCODE_DIST = join(REPO_ROOT, "dist", "opencode");
 const COPILOT_DIST = join(REPO_ROOT, "dist", "copilot");
 const KIRO_DIST = join(REPO_ROOT, "dist", "kiro", ".kiro");
 const CODEX_DIST = join(REPO_ROOT, "dist", "codex", ".codex");
+const CURSOR_DIST = join(REPO_ROOT, "dist", "cursor");
 const STAGE_TABLE_BEGIN =
   "<!-- BEGIN: compiled stage graph via `bun aidlc-utility.ts stage-table` - do NOT hand-edit -->";
 const STAGE_TABLE_END = "<!-- END: compiled stage graph -->";
@@ -183,12 +184,18 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
         join(built, harness.capabilities.plugin.wiringFile),
         "utf-8",
       );
-      expect(wiring, `${harness.name}: harness dir wiring`).toContain(
-        `AIDLC_HARNESS_DIR=${harness.manifest.harnessDir}`,
-      );
-      expect(wiring, `${harness.name}: harness name wiring`).toContain(
-        `AIDLC_HARNESS_NAME=${harness.name}`,
-      );
+      if (harness.name === "cursor") {
+        expect(wiring, `${harness.name}: harness dir argument`).toContain(
+          `aidlc-plugin-compose.ts ${harness.manifest.harnessDir}`,
+        );
+      } else {
+        expect(wiring, `${harness.name}: harness dir wiring`).toContain(
+          `AIDLC_HARNESS_DIR=${harness.manifest.harnessDir}`,
+        );
+        expect(wiring, `${harness.name}: harness name wiring`).toContain(
+          `AIDLC_HARNESS_NAME=${harness.name}`,
+        );
+      }
       expect(existsSync(join(built, "stages", "construction", "test-pro-integration.md"))).toBe(
         true,
       );
@@ -198,12 +205,253 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       // #550 plugin content buckets: scopes, agents, and knowledge must project
       // into EVERY harness (stronger than the pre-matrix Claude-only guard).
       expect(existsSync(join(built, "scopes", "test-pro-validation.md")), `${harness.name}: scope`).toBe(true);
-      expect(existsSync(join(built, "agents", "test-pro-metrics-agent.md")), `${harness.name}: agent`).toBe(true);
+      const agentSource =
+        harness.name === "cursor"
+          ? join(built, "aidlc", "agents", "test-pro-metrics-agent.md")
+          : join(built, "agents", "test-pro-metrics-agent.md");
+      expect(existsSync(agentSource), `${harness.name}: agent`).toBe(true);
       expect(
         existsSync(join(built, "knowledge", "test-pro-metrics-agent", "methodology.md")),
         `${harness.name}: knowledge`,
       ).toBe(true);
     }
+  });
+
+  test("Cursor projection uses Cursor's flat camelCase hook schema", () => {
+    const built = pluginBuilds.get("cursor")!;
+    const wiring = JSON.parse(
+      readFileSync(join(built, "hooks", "hooks.json"), "utf-8"),
+    ) as {
+      version?: number;
+      hooks?: Record<string, Array<Record<string, unknown>>>;
+    };
+    // `version` is REQUIRED, not cosmetic: Cursor's hook loader delivers zero
+    // events for a hooks.json missing it, silently and with rc 0, so a
+    // version-less projection ships an inert plugin that looks installed.
+    expect(Object.keys(wiring)).toEqual(["version", "hooks"]);
+    expect(wiring.version).toBe(1);
+    expect(Object.keys(wiring.hooks ?? {})).toEqual(["sessionStart"]);
+    const entries = wiring.hooks?.sessionStart ?? [];
+    expect(entries).toHaveLength(1);
+    expect(Object.keys(entries[0] ?? {})).toEqual(["command"]);
+    const command = String(entries[0]?.command ?? "");
+    expect(command).toBe("bun ./hooks/aidlc-plugin-compose.ts .cursor");
+    expect(command).not.toContain("sh -c");
+    expect(existsSync(join(built, "hooks", "aidlc-plugin-compose.ts"))).toBe(true);
+  });
+
+  test("Cursor's cross-platform launcher resolves its plugin root from the hook path", () => {
+    const built = pluginBuilds.get("cursor")!;
+    const cursorProject = join(tmp, "cursor-compose");
+    mkdirSync(cursorProject, { recursive: true });
+    const initialInstall = spawnSync(
+      BUN,
+      [join(CURSOR_DIST, "install.ts"), cursorProject],
+      {
+        cwd: REPO_ROOT,
+        encoding: "utf-8",
+        timeout: TIMEOUT_MS - 5_000,
+      },
+    );
+    expect(initialInstall.status, initialInstall.stderr).toBe(0);
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    delete env.CLAUDE_PLUGIN_ROOT;
+    delete env.PLUGIN_ROOT;
+    delete env.AIDLC_PLUGIN_ROOT;
+    delete env.CLAUDE_PROJECT_DIR;
+    delete env.CURSOR_PROJECT_DIR;
+    delete env.AIDLC_PROJECT_DIR;
+    env.AIDLC_HARNESS_DIR = ".cursor";
+
+    env.PATH = "";
+    const compose = spawnSync(
+      BUN,
+      [join(built, "hooks", "aidlc-plugin-compose.ts"), ".cursor"],
+      {
+        cwd: built,
+        input: JSON.stringify({
+          hook_event_name: "sessionStart",
+          workspace_roots: [cursorProject],
+        }),
+        encoding: "utf-8",
+        timeout: TIMEOUT_MS - 5_000,
+        env,
+      },
+    );
+    expect(compose.status, compose.stderr).toBe(0);
+    const cursorGraph = JSON.parse(
+      readFileSync(join(cursorProject, ".cursor", "tools", "data", "stage-graph.json"), "utf-8"),
+    ) as GraphStage[];
+    expect(cursorGraph.some((item) => item.slug === "test-pro-integration")).toBe(true);
+    expect(existsSync(join(built, "agents"))).toBe(false);
+    const internalAgent = readFileSync(
+      join(built, "aidlc", "agents", "test-pro-metrics-agent.md"),
+      "utf-8",
+    );
+    expect(internalAgent).not.toContain("{{HARNESS_DIR}}");
+    expect(internalAgent).not.toMatch(/^model:/m);
+    const composedAgent = readFileSync(
+      join(cursorProject, ".cursor", "agents", "test-pro-metrics-agent.md"),
+      "utf-8",
+    );
+    expect(composedAgent).not.toContain("{{HARNESS_DIR}}");
+    expect(composedAgent).not.toMatch(/^model:/m);
+    expect(composedAgent).toContain(".cursor/knowledge/test-pro-metrics-agent/");
+
+    const pureCoreStage = join(
+      cursorProject,
+      ".cursor",
+      "aidlc-common",
+      "stages",
+      "inception",
+      "requirements-analysis.md",
+    );
+    const pureCoreBefore = readFileSync(pureCoreStage, "utf-8");
+    writeFileSync(pureCoreStage, `${pureCoreBefore}\n<!-- stale core marker -->\n`);
+    const refusedReinstall = spawnSync(
+      BUN,
+      [join(CURSOR_DIST, "install.ts"), cursorProject],
+      {
+        cwd: REPO_ROOT,
+        encoding: "utf-8",
+        timeout: TIMEOUT_MS - 5_000,
+      },
+    );
+    expect(refusedReinstall.status).toBe(1);
+    expect(refusedReinstall.stderr).toContain(
+      ".cursor/aidlc-common/stages/inception/requirements-analysis.md",
+    );
+    expect(readFileSync(pureCoreStage, "utf-8")).toContain("stale core marker");
+    writeFileSync(pureCoreStage, pureCoreBefore);
+
+    const pluginModifiedStage = join(
+      cursorProject,
+      ".cursor",
+      "aidlc-common",
+      "stages",
+      "construction",
+      "build-and-test.md",
+    );
+    const pluginModifiedBefore = readFileSync(pluginModifiedStage);
+    const reinstall = spawnSync(
+      BUN,
+      [join(CURSOR_DIST, "install.ts"), cursorProject],
+      {
+        cwd: REPO_ROOT,
+        encoding: "utf-8",
+        timeout: TIMEOUT_MS - 5_000,
+      },
+    );
+    expect(reinstall.status, reinstall.stderr).toBe(0);
+    expect(reinstall.stdout).toContain("preserved runtime-managed files");
+    expect(reinstall.stdout).toContain(
+      ".cursor/aidlc-common/stages/construction/build-and-test.md",
+    );
+    expect(readFileSync(pluginModifiedStage)).toEqual(pluginModifiedBefore);
+    const graphAfterReinstall = JSON.parse(
+      readFileSync(
+        join(cursorProject, ".cursor", "tools", "data", "stage-graph.json"),
+        "utf-8",
+      ),
+    ) as GraphStage[];
+    expect(
+      graphAfterReinstall.some((item) => item.slug === "test-pro-integration"),
+    ).toBe(true);
+  });
+
+  test("Cursor launcher passes its plugin root through the installed aidlc branch", () => {
+    const built = pluginBuilds.get("cursor")!;
+    const cursorProject = join(tmp, "cursor-compose-installed-aidlc");
+    cpSync(CURSOR_DIST, cursorProject, { recursive: true });
+    const binDir = join(tmp, "cursor-fake-bin");
+    mkdirSync(binDir, { recursive: true });
+    const aidlc = join(binDir, "aidlc");
+    writeFileSync(
+      aidlc,
+      [
+        "#!/bin/sh",
+        `exec ${JSON.stringify(BUN)} ${JSON.stringify(
+          join(cursorProject, ".cursor", "tools", "aidlc.ts"),
+        )} "$@"`,
+        "",
+      ].join("\n"),
+    );
+    chmodSync(aidlc, 0o755);
+
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
+      AIDLC_HARNESS_DIR: ".cursor",
+    };
+    delete env.CLAUDE_PLUGIN_ROOT;
+    delete env.PLUGIN_ROOT;
+    delete env.AIDLC_PLUGIN_ROOT;
+    delete env.CLAUDE_PROJECT_DIR;
+    delete env.CURSOR_PROJECT_DIR;
+    delete env.AIDLC_PROJECT_DIR;
+
+    const compose = spawnSync(
+      BUN,
+      [join(built, "hooks", "aidlc-plugin-compose.ts"), ".cursor"],
+      {
+        cwd: built,
+        input: JSON.stringify({
+          hook_event_name: "sessionStart",
+          workspace_roots: [cursorProject],
+        }),
+        encoding: "utf-8",
+        timeout: TIMEOUT_MS - 5_000,
+        env,
+      },
+    );
+    expect(compose.status, compose.stderr || compose.stdout).toBe(0);
+    expect(compose.stdout).toContain("plugin sync complete: 1 plugin(s)");
+    const cursorGraph = JSON.parse(
+      readFileSync(join(cursorProject, ".cursor", "tools", "data", "stage-graph.json"), "utf-8"),
+    ) as GraphStage[];
+    expect(cursorGraph.some((item) => item.slug === "test-pro-integration")).toBe(true);
+    const pluginRunner = readFileSync(
+      join(cursorProject, ".cursor", "skills", "test-pro-integration", "SKILL.md"),
+      "utf-8",
+    );
+    expect(pluginRunner).toMatch(/^disable-model-invocation: true$/m);
+  });
+
+  test("Cursor launcher refuses an ambiguous multi-root workspace", () => {
+    const built = pluginBuilds.get("cursor")!;
+    const first = join(tmp, "cursor-multiroot-a");
+    const second = join(tmp, "cursor-multiroot-b");
+    cpSync(CURSOR_DIST, first, { recursive: true });
+    cpSync(CURSOR_DIST, second, { recursive: true });
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      PATH: "",
+      AIDLC_HARNESS_DIR: ".cursor",
+    };
+    delete env.CLAUDE_PLUGIN_ROOT;
+    delete env.PLUGIN_ROOT;
+    delete env.AIDLC_PLUGIN_ROOT;
+    delete env.CLAUDE_PROJECT_DIR;
+    delete env.CURSOR_PROJECT_DIR;
+    delete env.AIDLC_PROJECT_DIR;
+
+    const compose = spawnSync(
+      BUN,
+      [join(built, "hooks", "aidlc-plugin-compose.ts"), ".cursor"],
+      {
+        cwd: built,
+        input: JSON.stringify({
+          hook_event_name: "sessionStart",
+          workspace_roots: [first, second],
+        }),
+        encoding: "utf-8",
+        timeout: TIMEOUT_MS - 5_000,
+        env,
+      },
+    );
+    expect(compose.status).toBe(1);
+    expect(compose.stderr).toContain("multiple Cursor workspace roots");
+    expect(compose.stderr).toContain("AIDLC_PROJECT_DIR");
   });
 
   test("OpenCode compose emits plugin agents to both inline and native rosters", () => {

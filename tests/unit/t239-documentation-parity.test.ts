@@ -93,6 +93,7 @@ const harnessLabels: Record<string, string> = {
   claude: "Claude Code",
   codex: "Codex CLI",
   copilot: "GitHub Copilot",
+  cursor: "Cursor",
   kiro: "Kiro CLI",
   "kiro-ide": "Kiro IDE",
   opencode: "opencode",
@@ -169,7 +170,15 @@ describe("documentation parity derives current behavior from authored implementa
   });
 
   test("documented harness roster matches every implementation manifest", () => {
-    expect(harnessNames).toEqual(["claude", "codex", "copilot", "kiro", "kiro-ide", "opencode"]);
+    expect(harnessNames).toEqual([
+      "claude",
+      "codex",
+      "copilot",
+      "cursor",
+      "kiro",
+      "kiro-ide",
+      "opencode",
+    ]);
     expect(Object.keys(harnessLabels).sort()).toEqual(harnessNames);
 
     const readmeRoster = sliceBetween(

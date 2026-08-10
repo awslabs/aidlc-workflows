@@ -163,7 +163,7 @@ export const PHASE_NUMBERS: Record<string, Phase> = {
 // dev-repo CWD rung, where more than one harness dir can coexist and the Claude
 // tree is canonical (".claude" must win). A real single-harness install never
 // reaches the probe; it resolves by script path.
-export const KNOWN_HARNESS_DIRS = [".claude", ".kiro", ".codex", ".aidlc"] as const;
+export const KNOWN_HARNESS_DIRS = [".claude", ".kiro", ".codex", ".aidlc", ".cursor"] as const;
 
 // True for a plausible harness dir name: a dot-prefixed segment, e.g. ".claude"
 // / ".kiro" / ".gemini". Guards the script-path derivation so an unexpected
@@ -226,11 +226,13 @@ const KNOWN_RULES_SUBDIR: Record<string, string> = {
   // opencode: the ENGINE dir is .aidlc (opencode auto-imports .opencode/tools/
   // *.ts as custom tools, so the engine cannot live there); no rename needed.
   ".aidlc": "rules",
+  ".cursor": "rules",
 };
 
 interface ShippedHarnessData {
   rulesSubdir: string | null;
   plugins: ReadonlySet<string> | null;
+  runnerFrontmatterAdditions: readonly string[];
 }
 
 let _shippedHarnessData: ShippedHarnessData | null = null;
@@ -247,7 +249,11 @@ function readShippedHarnessData(): ShippedHarnessData {
   const p = harnessDataPath();
   try {
     const raw = readFileSync(p, "utf-8");
-    const parsed = JSON.parse(raw) as { rulesSubdir?: unknown; plugins?: unknown };
+    const parsed = JSON.parse(raw) as {
+      rulesSubdir?: unknown;
+      plugins?: unknown;
+      runnerFrontmatterAdditions?: unknown;
+    };
     let plugins: ReadonlySet<string> | null = null;
     if (Object.hasOwn(parsed, "plugins")) {
       if (!Array.isArray(parsed.plugins)) {
@@ -266,13 +272,31 @@ function readShippedHarnessData(): ShippedHarnessData {
       typeof parsed.rulesSubdir === "string" && parsed.rulesSubdir.length > 0
         ? parsed.rulesSubdir
         : null;
-    _shippedHarnessData = { rulesSubdir, plugins };
+    let runnerFrontmatterAdditions: string[] = [];
+    if (Object.hasOwn(parsed, "runnerFrontmatterAdditions")) {
+      if (
+        !Array.isArray(parsed.runnerFrontmatterAdditions) ||
+        parsed.runnerFrontmatterAdditions.some(
+          (line) => typeof line !== "string" || !/^[A-Za-z_][\w-]*\s*:/.test(line),
+        )
+      ) {
+        throw new Error(
+          `${p}: harness.json field "runnerFrontmatterAdditions" must be an array of YAML key lines.`,
+        );
+      }
+      runnerFrontmatterAdditions = [...parsed.runnerFrontmatterAdditions];
+    }
+    _shippedHarnessData = { rulesSubdir, plugins, runnerFrontmatterAdditions };
     return _shippedHarnessData;
   } catch (err) {
     if (err instanceof Error && err.message.startsWith(`${p}:`)) throw err;
     // no harness.json (dev core/, or a tree built before this landed) → fall through
   }
-  _shippedHarnessData = { rulesSubdir: null, plugins: null };
+  _shippedHarnessData = {
+    rulesSubdir: null,
+    plugins: null,
+    runnerFrontmatterAdditions: [],
+  };
   return _shippedHarnessData;
 }
 
@@ -289,6 +313,10 @@ function shippedRulesSubdir(): string | null {
 
 export function pluginsEnabled(): ReadonlySet<string> | null {
   return readShippedHarnessData().plugins;
+}
+
+export function runnerFrontmatterAdditions(): readonly string[] {
+  return readShippedHarnessData().runnerFrontmatterAdditions;
 }
 
 export function isPluginEnabled(plugin: string): boolean {

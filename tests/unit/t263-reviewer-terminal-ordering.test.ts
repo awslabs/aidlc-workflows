@@ -16,7 +16,7 @@
 //     no produces[] writes after it, READY-riding suggestions are gate input
 //     to quote, never edits to apply (they are not grounds for NOT-READY per
 //     step 2, so they are not grounds for editing past the receipt either)
-//   - all five harness SKILL.md reviewer steps: same ordering, conductor-facing
+//   - all six harness SKILL.md reviewer steps: same ordering, conductor-facing
 //   - aidlc-state.ts reviewerPreconditionError: the refusal text names the
 //     terminal ordering instead of only asking for a fresh receipt (the old
 //     message re-triggered the loop: "get a fresh receipt" -> re-review ->
@@ -107,7 +107,7 @@ describe("t263 reviewer terminal-receipt ordering (receipt-invalidation loop fix
   });
 
   test("every authored harness SKILL.md carries the ordering in its reviewer step", () => {
-    for (const harness of ["claude", "kiro", "kiro-ide", "codex", "opencode"]) {
+    for (const harness of ["claude", "kiro", "kiro-ide", "codex", "opencode", "cursor"]) {
       const src = readFileSync(
         join(REPO_ROOT, "harness", harness, "skills", "aidlc", "SKILL.md"),
         "utf-8",

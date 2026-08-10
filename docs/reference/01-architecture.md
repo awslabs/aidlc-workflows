@@ -254,6 +254,8 @@ sequenceDiagram
 The framework is **authored once and generated per harness** — today Claude
 Code, Kiro CLI, Kiro IDE, Codex CLI, opencode, and GitHub Copilot, and any
 capable CLI you port it to. The
+Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, and opencode, and any capable CLI
+you port it to. The
 hand-authored source is a harness-neutral `core/` plus a thin `harness/<name>/`
 surface per CLI; `bun scripts/package.ts` regenerates the committed,
 drift-guarded `dist/<harness>/` trees:

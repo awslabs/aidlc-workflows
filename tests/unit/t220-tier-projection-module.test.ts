@@ -42,6 +42,7 @@ const EXPECTED: Record<
   {
     claude: { model: string; effort: "medium" | null };
     codex: { model: string | null; effort: "medium" | null };
+    cursor: { model: string | null };
     kiro: { model: string | null };
     opencode: { model: string | null; variant: "medium" | null };
   }
@@ -49,6 +50,7 @@ const EXPECTED: Record<
   judgment: {
     claude: { model: "inherit", effort: null },
     codex: { model: null, effort: null },
+    cursor: { model: null },
     kiro: { model: null },
     opencode: { model: null, variant: null },
   },
@@ -59,6 +61,9 @@ const EXPECTED: Record<
     // doubling every review's cost via inherit).
     claude: { model: "sonnet", effort: "medium" },
     codex: { model: "openai.gpt-5.4", effort: "medium" },
+    // Cursor never pins a model either: model availability is Cursor-plan-
+    // dependent (Free rejects every named id), so all tiers inherit.
+    cursor: { model: null },
     // Kiro never pins a model (#601): shipped IDs resolve only when that
     // model is enabled on the user's install, so every Kiro tier inherits
     // the session model.
@@ -68,6 +73,7 @@ const EXPECTED: Record<
   templated: {
     claude: { model: "sonnet", effort: "medium" },
     codex: { model: "openai.gpt-5.4", effort: "medium" },
+    cursor: { model: null },
     kiro: { model: null },
     opencode: { model: "amazon-bedrock/global.anthropic.claude-sonnet-4-6", variant: "medium" },
   },
@@ -109,7 +115,7 @@ describe("t220 tier projection module", () => {
 
   // --- projectTier: every tier x every projection flavor ---------------------
   for (const tier of TIERS) {
-    for (const flavor of ["claude", "codex", "kiro", "opencode"] as const) {
+    for (const flavor of ["claude", "codex", "cursor", "kiro", "opencode"] as const) {
       test(`projectTier(${tier}, ${flavor}) matches the pinned policy`, () => {
         expect(projectTier(tier, flavor)).toEqual(EXPECTED[tier][flavor]);
       });

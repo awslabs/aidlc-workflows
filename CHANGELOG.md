@@ -1,6 +1,18 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.63] - 2026-08-10
+
+AI-DLC now ships a Cursor harness (`dist/cursor/`) for Cursor IDE and Cursor CLI from one tree. Install it with `bun dist/cursor/install.ts <project>` and run `/aidlc` in chat or `agent -p "/aidlc ..."` headlessly. **Upgrade:** rerun the installer after refreshing `dist/cursor/`; it preserves project-owned configuration and selected-plugin state, refreshes framework routing data, and refuses unresolved file collisions. Rebuild and reinstall any AIDLC Cursor plugins.
+
+* New `dist/cursor/` distribution: engine and native surfaces under `.cursor/` (skills, agents, rules, hooks, and tools), root `AGENTS.md` onboarding, and the neutral `aidlc/` workspace tree.
+* Cursor hooks use `.cursor/hooks.json` through a fail-closed adapter that normalizes shell working directories without treating cwd metadata as an accessed path, enforces reviewer scope and review freeze, tracks delegated identities, and denies general-purpose interpreter or dynamic-evaluation Shell calls from review delegates so encoded commands cannot erase attribution state.
+* The method reaches context through `.cursor/rules/aidlc.mdc` plus four agent-decided phase rules; `/aidlc space <name>` re-points the rules and persona memory paths in place.
+* Cursor-native `/aidlc-status`, `/aidlc-jump`, and `/aidlc-scope` skills route through the deterministic engine and disable model auto-invocation.
+* Cursor plugin projections use the native hook schema and a cross-platform Bun launcher, resolve the target project from SessionStart workspace roots, and emit one authoritative native agent surface.
+* `dist/cursor/install.ts` merges existing Cursor configuration, tracks framework ownership, preserves active-space and plugin selections, restores missing files against the selected space, and recompiles selected-plugin routing data against the upgraded core.
+* Release binaries, doctor checks, plugin composition, packaging parity, and deterministic adapter/installer tests now include Cursor.
+
 ## [2.5.62] - 2026-08-08
 
 `intent-create` now fails closed when invoked without meaningful work details, and starting a second unrelated intent hands the conductor to a fresh session so the new work does not inherit the prior intent's transcript. Scope runners (`/aidlc-<scope>`) now offer the same explicit second-intent path instead of dead-ending at a completed workflow. **Upgrade:** re-copy your `dist/<harness>/` shell into the project so the updated tools, hooks, orchestrator skill, and scope runners are installed.

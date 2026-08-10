@@ -443,16 +443,23 @@ function toolsDir(): string {
   return dispatcherDir();
 }
 
-type AdapterHarness = "codex" | "kiro" | "kiro-ide";
+type AdapterHarness = "codex" | "cursor" | "kiro" | "kiro-ide";
 
 const ADAPTER_HARNESS_LEAF: Record<AdapterHarness, string> = {
   codex: ".codex",
+  cursor: ".cursor",
   kiro: ".kiro",
   "kiro-ide": ".kiro",
 };
 
 function isAdapterHarness(value: string): value is AdapterHarness {
   return Object.hasOwn(ADAPTER_HARNESS_LEAF, value);
+}
+
+function adapterFile(harness: AdapterHarness): string {
+  if (harness === "codex") return "aidlc-codex-adapter.ts";
+  if (harness === "cursor") return "aidlc-cursor-adapter.ts";
+  return "aidlc-kiro-adapter.ts";
 }
 
 function resolveHookPath(
@@ -471,6 +478,7 @@ function resolveHookPath(
         ".claude",
         ".kiro",
         ".codex",
+        ".cursor",
       ].filter((value, index, values): value is string =>
         typeof value === "string" && value.length > 0 && values.indexOf(value) === index
       );
@@ -654,7 +662,7 @@ function handleRouteOnly(route: Route, argv: string[]): Action {
     if (!isAdapterHarness(harness)) return nounError("adapter", harness);
     if (!target) return nounError("adapter", undefined);
     if (!isSafeName(target)) return nounError("adapter", target);
-    const file = harness === "codex" ? "aidlc-codex-adapter.ts" : "aidlc-kiro-adapter.ts";
+    const file = adapterFile(harness);
     return {
       type: "adapter",
       harness,
@@ -807,9 +815,7 @@ export function resolveAction(argv: string[]): Action {
       action.path = resolveHookPath("aidlc-statusline.ts", undefined, absoluteProjectDir);
     } else if (action.type === "adapter") {
       action.projectDir = absoluteProjectDir;
-      const file = action.harness === "codex"
-        ? "aidlc-codex-adapter.ts"
-        : "aidlc-kiro-adapter.ts";
+      const file = adapterFile(action.harness);
       action.path = resolveHookPath(file, action.harness, absoluteProjectDir);
     } else if (action.type === "sensor-script-file") {
       action.projectDir = absoluteProjectDir;
