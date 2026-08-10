@@ -388,5 +388,4 @@ Steps 1-2a happen for every conversation, even non-AI-DLC ones — and because e
 - [Hooks and Tools](06-hooks-and-tools.md) -- hook system, audit taxonomy, CLI tools
 - [Knowledge System](10-knowledge-system.md) -- two-tier knowledge, loading order
 - [Porting to a New Harness](../harness-engineering/09-porting-to-a-new-harness.md) -- how to add a column to the mapping above: the manifest, hook adapter, and `emit.ts` contract
-- [Running on other harnesses](../guide/harnesses/README.md) -- the Kiro CLI, Kiro IDE, Codex, opencode, and Copilot expressions of these primitives
-- [Running on other harnesses](../guide/harnesses/README.md) -- the Kiro CLI, Kiro IDE, Codex, opencode, and Cursor expressions of these primitives
+- [Running on other harnesses](../guide/harnesses/README.md) -- the Kiro CLI, Kiro IDE, Codex, Cursor, opencode, and Copilot expressions of these primitives

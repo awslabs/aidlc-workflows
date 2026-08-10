@@ -375,6 +375,7 @@ aidlc-claude/
 │   ├── kiro-ide/               #   manifest.ts · orchestrator · agent JSONs · v2 .json + legacy .kiro.hook files · settings · onboarding fills
 │   ├── kiro/                   #   manifest.ts · orchestrator · agent JSONs · settings · onboarding fills (CLI — agent-JSON hooks)
 │   ├── codex/                  #   manifest.ts · emit.ts (Codex-only emissions) · orchestrator · hooks adapter
+│   ├── cursor/                 #   manifest.ts · orchestrator · hooks adapter · installer · rules · onboarding fills
 │   ├── opencode/               #   manifest.ts · emit.ts · orchestrator · /aidlc command · adapter plugin
 │   └── copilot/                #   manifest.ts · emit.ts · orchestrator skill · hooks adapter
 │
@@ -393,9 +394,10 @@ aidlc-claude/
 │   ├── kiro-ide/{AGENTS.md, .kiro/}          # what Kiro IDE users copy
 │   ├── kiro/{AGENTS.md, .kiro/}              # what Kiro CLI users copy
 │   ├── codex/{AGENTS.md, .agents/, .codex/}  # what Codex CLI users copy
+│   ├── cursor/{AGENTS.md, aidlc/, .cursor/}   # what Cursor IDE/CLI users install
 │   ├── opencode/{AGENTS.md, .aidlc/, .opencode/}  # what opencode users copy
 │   ├── copilot/{AGENTS.md, .aidlc/, .github/}     # what GitHub Copilot users copy
-│   └── plugins/<name>/{claude,codex,kiro,kiro-ide,opencode,copilot}/  # one real host plugin per harness — install alongside dist/<harness>/
+│   └── plugins/<name>/{claude,codex,copilot,cursor,kiro,kiro-ide,opencode}/  # one real host plugin per harness — install alongside dist/<harness>/
 │
 │  ─────────── SUPPORTING ───────────
 ├── tests/                      # all-TypeScript suite (t*.test.ts) — resolves dist via AIDLC_SRC

@@ -148,10 +148,9 @@ continues on **Claude Code** (the `dist/claude/` tree, which ships as a
 instead - [Running on Kiro CLI](harnesses/kiro-cli.md),
 [Running on Kiro IDE](harnesses/kiro-ide.md),
 [Running on Codex CLI](harnesses/codex-cli.md),
+[AI-DLC on Cursor](harnesses/cursor.md),
 [AI-DLC on opencode](harnesses/opencode.md), or
 [AI-DLC on GitHub Copilot](harnesses/copilot.md) - each covers the prerequisites
-[AI-DLC on Cursor](harnesses/cursor.md), or
-[AI-DLC on opencode](harnesses/opencode.md) - each covers the prerequisites
 and post-copy steps that differ.
 
 The `cp` commands below run from a clone of this repository on the `v2`
