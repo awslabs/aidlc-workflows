@@ -45,6 +45,7 @@ aidlc/.aidlc-cursor-subagents/
 # Per-conversation session→intent map (resume rebind, P8): per-user runtime
 # state keyed by Claude Code session_id, never shared truth.
 aidlc/.aidlc-sessions/
+aidlc/spaces/*/intents/.aidlc-*
 aidlc/spaces/*/intents/*/runtime-graph.json
 aidlc/spaces/*/intents/*/.aidlc-*
 # Redacted diagnostic reports (/aidlc --doctor --export): regenerated, meant to

@@ -116,6 +116,10 @@ Rules:
 - **Bold the header**, then the prompt, then the numbered options in spec
   order. When a question has a recommended option, list it FIRST and append
   "(Recommended)" to its label.
+- **Fresh local numbering**: start every question at `1`, independent of
+  numbered content earlier in the message or another question in the batch.
+  Use unordered bullets for immediately preceding summaries. Visible `1` maps
+  to the first source option label, `2` to the second, and so on.
 - **Always append an "Other" escape** as the final number — the spec's
   options never include one (on Claude Code the UI provides it; here you
   render it).
@@ -125,6 +129,14 @@ Rules:
   free-text reply that clearly matches an option counts as that option;
   anything else is an "Other" answer — treat it per the protocol (discuss,
   then re-ask for a final pick).
+- **File-backed questions**: retain A-E and X labels in the markdown source,
+  but remap those choices to numbered prose when presenting them in chat.
+  Preserve source order and map the selected number back to the stored label.
+  The consolidated-summary checkpoint above is the explicit exception: its
+  options have no source letters and its `[Answer]:` stores the exact semantic
+  label, not a source letter, chat number, prefix, or description.
+  Never present file letters as response keys or ask the user to answer with
+  file letters.
 - **Batching**: no harness limit on options per question, but keep batches
   readable — at most ~4 questions per message, and for 5+ options prefer one
   message per question. The questions FILE remains the authoritative record.

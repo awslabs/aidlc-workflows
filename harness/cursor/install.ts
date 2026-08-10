@@ -68,14 +68,6 @@ function readReceipt(path: string): InstallReceipt | null {
   return { schemaVersion: 1, managedFiles };
 }
 
-function isLegacyAidlcInstall(targetRoot: string): boolean {
-  return [
-    ".cursor/tools/aidlc-version.ts",
-    ".cursor/hooks/aidlc-cursor-adapter.ts",
-    ".cursor/skills/aidlc/SKILL.md",
-  ].every((rel) => existsSync(join(targetRoot, rel)));
-}
-
 function activeSpaceFor(targetRoot: string): string {
   const pointer = join(targetRoot, "aidlc", "active-space");
   if (!existsSync(pointer)) return "default";
@@ -102,25 +94,90 @@ function activePluginSelection(targetRoot: string): string[] | null {
   return stringArray(parsed.plugins, `${path}: plugins`);
 }
 
+interface StageContribRecord {
+  produces?: string[];
+  sensors?: string[];
+  consumes?: string[];
+  scopes?: string[];
+  required_sections?: string[];
+  required_sections_created?: boolean;
+}
+
+interface PluginStageState {
+  records: StageContribRecord[];
+  unsafe: boolean;
+}
+
 interface PluginRuntimeState {
   composed: boolean;
-  modifiedStageSlugs: Set<string>;
+  stages: Map<string, PluginStageState>;
+}
+
+interface PluginFragment {
+  plugin: string;
+  anchor: string;
+  order: number;
+  block: string;
+  start: number;
+  end: number;
+}
+
+interface ConsumeEntry {
+  artifact: string;
+  required: boolean;
+  conditional_on?: string;
+}
+
+function stageContribRecord(value: unknown): StageContribRecord | null {
+  if (!isObject(value)) return null;
+  const record: StageContribRecord = {};
+  for (const field of [
+    "produces",
+    "sensors",
+    "consumes",
+    "scopes",
+    "required_sections",
+  ] as const) {
+    const entries = value[field];
+    if (entries === undefined) continue;
+    if (!Array.isArray(entries) || entries.some((entry) => typeof entry !== "string")) {
+      return null;
+    }
+    record[field] = entries;
+  }
+  if (value.required_sections_created !== undefined) {
+    if (typeof value.required_sections_created !== "boolean") return null;
+    record.required_sections_created = value.required_sections_created;
+  }
+  return record;
 }
 
 function pluginRuntimeState(targetRoot: string): PluginRuntimeState {
   const state: PluginRuntimeState = {
     composed: false,
-    modifiedStageSlugs: new Set<string>(),
+    stages: new Map<string, PluginStageState>(),
+  };
+  const stageState = (slug: string): PluginStageState => {
+    const current = state.stages.get(slug);
+    if (current) return current;
+    const created = { records: [], unsafe: false };
+    state.stages.set(slug, created);
+    return created;
   };
   const dataDir = join(targetRoot, ".cursor", "tools", "data");
   try {
-    for (const name of readdirSync(dataDir)) {
+    for (const name of readdirSync(dataDir).sort()) {
       if (!name.startsWith("plugin-contrib-") || !name.endsWith(".json")) continue;
       state.composed = true;
       try {
         const parsed = JSON.parse(readFileSync(join(dataDir, name), "utf-8")) as unknown;
         if (isObject(parsed)) {
-          for (const slug of Object.keys(parsed)) state.modifiedStageSlugs.add(slug);
+          for (const [slug, value] of Object.entries(parsed)) {
+            const target = stageState(slug);
+            const record = stageContribRecord(value);
+            if (record) target.records.push(record);
+            else target.unsafe = true;
+          }
         }
       } catch {
         // The sidecar's presence still proves composition; collision handling
@@ -144,7 +201,7 @@ function pluginRuntimeState(targetRoot: string): PluginRuntimeState {
       if (!path.endsWith(".md")) continue;
       if (!readFileSync(path, "utf-8").includes("<!-- plugin:")) continue;
       state.composed = true;
-      state.modifiedStageSlugs.add(basename(path, ".md"));
+      stageState(basename(path, ".md"));
     }
   } catch {
     // Existing sidecar/graph evidence remains usable.
@@ -152,12 +209,417 @@ function pluginRuntimeState(targetRoot: string): PluginRuntimeState {
   return state;
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function hashProse(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index++) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function pluginFragments(content: string): PluginFragment[] | null {
+  const fragments: PluginFragment[] = [];
+  const open =
+    /<!-- plugin:([^:\n]+):(.+):(\d+):([0-9a-f]+) -->/g;
+  let match = open.exec(content);
+  while (match) {
+    const [marker, plugin, anchor, orderRaw, hash] = match;
+    const close = `<!-- /plugin:${plugin}:${anchor}:${orderRaw}:${hash} -->`;
+    const proseStart = match.index + marker.length;
+    const closeIndex = content.indexOf(close, proseStart);
+    if (
+      closeIndex === -1 ||
+      content[proseStart] !== "\n" ||
+      content[closeIndex - 1] !== "\n"
+    ) {
+      return null;
+    }
+    const prose = content.slice(proseStart + 1, closeIndex - 1);
+    if (hashProse(prose) !== hash) return null;
+    const end = closeIndex + close.length;
+    fragments.push({
+      plugin,
+      anchor,
+      order: Number(orderRaw),
+      block: content.slice(match.index, end),
+      start: match.index,
+      end,
+    });
+    open.lastIndex = end;
+    match = open.exec(content);
+  }
+  return fragments;
+}
+
+function scalarValue(raw: string): string {
+  const value = raw.trim();
+  const quoted = value.match(/^(["'])(.*)\1$/);
+  return quoted ? quoted[2] : value;
+}
+
+function listFieldValues(content: string, field: string): string[] | null {
+  if (new RegExp(`^${field}:\\s*\\[\\s*\\]\\s*$`, "m").test(content)) return [];
+  const block = content.match(new RegExp(`^${field}:\\n((?: {2}- .+\\n)*)`, "m"));
+  if (!block) return null;
+  return [...block[1].matchAll(/^ {2}- (.+?)\s*$/gm)].map((entry) =>
+    scalarValue(entry[1])
+  );
+}
+
+function consumeEntries(content: string, artifacts: ReadonlySet<string>): ConsumeEntry[] | null {
+  if (artifacts.size === 0) return [];
+  const block = content.match(
+    /^consumes:\n((?: {2}- artifact:.*\n(?: {4}(?:required|conditional_on):.*\n)*)*)/m,
+  )?.[1];
+  if (block === undefined) return null;
+  const found = new Map<string, ConsumeEntry>();
+  for (const match of block.matchAll(
+    /^ {2}- artifact:\s*([\w-]+).*\n((?: {4}(?:required|conditional_on):.*\n)*)/gm,
+  )) {
+    if (!artifacts.has(match[1])) continue;
+    const required = match[2].match(/^ {4}required:\s*(true|false)\s*$/m)?.[1];
+    if (!required || found.has(match[1])) return null;
+    const conditionalOn = match[2].match(/^ {4}conditional_on:\s*(\S+)\s*$/m)?.[1];
+    found.set(match[1], {
+      artifact: match[1],
+      required: required === "true",
+      ...(conditionalOn ? { conditional_on: conditionalOn } : {}),
+    });
+  }
+  if ([...artifacts].some((artifact) => !found.has(artifact))) return null;
+  return [...found.values()];
+}
+
+function removeListValues(
+  content: string,
+  field: string,
+  values: ReadonlySet<string>,
+  dropEmptyField: boolean,
+): string {
+  const blockRe = new RegExp(`^${field}:\\n((?: {2}- .+\\n)*)`, "m");
+  const match = content.match(blockRe);
+  if (!match) return content;
+  const entries = [...match[1].matchAll(/^ {2}- (.+)$/gm)].map((entry) => entry[1]);
+  const removeIndexes = new Set<number>();
+  const remaining = new Set(values);
+  for (let index = 0; index < entries.length; index++) {
+    if (remaining.delete(entries[index].trim())) removeIndexes.add(index);
+  }
+  for (const value of remaining) {
+    const index = entries.findIndex(
+      (entry, candidate) =>
+        !removeIndexes.has(candidate) && scalarValue(entry) === value,
+    );
+    if (index !== -1) removeIndexes.add(index);
+  }
+  const kept = entries.filter((_, index) => !removeIndexes.has(index));
+  const replacement =
+    kept.length > 0
+      ? `${field}:\n${kept.map((value) => `  - ${value}`).join("\n")}\n`
+      : dropEmptyField
+        ? ""
+        : `${field}: []\n`;
+  return content.replace(blockRe, replacement);
+}
+
+function removeConsumesEntries(content: string, artifacts: ReadonlySet<string>): string {
+  const blockRe =
+    /^consumes:\n((?: {2}- artifact:.*\n(?: {4}(?:required|conditional_on):.*\n)*)*)/m;
+  const match = content.match(blockRe);
+  if (!match) return content;
+  const kept = [
+    ...match[1].matchAll(
+      /^ {2}- artifact:\s*([\w-]+).*\n(?: {4}(?:required|conditional_on):.*\n)*/gm,
+    ),
+  ]
+    .filter((entry) => !artifacts.has(entry[1]))
+    .map((entry) => entry[0]);
+  const replacement =
+    kept.length > 0 ? `consumes:\n${kept.join("")}` : "consumes: []\n";
+  return content.replace(blockRe, replacement);
+}
+
+function stripPluginFragments(content: string, fragments: readonly PluginFragment[]): string {
+  let stripped = content;
+  for (const fragment of [...fragments].sort((left, right) => right.start - left.start)) {
+    stripped = stripped.slice(0, fragment.start) + stripped.slice(fragment.end);
+  }
+  return stripped.replace(/\n{3,}/g, "\n\n");
+}
+
+function mergeListValues(content: string, field: string, values: readonly string[]): string | null {
+  const items = [...new Set(values)];
+  if (items.length === 0) return content;
+  const emptyRe = new RegExp(`^${field}:\\s*\\[\\s*\\]\\s*$`, "m");
+  if (emptyRe.test(content)) {
+    return content.replace(
+      emptyRe,
+      `${field}:\n${items.map((item) => `  - ${item}`).join("\n")}`,
+    );
+  }
+  const blockRe = new RegExp(`^(${field}:\\n(?: {2}- .+\\n)*)`, "m");
+  const match = content.match(blockRe);
+  if (!match) return null;
+  const existing = new Set(
+    [...match[1].matchAll(/^ {2}- (.+)$/gm)].map((entry) => scalarValue(entry[1])),
+  );
+  const additions = items.filter((item) => !existing.has(item));
+  if (additions.length === 0) return content;
+  return content.replace(
+    blockRe,
+    match[1] + additions.map((item) => `  - ${item}`).join("\n") + "\n",
+  );
+}
+
+function mergeConsumes(content: string, entries: readonly ConsumeEntry[]): string | null {
+  if (entries.length === 0) return content;
+  const render = (entry: ConsumeEntry) =>
+    `  - artifact: ${entry.artifact}\n    required: ${entry.required}` +
+    (entry.conditional_on ? `\n    conditional_on: ${entry.conditional_on}` : "");
+  const emptyRe = /^consumes:\s*\[\s*\]\s*$/m;
+  if (emptyRe.test(content)) {
+    return content.replace(emptyRe, `consumes:\n${entries.map(render).join("\n")}`);
+  }
+  const blockRe =
+    /^(consumes:\n(?: {2}- artifact:.*\n(?: {4}(?:required|conditional_on):.*\n)*)*)/m;
+  const match = content.match(blockRe);
+  if (!match) return null;
+  const existing = new Set(
+    [...match[1].matchAll(/- artifact:\s*([\w-]+)/g)].map((entry) => entry[1]),
+  );
+  const additions = entries.filter((entry) => !existing.has(entry.artifact));
+  if (additions.length === 0) return content;
+  return content.replace(
+    blockRe,
+    match[1] + additions.map(render).join("\n") + "\n",
+  );
+}
+
+function mergeRequiredSections(content: string, values: readonly string[]): string | null {
+  const items = [...new Set(values)];
+  if (items.length === 0) return content;
+  const render = (entries: readonly string[]) =>
+    entries.map((entry) => `  - "${entry}"`).join("\n");
+  const emptyRe = /^required_sections:\s*\[\s*\]\s*$/m;
+  if (emptyRe.test(content)) {
+    return content.replace(emptyRe, `required_sections:\n${render(items)}`);
+  }
+  const blockRe = /^(required_sections:\n(?: {2}- .+\n)*)/m;
+  const match = content.match(blockRe);
+  if (match) {
+    const existing = new Set(
+      [...match[1].matchAll(/^ {2}- (.+?)\s*$/gm)].map((entry) =>
+        scalarValue(entry[1])
+      ),
+    );
+    const additions = items.filter((item) => !existing.has(item));
+    if (additions.length === 0) return content;
+    return content.replace(blockRe, match[1] + render(additions) + "\n");
+  }
+  const frontmatterClose = content.match(/^---\r?\n[\s\S]*?\n(---)(?:\r?\n|$)/);
+  if (!frontmatterClose) return null;
+  const insertAt = frontmatterClose.index! + frontmatterClose[0].lastIndexOf("---");
+  return (
+    content.slice(0, insertAt) +
+    `required_sections:\n${render(items)}\n` +
+    content.slice(insertAt)
+  );
+}
+
+function locateAnchor(content: string, anchor: string): number {
+  const stepAnchor = (kind: "after" | "before"): number => {
+    const number = anchor.slice(anchor.indexOf(":") + 1);
+    if (!/^\d+$/.test(number)) return -1;
+    const wanted = Number(number);
+    let hit: { index: number; length: number } | null = null;
+    for (const match of content.matchAll(/^### Step (\d+)(?:-(\d+))?\b.*$/gm)) {
+      const low = Number(match[1]);
+      const high = match[2] ? Number(match[2]) : low;
+      if (wanted >= low && wanted <= high) {
+        hit = { index: match.index!, length: match[0].length };
+        break;
+      }
+    }
+    if (!hit) return -1;
+    if (kind === "before") return hit.index;
+    const from = hit.index + hit.length;
+    const next = content.slice(from).search(/^#{2,3} /m);
+    return next === -1 ? content.length : from + next;
+  };
+  if (anchor.startsWith("after-step:")) return stepAnchor("after");
+  if (anchor.startsWith("before-step:")) return stepAnchor("before");
+  if (anchor === "end-of-steps") {
+    const steps = content.match(/^## Steps\b.*$/m);
+    if (!steps) return -1;
+    const from = steps.index! + steps[0].length;
+    const next = content.slice(from).search(/^## /m);
+    return next === -1 ? content.length : from + next;
+  }
+  if (anchor.startsWith("in:")) {
+    const component = anchor.slice(3);
+    if (!/^[\w -]+$/.test(component)) return -1;
+    const heading = content.match(new RegExp(`^## ${escapeRegExp(component)}\\b.*$`, "m"));
+    if (!heading) return -1;
+    const from = heading.index! + heading[0].length;
+    const next = content.slice(from).search(/^## /m);
+    return next === -1 ? content.length : from + next;
+  }
+  return -1;
+}
+
+function spliceFragment(content: string, fragment: PluginFragment): string | null {
+  const plugin = escapeRegExp(fragment.plugin);
+  const anchor = escapeRegExp(fragment.anchor);
+  if (
+    new RegExp(
+      `<!-- plugin:${plugin}:${anchor}:${fragment.order}:[0-9a-f]+ -->`,
+    ).test(content)
+  ) {
+    return null;
+  }
+  const peers: Array<{ order: number; plugin: string; start: number; end: number }> = [];
+  for (const match of content.matchAll(
+    new RegExp(`<!-- plugin:([^:]+):${anchor}:(\\d+):([0-9a-f]+) -->`, "g"),
+  )) {
+    const peerPlugin = match[1];
+    const order = Number(match[2]);
+    const close =
+      `<!-- /plugin:${peerPlugin}:${fragment.anchor}:${order}:${match[3]} -->`;
+    const closeIndex = content.indexOf(close, match.index!);
+    if (closeIndex === -1) return null;
+    peers.push({
+      order,
+      plugin: peerPlugin,
+      start: match.index!,
+      end: closeIndex + close.length,
+    });
+  }
+  if (peers.length > 0) {
+    const after = peers.find(
+      (peer) =>
+        peer.order > fragment.order ||
+        (peer.order === fragment.order &&
+          peer.plugin.localeCompare(fragment.plugin) > 0),
+    );
+    if (after) {
+      return (
+        content.slice(0, after.start) +
+        fragment.block +
+        "\n\n" +
+        content.slice(after.start)
+      );
+    }
+    const lastEnd = Math.max(...peers.map((peer) => peer.end));
+    return (
+      content.slice(0, lastEnd) +
+      "\n\n" +
+      fragment.block +
+      content.slice(lastEnd)
+    );
+  }
+  const insertion = locateAnchor(content, fragment.anchor);
+  if (insertion === -1) return null;
+  return (
+    content.slice(0, insertion) +
+    "\n" +
+    fragment.block +
+    "\n" +
+    content.slice(insertion)
+  );
+}
+
+function rebuildPluginComposedStage(
+  source: Buffer,
+  current: Buffer,
+  state: PluginStageState,
+): { desired: Buffer; base: Buffer } | null {
+  if (state.unsafe) return null;
+  const installed = current.toString("utf-8");
+  const fragments = pluginFragments(installed);
+  if (fragments === null) return null;
+
+  const owned = {
+    produces: new Set<string>(),
+    sensors: new Set<string>(),
+    consumes: new Set<string>(),
+    scopes: new Set<string>(),
+    required_sections: new Set<string>(),
+  };
+  let requiredSectionsCreated = false;
+  for (const record of state.records) {
+    for (const field of [
+      "produces",
+      "sensors",
+      "consumes",
+      "scopes",
+      "required_sections",
+    ] as const) {
+      for (const value of record[field] ?? []) owned[field].add(value);
+    }
+    requiredSectionsCreated ||= record.required_sections_created === true;
+  }
+
+  const ordered: Record<"produces" | "sensors" | "scopes" | "required_sections", string[]> = {
+    produces: [],
+    sensors: [],
+    scopes: [],
+    required_sections: [],
+  };
+  for (const field of ["produces", "sensors", "scopes", "required_sections"] as const) {
+    const values = listFieldValues(installed, field);
+    if (owned[field].size > 0 && values === null) return null;
+    ordered[field] = (values ?? []).filter((value) => owned[field].has(value));
+    if (ordered[field].length !== owned[field].size) return null;
+  }
+  const consumes = consumeEntries(installed, owned.consumes);
+  if (consumes === null) return null;
+
+  let base = stripPluginFragments(installed, fragments);
+  base = removeListValues(base, "produces", owned.produces, false);
+  base = removeListValues(base, "sensors", owned.sensors, false);
+  base = removeListValues(base, "scopes", owned.scopes, false);
+  base = removeConsumesEntries(base, owned.consumes);
+  base = removeListValues(
+    base,
+    "required_sections",
+    owned.required_sections,
+    requiredSectionsCreated,
+  );
+
+  let desired: string | null = source.toString("utf-8");
+  desired = mergeListValues(desired, "produces", ordered.produces);
+  if (desired === null) return null;
+  desired = mergeListValues(desired, "sensors", ordered.sensors);
+  if (desired === null) return null;
+  desired = mergeListValues(desired, "scopes", ordered.scopes);
+  if (desired === null) return null;
+  desired = mergeConsumes(desired, consumes);
+  if (desired === null) return null;
+  desired = mergeRequiredSections(desired, ordered.required_sections);
+  if (desired === null) return null;
+  for (const fragment of [...fragments].sort(
+    (left, right) =>
+      left.order - right.order || left.plugin.localeCompare(right.plugin),
+  )) {
+    desired = spliceFragment(desired, fragment);
+    if (desired === null) return null;
+  }
+  return {
+    desired: Buffer.from(desired, "utf-8"),
+    base: Buffer.from(base, "utf-8"),
+  };
+}
+
 function managedContent(
   rel: string,
   source: Buffer,
   activeSpace: string,
   existing?: Buffer,
-  pluginModifiedStageSlugs: ReadonlySet<string> = new Set<string>(),
 ): Buffer {
   if (rel === ".cursor/tools/data/harness.json" && existing) {
     const shipped = parseBufferObject(source, rel);
@@ -166,14 +628,6 @@ function managedContent(
       shipped.plugins = stringArray(current.plugins, `${rel}: plugins`);
     }
     return Buffer.from(`${JSON.stringify(shipped, null, 2)}\n`, "utf-8");
-  }
-
-  if (
-    pluginModifiedStageSlugs.has(basename(rel, ".md")) &&
-    existing &&
-    rel.startsWith(".cursor/aidlc-common/stages/")
-  ) {
-    return existing;
   }
 
   if (
@@ -220,19 +674,12 @@ function isRuntimeOwnedManagedFile(
   rel: string,
   selectedPlugins: string[] | null,
   pluginComposition: boolean,
-  pluginModifiedStageSlugs: ReadonlySet<string>,
 ): boolean {
   if (selectedPlugins === null && !pluginComposition) return false;
-  if (
+  return (
     rel === ".cursor/tools/data/stage-graph.json" ||
     rel === ".cursor/tools/data/scope-grid.json" ||
     rel === ".cursor/skills/aidlc/SKILL.md"
-  ) {
-    return true;
-  }
-  return (
-    rel.startsWith(".cursor/aidlc-common/stages/") &&
-    pluginModifiedStageSlugs.has(basename(rel, ".md"))
   );
 }
 
@@ -392,11 +839,9 @@ export async function install(targetDir: string): Promise<void> {
   const sharedJson = new Set([".cursor/hooks.json", ".cursor/cli.json"]);
   const receiptTarget = join(targetRoot, RECEIPT_REL);
   const priorReceipt = readReceipt(receiptTarget);
-  const legacyInstall = priorReceipt === null && isLegacyAidlcInstall(targetRoot);
   const activeSpace = activeSpaceFor(targetRoot);
   const selectedPlugins = activePluginSelection(targetRoot);
   const pluginRuntime = pluginRuntimeState(targetRoot);
-  const preservedRuntimeFiles: string[] = [];
   const managedFiles: Record<string, string> = {
     ...(priorReceipt?.managedFiles ?? {}),
   };
@@ -418,45 +863,40 @@ export async function install(targetDir: string): Promise<void> {
 
       managedFiles[rel] = sha256(sourceBytes);
       const targetBytes = existsSync(target) ? readFileSync(target) : undefined;
-      const desired = managedContent(
+      let desired = managedContent(
         rel,
         sourceBytes,
         activeSpace,
         targetBytes,
-        pluginRuntime.modifiedStageSlugs,
       );
+      let pluginBase: Buffer | undefined;
+      const pluginStage =
+        rel.startsWith(".cursor/aidlc-common/stages/") && rel.endsWith(".md")
+          ? pluginRuntime.stages.get(basename(rel, ".md"))
+          : undefined;
+      if (targetBytes && pluginStage) {
+        const rebuilt = rebuildPluginComposedStage(sourceBytes, targetBytes, pluginStage);
+        if (rebuilt) {
+          desired = rebuilt.desired;
+          pluginBase = rebuilt.base;
+        }
+      }
       const runtimeOwned = isRuntimeOwnedManagedFile(
         rel,
         selectedPlugins,
         pluginRuntime.composed,
-        pluginRuntime.modifiedStageSlugs,
       );
-      if (
-        targetBytes &&
-        runtimeOwned &&
-        targetBytes.equals(desired) &&
-        !targetBytes.equals(sourceBytes)
-      ) {
-        preservedRuntimeFiles.push(rel);
-      }
       if (!existsSync(target)) {
         actions.push({ kind: "write", target, content: desired });
       } else if (targetBytes?.equals(desired)) {
         // Already current, including an active-space-adjusted Cursor surface.
-      } else if (legacyInstall) {
-        actions.push({
-          kind: "write",
-          target,
-          content: desired,
-        });
       } else if (priorReceipt?.managedFiles[rel] !== undefined) {
-        const unchangedSinceInstall =
-          sha256(receiptComparableContent(rel, targetBytes!, activeSpace)) ===
-          priorReceipt.managedFiles[rel];
-        if (
-          unchangedSinceInstall ||
-          runtimeOwned
-        ) {
+        const unchangedSinceInstall = pluginStage
+          ? pluginBase !== undefined &&
+            sha256(pluginBase) === priorReceipt.managedFiles[rel]
+          : sha256(receiptComparableContent(rel, targetBytes!, activeSpace)) ===
+            priorReceipt.managedFiles[rel];
+        if (unchangedSinceInstall || runtimeOwned) {
           actions.push({ kind: "write", target, content: desired });
         } else {
           collisions.push(rel);
@@ -516,14 +956,6 @@ export async function install(targetDir: string): Promise<void> {
     mkdirSync(dirname(action.target), { recursive: true });
     if (action.kind === "copy") cpSync(action.source, action.target);
     else writeFileSync(action.target, action.content, "utf-8");
-  }
-  if (preservedRuntimeFiles.length > 0) {
-    console.log(
-      `AI-DLC Cursor installer preserved runtime-managed files:\n${preservedRuntimeFiles
-        .sort()
-        .map((path) => `  ${path}`)
-        .join("\n")}`,
-    );
   }
   if (selectedPlugins !== null || pluginRuntime.composed) {
     await refreshPluginRouting(targetRoot);

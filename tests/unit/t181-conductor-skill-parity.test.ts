@@ -139,6 +139,7 @@ const FRESH_SESSION_TOKENS: Record<string, string[]> = {
   "kiro-ide": ["new Kiro IDE chat", "`/aidlc`"],
   opencode: ["restart OpenCode", "`/aidlc`"],
   copilot: ["new Copilot CLI session", "new VS Code agent chat", "`/aidlc`"],
+  cursor: ["new Cursor chat", "`/aidlc`"],
 };
 
 function stageTableRows(body: string): string[] {
@@ -363,9 +364,9 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
-  test("Kiro file-backed questions remap source letters to numbered prose", () => {
+  test("prose renderers remap file-backed source letters to numbered prose", () => {
     const missing: string[] = [];
-    for (const harness of ["kiro", "kiro-ide"]) {
+    for (const harness of ["cursor", "kiro", "kiro-ide"]) {
       const skillRel = `harness/${harness}/skills/aidlc/SKILL.md`;
       const annexRel =
         `harness/${harness}/skills/aidlc/question-rendering.md`;
@@ -395,7 +396,14 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
 
   test("every prose question renderer starts a fresh local numbering scope", () => {
     const missing: string[] = [];
-    for (const harness of ["copilot", "codex", "kiro", "kiro-ide", "opencode"]) {
+    for (const harness of [
+      "copilot",
+      "codex",
+      "cursor",
+      "kiro",
+      "kiro-ide",
+      "opencode",
+    ]) {
       const rel = `harness/${harness}/skills/aidlc/question-rendering.md`;
       const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
       if (!body.includes("start every question at `1`")) {

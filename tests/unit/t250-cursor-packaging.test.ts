@@ -47,6 +47,7 @@ const PACKAGE_SCRIPT = join(REPO_ROOT, "scripts", "package.ts");
 const CLAUDE_SRC = join(REPO_ROOT, "dist", "claude", ".claude");
 const CURSOR_ROOT = join(REPO_ROOT, "dist", "cursor");
 const ENGINE = join(CURSOR_ROOT, ".cursor");
+const CURSOR_INSTALLER_SOURCE = join(REPO_ROOT, "harness", "cursor", "install.ts");
 
 function* walk(dir: string): Generator<string> {
   for (const entry of readdirSync(dir).sort()) {
@@ -372,11 +373,14 @@ describe("t250 dist/cursor packaging parity + shell shape", () => {
     }
   });
 
-  test("13: Cursor installer upgrades managed files after active-space repointing", () => {
+  test("13: Cursor installer migrates only verified pre-receipt files", () => {
     const root = mkdtempSync(join(tmpdir(), "t250-cursor-upgrade-"));
     const project = join(root, "project");
     try {
-      const installer = join(CURSOR_ROOT, "install.ts");
+      const stagedDist = join(root, "cursor-dist");
+      cpSync(CURSOR_ROOT, stagedDist, { recursive: true });
+      cpSync(CURSOR_INSTALLER_SOURCE, join(stagedDist, "install.ts"));
+      const installer = join(stagedDist, "install.ts");
       const first = spawnSync("bun", [installer, project], {
         cwd: REPO_ROOT,
         encoding: "utf-8",
@@ -401,7 +405,6 @@ describe("t250 dist/cursor packaging parity + shell shape", () => {
       // Simulate an install made by the reviewed pre-receipt installer.
       rmSync(join(project, ".cursor", "aidlc-install.json"), { force: true });
       const managed = join(project, ".cursor", "hooks", "aidlc-cursor-adapter.ts");
-      writeFileSync(managed, "// stale managed adapter\n");
       const projectMemory = join(
         project,
         "aidlc",
@@ -449,6 +452,31 @@ describe("t250 dist/cursor packaging parity + shell shape", () => {
       }
       expect(readFileSync(projectMemory, "utf-8")).toBe("# Project-owned method\n");
       expect(existsSync(join(project, ".cursor", "aidlc-install.json"))).toBe(true);
+
+      // Sentinel files establish that this is an older AI-DLC install, but do
+      // not prove ownership of a differing file. Without receipt provenance,
+      // a modified framework-shaped file must block the whole migration.
+      const agentsBeforeRefusal = readFileSync(join(project, "AGENTS.md"));
+      const ruleBeforeRefusal = readFileSync(
+        join(project, ".cursor", "rules", "aidlc.mdc"),
+      );
+      rmSync(join(project, ".cursor", "aidlc-install.json"), { force: true });
+      writeFileSync(managed, "// user-modified pre-receipt adapter\n");
+      const refused = spawnSync("bun", [installer, project], {
+        cwd: REPO_ROOT,
+        encoding: "utf-8",
+      });
+      expect(refused.status).toBe(1);
+      expect(refused.stderr).toContain("refusing to overwrite");
+      expect(refused.stderr).toContain(".cursor/hooks/aidlc-cursor-adapter.ts");
+      expect(readFileSync(managed, "utf-8")).toBe(
+        "// user-modified pre-receipt adapter\n",
+      );
+      expect(readFileSync(join(project, "AGENTS.md"))).toEqual(agentsBeforeRefusal);
+      expect(readFileSync(join(project, ".cursor", "rules", "aidlc.mdc"))).toEqual(
+        ruleBeforeRefusal,
+      );
+      expect(existsSync(join(project, ".cursor", "aidlc-install.json"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

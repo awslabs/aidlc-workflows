@@ -43,6 +43,7 @@ const COPILOT_DIST = join(REPO_ROOT, "dist", "copilot");
 const KIRO_DIST = join(REPO_ROOT, "dist", "kiro", ".kiro");
 const CODEX_DIST = join(REPO_ROOT, "dist", "codex", ".codex");
 const CURSOR_DIST = join(REPO_ROOT, "dist", "cursor");
+const CURSOR_INSTALLER_SOURCE = join(REPO_ROOT, "harness", "cursor", "install.ts");
 const STAGE_TABLE_BEGIN =
   "<!-- BEGIN: compiled stage graph via `bun aidlc-utility.ts stage-table` - do NOT hand-edit -->";
 const STAGE_TABLE_END = "<!-- END: compiled stage graph -->";
@@ -332,10 +333,41 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       "construction",
       "build-and-test.md",
     );
-    const pluginModifiedBefore = readFileSync(pluginModifiedStage);
+    const pluginModifiedBefore = readFileSync(pluginModifiedStage, "utf-8");
+    const upgradedDist = join(tmp, "cursor-upgrade-dist");
+    cpSync(CURSOR_DIST, upgradedDist, { recursive: true });
+    cpSync(CURSOR_INSTALLER_SOURCE, join(upgradedDist, "install.ts"));
+    const pluginStageRel =
+      ".cursor/aidlc-common/stages/construction/build-and-test.md";
+    const upgradedCoreStage = join(upgradedDist, pluginStageRel);
+    writeFileSync(
+      upgradedCoreStage,
+      `${readFileSync(upgradedCoreStage, "utf-8").trimEnd()}\n\n<!-- upgraded core v2 -->\n`,
+    );
+
+    writeFileSync(
+      pluginModifiedStage,
+      `${pluginModifiedBefore.trimEnd()}\n\n<!-- user-owned stage edit -->\n`,
+    );
+    const refusedComposedUpgrade = spawnSync(
+      BUN,
+      [join(upgradedDist, "install.ts"), cursorProject],
+      {
+        cwd: REPO_ROOT,
+        encoding: "utf-8",
+        timeout: TIMEOUT_MS - 5_000,
+      },
+    );
+    expect(refusedComposedUpgrade.status).toBe(1);
+    expect(refusedComposedUpgrade.stderr).toContain(pluginStageRel);
+    expect(readFileSync(pluginModifiedStage, "utf-8")).toContain(
+      "user-owned stage edit",
+    );
+    writeFileSync(pluginModifiedStage, pluginModifiedBefore);
+
     const reinstall = spawnSync(
       BUN,
-      [join(CURSOR_DIST, "install.ts"), cursorProject],
+      [join(upgradedDist, "install.ts"), cursorProject],
       {
         cwd: REPO_ROOT,
         encoding: "utf-8",
@@ -343,11 +375,14 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       },
     );
     expect(reinstall.status, reinstall.stderr).toBe(0);
-    expect(reinstall.stdout).toContain("preserved runtime-managed files");
-    expect(reinstall.stdout).toContain(
-      ".cursor/aidlc-common/stages/construction/build-and-test.md",
+    expect(reinstall.stdout).toContain("refreshed plugin routing");
+    const pluginModifiedAfter = readFileSync(pluginModifiedStage, "utf-8");
+    expect(pluginModifiedAfter).toContain("<!-- upgraded core v2 -->");
+    expect(pluginModifiedAfter).toContain(
+      "test-pro-branch-coverage-instructions",
     );
-    expect(readFileSync(pluginModifiedStage)).toEqual(pluginModifiedBefore);
+    expect(pluginModifiedAfter).toContain("Step 9a (test-pro)");
+    expect(pluginModifiedAfter).not.toBe(pluginModifiedBefore);
     const graphAfterReinstall = JSON.parse(
       readFileSync(
         join(cursorProject, ".cursor", "tools", "data", "stage-graph.json"),

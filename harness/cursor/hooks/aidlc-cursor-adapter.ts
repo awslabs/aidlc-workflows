@@ -339,13 +339,14 @@ export async function run(
   function activeSubagent(): string {
     const conversation = cursor.conversation_id ?? "";
     if (!conversation || isKnownMain(conversation)) return "";
+    const reviewerDispatch = activeReviewerDispatch();
     const live: Array<{ path: string; record: SubagentRecord }> = [];
     for (const path of ledgerFiles()) {
       const record = readRecord(path);
       if (record) live.push({ path, record });
     }
     if (live.length === 0) {
-      return activeReviewerDispatch() === null ? "" : AMBIGUOUS_REVIEWER;
+      return reviewerDispatch === null ? "" : AMBIGUOUS_REVIEWER;
     }
     // A conversation that spawned a live Task is a main even if its marker
     // write failed.
@@ -362,8 +363,15 @@ export async function run(
       }
     };
     const agents = new Set(live.map(({ record }) => record.agent));
+    const reviewers = [...agents].filter((agent) => REVIEW_AGENT_RE.test(agent));
+    // An active reviewer dispatch is independent evidence that an unknown
+    // conversation may be the reviewer. If only non-reviewer records survive,
+    // partial ledger loss must not silently disable reviewer-scope enforcement.
+    if (reviewerDispatch !== null && reviewers.length === 0) {
+      refresh();
+      return AMBIGUOUS_REVIEWER;
+    }
     if (agents.size !== 1) {
-      const reviewers = [...agents].filter((agent) => REVIEW_AGENT_RE.test(agent));
       if (reviewers.length === 1) {
         refresh();
         return reviewers[0];
@@ -525,8 +533,52 @@ export async function run(
     return values;
   }
 
-  function reviewerShellInvokesInterpreter(command: string): boolean {
-    if (/`|\$\(|\beval\b|\bsource\b/.test(command)) return true;
+  function shellUsesDynamicExpansion(command: string): boolean {
+    let quote: "'" | '"' | null = null;
+    let escaped = false;
+    for (let i = 0; i < command.length; i++) {
+      const ch = command[i];
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch === "\\" && quote !== "'") {
+        escaped = true;
+        continue;
+      }
+      if (quote === "'") {
+        if (ch === "'") quote = null;
+        continue;
+      }
+      if (quote === '"') {
+        if (ch === '"') {
+          quote = null;
+          continue;
+        }
+        if (ch === "`") return true;
+        if (ch !== "$") continue;
+        const next = command[i + 1] ?? "";
+        if (/[\w@*#?$!{('"_-]/.test(next)) return true;
+        continue;
+      }
+      if (ch === "'") {
+        quote = "'";
+        continue;
+      }
+      if (ch === '"') {
+        quote = '"';
+        continue;
+      }
+      if (ch === "`") return true;
+      if (ch !== "$") continue;
+      const next = command[i + 1] ?? "";
+      if (/[\w@*#?$!{('"_-]/.test(next)) return true;
+    }
+    return false;
+  }
+
+  function shellInvokesDynamicEvaluation(command: string): boolean {
+    if (shellUsesDynamicExpansion(command) || /\beval\b|\bsource\b/.test(command)) return true;
     const interpreter =
       /^(?:ba|da|fi|k|z)?sh$|^(?:bun|bunx|deno|node|nodejs|npm|npx|pnpm|yarn|corepack|tsx|ts-node|python(?:\d+(?:\.\d+)*)?|ruby|perl|php|lua|luajit|raku|julia|java|js|qjs|osascript|powershell|pwsh)$/i;
     return shellWords(command).some((word) => {
@@ -621,25 +673,34 @@ export async function run(
     }
 
     case "session-end": {
+      // Cursor does not deliver Task postToolUse on its real CLI lifecycle.
+      // Retire every still-live Task for this parent through the canonical
+      // SubagentStop hook before ending the session, explicitly qualifying the
+      // terminal event as inferred instead of silently dropping it.
+      if (cursor.conversation_id) {
+        for (const path of ledgerFiles().sort()) {
+          const record = readRecord(path);
+          if (record?.parent !== cursor.conversation_id) continue;
+          runCore(
+            "aidlc-log-subagent.ts",
+            JSON.stringify({
+              hook_event_name: "SubagentStop",
+              agent_type: record.agent,
+              last_assistant_message:
+                "inferred: Cursor emitted sessionEnd without Task postToolUse; " +
+                "the live Task record was retired.",
+            }),
+          );
+          removeLedger(path);
+        }
+        removeLedger(mainFile(cursor.conversation_id));
+      }
       const fwd = JSON.stringify({
         hook_event_name: "SessionEnd",
         reason: cursor.reason ?? "other",
         ...(sessionId ? { session_id: sessionId } : {}),
       });
       runCore("aidlc-session-end.ts", fwd);
-      // The conversation is over — retire its main marker AND its spawn
-      // records. This is the RELIABLE clear point: live probes show
-      // postToolUse (and so postToolUseFailure) never delivering for the Task
-      // tool on the CLI (cursor-agent 2026.07.23 fires them for Read/Write/
-      // Shell but not Task), so without this a completed Task's attribution
-      // would linger until the TTL. The postToolUse/postToolUseFailure clears
-      // stay wired for harness versions that do deliver them.
-      if (cursor.conversation_id) {
-        removeLedger(mainFile(cursor.conversation_id));
-        for (const path of ledgerFiles()) {
-          if (readRecord(path)?.parent === cursor.conversation_id) removeLedger(path);
-        }
-      }
       return 0;
     }
 
@@ -725,16 +786,18 @@ export async function run(
       }
       const command = cursor.tool_input?.command;
       if (
-        REVIEW_AGENT_RE.test(agent) &&
+        agent &&
         toolName === "Bash" &&
         typeof command === "string" &&
-        reviewerShellInvokesInterpreter(command)
+        (REVIEW_AGENT_RE.test(agent) || activeReviewerDispatch() !== null) &&
+        shellInvokesDynamicEvaluation(command)
       ) {
         process.stdout.write(`${JSON.stringify({
           permission: "deny",
           agent_message:
-            "AIDLC review delegates cannot invoke general-purpose interpreters or dynamic " +
-            "command evaluation from Shell because those paths can bypass reviewer attribution. " +
+            "AIDLC delegated agents cannot use general-purpose interpreters, shell parameter " +
+            "expansion, or dynamic command evaluation while reviewer attribution is active " +
+            "because those paths can bypass attribution-state protection. " +
             "Use Cursor's native read/search tools and have the parent conversation run executable probes.",
         })}\n`);
         return 0;

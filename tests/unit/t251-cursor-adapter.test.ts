@@ -19,7 +19,8 @@
 //     guard event from another conversation_id gets agent_type attributed
 //     (the reviewer-scope bound's identity source on this harness).
 //   - postToolUse Write feeds audit (ARTIFACT_*), Task feeds
-//     SUBAGENT_COMPLETED, beforeSubmitPrompt mints HUMAN_TURN.
+//     SUBAGENT_COMPLETED, and sessionEnd infers the same terminal event for
+//     Cursor's final live Task; beforeSubmitPrompt mints HUMAN_TURN.
 //   - stop: a core {"decision":"block","reason"} converts to
 //     {"followup_message"} (advisory nudge - Cursor stop cannot block).
 //   - malformed stdin fails open (exit 0, no output).
@@ -569,7 +570,7 @@ describe("t251 cursor adapter payload conversion", () => {
     expect(readAllAuditShards(actualProject)).toContain("SESSION_STARTED");
   });
 
-  test("13: sessionEnd forwards the reason into SESSION_ENDED and clears the conversation's spawn records", () => {
+  test("13: sessionEnd audits the final Task, forwards its reason, and clears spawn records", () => {
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");
     clearLedger(proj);
@@ -600,8 +601,12 @@ describe("t251 cursor adapter payload conversion", () => {
     expect(r.code).toBe(0);
     expect(ledgerFilesFor(proj)).toHaveLength(0);
     const shard = readAllAuditShards(proj);
+    expect(shard.match(/\*\*Event\*\*: SUBAGENT_COMPLETED/g) ?? []).toHaveLength(1);
+    expect(shard).toContain("aidlc-architecture-reviewer-agent");
+    expect(shard).toContain("inferred: Cursor emitted sessionEnd without Task postToolUse");
     expect(shard).toContain("SESSION_ENDED");
     expect(shard).toContain("completed");
+    expect(shard.indexOf("SUBAGENT_COMPLETED")).toBeLessThan(shard.indexOf("SESSION_ENDED"));
   });
 
   test("14: stop converts a core block into an advisory followup_message", () => {
@@ -995,6 +1000,55 @@ describe("t251 cursor adapter payload conversion", () => {
     }
     expect(ledgerFilesFor(proj)).toHaveLength(1);
 
+    const dynamicRemovals = [
+      [
+        `base=${JSON.stringify(join(proj, "aidlc"))}`,
+        "stem=.aidlc-cursor",
+        "suffix=-subagents",
+        'target="$base/$stem$suffix"',
+        'rm -rf "$target"',
+      ].join("; "),
+      [
+        `base=${JSON.stringify(dirname(dispatch))}`,
+        "stem=.aidlc-reviewer",
+        "suffix=-dispatch.json",
+        `target="\${base}/\${stem}\${suffix}"`,
+        `rm -f "\${target}"`,
+      ].join("; "),
+    ];
+    for (const command of dynamicRemovals) {
+      expect(command).not.toContain(".aidlc-cursor-subagents");
+      expect(command).not.toContain(".aidlc-reviewer-dispatch.json");
+      const expansion = runAdapter(
+        proj,
+        "guards",
+        payload("preToolUseShell", proj, {
+          conversation_id: "reviewer-expansion-conversation",
+          session_id: "reviewer-expansion-conversation",
+          tool_input: { command },
+        }),
+      );
+      const out = JSON.parse(expansion.stdout) as {
+        permission?: string;
+        agent_message?: string;
+      };
+      expect(out.permission, command).toBe("deny");
+      expect(out.agent_message ?? "", command).toContain("shell parameter expansion");
+    }
+    expect(existsSync(dispatch)).toBe(true);
+    expect(ledgerFilesFor(proj)).toHaveLength(1);
+
+    const literalDollar = runAdapter(
+      proj,
+      "guards",
+      payload("preToolUseShell", proj, {
+        conversation_id: "reviewer-literal-dollar-conversation",
+        session_id: "reviewer-literal-dollar-conversation",
+        tool_input: { command: "printf '%s\\n' '$HOME'" },
+      }),
+    );
+    expect(literalDollar.stdout.trim()).toBe("");
+
     // Simulate corruption outside the delegated tool path. The active dispatch
     // remains the independent fail-closed signal.
     rmSync(ledgerDirFor(proj), { recursive: true, force: true });
@@ -1013,5 +1067,80 @@ describe("t251 cursor adapter payload conversion", () => {
     };
     expect(lostOut.permission).toBe("deny");
     expect(lostOut.agent_message ?? "").toContain("identity is unavailable or ambiguous");
+  });
+
+  test("25: partial reviewer-ledger loss cannot resolve an unknown conversation as a developer", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    const record = seededRecordDir(proj);
+    clearLedger(proj);
+    mkdirSync(join(record, "construction", "unit-b"), { recursive: true });
+    writeFileSync(
+      join(record, ".aidlc-reviewer-dispatch.json"),
+      JSON.stringify({
+        reviewer: "aidlc-architecture-reviewer-agent",
+        stage: "functional-design",
+        unit: "unit-a",
+        exempt: [],
+      }),
+    );
+    registerTaskParent(proj);
+    runAdapter(proj, "guards", payload("preToolUseTask", proj));
+
+    runAdapter(
+      proj,
+      "session-start",
+      payload("sessionStart", proj, {
+        conversation_id: "developer-parent",
+        session_id: "developer-parent",
+      }),
+    );
+    runAdapter(
+      proj,
+      "guards",
+      payload("preToolUseTask", proj, {
+        conversation_id: "developer-parent",
+        session_id: "developer-parent",
+        generation_id: "developer-generation",
+        tool_use_id: "developer-tool-use",
+        tool_input: {
+          description: "Developer probe",
+          prompt: "Implement the unit.",
+          subagent_type: "aidlc-developer-agent",
+        },
+      }),
+    );
+
+    const entries = ledgerFilesFor(proj).map((path) => ({
+      path,
+      record: JSON.parse(readFileSync(path, "utf-8")) as { agent?: string },
+    }));
+    expect(entries).toHaveLength(2);
+    const reviewer = entries.find(
+      ({ record: entry }) => entry.agent === "aidlc-architecture-reviewer-agent",
+    );
+    const developer = entries.find(
+      ({ record: entry }) => entry.agent === "aidlc-developer-agent",
+    );
+    expect(reviewer).toBeDefined();
+    expect(developer).toBeDefined();
+    rmSync(reviewer?.path ?? "");
+    expect(existsSync(developer?.path ?? "")).toBe(true);
+
+    const unknown = runAdapter(
+      proj,
+      "guards",
+      payload("preToolUseSubagentRead", proj, {
+        conversation_id: "reviewer-after-partial-ledger-loss",
+        session_id: "reviewer-after-partial-ledger-loss",
+        tool_input: { file_path: join(record, "construction", "unit-b", "design.md") },
+      }),
+    );
+    const out = JSON.parse(unknown.stdout) as {
+      permission?: string;
+      agent_message?: string;
+    };
+    expect(out.permission).toBe("deny");
+    expect(out.agent_message ?? "").toContain("identity is unavailable or ambiguous");
   });
 });
