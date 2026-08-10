@@ -161,4 +161,7 @@ Rules (both tracks):
   anything else is an "Other" answer — treat it per the protocol (discuss,
   then re-ask for a final pick).
 - Gate semantics live in the ENGINE either way — the rendering never decides;
-  the user's answer rides back on `report --user-input "<exact label>"`.
+  an ordinary ask's answer rides back on
+  `report --user-input "<exact label>"`. The exception is an ask with
+  `ask_type: "new-work-routing"`: its answer routes through `next` exactly as
+  the SKILL.md `ask` row specifies, never through `report`.

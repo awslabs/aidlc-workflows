@@ -298,6 +298,17 @@ function inputMentions(result: CapturedToolResult, value: string): boolean {
   return JSON.stringify(result.input).includes(value);
 }
 
+function readIndex(
+  results: CapturedToolResult[],
+  value: string,
+): number {
+  return results.findIndex(
+    (result) =>
+      result.toolName === "Read" &&
+      inputMentions(result, value),
+  );
+}
+
 function shellCommand(result: CapturedToolResult): string | undefined {
   if (result.toolName !== "Bash" && result.toolName !== "Shell") return undefined;
   return typeof result.input.command === "string"
@@ -348,6 +359,19 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
 
         expect(result.timedOut).toBe(false);
         expect(result.stoppedAfterToolResult).toBe(true);
+        const leadPersonaPath = ".claude/agents/aidlc-product-agent.md";
+        const leadReadIndex = readIndex(result.toolResults, leadPersonaPath);
+        const projectKnowledgeReadIndex = readIndex(
+          result.toolResults,
+          LIVE_KNOWLEDGE_REL,
+        );
+        expect(leadReadIndex, "the inline mob lead persona was not read").toBeGreaterThanOrEqual(0);
+        expect(
+          projectKnowledgeReadIndex,
+          "the inline mob lead's project knowledge was not read",
+        ).toBeGreaterThan(
+          leadReadIndex,
+        );
         expect(
           result.toolResults.some(
             (toolResult) =>
@@ -475,16 +499,22 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
           );
         }
         // inline_context_paths is only the manifest. The conductor contract
-        // requires it to read each inline persona before stage work.
+        // requires it to read each inline persona before any stage/consume read.
         const leadPersonaPath = ".claude/agents/aidlc-product-agent.md";
-        expect(
-          result.toolResults.some(
-            (toolResult) =>
-              toolResult.toolName === "Read" &&
-              inputMentions(toolResult, leadPersonaPath),
-          ),
-          "the conductor did not read the inline mob lead persona",
-        ).toBe(true);
+        const leadReadIndex = readIndex(result.toolResults, leadPersonaPath);
+        const stageReadIndex = readIndex(
+          result.toolResults,
+          ".claude/aidlc-common/stages/inception/user-stories.md",
+        );
+        const consumeReadIndex = readIndex(result.toolResults, "requirements.md");
+        expect(leadReadIndex, "the conductor did not read the inline mob lead persona")
+          .toBeGreaterThanOrEqual(0);
+        expect(stageReadIndex, "stage_file read preceded the lead persona read").toBeGreaterThan(
+          leadReadIndex,
+        );
+        expect(consumeReadIndex, "consume read preceded the lead persona read").toBeGreaterThan(
+          leadReadIndex,
+        );
 
         // Round 1 dispatched every declared support. Each brief names the
         // shared draft/input, carries the active-space rules delivered by the

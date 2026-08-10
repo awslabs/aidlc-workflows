@@ -8,7 +8,7 @@ Closes the remaining composed-workflow routing and verification gaps. Stock matc
 * `aidlc-graph.ts validate-grid` now requires one explicit EXECUTE/SKIP entry for every compiled stage, and stock-distance calculation counts missing and extra keys instead of treating a partial grid as an exact match.
 * The adaptive composer revalidates an adopted stock grid and rebuilds its summary and stage-decision table from that final grid. Editing a matched stock plan converts it to a custom plan so the approved edits are persisted.
 * Mid-flow new-work offers now emit `ask_type: "new-work-routing"` with `response_route: "next"`, `new_work_description`, and `proposed_scope`; every harness uses that typed route instead of the ordinary report path, including rich prose that falls back to the selected default scope.
-* Concurrency and live-journey regressions now fail on contender crashes or malformed evidence, require actual persona reads and coherent completed-stage advancement, and verify that the new-work offer was rendered before confirmation.
+* Concurrency and live-journey regressions now fail on contender crashes or malformed evidence, require actual persona reads and coherent completed-stage advancement, and verify that the new-work offer was rendered before confirmation. Persona files named by `inline_context_paths` are now a blocking load precondition across every harness, including the mob lead before drafting or support dispatch.
 
 ## [2.5.63] - 2026-08-09
 

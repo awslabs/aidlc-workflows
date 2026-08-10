@@ -764,7 +764,14 @@ Each stage specifies its lead and supporting agents. To load a persona:
    dispatched. An agent name by itself is not loaded context. Knowledge remains
    path-loaded until the retrieval layer lands. Show any `context_warnings`
    verbatim and continue with the readable roster.
-3. Do not silently omit any listed path. Apply each loaded inline perspective
+3. This is a blocking precondition, not a manifest hint. The first tool calls
+   after `run-stage` must read these paths only; do not batch them with stage or
+   consume reads. A listed path is not delivered content: explicitly read it
+   with the harness file-read tool and wait for the result. Do not read the
+   stage file or consumes, initialize the diary, run the body, dispatch mob
+   supports, or write artifacts until every required inline-context read has
+   completed. In particular, a mob must load its lead persona first.
+4. Do not silently omit any listed path. Apply each loaded inline perspective
    when executing the stage.
 
 ### For subagent stages:
