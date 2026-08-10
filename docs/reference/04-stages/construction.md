@@ -673,7 +673,8 @@ This stage has a **two-part structure**: planning followed by generation.
    traceability -- map each plan step back to the user story it implements.
 
    **Recommended plan structure** (adapt if architecture warrants different
-   ordering):
+   ordering). With a test-after or unspecified posture, each layer's tests
+   follow its implementation step:
 
    ```
    Step 1:  Project structure setup (directories, config files, package.json/Cargo.toml/etc.)
@@ -689,6 +690,26 @@ This stage has a **two-part structure**: planning followed by generation.
    Step 11: Test configuration (vitest.config, jest.config, or equivalent)
    Step 12: Documentation (inline docs, API docs, README updates)
    ```
+
+   The step ordering follows the affirmed `## Testing Posture`, resolved from
+   `aidlc/spaces/<active-space>/memory/{project,team,org}.md` by the
+   most-specific non-empty statement (the `memory/org.md` default applies when
+   practices-discovery was skipped). The posture governs whether a layer's
+   tests precede or follow its implementation; the test strategy governs
+   volume. With a test-first posture (TDD, BDD, ATDD), each layer splits into
+   a red-green-refactor sequence instead of gaining a trailing test step:
+
+   ```
+   Step 3a: Business logic - Red (write the layer's failing tests)
+   Step 3b: Business logic - Green (implement until they pass)
+   Step 3c: Business logic - Refactor (clean up; tests stay green)
+   Step 5a: API / endpoint layer - Red
+   Step 5b: API / endpoint layer - Green
+   Step 5c: API / endpoint layer - Refactor
+   ```
+
+   The split happens within a layer, never across layers, so the
+   dependencies-before-dependents ordering below is unchanged.
 
    This layer-by-layer approach ensures dependencies are built before
    dependents (data models before business logic, business logic before API).
@@ -765,6 +786,11 @@ This stage has a **two-part structure**: planning followed by generation.
      aidlc-state.md)
    - Instructions to execute each plan step sequentially and mark checkboxes
      as completed
+   - The affirmed testing posture (resolved during planning). When it is
+     test-first, the subagent writes each layer's Red-step tests before that
+     layer's implementation and, where the workspace can already run the test
+     suite, records the failing run's output in the step's checkbox note
+     before implementing
 
    **Context budget:** Pass only the current unit's design artifacts, not all
    units. Summarize inception artifacts with file paths rather than embedding

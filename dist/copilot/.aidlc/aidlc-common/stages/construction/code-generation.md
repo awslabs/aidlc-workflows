@@ -111,9 +111,11 @@ The plan MUST include steps for:
 
 If the plan presented to the user omits test file steps, add them before presenting. Tests are not deferred to Build and Test — that stage verifies and extends, not creates from scratch.
 
+**Test ordering follows the affirmed testing posture.** Resolve `## Testing Posture` from `aidlc/spaces/<active-space>/memory/{project,team,org}.md` using the most-specific non-empty statement (when practices-discovery was skipped, the active space's `memory/org.md` default applies). The posture governs whether a layer's tests are written before or after its implementation; the test strategy above governs volume. Neither overrides the other.
+
 Number each plan step sequentially (Step 1, Step 2, etc.) for clear execution ordering and traceability.
 
-**Recommended plan structure** (adapt if architecture warrants a different ordering):
+**Recommended plan structure** (adapt if architecture warrants a different ordering). With a test-after or unspecified posture, each layer's tests follow its implementation step:
 
 ```
 Step 1: Project structure setup (directories, config files, package.json/Cargo.toml/etc.)
@@ -129,6 +131,19 @@ Step 10: Configuration and environment setup (.env templates, build config)
 Step 11: Test configuration (vitest.config, jest.config, or equivalent)
 Step 12: Documentation (inline docs, API docs, README updates)
 ```
+
+With a test-first posture (TDD, BDD, ATDD), do not append a test step after each layer; split each layer into a red-green-refactor sequence instead:
+
+```
+Step 3a: Business logic - Red (write the layer's failing tests)
+Step 3b: Business logic - Green (implement until they pass)
+Step 3c: Business logic - Refactor (clean up; tests stay green)
+Step 5a: API / endpoint layer - Red
+Step 5b: API / endpoint layer - Green
+Step 5c: API / endpoint layer - Refactor
+```
+
+The split happens within a layer, never across layers. For BDD the Red step writes the feature/scenario files; for ATDD, the acceptance tests. Steps with no test counterpart (project structure, configuration, documentation) keep their single-step form under either posture.
 
 This layer-by-layer approach ensures dependencies are built before dependents (data models before business logic, business logic before API). Deviate when the architecture requires it (e.g., event-driven systems, microservices with independent stacks).
 
@@ -198,6 +213,7 @@ Include in the delegation prompt:
 - The approved unit-test-instructions.md (full content)
 - Project workspace details (languages, frameworks, conventions from aidlc-state.md)
 - Instructions to execute each plan step sequentially and mark checkboxes as completed
+- The affirmed testing posture (resolved in Step 2). When it is test-first, instruct the subagent to write each layer's Red-step tests before that layer's implementation and, where the workspace can already run the test suite, to record the failing run's output in the step's checkbox note before implementing - evidence the ordering was honoured, not a retroactive tick.
 
 The subagent generates all code, test files, and configuration artifacts in the workspace.
 

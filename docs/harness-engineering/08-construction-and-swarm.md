@@ -187,7 +187,7 @@ Two surfaces carry the signal:
 
 Your harness contribution is making both real and meaningful. A check that always
 passes, or a spec that is empty, hands the swarm a rubber stamp. The
-`## Testing Posture` rule in `org.md:44-58` already sets per-scope test
+`## Testing Posture` rule in `org.md:45-61` already sets per-scope test
 floors (for example, `mvp`/`feature` get tests-alongside-code at 80% coverage);
 authoring a stricter posture at `team.md` is how you raise the bar the
 check enforces.

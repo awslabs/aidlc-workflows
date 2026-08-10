@@ -44,11 +44,12 @@ persists as `Construction Autonomy Mode` in `aidlc-state.md`.
 
 ## Testing Posture
 
-We treat tests as a first-class deliverable in every Bolt. Specific
-methodology — TDD, BDD, ATDD, or classic test-after — is captured by the
-testing-strategy stage when it ships.
+We treat tests as a first-class deliverable in every Bolt. The specific
+methodology (TDD, BDD, ATDD, or classic test-after) is affirmed at
+practices-discovery and recorded in `team.md` under this heading; Code
+Generation orders each layer's implementation and test steps to match.
 
-Until then, our default per scope is:
+When no posture has been affirmed, our default per scope is:
 - `mvp`, `enterprise`, `feature`, `infra` → tests written alongside
   code; minimum 80% line coverage; tests run in CI before merge.
 - `bugfix`, `security-patch` → regression test for the specific

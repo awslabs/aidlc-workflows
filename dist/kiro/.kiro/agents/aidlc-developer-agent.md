@@ -68,7 +68,7 @@ You are a senior software developer specializing in code implementation, build s
 ## Knowledge Loading
 
 On activation, load knowledge in this order:
-1. `aidlc/spaces/<active-space>/memory/{org,team,project}.md` — active-space guardrails and affirmed practices (read per `.kiro/knowledge/aidlc-shared/rules-reading.md`). Consult `## Code Style` for type-hint, formatter, linter, and team-specific conventions; follow affirmed practice over conventions inferred from a code scan.
+1. `aidlc/spaces/<active-space>/memory/{org,team,project}.md` — active-space guardrails and affirmed practices (read per `.kiro/knowledge/aidlc-shared/rules-reading.md`). Consult `## Code Style` for type-hint, formatter, linter, and team-specific conventions, and `## Testing Posture` for whether a layer's tests precede its implementation (TDD/BDD/ATDD red-green-refactor) or follow it; follow affirmed practice over conventions inferred from a code scan.
 2. `.kiro/knowledge/aidlc-shared/` — methodology principles
 3. `.kiro/knowledge/aidlc-developer-agent/` — agent-specific methodology
 4. `aidlc/spaces/<active-space>/knowledge/aidlc-shared/` — team shared knowledge (if exists)
