@@ -92,25 +92,25 @@ Two strategic pillars shape how the North Star reaches users and evolves:
 
 ## In flight
 
-Open work is listed without version claims. Merge readiness changes frequently;
-the linked pull request is authoritative.
+Selected open work is listed without version claims. Merge readiness changes
+frequently; each linked pull request is authoritative.
 
 <!-- markdownlint-disable MD013 -->
 
 | PR | Work | Theme |
 | --- | --- | --- |
-| #731 | DocumentKB S1: index team documents for citation by agents | Knowledge and org repository |
-| #716 | Project and propagate stale stage results | Traceability and validity |
-| #661 | Cursor harness | Harness expansion |
-| #617 | Batch-parallel per-unit waves and foreground reviewers | Ensemble and execution |
-| #616 | Bounded Build & Test to Code Generation loop-back | Cyclic flows |
-| #646 | Bind Code Generation review receipts to workspace source state | Traceability and validity |
-| #653 | Kiro IDE-native agent and settings surfaces | Harness parity |
-| #526 | Product discovery in Ideation | Product discovery |
-| #401 | Per-stage traceability enforcement sensor | Traceability |
-| #402 / #403 / #404 | Design/code boundaries, test ownership and observability consistency | Artefact quality |
-| #712 | Tutorial scope for a guided first run | Adoption |
-| #730 | Composed-workflow determinism and test-suite hardening | Reliability |
+| [#731](https://github.com/awslabs/aidlc-workflows/pull/731) | DocumentKB S1: index team documents for citation by agents | Knowledge and org repository |
+| [#716](https://github.com/awslabs/aidlc-workflows/pull/716) | Project and propagate stale stage results | Traceability and validity |
+| [#661](https://github.com/awslabs/aidlc-workflows/pull/661) | Cursor harness | Harness expansion |
+| [#617](https://github.com/awslabs/aidlc-workflows/pull/617) | Batch-parallel per-unit waves and foreground reviewers | Ensemble and execution |
+| [#616](https://github.com/awslabs/aidlc-workflows/pull/616) | Bounded Build & Test to Code Generation loop-back | Cyclic flows |
+| [#646](https://github.com/awslabs/aidlc-workflows/pull/646) | Bind Code Generation review receipts to workspace source state | Traceability and validity |
+| [#653](https://github.com/awslabs/aidlc-workflows/pull/653) | Kiro IDE-native agent and settings surfaces | Harness parity |
+| [#526](https://github.com/awslabs/aidlc-workflows/pull/526) | Product discovery in Ideation | Product discovery |
+| [#401](https://github.com/awslabs/aidlc-workflows/pull/401) | Per-stage traceability enforcement sensor | Traceability |
+| [#402](https://github.com/awslabs/aidlc-workflows/pull/402) / [#403](https://github.com/awslabs/aidlc-workflows/pull/403) / [#404](https://github.com/awslabs/aidlc-workflows/pull/404) | Design/code boundaries, test ownership and observability consistency | Artefact quality |
+| [#712](https://github.com/awslabs/aidlc-workflows/pull/712) | Tutorial scope for a guided first run | Adoption |
+| [#730](https://github.com/awslabs/aidlc-workflows/pull/730) | Composed-workflow determinism and test-suite hardening | Reliability |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -121,10 +121,16 @@ but do not yet have committed release versions.
 
 ### Traceability and progressive enrichment
 
-- Enforce per-stage upstream traceability (#401), bind review evidence to source
-  state (#646), and propagate stale stage results (#716).
-- Define per-unit attribution for Code Generation review receipts (#662) and a
-  fresh v2 implementation for cross-unit discovery propagation (#299/#300).
+- Enforce per-stage upstream traceability
+  ([#401](https://github.com/awslabs/aidlc-workflows/pull/401)), bind review
+  evidence to source state
+  ([#646](https://github.com/awslabs/aidlc-workflows/pull/646)), and propagate
+  stale stage results
+  ([#716](https://github.com/awslabs/aidlc-workflows/pull/716)).
+- Define per-unit attribution for Code Generation review receipts
+  ([#662](https://github.com/awslabs/aidlc-workflows/issues/662)) and a fresh v2
+  implementation for cross-unit discovery propagation
+  ([#299](https://github.com/awslabs/aidlc-workflows/issues/299)/[#300](https://github.com/awslabs/aidlc-workflows/pull/300)).
 - Preserve progressive enrichment as the North Star destination: downstream
   stages enrich upstream artefacts in place, with ADRs as a core design artefact.
 - Commit-level provenance remains an open design question; the current audit
@@ -133,8 +139,10 @@ but do not yet have committed release versions.
 
 ### Governed feedback loops
 
-- #616 implements one bounded Build & Test to Code Generation return path for
-  #611. It is an incremental loop, not a general cyclic graph engine.
+- [#616](https://github.com/awslabs/aidlc-workflows/pull/616) implements one
+  bounded Build & Test to Code Generation return path for
+  [#611](https://github.com/awslabs/aidlc-workflows/issues/611). It is an
+  incremental loop, not a general cyclic graph engine.
 - General cross-stage backward edges still need engine-level governance, stale
   artefact handling and explicit human authorization.
 
@@ -143,42 +151,67 @@ but do not yet have committed release versions.
 - The plugin mechanism, content projection, selection and plugin-contributed
   scopes are shipped.
 - Remote discovery, trust, a first-party marketplace and a graduation path are
-  proposed in #723. Product discovery (#652) and design (#527) are candidates
+  proposed in [#723](https://github.com/awslabs/aidlc-workflows/issues/723).
+  Product discovery
+  ([#652](https://github.com/awslabs/aidlc-workflows/issues/652)) and design
+  ([#527](https://github.com/awslabs/aidlc-workflows/issues/527)) are candidates
   for first-party plugins.
 
 ### Knowledge and documents
 
-- #714 defines DocumentKB and #731 implements its first indexing slice.
-- #694 proposes auditable supplemental-knowledge selection and delivery across
-  stage topologies.
+- [#714](https://github.com/awslabs/aidlc-workflows/issues/714) defines
+  DocumentKB and [#731](https://github.com/awslabs/aidlc-workflows/pull/731)
+  implements its first indexing slice.
+- [#694](https://github.com/awslabs/aidlc-workflows/issues/694) proposes auditable
+  supplemental-knowledge selection and delivery across stage topologies.
 
 ### Product discovery
 
-- Core Ideation delivery remains under review in #526, with an external-handover
-  contract in #586 and a plugin-shaped alternative in #652.
+- Core Ideation delivery remains under review in
+  [#526](https://github.com/awslabs/aidlc-workflows/pull/526), with an
+  external-handover contract in
+  [#586](https://github.com/awslabs/aidlc-workflows/issues/586) and a
+  plugin-shaped alternative in
+  [#652](https://github.com/awslabs/aidlc-workflows/issues/652).
 - The delivery surface, core versus first-party plugin, is not yet settled.
 
 ### Installation, upgrades and releases
 
-- #722 covers binary packaging, installers, npm, release automation, rollback and
-  post-install setup. #399 tracks the hard Bun dependency.
-- #636 tracks a first-class upgrade contract. The earlier implementation PR #535
-  closed without merging.
-- #635 tracks the mismatch between the v2 GA announcement and GitHub's Latest
-  release still pointing at `v1.0.1`.
+- [#722](https://github.com/awslabs/aidlc-workflows/issues/722) covers binary
+  packaging, installers, npm, release automation, rollback and post-install
+  setup. [#399](https://github.com/awslabs/aidlc-workflows/issues/399) tracks the
+  hard Bun dependency.
+- [#636](https://github.com/awslabs/aidlc-workflows/issues/636) tracks a
+  first-class upgrade contract. The earlier implementation PR
+  [#535](https://github.com/awslabs/aidlc-workflows/pull/535) closed without
+  merging.
+- [#635](https://github.com/awslabs/aidlc-workflows/issues/635) tracks the
+  mismatch between the v2 GA announcement and GitHub's Latest release still
+  pointing at `v1.0.1`.
 
 ### Harness expansion and parity
 
-- GitHub Copilot support shipped in #657; its RFC #472 still needs reconciliation.
-- Cursor support is open in #661, and Kiro IDE-native surfaces remain open in #653.
-- Antigravity setup is proposed in #690.
+- GitHub Copilot support shipped in
+  [#657](https://github.com/awslabs/aidlc-workflows/pull/657); its RFC
+  [#472](https://github.com/awslabs/aidlc-workflows/issues/472) still needs
+  reconciliation.
+- Cursor support is open in
+  [#661](https://github.com/awslabs/aidlc-workflows/pull/661), and Kiro IDE-native
+  surfaces remain open in
+  [#653](https://github.com/awslabs/aidlc-workflows/pull/653).
+- Antigravity setup is proposed in
+  [#690](https://github.com/awslabs/aidlc-workflows/issues/690).
 
 ### Evaluation and operations
 
-- #684 proposes repeatable benchmarks for measuring AI-DLC outcomes; #223 tracks
-  automated harness evaluation, initially for Claude Code and Kiro.
-- Operations-phase steering remains a requested direction (#221, #473), not an
-  active v2 implementation stream.
+- [#684](https://github.com/awslabs/aidlc-workflows/issues/684) proposes
+  repeatable benchmarks for measuring AI-DLC outcomes;
+  [#223](https://github.com/awslabs/aidlc-workflows/issues/223) tracks automated
+  harness evaluation, initially for Claude Code and Kiro.
+- Operations-phase steering remains a requested direction
+  ([#221](https://github.com/awslabs/aidlc-workflows/issues/221),
+  [#473](https://github.com/awslabs/aidlc-workflows/issues/473)), not an active
+  v2 implementation stream.
 
 ## Known gaps
 
