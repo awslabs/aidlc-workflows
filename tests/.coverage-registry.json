@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 544,
+    "total": 545,
     "enumeratedByClass": {
-      "function": 298,
+      "function": 299,
       "audit": 82,
       "scope": 9,
       "stage": 32,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 141,
+      "function": 142,
       "audit": 40,
       "scope": 9,
       "stage": 9,
@@ -2498,7 +2498,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/unit/t275-validate-grid-nearest-stock.test.ts",
+          "file": "tests/unit/t277-validate-grid-nearest-stock.test.ts",
           "mechanism": "cli"
         }
       ],

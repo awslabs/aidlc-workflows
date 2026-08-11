@@ -535,6 +535,21 @@ function askDirective(question: string): AskDirective {
   return { kind: "ask", question };
 }
 
+function newWorkRoutingAskDirective(
+  question: string,
+  description: string,
+  proposedScope: string,
+): AskDirective {
+  return {
+    kind: "ask",
+    ask_type: "new-work-routing",
+    response_route: "next",
+    question,
+    new_work_description: description,
+    proposed_scope: proposedScope,
+  };
+}
+
 function printDirective(message: string): PrintDirective {
   return { kind: "print", message };
 }
@@ -827,9 +842,10 @@ function composeDispatchDirective(
       `Dispatch the composer agent (${hd}/agents/aidlc-composer-agent.md) as a subagent to propose re-shaping the RUNNING workflow's pending stages` +
         (flags.intent ? ` for: "${flags.intent}".` : "."),
       "The composer reads the live state file's Stage Progress, re-estimates the entropy components from what completed stages resolved, validates the flipped grid with --strict, and proposes SKIP/un-SKIP flips for PENDING, ahead-of-cursor stages only (completed [x], in-progress [-], and skipped [S] stages are frozen; an ADD whose required producer is skipped or behind the cursor is rejected, not proposed).",
+      "This is mode in-flight, not matched/custom routing: preserve the current scope, depth, frozen actions, and full effective grid; stock-distance rankings are advisory only and MUST NOT trigger stock-grid adoption. Return the exact approved command delta as changes.skip and changes.add arrays.",
       "BEFORE presenting the gate, write the pending-proposal marker `aidlc/.aidlc-compose-pending` (any content) so the turn can end at the gate; on approve run `bun " +
         hd +
-        "/tools/aidlc-utility.ts recompose --skip <slugs> --add <slugs>` (comma-separated) and DELETE the marker; on reject/edit-then-resolve delete the marker too.",
+        "/tools/aidlc-utility.ts recompose --skip <changes.skip> --add <changes.add>` (comma-separated) and DELETE the marker; on reject/edit-then-resolve delete the marker too. Never write scope registry files for an in-flight proposal.",
     );
   } else {
     parts.push(
@@ -846,9 +862,15 @@ function composeDispatchDirective(
       );
     }
   }
+  const proposalShape = inFlight
+    ? "mode in-flight, the current scopeName, an ars block (the five component scores with method codekb|fallback), an arsRationale, the preserved full effective grid, exact changes.skip and changes.add arrays, a per-change rationale, a summary the strict validator computed, and two pre-rendered markdown tables (ARS scores with bands; per-stage decisions with reasoning)"
+    : "mode matched|custom, scopeName, an ars block (the five component scores with method codekb|fallback), an arsRationale, the per-stage EXECUTE/SKIP grid, a per-SKIP rationale, a summary the validator computed, and two pre-rendered markdown tables (ARS scores with bands; per-stage decisions with reasoning)";
+  const modeContract = inFlight
+    ? "the composer's mode is IN-FLIGHT and FINAL for the returned delta: nearest_stock is advisory, the running scope and frozen actions stay unchanged, and approval uses only changes.skip/changes.add through recompose; neither presentation nor comparison with stock grids may alter that delta"
+    : "the composer's mode is FINAL for the grid it returned: it routed matched-vs-custom solely on the final proposal validator's nearest_stock distance, a matched proposal already carries the revalidated stock grid verbatim, and neither presentation nor your own comparison of grids ever changes the verdict - never re-derive it, and a MATCHED proposal writes no scope file; if the human edits that stock grid, re-dispatch the composer, which must convert it to CUSTOM and revalidate before re-presenting";
   parts.push(
-    `The composer runs \`bun ${hd}/tools/aidlc-utility.ts detect --json\` (read-only scan + scope-registry paths), estimates the five entropy components (intent ambiguity, structural uncertainty, verification entropy, risk, unresolved assumptions) per its persona, and returns a structured proposal: mode matched|custom, scopeName, an ars block (the five component scores with method codekb|fallback), an arsRationale, the per-stage EXECUTE/SKIP grid, a per-SKIP rationale, a summary the validator computed, and two pre-rendered markdown tables (ARS scores with bands; per-stage decisions with reasoning).`,
-    "Render the proposal to the human as THREE blocks before the approve/edit/reject gate (see the composer block in SKILL.md), leading with plain language rather than the scores: (1) a two-or-three-sentence recommendation in your own words - what kind of change this looks like, how much process you suggest, and the steps in plain terms - followed by the validator's summary line formatted \"<execute> stages EXECUTE / <skip> SKIP, <gates> approval gates\" plus scopeName and mode (a matched stock scope stays matched: presentation never changes the composer's matched-vs-custom verdict, and a MATCHED proposal writes no scope file); (2) the composer's stage-decision table verbatim, with any fold advisories beneath it; (3) under a \"Scoring detail (advisory)\" heading, the composer's ARS score table verbatim with its method line and arsRationale. Relay the composer's tables and numbers as returned - never recompute, collapse into prose, or drop them. Do NOT write any file and do NOT advance any stage before an explicit approval.",
+    `The composer runs \`bun ${hd}/tools/aidlc-utility.ts detect --json\` (read-only scan + scope-registry paths), estimates the five entropy components (intent ambiguity, structural uncertainty, verification entropy, risk, unresolved assumptions) per its persona, and returns a structured proposal: ${proposalShape}.`,
+    `Render the proposal to the human as THREE blocks before the approve/edit/reject gate (see the composer block in SKILL.md), leading with plain language rather than the scores: (1) a two-or-three-sentence recommendation in your own words - what kind of change this looks like, how much process you suggest, and the steps in plain terms - followed by the validator's summary line formatted "<execute> stages EXECUTE / <skip> SKIP, <gates> approval gates" plus scopeName and mode (${modeContract}); (2) the composer's stage-decision table verbatim, with any fold advisories beneath it; (3) under a "Scoring detail (advisory)" heading, the composer's ARS score table verbatim with its method line and arsRationale. Relay the composer's tables and numbers as returned - never recompute, collapse into prose, or drop them. Do NOT write any file and do NOT advance any stage before an explicit approval.`,
   );
   const directive = printDirective(parts.join(" "));
   // This is the moment issue 682's reporter described: the user has asked for a
@@ -2937,6 +2959,40 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       "No workflow state found (no active intent). " +
         "Start one by describing what to build (/aidlc \"build the auth service\") " +
         "or by naming a scope (/aidlc --scope <scope>).",
+    ));
+    return;
+  }
+
+  // Branch 9c - freeform prose while a workflow is ACTIVE. Branch 8 gives
+  // fresh-start prose a routing ask; mid-flow prose used to fall through to
+  // Branch 10, which reads only the state file - the typed text contributed
+  // NOTHING and the engine silently answered "advance the current stage".
+  // That silent discard made the conductor's continue-vs-new-work judgment
+  // skippable, and live conductors that skipped it poured new-work prose into
+  // the active intent's stage. Detection is mechanical (prose arrived, no
+  // routing flag, a workflow is active), so the engine surfaces the question
+  // and stops - the classification stays with the human, the same split as
+  // every other ask. Explicit forms are untouched: --scope'd prose, positional
+  // scopes, jumps, compose, --new-intent, --single and --resume all returned
+  // in earlier branches or are excluded here.
+  if (flags.intent && !flags.scope && !flags.positionalScope && !flags.resume) {
+    const activeLabel =
+      (getField(stateContent, "Project") ?? "").trim() ||
+      (getField(stateContent, "Current Stage") ?? "").trim() ||
+      "the active workflow";
+    // Name the scope a confirmed new intent would get (the same pure
+    // inference Branch 8 uses) so the single ask carries everything the offer
+    // needs: active work, the new text, the proposed scope, and a "Yes"-led
+    // affirmative. inferScopeFromText always returns a deterministic scope,
+    // including its selection-aware fallback for rich prose.
+    const inferred = inferScopeFromText(flags.intent);
+    emit(newWorkRoutingAskDirective(
+      `Work is already in progress on: "${activeLabel}". You said: "${flags.intent}". ` +
+        `Is this (1) part of that work - continue it; (2) a separate new piece of work - ` +
+        `Yes, set it up alongside the current one as "${inferred.scope}" work without changing it; ` +
+        "or (3) a change to how the remaining plan is shaped?",
+      flags.intent,
+      inferred.scope,
     ));
     return;
   }

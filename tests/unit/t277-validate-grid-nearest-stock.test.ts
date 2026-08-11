@@ -1,6 +1,6 @@
 // covers: function:nearestStockScopes
 //
-// t275 - deterministic stock-scope distance in validate-grid.
+// t277 - deterministic stock-scope distance in validate-grid.
 //
 // The composer's matched-vs-custom verdict used to rest on an LLM diff-count
 // of the proposal against the stock grids, and the conductor could re-derive
@@ -56,7 +56,7 @@ function featureMinus(...slugs: string[]): Record<string, "EXECUTE" | "SKIP"> {
   return grid;
 }
 
-describe("t275 nearestStockScopes (in-process, shipped grid)", () => {
+describe("t277 nearestStockScopes (in-process, shipped grid)", () => {
   test("a verbatim stock grid ranks its own scope first at diff 0", () => {
     const ranked = nearestStockScopes(loadScopeGrid().bugfix.stages);
     expect(ranked[0]).toEqual({ scope: "bugfix", diff: 0, differs: [] });
@@ -183,9 +183,9 @@ describe("t275 nearestStockScopes (in-process, shipped grid)", () => {
   });
 });
 
-describe("t275 validate-grid CLI carries nearest_stock", () => {
+describe("t277 validate-grid CLI carries nearest_stock", () => {
   test("the JSON body ranks bugfix at diff 2 for the bugfix+2 proposal", () => {
-    const dir = mkdtempSync(join(tmpdir(), "aidlc-t275-"));
+    const dir = mkdtempSync(join(tmpdir(), "aidlc-t277-"));
     try {
       const proposal = join(dir, "p.json");
       writeFileSync(proposal, JSON.stringify(bugfixPlusTwo()), "utf-8");
@@ -210,7 +210,7 @@ describe("t275 validate-grid CLI carries nearest_stock", () => {
   });
 
   test("the CLI rejects an empty proposal instead of reporting a zero-stage match", () => {
-    const dir = mkdtempSync(join(tmpdir(), "aidlc-t275-empty-"));
+    const dir = mkdtempSync(join(tmpdir(), "aidlc-t277-empty-"));
     try {
       const proposal = join(dir, "p.json");
       writeFileSync(proposal, "{}", "utf-8");
@@ -236,7 +236,7 @@ describe("t275 validate-grid CLI carries nearest_stock", () => {
   });
 
   test("composer-authored grid entries are excluded from nearest_stock", () => {
-    const dir = mkdtempSync(join(tmpdir(), "aidlc-t275-composed-"));
+    const dir = mkdtempSync(join(tmpdir(), "aidlc-t277-composed-"));
     try {
       const gridPath = join(dir, "scope-grid.json");
       const proposal = join(dir, "p.json");
