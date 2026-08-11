@@ -362,7 +362,7 @@ Three zones: what AI-DLC **is**, how each harness **speaks**, and what users **c
 aidlc-claude/
 │  ─────────── HAND-AUTHORED SOURCE — edit here ───────────
 ├── core/                       # ONE harness-neutral source of truth
-│   ├── tools/                  #   25 aidlc-*.ts engine tools (+ data/scaffold/ templates)
+│   ├── tools/                  #   38 aidlc-*.ts engine tools (+ data/scaffold/ templates)
 │   ├── aidlc-common/           #   stage protocol + 32 stage files + conductor
 │   ├── agents/                 #   14 agents: 11 domain + 2 reviewers + composer
 │   ├── knowledge/ memory/ scopes/ sensors/ hooks/
