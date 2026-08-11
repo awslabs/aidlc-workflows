@@ -37,6 +37,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -646,6 +647,188 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
         expect(restored, file).toContain("aidlc/spaces/team-b/memory/");
         expect(restored, file).not.toContain("aidlc/spaces/default/memory/");
       }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("18: Cursor installer rejects symlinked managed targets and parent directories", () => {
+    const root = mkdtempSync(join(tmpdir(), "t275-cursor-symlink-"));
+    try {
+      const externalFile = join(root, "external-agents.md");
+      writeFileSync(externalFile, "# Outside\n");
+      const fileProject = join(root, "file-project");
+      mkdirSync(fileProject, { recursive: true });
+      symlinkSync(externalFile, join(fileProject, "AGENTS.md"));
+      const fileInstall = spawnSync("bun", [join(CURSOR_ROOT, "install.ts"), fileProject], {
+        cwd: REPO_ROOT,
+        encoding: "utf-8",
+      });
+      expect(fileInstall.status).toBe(1);
+      expect(fileInstall.stderr).toContain("symlinked installer targets");
+      expect(fileInstall.stderr).toContain("AGENTS.md");
+      expect(readFileSync(externalFile, "utf-8")).toBe("# Outside\n");
+      expect(existsSync(join(fileProject, ".cursor", "tools"))).toBe(false);
+
+      const externalCursor = join(root, "external-cursor");
+      mkdirSync(externalCursor);
+      const directoryProject = join(root, "directory-project");
+      mkdirSync(directoryProject);
+      symlinkSync(externalCursor, join(directoryProject, ".cursor"), "dir");
+      const directoryInstall = spawnSync(
+        "bun",
+        [join(CURSOR_ROOT, "install.ts"), directoryProject],
+        {
+          cwd: REPO_ROOT,
+          encoding: "utf-8",
+        },
+      );
+      expect(directoryInstall.status).toBe(1);
+      expect(directoryInstall.stderr).toContain("symlinked installer targets");
+      expect(directoryInstall.stderr).toContain(".cursor");
+      expect(readdirSync(externalCursor)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("19: Cursor upgrades remove unchanged obsolete files and refuse modified ones", () => {
+    const root = mkdtempSync(join(tmpdir(), "t275-cursor-obsolete-"));
+    const project = join(root, "project");
+    try {
+      const installer = join(CURSOR_ROOT, "install.ts");
+      expect(
+        spawnSync("bun", [installer, project], {
+          cwd: REPO_ROOT,
+          encoding: "utf-8",
+        }).status,
+      ).toBe(0);
+
+      const receiptPath = join(project, ".cursor", "aidlc-install.json");
+      const obsoleteRel = ".cursor/rules/obsolete.mdc";
+      const obsoletePath = join(project, obsoleteRel);
+      const frameworkBytes = Buffer.from("framework-owned obsolete rule\n");
+      writeFileSync(obsoletePath, frameworkBytes);
+      const receipt = JSON.parse(readFileSync(receiptPath, "utf-8")) as {
+        managedFiles: Record<string, string>;
+      };
+      receipt.managedFiles[obsoleteRel] = createHash("sha256")
+        .update(frameworkBytes)
+        .digest("hex");
+      writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
+
+      const cleanUpgrade = spawnSync("bun", [installer, project], {
+        cwd: REPO_ROOT,
+        encoding: "utf-8",
+      });
+      expect(cleanUpgrade.status, cleanUpgrade.stderr).toBe(0);
+      expect(existsSync(obsoletePath)).toBe(false);
+      const refreshedReceipt = JSON.parse(readFileSync(receiptPath, "utf-8")) as {
+        managedFiles: Record<string, string>;
+      };
+      expect(refreshedReceipt.managedFiles).not.toHaveProperty(obsoleteRel);
+
+      writeFileSync(obsoletePath, "user-modified obsolete rule\n");
+      refreshedReceipt.managedFiles[obsoleteRel] = createHash("sha256")
+        .update(frameworkBytes)
+        .digest("hex");
+      writeFileSync(receiptPath, `${JSON.stringify(refreshedReceipt, null, 2)}\n`);
+      const refused = spawnSync("bun", [installer, project], {
+        cwd: REPO_ROOT,
+        encoding: "utf-8",
+      });
+      expect(refused.status).toBe(1);
+      expect(refused.stderr).toContain("removed upstream but modified locally");
+      expect(refused.stderr).toContain(obsoleteRel);
+      expect(readFileSync(obsoletePath, "utf-8")).toBe(
+        "user-modified obsolete rule\n",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("20: Cursor upgrade transfers adopted contribution ownership back to core", () => {
+    const root = mkdtempSync(join(tmpdir(), "t275-cursor-core-adopts-"));
+    const project = join(root, "project");
+    try {
+      const installer = join(CURSOR_ROOT, "install.ts");
+      expect(
+        spawnSync("bun", [installer, project], {
+          cwd: REPO_ROOT,
+          encoding: "utf-8",
+        }).status,
+      ).toBe(0);
+
+      const stageRel =
+        ".cursor/aidlc-common/stages/construction/functional-design.md";
+      const stagePath = join(project, stageRel);
+      const artifact = "plugin-artifact-x";
+      const addArtifact = (content: string) =>
+        content.replace(
+          "  - domain-entities\n",
+          `  - domain-entities\n  - ${artifact}\n`,
+        );
+      writeFileSync(stagePath, addArtifact(readFileSync(stagePath, "utf-8")));
+      const sidecarPath = join(
+        project,
+        ".cursor",
+        "tools",
+        "data",
+        "plugin-contrib-test-pro.json",
+      );
+      writeFileSync(
+        sidecarPath,
+        `${JSON.stringify(
+          { "functional-design": { produces: [artifact] } },
+          null,
+          2,
+        )}\n`,
+      );
+
+      const stagedDist = join(root, "cursor-v2");
+      cpSync(CURSOR_ROOT, stagedDist, { recursive: true });
+      cpSync(CURSOR_INSTALLER_SOURCE, join(stagedDist, "install.ts"));
+      const stagedStage = join(stagedDist, stageRel);
+      writeFileSync(stagedStage, addArtifact(readFileSync(stagedStage, "utf-8")));
+      const upgrade = spawnSync("bun", [join(stagedDist, "install.ts"), project], {
+        cwd: REPO_ROOT,
+        encoding: "utf-8",
+      });
+      expect(upgrade.status, upgrade.stderr).toBe(0);
+      expect(
+        readFileSync(stagePath, "utf-8").match(new RegExp(`^  - ${artifact}$`, "gm")),
+      ).toHaveLength(1);
+      const sidecar = JSON.parse(readFileSync(sidecarPath, "utf-8")) as {
+        "functional-design"?: { produces?: string[] };
+      };
+      expect(sidecar["functional-design"]?.produces ?? []).not.toContain(artifact);
+
+      const pluginScopeSource = join(
+        REPO_ROOT,
+        "dist",
+        "plugins",
+        "test-pro",
+        "cursor",
+        "scopes",
+        "test-pro-validation.md",
+      );
+      cpSync(
+        pluginScopeSource,
+        join(project, ".cursor", "scopes", "test-pro-validation.md"),
+      );
+      const utility = join(project, ".cursor", "tools", "aidlc-utility.ts");
+      const disable = spawnSync(
+        "bun",
+        [utility, "select-plugins", "aidlc", "--project-dir", project],
+        {
+          cwd: project,
+          encoding: "utf-8",
+          env: { ...process.env, AIDLC_HARNESS_DIR: ".cursor" },
+        },
+      );
+      expect(disable.status, disable.stderr).toBe(0);
+      expect(readFileSync(stagePath, "utf-8")).toContain(`  - ${artifact}\n`);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

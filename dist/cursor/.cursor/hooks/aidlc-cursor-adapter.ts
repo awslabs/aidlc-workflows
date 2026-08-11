@@ -244,10 +244,11 @@ export async function run(
   function isKnownMain(conversation: string): boolean {
     try {
       const path = mainFile(conversation);
-      if (Date.now() - statSync(path).mtimeMs > LEDGER_TTL_MS) return false;
-      // Every event from a known main refreshes it: staleness is bounded by
-      // inactivity, so a long autonomous stretch cannot expire into
-      // misattribution while another conversation's reviewer is live.
+      if (!statSync(path).isFile()) return false;
+      // sessionStart/beforeSubmitPrompt are top-level-only lifecycle signals.
+      // Once established, that identity remains authoritative until sessionEnd
+      // removes the marker; inactivity alone must not turn a resumed main into
+      // another conversation's active reviewer.
       touchMarker(path);
       return true;
     } catch {
@@ -471,6 +472,106 @@ export async function run(
     return words;
   }
 
+  function shellCommandSegments(command: string): string[] {
+    const segments: string[] = [];
+    let start = 0;
+    let quote: "'" | '"' | null = null;
+    let escaped = false;
+    for (let i = 0; i < command.length; i++) {
+      const ch = command[i];
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch === "\\" && quote !== "'") {
+        escaped = true;
+        continue;
+      }
+      if (quote !== null) {
+        if (ch === quote) quote = null;
+        continue;
+      }
+      if (ch === "'" || ch === '"') {
+        quote = ch;
+        continue;
+      }
+      if (ch !== ";" && ch !== "\n" && ch !== "|" && ch !== "&") continue;
+      segments.push(command.slice(start, i));
+      if ((ch === "|" || ch === "&") && command[i + 1] === ch) i++;
+      start = i + 1;
+    }
+    segments.push(command.slice(start));
+    return segments;
+  }
+
+  interface ShellInvocation {
+    name: string;
+    args: string[];
+  }
+
+  function shellInvocation(words: string[]): ShellInvocation | null {
+    let index = 0;
+    const skipAssignments = () => {
+      while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index] ?? "")) index++;
+    };
+    skipAssignments();
+
+    while (index < words.length) {
+      const wrapper = basename(words[index]);
+      if (wrapper === "command") {
+        index++;
+        while (index < words.length && words[index].startsWith("-")) {
+          const option = words[index++];
+          if (option === "--") break;
+          if (option.includes("v") || option.includes("V")) return null;
+        }
+        skipAssignments();
+        continue;
+      }
+      if (wrapper === "exec" || wrapper === "nohup") {
+        index++;
+        while (index < words.length && words[index].startsWith("-")) {
+          if (words[index++] === "--") break;
+        }
+        skipAssignments();
+        continue;
+      }
+      if (wrapper === "env") {
+        index++;
+        while (index < words.length) {
+          const option = words[index];
+          if (option === "--") {
+            index++;
+            break;
+          }
+          if (/^(?:-u|--unset|-C|--chdir|-S|--split-string)$/.test(option)) {
+            index += 2;
+            continue;
+          }
+          if (/^(?:--unset|--chdir|--split-string)=/.test(option) || option === "-i") {
+            index++;
+            continue;
+          }
+          if (option.startsWith("-")) {
+            index++;
+            continue;
+          }
+          break;
+        }
+        skipAssignments();
+        continue;
+      }
+      break;
+    }
+
+    const executable = words[index];
+    if (!executable) return null;
+    return {
+      name: basename(executable),
+      args: words.slice(index + 1),
+    };
+  }
+
   function protectedReviewerPaths(): string[] {
     const dispatch = activeReviewerDispatch();
     return dispatch === null ? [LEDGER_DIR] : [LEDGER_DIR, dispatch];
@@ -506,6 +607,27 @@ export async function run(
     }
     const normalized = isAbsolute(prefix) ? resolve(prefix) : resolve(cwd, prefix);
     return protectedPaths.some((path) => path.startsWith(normalized));
+  }
+
+  function concreteWordTouchesProtected(
+    raw: string,
+    cwd: string,
+    protectedPaths: readonly string[],
+  ): boolean {
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(raw)) return false;
+    const equals = raw.lastIndexOf("=");
+    const candidate = (equals === -1 ? raw : raw.slice(equals + 1))
+      .replace(/^[,:[\]{}()]+|[,:[\]{}()]+$/g, "");
+    if (
+      candidate.length === 0 ||
+      candidate.startsWith("-") ||
+      /[$`*?[\]{}]/.test(candidate) ||
+      (!candidate.includes("/") && !candidate.includes("\\") && !candidate.startsWith("."))
+    ) {
+      return false;
+    }
+    const normalized = isAbsolute(candidate) ? resolve(candidate) : resolve(cwd, candidate);
+    return overlapsProtectedPath(normalized, protectedPaths);
   }
 
   function pathOperandValues(toolInput: Record<string, unknown>): string[] {
@@ -578,13 +700,18 @@ export async function run(
   }
 
   function shellInvokesDynamicEvaluation(command: string): boolean {
-    if (shellUsesDynamicExpansion(command) || /\beval\b|\bsource\b/.test(command)) return true;
+    if (shellUsesDynamicExpansion(command)) return true;
     const interpreter =
       /^(?:ba|da|fi|k|z)?sh$|^(?:bun|bunx|deno|node|nodejs|npm|npx|pnpm|yarn|corepack|tsx|ts-node|python(?:\d+(?:\.\d+)*)?|ruby|perl|php|lua|luajit|raku|julia|java|js|qjs|osascript|powershell|pwsh)$/i;
-    return shellWords(command).some((word) => {
-      const assignment = word.lastIndexOf("=");
-      const candidate = assignment === -1 ? word : word.slice(assignment + 1);
-      return interpreter.test(basename(candidate));
+    return shellCommandSegments(command).some((segment) => {
+      const invocation = shellInvocation(shellWords(segment));
+      return (
+        invocation !== null &&
+        (interpreter.test(invocation.name) ||
+          invocation.name === "eval" ||
+          invocation.name === "source" ||
+          invocation.name === ".")
+      );
     });
   }
 
@@ -616,7 +743,8 @@ export async function run(
       }
       if (
         shellWords(command).some((word) =>
-          globPrefixTouchesProtected(word, cwd, protectedPaths)
+          globPrefixTouchesProtected(word, cwd, protectedPaths) ||
+          concreteWordTouchesProtected(word, cwd, protectedPaths)
         )
       ) {
         return true;

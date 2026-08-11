@@ -147,6 +147,75 @@ function shellCommandSegments(command: string): string[] {
   return segments;
 }
 
+interface ShellInvocation {
+  name: string;
+  args: string[];
+}
+
+function shellInvocation(words: string[]): ShellInvocation | null {
+  let index = 0;
+  const skipAssignments = () => {
+    while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index] ?? "")) index++;
+  };
+  skipAssignments();
+
+  while (index < words.length) {
+    const wrapper = basename(words[index]);
+    if (wrapper === "command") {
+      index++;
+      while (index < words.length && words[index].startsWith("-")) {
+        const option = words[index++];
+        if (option === "--") break;
+        // `command -v/-V` queries a name; it does not execute the following word.
+        if (option.includes("v") || option.includes("V")) return null;
+      }
+      skipAssignments();
+      continue;
+    }
+    if (wrapper === "exec" || wrapper === "nohup") {
+      index++;
+      while (index < words.length && words[index].startsWith("-")) {
+        if (words[index++] === "--") break;
+      }
+      skipAssignments();
+      continue;
+    }
+    if (wrapper === "env") {
+      index++;
+      while (index < words.length) {
+        const option = words[index];
+        if (option === "--") {
+          index++;
+          break;
+        }
+        if (/^(?:-u|--unset|-C|--chdir|-S|--split-string)$/.test(option)) {
+          index += 2;
+          continue;
+        }
+        if (/^(?:--unset|--chdir|--split-string)=/.test(option) || option === "-i") {
+          index++;
+          continue;
+        }
+        if (option.startsWith("-")) {
+          index++;
+          continue;
+        }
+        break;
+      }
+      skipAssignments();
+      continue;
+    }
+    break;
+  }
+
+  const executable = words[index];
+  if (!executable) return null;
+  return {
+    name: basename(executable),
+    args: words.slice(index + 1),
+  };
+}
+
 function shellWordAt(command: string, start: number): { word: string; end: number } | null {
   let word = "";
   let quote: "'" | '"' | null = null;
@@ -333,13 +402,9 @@ export function shellWriteTargets(command: string, cwd = process.cwd()): string[
   // candidates for commands that also have read-only source operands.
   for (const segment of shellCommandSegments(command)) {
     const words = shellWords(segment);
-    if (words.length === 0) continue;
-    let commandIndex = 0;
-    while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[commandIndex] ?? "")) {
-      commandIndex++;
-    }
-    const commandName = (words[commandIndex] ?? "").split("/").pop() ?? "";
-    const args = words.slice(commandIndex + 1);
+    const invocation = shellInvocation(words);
+    if (!invocation) continue;
+    const { name: commandName, args } = invocation;
     if (commandName === "dd") {
       for (const arg of args) if (arg.startsWith("of=")) add(arg);
       continue;

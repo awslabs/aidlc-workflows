@@ -7,9 +7,11 @@ import { createHash } from "node:crypto";
 import {
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -26,11 +28,37 @@ const RECEIPT_REL = ".cursor/aidlc-install.json";
 type JsonObject = Record<string, unknown>;
 type WriteAction =
   | { kind: "copy"; source: string; target: string }
-  | { kind: "write"; target: string; content: string | Buffer };
+  | { kind: "write"; target: string; content: string | Buffer }
+  | { kind: "remove"; target: string };
 
 interface InstallReceipt {
   schemaVersion: 1;
   managedFiles: Record<string, string>;
+}
+
+function assertNoSymlinks(path: string, targetRoot: string): void {
+  let stat: ReturnType<typeof lstatSync>;
+  try {
+    stat = lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  const label = relative(targetRoot, path).replaceAll("\\", "/") || ".";
+  if (stat.isSymbolicLink()) {
+    throw new Error(`${label}: symlinked installer targets are not allowed`);
+  }
+  if (!stat.isDirectory()) return;
+  for (const name of readdirSync(path)) {
+    assertNoSymlinks(join(path, name), targetRoot);
+  }
+}
+
+function assertSafeManagedTree(targetRoot: string): void {
+  assertNoSymlinks(targetRoot, targetRoot);
+  for (const rel of [".cursor", "aidlc", "AGENTS.md", ".gitignore"]) {
+    assertNoSymlinks(join(targetRoot, rel), targetRoot);
+  }
 }
 
 function isObject(value: unknown): value is JsonObject {
@@ -104,13 +132,27 @@ interface StageContribRecord {
 }
 
 interface PluginStageState {
-  records: StageContribRecord[];
+  records: PluginStageRecord[];
   unsafe: boolean;
+}
+
+interface PluginSidecar {
+  path: string;
+  data: JsonObject;
+  dirty: boolean;
+}
+
+interface PluginStageRecord {
+  slug: string;
+  record: StageContribRecord;
+  raw: JsonObject;
+  sidecar: PluginSidecar;
 }
 
 interface PluginRuntimeState {
   composed: boolean;
   stages: Map<string, PluginStageState>;
+  sidecars: PluginSidecar[];
 }
 
 interface PluginFragment {
@@ -156,6 +198,7 @@ function pluginRuntimeState(targetRoot: string): PluginRuntimeState {
   const state: PluginRuntimeState = {
     composed: false,
     stages: new Map<string, PluginStageState>(),
+    sidecars: [],
   };
   const stageState = (slug: string): PluginStageState => {
     const current = state.stages.get(slug);
@@ -170,12 +213,17 @@ function pluginRuntimeState(targetRoot: string): PluginRuntimeState {
       if (!name.startsWith("plugin-contrib-") || !name.endsWith(".json")) continue;
       state.composed = true;
       try {
-        const parsed = JSON.parse(readFileSync(join(dataDir, name), "utf-8")) as unknown;
+        const path = join(dataDir, name);
+        const parsed = JSON.parse(readFileSync(path, "utf-8")) as unknown;
         if (isObject(parsed)) {
+          const sidecar = { path, data: parsed, dirty: false };
+          state.sidecars.push(sidecar);
           for (const [slug, value] of Object.entries(parsed)) {
             const target = stageState(slug);
             const record = stageContribRecord(value);
-            if (record) target.records.push(record);
+            if (record && isObject(value)) {
+              target.records.push({ slug, record, raw: value, sidecar });
+            }
             else target.unsafe = true;
           }
         }
@@ -293,6 +341,55 @@ function consumeEntries(content: string, artifacts: ReadonlySet<string>): Consum
   }
   if ([...artifacts].some((artifact) => !found.has(artifact))) return null;
   return [...found.values()];
+}
+
+function consumeArtifactValues(content: string): ReadonlySet<string> {
+  return new Set(
+    [...content.matchAll(/^ {2}- artifact:\s*([\w-]+)/gm)].map((entry) => entry[1]),
+  );
+}
+
+function reconcileCoreOwnedContributions(source: Buffer, state: PluginStageState): void {
+  const content = source.toString("utf-8");
+  const coreValues = {
+    produces: new Set(listFieldValues(content, "produces") ?? []),
+    sensors: new Set(listFieldValues(content, "sensors") ?? []),
+    consumes: consumeArtifactValues(content),
+    scopes: new Set(listFieldValues(content, "scopes") ?? []),
+    required_sections: new Set(listFieldValues(content, "required_sections") ?? []),
+  };
+  const coreHasRequiredSections =
+    listFieldValues(content, "required_sections") !== null;
+
+  for (const binding of state.records) {
+    for (const field of [
+      "produces",
+      "sensors",
+      "consumes",
+      "scopes",
+      "required_sections",
+    ] as const) {
+      const prior = binding.record[field] ?? [];
+      const retained = prior.filter((value) => !coreValues[field].has(value));
+      if (retained.length === prior.length) continue;
+      if (retained.length > 0) binding.raw[field] = retained;
+      else delete binding.raw[field];
+      binding.record[field] = retained;
+      binding.sidecar.dirty = true;
+    }
+    if (
+      binding.record.required_sections_created === true &&
+      coreHasRequiredSections
+    ) {
+      delete binding.raw.required_sections_created;
+      delete binding.record.required_sections_created;
+      binding.sidecar.dirty = true;
+    }
+    if (Object.keys(binding.raw).length === 0) {
+      delete binding.sidecar.data[binding.slug];
+      binding.sidecar.dirty = true;
+    }
+  }
 }
 
 function removeListValues(
@@ -551,7 +648,7 @@ function rebuildPluginComposedStage(
     required_sections: new Set<string>(),
   };
   let requiredSectionsCreated = false;
-  for (const record of state.records) {
+  for (const { record } of state.records) {
     for (const field of [
       "produces",
       "sensors",
@@ -834,6 +931,7 @@ async function refreshPluginRouting(targetRoot: string): Promise<void> {
 
 export async function install(targetDir: string): Promise<void> {
   const targetRoot = resolve(targetDir);
+  assertSafeManagedTree(targetRoot);
   const actions: WriteAction[] = [];
   const collisions: string[] = [];
   const sharedJson = new Set([".cursor/hooks.json", ".cursor/cli.json"]);
@@ -842,9 +940,7 @@ export async function install(targetDir: string): Promise<void> {
   const activeSpace = activeSpaceFor(targetRoot);
   const selectedPlugins = activePluginSelection(targetRoot);
   const pluginRuntime = pluginRuntimeState(targetRoot);
-  const managedFiles: Record<string, string> = {
-    ...(priorReceipt?.managedFiles ?? {}),
-  };
+  const managedFiles: Record<string, string> = {};
 
   for (const top of [".cursor", "aidlc"]) {
     const sourceRoot = join(DIST_ROOT, top);
@@ -870,6 +966,7 @@ export async function install(targetDir: string): Promise<void> {
         targetBytes,
       );
       let pluginBase: Buffer | undefined;
+      let rebuiltPluginStage = false;
       const pluginStage =
         rel.startsWith(".cursor/aidlc-common/stages/") && rel.endsWith(".md")
           ? pluginRuntime.stages.get(basename(rel, ".md"))
@@ -879,6 +976,7 @@ export async function install(targetDir: string): Promise<void> {
         if (rebuilt) {
           desired = rebuilt.desired;
           pluginBase = rebuilt.base;
+          rebuiltPluginStage = true;
         }
       }
       const runtimeOwned = isRuntimeOwnedManagedFile(
@@ -890,6 +988,9 @@ export async function install(targetDir: string): Promise<void> {
         actions.push({ kind: "write", target, content: desired });
       } else if (targetBytes?.equals(desired)) {
         // Already current, including an active-space-adjusted Cursor surface.
+        if (pluginStage && rebuiltPluginStage) {
+          reconcileCoreOwnedContributions(sourceBytes, pluginStage);
+        }
       } else if (priorReceipt?.managedFiles[rel] !== undefined) {
         const unchangedSinceInstall = pluginStage
           ? pluginBase !== undefined &&
@@ -898,12 +999,35 @@ export async function install(targetDir: string): Promise<void> {
             priorReceipt.managedFiles[rel];
         if (unchangedSinceInstall || runtimeOwned) {
           actions.push({ kind: "write", target, content: desired });
+          if (pluginStage && rebuiltPluginStage) {
+            reconcileCoreOwnedContributions(sourceBytes, pluginStage);
+          }
         } else {
           collisions.push(rel);
         }
       } else {
         collisions.push(rel);
       }
+    }
+  }
+
+  for (const sidecar of pluginRuntime.sidecars) {
+    if (!sidecar.dirty) continue;
+    actions.push({
+      kind: "write",
+      target: sidecar.path,
+      content: `${JSON.stringify(sidecar.data, null, 2)}\n`,
+    });
+  }
+
+  for (const [rel, priorHash] of Object.entries(priorReceipt?.managedFiles ?? {})) {
+    if (Object.hasOwn(managedFiles, rel)) continue;
+    const target = join(targetRoot, rel);
+    if (!existsSync(target)) continue;
+    if (sha256(readFileSync(target)) === priorHash) {
+      actions.push({ kind: "remove", target });
+    } else {
+      collisions.push(`${rel} (removed upstream but modified locally)`);
     }
   }
 
@@ -953,6 +1077,10 @@ export async function install(targetDir: string): Promise<void> {
   }
 
   for (const action of actions) {
+    if (action.kind === "remove") {
+      rmSync(action.target, { force: true });
+      continue;
+    }
     mkdirSync(dirname(action.target), { recursive: true });
     if (action.kind === "copy") cpSync(action.source, action.target);
     else writeFileSync(action.target, action.content, "utf-8");

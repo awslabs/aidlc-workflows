@@ -909,6 +909,19 @@ describe("t276 cursor adapter payload conversion", () => {
     };
     expect(writeOut.permission).toBe("deny");
     expect(writeOut.agent_message ?? "").toContain("review-freeze");
+
+    const wrappedWrite = runAdapter(
+      ready.project,
+      "guards",
+      payload("preToolUseShell", ready.project, {
+        cwd: "",
+        tool_input: {
+          command: "command truncate -s 0 requirements.md",
+          cwd: dirname(ready.artifact),
+        },
+      }),
+    );
+    expect(JSON.parse(wrappedWrite.stdout).permission).toBe("deny");
   });
 
   test("24: delegated tools cannot remove attribution state and missing state fails closed", () => {
@@ -974,6 +987,21 @@ describe("t276 cursor adapter payload conversion", () => {
     }
     expect(existsSync(dispatch)).toBe(true);
     expect(ledgerFilesFor(proj)).toHaveLength(1);
+
+    const quotedWrapperRemoval =
+      `command rm -f ${JSON.stringify(dispatch.slice(0, -1))}''n`;
+    expect(quotedWrapperRemoval).not.toContain(".aidlc-reviewer-dispatch.json");
+    const wrapped = runAdapter(
+      proj,
+      "guards",
+      payload("preToolUseShell", proj, {
+        conversation_id: "reviewer-wrapper-conversation",
+        session_id: "reviewer-wrapper-conversation",
+        tool_input: { command: quotedWrapperRemoval },
+      }),
+    );
+    expect(JSON.parse(wrapped.stdout).permission).toBe("deny");
+    expect(existsSync(dispatch)).toBe(true);
 
     const encodedRemoval = Buffer.from(
       `require("node:fs").rmSync(${JSON.stringify(ledgerDirFor(proj))}, { recursive: true, force: true });`,
@@ -1048,6 +1076,23 @@ describe("t276 cursor adapter payload conversion", () => {
       }),
     );
     expect(literalDollar.stdout.trim()).toBe("");
+
+    for (const command of [
+      "rg node README.md",
+      "printf '%s\\n' python",
+      "rg 'source' README.md",
+    ]) {
+      const harmlessArgument = runAdapter(
+        proj,
+        "guards",
+        payload("preToolUseShell", proj, {
+          conversation_id: "reviewer-harmless-argument-conversation",
+          session_id: "reviewer-harmless-argument-conversation",
+          tool_input: { command },
+        }),
+      );
+      expect(harmlessArgument.stdout.trim(), command).toBe("");
+    }
 
     // Simulate corruption outside the delegated tool path. The active dispatch
     // remains the independent fail-closed signal.
@@ -1142,5 +1187,53 @@ describe("t276 cursor adapter payload conversion", () => {
     };
     expect(out.permission).toBe("deny");
     expect(out.agent_message ?? "").toContain("identity is unavailable or ambiguous");
+  });
+
+  test("26: an idle top-level conversation remains main until sessionEnd", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    const record = seededRecordDir(proj);
+    clearLedger(proj);
+    mkdirSync(join(record, "construction", "unit-b"), { recursive: true });
+    writeFileSync(
+      join(record, ".aidlc-reviewer-dispatch.json"),
+      JSON.stringify({
+        reviewer: "aidlc-architecture-reviewer-agent",
+        stage: "functional-design",
+        unit: "unit-a",
+        exempt: [],
+      }),
+    );
+
+    const resumedMain = "resumed-main-after-long-idle";
+    runAdapter(
+      proj,
+      "session-start",
+      payload("sessionStart", proj, {
+        conversation_id: resumedMain,
+        session_id: resumedMain,
+      }),
+    );
+    const [resumedMarker] = ledgerFilesFor(proj, ".marker");
+    expect(resumedMarker).toBeDefined();
+
+    registerTaskParent(proj);
+    runAdapter(proj, "guards", payload("preToolUseTask", proj));
+    const expired = new Date(Date.now() - 31 * 60 * 1000);
+    utimesSync(resumedMarker, expired, expired);
+
+    const resumed = runAdapter(
+      proj,
+      "guards",
+      payload("preToolUseSubagentRead", proj, {
+        conversation_id: resumedMain,
+        session_id: resumedMain,
+        tool_input: {
+          file_path: join(record, "construction", "unit-b", "design.md"),
+        },
+      }),
+    );
+    expect(resumed.code).toBe(0);
+    expect(resumed.stdout.trim()).toBe("");
   });
 });

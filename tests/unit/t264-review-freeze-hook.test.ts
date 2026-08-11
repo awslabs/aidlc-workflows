@@ -128,6 +128,9 @@ describe("t264 (a) judgeFreeze decision table", () => {
       "/p/a/b.md",
     ]);
     expect(writeTargets("Bash", { command: "rm /a/b.md" })).toEqual(["/a/b.md"]);
+    expect(writeTargets("Bash", { command: "command rm -f /a/b.md" })).toEqual([
+      "/a/b.md",
+    ]);
     expect(writeTargets("Bash", { command: "cp /a/b.md /tmp/copy" })).not.toContain(
       "/a/b.md",
     );
@@ -153,6 +156,9 @@ describe("t264 (a) judgeFreeze decision table", () => {
     expect(writeTargets("Bash", { command: "truncate -s 1 -o /a/b.md" })).toEqual([
       "/a/b.md",
     ]);
+    expect(
+      writeTargets("Bash", { command: "command truncate -s 0 /a/b.md" }),
+    ).toEqual(["/a/b.md"]);
     expect(writeTargets("Bash", { command: "truncate -r /a/b.md /tmp/out" })).toEqual([
       "/tmp/out",
     ]);
@@ -308,6 +314,7 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
       `mv ${JSON.stringify(file)} /tmp/review-freeze-moved`,
       `install -dv ${JSON.stringify(file)} /tmp/review-freeze-directory`,
       `truncate -s 1 -o ${JSON.stringify(file)}`,
+      `command truncate -s 0 ${JSON.stringify(file)}`,
       `sed -i 's/change/changed/' ${JSON.stringify(file)} /tmp/review-freeze-other`,
       `perl -pi -e 's/change/changed/' ${JSON.stringify(file)} /tmp/review-freeze-other`,
     ]) {
