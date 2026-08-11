@@ -687,6 +687,25 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       expect(directoryInstall.stderr).toContain("symlinked installer targets");
       expect(directoryInstall.stderr).toContain(".cursor");
       expect(readdirSync(externalCursor)).toEqual([]);
+
+      const ordinaryProject = join(root, "ordinary-project");
+      mkdirSync(join(ordinaryProject, "node_modules", ".bin"), { recursive: true });
+      mkdirSync(join(ordinaryProject, "sub"), { recursive: true });
+      symlinkSync(
+        "/usr/bin/env",
+        join(ordinaryProject, "node_modules", ".bin", "env-link"),
+      );
+      symlinkSync("/tmp", join(ordinaryProject, "sub", "tmplink"), "dir");
+      const ordinaryInstall = spawnSync(
+        "bun",
+        [join(CURSOR_ROOT, "install.ts"), ordinaryProject],
+        {
+          cwd: REPO_ROOT,
+          encoding: "utf-8",
+        },
+      );
+      expect(ordinaryInstall.status, ordinaryInstall.stderr).toBe(0);
+      expect(existsSync(join(ordinaryProject, ".cursor", "tools"))).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -705,15 +724,33 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       ).toBe(0);
 
       const receiptPath = join(project, ".cursor", "aidlc-install.json");
-      const obsoleteRel = ".cursor/rules/obsolete.mdc";
+      writeFileSync(join(project, "aidlc", "active-space"), "myspace\n");
+      expect(
+        spawnSync("bun", [installer, project], {
+          cwd: REPO_ROOT,
+          encoding: "utf-8",
+        }).status,
+      ).toBe(0);
+
+      const obsoleteRel = ".cursor/rules/aidlc-legacy.mdc";
       const obsoletePath = join(project, obsoleteRel);
-      const frameworkBytes = Buffer.from("framework-owned obsolete rule\n");
-      writeFileSync(obsoletePath, frameworkBytes);
+      const sourceBytes = readFileSync(
+        join(CURSOR_ROOT, ".cursor", "rules", "aidlc.mdc"),
+      );
+      const activeSpaceBytes = Buffer.from(
+        sourceBytes
+          .toString("utf-8")
+          .replaceAll(
+            "aidlc/spaces/default/memory/",
+            "aidlc/spaces/myspace/memory/",
+          ),
+      );
+      writeFileSync(obsoletePath, activeSpaceBytes);
       const receipt = JSON.parse(readFileSync(receiptPath, "utf-8")) as {
         managedFiles: Record<string, string>;
       };
       receipt.managedFiles[obsoleteRel] = createHash("sha256")
-        .update(frameworkBytes)
+        .update(sourceBytes)
         .digest("hex");
       writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
 
@@ -728,9 +765,12 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       };
       expect(refreshedReceipt.managedFiles).not.toHaveProperty(obsoleteRel);
 
-      writeFileSync(obsoletePath, "user-modified obsolete rule\n");
+      writeFileSync(
+        obsoletePath,
+        Buffer.concat([activeSpaceBytes, Buffer.from("\n# user modification\n")]),
+      );
       refreshedReceipt.managedFiles[obsoleteRel] = createHash("sha256")
-        .update(frameworkBytes)
+        .update(sourceBytes)
         .digest("hex");
       writeFileSync(receiptPath, `${JSON.stringify(refreshedReceipt, null, 2)}\n`);
       const refused = spawnSync("bun", [installer, project], {
@@ -740,9 +780,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       expect(refused.status).toBe(1);
       expect(refused.stderr).toContain("removed upstream but modified locally");
       expect(refused.stderr).toContain(obsoleteRel);
-      expect(readFileSync(obsoletePath, "utf-8")).toBe(
-        "user-modified obsolete rule\n",
-      );
+      expect(readFileSync(obsoletePath, "utf-8")).toContain("# user modification");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -159,6 +159,21 @@ describe("t264 (a) judgeFreeze decision table", () => {
     expect(
       writeTargets("Bash", { command: "command truncate -s 0 /a/b.md" }),
     ).toEqual(["/a/b.md"]);
+    for (const command of [
+      "timeout 5 truncate -s 0 /a/b.md",
+      "nice truncate -s 0 /a/b.md",
+      "ionice truncate -s 0 /a/b.md",
+      "stdbuf -o0 truncate -s 0 /a/b.md",
+      "setsid truncate -s 0 /a/b.md",
+      "sudo truncate -s 0 /a/b.md",
+      "doas truncate -s 0 /a/b.md",
+      "xargs truncate -s 0 /a/b.md",
+      "time truncate -s 0 /a/b.md",
+      "unbuffer truncate -s 0 /a/b.md",
+      "env -S 'truncate -s 0 /a/b.md'",
+    ]) {
+      expect(writeTargets("Bash", { command }), command).toContain("/a/b.md");
+    }
     expect(writeTargets("Bash", { command: "truncate -r /a/b.md /tmp/out" })).toEqual([
       "/tmp/out",
     ]);

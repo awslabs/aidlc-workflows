@@ -1028,6 +1028,42 @@ describe("t276 cursor adapter payload conversion", () => {
     }
     expect(ledgerFilesFor(proj)).toHaveLength(1);
 
+    for (const command of [
+      "timeout 5 node -e 'x'",
+      "nice node -e 'x'",
+      "ionice node -e 'x'",
+      "stdbuf -o0 node -e 'x'",
+      "setsid node -e 'x'",
+      "sudo node -e 'x'",
+      "doas node -e 'x'",
+      "xargs node -e 'x'",
+      "time node -e 'x'",
+      "unbuffer node -e 'x'",
+      "env -S 'node -e x'",
+      "{ node -e 'x'; }",
+      "( node -e 'x' )",
+      "if true; then node -e 'x'; fi",
+      "for i in 1; do node -e 'x'; done",
+    ]) {
+      const wrappedInterpreter = runAdapter(
+        proj,
+        "guards",
+        payload("preToolUseShell", proj, {
+          conversation_id: "reviewer-wrapped-interpreter-conversation",
+          session_id: "reviewer-wrapped-interpreter-conversation",
+          tool_input: { command },
+        }),
+      );
+      const out = JSON.parse(wrappedInterpreter.stdout) as {
+        permission?: string;
+        agent_message?: string;
+      };
+      expect(out.permission, command).toBe("deny");
+      expect(out.agent_message ?? "", command).toContain(
+        "general-purpose interpreters",
+      );
+    }
+
     const dynamicRemovals = [
       [
         `base=${JSON.stringify(join(proj, "aidlc"))}`,

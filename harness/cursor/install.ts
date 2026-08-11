@@ -15,7 +15,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const DIST_ROOT = dirname(fileURLToPath(import.meta.url));
@@ -36,26 +36,35 @@ interface InstallReceipt {
   managedFiles: Record<string, string>;
 }
 
-function assertNoSymlinks(path: string, targetRoot: string): void {
+function assertNoSymlinks(
+  path: string,
+  targetRoot: string,
+  recursive = true,
+): void {
+  const root = resolve(targetRoot);
+  const candidate = resolve(path);
+  if (candidate !== root && !candidate.startsWith(`${root}${sep}`)) {
+    throw new Error(`${path}: installer target resolves outside ${root}`);
+  }
   let stat: ReturnType<typeof lstatSync>;
   try {
-    stat = lstatSync(path);
+    stat = lstatSync(candidate);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
     throw error;
   }
-  const label = relative(targetRoot, path).replaceAll("\\", "/") || ".";
+  const label = relative(root, candidate).replaceAll("\\", "/") || ".";
   if (stat.isSymbolicLink()) {
     throw new Error(`${label}: symlinked installer targets are not allowed`);
   }
-  if (!stat.isDirectory()) return;
-  for (const name of readdirSync(path)) {
-    assertNoSymlinks(join(path, name), targetRoot);
+  if (!recursive || !stat.isDirectory()) return;
+  for (const name of readdirSync(candidate)) {
+    assertNoSymlinks(join(candidate, name), root);
   }
 }
 
 function assertSafeManagedTree(targetRoot: string): void {
-  assertNoSymlinks(targetRoot, targetRoot);
+  assertNoSymlinks(targetRoot, targetRoot, false);
   for (const rel of [".cursor", "aidlc", "AGENTS.md", ".gitignore"]) {
     assertNoSymlinks(join(targetRoot, rel), targetRoot);
   }
@@ -1024,7 +1033,12 @@ export async function install(targetDir: string): Promise<void> {
     if (Object.hasOwn(managedFiles, rel)) continue;
     const target = join(targetRoot, rel);
     if (!existsSync(target)) continue;
-    if (sha256(readFileSync(target)) === priorHash) {
+    const comparable = receiptComparableContent(
+      rel,
+      readFileSync(target),
+      activeSpace,
+    );
+    if (sha256(comparable) === priorHash) {
       actions.push({ kind: "remove", target });
     } else {
       collisions.push(`${rel} (removed upstream but modified locally)`);

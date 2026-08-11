@@ -47,7 +47,7 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
@@ -472,104 +472,17 @@ export async function run(
     return words;
   }
 
-  function shellCommandSegments(command: string): string[] {
-    const segments: string[] = [];
-    let start = 0;
-    let quote: "'" | '"' | null = null;
-    let escaped = false;
-    for (let i = 0; i < command.length; i++) {
-      const ch = command[i];
-      if (escaped) {
-        escaped = false;
-        continue;
-      }
-      if (ch === "\\" && quote !== "'") {
-        escaped = true;
-        continue;
-      }
-      if (quote !== null) {
-        if (ch === quote) quote = null;
-        continue;
-      }
-      if (ch === "'" || ch === '"') {
-        quote = ch;
-        continue;
-      }
-      if (ch !== ";" && ch !== "\n" && ch !== "|" && ch !== "&") continue;
-      segments.push(command.slice(start, i));
-      if ((ch === "|" || ch === "&") && command[i + 1] === ch) i++;
-      start = i + 1;
-    }
-    segments.push(command.slice(start));
-    return segments;
+  interface ReviewFreezeShellModule {
+    shellWriteTargets?: (command: string, cwd?: string) => string[];
+    shellCommandInvocations?: (command: string) => Array<{ name: string; args: string[] }>;
   }
 
-  interface ShellInvocation {
-    name: string;
-    args: string[];
-  }
-
-  function shellInvocation(words: string[]): ShellInvocation | null {
-    let index = 0;
-    const skipAssignments = () => {
-      while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index] ?? "")) index++;
-    };
-    skipAssignments();
-
-    while (index < words.length) {
-      const wrapper = basename(words[index]);
-      if (wrapper === "command") {
-        index++;
-        while (index < words.length && words[index].startsWith("-")) {
-          const option = words[index++];
-          if (option === "--") break;
-          if (option.includes("v") || option.includes("V")) return null;
-        }
-        skipAssignments();
-        continue;
-      }
-      if (wrapper === "exec" || wrapper === "nohup") {
-        index++;
-        while (index < words.length && words[index].startsWith("-")) {
-          if (words[index++] === "--") break;
-        }
-        skipAssignments();
-        continue;
-      }
-      if (wrapper === "env") {
-        index++;
-        while (index < words.length) {
-          const option = words[index];
-          if (option === "--") {
-            index++;
-            break;
-          }
-          if (/^(?:-u|--unset|-C|--chdir|-S|--split-string)$/.test(option)) {
-            index += 2;
-            continue;
-          }
-          if (/^(?:--unset|--chdir|--split-string)=/.test(option) || option === "-i") {
-            index++;
-            continue;
-          }
-          if (option.startsWith("-")) {
-            index++;
-            continue;
-          }
-          break;
-        }
-        skipAssignments();
-        continue;
-      }
-      break;
-    }
-
-    const executable = words[index];
-    if (!executable) return null;
-    return {
-      name: basename(executable),
-      args: words.slice(index + 1),
-    };
+  let reviewFreezeShellModule: Promise<ReviewFreezeShellModule> | null = null;
+  function loadReviewFreezeShellModule(): Promise<ReviewFreezeShellModule> {
+    reviewFreezeShellModule ??= import(
+      join(HOOKS_DIR, "aidlc-review-freeze.ts")
+    ) as Promise<ReviewFreezeShellModule>;
+    return reviewFreezeShellModule;
   }
 
   function protectedReviewerPaths(): string[] {
@@ -592,6 +505,7 @@ export async function run(
     cwd: string,
     protectedPaths: readonly string[],
   ): boolean {
+    if (["{", "}", "(", ")"].includes(raw)) return false;
     const glob = raw.search(/[*?[\]{}]/);
     if (glob === -1) return false;
     let prefix = raw.slice(0, glob);
@@ -699,20 +613,23 @@ export async function run(
     return false;
   }
 
-  function shellInvokesDynamicEvaluation(command: string): boolean {
+  async function shellInvokesDynamicEvaluation(command: string): Promise<boolean> {
     if (shellUsesDynamicExpansion(command)) return true;
     const interpreter =
       /^(?:ba|da|fi|k|z)?sh$|^(?:bun|bunx|deno|node|nodejs|npm|npx|pnpm|yarn|corepack|tsx|ts-node|python(?:\d+(?:\.\d+)*)?|ruby|perl|php|lua|luajit|raku|julia|java|js|qjs|osascript|powershell|pwsh)$/i;
-    return shellCommandSegments(command).some((segment) => {
-      const invocation = shellInvocation(shellWords(segment));
-      return (
-        invocation !== null &&
-        (interpreter.test(invocation.name) ||
+    try {
+      const module = await loadReviewFreezeShellModule();
+      if (typeof module.shellCommandInvocations !== "function") return true;
+      return module.shellCommandInvocations(command).some(
+        (invocation) =>
+          interpreter.test(invocation.name) ||
           invocation.name === "eval" ||
           invocation.name === "source" ||
-          invocation.name === ".")
+          invocation.name === ".",
       );
-    });
+    } catch {
+      return true;
+    }
   }
 
   async function touchesProtectedReviewerState(): Promise<boolean> {
@@ -733,9 +650,7 @@ export async function run(
     const command = toolInput.command;
     if (toolName === "Bash" && typeof command === "string") {
       try {
-        const module = await import(join(HOOKS_DIR, "aidlc-review-freeze.ts")) as {
-          shellWriteTargets?: (command: string, cwd?: string) => string[];
-        };
+        const module = await loadReviewFreezeShellModule();
         const concrete = module.shellWriteTargets?.(command, cwd) ?? [];
         if (concrete.some((path) => overlapsProtectedPath(path, protectedPaths))) return true;
       } catch {
@@ -918,7 +833,7 @@ export async function run(
         toolName === "Bash" &&
         typeof command === "string" &&
         (REVIEW_AGENT_RE.test(agent) || activeReviewerDispatch() !== null) &&
-        shellInvokesDynamicEvaluation(command)
+        await shellInvokesDynamicEvaluation(command)
       ) {
         process.stdout.write(`${JSON.stringify({
           permission: "deny",
