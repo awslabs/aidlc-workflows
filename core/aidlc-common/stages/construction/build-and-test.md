@@ -113,7 +113,7 @@ Attempt to execute the build and test commands documented in the instruction fil
    - Coverage report (if test framework supports it)
    - `## Loop-Back Log` (only when the failure ladder's rung 3 or 4 fires a
      loop-back): one `### Loop-back N — <ISO timestamp>` entry per attempt,
-     carrying Diagnosis / Root-cause stage / Planned fix / Price. This section
+     carrying Diagnosis / Root-cause stage / Planned fix / Estimated impact. This section
      is APPEND-ONLY and must survive re-runs of this stage (choose Modify,
      never Redo, on loop-back re-entry — Redo would erase the ledger).
 
@@ -123,31 +123,31 @@ Attempt to execute the build and test commands documented in the instruction fil
    remit (test config, build scripts, environment setup, small code defects):
    read the error output, identify the failing code, apply the fix, re-run the
    failing step.
-2. **Classify and price** — when in-stage attempts are exhausted OR the
+2. **Classify and estimate impact** — when in-stage attempts are exhausted OR the
    diagnosis points upstream: decide whether the root cause lies in the
    generated code or an approach chosen at code-generation (library/version,
    container image, instance type, algorithm, flag). If so, look for an
    identifiable fix in a swappable dimension (newer image, driver, wheel
-   index, a CLI flag) and PRICE it — effort, cost, risk. Never declare a
-   feasible path out of scope on an UNPRICED effort assumption.
+   index, a CLI flag) and ESTIMATE ITS IMPACT — effort, financial cost, risk. Never declare a
+   feasible path out of scope on an IMPACT-UNESTIMATED effort assumption.
 3. **Autonomous bounded loop-back** — if `Construction Autonomy Mode:
-   autonomous` (in aidlc-state.md), a priced fix exists, and fewer than
+   autonomous` (in aidlc-state.md), an impact-estimated fix exists, and fewer than
    3 entries exist under `## Loop-Back Log` in test-results.md: follow
    stage-protocol.md §1 "Build-and-Test failure loop-back". Record the
-   diagnosis + priced fix plan, then jump back to code-generation and replay
+   diagnosis + impact-estimated fix plan, then jump back to code-generation and replay
    forward. Do NOT present this stage's approval gate on the failed run.
 4. **Halt-and-ask** — if the mode is gated (or unset), the 3-loop-back bound
    is exhausted, or no identifiable fix exists: log the failure in
-   test-results.md and present the priced halt-and-ask question defined in
+   test-results.md and present the impact-estimated halt-and-ask question defined in
    stage-protocol.md §1 "Build-and-Test failure loop-back", listing every
-   candidate fix WITH ITS PRICE. Giving up is the human's decision to make,
+   candidate fix WITH ITS ESTIMATED IMPACT. Giving up is the human's decision to make,
    never the agent's. When rung 2 found no identifiable fix at all, present
    stage-protocol.md §1's no-fix variant instead — it drops the "Retry with
    fix" option entirely rather than inventing a fix to retry with.
 
 **Single-stage runs**: in a `--single` run (`/aidlc --stage build-and-test
 --single`) rungs 3-4 never execute a jump — there is no main-workflow position
-to move. Stop at rung 2, log the diagnosis + priced options in
+to move. Stop at rung 2, log the diagnosis + impact-estimated options in
 test-results.md, and present them in this run's isolated-run summary.
 
 **On success**: Update the Build and Test Summary with actual results (not just instructions).

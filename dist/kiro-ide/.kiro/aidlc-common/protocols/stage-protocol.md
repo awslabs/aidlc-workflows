@@ -173,9 +173,9 @@ backward jump does not count against the bound — only entries this protocol
 writes do.
 
 **Autonomous loop-back procedure** (mode `autonomous`, bound not exhausted,
-priced fix identified):
+impact-estimated fix identified):
 1. Append the `### Loop-back N — <ISO timestamp>` entry (Diagnosis /
-   Root-cause stage / Planned fix / Price) to test-results.md and a matching
+   Root-cause stage / Planned fix / Estimated impact) to test-results.md and a matching
    Deviations entry to this stage's memory.md.
 2. Execute the jump through the ENGINE: run
    `bun .kiro/tools/aidlc-orchestrate.ts next --stage code-generation`.
@@ -220,16 +220,16 @@ gracefully to full re-dispatch rather than silently claiming unbuilt units. On
 the inline per-unit path all artifacts still exist, so the fix is applied
 through the Artifact Re-use ritual per unit.
 
-**Halt-and-ask, priced variant (gated or unset mode, or bound exhausted, WITH
+**Halt-and-ask, impact-estimated variant (gated or unset mode, or bound exhausted, WITH
 a candidate fix identified):**
 
 ```question
-prompt: "Build and Test failed: [short error]. Root cause: [diagnosis]. Candidate fix: [fix] — estimated price: [effort/cost/risk]. Loop-backs used: [N]/3. How would you like to proceed?"
+prompt: "Build and Test failed: [short error]. Root cause: [diagnosis]. Candidate fix: [fix] — estimated impact — effort: [effort]; financial cost: [cost]; risk: [risk]. Loop-backs used: [N]/3. How would you like to proceed?"
 header: Build Failure
 multiSelect: false
 options:
   - label: Retry with fix
-    description: Jump back to code-generation, apply [fix] ([price]), re-run.
+    description: Jump back to code-generation, apply [fix] (estimated impact — effort: [effort]; financial cost: [cost]; risk: [risk]), re-run.
   - label: Accept failure
     description: Log the failure in test-results.md and proceed to this stage's approval gate.
   - label: Abort
@@ -238,7 +238,7 @@ options:
 
 **Halt-and-ask, no-fix variant (no identifiable fix exists in any swappable
 dimension):** omit "Retry with fix" entirely — presenting it without a
-candidate fix would itself be the unpriced give-up option this protocol
+candidate fix would itself be the impact-unestimated give-up option this protocol
 forbids in the other direction (a fabricated fix to retry with). Use:
 
 ```question
@@ -252,8 +252,8 @@ options:
     description: Stop here; the workflow can resume later.
 ```
 
-Choose the variant by whether rung 2's classify-and-price step actually
-produced a priced candidate fix — never render the priced template's
+Choose the variant by whether rung 2's classify-and-estimate step actually
+produced an impact-estimated candidate fix — never render the impact-estimated template's
 `Candidate fix` / `Retry with fix` slots with placeholder or invented
 content just to keep the template shape.
 
@@ -267,7 +267,7 @@ Re-use question, entirely. The planned fix MUST be applied — via that
 override — BEFORE the gate it names is presented, never after. A
 human-approved retry does count an entry in the Loop-Back Log, and the human
 may override the bound explicitly. Every option's description must carry its
-price where one is known — presenting an unpriced give-up option is a
+estimated impact where one is known — presenting an impact-unestimated give-up option is a
 protocol violation.
 
 ---

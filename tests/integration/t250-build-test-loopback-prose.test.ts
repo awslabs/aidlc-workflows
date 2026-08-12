@@ -15,7 +15,7 @@
 //      subsection (sibling of the pinned "Halt-and-ask on failure" block:
 //      t34 + t76 pin the pre-existing §1 content; this addition is purely
 //      additive), the artifact-ledger paragraph, the ENGINE-routed jump
-//      procedure, the swarm cheap path, the priced + no-fix halt-and-ask
+//      procedure, the swarm cheap path, the impact-estimated + no-fix halt-and-ask
 //      templates, the NO EMERGENT BEHAVIOR carve-out sentence, the
 //      checklist-item-5 EXCEPTION sentence, the second-autonomous-stop-case
 //      sentence on the Bolt halt-and-ask, and the Artifact Re-use
@@ -68,30 +68,30 @@ describe("t250 build-and-test.md — Step 10 failure-escalation ladder", () => {
     expect(STAGE).toContain("this stage's own\n   remit");
   });
 
-  test("rung 2: classify and price — unpriced write-offs forbidden", () => {
-    expect(STAGE).toContain("**Classify and price**");
+  test("rung 2: classify and estimate impact — impact-unestimated write-offs forbidden", () => {
+    expect(STAGE).toContain("**Classify and estimate impact**");
     expect(STAGE).toContain(
       "an approach chosen at code-generation (library/version,",
     );
-    expect(STAGE).toContain("PRICE it — effort, cost, risk");
+    expect(STAGE).toContain("ESTIMATE ITS IMPACT — effort, financial cost, risk");
     expect(STAGE).toContain(
-      "Never declare a\n   feasible path out of scope on an UNPRICED effort assumption.",
+      "Never declare a\n   feasible path out of scope on an IMPACT-UNESTIMATED effort assumption.",
     );
   });
 
-  test("rung 3: autonomous bounded loop-back keyed to mode + priced fix + ledger bound", () => {
+  test("rung 3: autonomous bounded loop-back keyed to mode + impact-estimated fix + ledger bound", () => {
     expect(STAGE).toContain("**Autonomous bounded loop-back**");
     expect(STAGE).toContain("`Construction Autonomy Mode:\n   autonomous` (in aidlc-state.md)");
-    expect(STAGE).toContain("a priced fix exists, and fewer than\n   3 entries exist under `## Loop-Back Log` in test-results.md");
+    expect(STAGE).toContain("an impact-estimated fix exists, and fewer than\n   3 entries exist under `## Loop-Back Log` in test-results.md");
     expect(STAGE).toContain('stage-protocol.md §1 "Build-and-Test failure loop-back"');
     expect(STAGE).toContain(
       "Do NOT present this stage's approval gate on the failed run.",
     );
   });
 
-  test("rung 4: halt-and-ask — priced options, giving up is the human's call", () => {
+  test("rung 4: halt-and-ask — impact-estimated options, giving up is the human's call", () => {
     expect(STAGE).toContain("**Halt-and-ask**");
-    expect(STAGE).toContain("listing every\n   candidate fix WITH ITS PRICE");
+    expect(STAGE).toContain("listing every\n   candidate fix WITH ITS ESTIMATED IMPACT");
     expect(STAGE).toContain(
       "Giving up is the human's decision to make,\n   never the agent's.",
     );
@@ -100,7 +100,7 @@ describe("t250 build-and-test.md — Step 10 failure-escalation ladder", () => {
   test("artifact list carries the Loop-Back Log shape (append-only, Modify-never-Redo)", () => {
     expect(STAGE).toContain("`## Loop-Back Log` (only when the failure ladder's rung 3 or 4 fires a");
     expect(STAGE).toContain("`### Loop-back N — <ISO timestamp>` entry per attempt");
-    expect(STAGE).toContain("Diagnosis / Root-cause stage / Planned fix / Price");
+    expect(STAGE).toContain("Diagnosis / Root-cause stage / Planned fix / Estimated impact");
     expect(STAGE).toContain("APPEND-ONLY");
     expect(STAGE).toContain("choose Modify,\n     never Redo, on loop-back re-entry");
   });
@@ -110,6 +110,7 @@ describe("t250 build-and-test.md — Step 10 failure-escalation ladder", () => {
     expect(STAGE).toContain("rungs 3-4 never execute a jump");
     expect(STAGE).toContain("no main-workflow position");
     expect(STAGE).toContain("Stop at rung 2");
+    expect(STAGE).toContain("log the diagnosis + impact-estimated options in");
   });
 });
 
@@ -164,7 +165,7 @@ describe("t250 stage-protocol.md §1 — Build-and-Test failure loop-back subsec
 
   test("procedure step 1 appends the ledger entry AND a Deviations note in memory.md", () => {
     expect(PROTOCOL).toContain(
-      "Append the `### Loop-back N — <ISO timestamp>` entry (Diagnosis /\n   Root-cause stage / Planned fix / Price) to test-results.md and a matching\n   Deviations entry to this stage's memory.md.",
+      "Append the `### Loop-back N — <ISO timestamp>` entry (Diagnosis /\n   Root-cause stage / Planned fix / Estimated impact) to test-results.md and a matching\n   Deviations entry to this stage's memory.md.",
     );
   });
 
@@ -192,22 +193,24 @@ describe("t250 stage-protocol.md §1 — Build-and-Test failure loop-back subsec
     );
   });
 
-  test("halt-and-ask question template: 3 priced options, bound surfaced", () => {
+  test("halt-and-ask question template: 3 impact-estimated options, bound surfaced", () => {
     expect(PROTOCOL).toContain(
-      'prompt: "Build and Test failed: [short error]. Root cause: [diagnosis]. Candidate fix: [fix] — estimated price: [effort/cost/risk]. Loop-backs used: [N]/3. How would you like to proceed?"',
+      'prompt: "Build and Test failed: [short error]. Root cause: [diagnosis]. Candidate fix: [fix] — estimated impact — effort: [effort]; financial cost: [cost]; risk: [risk]. Loop-backs used: [N]/3. How would you like to proceed?"',
     );
     const lines = PROTOCOL.split("\n");
     const retryIdx = lines.findIndex((l) => /^\s*- label: Retry with fix$/.test(l));
     expect(retryIdx).toBeGreaterThan(-1);
-    expect(lines[retryIdx + 1]).toContain("apply [fix] ([price]), re-run");
+    expect(lines[retryIdx + 1]).toContain(
+      "apply [fix] (estimated impact — effort: [effort]; financial cost: [cost]; risk: [risk]), re-run",
+    );
     const acceptIdx = lines.findIndex((l) => /^\s*- label: Accept failure$/.test(l));
     expect(acceptIdx).toBeGreaterThan(-1);
     expect(lines[acceptIdx + 1]).toContain("proceed to this stage's approval gate");
   });
 
-  test("unpriced give-up option is a protocol violation; human retry counts + may override bound", () => {
+  test("impact-unestimated give-up option is a protocol violation; human retry counts + may override bound", () => {
     expect(PROTOCOL).toContain(
-      "presenting an unpriced give-up option is a\nprotocol violation",
+      "presenting an impact-unestimated give-up option is a\nprotocol violation",
     );
     expect(PROTOCOL).toContain(
       "A\nhuman-approved retry does count an entry in the Loop-Back Log, and the human\nmay override the bound explicitly",
@@ -295,10 +298,10 @@ describe("t250 Finding 4 (should-fix): no-fix halt-and-ask variant", () => {
     expect(abortIdx).toBeGreaterThan(acceptIdx);
   });
 
-  test("the priced variant is explicitly named as the other option, keyed on rung 2's outcome", () => {
-    expect(PROTOCOL).toContain("**Halt-and-ask, priced variant");
+  test("the impact-estimated variant is explicitly named as the other option, keyed on rung 2's outcome", () => {
+    expect(PROTOCOL).toContain("**Halt-and-ask, impact-estimated variant");
     expect(PROTOCOL).toContain(
-      "Choose the variant by whether rung 2's classify-and-price step actually\nproduced a priced candidate fix",
+      "Choose the variant by whether rung 2's classify-and-estimate step actually\nproduced an impact-estimated candidate fix",
     );
   });
 

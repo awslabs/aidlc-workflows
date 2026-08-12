@@ -871,7 +871,7 @@ testing expertise.
        - Coverage report (if test framework supports it)
        - `## Loop-Back Log` (only when the failure ladder's rung 3 or 4 fires
          a loop-back): one `### Loop-back N -- <ISO timestamp>` entry per
-         attempt (Diagnosis / Root-cause stage / Planned fix / Price).
+         attempt (Diagnosis / Root-cause stage / Planned fix / Estimated impact).
          Append-only; survives re-runs (Modify, never Redo, on loop-back
          re-entry).
 
@@ -881,28 +881,28 @@ testing expertise.
        stage's own remit (test config, build scripts, environment setup,
        small code defects): read the error output, identify the failing code,
        apply the fix, re-run the failing step.
-    2. **Classify and price** -- when in-stage attempts are exhausted or the
+    2. **Classify and estimate impact** -- when in-stage attempts are exhausted or the
        diagnosis points upstream: decide whether the root cause lies in the
        generated code or a code-generation approach choice (library/version,
        container image, instance type, algorithm, flag); find a fix in a
-       swappable dimension and PRICE it (effort, cost, risk). Never declare
-       a feasible path out of scope on an unpriced effort assumption.
+       swappable dimension and ESTIMATE ITS IMPACT (effort, financial cost, risk). Never declare
+       a feasible path out of scope on an impact-unestimated effort assumption.
     3. **Autonomous bounded loop-back** -- if `Construction Autonomy Mode:
-       autonomous`, a priced fix exists, and fewer than 3 entries exist under
-       `## Loop-Back Log`: record the diagnosis + priced fix, jump back to
+       autonomous`, an impact-estimated fix exists, and fewer than 3 entries exist under
+       `## Loop-Back Log`: record the diagnosis + impact-estimated fix, jump back to
        code-generation via the engine, and replay forward per
        stage-protocol.md Section 1 "Build-and-Test failure loop-back". The
        failed run's gate is not presented; its learnings ritual defers to the
        eventual passing run.
     4. **Halt-and-ask** -- gated/unset mode, bound exhausted, or no
        identifiable fix: log the failure and present the halt-and-ask
-       question from stage-protocol.md Section 1 -- the priced 3-option
-       variant (Retry with fix [price] / Accept failure / Abort) when a
+       question from stage-protocol.md Section 1 -- the impact-estimated 3-option
+       variant (Retry with fix [estimated impact] / Accept failure / Abort) when a
        candidate fix exists, or the no-fix 2-option variant (Accept
        failure / Abort) when rung 2 found none.
 
     Single-stage runs (`--single`) stop at rung 2 -- there is no
-    main-workflow position to move; the priced options are logged and
+    main-workflow position to move; the impact-estimated options are logged and
     presented in that run's isolated-run summary.
 
     **On success:** Update the Build and Test Summary with actual results (not
@@ -940,9 +940,9 @@ Strictly 2-option: Approve / Request Changes.
   real commands against the codebase.
 - **Failure-escalation ladder**: In-stage fixes are bounded at 2 attempts;
   when the root cause lies upstream in generated code or a code-generation
-  approach choice, the stage classifies and prices a fix, then either runs
+  approach choice, the stage classifies and estimates the impact of a fix, then either runs
   the bounded autonomous loop-back to code-generation (max 3, counted by the
-  append-only `## Loop-Back Log` in test-results.md) or presents the priced
+  append-only `## Loop-Back Log` in test-results.md) or presents the impact-estimated
   halt-and-ask question. See stage-protocol.md Section 1 "Build-and-Test
   failure loop-back".
 - **Conditional test types**: Performance tests, security tests, contract
