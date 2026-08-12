@@ -32,8 +32,12 @@
 //     exit 2 on unknown subcommand / missing subcommand.
 //
 // IDEMPOTENCY DISCIPLINE (this tool WRITES audit rows): persist appends
-// RULE_LEARNED rows and learnings-file lines keyed by a `cid:<slug>:<id>`
-// marker. The .sh proves persist-twice produces NO duplicate audit row and NO
+// RULE_LEARNED rows and learnings-file lines keyed by a
+// `cid:<intent-slug>:<slug>:<id>` marker (#735: the intent-slug component
+// prevents an unrelated intent's identically-numbered candidate from
+// colliding on the same workspace-level file; these fixtures resolve no
+// active intent, so "unscoped" is the expected sentinel value throughout).
+// The .sh proves persist-twice produces NO duplicate audit row and NO
 // duplicate file line (tests 23/25), and a belt-and-braces recovery (test 24:
 // audit row present, file line deleted -> re-write only). Those assertions are
 // preserved EXACTLY — spawn twice into a FRESH project per case and grep the
@@ -483,7 +487,7 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
     ]);
     expect(res.rc).toBe(0);
     const plf = projectPractices(pd);
-    expect(readFile(plf)).toContain("cid:user-stories:c1");
+    expect(readFile(plf)).toContain("cid:unscoped:user-stories:c1");
     // ensure-exists created the routed heading; the practice landed under it.
     expect(/^## Corrections/m.test(readFile(plf))).toBe(true);
     expect(/Event.*: RULE_LEARNED/.test(readAudit(pd))).toBe(true);
@@ -500,7 +504,7 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
     );
     runCli(["persist", "--slug", "user-stories", "--selections-json", sel, "--project-dir", pd]);
     expect(readFile(teamPractices(pd))).toContain(
-      "cid:user-stories:c2",
+      "cid:unscoped:user-stories:c2",
     );
   });
 
@@ -594,7 +598,7 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
     const rows = grepCountAudit(pd, /Event.*: RULE_LEARNED/);
     const lines = grepCount(
       projectPractices(pd),
-      "cid:user-stories:c1",
+      "cid:unscoped:user-stories:c1",
     );
     expect(`${rows}:${lines}`).toBe("1:1");
   });
@@ -614,7 +618,7 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
     const plf = projectPractices(pd);
     const kept = readFile(plf)
       .split("\n")
-      .filter((l) => !l.includes("cid:user-stories:c1"))
+      .filter((l) => !l.includes("cid:unscoped:user-stories:c1"))
       .join("\n");
     writeFileSync(plf, kept, "utf-8");
     const res = runCli([
@@ -627,7 +631,7 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
       pd,
     ]);
     const rows = grepCountAudit(pd, /Event.*: RULE_LEARNED/);
-    const lines = grepCount(plf, "cid:user-stories:c1");
+    const lines = grepCount(plf, "cid:unscoped:user-stories:c1");
     expect(`${res.rc}:${rows}:${lines}`).toBe("0:1:1");
   });
 
@@ -645,7 +649,7 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
     runCli(["persist", "--slug", "user-stories", "--selections-json", sel, "--project-dir", pd]);
     const lines = grepCount(
       projectPractices(pd),
-      "cid:user-stories:c1",
+      "cid:unscoped:user-stories:c1",
     );
     expect(lines).toBe(1);
   });

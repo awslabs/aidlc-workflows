@@ -38,6 +38,7 @@ import { dirname, join } from "node:path";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import { memoryDirFor } from "./aidlc-graph.ts";
 import {
+  activeIntent,
   appendUnderHeading,
   errorMessage,
   findAllEvents,
@@ -403,10 +404,14 @@ function ensureHeading(content: string, heading: string): string {
 }
 
 // cid marker — stable, date-/text-independent idempotency key per written
-// line. Keyed on (stage slug, candidate id) so a same-day re-run of the
-// same selection is a no-op rather than a double-append.
-function cidMarker(slug: string, candidateId: string): string {
-  return `<!-- cid:${slug}:${candidateId} -->`;
+// line. Keyed on (intent slug, stage slug, candidate id) so a same-day
+// re-run of the same selection within the SAME intent is a no-op rather
+// than a double-append, and so an unrelated intent's own candidate ids
+// (which restart at c1 on every stage run) can never collide with this
+// intent's marker in the shared, workspace-level project.md/team.md
+// (stage-protocol.md §13: no per-intent partition, no org tier).
+function cidMarker(intentSlug: string, slug: string, candidateId: string): string {
+  return `<!-- cid:${intentSlug}:${slug}:${candidateId} -->`;
 }
 
 function handlePersist(args: string[], projectDir: string): void {
@@ -422,6 +427,11 @@ function handlePersist(args: string[], projectDir: string): void {
 
   const selFile = parseSelectionsFile(selectionsJson);
   const stageSlug = slug ?? selFile.stage_slug;
+  // Resolved once per persist call and threaded into cidMarker below. A
+  // gated stage's persist always runs against a resolved active intent;
+  // "unscoped" only guards the type (activeIntent is total) and is not
+  // expected to be exercised in practice.
+  const intentSlug = activeIntent(projectDir) ?? "unscoped";
 
   // ONE withAuditLock body — decide-inside-lock (plan §0.4). Re-read the
   // audit fresh INSIDE the lock; never reuse a pre-lock read.
@@ -465,7 +475,7 @@ function handlePersist(args: string[], projectDir: string): void {
         const bucket = ensureFile(sel.scope);
         const path = bucket.path;
         let content = bucket.content;
-        const marker = cidMarker(stageSlug, sel.candidate_id);
+        const marker = cidMarker(intentSlug, stageSlug, sel.candidate_id);
         const today = isoTimestamp().slice(0, 10);
         const source = sel.source ?? "orchestrator";
         // The orchestrator routes the learning to the fitting practice heading
