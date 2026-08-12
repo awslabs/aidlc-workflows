@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.68] - 2026-08-12
+
+`consumes_absent`'s `expected` flag now respects a producer's own `produces_kinds` gate, so a kind-tagged unit that correctly never produces a given artifact no longer gets a false "real gap" alarm on the next stage's directive. Fixes #736. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* `splitConsumesByPresence` now takes `unitKind` (mirroring `resolveProduces`'s existing parameter) and checks the producing stage's `produces_kinds` gate before computing `expected`.
+* An untagged unit, or a stage with no `produces_kinds` map, sees byte-for-byte identical behaviour — this is a strict narrowing of the true case, not a behaviour change for anything that isn't kind-gated.
+* No command or flag changes; no breaking change for CI or scripts.
+
 ## [2.5.64] - 2026-08-11
 
 Composed-workflow routing is now deterministic from proposal through execution, and the affected test-runner and live-journey paths fail closed. Stock matches present exactly the grid that will run, incomplete model-produced grids cannot match a stock scope, in-flight recomposition preserves the running plan, isolated stages no longer wait on nonexistent questions, and mid-flow new work carries one typed continuation contract with a named scope. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.

@@ -1506,10 +1506,22 @@ function resolveConsumes(
 //     check against; everything stays in `consumes`, exactly as before.
 //   - a path still carrying the {unit-name} placeholder → existence is
 //     unknowable pre-Bolt; it stays in `consumes`.
+//
+// "A producer is on the path" is necessary but not sufficient — a producer
+// on path can still legitimately not produce THIS artifact for THIS unit's
+// kind, via that producer's own produces_kinds gate (mirrors resolveProduces's
+// existing unitKind filtering below). Without this, a kind-excluded artifact
+// (e.g. a `ui`-kind unit correctly never producing an artifact a stage's own
+// produces_kinds map scopes to `[service, spec, library]`) is flagged
+// `expected: false` — a false "real gap" alarm, since the producing stage
+// itself did run. `unitKind` defaults to null (an untagged unit, or a
+// non-per-unit stage), which keeps prior behaviour exactly:
+// filterProducesByKind is a no-op when unitKind is null.
 function splitConsumesByPresence(
   consumes: ResolvedConsume[],
   scope: string,
   codekbCtx?: CodekbCtx,
+  unitKind: string | null = null,
 ): { present: string[]; absent: Array<{ path: string; expected: boolean }> } {
   if (!codekbCtx) return { present: consumes.map((c) => c.path), absent: [] };
   const onPath = new Set(subgraphForScope(scope).map((s) => s.slug));
@@ -1527,7 +1539,11 @@ function splitConsumesByPresence(
     }
     if (!c.required) continue; // optional + missing → not an input, not a gap
     const producers = producersOf(c.artifact);
-    const producerOnPath = producers.some((p) => onPath.has(p.slug));
+    const producerOnPath = producers.some(
+      (p) =>
+        onPath.has(p.slug) &&
+        filterProducesByKind(p.produces_kinds, [c.artifact], unitKind).length > 0,
+    );
     absent.push({ path: c.path, expected: !producerOnPath });
   }
   return { present, absent };
@@ -1861,7 +1877,7 @@ function buildRunStageDirective(
   const resolvedConsumes = resolveConsumes(
     node.consumes ?? [], node, projectType, unit, recordPrefix, codekbCtx,
   );
-  const { present, absent } = splitConsumesByPresence(resolvedConsumes, scope, codekbCtx);
+  const { present, absent } = splitConsumesByPresence(resolvedConsumes, scope, codekbCtx, unitKind);
   const inlineContext = inlineContextRoster(node, codekbCtx);
   const ruleEntries = codekbCtx
     ? rulesContentEntries(node, codekbCtx.projectDir, codekbCtx.space)
