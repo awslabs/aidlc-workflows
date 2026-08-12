@@ -75,7 +75,7 @@ class ClaudeCodeAdapter(CLIAdapter):
     def name(self) -> str:
         return "claude-code"
 
-    def check_prerequisites(self) -> tuple[bool, str]:
+    def check_prerequisites(self, config: AdapterConfig | None = None) -> tuple[bool, str]:
         """Verify that ``claude`` is on PATH."""
         if not shutil.which(_CLAUDE_CLI):
             return False, (
@@ -123,7 +123,8 @@ class ClaudeCodeAdapter(CLIAdapter):
                     dst = rules_dir / rel
                     dst.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(rule_file, dst)
-                _log(f"Copied AIDLC rules directory ({sum(1 for _ in rules_dir.rglob('*.md'))} files)")
+                copied_rule_count = sum(1 for _ in rules_dir.rglob("*.md"))
+                _log(f"Copied AIDLC rules directory ({copied_rule_count} files)")
             else:
                 shutil.copy2(rules_path, rules_dir / rules_path.name)
                 _log(f"Copied AIDLC rules file: {rules_path.name}")
@@ -137,14 +138,15 @@ class ClaudeCodeAdapter(CLIAdapter):
                 "-p",
                 "--dangerously-skip-permissions",
                 "--verbose",
-                "--output-format", "stream-json",
+                "--output-format",
+                "stream-json",
             ]
             if config.model:
                 cmd += ["--model", config.model]
 
             cmd.append(prompt)
 
-            _log(f"Running: claude -p --dangerously-skip-permissions ...")
+            _log("Running: claude -p --dangerously-skip-permissions ...")
             _log(f"Model: {config.model or 'default'}")
             _log(f"Prompt length: {len(prompt)} chars")
 
@@ -281,8 +283,7 @@ class ClaudeCodeAdapter(CLIAdapter):
                 )
 
             error_detail = (
-                f"claude exited with code {process.returncode}, "
-                "no aidlc-docs/ output was produced."
+                f"claude exited with code {process.returncode}, no aidlc-docs/ output was produced."
                 if not has_docs
                 else f"claude exited with code {process.returncode} "
                 "but aidlc-docs/ may be incomplete."

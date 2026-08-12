@@ -41,10 +41,19 @@ PACKAGES = REPO_ROOT / "packages"
 # Add cli-harness to path
 sys.path.insert(0, str(PACKAGES / "cli-harness" / "src"))
 
-from cli_harness.registry import get_adapter, list_adapters  # noqa: E402
+from cli_harness.adapter import AdapterConfig  # noqa: E402
 from cli_harness.orchestrator import run_cli_evaluation  # noqa: E402
+from cli_harness.registry import get_adapter, list_adapters  # noqa: E402
 
 _SLUG_MAX_LEN = 80
+_SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+
+
+def _positive_seconds(value: str) -> int:
+    seconds = int(value)
+    if seconds <= 0:
+        raise argparse.ArgumentTypeError("timeout must be a positive integer")
+    return seconds
 
 
 def _rules_slug(
@@ -104,9 +113,12 @@ def _setup_rules(
         # nosemgrep: dangerous-subprocess-use-audit
         result = subprocess.run(
             [
-                "git", "clone",
-                "--branch", rules_ref,
-                "--depth", "1",
+                "git",
+                "clone",
+                "--branch",
+                rules_ref,
+                "--depth",
+                "1",
                 rules_repo,
                 str(rules_dest / "_repo"),
             ],
@@ -143,49 +155,105 @@ def main() -> None:
         description="Run AIDLC evaluation through a CLI AI assistant",
     )
     parser.add_argument(
-        "--cli", type=str,
+        "--cli",
+        type=str,
         help="CLI adapter name (e.g., kiro-cli)",
     )
     parser.add_argument(
-        "--list", action="store_true",
+        "--list",
+        action="store_true",
         help="List available CLI adapters and exit",
     )
     parser.add_argument(
-        "--check-only", action="store_true",
+        "--check-only",
+        action="store_true",
         help="Only check CLI prerequisites, don't run evaluation",
     )
     parser.add_argument(
-        "--config", type=Path,
+        "--config",
+        type=Path,
         default=REPO_ROOT / "config" / "default.yaml",
         help="Path to YAML config file (default: config/default.yaml)",
     )
-    parser.add_argument("--vision", type=Path, default=REPO_ROOT / "test_cases" / "sci-calc" / "vision.md")
-    parser.add_argument("--tech-env", type=Path, default=REPO_ROOT / "test_cases" / "sci-calc" / "tech-env.md")
-    parser.add_argument("--golden", type=Path, default=REPO_ROOT / "test_cases" / "sci-calc" / "golden-aidlc-docs")
-    parser.add_argument("--openapi", type=Path, default=REPO_ROOT / "test_cases" / "sci-calc" / "openapi.yaml")
-    parser.add_argument("--baseline", type=Path, default=REPO_ROOT / "test_cases" / "sci-calc" / "golden.yaml")
     parser.add_argument(
-        "--rules-ref", default=None,
+        "--vision", type=Path, default=REPO_ROOT / "test_cases" / "sci-calc" / "vision.md"
+    )
+    parser.add_argument(
+        "--tech-env", type=Path, default=REPO_ROOT / "test_cases" / "sci-calc" / "tech-env.md"
+    )
+    parser.add_argument(
+        "--golden", type=Path, default=REPO_ROOT / "test_cases" / "sci-calc" / "golden-aidlc-docs"
+    )
+    parser.add_argument(
+        "--openapi", type=Path, default=REPO_ROOT / "test_cases" / "sci-calc" / "openapi.yaml"
+    )
+    parser.add_argument(
+        "--baseline", type=Path, default=REPO_ROOT / "test_cases" / "sci-calc" / "golden.yaml"
+    )
+    parser.add_argument(
+        "--rules-ref",
+        default=None,
         help="Git ref (branch/tag/commit) for AIDLC rules (overrides config value)",
     )
     parser.add_argument(
-        "--rules-path", type=Path, default=None,
+        "--rules-path",
+        type=Path,
+        default=None,
         help="Path to local AIDLC rules directory (overrides git clone)",
     )
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--profile", default=None, help="AWS profile (default: from config YAML)")
     parser.add_argument("--region", default=None, help="AWS region (default: from config YAML)")
-    parser.add_argument("--scorer-model", default=None, help="Bedrock model for scoring (default: from config YAML)")
-    parser.add_argument("--model", default=None, help="Model to use with the CLI adapter (e.g., claude-sonnet-4)")
     parser.add_argument(
-        "--verbose", "-v", action="store_true",
+        "--scorer-model", default=None, help="Bedrock model for scoring (default: from config YAML)"
+    )
+    parser.add_argument(
+        "--model", default=None, help="Model to use with the CLI adapter (e.g., claude-sonnet-4)"
+    )
+    parser.add_argument(
+        "--interaction-provider",
+        choices=("auto", "plannotator", "manual", "none"),
+        default="auto",
+        help="Human interaction provider for Kiro CLI gates (default: auto)",
+    )
+    parser.add_argument(
+        "--interaction-timeout",
+        type=_positive_seconds,
+        default=1800,
+        help="Per-interaction timeout in seconds (default: 1800)",
+    )
+    parser.add_argument(
+        "--plannotator-verification",
+        choices=("attestation", "checksum"),
+        default="attestation",
+        help="Plannotator binary verification policy (default: attestation)",
+    )
+    parser.add_argument(
+        "--plannotator-sha256",
+        default=None,
+        help="Expected SHA-256 when --plannotator-verification=checksum",
+    )
+    parser.add_argument(
+        "--verbose",
+        "-v",
+        action="store_true",
         help="Enable verbose logging output",
     )
 
     args = parser.parse_args()
 
+    if args.plannotator_sha256 and not _SHA256_RE.fullmatch(args.plannotator_sha256):
+        parser.error("--plannotator-sha256 must be exactly 64 hexadecimal characters")
+    if (
+        args.plannotator_verification == "checksum"
+        and args.interaction_provider in {"auto", "plannotator"}
+        and not args.plannotator_sha256
+    ):
+        parser.error("--plannotator-sha256 is required for checksum verification")
+
     if args.verbose:
         import logging
+
         logging.basicConfig(
             level=logging.DEBUG,
             format="%(asctime)s %(name)s %(levelname)s: %(message)s",
@@ -210,7 +278,16 @@ def main() -> None:
     adapter.verbose = args.verbose
 
     if args.check_only:
-        ok, msg = adapter.check_prerequisites()
+        prerequisite_config = AdapterConfig(
+            vision_path=args.vision,
+            output_dir=args.output_dir or Path.cwd(),
+            rules_path=args.rules_path or Path.cwd(),
+            interaction_provider=args.interaction_provider,
+            interaction_timeout_seconds=args.interaction_timeout,
+            plannotator_verification=args.plannotator_verification,
+            plannotator_sha256=args.plannotator_sha256,
+        )
+        ok, msg = adapter.check_prerequisites(prerequisite_config)
         print(f"{adapter.name}: {'OK' if ok else 'FAIL'} — {msg}")
         sys.exit(0 if ok else 1)
 
@@ -225,9 +302,7 @@ def main() -> None:
     if args.region is None:
         args.region = cfg_data.get("aws", {}).get("region")
     if args.scorer_model is None:
-        args.scorer_model = (
-            cfg_data.get("models", {}).get("scorer", {}).get("model_id")
-        )
+        args.scorer_model = cfg_data.get("models", {}).get("scorer", {}).get("model_id")
         if args.scorer_model is None:
             parser.error(
                 "--scorer-model is required (or set models.scorer.model_id in config YAML)"
@@ -253,9 +328,7 @@ def main() -> None:
     baseline_path = Path(args.baseline).resolve()
     slug = _rules_slug(rules_source, rules_repo, rules_ref, rules_local_path)
     output_dir = (
-        Path(args.output_dir).resolve()
-        if args.output_dir
-        else _default_output_dir(args.cli, slug)
+        Path(args.output_dir).resolve() if args.output_dir else _default_output_dir(args.cli, slug)
     )
 
     # ── Setup AIDLC rules (git clone or local copy) ─────────────────────
@@ -282,14 +355,19 @@ def main() -> None:
         region=args.region,
         scorer_model=args.scorer_model,
         model=args.model,
+        interaction_provider=args.interaction_provider,
+        interaction_timeout_seconds=args.interaction_timeout,
+        plannotator_verification=args.plannotator_verification,
+        plannotator_sha256=(args.plannotator_sha256.lower() if args.plannotator_sha256 else None),
         rules_source=rules_source,
         rules_ref=rules_ref,
         rules_repo=rules_repo,
     )
 
     if not result.success:
-        print(f"\n[FAILED] {adapter.name}: {result.error}")
-        sys.exit(1)
+        label = "BLOCKED" if eval_rc == 2 else "FAILED"
+        print(f"\n[{label}] {adapter.name}: {result.error}")
+        sys.exit(eval_rc or 1)
 
     print(f"\n[DONE] {adapter.name} evaluation complete.")
     print(f"  Output: {result.output_dir}")

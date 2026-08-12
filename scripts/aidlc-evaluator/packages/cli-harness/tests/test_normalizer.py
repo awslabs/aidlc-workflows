@@ -8,7 +8,6 @@ The normalizer only writes ``run-meta.yaml`` and ``run-metrics.yaml``.
 from pathlib import Path
 
 import yaml
-
 from cli_harness.normalizer import normalize_output
 
 
@@ -83,8 +82,9 @@ def test_normalize_with_token_usage(tmp_path: Path) -> None:
         "model": "test-model",
     }
 
-    normalize_output(workspace, output, adapter_name="test",
-                     elapsed_seconds=60, token_usage=token_usage)
+    normalize_output(
+        workspace, output, adapter_name="test", elapsed_seconds=60, token_usage=token_usage
+    )
 
     metrics = yaml.safe_load((output / "run-metrics.yaml").read_text())
     assert metrics["tokens"]["total"]["input_tokens"] == 1000
@@ -92,3 +92,15 @@ def test_normalize_with_token_usage(tmp_path: Path) -> None:
     assert metrics["tokens"]["per_agent"]["executor"]["total_tokens"] == 1500
     assert metrics["handoff_patterns"]["per_agent"]["executor"]["turn_count"] == 5
     assert metrics["model_params"]["executor"]["model_id"] == "test-model"
+
+
+def test_normalize_records_real_incomplete_status(tmp_path: Path) -> None:
+    """normalize_output should persist the adapter's real run status."""
+    output = tmp_path / "output"
+    workspace = output / "workspace"
+    workspace.mkdir(parents=True)
+
+    normalize_output(workspace, output, adapter_name="test", status="incomplete")
+
+    meta = yaml.safe_load((output / "run-meta.yaml").read_text())
+    assert meta["status"] == "incomplete"

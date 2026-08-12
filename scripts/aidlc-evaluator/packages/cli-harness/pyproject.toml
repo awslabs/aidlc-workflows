@@ -4,8 +4,12 @@ version = "0.1.0"
 description = "CLI-based harness for testing AIDLC workflows via kiro-cli"
 requires-python = ">=3.13"
 dependencies = [
+    "mcp==1.23.3",
     "pyyaml>=6.0",
 ]
+
+[project.scripts]
+aidlc-plannotator-mcp = "cli_harness.mcp_server:main"
 
 [project.optional-dependencies]
 dev = [

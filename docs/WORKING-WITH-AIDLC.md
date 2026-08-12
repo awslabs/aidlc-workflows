@@ -46,15 +46,17 @@ These patterns let you think out loud with the AI, evaluate options, and challen
 
 ### The Question → Doc → Approval Flow
 
-AIDLC never asks clarifying questions inline in the chat. It writes questions into a markdown file and waits for you to fill in your answers there. This keeps a durable record of every decision and makes it easy for the whole team to contribute.
+AIDLC never asks clarifying questions inline in the chat. It writes questions into a markdown file so every decision has a durable record and the whole team can contribute.
+
+In a Kiro CLI workspace with the Plannotator MCP integration, question and approval gates open automatically. Complete the one-time setup in [`aidlc-rules/KIRO_PLANNOTATOR_SETUP.md`](../aidlc-rules/KIRO_PLANNOTATOR_SETUP.md).
 
 **Step 1 — AIDLC creates a question file**
 
-The AI creates a file like `aidlc-docs/inception/requirements/requirement-verification-questions.md` and stops. It will not proceed until you answer.
+The AI creates a file like `aidlc-docs/inception/requirements/requirement-verification-questions.md`, validates it, and invokes the gate for that exact path.
 
-**Step 2 — You fill in your answers**
+**Step 2 — Plannotator opens the interview**
 
-Open the file and fill in each `[Answer]:` tag. Questions use multiple-choice format:
+The question interaction uses interview mode with selectable controls, not the generic annotation viewer. Questions retain the standard multiple-choice format:
 
 ```markdown
 ## Question: Deployment model
@@ -73,32 +75,31 @@ X) Other (please describe after [Answer]: tag below)
 
 A few things that work well when answering:
 
-- **Add a label alongside the letter.** `C — financial summary and debt service coverage` is clearer than just `C`.
-- **Include a brief justification.** `A — design-first; generate the OpenAPI spec before writing code` confirms intent and gives the AI context it carries forward.
-- **Combine options when you mean both.** `B and C — rate limiting at both API Gateway level and application level (not D)` is unambiguous.
-- **Add a caveat when the option is almost right.** `B — migration is a separate project; however, include a one-time migration into the new data structures.`
-- **Use X freely.** If none of the options fit, X is the right choice over forcing a wrong answer.
+- **Choose exactly one listed option.** The canonical answer records its letter.
+- **Use Plannotator's single `Other...` control for a custom answer.** The adapter maps it back to the mandatory final `Other` option in the Markdown file.
+- **Put combinations or caveats in `Other...`.** Do not select a listed option and provide custom text at the same time.
+- **Keep custom text on one line.** Multiline or empty custom answers fail closed.
 
-**Step 3 — Tell the AI your answers are ready**
+**Step 3 — Submit through Plannotator**
 
-Return to the chat and say: "We have answered your clarification questions. Please re-read the file and proceed."
+Plannotator applies all submitted answers atomically to the canonical Markdown file. The AI continues only after the gate returns `answers_submitted`, then re-reads the file and checks completeness, contradictions, and ambiguities. No separate "answers are ready" chat message is required.
 
-Tip: explicitly asking the AI to *re-read* the file ensures it loads your answers from disk rather than relying on an in-memory version that may not reflect your latest edits.
+If the workspace MCP integration is unavailable, the stage remains blocked. Either repair and retry the gate or use the documented manual workflow for an environment that intentionally does not enable MCP; never interpret cancellation, timeout, or tool failure as submitted answers.
 
 **Step 4 — AIDLC validates and proceeds**
 
-The AI reads your answers, flags any remaining ambiguities, and proceeds to generate the next artifact.
+The AI flags any remaining ambiguities. If clarification is needed, it creates a new clarification artifact and opens another Plannotator interview for that exact file.
 
 > **Advanced tip**: If you have documentation that answers some of the AI's questions, you can instruct it to resolve those itself: "Analyze the rationale for each question. If a question has already been answered through the provided documentation, answer it yourself. Only ask me if it is still unclear." This reduces unnecessary back-and-forth at gate points.
 
 **Approval gates**
 
-At the end of each stage, AIDLC presents a completion message with two options:
+At the end of each stage, AIDLC presents the artifact in Plannotator approval mode:
 
-- **Request Changes** — ask for modifications before moving on
-- **Approve and Continue** — accept the output and advance
+- **Request Changes** — returns `changes_requested`, keeps the stage open, and requires a revised digest-bound review.
+- **Approve and Continue** — returns `approved` for the current artifact digest and permits advancement.
 
-Read the generated artifact before approving. Discuss with your team if needed. Only approve when you're satisfied.
+Read the generated artifact before approving and discuss it with your team if needed. Missing tools, stale content, cancellation, and unknown outcomes block progression. For strict external enforcement independent of model behavior, use the evaluator-supervised Kiro adapter described in the setup guide.
 
 ---
 

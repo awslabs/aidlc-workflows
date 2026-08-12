@@ -22,11 +22,20 @@
 • **No fixed sequences**: Stages execute in the order that makes sense for your specific task
 
 ## Your Team's Role:
-• **Answer questions** in dedicated question files using [Answer]: tags with letter choices (A, B, C, D, E)
-• **Option E available**: Choose "Other" and describe your custom response if provided options don't match
+• **Answer questions** through the automatic Plannotator interview opened for dedicated files with `[Answer]:` tags
+• **Choose Other when needed**: Select the final "Other" option and provide a bounded custom response when no option matches
+• **Review approvals** through the digest-bound Plannotator approval gate before each stage advances
 • **Work as a team** to review and approve each phase before proceeding
 • **Collectively decide** on architectural approach when needed
 • **Important**: This is a team effort - involve relevant stakeholders for each phase
+
+## Automatic Human Gates:
+• AI-DLC calls `review_aidlc_gate("questions", exact_path)` immediately after writing a pending question file
+• Question gates use Plannotator interview controls, never the generic annotation viewer
+• AI-DLC calls `review_aidlc_gate("approval", exact_path)` before recording stage approval
+• Only `answers_submitted` or the matching `approved` outcome permits the corresponding continuation
+• Blocking, cancellation, requested changes, stale content, tool absence, and unknown outcomes keep the stage open
+• Workspace MCP is the normal Kiro path; the evaluator supervisor remains the strict external-enforcement path
 
 ## AI-DLC Three-Phase Workflow:
 

@@ -15,8 +15,9 @@ def normalize_output(
     model_hint: str = "",
     elapsed_seconds: float = 0.0,
     token_usage: dict | None = None,
+    status: str = "completed",
 ) -> Path:
-    """Write run-meta.yaml and run-metrics.yaml for a completed CLI run.
+    """Write run-meta.yaml and run-metrics.yaml for a CLI run.
 
     Adapters now work directly in ``<output_dir>/workspace/`` and move
     ``aidlc-docs/`` up to ``<output_dir>/aidlc-docs/`` themselves, so this
@@ -30,10 +31,13 @@ def normalize_output(
         elapsed_seconds: Wall clock time for the run.
         token_usage: Optional dict with token counts, cost, and model breakdown
                      (from stream-json result parsing).
+        status: Real run status: ``completed``, ``incomplete``, or ``failed``.
 
     Returns:
         Path to the output_dir.
     """
+    if status not in {"completed", "incomplete", "failed"}:
+        raise ValueError(f"invalid run status: {status}")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     dst_workspace = output_dir / "workspace"
@@ -45,7 +49,7 @@ def normalize_output(
         "run_folder": str(output_dir),
         "started_at": now,
         "completed_at": now,
-        "status": "completed",
+        "status": status,
         "execution_time_ms": int(elapsed_seconds * 1000),
         "total_handoffs": 0,
         "node_history": [],
@@ -108,11 +112,13 @@ def normalize_output(
 
     # timing section — CLI adapters run as a single executor session
     # Emit one handoff entry for the whole run (not per-turn, to avoid noise)
-    handoffs = [{
-        "handoff": 1,
-        "node_id": "executor",
-        "duration_ms": duration_api_ms or duration_ms,
-    }]
+    handoffs = [
+        {
+            "handoff": 1,
+            "node_id": "executor",
+            "duration_ms": duration_api_ms or duration_ms,
+        }
+    ]
 
     timing_section: dict = {
         "total_wall_clock_ms": duration_ms,

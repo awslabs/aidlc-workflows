@@ -19,6 +19,10 @@ class AdapterConfig:
     model: str | None = None
     aws_profile: str | None = None
     timeout_seconds: int = 7200  # 2 hours max
+    interaction_provider: str = "auto"
+    interaction_timeout_seconds: int = 1800
+    plannotator_verification: str = "attestation"
+    plannotator_sha256: str | None = None
 
 
 @dataclass
@@ -45,7 +49,7 @@ class CLIAdapter(ABC):
         ...
 
     @abstractmethod
-    def check_prerequisites(self) -> tuple[bool, str]:
+    def check_prerequisites(self, config: AdapterConfig | None = None) -> tuple[bool, str]:
         """Verify the CLI tool is installed, configured, and accessible.
 
         Returns:

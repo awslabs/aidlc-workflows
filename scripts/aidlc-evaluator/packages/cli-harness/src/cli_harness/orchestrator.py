@@ -10,8 +10,7 @@ from pathlib import Path
 import yaml
 
 from cli_harness.adapter import AdapterConfig, AdapterResult, CLIAdapter
-from cli_harness.normalizer import normalize_output, _count_workspace_files, _count_doc_files
-
+from cli_harness.normalizer import _count_doc_files, _count_workspace_files
 
 REPO_ROOT = Path(__file__).resolve().parents[4]  # packages/cli-harness/src/cli_harness -> repo root
 
@@ -118,6 +117,10 @@ def run_cli_evaluation(
     prompt_template: str | None = None,
     model: str | None = None,
     timeout_seconds: int = 7200,
+    interaction_provider: str = "auto",
+    interaction_timeout_seconds: int = 1800,
+    plannotator_verification: str = "attestation",
+    plannotator_sha256: str | None = None,
     rules_source: str = "git",
     rules_ref: str = "main",
     rules_repo: str = "https://github.com/awslabs/aidlc-workflows.git",
@@ -133,8 +136,22 @@ def run_cli_evaluation(
     Returns:
         (adapter_result, eval_exit_code)
     """
-    # 1. Check prerequisites
-    ok, msg = adapter.check_prerequisites()
+    # 1. Build validated adapter configuration and check prerequisites
+    config = AdapterConfig(
+        vision_path=vision_path,
+        tech_env_path=tech_env_path,
+        rules_path=rules_path,
+        output_dir=output_dir,
+        prompt_template=prompt_template,
+        model=model,
+        aws_profile=profile,
+        timeout_seconds=timeout_seconds,
+        interaction_provider=interaction_provider,
+        interaction_timeout_seconds=interaction_timeout_seconds,
+        plannotator_verification=plannotator_verification,
+        plannotator_sha256=plannotator_sha256,
+    )
+    ok, msg = adapter.check_prerequisites(config)
     if not ok:
         print(f"[ERROR] {adapter.name} prerequisites not met: {msg}", file=sys.stderr)
         return AdapterResult(
@@ -146,38 +163,31 @@ def run_cli_evaluation(
     print(f"[OK] {adapter.name} prerequisites met: {msg}")
 
     # 2. Run the adapter
-    config = AdapterConfig(
-        vision_path=vision_path,
-        tech_env_path=tech_env_path,
-        rules_path=rules_path,
-        output_dir=output_dir,
-        prompt_template=prompt_template,
-        model=model,
-        aws_profile=profile,
-        timeout_seconds=timeout_seconds,
-    )
 
     print(f"\nRunning {adapter.name} adapter...")
     result = adapter.run(config)
+    run_status = result.extra.get("run_status", "completed" if result.success else "failed")
 
-    if not result.success:
-        print(f"[FAILED] {adapter.name}: {result.error}", file=sys.stderr)
-        return result, 1
+    # 3. Normalize available output even when the run is incomplete, but never score it.
+    if output_dir.exists():
+        _normalize_run_folder(
+            output_dir,
+            vision_path=vision_path,
+            tech_env_path=tech_env_path,
+            adapter_name=adapter.name,
+            profile=profile,
+            region=region,
+            rules_source=rules_source,
+            rules_ref=rules_ref,
+            rules_repo=rules_repo,
+        )
+
+    if not result.success or run_status != "completed":
+        label = "BLOCKED" if run_status == "incomplete" else "FAILED"
+        print(f"[{label}] {adapter.name}: {result.error or run_status}", file=sys.stderr)
+        return result, 2 if run_status == "incomplete" else 1
 
     print(f"[OK] {adapter.name} completed in {result.elapsed_seconds:.0f}s")
-
-    # 3. Normalize run folder layout to match the execution pipeline
-    _normalize_run_folder(
-        output_dir,
-        vision_path=vision_path,
-        tech_env_path=tech_env_path,
-        adapter_name=adapter.name,
-        profile=profile,
-        region=region,
-        rules_source=rules_source,
-        rules_ref=rules_ref,
-        rules_repo=rules_repo,
-    )
 
     # 4. Verify aidlc-docs were produced
     aidlc_docs = result.aidlc_docs_dir or output_dir / "aidlc-docs"
@@ -187,19 +197,26 @@ def run_cli_evaluation(
         result.error = "No aidlc-docs produced"
         return result, 1
 
-    doc_files = [f for f in aidlc_docs.rglob("*.md")
-                 if f.name not in ("aidlc-state.md", "audit.md")]
+    doc_files = [
+        f for f in aidlc_docs.rglob("*.md") if f.name not in ("aidlc-state.md", "audit.md")
+    ]
     if not doc_files:
         print("[WARN] aidlc-docs exists but contains no substantive documents")
 
     # 5. Run evaluation pipeline (stages 2-6)
     eval_cmd = [
-        sys.executable, str(REPO_ROOT / "run_evaluation.py"),
-        "--evaluate-only", str(aidlc_docs),
-        "--golden", str(golden_docs),
-        "--results", str(output_dir / "qualitative-comparison.yaml"),
-        "--scorer-model", scorer_model,
-        "--report-format", report_format,
+        sys.executable,
+        str(REPO_ROOT / "run_evaluation.py"),
+        "--evaluate-only",
+        str(aidlc_docs),
+        "--golden",
+        str(golden_docs),
+        "--results",
+        str(output_dir / "qualitative-comparison.yaml"),
+        "--scorer-model",
+        scorer_model,
+        "--report-format",
+        report_format,
     ]
     if profile:
         eval_cmd += ["--profile", profile]

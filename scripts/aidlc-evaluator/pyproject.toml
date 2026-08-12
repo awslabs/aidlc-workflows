@@ -47,6 +47,7 @@ dev = [
     "ruff>=0.15.16",
     "bandit>=1.9.4",
     "semgrep>=1.165.0",
+    "hypothesis==6.165.3",
 ]
 
 [tool.ruff]
@@ -63,7 +64,7 @@ ignore = []
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["packages/cli-harness/src"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-collect_ignore_glob = ["**/src/**"]

@@ -299,7 +299,61 @@ uv run python run.py cli --cli kiro-cli \
 uv run python run.py cli --cli claude-code --check-only
 ```
 
-Output is written to `runs/<cli-name>-<timestamp>-<uuid>/`. The CLI harness runs the adapter, then invokes `scripts/run_evaluation.py --evaluate-only` for scoring (stages 2–6).
+Output is written to `runs/<cli-name>-<timestamp>-<uuid>/`. The CLI harness runs the adapter, then invokes `scripts/run_evaluation.py --evaluate-only` for scoring (stages 2–6). Incomplete or blocked runs retain their artifacts with `status: incomplete` and are not scored.
+
+### Workspace MCP gates in normal Kiro v3 chats
+
+Normal `kiro-cli chat --v3` sessions can open Plannotator without the evaluator wrapper by registering the `aidlc-plannotator-mcp` console entry point in workspace MCP configuration. The complete setup, provenance policies, nested-project behavior, and recovery procedure are documented in [`../../aidlc-rules/KIRO_PLANNOTATOR_SETUP.md`](../../aidlc-rules/KIRO_PLANNOTATOR_SETUP.md).
+
+Run the MCP server directly to inspect its trusted launch options:
+
+```bash
+uv run --project scripts/aidlc-evaluator --package aidlc-cli-harness \
+    aidlc-plannotator-mcp --help
+```
+
+Check MCP startup from the repository root without opening a browser:
+
+```bash
+kiro-cli chat --v3 --require-mcp-startup --no-interactive \
+    "Respond with exactly MCP startup ok. Do not call tools."
+```
+
+Use an interactive `kiro-cli chat --v3 --require-mcp-startup` session for a real question or approval gate. The workspace rules call `review_aidlc_gate` with an explicit relative artifact path. Questions open `setup-goal interview` controls; approvals open annotation gate mode. The operation fails closed unless it returns the legal typed outcome for the current digest.
+
+Workspace MCP plus steering is not equivalent to an external supervisor if the model omits the tool call. Use the evaluator-supervised mode below when enforcement must be independent of model behavior.
+
+### Evaluator-supervised Kiro CLI gates
+
+Kiro CLI no longer auto-approves AI-DLC pauses. It detects unanswered `[Answer]:` fields before approval gates, presents the canonical Markdown through the configured provider, and resumes only after a typed decision tied to the reviewed artifact's SHA-256 digest.
+
+```bash
+# Prefer verified Plannotator and fall back to an explicit terminal decision
+uv run python run.py cli --cli kiro-cli \
+    --interaction-provider auto \
+    --interaction-timeout 1800 \
+    --plannotator-verification attestation
+
+# Fail closed unless this exact Plannotator binary is present
+uv run python run.py cli --cli kiro-cli \
+    --interaction-provider plannotator \
+    --plannotator-verification checksum \
+    --plannotator-sha256 <64-hex-character-sha256>
+
+# Do not launch a browser; require explicit terminal interaction
+uv run python run.py cli --cli kiro-cli --interaction-provider manual
+```
+
+Provider modes:
+
+- `auto` verifies Plannotator first and uses the manual provider when verification, startup, timeout, cancellation, or structured output fails.
+- `plannotator` requires successful provenance verification and fails closed when the binary cannot be trusted.
+- `manual` displays the artifact path and requires an explicit `submitted`, `approve`, `changes`, or `cancel` response. EOF and cancellation never approve.
+- `none` disables interaction and leaves the run incomplete at the first gate; it never restores legacy auto-approval.
+
+The default `attestation` policy runs `gh attestation verify <resolved-binary> --repo backnotprop/plannotator`. Use `checksum` with `--plannotator-sha256` in environments without GitHub access. Run metadata records only provider decisions, relative artifact paths, digests, verified version/digest, and hashed feedback metadata; raw answers, raw feedback, encoded feedback, and absolute executable paths are not copied into `AdapterResult.extra`.
+
+When Plannotator returns annotations, the harness sends them to Kiro inside a clearly delimited untrusted-data envelope and keeps the stage open. A modified artifact receives a new digest and must be presented again. Build and Test is complete only when `aidlc-docs/aidlc-state.md` contains a checked Build and Test entry and no interaction remains pending.
 
 ## IDE Evaluation
 

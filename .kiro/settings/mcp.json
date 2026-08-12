@@ -1,0 +1,25 @@
+{
+  "mcpServers": {
+    "aidlc-plannotator-gate": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--project",
+        "scripts/aidlc-evaluator",
+        "--package",
+        "aidlc-cli-harness",
+        "aidlc-plannotator-mcp",
+        "--workspace",
+        ".",
+        "--verification",
+        "attestation",
+        "--timeout",
+        "1800"
+      ],
+      "disabled": false,
+      "autoApprove": [
+        "review_aidlc_gate"
+      ]
+    }
+  }
+}

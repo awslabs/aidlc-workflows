@@ -166,23 +166,19 @@ C) Maybe
 Create aidlc-docs/{phase-name}-questions.md with all questions
 ```
 
-#### Step 2: Inform User
-```
-"I've created {phase-name}-questions.md with [X] questions. 
-Please answer each question by filling in the letter choice after the [Answer]: tag. 
-If none of the options match your needs, choose the last option (Other) and describe your preference. Let me know when you're done."
-```
+#### Step 2: Invoke the Automatic Question Gate
 
-#### Step 3: Wait for Confirmation
-Wait for user to say "done", "completed", "finished", or similar.
+Immediately call `review_aidlc_gate` with `interaction_type="questions"` and the exact workspace-relative path just written. Do not choose a file by recency and do not use generic annotation mode.
 
-#### Step 4: Read and Analyze
-```
-Read aidlc-docs/{phase-name}-questions.md
-Extract all answers
-Validate completeness
-Proceed with analysis
-```
+Continue only when the response outcome is `answers_submitted` with `blocking=false`. For every blocking, unavailable, cancelled, stale, mismatched, or unknown response, stop and report the safe reason code without treating the interaction as answered.
+
+#### Step 3: Re-read and Validate
+
+Read the canonical question file after a successful gate, extract all answers, validate completeness and option/custom-answer rules, then perform contradiction and ambiguity analysis. The file—not MCP output—is the durable source of truth.
+
+#### Step 4: Compatibility Fallback
+
+If `review_aidlc_gate` is not installed in the current non-Kiro environment, inform the user that manual completion is required and wait for explicit confirmation. Never infer answers or approval from tool absence. For strict external enforcement, use the evaluator supervisor described in `common/plannotator-gates.md`.
 
 ### Error Handling
 
@@ -276,9 +272,9 @@ D) [Clear option 4]
 
 1. **Detect**: Analyze all responses for contradictions/ambiguities
 2. **Create**: Generate clarification question file if issues found
-3. **Inform**: Tell user about the issues and clarification file
-4. **Wait**: Do not proceed until user provides clarifications
-5. **Re-validate**: After clarifications, check again for consistency
+3. **Invoke**: Immediately call `review_aidlc_gate("questions", exact_clarification_path)`
+4. **Re-read**: Continue only after `answers_submitted`; read the canonical file again
+5. **Re-validate**: Check clarifications for completeness and consistency
 6. **Proceed**: Only move forward when all contradictions are resolved
 
 #### Example User Message
@@ -289,7 +285,7 @@ D) [Clear option 4]
 2. Low risk vs. breaking changes (Q7 vs Q4)
 
 I've created classification-clarification-questions.md with 2 questions to resolve these.
-Please answer these clarifying questions before I can proceed with classification."
+I'm opening the Plannotator interview now. Classification remains blocked unless the gate returns `answers_submitted` and the answers pass re-validation."
 ```
 
 ### Best Practices
@@ -358,8 +354,8 @@ E) Other (please describe after [Answer]: tag below)
 - ✅ **Always include "Other" as the LAST option (MANDATORY)**
 - ✅ Only include meaningful options - don't make up options to fill slots
 - ✅ Always use [Answer]: tags
-- ✅ Always wait for user completion
-- ✅ Always validate responses for contradictions
+- ✅ Always invoke the automatic question gate with the exact artifact path
+- ✅ Always re-read and validate the canonical answers after `answers_submitted`
 - ✅ Always create clarification files if needed
 - ✅ Always resolve contradictions before proceeding
 - ❌ Never ask questions in chat
