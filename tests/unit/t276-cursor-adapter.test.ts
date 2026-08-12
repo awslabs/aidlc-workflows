@@ -375,7 +375,7 @@ describe("t276 cursor adapter payload conversion", () => {
     clearLedger(proj);
 
     const parent = runAdapter(proj, "guards", payload("preToolUseTask", proj));
-    expect(parent.code).toBe(0);
+    expectAllowJson(parent);
     const [ledger] = ledgerFilesFor(proj);
     const before = readFileSync(ledger, "utf-8");
 
@@ -728,7 +728,7 @@ describe("t276 cursor adapter payload conversion", () => {
         tool_input: { file_path: join(proj, "obsolete.md") },
       }),
     );
-    expect(r.code).toBe(0);
+    expectAllowJson(r);
     const forwarded = JSON.parse(readFileSync(captureFile, "utf-8")) as {
       tool_name?: string;
     };
@@ -776,7 +776,7 @@ describe("t276 cursor adapter payload conversion", () => {
         tool_input: { file_path: join(proj, "README.md") },
       }),
     );
-    expect(r.code).toBe(0);
+    expectAllowJson(r);
     expect(Date.now() - statSync(record).mtimeMs).toBeLessThan(60 * 1000);
   });
 
@@ -809,7 +809,7 @@ describe("t276 cursor adapter payload conversion", () => {
         },
       }),
     );
-    expect(developer.code).toBe(0);
+    expectAllowJson(developer);
     expect(ledgerFilesFor(proj)).toHaveLength(1);
 
     // Cursor emits no postToolUse for the developer Task. The parent's next
@@ -823,7 +823,7 @@ describe("t276 cursor adapter payload conversion", () => {
         tool_use_id: "review-tool-use",
       }),
     );
-    expect(reviewer.code).toBe(0);
+    expectAllowJson(reviewer);
     expect(ledgerFilesFor(proj)).toHaveLength(1);
     expect(readAllAuditShards(proj)).toContain("SUBAGENT_COMPLETED");
     expect(readAllAuditShards(proj)).toContain("aidlc-developer-agent");
