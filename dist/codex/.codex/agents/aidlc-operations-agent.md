@@ -9,7 +9,7 @@ description: >
   Leads Observability Setup, Incident Response, and Feedback & Optimization stages.
   Supports Performance Validation.
 disallowedTools: Task
-model: openai.gpt-5.4
+model: openai.gpt-5.6-terra
 effort: medium
 ---
 

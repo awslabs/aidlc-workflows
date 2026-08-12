@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.68] - 2026-08-13
+
+Codex balanced and templated agents now use a supported model on Amazon Bedrock. **Upgrade:** re-copy `dist/codex/` into the project.
+
+* Codex tier projections now pin `openai.gpt-5.6-terra` for balanced and templated agents.
+* Codex onboarding and harness documentation now describe the updated model pin.
+
 ## [2.5.67] - 2026-08-12
 
 Stage-major Construction design can now run dependency-safe per-Unit waves from an engine-emitted directive, with current lifecycle, review-class, and crash-recovery contracts preserved. The engine resolves each wave from one healed Bolt-DAG snapshot and keeps the batch active until every applicable Unit has build evidence, paired terminal review evidence when enabled, crash-safe diary fan-in, and a `UNIT_COMPLETED` receipt. **Upgrade:** re-copy `dist/<harness>/` into your project and start a fresh `/aidlc` turn; an in-flight pre-upgrade steering continuation token intentionally fails closed and must be restarted with `next`.

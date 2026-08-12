@@ -94,8 +94,8 @@ The projection per harness (`core/tools/aidlc-tiers.ts` is the single source of 
 | Tier | Claude Code (.md frontmatter) | Codex CLI (.toml) | Kiro CLI/IDE (agent JSON `"model"`, CLI / `.md` frontmatter `model:`, IDE) | Kiro cli.json `chat.modelDefaults` | opencode (.md frontmatter) | Copilot (.md frontmatter) | Cursor (.md frontmatter) |
 |------|-------------------------------|-------------------|--------------------------------------|-------------------------------------|-----------------------------|-----------------------------|--------------------------|
 | `judgment` | `model: inherit`, no `effort:` line | no `model`/`model_reasoning_effort` keys (config.toml session defaults apply) | field OMITTED (schema fallback: the user's default model) | no tier entry | no `model:`/`variant:` keys (opencode.json session defaults apply) | omitted (inherits session model) | `model:` OMITTED (inherits the session model) |
-| `balanced` | `model: sonnet`, no `effort:` line | `model = "openai.gpt-5.4"`, no effort key | field OMITTED (see below) | no tier entry | `model: amazon-bedrock/global.anthropic.claude-sonnet-4-6`, no variant key | omitted (inherits session model) | `model:` OMITTED (see below) |
-| `templated` | `model: sonnet`, `effort: medium` | `model = "openai.gpt-5.4"`, `model_reasoning_effort = "medium"` | field OMITTED (see below) | no tier entry | same model, `variant: medium` | omitted (inherits session model) | `model:` OMITTED (see below) |
+| `balanced` | `model: sonnet`, no `effort:` line | `model = "openai.gpt-5.6-terra"`, no effort key | field OMITTED (see below) | no tier entry | `model: amazon-bedrock/global.anthropic.claude-sonnet-4-6`, no variant key | omitted (inherits session model) | `model:` OMITTED (see below) |
+| `templated` | `model: sonnet`, `effort: medium` | `model = "openai.gpt-5.6-terra"`, `model_reasoning_effort = "medium"` | field OMITTED (see below) | no tier entry | same model, `variant: medium` | omitted (inherits session model) | `model:` OMITTED (see below) |
 
 Key facts behind the table:
 

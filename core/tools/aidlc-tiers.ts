@@ -133,7 +133,7 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
     // of an xhigh-inheriting one with no verdict/finding quality loss. A
     // session pinned to xhigh was silently doubling every review's cost.
     claude: { model: "sonnet", effort: "medium" },
-    codex: { model: "openai.gpt-5.4", effort: "medium" },
+    codex: { model: "openai.gpt-5.6-terra", effort: "medium" },
     cursor: { model: null },
     kiro: { model: null },
     opencode: { model: "amazon-bedrock/global.anthropic.claude-sonnet-4-6", variant: "medium" },
@@ -143,7 +143,7 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
     // The one deliberate downgrade: a smaller model at reduced effort for
     // pattern-following output.
     claude: { model: "sonnet", effort: "medium" },
-    codex: { model: "openai.gpt-5.4", effort: "medium" },
+    codex: { model: "openai.gpt-5.6-terra", effort: "medium" },
     kiro: { model: null },
     opencode: { model: "amazon-bedrock/global.anthropic.claude-sonnet-4-6", variant: "medium" },
     copilot: { model: null },
