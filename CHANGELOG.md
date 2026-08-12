@@ -1,6 +1,16 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.67] - 2026-08-12
+
+Stage-major Construction design can now run dependency-safe per-Unit waves from an engine-emitted directive, with current lifecycle, review-class, and crash-recovery contracts preserved. The engine resolves each wave from one healed Bolt-DAG snapshot and keeps the batch active until every applicable Unit has build evidence, paired terminal review evidence when enabled, crash-safe diary fan-in, and a `UNIT_COMPLETED` receipt. **Upgrade:** re-copy `dist/<harness>/` into your project and start a fresh `/aidlc` turn; an in-flight pre-upgrade steering continuation token intentionally fails closed and must be restarted with `next`.
+
+* Eligible `run-stage` directives gain optional `directive.wave` entries with resolved Unit kind, present/absent consumes, outputs, kind-applicable `required_produces`, `unit_memory_path`, build state, completion state, and review progress (`outstanding`, `retry-required`, `repair-required`, or terminal).
+* Wave builders remain confined to the four inline design stages on the default stage-major walk. Code Generation, unit-major iteration, and plugin-contributed stages remain on their existing serial or swarm paths.
+* `aidlc-state.ts unit complete --wave --stage <slug> --unit <name>` verifies the live wave entry, copies new Unit diary entries verbatim into the parent stage diary with deterministic deduplication, binds the receipt to the final artifact fingerprint, and emits `UNIT_COMPLETED`; a crash before that transaction or a later artifact change leaves the entry open for recovery.
+* Wave review settlement uses paired `REVIEW_REQUESTED` / `REVIEW_COMPLETED` rows and the effective review class: `none` requires no review, advisory verdicts settle after one pass, adversarial NOT-READY stays open below its iteration cap, and unmatched requests resume with `--retry-pending`.
+* All seven shipped harnesses receive the same branch-before-gate contract, steering/context inheritance, kind-aware blocked-output rule, reviewer-scope serialization rule, and deterministic same-batch transport prefixing.
+
 ## [2.5.64] - 2026-08-11
 
 Composed-workflow routing is now deterministic from proposal through execution, and the affected test-runner and live-journey paths fail closed. Stock matches present exactly the grid that will run, incomplete model-produced grids cannot match a stock scope, in-flight recomposition preserves the running plan, isolated stages no longer wait on nonexistent questions, and mid-flow new work carries one typed continuation contract with a named scope. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.

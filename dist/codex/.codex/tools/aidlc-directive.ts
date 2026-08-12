@@ -91,6 +91,7 @@ export interface LoadSteeringDirective {
 
 export type WaveReviewState =
   | "outstanding"
+  | "retry-required"
   | "repair-required"
   | "READY"
   | "NOT-READY"
@@ -104,6 +105,7 @@ export interface RunStageWaveEntry {
   unit: string;
   unit_kind: string | null;
   build_required: boolean;
+  completion_required: boolean;
   review_state: WaveReviewState;
   review_iteration: number | null;
   unit_memory_path: string;
@@ -964,6 +966,7 @@ function checkOptionalWave(
     "unit",
     "unit_kind",
     "build_required",
+    "completion_required",
     "review_state",
     "review_iteration",
     "unit_memory_path",
@@ -999,15 +1002,21 @@ function checkOptionalWave(
         `${prefix}.build_required must be boolean, got ${describe(item.build_required)}`,
       );
     }
+    if (typeof item.completion_required !== "boolean") {
+      errors.push(
+        `${prefix}.completion_required must be boolean, got ${describe(item.completion_required)}`,
+      );
+    }
     if (
       item.review_state !== "outstanding" &&
+      item.review_state !== "retry-required" &&
       item.review_state !== "repair-required" &&
       item.review_state !== "READY" &&
       item.review_state !== "NOT-READY" &&
       item.review_state !== "not-required"
     ) {
       errors.push(
-        `${prefix}.review_state must be one of outstanding | repair-required | READY | NOT-READY | not-required, got ${JSON.stringify(item.review_state)}`,
+        `${prefix}.review_state must be one of outstanding | retry-required | repair-required | READY | NOT-READY | not-required, got ${JSON.stringify(item.review_state)}`,
       );
     }
     if (

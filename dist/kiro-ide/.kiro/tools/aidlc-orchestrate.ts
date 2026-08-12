@@ -105,6 +105,7 @@ import {
   checkSummaryConfirmationEvidence,
   clearActiveDirectiveMarker,
   codekbRepoName,
+  currentUnitLifecycleMode,
   errorMessage,
   filterProducesByKind,
   firstInScopeStageOfPhase,
@@ -3427,6 +3428,7 @@ type UnitLedger = {
   receipts: Set<string>;
   checkpoint: ReturnType<typeof activeUnitCheckpoint>;
   inUse: boolean;
+  mode: ReturnType<typeof currentUnitLifecycleMode>;
 };
 function unitLedgerFor(projectDir: string, slug: string): UnitLedger {
   const receipts = unitCompletedReceipts(projectDir, slug);
@@ -3435,6 +3437,7 @@ function unitLedgerFor(projectDir: string, slug: string): UnitLedger {
     receipts,
     checkpoint,
     inUse: unitLifecycleReceiptsInUse(projectDir, slug),
+    mode: currentUnitLifecycleMode(projectDir, slug),
   };
 }
 
@@ -3545,6 +3548,7 @@ function waveEntry(
   recordPrefix: string | null,
   codekbCtx: CodekbCtx,
   buildRequired: boolean,
+  completionRequired: boolean,
   reviewState: RunStageWaveEntry["review_state"],
   reviewIteration: number | null,
 ): RunStageWaveEntry {
@@ -3566,6 +3570,7 @@ function waveEntry(
     unit,
     unit_kind: unitKind,
     build_required: buildRequired,
+    completion_required: completionRequired,
     review_state: reviewState,
     review_iteration: reviewIteration,
     unit_memory_path: unitMemoryPathFor(node.slug, unit, recordPrefix),
@@ -3641,11 +3646,16 @@ function activePerUnitWave(
   recordPrefix: string | null,
   codekbCtx: CodekbCtx,
 ): ActiveWave {
-  const reviewProgress = node.reviewer
+  const reviewClass = node.reviewer
+    ? resolveReviewClass(node.review_class ?? "adversarial", scope, stateContent)
+    : "none";
+  const reviewProgress = reviewClass !== "none"
     ? freshReviewReceipts(projectDir, stateContent ?? "", node, {
         boltDag: resolution,
+        reviewClass,
       })
     : null;
+  const ledger = unitLedgerFor(projectDir, node.slug);
 
   for (let batchIndex = 0; batchIndex < resolution.batches.length; batchIndex++) {
     const batch = resolution.batches[batchIndex];
@@ -3674,21 +3684,25 @@ function activePerUnitWave(
       }
       const terminalVerdict = reviewProgress?.unitVerdicts.get(unit);
       const pendingReview = reviewProgress?.unitPending.get(unit);
-      const reviewState: RunStageWaveEntry["review_state"] = !node.reviewer
+      const reviewState: RunStageWaveEntry["review_state"] = reviewClass === "none"
         ? "not-required"
-        : terminalVerdict ??
-          (pendingReview?.repairRequired === true
-            ? "repair-required"
-            : "outstanding");
-      const reviewIteration = !node.reviewer
+        : terminalVerdict ?? pendingReview?.state ?? "outstanding";
+      const reviewIteration = reviewClass === "none"
         ? null
         : terminalVerdict
           ? (reviewProgress?.unitIterations.get(unit) ?? null)
           : (pendingReview?.iteration ?? 1);
       const buildRequired = !covered;
+      // Wave entries always settle through an explicit `unit complete --wave`
+      // receipt. This is the parallel counterpart to the serial start/complete
+      // lifecycle: the completion tool verifies this exact entry, fans its
+      // memory into the parent diary, then emits UNIT_COMPLETED atomically.
+      const completionRequired = !ledger.receipts.has(unit);
       if (
         buildRequired ||
+        completionRequired ||
         reviewState === "outstanding" ||
+        reviewState === "retry-required" ||
         reviewState === "repair-required"
       ) {
         entries.push(
@@ -3701,6 +3715,7 @@ function activePerUnitWave(
             recordPrefix,
             codekbCtx,
             buildRequired,
+            completionRequired,
             reviewState,
             reviewIteration,
           ),
@@ -3775,8 +3790,31 @@ function emitPerUnitRunStage(
       break;
   }
   const units = r.batches.flat();
+  const kinds = r.unitKinds;
+  const ledger = unitLedgerFor(projectDir, node.slug);
 
-  if (allowWave && waveEligible(node)) {
+  // The serial lifecycle owns any existing active/paused checkpoint. A fresh
+  // wave has no single active Unit; every entry settles with `complete --wave`.
+  if (ledger.checkpoint?.state === "paused") {
+    const cp = ledger.checkpoint;
+    emit(askDirective(
+      `Unit "${cp.unit}" of stage "${node.slug}" is PAUSED (unit_state: paused)` +
+        `${cp.reason ? ` — reason: ${cp.reason}` : ""}.` +
+        `${cp.nextAction ? ` Recorded next action: ${cp.nextAction}.` : ""} ` +
+        `Do not start other work. Resume this unit (bun ${harnessDir()}/tools/aidlc-state.ts unit resume ` +
+        `--stage ${node.slug} --unit ${cp.unit}) and continue from the recorded next action, or ask ` +
+        "the human how to proceed. STOP until the unit is explicitly resumed.",
+    ));
+    return;
+  }
+
+  if (
+    allowWave &&
+    ledger.checkpoint === null &&
+    ledger.mode !== "serial" &&
+    ledger.mode !== "mixed" &&
+    waveEligible(node)
+  ) {
     const wave = activePerUnitWave(
       projectDir,
       node,
@@ -3815,31 +3853,6 @@ function emitPerUnitRunStage(
     }
     // All applicable units have settled build + review evidence. Fall through
     // to the stock settle branch below, which presents the one stage gate.
-  }
-
-  // The resolution carries batches + kinds from one graph snapshot. null =
-  // no kinds known = every unit on the full matrix.
-  const kinds = r.unitKinds;
-  const ledger = unitLedgerFor(projectDir, node.slug);
-
-  // PAUSED-UNIT HARD STOP (issue: a paused unit routed back as ordinary stage
-  // work with no conductor stop). A unit paused via `aidlc-state.ts unit pause`
-  // carries an explicit reason and next action; the engine surfaces exactly
-  // that checkpoint and STOPS — the conductor must not resume work until an
-  // explicit `unit resume` (a deliberate move, usually after the human weighs
-  // in on the pause reason). Ask, don't run: the ask directive is terminal for
-  // the turn, exactly like the resume-choice ask.
-  if (ledger.checkpoint?.state === "paused") {
-    const cp = ledger.checkpoint;
-    emit(askDirective(
-      `Unit "${cp.unit}" of stage "${node.slug}" is PAUSED (unit_state: paused)` +
-        `${cp.reason ? ` — reason: ${cp.reason}` : ""}.` +
-        `${cp.nextAction ? ` Recorded next action: ${cp.nextAction}.` : ""} ` +
-        `Do not start other work. Resume this unit (bun ${harnessDir()}/tools/aidlc-state.ts unit resume ` +
-        `--stage ${node.slug} --unit ${cp.unit}) and continue from the recorded next action, or ask ` +
-        "the human how to proceed. STOP until the unit is explicitly resumed.",
-    ));
-    return;
   }
 
   const pick = nextUncoveredUnit(

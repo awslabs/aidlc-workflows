@@ -64,6 +64,7 @@ resetAidlcEnv();
 const BUN = process.execPath; // the bun running this test
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
+const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 
 // The record-relative prefix every resolved per-unit path is rooted at, the
 // active intent's record dir (relativeRecordDir over the seeded default intent).
@@ -104,6 +105,28 @@ function logReviewReady(proj: string, stage: string, unit: string): void {
     if ((res.status ?? -1) !== 0) {
       throw new Error(`review log failed: ${res.stdout ?? ""}${res.stderr ?? ""}`);
     }
+  }
+}
+
+function completeWave(proj: string, stage: string, unit: string): void {
+  const result = spawnSync(
+    BUN,
+    [
+      STATE,
+      "unit",
+      "complete",
+      "--wave",
+      "--stage",
+      stage,
+      "--unit",
+      unit,
+      "--project-dir",
+      proj,
+    ],
+    { encoding: "utf-8" },
+  );
+  if ((result.status ?? -1) !== 0) {
+    throw new Error(`wave completion failed: ${result.stdout}${result.stderr}`);
   }
 }
 
@@ -302,6 +325,7 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     seedBoltDag(proj, ["alpha", "beta"]);
     coverUnit(proj, "alpha", "functional-design", FD_REQUIRED_PRODUCES);
     logReviewReady(proj, "functional-design", "alpha");
+    completeWave(proj, "functional-design", "alpha");
     const d = runNext(proj);
     expect(d.unit).toBe("beta");
     expect(d.gate).toBe(false);
@@ -419,6 +443,8 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     coverUnit(proj, "beta", "functional-design", FD_REQUIRED_PRODUCES);
     logReviewReady(proj, "functional-design", "alpha");
     logReviewReady(proj, "functional-design", "beta");
+    completeWave(proj, "functional-design", "alpha");
+    completeWave(proj, "functional-design", "beta");
     const d = runReport(proj, [
       "--stage",
       "functional-design",
@@ -435,6 +461,8 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     coverUnit(proj, "beta", "functional-design", FD_REQUIRED_PRODUCES);
     logReviewReady(proj, "functional-design", "alpha");
     logReviewReady(proj, "functional-design", "beta");
+    completeWave(proj, "functional-design", "alpha");
+    completeWave(proj, "functional-design", "beta");
     const d = runNext(proj);
     expect(d.kind).toBe("run-stage");
     expect(d.unit).toBe("beta");

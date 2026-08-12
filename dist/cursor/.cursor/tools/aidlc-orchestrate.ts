@@ -93,6 +93,8 @@ import {
   type ParkedDirective,
   type PrintDirective,
   type RunStageDirective,
+  type RunStageWave,
+  type RunStageWaveEntry,
   validateDirective,
 } from "./aidlc-directive.ts";
 import {
@@ -103,9 +105,11 @@ import {
   checkSummaryConfirmationEvidence,
   clearActiveDirectiveMarker,
   codekbRepoName,
+  currentUnitLifecycleMode,
   errorMessage,
   filterProducesByKind,
   firstInScopeStageOfPhase,
+  freshReviewReceipts,
   getField,
   intentRepos,
   isPerUnitStage,
@@ -992,6 +996,15 @@ function memoryPathFor(phase: string, slug: string, recordPrefix: string | null)
   return `${prefix}/${phase}/${slug}/memory.md`;
 }
 
+function unitMemoryPathFor(
+  slug: string,
+  unit: string,
+  recordPrefix: string | null,
+): string {
+  const prefix = recordPrefix ?? relativeSpaceRecordPrefix();
+  return `${prefix}/construction/${unit}/${slug}/memory.md`;
+}
+
 // Derive the stage file path from phase + slug (the shipped layout:
 // .claude/aidlc-common/stages/<phase>/<slug>.md — relocated to the shared
 // aidlc-common/ spine, a peer of skills/). Matches the engine design's example
@@ -1064,6 +1077,7 @@ type SteeringTokenPayload = {
   n: string | null | undefined;
   x: boolean;
   p: boolean;
+  w: boolean;
   h: string | null;
 };
 
@@ -1467,6 +1481,7 @@ function resolveConsumes(
   unit: string,
   recordPrefix: string | null,
   codekbCtx?: CodekbCtx,
+  unitKind: string | null = null,
 ): ResolvedConsume[] {
   const resolved: ResolvedConsume[] = [];
   for (const consume of consumes) {
@@ -1474,6 +1489,18 @@ function resolveConsumes(
       consume.conditional_on &&
       projectType &&
       consume.conditional_on !== projectType
+    ) {
+      continue;
+    }
+    const producer = producersOf(consume.artifact)[0];
+    if (
+      producer &&
+      isPerUnit(producer) &&
+      filterProducesByKind(
+        producer.produces_kinds,
+        [consume.artifact],
+        unitKind,
+      ).length === 0
     ) {
       continue;
     }
@@ -1859,7 +1886,13 @@ function buildRunStageDirective(
   forcePersona = false,
 ): RunStageDirective {
   const resolvedConsumes = resolveConsumes(
-    node.consumes ?? [], node, projectType, unit, recordPrefix, codekbCtx,
+    node.consumes ?? [],
+    node,
+    projectType,
+    unit,
+    recordPrefix,
+    codekbCtx,
+    unitKind,
   );
   const { present, absent } = splitConsumesByPresence(resolvedConsumes, scope, codekbCtx);
   const inlineContext = inlineContextRoster(node, codekbCtx);
@@ -2217,6 +2250,7 @@ function decodeSteeringToken(
       (p.n !== undefined && p.n !== null && typeof p.n !== "string") ||
       typeof p.x !== "boolean" ||
       typeof p.p !== "boolean" ||
+      typeof p.w !== "boolean" ||
       (p.h !== null && typeof p.h !== "string")
     ) {
       return null;
@@ -2250,6 +2284,7 @@ function steeringTokenPayload(
     n: directive.next_stage,
     x: directive.single === true,
     p: directive.unit !== undefined,
+    w: directive.wave !== undefined,
     h: route.stateHash,
   };
 }
@@ -3393,6 +3428,7 @@ type UnitLedger = {
   receipts: Set<string>;
   checkpoint: ReturnType<typeof activeUnitCheckpoint>;
   inUse: boolean;
+  mode: ReturnType<typeof currentUnitLifecycleMode>;
 };
 function unitLedgerFor(projectDir: string, slug: string): UnitLedger {
   const receipts = unitCompletedReceipts(projectDir, slug);
@@ -3401,6 +3437,7 @@ function unitLedgerFor(projectDir: string, slug: string): UnitLedger {
     receipts,
     checkpoint,
     inUse: unitLifecycleReceiptsInUse(projectDir, slug),
+    mode: currentUnitLifecycleMode(projectDir, slug),
   };
 }
 
@@ -3480,6 +3517,231 @@ function nextUncoveredUnit(
   return { unit: uncovered[0], uncovered };
 }
 
+const WAVE_ELIGIBLE_STAGES: ReadonlySet<string> = new Set([
+  "functional-design",
+  "nfr-requirements",
+  "nfr-design",
+  "infrastructure-design",
+]);
+
+function waveEligible(node: GraphStage): boolean {
+  return (
+    WAVE_ELIGIBLE_STAGES.has(node.slug) &&
+    node.phase === "construction" &&
+    node.for_each === "unit-of-work" &&
+    node.mode === "inline" &&
+    node.workspace_requires !== true
+  );
+}
+
+type ActiveWave =
+  | { state: "active"; unit: string; wave: RunStageWave }
+  | { state: "settled" }
+  | { state: "error"; message: string };
+
+function waveEntry(
+  node: GraphStage,
+  unit: string,
+  unitKind: string | null,
+  projectType: "brownfield" | "greenfield" | null,
+  scope: string,
+  recordPrefix: string | null,
+  codekbCtx: CodekbCtx,
+  buildRequired: boolean,
+  completionRequired: boolean,
+  reviewState: RunStageWaveEntry["review_state"],
+  reviewIteration: number | null,
+): RunStageWaveEntry {
+  const resolvedConsumes = resolveConsumes(
+    node.consumes ?? [],
+    node,
+    projectType,
+    unit,
+    recordPrefix,
+    codekbCtx,
+    unitKind,
+  );
+  const { present, absent } = splitConsumesByPresence(
+    resolvedConsumes,
+    scope,
+    codekbCtx,
+  );
+  const entry: RunStageWaveEntry = {
+    unit,
+    unit_kind: unitKind,
+    build_required: buildRequired,
+    completion_required: completionRequired,
+    review_state: reviewState,
+    review_iteration: reviewIteration,
+    unit_memory_path: unitMemoryPathFor(node.slug, unit, recordPrefix),
+    consumes: present,
+    consumes_absent: absent,
+    produces: resolveProduces(
+      node,
+      unit,
+      recordPrefix,
+      codekbCtx,
+      unitKind,
+    ),
+    required_produces: applicableProduceNames(node, unitKind, false).map(
+      (name) =>
+        resolveArtifactPath(
+          name,
+          node,
+          unit,
+          recordPrefix,
+          codekbCtx,
+        ),
+    ),
+  };
+  return entry;
+}
+
+function attachBoundedWave(
+  directive: RunStageDirective,
+  wave: RunStageWave,
+): string | null {
+  const entries: RunStageWaveEntry[] = [];
+  for (const entry of wave.entries) {
+    const candidate = {
+      batch_index: wave.batch_index,
+      entries: [...entries, entry],
+    };
+    directive.wave = candidate;
+    // Leave room for the final transport's canonical rules_in_context paths
+    // and JSON framing. A large batch degrades to deterministic same-batch
+    // prefixes across successive next calls; it never spills into a dependent
+    // batch merely to fit one directive.
+    if (
+      Buffer.byteLength(JSON.stringify(directive), "utf-8") >
+      DIRECTIVE_MAX_BYTES - 1024
+    ) {
+      break;
+    }
+    entries.push(entry);
+  }
+  if (entries.length === 0) {
+    delete directive.wave;
+    return (
+      `Cannot emit the active wave for stage "${directive.stage}" within the ` +
+      `${DIRECTIVE_MAX_BYTES}-byte directive limit. Reduce the stage's path/context ` +
+      "fan-out or process this workflow with a smaller unit batch."
+    );
+  }
+  directive.wave = { batch_index: wave.batch_index, entries };
+  return null;
+}
+
+// Resolve the first unsettled Bolt-DAG batch from one healed snapshot. A batch
+// stays active until each kind-applicable unit has both its required artifacts
+// and a fresh terminal review receipt. This is the ordering boundary that keeps
+// dependent units from consuming work whose review may still trigger revision.
+function activePerUnitWave(
+  projectDir: string,
+  node: GraphStage,
+  resolution: Extract<BoltBatchesResolution, { state: "ok" }>,
+  projectType: "brownfield" | "greenfield" | null,
+  scope: string,
+  stateContent: string | null,
+  recordPrefix: string | null,
+  codekbCtx: CodekbCtx,
+): ActiveWave {
+  const reviewClass = node.reviewer
+    ? resolveReviewClass(node.review_class ?? "adversarial", scope, stateContent)
+    : "none";
+  const reviewProgress = reviewClass !== "none"
+    ? freshReviewReceipts(projectDir, stateContent ?? "", node, {
+        boltDag: resolution,
+        reviewClass,
+      })
+    : null;
+  const ledger = unitLedgerFor(projectDir, node.slug);
+
+  for (let batchIndex = 0; batchIndex < resolution.batches.length; batchIndex++) {
+    const batch = resolution.batches[batchIndex];
+    const entries: RunStageWaveEntry[] = [];
+    let firstPendingIndex = -1;
+    for (const unit of batch) {
+      const unitKind = resolution.unitKinds?.get(unit) ?? null;
+      // Match unitCovered and the approval guard: a kind with no applicable
+      // required produce is vacuously covered and owes neither work nor review.
+      if (applicableProduceNames(node, unitKind, false).length === 0) continue;
+
+      const covered = unitCovered(
+        projectDir,
+        node,
+        unit,
+        recordPrefix,
+        codekbCtx,
+        unitKind,
+      );
+      if (covered) {
+        const confirmation = checkSummaryConfirmationEvidence(projectDir, node, {
+          stateContent,
+          unit,
+        });
+        if (!confirmation.ok) return { state: "error", message: confirmation.message };
+      }
+      const terminalVerdict = reviewProgress?.unitVerdicts.get(unit);
+      const pendingReview = reviewProgress?.unitPending.get(unit);
+      const reviewState: RunStageWaveEntry["review_state"] = reviewClass === "none"
+        ? "not-required"
+        : terminalVerdict ?? pendingReview?.state ?? "outstanding";
+      const reviewIteration = reviewClass === "none"
+        ? null
+        : terminalVerdict
+          ? (reviewProgress?.unitIterations.get(unit) ?? null)
+          : (pendingReview?.iteration ?? 1);
+      const buildRequired = !covered;
+      // Wave entries always settle through an explicit `unit complete --wave`
+      // receipt. This is the parallel counterpart to the serial start/complete
+      // lifecycle: the completion tool verifies this exact entry, fans its
+      // memory into the parent diary, then emits UNIT_COMPLETED atomically.
+      const completionRequired = !ledger.receipts.has(unit);
+      if (
+        buildRequired ||
+        completionRequired ||
+        reviewState === "outstanding" ||
+        reviewState === "retry-required" ||
+        reviewState === "repair-required"
+      ) {
+        entries.push(
+          waveEntry(
+            node,
+            unit,
+            unitKind,
+            projectType,
+            scope,
+            recordPrefix,
+            codekbCtx,
+            buildRequired,
+            completionRequired,
+            reviewState,
+            reviewIteration,
+          ),
+        );
+        if (firstPendingIndex === -1) {
+          firstPendingIndex = entries.length - 1;
+        }
+      }
+    }
+    if (firstPendingIndex !== -1) {
+      // Put the active unit first so the size-bounded prefix always contains
+      // the parent directive's unit, then retain deterministic batch order.
+      const ordered = [
+        ...entries.slice(firstPendingIndex),
+        ...entries.slice(0, firstPendingIndex),
+      ];
+      return {
+        state: "active",
+        unit: ordered[0].unit,
+        wave: { batch_index: batchIndex, entries: ordered },
+      };
+    }
+  }
+  return { state: "settled" };
+}
+
 // Emit ONE iteration of a per-unit Construction stage. The engine owns the
 // for_each loop here: it resolves the next uncovered unit, substitutes the real
 // unit name for {unit-name} in every path, and suppresses the gate for EVERY
@@ -3495,6 +3757,7 @@ function emitPerUnitRunStage(
   codekbCtx: CodekbCtx,
   projectDir: string,
   resolution?: BoltBatchesResolution,
+  allowWave = true,
 ): void {
   // GATE precedence: never iterate per-unit until the walking-skeleton gate is
   // RESOLVED. If this is the skeleton-gate stage and no stance is recorded yet,
@@ -3527,19 +3790,11 @@ function emitPerUnitRunStage(
       break;
   }
   const units = r.batches.flat();
-
-  // The resolution carries batches + kinds from one graph snapshot. null =
-  // no kinds known = every unit on the full matrix.
   const kinds = r.unitKinds;
   const ledger = unitLedgerFor(projectDir, node.slug);
 
-  // PAUSED-UNIT HARD STOP (issue: a paused unit routed back as ordinary stage
-  // work with no conductor stop). A unit paused via `aidlc-state.ts unit pause`
-  // carries an explicit reason and next action; the engine surfaces exactly
-  // that checkpoint and STOPS — the conductor must not resume work until an
-  // explicit `unit resume` (a deliberate move, usually after the human weighs
-  // in on the pause reason). Ask, don't run: the ask directive is terminal for
-  // the turn, exactly like the resume-choice ask.
+  // The serial lifecycle owns any existing active/paused checkpoint. A fresh
+  // wave has no single active Unit; every entry settles with `complete --wave`.
   if (ledger.checkpoint?.state === "paused") {
     const cp = ledger.checkpoint;
     emit(askDirective(
@@ -3551,6 +3806,53 @@ function emitPerUnitRunStage(
         "the human how to proceed. STOP until the unit is explicitly resumed.",
     ));
     return;
+  }
+
+  if (
+    allowWave &&
+    ledger.checkpoint === null &&
+    ledger.mode !== "serial" &&
+    ledger.mode !== "mixed" &&
+    waveEligible(node)
+  ) {
+    const wave = activePerUnitWave(
+      projectDir,
+      node,
+      r,
+      projectType,
+      scope,
+      stateContent,
+      recordPrefix,
+      codekbCtx,
+    );
+    if (wave.state === "error") {
+      emit(errorDirective(wave.message));
+      return;
+    }
+    if (wave.state === "active") {
+      const unitKind = r.unitKinds?.get(wave.unit) ?? null;
+      const directive = buildRunStageDirective(
+        node,
+        projectType,
+        wave.unit,
+        scope,
+        stateContent,
+        recordPrefix,
+        codekbCtx,
+        unitKind,
+      );
+      directive.gate = false;
+      directive.unit = wave.unit;
+      const waveError = attachBoundedWave(directive, wave.wave);
+      if (waveError !== null) {
+        emit(errorDirective(waveError));
+        return;
+      }
+      emit(directive);
+      return;
+    }
+    // All applicable units have settled build + review evidence. Fall through
+    // to the stock settle branch below, which presents the one stage gate.
   }
 
   const pick = nextUncoveredUnit(
@@ -3693,6 +3995,7 @@ function emitUnitMajorRunStage(
       codekbCtx,
       projectDir,
       resolution,
+      false,
     );
     return;
   }
@@ -3713,6 +4016,7 @@ function emitUnitMajorRunStage(
       codekbCtx,
       projectDir,
       resolution,
+      false,
     );
     return;
   }
@@ -3783,6 +4087,7 @@ function emitUnitMajorRunStage(
     codekbCtx,
     projectDir,
     resolution,
+    false,
   );
 }
 
@@ -5375,6 +5680,28 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
     directive.next_stage = payload.n;
   }
   if (payload.x) directive.single = true;
+  if (payload.w) {
+    const resolution = resolveBoltDag(pd);
+    if (resolution.state === "ok") {
+      const wave = activePerUnitWave(
+        pd,
+        node,
+        resolution,
+        projectTypeFrom(liveState),
+        payload.c,
+        payload.a ? liveState : null,
+        relativeRecordDir(pd),
+        codekbCtxFor(pd),
+      );
+      if (wave.state === "active" && wave.unit === payload.u) {
+        const waveError = attachBoundedWave(directive, wave.wave);
+        if (waveError !== null) {
+          emit(errorDirective(waveError));
+          return;
+        }
+      }
+    }
+  }
 
   requestedSteeringContinuation = payload;
   emit(directive);

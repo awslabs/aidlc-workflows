@@ -39,6 +39,7 @@ import {
   PHASE_NUMBERS,
   PHASES,
   parseCheckboxes,
+  parseMemoryEntries,
   parseRefsList,
   parseStateStageSuffixes,
   producesArtifactFile,
@@ -51,6 +52,7 @@ import {
   removeSlug,
   replaceSection,
   resolveBoltDag,
+  reviewArtifactFingerprint,
   resolveReviewClass,
   resolveProjectDir,
   resolveStage,
@@ -69,6 +71,7 @@ import {
   worktreePath,
   worktreeStateFilePath,
   writeStateFile,
+  writeFileAtomic,
 } from "./aidlc-lib.js";
 import { memoryDirFor } from "./aidlc-graph.ts";
 import { compiledExecutable } from "./aidlc-runtime-paths.ts";
@@ -834,7 +837,7 @@ function handleUnpark(_args: string[]): void {
 }
 
 // unit <start|pause|resume|complete> --stage <slug> --unit <name>
-//        [--reason <text>] [--next-action <text>]
+//        [--reason <text>] [--next-action <text>] [--wave]
 //
 // Unit-of-work lifecycle receipts for INLINE per-unit Construction stages
 // (for_each: unit-of-work, mode: inline). The engine's coverage walk
@@ -856,7 +859,7 @@ function handleUnit(args: string[]): void {
   const VALID_UNIT_ACTIONS = new Set(["start", "pause", "resume", "complete"]);
   if (!action || !VALID_UNIT_ACTIONS.has(action)) {
     error(
-      `Usage: aidlc-state.ts unit <start|pause|resume|complete> --stage <slug> --unit <name> [--reason <text>] [--next-action <text>]`,
+      `Usage: aidlc-state.ts unit <start|pause|resume|complete> --stage <slug> --unit <name> [--reason <text>] [--next-action <text>] [--wave]`,
     );
   }
   const rest = args.slice(1);
@@ -864,6 +867,7 @@ function handleUnit(args: string[]): void {
   const unit = getFlagValue(rest, "--unit");
   const rawReason = getFlagValue(rest, "--reason");
   const rawNextAction = getFlagValue(rest, "--next-action");
+  const waveMode = rest.includes("--wave");
   const reason = rawReason?.trim();
   const nextAction = rawNextAction?.trim();
   if (!slug) error("Missing --stage <slug>");
@@ -880,6 +884,9 @@ function handleUnit(args: string[]): void {
   if (action === "pause") {
     if (!reason) error("unit pause requires --reason <text> (why the unit stopped).");
     if (!nextAction) error("unit pause requires --next-action <text> (the exact next step on resume).");
+  }
+  if (waveMode && action !== "complete") {
+    error("unit --wave is supported only with the complete action.");
   }
 
   const pd = resolveProjectDir(projectDir);
@@ -915,7 +922,15 @@ function handleUnit(args: string[]): void {
 
     const checkpoint = activeUnitCheckpoint(pd, slug);
 
-    if (action === "start") {
+    if (waveMode) {
+      if (checkpoint) {
+        error(
+          `Refusing wave completion for unit "${unit}" of "${slug}": serial unit ` +
+            `"${checkpoint.unit}" is ${checkpoint.state}. Complete or resume that checkpoint first.`,
+        );
+      }
+      requireEngineRoutedWaveUnit(pd, slug, unit);
+    } else if (action === "start") {
       if (checkpoint && checkpoint.unit !== unit) {
         error(
           `Refusing to start unit "${unit}" for "${slug}": unit "${checkpoint.unit}" is ${checkpoint.state}` +
@@ -968,6 +983,22 @@ function handleUnit(args: string[]): void {
       }
     }
 
+    const memoryEntries =
+      action === "complete" && waveMode
+        ? fanInWaveUnitMemory(pd, slug, unit)
+        : 0;
+    const waveFingerprint =
+      action === "complete" && waveMode
+        ? reviewArtifactFingerprint(pd, stage, unit, {
+            requireRequiredArtifacts: true,
+          })
+        : null;
+    if (action === "complete" && waveMode && waveFingerprint === null) {
+      error(
+        `Refusing wave completion for unit "${unit}" of "${slug}": the final artifact fingerprint could not be computed.`,
+      );
+    }
+
     let eventType: string;
     if (action === "start") eventType = "UNIT_STARTED";
     else if (action === "pause") eventType = "UNIT_PAUSED";
@@ -981,6 +1012,13 @@ function handleUnit(args: string[]): void {
         slug,
         getField(content, "Construction Iteration")?.trim() === "unit-major",
       ),
+      ...(waveMode
+        ? {
+            Mode: "wave",
+            "Wave memory entries": String(memoryEntries),
+            "Artifact Fingerprint": waveFingerprint ?? "",
+          }
+        : {}),
     };
     if (reason) fields.Reason = reason;
     if (nextAction) fields["Next Action"] = nextAction;
@@ -1018,7 +1056,13 @@ function handleUnit(args: string[]): void {
     }
     content = setField(content, "Last Updated", timestamp);
     writeStateFile(pd, content);
-    console.log(JSON.stringify({ emitted: eventType, stage: slug, unit, timestamp }));
+    console.log(JSON.stringify({
+      emitted: eventType,
+      stage: slug,
+      unit,
+      timestamp,
+      ...(waveMode ? { wave: true, memory_entries: memoryEntries } : {}),
+    }));
   });
 }
 
@@ -1096,6 +1140,143 @@ function requireEngineRoutedUnit(pd: string, stage: string, unit: string): void 
         "Run the exact directive.stage/directive.unit pair returned by aidlc-orchestrate.ts next.",
     );
   }
+}
+
+function requireEngineRoutedWaveUnit(
+  pd: string,
+  stage: string,
+  unit: string,
+): void {
+  const executable = compiledExecutable();
+  let subargs = ["next", "--project-dir", pd];
+  let directive: unknown = null;
+  for (let attempts = 0; attempts < 1_000; attempts++) {
+    const command = executable
+      ? [executable, ...subargs]
+      : [
+          process.execPath,
+          fileURLToPath(new URL("./aidlc-orchestrate.ts", import.meta.url)),
+          ...subargs,
+        ];
+    const result = spawnSync(command[0], command.slice(1), {
+      cwd: pd,
+      encoding: "utf-8",
+      env: { ...process.env, AIDLC_PROJECT_DIR: pd },
+      timeout: 30_000,
+    });
+    if (result.status !== 0) {
+      error(
+        `Refusing wave completion for unit "${unit}" of "${stage}": the orchestration ` +
+          `engine could not resolve the current wave (${(result.stderr ?? "").trim() || "no diagnostic"}).`,
+      );
+    }
+    try {
+      directive = JSON.parse((result.stdout ?? "").trim());
+    } catch {
+      error(
+        `Refusing wave completion for unit "${unit}" of "${stage}": the orchestration ` +
+          "engine returned an unparseable directive.",
+      );
+    }
+    const transport =
+      directive !== null && typeof directive === "object"
+        ? directive as { kind?: unknown; continue_token?: unknown }
+        : {};
+    if (transport.kind !== "load-steering") break;
+    if (
+      typeof transport.continue_token !== "string" ||
+      transport.continue_token.length === 0
+    ) {
+      error(
+        `Refusing wave completion for unit "${unit}" of "${stage}": the engine's ` +
+          "steering directive did not include a continuation token.",
+      );
+    }
+    subargs = ["continue", transport.continue_token, "--project-dir", pd];
+  }
+
+  const routed =
+    directive !== null && typeof directive === "object"
+      ? directive as {
+          kind?: unknown;
+          stage?: unknown;
+          wave?: {
+            entries?: Array<{
+              unit?: unknown;
+              build_required?: unknown;
+              completion_required?: unknown;
+              review_state?: unknown;
+            }>;
+          };
+        }
+      : {};
+  const entry = routed.wave?.entries?.find((candidate) => candidate.unit === unit);
+  const reviewSettled =
+    entry?.review_state === "READY" ||
+    entry?.review_state === "NOT-READY" ||
+    entry?.review_state === "not-required";
+  if (
+    routed.kind !== "run-stage" ||
+    routed.stage !== stage ||
+    !entry ||
+    entry.build_required !== false ||
+    entry.completion_required !== true ||
+    !reviewSettled
+  ) {
+    error(
+      `Refusing wave completion for unit "${unit}" of "${stage}": the engine does ` +
+        "not currently expose that entry as build-complete, review-settled, and awaiting its completion receipt.",
+    );
+  }
+}
+
+function fanInWaveUnitMemory(pd: string, stage: string, unit: string): number {
+  const headings = [
+    "Interpretations",
+    "Deviations",
+    "Tradeoffs",
+    "Open questions",
+  ] as const;
+  const rec = recordDir(pd);
+  if (rec === null) {
+    error(
+      `Refusing wave completion for unit "${unit}" of "${stage}": no active intent record directory exists.`,
+    );
+  }
+  const unitPath = join(rec, "construction", unit, stage, "memory.md");
+  const parentPath = join(rec, "construction", stage, "memory.md");
+  const unitContent = existsSync(unitPath) ? readFileSync(unitPath, "utf-8") : "";
+  const entries = parseMemoryEntries(unitContent);
+
+  let parentContent = existsSync(parentPath)
+    ? readFileSync(parentPath, "utf-8")
+    : `${headings.map((heading) => `## ${heading}\n`).join("\n")}\n`;
+  for (const heading of headings) {
+    if (!new RegExp(`^## ${heading}$`, "m").test(parentContent)) {
+      parentContent = `${parentContent.trimEnd()}\n\n## ${heading}\n`;
+    }
+  }
+
+  let added = 0;
+  for (const entry of entries) {
+    const digest = createHash("sha256")
+      .update(`${stage}\0${unit}\0${entry.heading}\0${entry.raw}`, "utf-8")
+      .digest("hex");
+    const marker = `<!-- aidlc-wave-memory:${unit}:${digest} -->`;
+    if (parentContent.includes(marker)) continue;
+    parentContent = appendUnderHeading(
+      parentContent,
+      `## ${entry.heading}`,
+      `\n${entry.raw}\n${marker}\n`,
+    );
+    added++;
+  }
+
+  mkdirSync(dirname(parentPath), { recursive: true });
+  if (!existsSync(parentPath) || added > 0) {
+    writeFileAtomic(parentPath, parentContent.endsWith("\n") ? parentContent : `${parentContent}\n`);
+  }
+  return added;
 }
 
 // The unit's missing REQUIRED artifacts (kind-filtered like the engine's
@@ -1586,6 +1767,7 @@ function verifyReviewerPrecondition(
     for_each?: string;
     mode?: string;
     reviewer?: string;
+    reviewer_max_iterations?: number;
     review_class?: "adversarial" | "advisory";
     produces?: string[];
     optional_produces?: string[];
@@ -1600,14 +1782,15 @@ function verifyReviewerPrecondition(
   // swarm stages are the exception: their declared reviewer is the only
   // pre-merge verification inside each Bolt, so caps/overrides do not silence
   // the receipt requirement there.
-  if (
-    !isAutonomousSwarmStage(pd, content, stage) &&
-    resolveReviewClass(
-      stage.review_class ?? "adversarial",
-      getField(content, "Scope") ?? "",
-      content,
-    ) === "none"
-  ) {
+  const autonomousSwarm = isAutonomousSwarmStage(pd, content, stage);
+  const reviewClass = autonomousSwarm
+    ? stage.review_class ?? "adversarial"
+    : resolveReviewClass(
+        stage.review_class ?? "adversarial",
+        getField(content, "Scope") ?? "",
+        content,
+      );
+  if (reviewClass === "none") {
     return;
   }
 
@@ -1621,7 +1804,7 @@ function verifyReviewerPrecondition(
   // event interleave (timestamp, buffer-position tiebreak), the stage-agnostic
   // WORKFLOW_STARTED/STAGE_JUMPED floor, the unit-major STAGE_STARTED skip,
   // and per-unit write invalidation are all documented there.
-  const receipts = freshReviewReceipts(pd, content, stage);
+  const receipts = freshReviewReceipts(pd, content, stage, { reviewClass });
   const perUnit = stage.for_each === "unit-of-work";
   const sawStageReview = receipts.stageVerdict !== null;
   const reviewedUnits = new Set(receipts.unitVerdicts.keys());

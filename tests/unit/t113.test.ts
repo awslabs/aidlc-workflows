@@ -75,6 +75,32 @@ function runStage(): Record<string, unknown> {
   };
 }
 
+function wave() {
+  return {
+    batch_index: 0,
+    entries: [
+      {
+        unit: "auth",
+        unit_kind: "service",
+        build_required: true,
+        completion_required: true,
+        review_state: "outstanding",
+        review_iteration: 1,
+        unit_memory_path:
+          "aidlc-docs/construction/auth/functional-design/memory.md",
+        consumes: ["aidlc-docs/inception/requirements/requirements.md"],
+        consumes_absent: [],
+        produces: [
+          "aidlc-docs/construction/auth/functional-design/business-logic-model.md",
+        ],
+        required_produces: [
+          "aidlc-docs/construction/auth/functional-design/business-logic-model.md",
+        ],
+      },
+    ],
+  };
+}
+
 function dispatchSubagent(): Record<string, unknown> {
   return {
     kind: "dispatch-subagent",
@@ -403,6 +429,37 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     expect(errs({ ...runStage(), review_class: "advisory" })).toContain(
       "run-stage: review_class requires reviewer",
     );
+  });
+
+  test("run-stage accepts a complete engine-resolved wave entry", () => {
+    expect(
+      errs({
+        ...runStage(),
+        unit: "auth",
+        gate: false,
+        wave: wave(),
+      }),
+    ).toBe("VALID");
+  });
+
+  test("run-stage wave validates completion and retry state fields", () => {
+    const malformed = structuredClone(wave());
+    malformed.entries[0].completion_required = "yes" as unknown as boolean;
+    malformed.entries[0].review_state =
+      "stale" as typeof malformed.entries[0]["review_state"];
+    const result = errs({ ...runStage(), wave: malformed });
+    expect(result).toContain(
+      "run-stage: wave.entries[0].completion_required must be boolean",
+    );
+    expect(result).toContain(
+      "run-stage: wave.entries[0].review_state must be one of",
+    );
+
+    const retry = structuredClone(wave());
+    retry.entries[0].build_required = false;
+    retry.entries[0].review_state =
+      "retry-required" as typeof retry.entries[0]["review_state"];
+    expect(errs({ ...runStage(), wave: retry })).toBe("VALID");
   });
 
   test("invoke-swarm review_class validates the advisory/adversarial enum", () => {

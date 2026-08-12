@@ -3334,6 +3334,30 @@ export function producesArtifactUnit(
 
 export type ReviewVerdict = "READY" | "NOT-READY";
 
+export function terminalReviewVerdict(
+  verdict: string | null,
+  iteration: string | null,
+  reviewClass: ReviewClass,
+  maxIterations = 2,
+): ReviewVerdict | null {
+  if (reviewClass === "none") return null;
+  if (verdict === "READY") return verdict;
+  if (
+    verdict === "NOT-READY" &&
+    iteration !== null &&
+    /^[1-9][0-9]*$/.test(iteration) &&
+    (reviewClass === "advisory" || Number(iteration) >= maxIterations)
+  ) {
+    return verdict;
+  }
+  return null;
+}
+
+export interface PendingReviewProgress {
+  state: "outstanding" | "retry-required" | "repair-required";
+  iteration: number;
+}
+
 export interface FreshReviewReceipts {
   /** Verdict of the last fresh terminal receipt for the stage (any receipt,
    *  unit-scoped included), or null when none survives. For NON-per-unit
@@ -3346,6 +3370,10 @@ export interface FreshReviewReceipts {
    *  artifacts deletes the entry; an ambiguous matching path fails closed by
    *  clearing every unit entry. */
   unitVerdicts: Map<string, ReviewVerdict>;
+  stageIteration: number | null;
+  unitIterations: Map<string, number>;
+  stagePending: PendingReviewProgress | null;
+  unitPending: Map<string, PendingReviewProgress>;
 }
 
 interface ReviewFingerprintStage {
@@ -3367,6 +3395,7 @@ function reviewArtifactEntries(
   projectDir: string,
   stage: ReviewFingerprintStage,
   unit?: string,
+  boltDag?: BoltDagResolution,
 ): ReviewArtifactEntry[] | null {
   const artifactsForKind = (kind: string | null) => [
     ...filterProducesByKind(stage.produces_kinds, stage.produces ?? [], kind).map(
@@ -3420,7 +3449,7 @@ function reviewArtifactEntries(
 
   let units: string[];
   let unitKinds = new Map<string, string>();
-  const resolution = resolveBoltDag(projectDir);
+  const resolution = boltDag ?? resolveBoltDag(projectDir);
   if (unit) {
     units = [unit];
     if (resolution.state === "ok" && resolution.unitKinds !== null) {
@@ -3467,11 +3496,14 @@ export function reviewArtifactFingerprint(
   projectDir: string,
   stage: ReviewFingerprintStage,
   unit?: string,
-  options: { requireRequiredArtifacts?: boolean } = {},
+  options: {
+    requireRequiredArtifacts?: boolean;
+    boltDag?: BoltDagResolution;
+  } = {},
 ): string | null {
   let entries: ReviewArtifactEntry[] | null;
   try {
-    entries = reviewArtifactEntries(projectDir, stage, unit);
+    entries = reviewArtifactEntries(projectDir, stage, unit, options.boltDag);
   } catch {
     return null;
   }
@@ -3526,14 +3558,31 @@ export function freshReviewReceipts(
     phase: string;
     for_each?: string;
     reviewer?: string;
+    reviewer_max_iterations?: number;
+    review_class?: "adversarial" | "advisory";
     produces?: string[];
     optional_produces?: string[];
     produces_kinds?: Record<string, string[]>;
   },
+  options: {
+    boltDag?: BoltDagResolution;
+    reviewClass?: ReviewClass;
+  } = {},
 ): FreshReviewReceipts {
-  const empty: FreshReviewReceipts = { stageVerdict: null, unitVerdicts: new Map() };
+  const empty: FreshReviewReceipts = {
+    stageVerdict: null,
+    unitVerdicts: new Map(),
+    stageIteration: null,
+    unitIterations: new Map(),
+    stagePending: null,
+    unitPending: new Map(),
+  };
   const reviewer = stage.reviewer;
   if (!reviewer) return empty;
+  const reviewClass = options.reviewClass ?? stage.review_class ?? "adversarial";
+  if (reviewClass === "none") return empty;
+  const maxIterations =
+    reviewClass === "advisory" ? 1 : stage.reviewer_max_iterations ?? 2;
   const audit = readAllAuditShards(projectDir);
   if (audit.length === 0) return empty;
 
@@ -3582,8 +3631,15 @@ export function freshReviewReceipts(
   // an ambiguous matching path fails closed by clearing every unit receipt.
   const recordedRepos = new Set(intentRepos(projectDir));
   const unitVerdicts = new Map<string, ReviewVerdict>();
-  const pendingRequests = new Set<string>();
+  const unitIterations = new Map<string, number>();
+  const unitPending = new Map<string, PendingReviewProgress>();
+  const pendingRequests = new Map<
+    string,
+    { unit: string | undefined; iteration: number }
+  >();
   let stageVerdict: ReviewVerdict | null = null;
+  let stageIteration: number | null = null;
+  let stagePending: PendingReviewProgress | null = null;
   for (let i = floorIdx + 1; i < events.length; i++) {
     const e = events[i];
     if (e.event === "ARTIFACT_CREATED" || e.event === "ARTIFACT_UPDATED") {
@@ -3593,10 +3649,13 @@ export function freshReviewReceipts(
       if (targetUnit === undefined) continue;
       if (!perUnit) {
         stageVerdict = null;
+        stageIteration = null;
       } else if (targetUnit === null) {
         unitVerdicts.clear();
+        unitIterations.clear();
       } else {
         unitVerdicts.delete(targetUnit);
+        unitIterations.delete(targetUnit);
       }
       continue;
     }
@@ -3609,32 +3668,86 @@ export function freshReviewReceipts(
     if (auditBlockField(e.block, "Workflow")?.startsWith("single-stage:")) continue;
     if (auditBlockField(e.block, "Stage") !== stage.slug) continue;
     if (auditBlockField(e.block, "Reviewer") !== reviewer) continue;
-    const iteration = auditBlockField(e.block, "Iteration");
-    if (!iteration || !/^[1-9][0-9]*$/.test(iteration)) continue;
+    const iterationField = auditBlockField(e.block, "Iteration");
+    if (!iterationField || !/^[1-9][0-9]*$/.test(iterationField)) continue;
+    const iteration = Number(iterationField);
     const unit = auditBlockField(e.block, "Unit") || undefined;
-    const requestKey = `${unit ?? ""}\u0000${iteration}`;
+    const requestKey = `${unit ?? ""}\u0000${iterationField}`;
     if (e.event === "REVIEW_REQUESTED") {
-      pendingRequests.add(requestKey);
+      pendingRequests.set(requestKey, { unit, iteration });
       continue;
     }
     const verdict = auditBlockField(e.block, "Verdict");
     if (verdict !== "READY" && verdict !== "NOT-READY") continue;
     if (!pendingRequests.delete(requestKey)) continue;
     const recordedFingerprint = auditBlockField(e.block, "Artifact Fingerprint");
-    const currentFingerprint = reviewArtifactFingerprint(projectDir, stage, unit);
-    if (
-      recordedFingerprint === null ||
-      !/^sha256:[0-9a-f]{64}$/.test(recordedFingerprint) ||
-      currentFingerprint === null ||
-      recordedFingerprint !== currentFingerprint
-    ) {
+    const currentFingerprint = reviewArtifactFingerprint(
+      projectDir,
+      stage,
+      unit,
+      { boltDag: options.boltDag },
+    );
+    const fingerprintUsable =
+      recordedFingerprint !== null &&
+      /^sha256:[0-9a-f]{64}$/.test(recordedFingerprint) &&
+      currentFingerprint !== null;
+    const fingerprintMatches =
+      fingerprintUsable && recordedFingerprint === currentFingerprint;
+    const terminalVerdict = terminalReviewVerdict(
+      verdict,
+      iterationField,
+      reviewClass,
+      maxIterations,
+    );
+    if (terminalVerdict === null) {
+      if (verdict !== "NOT-READY" || !fingerprintUsable) continue;
+      const pending: PendingReviewProgress = fingerprintMatches
+        ? { state: "repair-required", iteration }
+        : { state: "outstanding", iteration: iteration + 1 };
+      stageVerdict = null;
+      stageIteration = null;
+      stagePending = pending;
+      if (unit) {
+        unitVerdicts.delete(unit);
+        unitIterations.delete(unit);
+        unitPending.set(unit, pending);
+      }
       continue;
     }
-    stageVerdict = verdict;
-    if (unit) unitVerdicts.set(unit, verdict);
+    if (!fingerprintMatches) continue;
+    stageVerdict = terminalVerdict;
+    stageIteration = iteration;
+    stagePending = null;
+    if (unit) {
+      unitVerdicts.set(unit, terminalVerdict);
+      unitIterations.set(unit, iteration);
+      unitPending.delete(unit);
+    }
   }
 
-  return { stageVerdict, unitVerdicts };
+  for (const request of pendingRequests.values()) {
+    const pending: PendingReviewProgress = {
+      state: "retry-required",
+      iteration: request.iteration,
+    };
+    stageVerdict = null;
+    stageIteration = null;
+    stagePending = pending;
+    if (request.unit) {
+      unitVerdicts.delete(request.unit);
+      unitIterations.delete(request.unit);
+      unitPending.set(request.unit, pending);
+    }
+  }
+
+  return {
+    stageVerdict,
+    unitVerdicts,
+    stageIteration,
+    unitIterations,
+    stagePending,
+    unitPending,
+  };
 }
 
 // --- Multi-repo: repos are siblings of the workspace ----------------------------
@@ -5541,10 +5654,11 @@ export function swarmConvergedUnits(
 // invalidates every receipt from the prior attempt. Unit-major uses its
 // workflow/jump/rejection boundary so a later STAGE_STARTED does not erase
 // receipts legitimately emitted earlier in that block.
-// Artifact existence is deliberately NOT consulted here: the receipt is the
-// transition, artifacts are the evidence the receipt-writer checked at emit
-// time. A paused or partially-written unit has artifacts but no receipt, so it
-// stays uncovered.
+// Serial receipts are the transition: artifacts are evidence the writer
+// checked at emit time. Wave receipts additionally bind that transition to
+// the final artifact fingerprint so a later write reopens the entry for
+// review, memory fan-in, and completion. A paused or partially-written unit
+// has artifacts but no receipt, so it stays uncovered.
 type UnitLifecycleRow = {
   ts: string;
   pos: number;
@@ -5662,11 +5776,60 @@ export function unitCompletedReceipts(
   if (!audit) return new Set();
   const unitMajor = unitMajorLifecycleMode(projectDir);
   const done = new Set<string>();
+  const stage = resolveStage(slug);
   for (const row of currentUnitLifecycleRows(projectDir, audit, slug, unitMajor)) {
-    if (row.event === "UNIT_COMPLETED") done.add(row.unit);
-    else done.delete(row.unit);
+    if (row.event !== "UNIT_COMPLETED") {
+      done.delete(row.unit);
+      continue;
+    }
+    if (auditBlockField(row.block, "Mode") !== "wave") {
+      done.add(row.unit);
+      continue;
+    }
+    const recorded = auditBlockField(row.block, "Artifact Fingerprint");
+    const current =
+      stage === undefined
+        ? null
+        : reviewArtifactFingerprint(projectDir, stage, row.unit, {
+            requireRequiredArtifacts: true,
+          });
+    if (
+      recorded !== null &&
+      /^sha256:[0-9a-f]{64}$/.test(recorded) &&
+      current === recorded
+    ) {
+      done.add(row.unit);
+    } else {
+      done.delete(row.unit);
+    }
   }
   return done;
+}
+
+export type UnitLifecycleMode = "none" | "serial" | "wave" | "mixed";
+
+export function currentUnitLifecycleMode(
+  projectDir: string,
+  slug: string,
+): UnitLifecycleMode {
+  const audit = readAllAuditShards(projectDir);
+  if (!audit) return "none";
+  const rows = currentUnitLifecycleRows(
+    projectDir,
+    audit,
+    slug,
+    unitMajorLifecycleMode(projectDir),
+  );
+  let sawSerial = false;
+  let sawWave = false;
+  for (const row of rows) {
+    if (auditBlockField(row.block, "Mode") === "wave") sawWave = true;
+    else sawSerial = true;
+  }
+  if (sawSerial && sawWave) return "mixed";
+  if (sawWave) return "wave";
+  if (sawSerial) return "serial";
+  return "none";
 }
 
 // Receipt mode is sticky across attempts. Once a stage has emitted any

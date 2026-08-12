@@ -89,6 +89,37 @@ export interface LoadSteeringDirective {
   continue_token: string;
 }
 
+export type WaveReviewState =
+  | "outstanding"
+  | "retry-required"
+  | "repair-required"
+  | "READY"
+  | "NOT-READY"
+  | "not-required";
+
+// One engine-resolved unit in an optional stage-major batch wave. Every path
+// is resolved independently from this unit's kind against the same healed DAG
+// snapshot. The parent run-stage retains stage-level steering, context, and
+// memory; the entry carries only the unit-local execution surface.
+export interface RunStageWaveEntry {
+  unit: string;
+  unit_kind: string | null;
+  build_required: boolean;
+  completion_required: boolean;
+  review_state: WaveReviewState;
+  review_iteration: number | null;
+  unit_memory_path: string;
+  consumes: string[];
+  consumes_absent: Array<{ path: string; expected: boolean }>;
+  produces: string[];
+  required_produces: string[];
+}
+
+export interface RunStageWave {
+  batch_index: number;
+  entries: RunStageWaveEntry[];
+}
+
 // run-stage — load the resolved rules, load lead + support agents, load
 // `consumes` artifacts, run the stage body, write `produces`, keep memory.md. Routing fields (lead_agent,
 // support_agents, mode, gate, sensors_applicable, rules_in_context, stage_file)
@@ -173,10 +204,18 @@ export interface RunStageDirective {
   // per-unit loop, re-emitting the next uncovered unit on each `next` and
   // suppressing the gate (gate:false) on EVERY not-yet-covered unit. The stage's
   // real gate is presented only once, on the re-entry after the last unit's
-  // artifacts land on disk (no uncovered units remain), so the conductor must
-  // build a gate:false unit and re-run `next` rather than approve it. See
+  // artifacts and review receipts settle, so the conductor must complete a
+  // gate:false unit and re-run `next` rather than approve it. See
   // aidlc-orchestrate.ts emitPerUnitRunStage.
   unit?: string;
+  // wave: optional stage-major parallelization surface for the four inline
+  // per-unit design stages. Entries come from one healed Bolt-DAG snapshot and
+  // are complete per-unit execution records. build_required/review_state make
+  // crash recovery deterministic: covered-but-unreviewed units stay in their
+  // current batch as review-only work instead of allowing a dependent batch or
+  // the stage gate to advance. Absent on unit-major iteration, code-generation,
+  // and the no-DAG degrade path.
+  wave?: RunStageWave;
   // consumes_absent: REQUIRED declared inputs whose resolved file does NOT
   // exist on disk at emit time, each annotated with why. `expected: true` =
   // the producing stage is not on the active scope's path (the scope
@@ -395,6 +434,7 @@ const RUN_STAGE_FIELDS = [
   "conductor_persona",
   "next_stage",
   "unit",
+  "wave",
   "consumes_absent",
 ] as const;
 
@@ -411,7 +451,9 @@ const LOAD_STEERING_FIELDS = [
 // dispatch-subagent = shared run-stage fields + `worker`; the isolated-run
 // marker belongs only to the emitted run-stage kind.
 const DISPATCH_SUBAGENT_FIELDS = [
-  ...RUN_STAGE_FIELDS.filter((field) => field !== "single"),
+  ...RUN_STAGE_FIELDS.filter(
+    (field) => field !== "single" && field !== "wave",
+  ),
   "worker",
 ] as const;
 
@@ -535,6 +577,7 @@ export function validateDirective(obj: unknown): ValidationResult {
     case "run-stage":
       checkRunStageShared(o, kind, errors);
       checkOptionalBoolean(o, "single", kind, errors);
+      checkOptionalWave(o, "wave", kind, errors);
       break;
     case "dispatch-subagent":
       checkRunStageShared(o, kind, errors);
@@ -878,6 +921,176 @@ function checkOptionalConsumesAbsent(
       errors.push(
         `${kind}: ${field}[${i}].expected must be boolean, got ${describe(item.expected)}`,
       );
+    }
+  });
+}
+
+function checkOptionalWave(
+  o: Record<string, unknown>,
+  field: string,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!(field in o)) return;
+  const value: unknown = o[field];
+  if (!isPlainObject(value)) {
+    errors.push(`${kind}: ${field} must be object, got ${describe(value)}`);
+    return;
+  }
+  for (const key of Object.keys(value)) {
+    if (key !== "batch_index" && key !== "entries") {
+      errors.push(`${kind}: ${field}: unknown key: ${key}`);
+    }
+  }
+  if (
+    typeof value.batch_index !== "number" ||
+    !Number.isInteger(value.batch_index) ||
+    value.batch_index < 0
+  ) {
+    errors.push(
+      `${kind}: ${field}.batch_index must be a non-negative integer, got ${describe(value.batch_index)}`,
+    );
+  }
+  if (!Array.isArray(value.entries)) {
+    errors.push(
+      `${kind}: ${field}.entries must be array, got ${describe(value.entries)}`,
+    );
+    return;
+  }
+  if (value.entries.length === 0) {
+    errors.push(`${kind}: ${field}.entries must contain at least one entry`);
+    return;
+  }
+
+  const known = new Set([
+    "unit",
+    "unit_kind",
+    "build_required",
+    "completion_required",
+    "review_state",
+    "review_iteration",
+    "unit_memory_path",
+    "consumes",
+    "consumes_absent",
+    "produces",
+    "required_produces",
+  ]);
+  const units = new Set<string>();
+  value.entries.forEach((item: unknown, i: number) => {
+    const prefix = `${kind}: ${field}.entries[${i}]`;
+    if (!isPlainObject(item)) {
+      errors.push(`${prefix} must be object, got ${describe(item)}`);
+      return;
+    }
+    for (const key of Object.keys(item)) {
+      if (!known.has(key)) errors.push(`${prefix}: unknown key: ${key}`);
+    }
+    if (typeof item.unit !== "string") {
+      errors.push(`${prefix}.unit must be string, got ${describe(item.unit)}`);
+    } else if (units.has(item.unit)) {
+      errors.push(`${prefix}.unit duplicates "${item.unit}"`);
+    } else {
+      units.add(item.unit);
+    }
+    if (item.unit_kind !== null && typeof item.unit_kind !== "string") {
+      errors.push(
+        `${prefix}.unit_kind must be string or null, got ${describe(item.unit_kind)}`,
+      );
+    }
+    if (typeof item.build_required !== "boolean") {
+      errors.push(
+        `${prefix}.build_required must be boolean, got ${describe(item.build_required)}`,
+      );
+    }
+    if (typeof item.completion_required !== "boolean") {
+      errors.push(
+        `${prefix}.completion_required must be boolean, got ${describe(item.completion_required)}`,
+      );
+    }
+    if (
+      item.review_state !== "outstanding" &&
+      item.review_state !== "retry-required" &&
+      item.review_state !== "repair-required" &&
+      item.review_state !== "READY" &&
+      item.review_state !== "NOT-READY" &&
+      item.review_state !== "not-required"
+    ) {
+      errors.push(
+        `${prefix}.review_state must be one of outstanding | retry-required | repair-required | READY | NOT-READY | not-required, got ${JSON.stringify(item.review_state)}`,
+      );
+    }
+    if (
+      item.review_iteration !== null &&
+      (
+        typeof item.review_iteration !== "number" ||
+        !Number.isInteger(item.review_iteration) ||
+        item.review_iteration < 1
+      )
+    ) {
+      errors.push(
+        `${prefix}.review_iteration must be a positive integer or null, got ${describe(item.review_iteration)}`,
+      );
+    }
+    for (const key of ["unit_memory_path"] as const) {
+      if (typeof item[key] !== "string") {
+        errors.push(`${prefix}.${key} must be string, got ${describe(item[key])}`);
+      }
+    }
+    for (const key of ["consumes", "produces", "required_produces"] as const) {
+      const nested = item[key];
+      if (!Array.isArray(nested)) {
+        errors.push(`${prefix}.${key} must be array, got ${describe(nested)}`);
+        continue;
+      }
+      nested.forEach((entry: unknown, j: number) => {
+        if (typeof entry !== "string") {
+          errors.push(
+            `${prefix}.${key}[${j}] must be string, got ${describe(entry)}`,
+          );
+        }
+      });
+    }
+    if (
+      Array.isArray(item.required_produces) &&
+      item.required_produces.length === 0
+    ) {
+      errors.push(
+        `${prefix}.required_produces must contain at least one kind-applicable required path`,
+      );
+    }
+    if (Array.isArray(item.produces) && Array.isArray(item.required_produces)) {
+      const produces = new Set(item.produces);
+      item.required_produces.forEach((path: unknown, j: number) => {
+        if (typeof path === "string" && !produces.has(path)) {
+          errors.push(
+            `${prefix}.required_produces[${j}] must also appear in produces`,
+          );
+        }
+      });
+    }
+    if (!Array.isArray(item.consumes_absent)) {
+      errors.push(
+        `${prefix}.consumes_absent must be array, got ${describe(item.consumes_absent)}`,
+      );
+    } else {
+      item.consumes_absent.forEach((entry: unknown, j: number) => {
+        if (!isPlainObject(entry)) {
+          errors.push(
+            `${prefix}.consumes_absent[${j}] must be object, got ${describe(entry)}`,
+          );
+          return;
+        }
+        if (typeof entry.path !== "string") {
+          errors.push(
+            `${prefix}.consumes_absent[${j}].path must be string, got ${describe(entry.path)}`,
+          );
+        }
+        if (typeof entry.expected !== "boolean") {
+          errors.push(
+            `${prefix}.consumes_absent[${j}].expected must be boolean, got ${describe(entry.expected)}`,
+          );
+        }
+      });
     }
   });
 }

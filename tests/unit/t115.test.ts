@@ -1068,7 +1068,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     expect(countEvent(p, "GATE_APPROVED")).toBe(1);
   }, 30000);
 
-  test("R3b: NOT-READY before the iteration cap is not a terminal receipt", () => {
+  test("R3b: an unpaired REVIEW_COMPLETED is not a terminal receipt", () => {
     const p = projWithState("state-mid-inception.md");
     expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
 

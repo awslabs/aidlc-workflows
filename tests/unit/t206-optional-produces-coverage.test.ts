@@ -45,6 +45,7 @@ resetAidlcEnv();
 const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
+const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 
 // functional-design declares a reviewer; the §12a gate precondition refuses an
 // approve without a terminal REVIEW_COMPLETED. These tests target the coverage
@@ -58,6 +59,26 @@ function logReviewReady(proj: string, stage: string, reviewer: string, unit?: st
     // Keep a log-record failure local, not surfaced later as a confusing gate error.
     expect(res.status).toBe(0);
   }
+}
+
+function completeWave(proj: string, stage: string, unit: string): void {
+  const result = spawnSync(
+    BUN,
+    [
+      STATE,
+      "unit",
+      "complete",
+      "--wave",
+      "--stage",
+      stage,
+      "--unit",
+      unit,
+      "--project-dir",
+      proj,
+    ],
+    { encoding: "utf-8" },
+  );
+  expect(result.status).toBe(0);
 }
 
 // The record-relative prefix every resolved per-unit path is rooted at.
@@ -209,6 +230,7 @@ describe("t206 optional_produces exempt from per-unit coverage", () => {
       "aidlc-architecture-reviewer-agent",
       "alpha",
     );
+    completeWave(proj, "functional-design", "alpha");
     expect(runNext(proj).unit).toBe("beta");
   }, 30000);
 
@@ -250,6 +272,8 @@ describe("t206 optional_produces exempt from per-unit coverage", () => {
       "aidlc-architecture-reviewer-agent",
       "beta",
     );
+    completeWave(proj, "functional-design", "alpha");
+    completeWave(proj, "functional-design", "beta");
     const d = runNext(proj);
     expect(d.kind).toBe("run-stage");
     expect(d.unit).toBe("beta");

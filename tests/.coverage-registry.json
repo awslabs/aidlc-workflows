@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 545,
+    "total": 547,
     "enumeratedByClass": {
-      "function": 299,
+      "function": 301,
       "audit": 82,
       "scope": 9,
       "stage": 32,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 142,
+      "function": 143,
       "audit": 40,
       "scope": 9,
       "stage": 9,
@@ -1438,6 +1438,13 @@
     {
       "unitClass": "function",
       "unitId": "function:CURRENT_SESSION_FILE",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:currentUnitLifecycleMode",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -3584,6 +3591,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t155-template-override.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:terminalReviewVerdict",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t135-invoke-swarm.test.ts",
           "mechanism": "cli"
         }
       ],

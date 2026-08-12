@@ -297,6 +297,19 @@ function finalizeWithNotReady(iteration: number): {
   );
   const worktree = join(proj, ".aidlc", "worktrees", `bolt-${unit}`);
   writeFileSync(join(worktree, `${unit}.txt`), "done\n");
+  if (iteration > 1) {
+    logWorktreeReview(proj, unit, true, "NOT-READY", 1);
+    writeFileSync(
+      join(
+        seededRecordDir(worktree),
+        "construction",
+        unit,
+        "code-generation",
+        "code-summary.md",
+      ),
+      "# repaired after iteration 1\n",
+    );
+  }
   logWorktreeReview(proj, unit, true, "NOT-READY", iteration);
   const result = spawnSync(
     BUN,

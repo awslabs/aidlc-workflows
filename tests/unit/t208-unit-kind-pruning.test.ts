@@ -40,6 +40,7 @@ resetAidlcEnv();
 const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
+const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const RP = `aidlc/spaces/${DEFAULT_SPACE}/intents/${DEFAULT_RECORD_DIR}`;
 
 // nfr-requirements produces[] and their per-kind applicability (verified against
@@ -154,12 +155,17 @@ function runReport(proj: string, args: string[], enforceGuard = false): Directiv
   }
 }
 
-function logReviewReady(proj: string, unit: string, iteration = 1): void {
+function logReviewReady(
+  proj: string,
+  unit: string,
+  iteration = 1,
+  stage = "functional-design",
+): void {
   const args = [
     LOG,
     "review",
     "--stage",
-    "functional-design",
+    stage,
     "--reviewer",
     "aidlc-architecture-reviewer-agent",
     "--unit",
@@ -174,6 +180,28 @@ function logReviewReady(proj: string, unit: string, iteration = 1): void {
     if ((r.status ?? -1) !== 0) {
       throw new Error(`review log failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
     }
+  }
+}
+
+function completeWave(proj: string, unit: string, stage: string): void {
+  const result = spawnSync(
+    BUN,
+    [
+      STATE,
+      "unit",
+      "complete",
+      "--wave",
+      "--stage",
+      stage,
+      "--unit",
+      unit,
+      "--project-dir",
+      proj,
+    ],
+    { encoding: "utf-8" },
+  );
+  if ((result.status ?? -1) !== 0) {
+    throw new Error(`wave completion failed: ${result.stdout}${result.stderr}`);
   }
 }
 
@@ -231,6 +259,8 @@ describe("t208 engine unit-kind pruning", () => {
     const proj = seedProject("nfr-requirements");
     seedBoltDag(proj, [{ name: "api", kind: "spec" }, { name: "svc" }]);
     coverUnit(proj, "api", "nfr-requirements", NFR_REQ_SPEC);
+    logReviewReady(proj, "api", 1, "nfr-requirements");
+    completeWave(proj, "api", "nfr-requirements");
     const d = runNext(proj);
     // api is covered by its two-artifact pruned set; the engine moves to svc.
     expect(d.unit).toBe("svc");
@@ -455,6 +485,8 @@ describe("t208 engine unit-kind pruning", () => {
     const proj = seedProject("functional-design");
     seedBoltDag(proj, [{ name: "web", kind: "ui" }, { name: "svc" }]);
     coverUnit(proj, "web", "functional-design", ["business-logic-model"]);
+    logReviewReady(proj, "web");
+    completeWave(proj, "web", "functional-design");
     const d = runNext(proj);
     expect(d.unit).toBe("svc");
   }, 30000);

@@ -14,7 +14,7 @@
 //       DIST tree) - stage-level and per-unit freeze/no-freeze cases;
 //   (b) the SHIPPED hook as a subprocess over a REAL audit ledger written by
 //       the real aidlc-log/audit tools: allow before receipt, block after
-//       READY, allow after NOT-READY, release on GATE_REJECTED, allow for
+//       READY or terminal advisory NOT-READY, release on GATE_REJECTED, allow for
 //       non-produces paths, fail-open with no ledger, off-switch, and the
 //       REVIEW_FREEZE_BLOCKED audit row on a genuine block;
 //   (c) registration pins per harness: Claude settings.json (third entry in
@@ -88,8 +88,8 @@ describe("t264 (a) judgeFreeze decision table", () => {
     expect(blockReason(v)).toContain("terminal receipt ends artifact work");
   });
 
-  test("never blocks under NOT-READY (the repair loop must edit)", () => {
-    expect(judgeFreeze(RA, raFile, NONE, notReady).block).toBe(false);
+  test("blocks under a terminal NOT-READY receipt", () => {
+    expect(judgeFreeze(RA, raFile, NONE, notReady).block).toBe(true);
   });
 
   test("never blocks with no receipt (normal stage work)", () => {
@@ -112,10 +112,10 @@ describe("t264 (a) judgeFreeze decision table", () => {
     expect(judgeFreeze(NFR, u4, NONE, receipts).block).toBe(false);
   });
 
-  test("per-unit: a NOT-READY unit receipt does not freeze that unit", () => {
+  test("per-unit: a terminal NOT-READY receipt freezes that unit", () => {
     const u3 = "/p/aidlc/spaces/default/intents/i1/construction/U03/nfr-requirements/nfr-requirements.md";
     const receipts = { stageVerdict: "NOT-READY", unitVerdicts: new Map([["U03", "NOT-READY"]]) };
-    expect(judgeFreeze(NFR, u3, NONE, receipts).block).toBe(false);
+    expect(judgeFreeze(NFR, u3, NONE, receipts).block).toBe(true);
   });
 
   test("writeTargets: file tools and mutation-capable Bash contribute paths", () => {
@@ -289,10 +289,10 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
     expect(runHook(p, writePayload(file)).code).toBe(2);
   });
 
-  test("NOT-READY never freezes (the lead-alone repair loop must edit)", () => {
+  test("advisory NOT-READY is terminal and freezes until the human gate", () => {
     const p = projWithGate();
     recordReview(p, "NOT-READY");
-    expect(runHook(p, writePayload(raArtifact(p))).code).toBe(0);
+    expect(runHook(p, writePayload(raArtifact(p))).code).toBe(2);
   });
 
   test("a non-produces write under a READY receipt is untouched", () => {
