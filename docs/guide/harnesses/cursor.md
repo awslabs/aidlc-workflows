@@ -86,10 +86,11 @@ projection directly (no `emit.ts`, no split dot-dir). The distribution is:
   state-transition, reviewer read-scope, review-freeze, and plan-approval
   guards before a tool runs, audit +
   sensors on write/edit, failed-Task attribution cleanup, stage-graph rebuilds on
-  shell, and state validation before compaction. The **PreToolUse guards block**
-  via Cursor's `{"permission":"deny","agent_message":...}` stdout channel and
-  register `failClosed: true`; malformed input, a missing guard, or a crashing
-  guard denies the operation. Cursor names its shell tool `Shell`; the adapter
+  shell, and state validation before compaction. The **PreToolUse guards**
+  answer on Cursor's `{"permission":"allow"|"deny"}` stdout channel (`deny`
+  may add `agent_message`) and register `failClosed: true`. Empty stdout is
+  invalid JSON, so the IDE blocks the call; malformed input, a missing guard,
+  or a crashing guard also denies the operation. Cursor names its shell tool `Shell`; the adapter
   maps it to the core hooks' `Bash`. Cursor's
     first-class `Delete` tool (unique to this harness - everywhere else deletion
     goes through the shell) is presented to the reviewer-scope guard as a write so a

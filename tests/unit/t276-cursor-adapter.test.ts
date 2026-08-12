@@ -15,6 +15,8 @@
 //   - guards (preToolUse): Shell maps to Bash for the core guards; a core
 //     exit-2 block converts to {"permission":"deny","agent_message"} stdout
 //     JSON (exit 0) - Cursor's deny channel, NOT the Claude exit-2 contract.
+//     Allow paths emit {"permission":"allow"} (failClosed IDE treats empty
+//     stdout as invalid JSON and blocks; CLI treated the same silence as allow).
 //   - Task spawn/completion maintains the subagent-identity ledger, so a
 //     guard event from another conversation_id gets agent_type attributed
 //     (the reviewer-scope bound's identity source on this harness).
@@ -23,7 +25,8 @@
 //     Cursor's final live Task; beforeSubmitPrompt mints HUMAN_TURN.
 //   - stop: a core {"decision":"block","reason"} converts to
 //     {"followup_message"} (advisory nudge - Cursor stop cannot block).
-//   - malformed stdin fails open (exit 0, no output).
+//   - malformed stdin denies guards and remains advisory (empty stdout)
+//     on every other target.
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -138,6 +141,17 @@ function runAdapter(
   return { stdout: r.stdout ?? "", stderr: r.stderr ?? "", code: r.status ?? 0 };
 }
 
+/** Cursor failClosed preToolUse requires permission JSON on allow, not silence. */
+function expectAllowJson(
+  r: { code: number; stdout: string },
+  label?: string,
+): void {
+  expect(r.code, label).toBe(0);
+  expect(JSON.parse(r.stdout) as { permission?: string }, label).toEqual({
+    permission: "allow",
+  });
+}
+
 function registerTaskParent(projectDir: string): void {
   const conversation = PAYLOADS.preToolUseTask.conversation_id;
   if (typeof conversation !== "string") {
@@ -235,12 +249,11 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(out.agent_message ?? "").toContain("aidlc-orchestrate");
   });
 
-  test("4: guards allow an ordinary shell command silently", () => {
+  test("4: guards allow an ordinary shell command with permission-allow JSON", () => {
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");
     const r = runAdapter(proj, "guards", payload("preToolUseShell", proj));
-    expect(r.code).toBe(0);
-    expect(r.stdout.trim()).toBe("");
+    expectAllowJson(r);
   });
 
   test("5: Task attribution binds unknown conversations only; registered mains are never conflated", () => {
@@ -273,7 +286,7 @@ describe("t276 cursor adapter payload conversion", () => {
     );
     // Spawn: the MAIN conversation's Task call records the ledger entry.
     const spawn = runAdapter(proj, "guards", payload("preToolUseTask", proj));
-    expect(spawn.code).toBe(0);
+    expectAllowJson(spawn);
     expect(ledgerFilesFor(proj)).toHaveLength(1);
     // The registered independent conversation must not inherit the reviewer
     // identity (the review round-1 conflation repro).
@@ -287,7 +300,7 @@ describe("t276 cursor adapter payload conversion", () => {
       }),
     );
     expect(unrelated.code).toBe(0);
-    expect(unrelated.stdout.trim()).toBe("");
+    expectAllowJson(unrelated);
     // The reviewer's own Read (fresh conversation_id, no sessionStart, no
     // identity fields — the live subagent shape) is scope-enforced.
     const sibling = runAdapter(
@@ -325,7 +338,7 @@ describe("t276 cursor adapter payload conversion", () => {
       }),
     );
     expect(afterDispatch.code).toBe(0);
-    expect(afterDispatch.stdout.trim()).toBe("");
+    expectAllowJson(afterDispatch);
   });
 
   test("6: postToolUse Write lands an audit row; Task lands SUBAGENT_COMPLETED; mint lands HUMAN_TURN", () => {
@@ -498,7 +511,7 @@ describe("t276 cursor adapter payload conversion", () => {
       conversation_id: "parent-conversation-b",
       session_id: "parent-conversation-b",
     });
-    expect(parentB.stdout.trim()).toBe("");
+    expectAllowJson(parentB);
     // An unknown conversation (the live subagent shape) is attributed while
     // both records name the same agent...
     expect(JSON.parse(siblingRead({}).stdout).permission).toBe("deny");
@@ -696,7 +709,7 @@ describe("t276 cursor adapter payload conversion", () => {
       }),
     );
     expect(own.code).toBe(0);
-    expect(own.stdout.trim()).toBe("");
+    expectAllowJson(own);
   });
 
   test("17: Delete keeps its real name for the state-transition guard", () => {
@@ -889,7 +902,7 @@ describe("t276 cursor adapter payload conversion", () => {
         },
       }),
     );
-    expect(harmless.stdout).toBe("");
+    expectAllowJson(harmless);
 
     const ready = projectWithReadyReview();
     const protectedWrite = runAdapter(
@@ -1111,7 +1124,7 @@ describe("t276 cursor adapter payload conversion", () => {
         tool_input: { command: "printf '%s\\n' '$HOME'" },
       }),
     );
-    expect(literalDollar.stdout.trim()).toBe("");
+    expectAllowJson(literalDollar);
 
     for (const command of [
       "rg node README.md",
@@ -1127,7 +1140,7 @@ describe("t276 cursor adapter payload conversion", () => {
           tool_input: { command },
         }),
       );
-      expect(harmlessArgument.stdout.trim(), command).toBe("");
+      expectAllowJson(harmlessArgument, command);
     }
 
     // Simulate corruption outside the delegated tool path. The active dispatch
@@ -1270,6 +1283,6 @@ describe("t276 cursor adapter payload conversion", () => {
       }),
     );
     expect(resumed.code).toBe(0);
-    expect(resumed.stdout.trim()).toBe("");
+    expectAllowJson(resumed);
   });
 });

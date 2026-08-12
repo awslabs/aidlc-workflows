@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.69] - 2026-08-13
+
+Cursor IDE no longer blocks every tool call on a fail-closed PreToolUse hook that allowed with empty stdout. The Cursor adapter now emits `{"permission":"allow"}` on both allow returns, matching Cursor's required permission JSON; deny JSON and `failClosed: true` are unchanged. Cursor CLI already treated silence as allow, so CLI-only verification missed this. **Upgrade:** refresh `dist/cursor/` and rerun `bun dist/cursor/install.ts <project>`.
+
+* Cursor `preToolUse` (`guards`) allow paths write `{"permission":"allow"}` before exit 0. Empty stdout is invalid JSON; with `failClosed: true` the IDE denied the call (`Hook "bun .cursor/hooks/aidlc-cursor-adapter.ts guards" returned no output`).
+* Unit coverage in t276 asserts allow stdout is that JSON, and still deny JSON on block or malformed input.
+* No command or flag changes.
+
 ## [2.5.68] - 2026-08-13
 
 Codex balanced and templated agents now use a supported model on Amazon Bedrock. **Upgrade:** re-copy `dist/codex/` into the project.
