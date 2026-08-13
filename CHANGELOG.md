@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.71] - 2026-08-13
+
+Stages now carry deterministic element-level traceability from requirements through stories, Units, design, code, and the Construction exit checks. **Upgrade:** refresh `dist/<harness>/`; for an existing intent whose current or completed in-flight stage predates `traceability.json`, revisit that stage and create its declared traceability artifact before attempting completion or downstream phase verification.
+
+* Requirements, stories, acceptance criteria, Units, business rules, and detailed NFRs use stable IDs (`FR`, `NFR`, `US`, three-segment `AC`, `U`/Unit directory, `BRx.y`, and `NFRx.y`) in stage deliverables.
+* Eight Inception and Construction stages declare and write `traceability.json`; the new advisory `traceability` sensor validates JSON shape and statuses, fails closed on missing upstream evidence, verifies deterministic targets, and derives unexplained business-rule orphans.
+* Delivery Planning aggregates Inception traceability, Build and Test writes a cross-Unit final coverage deliverable, and CI Pipeline keeps the Construction phase-boundary check at the real transition while consuming those results.
+* `aidlc-sensor list` now reports six framework sensors. No command or flag changes.
+
 ## [2.5.69] - 2026-08-13
 
 Cursor IDE no longer blocks every tool call on a fail-closed PreToolUse hook that allowed with empty stdout. The Cursor adapter now emits `{"permission":"allow"}` on both allow returns, matching Cursor's required permission JSON; deny JSON and `failClosed: true` are unchanged. Cursor CLI already treated silence as allow, so CLI-only verification missed this. **Upgrade:** refresh `dist/cursor/` and rerun `bun dist/cursor/install.ts <project>`.

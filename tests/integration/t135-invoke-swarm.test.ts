@@ -82,6 +82,7 @@ import {
   seededStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
+import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 resetAidlcEnv();
 
@@ -245,9 +246,13 @@ function logWorktreeReview(
   if (seedArtifacts) {
     const dir = join(seededRecordDir(wt), "construction", unit, "code-generation");
     mkdirSync(dir, { recursive: true });
-    for (const name of ["code-generation-plan", "code-summary"]) {
-      const artifact = join(dir, `${name}.md`);
-      if (!existsSync(artifact)) writeFileSync(artifact, `# ${name}\n`);
+    for (const name of ["code-generation-plan", "code-summary", "traceability"]) {
+      const artifact = join(dir, artifactFilename(name));
+      const body =
+        name === "traceability"
+          ? '{"stage":"code-generation","upstream_ids":[],"coverage":[]}\n'
+          : `# ${name}\n`;
+      if (!existsSync(artifact)) writeFileSync(artifact, body);
     }
   }
   for (const terminal of [false, true]) {

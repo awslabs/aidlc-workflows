@@ -19,6 +19,7 @@ produces:
   - scalability-requirements
   - reliability-requirements
   - tech-stack-decisions
+  - traceability
 produces_kinds:
   performance-requirements: [service, ui]
   scalability-requirements: [service]
@@ -41,6 +42,7 @@ sensors:
   - upstream-coverage
   - linter
   - type-check
+  - traceability
 scopes:
   - enterprise
   - feature
@@ -49,7 +51,7 @@ scopes:
   - security-patch
   - workshop
 inputs: functional design artifacts, requirements.md, RE artifacts
-outputs: "performance-requirements.md, security-requirements.md, scalability-requirements.md, reliability-requirements.md, tech-stack-decisions.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)"
+outputs: "performance-requirements.md, security-requirements.md, scalability-requirements.md, reliability-requirements.md, tech-stack-decisions.md, traceability.json (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)"
 ---
 
 # NFR Requirements
@@ -114,6 +116,27 @@ Generate the following in `<record>/construction/{unit-name}/nfr-requirements/`:
 - **reliability-requirements.md**: Availability targets (SLA/SLO), fault tolerance requirements, backup/recovery, graceful degradation
 - **tech-stack-decisions.md**: Technology selections and rationale — languages, frameworks, databases, infrastructure tools, and justification for each choice
 
+Every detailed requirement inherits its inception NFR ID and appends a
+sub-number, such as `NFR4.1` and `NFR4.2`. Carry these IDs on every requirement
+row.
+
+Create
+`<record>/construction/{unit-name}/nfr-requirements/traceability.json`.
+Enumerate every inception `NFR{n}` applicable to this Unit and target the
+derived `NFRx.y` IDs. `N/A` requires a justification:
+
+```json
+{
+  "stage": "nfr-requirements",
+  "unit": "u1-auth",
+  "upstream_ids": ["NFR1", "NFR4"],
+  "coverage": [
+    { "id": "NFR1", "status": "OK", "target": "NFR1.1, NFR1.2" },
+    { "id": "NFR4", "status": "N/A", "target": "no persistent data in this Unit" }
+  ]
+}
+```
+
 ### Step 7: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
@@ -146,6 +169,7 @@ The imported sensors check those outputs:
 - **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter (this stage consumes `business-logic-model`, `business-rules`, `requirements`).
 - **`linter`** runs against any TypeScript/JavaScript snippets the design includes (matches `**/*.{ts,js}`).
 - **`type-check`** runs against any TypeScript/TSX snippets the design includes (matches `**/*.{ts,tsx}`).
+- **`traceability`** validates that inception NFR IDs are declared and covered by per-Unit `NFRx.y` requirements.
 
 Failure modes land in `<record>/.aidlc-sensors/<stage-slug>/` as `SENSOR_FAILED` audit rows with per-sensor detail files.
 

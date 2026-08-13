@@ -17,6 +17,7 @@ produces:
   - scalability-design
   - reliability-design
   - logical-components
+  - traceability
 produces_kinds:
   performance-design: [service, ui]
   scalability-design: [service]
@@ -43,6 +44,7 @@ sensors:
   - upstream-coverage
   - linter
   - type-check
+  - traceability
 scopes:
   - enterprise
   - feature
@@ -50,7 +52,7 @@ scopes:
   - infra
   - workshop
 inputs: NFR requirements artifacts, functional design artifacts
-outputs: "performance-design.md, security-design.md, scalability-design.md, reliability-design.md, logical-components.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)"
+outputs: "performance-design.md, security-design.md, scalability-design.md, reliability-design.md, logical-components.md, traceability.json (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)"
 ---
 
 # NFR Design
@@ -122,6 +124,22 @@ Generate the following in `<record>/construction/{unit-name}/nfr-design/`:
 - **reliability-design.md**: Resilience patterns, circuit breaker configuration, retry policies, health check design, failover procedures, backup strategy
 - **logical-components.md**: Logical infrastructure component inventory — service boundaries, failure domains, blast radius mapping, component isolation strategy, shared resource identification. Bridges NFR design decisions with Infrastructure Design by providing a component-level view of where NFR patterns apply.
 
+Create `<record>/construction/{unit-name}/nfr-design/traceability.json`.
+Enumerate every `NFRx.y` from this Unit's NFR requirements and map it to the
+concrete design solution:
+
+```json
+{
+  "stage": "nfr-design",
+  "unit": "u1-auth",
+  "upstream_ids": ["NFR1.1", "NFR1.2"],
+  "coverage": [
+    { "id": "NFR1.1", "status": "OK", "target": "Redis cache with connection pooling" },
+    { "id": "NFR1.2", "status": "GAP" }
+  ]
+}
+```
+
 ### Step 7: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
@@ -154,6 +172,7 @@ The imported sensors check those outputs:
 - **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter (this stage consumes `performance-requirements`, `security-requirements`, `scalability-requirements`, `reliability-requirements`, `tech-stack-decisions`, `business-logic-model`).
 - **`linter`** runs against any TypeScript/JavaScript snippets the design includes (matches `**/*.{ts,js}`).
 - **`type-check`** runs against any TypeScript/TSX snippets the design includes (matches `**/*.{ts,tsx}`).
+- **`traceability`** validates that every detailed NFR requirement is declared and covered by a design solution.
 
 Failure modes land in `<record>/.aidlc-sensors/<stage-slug>/` as `SENSOR_FAILED` audit rows with per-sensor detail files.
 

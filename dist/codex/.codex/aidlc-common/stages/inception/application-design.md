@@ -18,6 +18,7 @@ produces:
   - services
   - component-dependency
   - decisions
+  - traceability
 consumes:
   - artifact: requirements
     required: true
@@ -37,13 +38,14 @@ requires_stage:
 sensors:
   - required-sections
   - upstream-coverage
+  - traceability
 scopes:
   - enterprise
   - feature
   - mvp
   - workshop
 inputs: <record>/inception/requirements-analysis/requirements.md, <record>/inception/user-stories/stories.md (if produced), RE artifacts (if brownfield)
-outputs: components.md, component-methods.md, services.md, component-dependency.md, decisions.md (under this stage's record dir, engine-resolved)
+outputs: components.md, component-methods.md, services.md, component-dependency.md, decisions.md, traceability.json (under this stage's record dir, engine-resolved)
 ---
 
 # Application Design
@@ -130,6 +132,22 @@ decisions.md.
 
 When only one option is viable, state why and skip the block.
 
+Create `<record>/inception/application-design/traceability.json`. When
+`stories.md` exists, enumerate every `USx.y`; otherwise enumerate every `FR`
+from `requirements.md`. Map each upstream ID to the component, service, or
+public method that realizes it:
+
+```json
+{
+  "stage": "application-design",
+  "upstream_ids": ["US1.1", "US1.2"],
+  "coverage": [
+    { "id": "US1.1", "status": "OK", "target": "AuthService.login()" },
+    { "id": "US1.2", "status": "GAP" }
+  ]
+}
+```
+
 ### Step 6: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
@@ -159,6 +177,7 @@ The imported sensors check those outputs:
 
 - **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `<record>/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
 - **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `requirements`, `stories`, `team-practices`).
+- **`traceability`** validates `traceability.json` and checks every story, or every fallback functional requirement, is declared and covered.
 
 ## Learn
 

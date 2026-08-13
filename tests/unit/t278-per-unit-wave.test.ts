@@ -24,6 +24,7 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
+import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
@@ -35,6 +36,7 @@ const REQUIRED_FD = [
   "business-logic-model",
   "business-rules",
   "domain-entities",
+  "traceability",
 ];
 interface WaveEntry {
   unit: string;
@@ -166,7 +168,7 @@ function cover(
   const dir = join(seededRecordDir(proj), "construction", unit, stage);
   mkdirSync(dir, { recursive: true });
   for (const name of names) {
-    writeFileSync(join(dir, `${name}.md`), `# ${name} for ${unit}\n`);
+    writeFileSync(join(dir, artifactFilename(name)), `# ${name} for ${unit}\n`);
   }
 }
 
@@ -312,7 +314,7 @@ describe("t278 engine-emitted wave contract", () => {
     const web = directive.wave?.entries[1] as WaveEntry;
     expect(api.unit_kind).toBe("service");
     expect(api.completion_required).toBe(true);
-    expect(api.required_produces).toHaveLength(4);
+    expect(api.required_produces).toHaveLength(5);
     expect(
       api.required_produces.every((path) =>
         path.includes("/construction/api/infrastructure-design/")
@@ -322,6 +324,7 @@ describe("t278 engine-emitted wave contract", () => {
     expect(web.required_produces).toEqual([
       `${RP}/construction/web/infrastructure-design/deployment-architecture.md`,
       `${RP}/construction/web/infrastructure-design/cicd-pipeline.md`,
+      `${RP}/construction/web/infrastructure-design/traceability.json`,
     ]);
     expect(web.produces).toContain(
       `${RP}/construction/web/infrastructure-design/shared-infrastructure.md`,
@@ -386,6 +389,7 @@ describe("t278 engine-emitted wave contract", () => {
     );
     expect(entry.required_produces).toEqual([
       `${RP}/construction/contract/nfr-design/security-design.md`,
+      `${RP}/construction/contract/nfr-design/traceability.json`,
     ]);
   }, 30000);
 

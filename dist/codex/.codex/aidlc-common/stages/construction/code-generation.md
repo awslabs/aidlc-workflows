@@ -13,6 +13,7 @@ workspace_requires: true
 produces:
   - code-generation-plan
   - code-summary
+  - traceability
 consumes:
   - artifact: business-logic-model
     required: false
@@ -39,6 +40,7 @@ requires_stage:
 sensors:
   - linter
   - type-check
+  - traceability
 scopes:
   - enterprise
   - feature
@@ -49,7 +51,7 @@ scopes:
   - security-patch
   - workshop
 inputs: ALL prior design artifacts for this unit
-outputs: application code + code-generation-plan.md, code-generation-questions.md, code-summary.md (under this stage's per-unit record dir, engine-resolved)
+outputs: application code + code-generation-plan.md, code-generation-questions.md, code-summary.md, traceability.json (under this stage's per-unit record dir, engine-resolved)
 ---
 
 # Code Generation
@@ -174,6 +176,25 @@ After subagent completes, create `<record>/construction/{unit-name}/code-generat
 - Test coverage summary
 - Any deviations from the plan
 
+Create
+`<record>/construction/{unit-name}/code-generation/traceability.json`.
+Enumerate every assigned AC, detailed `NFRx.y`, and `BRx.y` (or direct `FR` /
+`NFR` IDs when incremental scope skipped the design chain). Every `OK` target
+must be one existing workspace-relative implementation or test file:
+
+```json
+{
+  "stage": "code-generation",
+  "unit": "u1-auth",
+  "upstream_ids": ["AC1.1.1", "NFR1.1", "BR1.1"],
+  "coverage": [
+    { "id": "AC1.1.1", "status": "OK", "target": "src/auth/login.ts" },
+    { "id": "NFR1.1", "status": "OK", "target": "src/cache/redis.ts" },
+    { "id": "BR1.1", "status": "OK", "target": "src/auth/policy.ts" }
+  ]
+}
+```
+
 ### Step 6: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
@@ -215,11 +236,13 @@ The imported sensors check the code outputs:
 - **`type-check`** wraps the project's configured type-checker (tsc by
   default). Fires on `**/*.{ts,tsx}`. Failure mode: type errors emit
   `SENSOR_FAILED` with similar detail.
+- **`traceability`** validates the per-Unit coverage table and verifies every
+  `OK` target is an existing workspace-relative file.
 
 The two universal markdown-shape sensors (`required-sections`,
 `upstream-coverage`) are NOT imported here — code-generation produces
-code, not markdown artefacts. Future stages that produce both code and
-markdown would import all four.
+code plus record artifacts, while those two checks are scoped to markdown
+content rather than the structured traceability file.
 
 ## Learn
 

@@ -17,6 +17,7 @@ produces:
   - infrastructure-services
   - monitoring-design
   - cicd-pipeline
+  - traceability
 optional_produces:
   - shared-infrastructure
 produces_kinds:
@@ -24,6 +25,7 @@ produces_kinds:
   infrastructure-services: [service, packaging]
   monitoring-design: [service, packaging]
   cicd-pipeline: [service, ui, packaging, library]
+  traceability: [service, ui, packaging, library]
 consumes:
   - artifact: performance-design
     required: true
@@ -49,6 +51,7 @@ sensors:
   - upstream-coverage
   - linter
   - type-check
+  - traceability
 scopes:
   - enterprise
   - feature
@@ -56,7 +59,7 @@ scopes:
   - infra
   - workshop
 inputs: NFR design artifacts, application design, functional design
-outputs: "deployment-architecture.md, infrastructure-services.md, monitoring-design.md, cicd-pipeline.md, CONDITIONAL: shared-infrastructure.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)"
+outputs: "deployment-architecture.md, infrastructure-services.md, monitoring-design.md, cicd-pipeline.md, traceability.json, CONDITIONAL: shared-infrastructure.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)"
 ---
 
 # Infrastructure Design
@@ -135,6 +138,23 @@ Generate the following in `<record>/construction/{unit-name}/infrastructure-desi
 - **cicd-pipeline.md**: Pipeline stages, build configuration, test automation integration, deployment strategy (blue-green, canary, rolling), rollback procedures, secrets management in CI/CD
 - **shared-infrastructure.md** (CONDITIONAL — produce when multiple units share infrastructure resources): Shared databases, shared caches, shared message queues, shared networking, cross-unit service discovery, resource ownership and access boundaries
 
+Create
+`<record>/construction/{unit-name}/infrastructure-design/traceability.json`.
+Enumerate every `NFRx.y` design decision that requires infrastructure and map
+it to the concrete resource or configuration:
+
+```json
+{
+  "stage": "infrastructure-design",
+  "unit": "u1-auth",
+  "upstream_ids": ["NFR1.1", "NFR3.1"],
+  "coverage": [
+    { "id": "NFR1.1", "status": "OK", "target": "ElastiCache cluster" },
+    { "id": "NFR3.1", "status": "GAP" }
+  ]
+}
+```
+
 ### Step 7: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
@@ -167,6 +187,7 @@ The imported sensors check those outputs:
 - **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter (this stage consumes `performance-design`, `security-design`, `scalability-design`, `reliability-design`, `logical-components`, `components`, `services`, `business-logic-model`).
 - **`linter`** runs against any TypeScript/JavaScript snippets the design includes (matches `**/*.{ts,js}`).
 - **`type-check`** runs against any TypeScript/TSX snippets the design includes (matches `**/*.{ts,tsx}`).
+- **`traceability`** validates that every infrastructure-relevant `NFRx.y` design decision is declared and covered.
 
 Failure modes land in `<record>/.aidlc-sensors/<stage-slug>/` as `SENSOR_FAILED` audit rows with per-sensor detail files.
 

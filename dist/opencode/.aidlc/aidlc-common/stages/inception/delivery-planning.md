@@ -143,11 +143,18 @@ the explanation.
 
 ### Step 6: Phase Boundary Verification
 
-Run Inception → Construction verification check:
-- Requirements → Stories → Architecture alignment
-- All stories trace to requirements
-- Architecture covers all stories
-- Write results to `<record>/verification/phase-check-inception.md`
+Run the Inception → Construction completeness audit. Read every
+`traceability.json` produced by the Inception stages that executed:
+
+- `<record>/inception/user-stories/traceability.json`
+- `<record>/inception/application-design/traceability.json`
+- `<record>/inception/units-generation/traceability.json`
+
+Confirm there are no unresolved findings, including `GAP`, `ORPHAN`, invalid
+targets, or missing upstream IDs. Consolidate the tables into
+`<record>/verification/phase-check-inception.md` with a pass/fail verdict at
+the top. If any finding remains, stop the transition and revisit the owning
+stage before Construction begins.
 
 ### Step 7: Completion Handoff
 

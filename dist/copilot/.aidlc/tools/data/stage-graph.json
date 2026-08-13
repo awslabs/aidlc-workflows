@@ -984,7 +984,8 @@
     "produces": [
       "stories",
       "personas",
-      "user-stories-assessment"
+      "user-stories-assessment",
+      "traceability"
     ],
     "consumes": [
       {
@@ -1011,7 +1012,8 @@
     ],
     "sensors": [
       "required-sections",
-      "upstream-coverage"
+      "upstream-coverage",
+      "traceability"
     ],
     "scopes": [
       "enterprise",
@@ -1024,7 +1026,7 @@
     "review_class": "advisory",
     "summary_confirmation": "required",
     "inputs": "<record>/inception/requirements-analysis/requirements.md, RE artifacts (if brownfield)",
-    "outputs": "stories.md, personas.md, user-stories-assessment.md (under this stage's record dir, engine-resolved)",
+    "outputs": "stories.md, personas.md, user-stories-assessment.md, traceability.json (under this stage's record dir, engine-resolved)",
     "rules_in_context": [
       {
         "path": "aidlc/spaces/default/memory/org.md",
@@ -1053,6 +1055,11 @@
         "id": "upstream-coverage",
         "path": ".aidlc/sensors/aidlc-upstream-coverage.md",
         "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "traceability",
+        "path": ".aidlc/sensors/aidlc-traceability.md",
+        "matches": "**/traceability.json"
       }
     ]
   },
@@ -1165,7 +1172,8 @@
       "component-methods",
       "services",
       "component-dependency",
-      "decisions"
+      "decisions",
+      "traceability"
     ],
     "consumes": [
       {
@@ -1197,7 +1205,8 @@
     ],
     "sensors": [
       "required-sections",
-      "upstream-coverage"
+      "upstream-coverage",
+      "traceability"
     ],
     "scopes": [
       "enterprise",
@@ -1210,7 +1219,7 @@
     "review_class": "advisory",
     "summary_confirmation": "required",
     "inputs": "<record>/inception/requirements-analysis/requirements.md, <record>/inception/user-stories/stories.md (if produced), RE artifacts (if brownfield)",
-    "outputs": "components.md, component-methods.md, services.md, component-dependency.md, decisions.md (under this stage's record dir, engine-resolved)",
+    "outputs": "components.md, component-methods.md, services.md, component-dependency.md, decisions.md, traceability.json (under this stage's record dir, engine-resolved)",
     "rules_in_context": [
       {
         "path": "aidlc/spaces/default/memory/org.md",
@@ -1239,6 +1248,11 @@
         "id": "upstream-coverage",
         "path": ".aidlc/sensors/aidlc-upstream-coverage.md",
         "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "traceability",
+        "path": ".aidlc/sensors/aidlc-traceability.md",
+        "matches": "**/traceability.json"
       }
     ]
   },
@@ -1257,7 +1271,8 @@
     "produces": [
       "unit-of-work",
       "unit-of-work-dependency",
-      "unit-of-work-story-map"
+      "unit-of-work-story-map",
+      "traceability"
     ],
     "consumes": [
       {
@@ -1294,7 +1309,8 @@
     ],
     "sensors": [
       "required-sections",
-      "upstream-coverage"
+      "upstream-coverage",
+      "traceability"
     ],
     "scopes": [
       "enterprise",
@@ -1307,7 +1323,7 @@
     "review_class": "advisory",
     "summary_confirmation": "required",
     "inputs": "<record>/inception/application-design/ (all design artifacts), <record>/inception/requirements-analysis/requirements.md, <record>/inception/user-stories/stories.md (if produced)",
-    "outputs": "unit-of-work.md, unit-of-work-dependency.md, unit-of-work-story-map.md (under this stage's record dir, engine-resolved)",
+    "outputs": "unit-of-work.md, unit-of-work-dependency.md, unit-of-work-story-map.md, traceability.json (under this stage's record dir, engine-resolved)",
     "rules_in_context": [
       {
         "path": "aidlc/spaces/default/memory/org.md",
@@ -1336,6 +1352,11 @@
         "id": "upstream-coverage",
         "path": ".aidlc/sensors/aidlc-upstream-coverage.md",
         "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "traceability",
+        "path": ".aidlc/sensors/aidlc-traceability.md",
+        "matches": "**/traceability.json"
       }
     ]
   },
@@ -1455,7 +1476,8 @@
     "produces": [
       "business-logic-model",
       "business-rules",
-      "domain-entities"
+      "domain-entities",
+      "traceability"
     ],
     "optional_produces": [
       "frontend-components"
@@ -1474,6 +1496,12 @@
       "domain-entities": [
         "service",
         "spec",
+        "library"
+      ],
+      "traceability": [
+        "service",
+        "spec",
+        "ui",
         "library"
       ],
       "frontend-components": [
@@ -1513,7 +1541,8 @@
       "required-sections",
       "upstream-coverage",
       "linter",
-      "type-check"
+      "type-check",
+      "traceability"
     ],
     "scopes": [
       "enterprise",
@@ -1527,7 +1556,7 @@
     "review_class": "adversarial",
     "summary_confirmation": "required",
     "inputs": "unit-of-work.md, unit-of-work-story-map.md, requirements.md, application design artifacts",
-    "outputs": "business-logic-model.md, business-rules.md, domain-entities.md, CONDITIONAL: frontend-components.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)",
+    "outputs": "business-logic-model.md, business-rules.md, domain-entities.md, traceability.json, CONDITIONAL: frontend-components.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)",
     "rules_in_context": [
       {
         "path": "aidlc/spaces/default/memory/org.md",
@@ -1566,6 +1595,11 @@
         "id": "type-check",
         "path": ".aidlc/sensors/aidlc-type-check.md",
         "matches": "**/*.{ts,tsx}"
+      },
+      {
+        "id": "traceability",
+        "path": ".aidlc/sensors/aidlc-traceability.md",
+        "matches": "**/traceability.json"
       }
     ]
   },
@@ -1589,7 +1623,8 @@
       "security-requirements",
       "scalability-requirements",
       "reliability-requirements",
-      "tech-stack-decisions"
+      "tech-stack-decisions",
+      "traceability"
     ],
     "produces_kinds": {
       "performance-requirements": [
@@ -1630,7 +1665,8 @@
       "required-sections",
       "upstream-coverage",
       "linter",
-      "type-check"
+      "type-check",
+      "traceability"
     ],
     "scopes": [
       "enterprise",
@@ -1645,7 +1681,7 @@
     "review_class": "adversarial",
     "summary_confirmation": "required",
     "inputs": "functional design artifacts, requirements.md, RE artifacts",
-    "outputs": "performance-requirements.md, security-requirements.md, scalability-requirements.md, reliability-requirements.md, tech-stack-decisions.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)",
+    "outputs": "performance-requirements.md, security-requirements.md, scalability-requirements.md, reliability-requirements.md, tech-stack-decisions.md, traceability.json (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)",
     "rules_in_context": [
       {
         "path": "aidlc/spaces/default/memory/org.md",
@@ -1684,6 +1720,11 @@
         "id": "type-check",
         "path": ".aidlc/sensors/aidlc-type-check.md",
         "matches": "**/*.{ts,tsx}"
+      },
+      {
+        "id": "traceability",
+        "path": ".aidlc/sensors/aidlc-traceability.md",
+        "matches": "**/traceability.json"
       }
     ]
   },
@@ -1705,7 +1746,8 @@
       "security-design",
       "scalability-design",
       "reliability-design",
-      "logical-components"
+      "logical-components",
+      "traceability"
     ],
     "produces_kinds": {
       "performance-design": [
@@ -1758,7 +1800,8 @@
       "required-sections",
       "upstream-coverage",
       "linter",
-      "type-check"
+      "type-check",
+      "traceability"
     ],
     "scopes": [
       "enterprise",
@@ -1772,7 +1815,7 @@
     "review_class": "adversarial",
     "summary_confirmation": "required",
     "inputs": "NFR requirements artifacts, functional design artifacts",
-    "outputs": "performance-design.md, security-design.md, scalability-design.md, reliability-design.md, logical-components.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)",
+    "outputs": "performance-design.md, security-design.md, scalability-design.md, reliability-design.md, logical-components.md, traceability.json (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)",
     "rules_in_context": [
       {
         "path": "aidlc/spaces/default/memory/org.md",
@@ -1811,6 +1854,11 @@
         "id": "type-check",
         "path": ".aidlc/sensors/aidlc-type-check.md",
         "matches": "**/*.{ts,tsx}"
+      },
+      {
+        "id": "traceability",
+        "path": ".aidlc/sensors/aidlc-traceability.md",
+        "matches": "**/traceability.json"
       }
     ]
   },
@@ -1832,7 +1880,8 @@
       "deployment-architecture",
       "infrastructure-services",
       "monitoring-design",
-      "cicd-pipeline"
+      "cicd-pipeline",
+      "traceability"
     ],
     "optional_produces": [
       "shared-infrastructure"
@@ -1852,6 +1901,12 @@
         "packaging"
       ],
       "cicd-pipeline": [
+        "service",
+        "ui",
+        "packaging",
+        "library"
+      ],
+      "traceability": [
         "service",
         "ui",
         "packaging",
@@ -1900,7 +1955,8 @@
       "required-sections",
       "upstream-coverage",
       "linter",
-      "type-check"
+      "type-check",
+      "traceability"
     ],
     "scopes": [
       "enterprise",
@@ -1914,7 +1970,7 @@
     "review_class": "adversarial",
     "summary_confirmation": "required",
     "inputs": "NFR design artifacts, application design, functional design",
-    "outputs": "deployment-architecture.md, infrastructure-services.md, monitoring-design.md, cicd-pipeline.md, CONDITIONAL: shared-infrastructure.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)",
+    "outputs": "deployment-architecture.md, infrastructure-services.md, monitoring-design.md, cicd-pipeline.md, traceability.json, CONDITIONAL: shared-infrastructure.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)",
     "rules_in_context": [
       {
         "path": "aidlc/spaces/default/memory/org.md",
@@ -1953,6 +2009,11 @@
         "id": "type-check",
         "path": ".aidlc/sensors/aidlc-type-check.md",
         "matches": "**/*.{ts,tsx}"
+      },
+      {
+        "id": "traceability",
+        "path": ".aidlc/sensors/aidlc-traceability.md",
+        "matches": "**/traceability.json"
       }
     ]
   },
@@ -1970,7 +2031,8 @@
     "workspace_requires": true,
     "produces": [
       "code-generation-plan",
-      "code-summary"
+      "code-summary",
+      "traceability"
     ],
     "consumes": [
       {
@@ -2015,7 +2077,8 @@
     ],
     "sensors": [
       "linter",
-      "type-check"
+      "type-check",
+      "traceability"
     ],
     "scopes": [
       "enterprise",
@@ -2031,7 +2094,7 @@
     "reviewer_max_iterations": 2,
     "review_class": "adversarial",
     "inputs": "ALL prior design artifacts for this unit",
-    "outputs": "application code + code-generation-plan.md, code-generation-questions.md, code-summary.md (under this stage's per-unit record dir, engine-resolved)",
+    "outputs": "application code + code-generation-plan.md, code-generation-questions.md, code-summary.md, traceability.json (under this stage's per-unit record dir, engine-resolved)",
     "rules_in_context": [
       {
         "path": "aidlc/spaces/default/memory/org.md",
@@ -2060,6 +2123,11 @@
         "id": "type-check",
         "path": ".aidlc/sensors/aidlc-type-check.md",
         "matches": "**/*.{ts,tsx}"
+      },
+      {
+        "id": "traceability",
+        "path": ".aidlc/sensors/aidlc-traceability.md",
+        "matches": "**/traceability.json"
       }
     ]
   },
@@ -2082,7 +2150,8 @@
       "performance-test-instructions",
       "security-test-instructions",
       "build-and-test-summary",
-      "build-test-results"
+      "build-test-results",
+      "cross-unit-traceability"
     ],
     "consumes": [
       {
@@ -2113,7 +2182,7 @@
       "workshop"
     ],
     "inputs": "ALL code generation outputs across all units",
-    "outputs": "build-instructions.md, unit-test-instructions.md, integration-test-instructions.md, performance-test-instructions.md, security-test-instructions.md, build-and-test-summary.md, test-results.md (under this stage's record dir, engine-resolved)",
+    "outputs": "build-instructions.md, unit-test-instructions.md, integration-test-instructions.md, performance-test-instructions.md, security-test-instructions.md, build-and-test-summary.md, test-results.md, cross-unit-traceability.md (under this stage's record dir, engine-resolved)",
     "rules_in_context": [
       {
         "path": "aidlc/spaces/default/memory/org.md",

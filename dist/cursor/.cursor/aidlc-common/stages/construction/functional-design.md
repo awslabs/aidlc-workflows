@@ -15,12 +15,14 @@ produces:
   - business-logic-model
   - business-rules
   - domain-entities
+  - traceability
 optional_produces:
   - frontend-components
 produces_kinds:
   business-logic-model: [service, ui, library]
   business-rules: [service, spec, library]
   domain-entities: [service, spec, library]
+  traceability: [service, spec, ui, library]
   frontend-components: [ui]
 consumes:
   - artifact: unit-of-work
@@ -42,6 +44,7 @@ sensors:
   - upstream-coverage
   - linter
   - type-check
+  - traceability
 scopes:
   - enterprise
   - feature
@@ -49,7 +52,7 @@ scopes:
   - refactor
   - workshop
 inputs: unit-of-work.md, unit-of-work-story-map.md, requirements.md, application design artifacts
-outputs: "business-logic-model.md, business-rules.md, domain-entities.md, CONDITIONAL: frontend-components.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)"
+outputs: "business-logic-model.md, business-rules.md, domain-entities.md, traceability.json, CONDITIONAL: frontend-components.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)"
 ---
 
 # Functional Design
@@ -112,9 +115,31 @@ If ANY ambiguity found: create follow-up questions and resolve before proceeding
 Generate the following in `<record>/construction/{unit-name}/functional-design/`:
 
 - **business-logic-model.md**: Detailed algorithms, workflows, data transformations, processing sequences, and decision trees for the unit's business logic
-- **business-rules.md**: Decision rules, validation logic, constraints, policies, conditional behavior, and business invariants
+- **business-rules.md**: Decision rules, validation logic, constraints, policies, conditional behavior, and business invariants. Give every rule a stable `BR{group}.{seq}` ID (for example `BR1.1`).
 - **domain-entities.md**: Entities, relationships, data structures, attributes, lifecycle states, and entity interaction patterns
 - **frontend-components.md** (CONDITIONAL — only if unit includes frontend/UI): Component hierarchy, props/state design, interaction flows, form validation rules, API integration points
+
+Create
+`<record>/construction/{unit-name}/functional-design/traceability.json`.
+Enumerate every acceptance criterion assigned to this Unit. Each `OK` target
+must name one or more `BRx.y` IDs that exist in `business-rules.md`. Use the
+optional `reverse` array to explain rules that intentionally have no AC; any
+unexplained rule is mechanically derived as an orphan:
+
+```json
+{
+  "stage": "functional-design",
+  "unit": "u1-auth",
+  "upstream_ids": ["AC1.1.1", "AC1.1.2"],
+  "coverage": [
+    { "id": "AC1.1.1", "status": "OK", "target": "BR1.1" },
+    { "id": "AC1.1.2", "status": "GAP" }
+  ],
+  "reverse": [
+    { "id": "BR1.3", "status": "N/A", "target": "technical validation rule" }
+  ]
+}
+```
 
 ### Step 6: Completion Handoff
 
@@ -148,6 +173,7 @@ The imported sensors check those outputs:
 - **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter (this stage consumes `unit-of-work`, `unit-of-work-story-map`, `requirements`, `components`, `component-methods`, `services`).
 - **`linter`** runs against any TypeScript/JavaScript snippets the design includes (matches `**/*.{ts,js}`).
 - **`type-check`** runs against any TypeScript/TSX snippets the design includes (matches `**/*.{ts,tsx}`).
+- **`traceability`** validates per-Unit AC coverage, verifies `BRx.y` targets against `business-rules.md`, and derives unexplained business-rule orphans.
 
 Failure modes land in `<record>/.aidlc-sensors/<stage-slug>/` as `SENSOR_FAILED` audit rows with per-sensor detail files.
 

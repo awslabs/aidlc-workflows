@@ -9,6 +9,7 @@ import {
   activeUnitCheckpoint,
   appendSlug,
   appendUnderHeading,
+  artifactFilename,
   type CheckboxState,
   checkSummaryConfirmationEvidence,
   codekbDir,
@@ -1304,7 +1305,7 @@ function missingUnitArtifacts(
   }
   const missing: string[] = [];
   for (const name of required) {
-    const p = join(rec, "construction", unit, stage.slug, `${name}.md`);
+    const p = join(rec, "construction", unit, stage.slug, artifactFilename(name));
     if (!isRegularFile(p)) missing.push(name);
   }
   return missing;
@@ -1531,7 +1532,7 @@ function producesArtifactsExist(
   }
   for (const dir of producesDirsForStage(pd, stage)) {
     for (const name of produces) {
-      if (isRegularFile(join(dir, `${name}.md`))) return true;
+      if (isRegularFile(join(dir, artifactFilename(name)))) return true;
     }
   }
   return false;

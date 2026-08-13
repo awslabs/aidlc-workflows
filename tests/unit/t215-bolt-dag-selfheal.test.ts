@@ -24,6 +24,7 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 resetAidlcEnv();
 
@@ -40,6 +41,7 @@ const FD_PRODUCES = [
   "business-rules",
   "domain-entities",
   "frontend-components",
+  "traceability",
 ];
 
 const tempDirs: string[] = [];
@@ -237,7 +239,7 @@ function coverUnit(
   const dir = join(seededRecordDir(proj), "construction", unit, slug);
   mkdirSync(dir, { recursive: true });
   for (const name of producesNames) {
-    writeFileSync(join(dir, `${name}.md`), `# ${name} for ${unit}\n`);
+    writeFileSync(join(dir, artifactFilename(name)), `# ${name} for ${unit}\n`);
   }
 }
 

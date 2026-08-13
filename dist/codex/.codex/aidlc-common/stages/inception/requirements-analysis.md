@@ -154,12 +154,15 @@ confirmation `[Answer]:` to blank, and repeat this step. Do NOT create
 
 Create `<record>/inception/requirements-analysis/requirements.md` containing:
 - **Intent analysis** — What the user is trying to achieve (goals, not just features)
-- **Functional requirements** — Organized by feature area or domain
-- **Non-functional requirements** — Performance, security, scalability targets
+- **Functional requirements** — Organized by feature area or domain. Give every requirement a stable `FR{n}` ID (for example `FR1`) and every sub-requirement an `FR{n}.{m}` ID (for example `FR1.2`).
+- **Non-functional requirements** — Performance, security, scalability, and reliability targets. Give every requirement a stable `NFR{n}` ID (for example `NFR3`).
 - **Constraints** — Technical, business, and organizational constraints
 - **Assumptions** — Documented assumptions with rationale
 - **Out of scope** — Explicitly excluded items
 - **Open questions** — Any remaining uncertainties for later stages
+
+These IDs are permanent traceability keys. Downstream stages must preserve
+them exactly rather than renumbering or replacing them with prose references.
 
 ### Step 12: Completion Handoff
 

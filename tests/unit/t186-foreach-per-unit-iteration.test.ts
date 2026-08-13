@@ -58,6 +58,7 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 resetAidlcEnv();
 
@@ -78,6 +79,7 @@ const FD_REQUIRED_PRODUCES = [
   "business-logic-model",
   "business-rules",
   "domain-entities",
+  "traceability",
 ];
 
 const tempDirs: string[] = [];
@@ -218,7 +220,7 @@ function coverUnit(
   const dir = join(seededRecordDir(proj), "construction", unit, slug);
   mkdirSync(dir, { recursive: true });
   for (const name of producesNames) {
-    writeFileSync(join(dir, `${name}.md`), `# ${name} for ${unit}\n`);
+    writeFileSync(join(dir, artifactFilename(name)), `# ${name} for ${unit}\n`);
   }
 }
 
@@ -541,7 +543,7 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
   // 13: a report arriving at an autonomous swarm's batch boundary must not
   // complete the whole stage. Only a valid DAG with current-run convergence
   // rows for every unit can receive the report-side disk-coverage exemption.
-  const CG_PRODUCES = ["code-generation-plan", "code-summary"];
+  const CG_PRODUCES = ["code-generation-plan", "code-summary", "traceability"];
   test("13: autonomous multi-batch swarm refuses approval before every batch converges", () => {
     const proj = seedProject("code-generation", "on");
     // code-generation must be in-flight (not pending) for an approve to be valid;

@@ -100,6 +100,7 @@ import {
 import {
   activeSpace,
   activeUnitCheckpoint,
+  artifactFilename,
   auditBlockField,
   type CheckboxLine,
   checkSummaryConfirmationEvidence,
@@ -1409,6 +1410,7 @@ function resolveArtifactPath(
   recordPrefix: string | null,
   codekbCtx?: CodekbCtx,
 ): string {
+  const filename = artifactFilename(name);
   // Codekb artifacts live in the space-level codekb dir, keyed by repo — NOT
   // under the per-intent record dir. This arm fires for BOTH produces[] (owner
   // is the directive's own node) AND consumes[] (owner is the producing stage
@@ -1417,13 +1419,13 @@ function resolveArtifactPath(
   // stem, mirroring relativeCodekbDir. Guarded on the ctx being present so a
   // ctx-less caller (defaults) falls through to the record-dir arms below.
   if (isCodekb(owner) && codekbCtx) {
-    return `${relativeCodekbDir(codekbCtx.projectDir, codekbCtx.codekbRepo, codekbCtx.space)}/${name}.md`;
+    return `${relativeCodekbDir(codekbCtx.projectDir, codekbCtx.codekbRepo, codekbCtx.space)}/${filename}`;
   }
   const prefix = recordPrefix ?? relativeSpaceRecordPrefix();
   if (isPerUnit(owner)) {
-    return `${prefix}/construction/${unit}/${owner.slug}/${name}.md`;
+    return `${prefix}/construction/${unit}/${owner.slug}/${filename}`;
   }
-  return `${prefix}/${owner.phase}/${owner.slug}/${name}.md`;
+  return `${prefix}/${owner.phase}/${owner.slug}/${filename}`;
 }
 
 // Resolve a CONSUMED artifact's path. A consumed artifact lives under the stage

@@ -161,6 +161,7 @@ const shippedAidlcEntrypoints: ReadonlySet<string> = new Set<string>(
     "tools/aidlc-sensor-linter.ts",
     "tools/aidlc-sensor-required-sections.ts",
     "tools/aidlc-sensor-schema.ts",
+    "tools/aidlc-sensor-traceability.ts",
     "tools/aidlc-sensor-type-check.ts",
     "tools/aidlc-sensor-upstream-coverage.ts",
     "tools/aidlc-sensor.ts",

@@ -39,6 +39,7 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 resetAidlcEnv();
 
@@ -86,7 +87,7 @@ const RP = `aidlc/spaces/${DEFAULT_SPACE}/intents/${DEFAULT_RECORD_DIR}`;
 
 // functional-design's REQUIRED produces[] - the coverage set. frontend-components
 // is under optional_produces and is deliberately NOT here.
-const FD_REQUIRED = ["business-logic-model", "business-rules", "domain-entities"];
+const FD_REQUIRED = ["business-logic-model", "business-rules", "domain-entities", "traceability"];
 const FD_OPTIONAL = "frontend-components";
 
 const tempDirs: string[] = [];
@@ -158,7 +159,7 @@ function coverUnit(proj: string, unit: string, slug: string, names: string[]): v
   const dir = join(seededRecordDir(proj), "construction", unit, slug);
   mkdirSync(dir, { recursive: true });
   for (const name of names) {
-    writeFileSync(join(dir, `${name}.md`), `# ${name} for ${unit}\n`);
+    writeFileSync(join(dir, artifactFilename(name)), `# ${name} for ${unit}\n`);
   }
 }
 
@@ -216,7 +217,7 @@ describe("t206 optional_produces exempt from per-unit coverage", () => {
       review_state: "outstanding",
       required_produces: FD_REQUIRED.map(
         (name) =>
-          `${RP}/construction/alpha/functional-design/${name}.md`,
+          `${RP}/construction/alpha/functional-design/${artifactFilename(name)}`,
       ),
     });
     expect(

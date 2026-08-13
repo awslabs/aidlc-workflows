@@ -44,6 +44,7 @@ import {
 } from "../harness/fixtures.ts";
 import {
   activeUnitCheckpoint,
+  artifactFilename,
   parseBoltDag,
   readAllAuditShards,
   unitCompletedReceipts,
@@ -54,7 +55,7 @@ const BUN = process.execPath;
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const SLUG = "functional-design"; // inline per-unit stage
-const PRODUCES = ["business-logic-model", "business-rules", "domain-entities"];
+const PRODUCES = ["business-logic-model", "business-rules", "domain-entities", "traceability"];
 
 // A minimal Construction state with functional-design in-flight and the
 // skeleton stance recorded (mirrors t209's constructionState) — so the engine's
@@ -137,7 +138,7 @@ function writeUnitArtifacts(proj: string, unit: string): void {
   const dir = join(seededRecordDir(proj), "construction", unit, SLUG);
   mkdirSync(dir, { recursive: true });
   for (const name of PRODUCES) {
-    writeFileSync(join(dir, `${name}.md`), `# ${name}\nstub\n`, "utf-8");
+    writeFileSync(join(dir, artifactFilename(name)), `# ${name}\nstub\n`, "utf-8");
   }
 }
 
@@ -189,7 +190,7 @@ describe("t260 receipts are the transition, artifacts the evidence", () => {
     const dir = join(seededRecordDir(proj), "construction", "unit-a", SLUG);
     mkdirSync(dir, { recursive: true });
     for (const name of PRODUCES) {
-      mkdirSync(join(dir, `${name}.md`));
+      mkdirSync(join(dir, artifactFilename(name)));
     }
 
     expect(runNext(proj).out).toContain('"unit":"unit-a"');

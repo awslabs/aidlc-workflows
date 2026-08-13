@@ -2749,7 +2749,7 @@ function summaryArtifactPaths(
     ...(stage.optional_produces ?? []),
   ].filter((name) => !name.endsWith("-questions"));
   return names
-    .map((name) => join(question.dir, `${name}.md`))
+    .map((name) => join(question.dir, artifactFilename(name)))
     .filter((path) => existsSync(path));
 }
 
@@ -3247,9 +3247,16 @@ export const KNOWN_CODEKB_STAGES: ReadonlySet<string> = new Set([
   "reverse-engineering",
 ]);
 
+// Artifact vocabulary names normally map to Markdown files. Traceability is
+// the structured-data exception: stages still declare the bare vocabulary
+// name while every engine surface resolves it to the JSON sensor input.
+export function artifactFilename(name: string): string {
+  return name === "traceability" ? "traceability.json" : `${name}.md`;
+}
+
 // True when a written File path (from an ARTIFACT_CREATED/ARTIFACT_UPDATED audit
 // row, or a PreToolUse file_path) is one of the stage's declared produces[]
-// artifacts. Matches on the path SUFFIX `/<slug>/<name>.md` rather than
+// artifacts. Matches on the path suffix `/<slug>/<artifact filename>` rather than
 // resolving one absolute dir, so it covers BOTH the standard
 // <record>/<phase>/<slug>/ layout AND the per-unit construction/<unit>/<slug>/
 // layout without needing to know the {unit} segment. Codekb stages get their
@@ -3271,8 +3278,9 @@ export function producesArtifactFile(
   const norm = file.replace(/\\/g, "/");
   if (KNOWN_CODEKB_STAGES.has(stage.slug)) {
     return produces.some((name) => {
-      const idx = norm.lastIndexOf(`/${name}.md`);
-      if (idx === -1 || idx + `/${name}.md`.length !== norm.length) return false;
+      const filename = artifactFilename(name);
+      const idx = norm.lastIndexOf(`/${filename}`);
+      if (idx === -1 || idx + `/${filename}`.length !== norm.length) return false;
       // Exactly one <repo> segment between /codekb/ and /<name>.md.
       const head = norm.slice(0, idx);
       const repoSlash = head.lastIndexOf("/");
@@ -3286,7 +3294,9 @@ export function producesArtifactFile(
       return recordedRepos.size === 0 || recordedRepos.has(repo);
     });
   }
-  return produces.some((name) => norm.endsWith(`/${stage.slug}/${name}.md`));
+  return produces.some((name) =>
+    norm.endsWith(`/${stage.slug}/${artifactFilename(name)}`)
+  );
 }
 
 // Resolve the unit targeted by a declared produces[] write. `undefined` means
@@ -3320,7 +3330,7 @@ export function producesArtifactUnit(
 
   const norm = file.replace(/\\/g, "/");
   for (const name of reviewedArtifacts) {
-    const suffix = `/${stage.slug}/${name}.md`;
+    const suffix = `/${stage.slug}/${artifactFilename(name)}`;
     if (!norm.endsWith(suffix)) continue;
     const parent = norm.slice(0, -suffix.length);
     const marker = "/construction/";
@@ -3423,15 +3433,15 @@ function reviewArtifactEntries(
     }
     if (repos.length === 0) {
       return allArtifacts.map((artifact) => ({
-        logicalPath: `codekb/*/${artifact.name}.md`,
+        logicalPath: `codekb/*/${artifactFilename(artifact.name)}`,
         path: null,
         required: artifact.required,
       }));
     }
     return repos.flatMap((repo) =>
       allArtifacts.map((artifact) => ({
-        logicalPath: `codekb/${repo}/${artifact.name}.md`,
-        path: join(codekbDir(projectDir, repo), `${artifact.name}.md`),
+        logicalPath: `codekb/${repo}/${artifactFilename(artifact.name)}`,
+        path: join(codekbDir(projectDir, repo), artifactFilename(artifact.name)),
         required: artifact.required,
       })),
     );
@@ -3441,8 +3451,8 @@ function reviewArtifactEntries(
   if (record === null) return null;
   if (stage.for_each !== "unit-of-work") {
     return allArtifacts.map((artifact) => ({
-      logicalPath: `${stage.phase}/${stage.slug}/${artifact.name}.md`,
-      path: join(record, stage.phase, stage.slug, `${artifact.name}.md`),
+      logicalPath: `${stage.phase}/${stage.slug}/${artifactFilename(artifact.name)}`,
+      path: join(record, stage.phase, stage.slug, artifactFilename(artifact.name)),
       required: artifact.required,
     }));
   }
@@ -3472,15 +3482,15 @@ function reviewArtifactEntries(
   }
   if (units.length === 0) {
     return allArtifacts.map((artifact) => ({
-      logicalPath: `construction/*/${stage.slug}/${artifact.name}.md`,
+      logicalPath: `construction/*/${stage.slug}/${artifactFilename(artifact.name)}`,
       path: null,
       required: artifact.required,
     }));
   }
   return units.flatMap((name) =>
     artifactsForKind(unitKinds.get(name) ?? null).map((artifact) => ({
-      logicalPath: `construction/${name}/${stage.slug}/${artifact.name}.md`,
-      path: join(record, "construction", name, stage.slug, `${artifact.name}.md`),
+      logicalPath: `construction/${name}/${stage.slug}/${artifactFilename(artifact.name)}`,
+      path: join(record, "construction", name, stage.slug, artifactFilename(artifact.name)),
       required: artifact.required,
     })),
   );
