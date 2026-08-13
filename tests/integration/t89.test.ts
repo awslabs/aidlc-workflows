@@ -134,17 +134,19 @@ afterEach(() => {
 // =========================================================================
 
 describe("t89 sensors_applicable resolution (in-process compileStageGraph)", () => {
-  // Case 1 (.sh:64-66): basic-import — code-generation resolves 3 sensors.
-  test("basic-import: code-generation has 3 resolved sensors", () => {
+  // Case 1 (.sh:64-66): basic-import - code-generation resolves 4 sensors.
+  test("basic-import: code-generation has 4 resolved sensors", () => {
     const { stages } = compileWithSensors(join(FIXTURES, "basic-import"));
-    expect(stageBySlug(stages, "code-generation").sensors_applicable).toHaveLength(3);
+    expect(stageBySlug(stages, "code-generation").sensors_applicable).toHaveLength(4);
   });
 
   // Case 2 (.sh:68-70): resolved entries carry id and .claude/... path.
   test("basic-import: first sensor id+path correct", () => {
     const { stages } = compileWithSensors(join(FIXTURES, "basic-import"));
     const first = stageBySlug(stages, "code-generation").sensors_applicable[0];
-    expect(`${first.id}|${first.path}`).toBe("linter|.claude/sensors/aidlc-linter.md");
+    expect(`${first.id}|${first.path}`).toBe(
+      "required-sections|.claude/sensors/aidlc-required-sections.md",
+    );
   });
 
   // Case 3 (.sh:72-75): matches glob copied verbatim from the manifest.
@@ -332,11 +334,11 @@ describe("t89 sensors_applicable resolution (in-process compileStageGraph)", () 
     expect(keys[idx + 1]).toBe("sensors_applicable");
   });
 
-  // Case 19 (.sh:230-241): per-stage matrix — code-generation=3, build-and-test=3,
+  // Case 19 (.sh:230-241): per-stage matrix - code-generation=4, build-and-test=3,
   // workspace-scaffold=0, functional-design=5.
-  test("per-stage matrix: CG=3, BT=3, WS=0, FD=5", () => {
+  test("per-stage matrix: CG=4, BT=3, WS=0, FD=5", () => {
     const { stages } = compileWithSensors(join(FIXTURES, "basic-import"));
-    expect(stageBySlug(stages, "code-generation").sensors_applicable.length).toBe(3);
+    expect(stageBySlug(stages, "code-generation").sensors_applicable.length).toBe(4);
     expect(stageBySlug(stages, "build-and-test").sensors_applicable.length).toBe(3);
     expect(stageBySlug(stages, "workspace-scaffold").sensors_applicable.length).toBe(0);
     expect(stageBySlug(stages, "functional-design").sensors_applicable.length).toBe(5);

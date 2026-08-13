@@ -59,6 +59,10 @@ outputs: "business-logic-model.md, business-rules.md, domain-entities.md, tracea
 
 MANDATORY: Follow stage-protocol.md for approval gates, question format, and completion messages.
 
+## Constraints
+
+This is a design stage — artifacts describe business logic, domain models, and rules at an architectural level, not implementation-ready code. Complete function bodies, class implementations, and framework-specific code belong in code-generation. Limit code to short illustrative snippets (pseudocode or interface-level, ≤15 lines) that clarify a design decision.
+
 ## Steps
 
 ### Execution Modes

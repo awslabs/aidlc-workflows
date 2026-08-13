@@ -107,7 +107,7 @@ inside a disposable sandbox where blanket shell access is acceptable.
 | Forwarding-loop enforcement (Stop hook) | Interactive + headless | Interactive sessions only — `--no-interactive` runs do not honor the stop-hook block |
 | Permissions | `settings.json` allowlist | `aidlc` agent config: only project-relative framework `bun .kiro/tools/<tool>.ts` calls and `date -u` are pre-approved; other shell commands prompt |
 | Welcome message | Rendered at session start from `settings.json` `companyAnnouncements` | None — Kiro has no welcome-render equivalent; the session-start hook injects resume context only |
-| MCP servers | Ships 5 (`.mcp.json`: `context7` + four AWS servers) | None shipped, and the Kiro MCP config mechanism is not yet documented here — Claude-only today in practice |
+| MCP servers | Ships 5 (`.mcp.json`: `context7` + four AWS servers) | Ships the same 5 in `.kiro/settings/mcp.json`, all disabled by default; flip `"disabled": false` per server to enable it. Context7 is keyless on Kiro because Kiro sends configured HTTP header values verbatim instead of expanding environment placeholders. All 14 delegated personas opt in through `includeMcpJson: true` plus `@<server>` tool grants; the conductor gets none. |
 
 Everything else — state machine, audit trail, artifacts under the intent
 record dirs (`aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`), the learnings
@@ -126,7 +126,7 @@ substituted to `.kiro` and the `rules/` → `steering/` rename). `bun
 scripts/package.ts --check` is the drift guard and runs in CI (t145). The
 authored Kiro surfaces live in `harness/kiro/`: the orchestrator skill
 (`skills/aidlc/`), the agent JSONs (`agents/`), the hook adapter
-(`hooks/aidlc-kiro-adapter.ts`), `settings/cli.json`, and `AGENTS.md` — edit
+(`hooks/aidlc-kiro-adapter.ts`), `settings/cli.json`, `settings/mcp.json`, and `AGENTS.md` — edit
 those (or `core/`), never the generated `dist/kiro`. See
 [Porting to a New Harness](../../harness-engineering/09-porting-to-a-new-harness.md).
 

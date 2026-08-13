@@ -246,7 +246,12 @@ function logWorktreeReview(
   if (seedArtifacts) {
     const dir = join(seededRecordDir(wt), "construction", unit, "code-generation");
     mkdirSync(dir, { recursive: true });
-    for (const name of ["code-generation-plan", "code-summary", "traceability"]) {
+    for (const name of [
+      "code-generation-plan",
+      "unit-test-instructions",
+      "code-summary",
+      "traceability",
+    ]) {
       const artifact = join(dir, artifactFilename(name));
       const body =
         name === "traceability"

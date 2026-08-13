@@ -2032,6 +2032,7 @@
       "workspace_requires": true,
       "produces": [
         "code-generation-plan",
+        "unit-test-instructions",
         "code-summary",
         "traceability"
       ],
@@ -2077,6 +2078,7 @@
         "infrastructure-design"
       ],
       "sensors": [
+        "required-sections",
         "linter",
         "type-check",
         "traceability"
@@ -2095,7 +2097,7 @@
       "reviewer_max_iterations": 2,
       "review_class": "adversarial",
       "inputs": "ALL prior design artifacts for this unit",
-      "outputs": "application code + code-generation-plan.md, code-generation-questions.md, code-summary.md, traceability.json (under this stage's per-unit record dir, engine-resolved)",
+      "outputs": "application code + code-generation-plan.md, code-generation-questions.md, unit-test-instructions.md, code-summary.md, traceability.json (under this stage's per-unit record dir, engine-resolved)",
       "rules_in_context": [
         {
           "path": "aidlc/spaces/default/memory/org.md",
@@ -2115,6 +2117,11 @@
         }
       ],
       "sensors_applicable": [
+        {
+          "id": "required-sections",
+          "path": ".claude/sensors/aidlc-required-sections.md",
+          "matches": "**/{aidlc-docs,intents}/**"
+        },
         {
           "id": "linter",
           "path": ".claude/sensors/aidlc-linter.md",
@@ -2146,7 +2153,6 @@
       "mode": "inline",
       "produces": [
         "build-instructions",
-        "unit-test-instructions",
         "integration-test-instructions",
         "performance-test-instructions",
         "security-test-instructions",
@@ -2157,6 +2163,10 @@
       "consumes": [
         {
           "artifact": "code-generation-plan",
+          "required": true
+        },
+        {
+          "artifact": "unit-test-instructions",
           "required": true
         },
         {
@@ -2183,7 +2193,7 @@
         "workshop"
       ],
       "inputs": "ALL code generation outputs across all units",
-      "outputs": "build-instructions.md, unit-test-instructions.md, integration-test-instructions.md, performance-test-instructions.md, security-test-instructions.md, build-and-test-summary.md, test-results.md, cross-unit-traceability.md (under this stage's record dir, engine-resolved)",
+      "outputs": "build-instructions.md, integration-test-instructions.md, performance-test-instructions.md, security-test-instructions.md, build-and-test-summary.md, test-results.md, cross-unit-traceability.md (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
         {
           "path": "aidlc/spaces/default/memory/org.md",

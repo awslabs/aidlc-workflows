@@ -380,13 +380,14 @@ describe("t185: stage-completion artifact guard (#366)", () => {
   describe("workspace_requires (code-generation)", () => {
     const UNIT = "user-auth";
 
-    // Move the pointer to code-generation, in-progress, and write its two
+    // Move the pointer to code-generation, in-progress, and write its three
     // per-unit produces[] docs under the record's construction/<unit>/ subtree
     // (satisfies layer 1) but NO source code.
     function stageCodeGenDocsOnly(): void {
       guarded(proj, ["set", "Current Stage=code-generation"]);
       guarded(proj, ["checkbox", "code-generation=in-progress"]);
       writeRecordDoc(proj, `construction/${UNIT}/code-generation/code-generation-plan.md`);
+      writeRecordDoc(proj, `construction/${UNIT}/code-generation/unit-test-instructions.md`);
       writeRecordDoc(proj, `construction/${UNIT}/code-generation/code-summary.md`);
     }
 

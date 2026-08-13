@@ -144,8 +144,9 @@ the workspace root**, not just planning documents under the per-intent record di
 Why it exists: a stage's `produces[]` artifacts always resolve to markdown under
 the record dir (the only place the path resolver writes them). So a "do the
 produces exist?" check is satisfied by a `code-generation` stage that wrote its
-`code-generation-plan.md` and `code-summary.md` but never emitted a line of
-actual code (issue #366). `workspace_requires: true` closes that gap: the
+`code-generation-plan.md`, `unit-test-instructions.md`, and `code-summary.md`
+but never emitted a line of actual code (issue #366).
+`workspace_requires: true` closes that gap: the
 stage-completion artifact guard (`aidlc-state.ts` approve/advance/finalize/
 complete-workflow) additionally requires evidence of real source work outside
 the `aidlc/` workspace tree and the harness directory before the stage may

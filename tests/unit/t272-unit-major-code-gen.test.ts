@@ -96,7 +96,12 @@ const PRODUCES: Record<string, string[]> = {
     "shared-infrastructure",
     "traceability",
   ],
-  "code-generation": ["code-generation-plan", "code-summary", "traceability"],
+  "code-generation": [
+    "code-generation-plan",
+    "unit-test-instructions",
+    "code-summary",
+    "traceability",
+  ],
 };
 // The widened walk block, graph order: design stages then code-generation.
 const BLOCK = [

@@ -613,7 +613,7 @@ share infrastructure resources.
 | support_agents    | (none -- focused implementation)                                                                  |
 | mode              | subagent (Task tool subagent_type: aidlc-developer-agent)                                               |
 | Inputs            | ALL prior design artifacts for this unit                                                          |
-| Outputs           | application code (workspace root) + `<record>/construction/{unit-name}/code-generation/` -- code-generation-plan.md, code-generation-questions.md, code-summary.md |
+| Outputs           | application code (workspace root) + `<record>/construction/{unit-name}/code-generation/` -- code-generation-plan.md, code-generation-questions.md, unit-test-instructions.md, code-summary.md |
 
 ### Purpose
 
@@ -693,8 +693,26 @@ This stage has a **two-part structure**: planning followed by generation.
    Number each plan step sequentially (Step 1, Step 2, etc.) for clear
    execution ordering and traceability.
 
-3. **Plan Approval** -- Present the plan summary to the user and request
-   approval. First create or reset
+   Also create
+   `<record>/construction/{unit-name}/code-generation/unit-test-instructions.md`
+   before Plan Approval. Match the active test strategy:
+   - **Minimal**: Requirement-driven unit tests (1 test per requirement,
+     happy-path floor per component), approximately 5-15 tests total
+   - **Standard**: 5-8 tests per component, with key behavior coverage
+   - **Comprehensive**: 10-15 tests per component, with thorough coverage
+
+   Include test framework setup and configuration, how to run this unit's
+   tests, expected coverage targets, mocking/stubbing guidance, and test data
+   management. Every run command MUST be scoped to this unit using exact test
+   file paths or an exact unit filter. A bare project-wide command such as
+   `npm test` is not acceptable because Build and Test executes every unit's
+   commands.
+
+   Present the unit test instruction summary together with the plan summary.
+
+3. **Plan Approval** -- Request approval for both
+   `code-generation-plan.md` and `unit-test-instructions.md`. First create or
+   reset
    `<record>/construction/{unit-name}/code-generation/code-generation-questions.md`
    with a **Plan Approval** question and blank `[Answer]:`, then render it as a
    structured question and stop the turn:
@@ -702,8 +720,10 @@ This stage has a **two-part structure**: planning followed by generation.
    - "Request Changes" -- revise the plan
 
    Fill the tag only after the human responds. A request for changes is
-   recorded, the plan is revised, and the Plan Approval tag is reset to blank
-   before re-prompting. A forwarding-loop continuation is never approval.
+   recorded, both files are revised as needed, and the Plan Approval tag is
+   reset to blank before re-prompting. Any post-approval change to
+   `unit-test-instructions.md` reopens Plan Approval the same way a plan
+   change does. A forwarding-loop continuation is never approval.
 
 #### PART 2 -- Generation (Steps 4-7)
 
@@ -727,6 +747,7 @@ This stage has a **two-part structure**: planning followed by generation.
      (requirements summary, stories summary, app design summary) -- the
      subagent can Read specific files if it needs full content
    - The approved code-generation-plan.md (full content)
+   - The approved unit-test-instructions.md (full content)
    - Project workspace details (languages, frameworks, conventions from
      aidlc-state.md)
    - Instructions to execute each plan step sequentially and mark checkboxes
@@ -756,6 +777,7 @@ This stage has a **two-part structure**: planning followed by generation.
 |---------------------------|---------------------------------------------------------------------|
 | code-generation-plan.md   | Detailed plan with checkboxes, story traceability, step sequencing  |
 | code-generation-questions.md | Persisted Plan Approval question and explicit human answer       |
+| unit-test-instructions.md | Per-unit setup, scoped run commands, coverage, mocks, and test data |
 | code-summary.md           | Files created/modified, decisions, test coverage, plan deviations   |
 | (application code)        | All source code, tests, and config written to workspace root        |
 
@@ -781,6 +803,9 @@ Strictly 2-option: Approve / Request Changes.
 - **Mandatory test file inclusion**: Test files MUST be part of the code
   generation plan. Stage 3.6 (Build and Test) verifies and extends tests but
   does not create them from scratch.
+- **Unit-scoped execution**: Each per-unit test instruction file uses exact
+  test paths or an exact unit filter so the cross-unit execution stage does
+  not rerun the project-wide suite for every unit.
 - **Brownfield awareness**: In brownfield projects, the subagent modifies
   existing files in-place rather than creating duplicates.
 
@@ -801,19 +826,21 @@ Strictly 2-option: Approve / Request Changes.
 | support_agents    | aidlc-devsecops-agent                                                                                   |
 | mode              | inline                                                                                            |
 | Inputs            | ALL code generation outputs across all units                                                      |
-| Outputs           | `<record>/construction/build-and-test/` -- build-instructions.md, unit-test-instructions.md, integration-test-instructions.md, performance-test-instructions.md, security-test-instructions.md, build-and-test-summary.md, test-results.md, plus conditional test instruction files |
+| Outputs           | `<record>/construction/build-and-test/` -- build-instructions.md, integration-test-instructions.md, performance-test-instructions.md, security-test-instructions.md, build-and-test-summary.md, test-results.md, plus conditional test instruction files |
 
 ### Purpose
 
-Generate test instructions across all test types, then actually execute the
-build and tests via Bash. This stage operates across ALL units -- it is NOT
-per-unit. The aidlc-quality-agent leads with the aidlc-devsecops-agent providing security
-testing expertise.
+Generate cross-unit test instructions, consume the per-unit unit test
+instructions, then actually execute the build and tests via Bash. This stage
+operates across ALL units -- it is NOT per-unit. The aidlc-quality-agent leads
+with the aidlc-devsecops-agent providing security testing expertise.
 
 ### Inputs
 
 - Code generation outputs across all units from
   `<record>/construction/*/code-generation/code-summary.md`
+- Per-unit test instructions from
+  `<record>/construction/*/code-generation/unit-test-instructions.md`
 - NFR requirements across units (if they exist) for performance and security
   testing needs
 
@@ -822,9 +849,10 @@ testing expertise.
 1. **Load Personas** -- Load aidlc-quality-agent (lead) persona and knowledge. Load
    aidlc-devsecops-agent persona and knowledge for security testing input.
 
-2. **Analyze Testing Requirements** -- Read code generation outputs across all
-   units. Review NFR requirements (if they exist) to identify performance and
-   security testing needs. Catalog all test types required.
+2. **Analyze Testing Requirements** -- Read code generation summaries and
+   per-unit test instructions across all units. Review NFR requirements (if
+   they exist) to identify performance and security testing needs. Catalog
+   all test types required.
 
 3. **Generate Build Instructions** -- Create
    `<record>/construction/build-and-test/build-instructions.md`:
@@ -834,50 +862,21 @@ testing expertise.
    - Build verification steps
    - Troubleshooting common build issues
 
-4. **Generate Unit Test Instructions** -- Create
-   `<record>/construction/build-and-test/unit-test-instructions.md`:
-   - Test framework setup and configuration
-   - How to run unit tests (commands, flags, filters)
-   - Expected test coverage targets
-   - Mocking/stubbing guidance
-   - Test data management
-
-5. **Generate Integration Test Instructions** -- Create
-   `<record>/construction/build-and-test/integration-test-instructions.md`:
-   - Test environment prerequisites (databases, services, queues)
-   - How to run integration tests
-   - Cross-unit interaction testing
-   - External dependency handling (stubs, test doubles, sandboxes)
-   - Test data setup and teardown
-
-6. **Generate Performance Test Instructions** (CONDITIONAL) -- IF NFR
-   performance requirements exist for any unit, create
-   `performance-test-instructions.md`:
-   - Load testing tools and configuration
-   - Performance test scenarios mapped to NFR targets
-   - Baseline measurements and benchmarks
-   - Stress and soak test procedures
-   - Performance regression detection
-
-7. **Generate Security Test Instructions** (CONDITIONAL) -- IF NFR security
-   requirements exist for any unit, create
-   `security-test-instructions.md`:
-   - Security scanning tools (SAST, DAST, dependency audit)
-   - Authentication/authorization test scenarios
-   - Input validation and injection testing
-   - Compliance verification steps
-   - Vulnerability assessment procedures
-
-8. **Generate Additional Test Types** (CONDITIONAL) -- As applicable based on
-   project architecture, create specifically named files:
-   - **contract-test-instructions.md**: For microservice APIs --
-     consumer-driven contracts, schema validation, API compatibility
-   - **e2e-test-instructions.md**: For UI-driven applications -- browser
-     automation, user journey tests, cross-browser verification
-   - **accessibility-test-instructions.md**: For user-facing interfaces --
-     WCAG compliance, screen reader testing, keyboard navigation
+4-8. **Generate Additional Test Instructions** -- Consult the active test
+   strategy and generate the matching cross-unit instruction files:
+   - **Minimal**: Generate no additional files. Unit tests are covered
+     per-unit by Code Generation.
+   - **Standard**: Generate `integration-test-instructions.md` for key
+     boundaries and cross-unit interactions.
+   - **Comprehensive**: Generate integration instructions, plus
+     `performance-test-instructions.md` when performance NFRs exist and
+     `security-test-instructions.md` when security NFRs exist.
+   - At any strategy, add specifically named contract, E2E, accessibility, or
+     other instruction files when the project context requires them.
 
    All files go in `<record>/construction/build-and-test/`.
+   Each file includes framework setup, run commands and filters, coverage
+   targets, and test data or environment setup.
 
 9. **Generate Build and Test Summary** -- Create
    `<record>/construction/build-and-test/build-and-test-summary.md`:
@@ -892,8 +891,11 @@ testing expertise.
 
     a. **Build**: Run the build commands from build-instructions.md via Bash.
        Capture output.
-    b. **Unit tests**: Run the unit test command from
-       unit-test-instructions.md via Bash. Capture pass/fail counts.
+    b. **Unit tests**: Collect commands from every per-unit
+       `code-generation/unit-test-instructions.md`, deduplicate identical
+       commands, and run each distinct command once. Commands should be
+       unit-scoped; if a file contains a project-wide command, run it once,
+       never once per unit. Report per-unit pass/fail without double counting.
     c. **Integration tests** (if applicable): Run integration test commands.
        Capture results.
     d. **Report results**: Create or update
@@ -925,8 +927,7 @@ testing expertise.
 | Artifact                          | Description                                                     | Condition          |
 |-----------------------------------|-----------------------------------------------------------------|--------------------|
 | build-instructions.md             | Dependency install, env setup, build commands, troubleshooting  | Always             |
-| unit-test-instructions.md         | Test framework setup, run commands, coverage targets, mocking   | Always             |
-| integration-test-instructions.md  | Prerequisites, cross-unit testing, external deps, data setup    | Always             |
+| integration-test-instructions.md  | Prerequisites, cross-unit testing, external deps, data setup    | Standard/Comprehensive |
 | performance-test-instructions.md  | Load testing, NFR scenarios, baselines, stress/soak tests       | If NFR perf exists |
 | security-test-instructions.md     | SAST/DAST, auth testing, injection testing, compliance          | If NFR sec exists  |
 | contract-test-instructions.md     | Consumer-driven contracts, schema validation, API compat        | If microservices   |

@@ -1,14 +1,30 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
-## [2.5.72] - 2026-08-11
+## [2.5.74] - 2026-08-13
 
-Add dependency-aware validity projection for completed stages. No manual migration is required; existing audit ledgers remain compatible and become tracked when stages complete again.
+Kiro CLI now ships the same five MCP servers as Claude Code, with every server disabled until a user explicitly enables it. **Upgrade:** refresh `dist/kiro/`, then flip `"disabled": false` on each server you want to enable in `.kiro/settings/mcp.json`.
 
-- Resolve canonical artifact aliases, active Bolt DAG units, and `produces_kinds` through one shared runtime resolver.
-- Record compact schema-2 structure/content fingerprints per observed canonical artifact.
-- Propagate revalidation through artifact inputs observed by completed consumers.
-- Preserve historical completion checkboxes while blocking routing past stale tracked AI-DLC artifacts.
+* New `.kiro/settings/mcp.json` registry ships `context7` plus the four AWS servers, all disabled by default. Context7 ships keyless on Kiro because live verification on Kiro CLI 2.12.1 found that MCP HTTP header values are sent verbatim rather than expanding environment placeholders; API keys must not be committed to `.kiro/settings/mcp.json`. The `@latest` launchers remain aligned with the Claude registry and execute only after explicit per-server user opt-in.
+* All 14 delegated persona configs set `includeMcpJson: true` and grant the five `@<server>` tools; the conductor remains excluded so orchestration itself gets no MCP access.
+* Persona configs drop their upstream `$schema` declaration because that schema rejects the Kiro-supported `includeMcpJson` field through `additionalProperties: false`; the unchanged conductor retains its schema.
+* Based on community PR #412 by @jeromevdl.
+
+## [2.5.73] - 2026-08-13
+
+Re-authored from PR #403 by @jeromevdl, unit test instructions now belong to each Code Generation unit before implementation and flow into the cross-unit Build and Test stage. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* Code Generation produces `unit-test-instructions.md` per unit alongside the implementation plan, and Build and Test consumes those instructions instead of recreating them after code exists.
+* Plan Approval now covers both the code generation plan and unit test instructions; changing either file requires renewed approval before developer-agent dispatch.
+* Per-unit test commands must use exact test paths or an exact unit filter, and Build and Test deduplicates identical commands so each distinct command runs once.
+* Code Generation now imports the advisory `required-sections` sensor so the moved markdown artifact retains the document-shape validation applied at its former stage.
+
+## [2.5.72] - 2026-08-13
+
+Construction design stages no longer ship implementation-ready code in design artifacts. `functional-design`, `nfr-design`, and `infrastructure-design` now carry an explicit Constraints section: artifacts describe what is needed and why at an architectural level, code is capped at short illustrative snippets (pseudocode or interface-level, 15 lines or fewer), and complete implementations (IaC modules, Lambda handlers, IAM policy documents, middleware) belong in `code-generation` (#396). **Upgrade:** re-copy your harness tree from `dist/<harness>/` to pick up the revised stage files.
+
+* `functional-design`, `nfr-design`, and `infrastructure-design` stage prose gains a `## Constraints` section scoping artifacts to design-level content.
+* No command, flag, or artifact-path changes.
 
 ## [2.5.71] - 2026-08-13
 

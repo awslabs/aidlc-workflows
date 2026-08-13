@@ -199,7 +199,7 @@ The four design stages (3.1-3.4) prune their artifacts to each unit's **kind** (
 | 3.2 NFR Requirements | `security-requirements.md`, `performance-requirements.md` | Per plan, per unit (by kind) |
 | 3.3 NFR Design | `security-design.md`, `performance-design.md` | Per plan, per unit (by kind) |
 | 3.4 Infrastructure Design | `deployment-architecture.md`, `infrastructure-services.md` | Per plan, per unit (by kind) |
-| 3.5 Code Generation | `code-generation-plan.md`, `code-generation-questions.md`, `code-summary.md` (code goes to workspace root) | Always, per unit |
+| 3.5 Code Generation | `code-generation-plan.md`, `code-generation-questions.md`, `unit-test-instructions.md`, `code-summary.md` (code goes to workspace root) | Always, per unit |
 | 3.6 Build and Test | `build-instructions.md`, `test-results.md` | Always, after all units |
 | 3.7 CI Pipeline | `ci-config.md`, `quality-gates.md` | Conditional, after all units |
 
