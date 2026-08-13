@@ -1,0 +1,12 @@
+[submodule "fronts/vue3-realworld-example-app"]
+    path = fronts/vue3-realworld-example-app
+    url = https://github.com/mutoe/vue3-realworld-example-app
+    ignore = dirty
+[submodule "fronts/react-redux-realworld-example-app"]
+    path = fronts/react-redux-realworld-example-app
+    url = https://github.com/khaledosman/react-redux-realworld-example-app
+    ignore = dirty
+[submodule "realworld"]
+	path = realworld
+	url = https://github.com/realworld-apps/realworld.git
+    ignore = dirty
