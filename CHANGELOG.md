@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.74] - 2026-08-13
+
+Kiro CLI now ships the same five MCP servers as Claude Code, with every server disabled until a user explicitly enables it. **Upgrade:** refresh `dist/kiro/`, then flip `"disabled": false` on each server you want to enable in `.kiro/settings/mcp.json`.
+
+* New `.kiro/settings/mcp.json` registry ships `context7` plus the four AWS servers, all disabled by default. Context7 ships keyless on Kiro because live verification on Kiro CLI 2.12.1 found that MCP HTTP header values are sent verbatim rather than expanding environment placeholders; API keys must not be committed to `.kiro/settings/mcp.json`. The `@latest` launchers remain aligned with the Claude registry and execute only after explicit per-server user opt-in.
+* All 14 delegated persona configs set `includeMcpJson: true` and grant the five `@<server>` tools; the conductor remains excluded so orchestration itself gets no MCP access.
+* Persona configs drop their upstream `$schema` declaration because that schema rejects the Kiro-supported `includeMcpJson` field through `additionalProperties: false`; the unchanged conductor retains its schema.
+* Based on community PR #412 by @jeromevdl.
+
 ## [2.5.73] - 2026-08-13
 
 Re-authored from PR #403 by @jeromevdl, unit test instructions now belong to each Code Generation unit before implementation and flow into the cross-unit Build and Test stage. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
