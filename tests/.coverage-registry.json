@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 549,
+    "total": 551,
     "enumeratedByClass": {
-      "function": 302,
+      "function": 304,
       "audit": 82,
       "scope": 9,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 144,
+      "function": 145,
       "audit": 40,
       "scope": 9,
       "stage": 11,
@@ -1251,6 +1251,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:classifyStateVersion",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t282-state-version-doctor.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:classifyTerminalCommand",
       "minMechanism": "none",
       "coveredBy": [
@@ -1450,6 +1462,13 @@
     {
       "unitClass": "function",
       "unitId": "function:CURRENT_SESSION_FILE",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:CURRENT_STATE_VERSION",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"

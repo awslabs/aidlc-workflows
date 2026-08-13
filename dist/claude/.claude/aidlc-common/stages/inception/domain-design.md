@@ -164,15 +164,18 @@ Number ADRs sequentially (`ADR-001`, `ADR-002`, …). Where a decision came from
 
 Create `<record>/inception/domain-design/traceability.json`. When
 `stories.md` exists, enumerate every `USx.y`; otherwise enumerate every `FR`
-from `requirements.md`. Map each upstream ID to the component, service, or
-public method that realizes it:
+from `requirements.md`. Map each upstream ID to the **component or entity**
+in `components.md` that realizes it — those are the only identifiers this
+stage's source of truth defines (it does not name services or public methods;
+method- and API-level targets are pinned later in Contract Design and
+Functional Design):
 
 ```json
 {
   "stage": "domain-design",
   "upstream_ids": ["US1.1", "US1.2"],
   "coverage": [
-    { "id": "US1.1", "status": "OK", "target": "AuthService.login()" },
+    { "id": "US1.1", "status": "OK", "target": "AuthComponent" },
     { "id": "US1.2", "status": "GAP" }
   ]
 }

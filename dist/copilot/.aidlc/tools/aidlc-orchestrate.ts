@@ -152,6 +152,7 @@ import {
   type WorkspaceCommand,
   writeActiveDirectiveMarker,
   workspaceCommandUtilityArgv,
+  classifyStateVersion,
 } from "./aidlc-lib.ts";
 import {
   type Consume,
@@ -563,29 +564,17 @@ function errorDirective(message: string): ErrorDirective {
   return { kind: "error", message };
 }
 
-// The state-file schema version the current graph expects. v8 renamed the
-// Inception `application-design` stage to `domain-design` and inserted
-// `contract-design`, so a pre-v8 state file's stage rows no longer match the
-// compiled graph. `/aidlc --doctor` reports this, but a stale state must ALSO be
-// refused up front by runtime/mutating commands (next, report) rather than
-// silently advancing until it hits the missing/renamed row (which fails later,
-// deeper, and more confusingly). Fires only when the field is PRESENT and stale
-// — a state with no version field is left to the doctor's stricter check so this
-// runtime guard never over-fires on a minimal fixture.
-const CURRENT_STATE_VERSION = "8";
+// State-schema-version guard. The classifier (aidlc-lib.ts
+// `classifyStateVersion`) is the single source of truth for parsing and
+// classifying `- **State Version**: N` lines; runtime (next/report) and doctor
+// call it the same way so they can never disagree on whether a state is
+// unparseable / past / future / ok. staleStateVersionError() is the runtime
+// adapter: it returns the classifier's message on any incompatible verdict and
+// null on `ok`, so next/report can emit the message as an errorDirective
+// before any workflow-cursor read/advance.
 function staleStateVersionError(stateContent: string): string | null {
-  const v = (getField(stateContent, "State Version") ?? "").trim();
-  if (v.length === 0 || v === CURRENT_STATE_VERSION) return null;
-  return (
-    `Incompatible workflow state: State Version ${v} predates the current ` +
-    `v${CURRENT_STATE_VERSION} stage graph. v8 renamed the Inception ` +
-    "`application-design` stage to `domain-design` and inserted " +
-    "`contract-design`, so this state's stage rows no longer match the graph " +
-    "and cannot be advanced safely. Archive your workspace " +
-    `('mv aidlc aidlc.v${v}-archive') and start a fresh workflow (describe what ` +
-    "to build), or finish this workflow on the prior shell. Run `/aidlc --doctor` " +
-    "for the full diagnosis."
-  );
+  const verdict = classifyStateVersion(stateContent);
+  return verdict.kind === "ok" ? null : verdict.message;
 }
 
 function shellArg(value: string): string {
@@ -2613,7 +2602,10 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // renamed/missing Inception rows. Fires after the workspace/plugin/compose
   // branches above (those are version-independent) and before any branch that
   // reads or advances the workflow cursor.
-  if (stateContent) {
+  // `!== null` (not truthiness): a PRESENT but zero-byte aidlc-state.md returns
+  // "" and must still be refused (an empty version → missing/unparseable branch),
+  // not skipped as if the file were absent.
+  if (stateContent !== null) {
     const stale = staleStateVersionError(stateContent);
     if (stale) {
       emit(errorDirective(stale));
@@ -5203,7 +5195,9 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   {
     const pd = resolveProjectDir(projectDir);
     const sc = loadStateFileIfPresent(pd);
-    if (sc) {
+    // `!== null` (not truthiness): a present but zero-byte state file returns ""
+    // and must still be refused, not treated as an absent file.
+    if (sc !== null) {
       const stale = staleStateVersionError(sc);
       if (stale) {
         emit(errorDirective(stale));
