@@ -250,6 +250,16 @@ deterministic audit cross-check. The log is append-only. A human-directed
 backward jump does not count against the bound — only entries this protocol
 writes do.
 
+**Plan approval on replay.** A Section 1 loop-back is a repair of the
+already-approved code-generation plan. The recorded Plan Approval answer remains
+authoritative: the conductor MUST NOT blank its `[Answer]:` for the loop-back
+revision, and records the plan delta in the Loop-Back Log entry instead. In
+gated mode, the human's "Retry with fix" answer IS the re-approval of the
+revised approach; carry that exact answer via `--user-input` on the replayed
+code-generation approval report. The plan-approval guard's evidence survives
+the jump because the non-empty plan and its approved questions file are
+preserved.
+
 **Autonomous loop-back procedure** (mode `autonomous`, bound not exhausted,
 impact-estimated fix identified):
 1. Append the `### Loop-back N — <ISO timestamp>` entry (Diagnosis /
@@ -264,11 +274,13 @@ impact-estimated fix identified):
    and pivots Current Stage), then re-run `next` and continue the forwarding
    loop. Never compose the `execute` call by hand — the engine's print is the
    validated form.
-3. On the code-generation re-entry, apply the planned fix ONLY to the unit(s)
-   the diagnosis names (see "Autonomous failure loop-back" under Artifact
-   Re-use, below). The standing `Construction Autonomy Mode: autonomous` grant
-   is unchanged by the jump; the replayed code-generation gate is
-   auto-approved under it with
+3. On the code-generation re-entry, follow "Re-entry settlement and review"
+   below. Apply the planned fix ONLY to the unit(s) the diagnosis names and
+   apply the deterministic Artifact Re-use decisions (see "Autonomous failure
+   loop-back" below). The standing `Construction Autonomy Mode: autonomous`
+   grant is unchanged by the jump; after every applicable unit has a fresh
+   current-attempt review, the replayed code-generation gate is auto-approved
+   under it with
    `--user-input "Autonomous loop-back N per stage-protocol §1"` — the human
    already approved the original run of this stage; the replay is a repair of
    that approved shape, not a new autonomy inference (checklist item 6).
@@ -276,27 +288,57 @@ impact-estimated fix identified):
    at its own Artifact Re-use prompt (never Redo — it would erase the
    Loop-Back Log) and re-execute Step 10 fresh.
 
+**Re-entry settlement and review.** Backward jumps preserve artifacts, but the
+route depends on whether code-generation has ever used the unit lifecycle
+ledger:
+
+1. **Artifact-only workflow** — when no code-generation lifecycle row has ever
+   been emitted, artifacts remain the settlement signal. The re-entry `next`
+   call can therefore emit the all-covered `gate: true` fast path. Apply the
+   planned fix and the deterministic Modify/Keep decisions through the
+   re-entry override BEFORE presenting or auto-approving that gate.
+2. **Receipt-mode workflow** — once any code-generation lifecycle row exists,
+   receipt mode is sticky. The jump invalidates the old attempt's settlement
+   receipts, so re-entry emits per-unit `run-stage` directives. For each
+   applicable unit, re-mint `unit start` / `unit complete`, applying the planned
+   fix to targeted units and the deterministic **Modify targeted / Keep rest**
+   Artifact Re-use decision inline as that unit re-runs.
+
+On BOTH paths, after every fix and re-use decision and BEFORE presenting or
+auto-approving the settle/approval gate, dispatch code-generation's declared
+reviewer for every applicable unit and record fresh current-attempt
+`REVIEW_COMPLETED` receipts. The backward jump's `STAGE_JUMPED` invalidates
+every prior review receipt, and the engine refuses approval while any applicable
+unit lacks a fresh one. Under unit-major iteration the autonomous swarm never
+fires: the replay follows the ordinary per-unit walk, re-mints lifecycle and
+review receipts per unit as above, and the plan-approval carve-out keeps the
+autonomous repair free of an extra human turn.
+
 **Swarm interaction.** On a loop-back replay where the engine emits
-`invoke-swarm`, the jump's fresh `STAGE_STARTED` floors the convergence
-ledger (each `SWARM_UNIT_CONVERGED` row is stamped with its attempt's run
-floor, so prior-attempt rows no longer count) — all units re-dispatch by
-default. Before `prepare`, check for worktrees or `bolt-<slug>` branches left
-by the prior attempt (a crash or a halt-and-ask mid-swarm leaves them in
-place): `prepare` hard-errors on collision, so discard the stale
-worktrees/branches, or adopt them if their code is still wanted, before
-calling it — do not call `prepare` on a replay without checking first. Do not
-spend a worker turn per unit: after `prepare`, run
+`invoke-swarm`, the jump establishes a new exact stage-attempt `Run floor`
+boundary token (`<event>:<timestamp>#<ordinal>` over workflow start, jump,
+rejection, and stage start boundaries). Each `SWARM_UNIT_CONVERGED` row must
+match the current token, so prior-attempt rows no longer count and all units
+re-dispatch by default. Before `prepare`, check for worktrees or
+`bolt-<slug>` branches left by the prior attempt (a crash or a halt-and-ask
+mid-swarm leaves them in place): `prepare` hard-errors on collision, and
+`finalize` refuses a unit without the current attempt's prepare stamp, so
+discard the stale worktrees/branches before a fresh `prepare` — never adopt
+them into the new attempt. Do not spend a worker turn per unit: after
+`prepare`, run
 `check <unit> --check-cmd "<the project's convergence check>"` on every unit
-FIRST — units already green are claimed at `finalize` without any worker turn
-(`finalize` re-verifies every claimed unit, so the claim is safe); dispatch
-workers only for the unit(s) the Loop-Back Log's planned fix targets or that
-fail the check. The cheap path assumes the prior attempt's code is in the
-base the worktrees forked from — true only once that attempt's git code
-merge actually completed; if it did not (the attempt halted before
-finalizing), every `check` comes back red and the cheap path degrades
-gracefully to full re-dispatch rather than silently claiming unbuilt units. On
-the inline per-unit path all artifacts still exist, so the fix is applied
-through the Artifact Re-use ritual per unit.
+FIRST. A unit already green needs no builder turn, but before putting it in
+`finalize --claimed`, dispatch code-generation's reviewer in that fresh
+worktree and record a terminal current-attempt `REVIEW_COMPLETED`. `finalize`
+then verifies the current prepare stamp, the terminal receipt, and its current
+artifact fingerprint before accepting the claim. Dispatch workers only for the
+unit(s) the Loop-Back Log's planned fix targets or that fail the check, then
+run the same reviewer pass after their final changes. The cheap path assumes
+the prior attempt's code is in the base the worktrees forked from — true only
+once that attempt's git code merge actually completed; if it did not (the
+attempt halted before finalizing), every `check` comes back red and the cheap
+path degrades gracefully to full re-dispatch rather than silently claiming
+unbuilt units.
 
 **Halt-and-ask, impact-estimated variant (gated or unset mode, or bound exhausted, WITH
 a candidate fix identified):**
@@ -335,18 +377,17 @@ produced an impact-estimated candidate fix — never render the impact-estimated
 `Candidate fix` / `Retry with fix` slots with placeholder or invented
 content just to keep the template shape.
 
-"Retry with fix" runs the same procedure as the autonomous loop-back,
-including its re-entry gate override (see "Gated failure loop-back" under
-Artifact Re-use, below): backward jumps preserve artifacts, so every
-code-generation unit is still "covered" on disk after the jump, and the
-re-entry `next` call answers with a `gate: true` directive straight to the
-approval gate — skipping the stage body, and with it the ordinary Artifact
-Re-use question, entirely. The planned fix MUST be applied — via that
-override — BEFORE the gate it names is presented, never after. A
-human-approved retry does count an entry in the Loop-Back Log, and the human
+"Retry with fix" runs the same settlement-aware procedure as the autonomous
+loop-back, including its re-entry override (see "Gated failure loop-back" under
+Artifact Re-use, below). Artifact-only workflows may take the all-covered
+`gate: true` fast path; receipt-mode workflows instead re-emit per-unit
+directives. On either path the planned fix and deterministic Modify/Keep
+decisions MUST be applied BEFORE the settle/approval gate, and every applicable
+unit MUST receive a fresh current-attempt review before that gate is presented.
+A human-approved retry does count an entry in the Loop-Back Log, and the human
 may override the bound explicitly. Every option's description must carry its
-estimated impact where one is known — presenting an impact-unestimated give-up option is a
-protocol violation.
+estimated impact where one is known — presenting an impact-unestimated give-up
+option is a protocol violation.
 
 ---
 
@@ -1465,20 +1506,25 @@ Loop-Back Log's planned fix: **Modify** for the unit(s) the fix targets,
 re-entry (Redo is forbidden there — it would erase the Loop-Back Log). Every
 auto-decision is still audited via `aidlc-state.ts reuse-artifact <slug>
 --decision <keep|modify> --artifacts "<comma-separated list of existing
-artifacts found>"`.
+artifacts found>"`. In receipt mode apply those decisions inside each emitted
+per-unit replay between `unit start` and the fresh reviewer / `unit complete`;
+in artifact-only mode apply them through the pre-gate override. Either way,
+fresh current-attempt reviews for every applicable unit are mandatory before
+the replayed gate is auto-approved.
 
 **Gated failure loop-back**: the same override applies when the human chose
 "Retry with fix" at the Build-and-Test halt-and-ask (§1) under `Construction
-Autonomy Mode: gated`. Because backward jumps preserve artifacts, every
-code-generation unit is still "covered" on disk after the jump, so the
-re-entry `next` call answers with a `gate: true` directive straight to the
-approval gate — the stage body never runs, and with it the ordinary Artifact
-Re-use question never fires. Do not accept that directive at face value:
-BEFORE presenting the gate it names, apply the planned fix the same way the
-autonomous case does — **Modify** for the unit(s) the fix targets, **Keep**
-for all other units, **Modify** for build-and-test itself on re-entry (Redo
-is forbidden there — it would erase the Loop-Back Log) — audited via the
-same `aidlc-state.ts reuse-artifact <slug> --decision <keep|modify>
---artifacts "<comma-separated list of existing artifacts found>"` call. The
+Autonomy Mode: gated` (or unset). Artifact-only workflows may arrive directly
+at the all-covered `gate: true` directive, where the ordinary Artifact Re-use
+question never fires; receipt-mode workflows instead receive per-unit replay
+directives. In the fast path, BEFORE presenting the gate, apply the planned fix
+through the override. In receipt mode, apply it inline while the units re-run.
+Both use **Modify** for the unit(s) the fix targets, **Keep** for all other
+units, and **Modify** for build-and-test itself on re-entry (Redo is forbidden
+there — it would erase the Loop-Back Log), audited via the same
+`aidlc-state.ts reuse-artifact <slug> --decision <keep|modify> --artifacts
+"<comma-separated list of existing artifacts found>"` call. After those
+decisions, dispatch the declared reviewer for every applicable unit and record
+fresh current-attempt reviews BEFORE presenting the settle/approval gate. The
 human already gave the confirming decision by choosing "Retry with fix"; this
 is not a second, silent autonomy inference.

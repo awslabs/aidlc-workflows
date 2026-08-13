@@ -369,6 +369,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/integration/t280-loopback-review-receipt-replay.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t115.test.ts",
           "mechanism": "cli"
         }
@@ -535,6 +539,10 @@
         {
           "file": "tests/e2e/t57-workflow-backward-jump.test.ts",
           "mechanism": "sdk"
+        },
+        {
+          "file": "tests/integration/t280-loopback-review-receipt-replay.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1728,6 +1736,10 @@
       "unitId": "function:freshReviewReceipts",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t280-loopback-review-receipt-replay.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t264-review-freeze-hook.test.ts",
           "mechanism": "cli"
@@ -5240,6 +5252,10 @@
           "mechanism": "sdk"
         },
         {
+          "file": "tests/integration/t280-loopback-review-receipt-replay.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t19.test.ts",
           "mechanism": "cli"
         },
@@ -5351,6 +5367,10 @@
       "unitId": "aidlc-log review",
       "minMechanism": "cli",
       "coveredBy": [
+        {
+          "file": "tests/integration/t280-loopback-review-receipt-replay.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t115.test.ts",
           "mechanism": "cli"

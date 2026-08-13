@@ -922,8 +922,9 @@ testing expertise.
        a feasible path out of scope on an impact-unestimated effort assumption.
     3. **Autonomous bounded loop-back** -- if `Construction Autonomy Mode:
        autonomous`, an impact-estimated fix exists, and fewer than 3 entries exist under
-       `## Loop-Back Log`: record the diagnosis + impact-estimated fix, jump back to
-       code-generation via the engine, and replay forward per
+       `## Loop-Back Log`: record the diagnosis + impact-estimated fix, jump
+       back to code-generation via the engine, and replay forward through its
+       settlement-aware route per
        stage-protocol.md Section 1 "Build-and-Test failure loop-back". The
        failed run's gate is not presented; its learnings ritual defers to the
        eventual passing run.
@@ -933,6 +934,31 @@ testing expertise.
        variant (Retry with fix [estimated impact] / Accept failure / Abort) when a
        candidate fix exists, or the no-fix 2-option variant (Accept
        failure / Abort) when rung 2 found none.
+
+    **Loop-back replay routing:** If Code Generation never used unit lifecycle
+    receipts, preserved artifacts can take the all-covered `gate: true` fast
+    path; apply the planned fix and deterministic Modify/Keep decisions before
+    that gate. Once any lifecycle row exists, receipt mode is sticky and the
+    jump re-emits per-Unit work: re-mint `unit start` / `unit complete`, apply
+    Modify to targeted Units and Keep to the rest, and run the declared reviewer
+    per Unit. Both paths MUST record a fresh current-attempt
+    `REVIEW_COMPLETED` for every applicable Unit before the settle/approval
+    gate because `STAGE_JUMPED` invalidates all earlier reviews. Under
+    unit-major the autonomous swarm never fires; the replay follows the serial
+    per-Unit walk and still needs no extra human turn.
+
+    The replay repairs the already-approved Code Generation plan. Preserve its
+    Plan Approval `[Answer]:`, record the delta in the Loop-Back Log, and treat
+    gated "Retry with fix" as the human's re-approval of the revised approach.
+
+    **Swarm cheap path:** A jump creates a new exact stage-attempt `Run floor`
+    boundary token, so stale convergence rows cannot count. Discard stale
+    worktrees/branches and run a fresh `prepare`; they cannot be adopted into
+    the new attempt because `finalize` requires its current prepare stamp. Run
+    `check` first. A green Unit can skip a builder turn, but it still needs a
+    terminal current-attempt reviewer receipt in the fresh worktree before it
+    enters `finalize --claimed`; `finalize` verifies that receipt's current
+    artifact fingerprint as well as the attempt stamp.
 
     Single-stage runs (`--single`) stop at rung 2 -- there is no
     main-workflow position to move; the impact-estimated options are logged and
@@ -977,7 +1003,9 @@ Strictly 2-option: Approve / Request Changes.
   the bounded autonomous loop-back to code-generation (max 3, counted by the
   append-only `## Loop-Back Log` in test-results.md) or presents the impact-estimated
   halt-and-ask question. See stage-protocol.md Section 1 "Build-and-Test
-  failure loop-back".
+  failure loop-back". Re-entry is settlement-aware, preserves the approved
+  plan, and cannot reach its gate until every applicable Code Generation Unit
+  has a fresh current-attempt review.
 - **Conditional test types**: Performance tests, security tests, contract
   tests, E2E tests, and accessibility tests are only generated when relevant
   conditions are met (NFR requirements exist, microservice architecture,

@@ -130,6 +130,21 @@ hatch (below) and the Build-and-Test failure loop-back (protocol Section 1,
 "Build-and-Test failure loop-back" -- the bounded 3.6 to 3.5 repair loop with
 its impact-estimated halt-and-ask question).
 
+The loop-back has two deterministic re-entry routes. If Code Generation has
+never used lifecycle receipts, preserved artifacts can settle every Unit and
+the engine may emit the all-covered `gate: true` fast path. Once any lifecycle
+row exists, receipt mode is sticky: the jump invalidates the old settlement
+receipts and the engine re-emits per-Unit work so `unit start` / `unit complete`
+are minted again. Both routes apply the planned fix and deterministic
+Modify/Keep decisions before the gate and MUST produce a fresh
+`REVIEW_COMPLETED` for every applicable Unit, because `STAGE_JUMPED` invalidates
+all earlier reviews and the completion precondition refuses stale coverage.
+Under unit-major the replay stays on this serial walk and never swarms.
+
+Plan Approval is not reopened for this repair. The approved answer and non-empty
+plan survive the jump, the Loop-Back Log records the plan delta, and a gated
+"Retry with fix" answer is the human's re-approval of that revised approach.
+
 ### Conditional 3rd Option
 
 Ideation and Inception stages (phases 1-2) may conditionally include a third

@@ -1,6 +1,23 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.70] - 2026-08-13
+
+Bounded Build & Test → Code Generation failure loop-back. When Build and Test (3.6) diagnoses a failure whose root cause lies in generated code or a code-generation approach choice (a library/version, container image, instance type, algorithm, or flag), the workflow can now jump back to Code Generation and repair it instead of writing the approach off or dead-ending at a failed gate. Step 10's failure handling is a four-rung ladder: bounded in-stage fixes, classification plus estimated impact (effort, financial cost, risk), an autonomous loop-back capped at three entries per intent, and an impact-estimated halt-and-ask when human judgement is required. **Upgrade:** re-copy your `dist/<harness>/` shell into the project (prose-only framework behavior; no tool or state-format changes).
+
+* The loop-back counter is a crash-safe artifact ledger: an append-only `## Loop-Back Log` in test-results.md, one `### Loop-back N — <ISO timestamp>` entry (Diagnosis / Root-cause stage / Planned fix / Estimated impact) per attempt. The entry count is the bound; human-directed jumps do not count.
+* The jump routes through the engine: `aidlc-orchestrate.ts next --stage code-generation` emits the validated `aidlc-jump.ts execute` command, and the conductor runs that printed command rather than composing one.
+* Re-entry is settlement-aware. Artifact-only workflows may take the all-covered gate fast path; sticky receipt-mode workflows re-emit per-Unit work and re-mint `unit start` / `unit complete`. Both paths apply fixes and Artifact Re-use decisions before the gate and require a fresh current-attempt review for every applicable Code Generation Unit because `STAGE_JUMPED` invalidates prior receipts.
+* The approved Code Generation plan remains authoritative on a loop-back replay. The Plan Approval answer is not blanked, the plan delta is recorded in the Loop-Back Log, and gated "Retry with fix" is the human re-approval of the revised approach.
+* Autonomous Artifact Re-use is deterministic: Modify targeted Units, Keep the rest, and Modify Build and Test on re-entry; Redo is forbidden because it would erase the ledger. Unit-major replays remain on the serial per-Unit path and do not invoke the autonomous swarm.
+* Gated "Retry with fix" uses the same settlement-aware override. The fix and Modify/Keep decisions happen before the settle gate, and fresh per-Unit reviewer receipts are mandatory before the gate is presented.
+* Rung 4 has two forms: an impact-estimated three-option question (Retry with fix / Accept failure / Abort) when a candidate exists, and a no-fix two-option question (Accept failure / Abort) when it does not.
+* Swarm replays discard stale worktrees and run a fresh `prepare`; old worktrees cannot be adopted into the new attempt because `finalize` requires the current prepare stamp. The check-first cheap path still skips builder turns for already-green Units, but every claimed Unit receives a fresh terminal review and `finalize` verifies its current artifact fingerprint before merge.
+* Crash resume re-executes a logged-but-not-jumped repair instead of re-diagnosing. After a recorded jump, it resumes the settlement-aware path and never treats preserved artifacts as proof that prior reviews remain current.
+* Single-stage runs (`/aidlc --stage build-and-test --single`) stop at classification because they have no main-workflow position to move; impact-estimated options appear in the isolated-run summary.
+* The stage-ritual exception is present in all seven shipped conductor SKILLs, including Cursor and GitHub Copilot, and generated distributions remain byte-aligned with their authored sources.
+* Deterministic integration coverage (`t280-loopback-review-receipt-replay`) proves the replayed Code Generation gate refuses stale per-Unit reviews after `STAGE_JUMPED` and succeeds only after fresh receipts are recorded.
+
 ## [2.5.69] - 2026-08-13
 
 Cursor IDE no longer blocks every tool call on a fail-closed PreToolUse hook that allowed with empty stdout. The Cursor adapter now emits `{"permission":"allow"}` on both allow returns, matching Cursor's required permission JSON; deny JSON and `failClosed: true` are unchanged. Cursor CLI already treated silence as allow, so CLI-only verification missed this. **Upgrade:** refresh `dist/cursor/` and rerun `bun dist/cursor/install.ts <project>`.

@@ -55,7 +55,11 @@ Offer to resume from the last incomplete stage.
 no matching `STAGE_JUMPED` (Target: code-generation) after it, the session
 died between logging and jumping — re-execute the jump per stage-protocol.md
 §1 "Build-and-Test failure loop-back" rather than re-diagnosing. On any
-resume, the loop-back count is the ledger's entry count, never zero.
+resume, the loop-back count is the ledger's entry count, never zero. If the
+matching jump already exists, resume the settlement-aware re-entry instead:
+receipt-mode continues from the first unsettled unit, while artifact-only mode
+resumes the pre-gate override; neither path may treat preserved artifacts as
+evidence that the invalidated per-unit reviews are still current.
 
 ### Session resume context loading
 When resuming, load context appropriate to the current phase and stage type:

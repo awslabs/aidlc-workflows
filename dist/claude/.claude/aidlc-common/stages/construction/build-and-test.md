@@ -134,8 +134,9 @@ Attempt to execute the build and test commands documented in the instruction fil
    autonomous` (in aidlc-state.md), an impact-estimated fix exists, and fewer than
    3 entries exist under `## Loop-Back Log` in test-results.md: follow
    stage-protocol.md §1 "Build-and-Test failure loop-back". Record the
-   diagnosis + impact-estimated fix plan, then jump back to code-generation and replay
-   forward. Do NOT present this stage's approval gate on the failed run.
+   diagnosis + impact-estimated fix plan, then jump back to code-generation and
+   replay forward through its settlement-aware route. Do NOT present this
+   stage's approval gate on the failed run.
 4. **Halt-and-ask** — if the mode is gated (or unset), the 3-loop-back bound
    is exhausted, or no identifiable fix exists: log the failure in
    test-results.md and present the impact-estimated halt-and-ask question defined in
@@ -144,6 +145,14 @@ Attempt to execute the build and test commands documented in the instruction fil
    never the agent's. When rung 2 found no identifiable fix at all, present
    stage-protocol.md §1's no-fix variant instead — it drops the "Retry with
    fix" option entirely rather than inventing a fix to retry with.
+
+**Loop-back replay invariant**: artifact-only code-generation workflows may
+settle directly to the all-covered gate, while sticky receipt-mode workflows
+re-emit per-unit work. Both routes apply the planned fix and deterministic
+Modify/Keep decisions before the gate, then record a fresh current-attempt
+review for every applicable code-generation unit; `STAGE_JUMPED` invalidates
+the prior reviews and approval fails without replacements. Under unit-major
+iteration the replay uses the serial per-unit walk, never the autonomous swarm.
 
 **Single-stage runs**: in a `--single` run (`/aidlc --stage build-and-test
 --single`) rungs 3-4 never execute a jump — there is no main-workflow position

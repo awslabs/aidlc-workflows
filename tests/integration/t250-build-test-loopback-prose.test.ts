@@ -1,4 +1,4 @@
-// covers: doc:aidlc-common/protocols/stage-protocol.md, doc:aidlc-common/protocols/stage-protocol-recovery.md, file:aidlc-common/stages/construction/build-and-test.md
+// covers: doc:aidlc-common/protocols/stage-protocol.md, doc:aidlc-common/protocols/stage-protocol-recovery.md, file:aidlc-common/stages/construction/build-and-test.md, file:aidlc-common/stages/construction/code-generation.md
 //
 // t250 — Build-and-Test failure loop-back PROSE-PIN (issue #611). t34-style:
 // mechanism = none. Every assertion is readFileSync + a string / regex check
@@ -51,6 +51,10 @@ const STAGE = readFileSync(
   join(AIDLC_SRC, "aidlc-common", "stages", "construction", "build-and-test.md"),
   "utf-8",
 );
+const CODE_GENERATION = readFileSync(
+  join(AIDLC_SRC, "aidlc-common", "stages", "construction", "code-generation.md"),
+  "utf-8",
+);
 
 describe("t250 build-and-test.md — Step 10 failure-escalation ladder", () => {
   test("On-failure block is the ladder, not the old flat retry list", () => {
@@ -85,7 +89,7 @@ describe("t250 build-and-test.md — Step 10 failure-escalation ladder", () => {
     expect(STAGE).toContain("an impact-estimated fix exists, and fewer than\n   3 entries exist under `## Loop-Back Log` in test-results.md");
     expect(STAGE).toContain('stage-protocol.md §1 "Build-and-Test failure loop-back"');
     expect(STAGE).toContain(
-      "Do NOT present this stage's approval gate on the failed run.",
+      "stage's approval gate on the failed run.",
     );
   });
 
@@ -176,20 +180,74 @@ describe("t250 stage-protocol.md §1 — Build-and-Test failure loop-back subsec
     expect(PROTOCOL).toContain("not a new autonomy inference (checklist item 6)");
   });
 
+  test("plan approval remains authoritative across the repair replay", () => {
+    expect(PROTOCOL).toContain(
+      "The recorded Plan Approval answer remains\nauthoritative: the conductor MUST NOT blank its `[Answer]:` for the loop-back\nrevision",
+    );
+    expect(PROTOCOL).toContain(
+      "the human's \"Retry with fix\" answer IS the re-approval of the\nrevised approach",
+    );
+    expect(PROTOCOL).toContain(
+      "The plan-approval guard's evidence survives\nthe jump because the non-empty plan and its approved questions file are\npreserved.",
+    );
+    expect(CODE_GENERATION).toContain(
+      "**Build-and-Test loop-back exception:** A stage-protocol.md §1 loop-back",
+    );
+    expect(CODE_GENERATION).toContain(
+      "Do not blank the Plan Approval `[Answer]:`",
+    );
+    expect(CODE_GENERATION).toContain(
+      "The plan-approval guard's evidence survives the jump",
+    );
+  });
+
   test("replay ends with Modify at build-and-test's own re-use prompt + fresh Step 10", () => {
     expect(PROTOCOL).toContain("choose Modify\n   at its own Artifact Re-use prompt");
     expect(PROTOCOL).toContain("re-execute Step 10 fresh");
   });
 
-  test("swarm interaction: fresh STAGE_STARTED floors the ledger; check-first cheap path", () => {
+  test("re-entry is settlement-aware and every path refreshes per-unit reviews", () => {
+    expect(PROTOCOL).toContain("**Re-entry settlement and review.**");
     expect(PROTOCOL).toContain(
-      "the jump's fresh `STAGE_STARTED` floors the convergence\nledger",
+      "**Artifact-only workflow** — when no code-generation lifecycle row has ever",
     );
-    expect(PROTOCOL).toContain("all units re-dispatch by\ndefault");
-    expect(PROTOCOL).toContain("after `prepare`, run\n`check <unit> --check-cmd");
-    expect(PROTOCOL).toContain("claimed at `finalize` without any worker turn");
     expect(PROTOCOL).toContain(
-      "dispatch\nworkers only for the unit(s) the Loop-Back Log's planned fix targets or that\nfail the check",
+      "The re-entry `next`\n   call can therefore emit the all-covered `gate: true` fast path",
+    );
+    expect(PROTOCOL).toContain(
+      "**Receipt-mode workflow** — once any code-generation lifecycle row exists,\n   receipt mode is sticky",
+    );
+    expect(PROTOCOL).toContain(
+      "re-mint `unit start` / `unit complete`",
+    );
+    expect(PROTOCOL).toContain(
+      "On BOTH paths, after every fix and re-use decision and BEFORE presenting or\nauto-approving the settle/approval gate, dispatch code-generation's declared\nreviewer for every applicable unit",
+    );
+    expect(PROTOCOL).toContain(
+      "The backward jump's `STAGE_JUMPED` invalidates\nevery prior review receipt, and the engine refuses approval",
+    );
+  });
+
+  test("unit-major replay stays serial and uses the same receipt/review route", () => {
+    expect(PROTOCOL).toContain(
+      "Under unit-major iteration the autonomous swarm never\nfires: the replay follows the ordinary per-unit walk",
+    );
+    expect(PROTOCOL).toContain(
+      "the plan-approval carve-out keeps the\nautonomous repair free of an extra human turn",
+    );
+  });
+
+  test("swarm interaction: exact attempt floor, fresh prepare, review-before-finalize cheap path", () => {
+    expect(PROTOCOL).toContain(
+      "the jump establishes a new exact stage-attempt `Run floor`\nboundary token (`<event>:<timestamp>#<ordinal>`",
+    );
+    expect(PROTOCOL).toContain("prior-attempt rows no longer count and all units\nre-dispatch by default");
+    expect(PROTOCOL).toContain("after\n`prepare`, run\n`check <unit> --check-cmd");
+    expect(PROTOCOL).toContain(
+      "A unit already green needs no builder turn, but before putting it in\n`finalize --claimed`, dispatch code-generation's reviewer",
+    );
+    expect(PROTOCOL).toContain(
+      "`finalize`\nthen verifies the current prepare stamp, the terminal receipt, and its current\nartifact fingerprint",
     );
   });
 
@@ -210,10 +268,10 @@ describe("t250 stage-protocol.md §1 — Build-and-Test failure loop-back subsec
 
   test("impact-unestimated give-up option is a protocol violation; human retry counts + may override bound", () => {
     expect(PROTOCOL).toContain(
-      "presenting an impact-unestimated give-up option is a\nprotocol violation",
+      "presenting an impact-unestimated give-up\noption is a protocol violation",
     );
     expect(PROTOCOL).toContain(
-      "A\nhuman-approved retry does count an entry in the Loop-Back Log, and the human\nmay override the bound explicitly",
+      "A human-approved retry does count an entry in the Loop-Back Log, and the human\nmay override the bound explicitly",
     );
   });
 
@@ -242,24 +300,34 @@ describe("t250 stage-protocol.md §1 — Build-and-Test failure loop-back subsec
     const gated = tail.slice(gatedIdx);
     expect(gated).toContain('"Retry with fix" at the Build-and-Test halt-and-ask');
     expect(gated).toContain(
-      'the\nre-entry `next` call answers with a `gate: true` directive straight to the\napproval gate — the stage body never runs',
+      "Artifact-only workflows may arrive directly\nat the all-covered `gate: true` directive",
     );
-    expect(gated).toContain("Do not accept that directive at face value:\nBEFORE presenting the gate it names, apply the planned fix");
-    expect(gated).toContain("**Modify** for the unit(s) the fix targets, **Keep**\nfor all other units, **Modify** for build-and-test itself on re-entry");
     expect(gated).toContain(
-      'aidlc-state.ts reuse-artifact <slug> --decision <keep|modify>\n--artifacts "<comma-separated list of existing artifacts found>"',
+      "receipt-mode workflows instead receive per-unit replay\ndirectives",
+    );
+    expect(gated).toContain(
+      "In the fast path, BEFORE presenting the gate, apply the planned fix",
+    );
+    expect(gated).toContain("**Modify** for the unit(s) the fix targets, **Keep** for all other\nunits, and **Modify** for build-and-test itself on re-entry");
+    expect(gated).toContain(
+      'aidlc-state.ts reuse-artifact <slug> --decision <keep|modify> --artifacts\n"<comma-separated list of existing artifacts found>"',
+    );
+    expect(gated).toContain(
+      "dispatch the declared reviewer for every applicable unit and record\nfresh current-attempt reviews BEFORE presenting the settle/approval gate",
     );
     expect(gated).toContain('this\nis not a second, silent autonomy inference.');
   });
 
-  test("Finding 1 (must-fix): the halt-and-ask 'Retry with fix' text names the same gate:true override BEFORE the gate", () => {
+  test("Finding 1 (must-fix): Retry with fix names both settlement routes and fresh reviews", () => {
     const retryIdx = PROTOCOL.indexOf('"Retry with fix" runs the same procedure as the autonomous loop-back');
-    expect(retryIdx).toBeGreaterThan(-1);
-    const retry = PROTOCOL.slice(retryIdx, retryIdx + 900);
-    expect(retry).toContain('including its re-entry gate override (see "Gated failure loop-back" under');
-    expect(retry).toContain('a `gate: true` directive straight to the');
+    const settlementAwareIdx = PROTOCOL.indexOf('"Retry with fix" runs the same settlement-aware procedure as the autonomous');
+    expect(retryIdx).toBe(-1);
+    expect(settlementAwareIdx).toBeGreaterThan(-1);
+    const retry = PROTOCOL.slice(settlementAwareIdx, settlementAwareIdx + 1_100);
+    expect(retry).toContain("Artifact-only workflows may take the all-covered\n`gate: true` fast path");
+    expect(retry).toContain("receipt-mode workflows instead re-emit per-unit\ndirectives");
     expect(retry).toContain(
-      "The planned fix MUST be applied — via that\noverride — BEFORE the gate it names is presented, never after.",
+      "every applicable\nunit MUST receive a fresh current-attempt review before that gate is presented",
     );
   });
 });
@@ -350,18 +418,20 @@ describe("t250 Finding 6 (should-fix): crash-resume bullet lives under Session r
 });
 
 describe("t250 Finding 7 (should-fix): swarm cheap-path premises are handled, not silently assumed", () => {
-  test("prepare-collision handling: discard or adopt stale worktrees/branches before calling prepare", () => {
+  test("prepare-collision handling: discard stale worktrees/branches before a fresh prepare", () => {
     expect(PROTOCOL).toContain(
-      "`prepare` hard-errors on collision, so discard the stale\nworktrees/branches, or adopt them if their code is still wanted, before\ncalling it",
+      "`prepare` hard-errors on collision, and\n`finalize` refuses a unit without the current attempt's prepare stamp, so\ndiscard the stale worktrees/branches before a fresh `prepare`",
     );
+    expect(PROTOCOL).toContain("never adopt\nthem into the new attempt");
+    expect(PROTOCOL).not.toContain("or adopt them if their code is still wanted");
   });
 
   test("the already-green premise is softened: depends on the prior attempt's code merge completing", () => {
     expect(PROTOCOL).toContain(
-      "true only once that attempt's git code\nmerge actually completed",
+      "true only\nonce that attempt's git code merge actually completed",
     );
     expect(PROTOCOL).toContain(
-      "the cheap path degrades\ngracefully to full re-dispatch rather than silently claiming unbuilt units",
+      "the cheap\npath degrades gracefully to full re-dispatch rather than silently claiming\nunbuilt units",
     );
   });
 });
@@ -382,6 +452,18 @@ describe("t250 stage-protocol-recovery.md — crash-resume bullet", () => {
       "On any\nresume, the loop-back count is the ledger's entry count, never zero.",
     );
   });
+
+  test("resume after the jump follows settlement mode and never trusts stale reviews", () => {
+    expect(RECOVERY).toContain(
+      "If the\nmatching jump already exists, resume the settlement-aware re-entry instead",
+    );
+    expect(RECOVERY).toContain(
+      "receipt-mode continues from the first unsettled unit, while artifact-only mode\nresumes the pre-gate override",
+    );
+    expect(RECOVERY).toContain(
+      "neither path may treat preserved artifacts as\nevidence that the invalidated per-unit reviews are still current",
+    );
+  });
 });
 
 describe("t250 conductor SKILLs — STAGE RITUAL IS ATOMIC exception (authored + dist, every harness)", () => {
@@ -389,6 +471,7 @@ describe("t250 conductor SKILLs — STAGE RITUAL IS ATOMIC exception (authored +
     "(One exception: the Build-and-Test failure loop-back — stage-protocol.md §1 — jumps back to code-generation from a deliberately in-flight failed stage; its learnings ritual fires on the eventual passing run.)";
 
   test("every authored conductor SKILL carries the exception on the atomic-ritual bullet", () => {
+    expect(HARNESS_MATRIX).toHaveLength(7);
     const missing: string[] = [];
     for (const harness of HARNESS_MATRIX) {
       const rel = `harness/${harness.name}/skills/aidlc/SKILL.md`;
