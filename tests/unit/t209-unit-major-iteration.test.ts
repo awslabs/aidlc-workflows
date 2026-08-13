@@ -101,7 +101,12 @@ const PRODUCES: Record<string, string[]> = {
     "shared-infrastructure",
     "traceability",
   ],
-  "code-generation": ["code-generation-plan", "code-summary", "traceability"],
+  "code-generation": [
+    "code-generation-plan",
+    "unit-test-instructions",
+    "code-summary",
+    "traceability",
+  ],
 };
 // The walk's inner list in graph order: the four inline design stages, then
 // code-generation (mode: subagent, in the walk since the block filter was

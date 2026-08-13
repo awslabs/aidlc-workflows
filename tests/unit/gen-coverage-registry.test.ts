@@ -919,6 +919,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t272-unit-major-code-gen.test.ts",
     "unit/t248-steering-content-delivery.test.ts",
     "unit/t278-per-unit-wave.test.ts",
+    "unit/t290-code-gen-unit-test-instructions-coverage.test.ts",
     "unit/t255-workspace-sync.test.ts",
     "unit/t27.test.ts",
     "unit/t29.test.ts",

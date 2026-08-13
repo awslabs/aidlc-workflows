@@ -131,9 +131,10 @@ The canonical names are split so the two never collide on the wire:
 
 - `build-test-results` — emitted by `build-and-test`. Pairs with
   sibling names in that stage: `build-instructions`,
-  `unit-test-instructions`, `integration-test-instructions`,
-  `performance-test-instructions`, `security-test-instructions`,
-  `build-and-test-summary`.
+  `integration-test-instructions`, `performance-test-instructions`,
+  `security-test-instructions`, `build-and-test-summary`.
+- `unit-test-instructions` is produced per-unit by `code-generation` and
+  consumed by `build-and-test`.
 - `load-test-results` — emitted by `performance-validation`. Pairs with
   `load-test-plan` already produced by the same stage.
 

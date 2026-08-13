@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.73] - 2026-08-13
+
+Re-authored from PR #403 by @jeromevdl, unit test instructions now belong to each Code Generation unit before implementation and flow into the cross-unit Build and Test stage. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* Code Generation produces `unit-test-instructions.md` per unit alongside the implementation plan, and Build and Test consumes those instructions instead of recreating them after code exists.
+* Plan Approval now covers both the code generation plan and unit test instructions; changing either file requires renewed approval before developer-agent dispatch.
+* Per-unit test commands must use exact test paths or an exact unit filter, and Build and Test deduplicates identical commands so each distinct command runs once.
+* Code Generation now imports the advisory `required-sections` sensor so the moved markdown artifact retains the document-shape validation applied at its former stage.
+
 ## [2.5.72] - 2026-08-13
 
 Construction design stages no longer ship implementation-ready code in design artifacts. `functional-design`, `nfr-design`, and `infrastructure-design` now carry an explicit Constraints section: artifacts describe what is needed and why at an architectural level, code is capped at short illustrative snippets (pseudocode or interface-level, 15 lines or fewer), and complete implementations (IaC modules, Lambda handlers, IAM policy documents, middleware) belong in `code-generation` (#396). **Upgrade:** re-copy your harness tree from `dist/<harness>/` to pick up the revised stage files.

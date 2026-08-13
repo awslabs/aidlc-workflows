@@ -1200,8 +1200,9 @@ function readConstructionIteration(
 // signal, NOT on-disk artifact presence. A swarm unit builds inside an isolated
 // Bolt worktree and `aidlc-bolt complete --merge` consolidates only the AIDLC
 // metadata (state + audit + runtime-graph fragment) back to the main checkout;
-// the unit's produced artifacts (code-generation-plan.md / code-summary.md and
-// the generated source) are NOT copied into the main record tree by the swarm
+// the unit's produced artifacts (code-generation-plan.md,
+// unit-test-instructions.md, code-summary.md, and the generated source) are NOT
+// copied into the main record tree by the swarm
 // finalize flow. So unitCovered's disk check (the INLINE per-unit ledger) never
 // sees a swarm unit as covered, and the batch-advance signal must instead be the
 // `SWARM_UNIT_CONVERGED` audit rows `aidlc-swarm.ts finalize` writes from the
