@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.72] - 2026-08-13
+
+Construction design stages no longer ship implementation-ready code in design artifacts. `functional-design`, `nfr-design`, and `infrastructure-design` now carry an explicit Constraints section: artifacts describe what is needed and why at an architectural level, code is capped at short illustrative snippets (pseudocode or interface-level, 15 lines or fewer), and complete implementations (IaC modules, Lambda handlers, IAM policy documents, middleware) belong in `code-generation` (#396). **Upgrade:** re-copy your harness tree from `dist/<harness>/` to pick up the revised stage files.
+
+* `functional-design`, `nfr-design`, and `infrastructure-design` stage prose gains a `## Constraints` section scoping artifacts to design-level content.
+* No command, flag, or artifact-path changes.
+
 ## [2.5.71] - 2026-08-13
 
 Stages now carry deterministic element-level traceability from requirements through stories, Units, design, code, and the Construction exit checks. **Upgrade:** refresh `dist/<harness>/`; for an existing intent whose current or completed in-flight stage predates `traceability.json`, revisit that stage and create its declared traceability artifact before attempting completion or downstream phase verification.
