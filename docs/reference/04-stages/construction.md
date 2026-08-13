@@ -1100,7 +1100,9 @@ through a phased construction flow:
 **Key characteristics:**
 - Stages 3.1-3.4 are CONDITIONAL; 3.5-3.6 ALWAYS execute; 3.7 is CONDITIONAL
 - All conditional stages follow the execution plan from Delivery Planning
-- Per-unit loop ensures one unit completes fully before the next begins
+- Default walk is stage-major (a stage for every Unit, then the next stage);
+  the opt-in `unit-major` walk runs one Unit through every per-unit stage
+  before the next Unit begins
 - NFR artifacts use expanded granularity (6 files for requirements, 6 for
   design) compared to the upstream reference
 - Infrastructure Design is expanded to 5 artifacts with dedicated monitoring

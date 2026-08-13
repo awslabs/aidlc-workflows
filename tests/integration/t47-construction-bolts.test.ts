@@ -7,8 +7,8 @@
 // N" sub-step labels (must be GONE from SKILL.md), the four Bolt audit events
 // registered in aidlc-audit.ts, the BOLT_STARTED row in audit-format.md, the
 // Construction Autonomy Mode state field in state-template.md, the stage-protocol
-// Glossary entry tying a Bolt to stages 3.1-3.5 (with 3.6/3.7 once at the end),
-// and the orchestrator-managed gating note in code-generation.md.
+// Terminology **Bolt** row (one Unit, one worktree, one BOLT_* pair; 3.6/3.7 once
+// after all Units), and the orchestrator-managed gating note in code-generation.md.
 //
 // The .sh carried NO `# covers:` header, so it joined to zero enumerated registry
 // units — and none of the seven enumerated unit classes
@@ -43,7 +43,7 @@
 //   dist/claude/.claude/knowledge/aidlc-shared/state-template.md             (STATE_TEMPLATE)
 //     :93 **Construction Autonomy Mode**: [unset/autonomous/gated]
 //   dist/claude/.claude/aidlc-common/protocols/stage-protocol.md             (STAGE_PROTOCOL)
-//     :716 Glossary **Bolt** row: stages 3.1-3.5; 3.6 & 3.7 run once after all Bolts
+//     Terminology **Bolt** row: one Unit / worktree / BOLT_* pair; 3.6 & 3.7 once after all Units
 //   dist/claude/.claude/aidlc-common/stages/construction/code-generation.md  (CODE_GEN)
 //     :176 "orchestrator-managed gating" / "suppressed by the orchestrator" note
 //
@@ -58,7 +58,7 @@
 //                   merely anywhere in the file.
 //   .sh test 9     (audit-format.md documents BOLT_STARTED)     -> "audit-format.md documents BOLT_STARTED"
 //   .sh test 10    (state-template.md has Construction Autonomy Mode) -> "state-template.md exposes Construction Autonomy Mode"
-//   .sh test 11    (stage-protocol Glossary ties Bolt to 3.1-3.5 + 3.6/3.7 once) -> "stage-protocol.md Glossary ..."
+//   .sh test 11    (stage-protocol Terminology: one-Unit Bolt + 3.6/3.7 once) -> "stage-protocol.md Terminology ..."
 //   .sh test 12    (code-generation.md notes orchestrator-managed gating) -> "code-generation.md notes orchestrator-managed gating"
 
 import { describe, expect, test } from "bun:test";
@@ -157,28 +157,25 @@ describe("t47 Construction Bolt vocabulary (migrated from t47-construction-bolts
   });
 
   // =========================================================================
-  // Test 11 — stage-protocol.md Glossary ties a Bolt to stages 3.1-3.5, with
-  // 3.6/3.7 run once at the end. The .sh required BOTH greps to hit on the same
-  // file:
-  //   grep -q  "3\.1.*3\.5"           (the `.` matches the en-dash in "3.1-3.5")
-  //   grep -qi "3\.6.*3\.7.*once"
-  // Reproduce both as regex tests against the shipped bytes. STRONGER: assert
-  // both on a SINGLE line (the Glossary **Bolt** row), so a split across
-  // unrelated lines can't satisfy the guard.
+  // Test 11 — stage-protocol.md Terminology **Bolt** row: one Unit, one
+  // worktree, one BOLT_STARTED / BOLT_COMPLETED pair, never a multi-Unit
+  // container; 3.6/3.7 run once after all Units. The retired .sh grepped
+  // 3.1–3.5 on that row (the opt-in unit-major walk). Pin the new row so a
+  // split across unrelated lines can't satisfy the guard, and so the old
+  // 3.1–3.5 definition cannot return on this line.
   // =========================================================================
-  test("stage-protocol.md Glossary ties Bolt to 3.1-3.5 with 3.6/3.7 once at end", () => {
-    // .sh grep half 1: "3.1<anything>3.5" — the literal `.` is any-char, which
-    // is how the .sh matched the en-dash form "3.1-3.5".
-    expect(/3.1.*3.5/.test(STAGE_PROTOCOL)).toBe(true);
-    // .sh grep half 2 (case-insensitive): "3.6<...>3.7<...>once".
-    expect(/3.6.*3.7.*once/i.test(STAGE_PROTOCOL)).toBe(true);
-    // STRONGER: both halves co-located on one Glossary row. Find the line that
-    // carries the 3.1-3.5 span and assert the 3.6/3.7-once clause is on it too.
+  test("stage-protocol.md Terminology ties Bolt to one Unit worktree / BOLT_* pair with 3.6/3.7 once", () => {
     const boltRow = STAGE_PROTOCOL.split("\n").find((l) =>
-      /3.1.*3.5/.test(l),
+      l.startsWith("| **Bolt** |"),
     );
     expect(boltRow).toBeDefined();
-    expect(/3.6.*3.7.*once/i.test(boltRow ?? "")).toBe(true);
+    expect(boltRow).toMatch(/one Unit/i);
+    expect(boltRow).toMatch(/worktree/);
+    expect(boltRow).toMatch(/BOLT_STARTED/);
+    expect(boltRow).toMatch(/BOLT_COMPLETED/);
+    expect(boltRow).toMatch(/never a container/i);
+    expect(boltRow).toMatch(/3\.6.*3\.7.*once/i);
+    expect(boltRow).not.toMatch(/3\.1.*3\.5/);
   });
 
   // =========================================================================
