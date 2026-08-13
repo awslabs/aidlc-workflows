@@ -888,6 +888,9 @@ const AUDIT_EVENT_ALLOWLIST = new Set([
   "SCOPE_DETECTED",
   "SCOPE_CHANGED",
   "RECOMPOSED",
+  "DOCUMENT_INDEXED",
+  "DOCUMENT_UPDATED",
+  "DOCUMENT_REMOVED",
 ]);
 
 // Audit block fields kept per event (structural only — no Details/Request/
@@ -1551,8 +1554,9 @@ function isSymlink(path: string): boolean {
   }
 }
 
-// Read the audit trail, refusing symlinked shard files. readAllAuditShards uses
-// readFileSync and would follow a symlinked shard, so we gate on the shard dir:
+// Read the audit trail, refusing symlinked intent-shard files. The shared audit
+// reader also validates every space/intent directory component and opens each
+// shard no-follow, covering the space-level DocumentKB shard as well.
 // if ANY entry under it is a symlink, we refuse the whole trail rather than
 // leak a redirected file's normalized fields into the report. Audit content is
 // otherwise only surfaced through the allowlisted extractAuditEvents.

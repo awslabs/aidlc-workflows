@@ -59,11 +59,12 @@ import {
   realpathSync,
   statSync,
 } from "node:fs";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   activeIntent,
   activeSpace,
   assertNoSymlinkInChainOrThrow,
+  auditBlockField,
   auditShardName,
   documentExtractors,
   emitError,
@@ -75,6 +76,7 @@ import {
   listIntents,
   listSpaces,
   readRegularFileNoFollowOrThrow,
+  readAuditShardEvents,
   removeTreeSync,
   renameIntoPlace,
   resolveProjectDir,
@@ -1452,7 +1454,13 @@ export function onboard(
   // neither tombstoned -- a state `rebuildIndex`'s own duplicate-id-only check
   // cannot even see, because the two ids differ. `sync` already had this
   // exact case right (the "changed" branch); `onboard` did not.
-  const staged: { row: DocumentRow; buf: Buffer; abs: string; text?: string }[] = [];
+  const staged: {
+    row: DocumentRow;
+    buf: Buffer;
+    abs: string;
+    text?: string;
+    baseRow?: DocumentRow;
+  }[] = [];
   const editedIds = new Set<string>();
   const seenIds = new Set<string>();
   const outcomes: OnboardOutcome[] = [];
@@ -1518,7 +1526,7 @@ export function onboard(
         };
         setRowContentFields(row, outcome.text);
         editedIds.add(row.id);
-        staged.push({ row, buf, abs, text: outcome.text });
+        staged.push({ row, buf, abs, text: outcome.text, baseRow: structuredClone(existing) });
       }
       continue;
     }
@@ -1562,9 +1570,19 @@ export function onboard(
   // with `--intent` must not silently do nothing just because there was no
   // row to create or edit.
   if (staged.length === 0) {
-    for (const id of pendingIntentAssociations) {
-      setIntentAssociation(projectDir, space, id, intentUuid as string, "associate");
-    }
+    withAuditLock(projectDir, () => {
+      for (const id of pendingIntentAssociations) {
+        setIntentAssociation(projectDir, space, id, intentUuid as string, "associate");
+      }
+      const current = readIndex(projectDir, space);
+      const auditState = documentAuditState(projectDir, space);
+      for (const outcome of outcomes) {
+        const row = current.documents.find((candidate) => candidate.id === outcome.id);
+        if (!row) continue;
+        ensureDocumentRevisionAudit(projectDir, space, row, auditState);
+        ensureDocumentAssociationAudit(projectDir, space, row, auditState);
+      }
+    }, undefined, space);
     return { space, indexed: outcomes };
   }
 
@@ -1626,13 +1644,20 @@ export function onboard(
       const freshSources = new Map(fresh.documents.map((r) => [r.source.path, r]));
       const landed: DocumentRow[] = [];
       const edited: DocumentRow[] = [];
-      for (const { row } of staged) {
+      for (const { row, baseRow } of staged) {
         if (editedIds.has(row.id)) {
           // This id is EXPECTED to already exist in the fresh index -- it is
           // the row being refreshed in place, not a new one. A concurrent
           // onboard/sync may have already advanced it past this digest; in
           // that case there is nothing left for THIS run to apply.
           const freshRow = fresh.documents.find((r) => r.id === row.id);
+          if (freshRow !== undefined && baseRow !== undefined &&
+              JSON.stringify(freshRow) !== JSON.stringify(baseRow)) {
+            // Another writer changed this identity after staging (rebind and
+            // association updates are the important cases). Never apply a
+            // pre-lock edit plan to a row it was not planned from.
+            continue;
+          }
           const sameRevisionAlreadyPublished = freshRow !== undefined &&
             freshRow.sha256 === row.sha256 &&
             (freshRow.content === undefined ||
@@ -1715,7 +1740,20 @@ export function onboard(
       // under a citation that never claimed it. Publishing the index first
       // means a later content-write failure leaves content stale-or-absent
       // under the row's OWN new digest, never someone else's old one.
-      if (landed.length > 0 || edited.length > 0) writeIndex(projectDir, space, fresh);
+      if (landed.length > 0 || edited.length > 0) {
+        try {
+          writeIndex(projectDir, space, fresh);
+        } catch (error) {
+          // Fresh directories were renamed out of the journal just above. If
+          // the authoritative index did not commit, remove only those newly
+          // landed identities so a later rebuild cannot resurrect a failed,
+          // unaudited onboard operation.
+          for (const row of landed) {
+            try { removeTreeSync(documentDir(projectDir, space, row.id)); } catch { /* best effort */ }
+          }
+          throw error;
+        }
+      }
 
       // (f) NOW publish each edited row's metadata.json + content.md -- after
       // the index reflects its new digest/extraction, never before. Routed
@@ -1751,6 +1789,9 @@ export function onboard(
             Document: row.id,
             Source: row.source.path,
             Digest: row.sha256,
+            ...(row.related_intent_ids === undefined
+              ? {}
+              : { Intents: JSON.stringify(row.related_intent_ids) }),
           },
           projectDir,
           spaceAuditShardPath(projectDir, space),
@@ -1768,6 +1809,13 @@ export function onboard(
       // lock as everything else this batch touches.
       for (const id of pendingIntentAssociations) {
         setIntentAssociation(projectDir, space, id, intentUuid as string, "associate");
+      }
+      const auditState = documentAuditState(projectDir, space);
+      for (const outcome of outcomes) {
+        const row = fresh.documents.find((candidate) => candidate.id === outcome.id);
+        if (!row) continue;
+        ensureDocumentRevisionAudit(projectDir, space, row, auditState);
+        ensureDocumentAssociationAudit(projectDir, space, row, auditState);
       }
       return { landed, edited };
     }, undefined, space);
@@ -2241,9 +2289,8 @@ export interface SyncResult {
  * does not "simplify" one away on the evidence that removing it breaks nothing.
  */
 function deleteDerivedText(projectDir: string, space: string, id: string): void {
-  try {
-    removeTreeSync(join(documentDir(projectDir, space, id), "content.md"));
-  } catch { /* absent already */ }
+  const path = join(documentDir(projectDir, space, id), "content.md");
+  if (existsSync(path)) removeTreeSync(path);
 }
 
 /**
@@ -2530,6 +2577,9 @@ export function syncDocuments(
     // follows and for the same reason: the copy planning used predates the
     // lock, and writing it back is how a concurrent writer's row is lost.
     const index = readIndex(projectDir, space);
+    for (const row of index.documents) {
+      if (isTombstoned(row)) deleteDerivedText(projectDir, space, row.id);
+    }
     const rows = new Map(index.documents.map((r) => [r.id, r]));
     const liveSourcePaths = new Map(
       index.documents.filter((r) => !isTombstoned(r)).map((r) => [r.source.path, r]),
@@ -2688,7 +2738,15 @@ export function syncDocuments(
       });
       audits.push(() => appendAuditEntryAtPathUnlocked(
         "DOCUMENT_INDEXED",
-        { Space: space, Document: row.id, Source: row.source.path, Digest: row.sha256 },
+        {
+          Space: space,
+          Document: row.id,
+          Source: row.source.path,
+          Digest: row.sha256,
+          ...(row.related_intent_ids === undefined
+            ? {}
+            : { Intents: JSON.stringify(row.related_intent_ids) }),
+        },
         projectDir,
         spaceAuditShardPath(projectDir, space),
       ));
@@ -2737,6 +2795,12 @@ export function syncDocuments(
     // Audit LAST, only after content + metadata + index all landed -- so the
     // ledger never records a change the catalog does not yet reflect.
     for (const emit of audits) emit();
+    const auditState = documentAuditState(projectDir, space);
+    for (const row of index.documents) {
+      if (isTombstoned(row)) ensureDocumentRemovalAudit(projectDir, space, row, auditState);
+      else ensureDocumentRevisionAudit(projectDir, space, row, auditState);
+      ensureDocumentAssociationAudit(projectDir, space, row, auditState);
+    }
 
     return { space, changes, journalsCollected };
   }, undefined, space);
@@ -2796,12 +2860,196 @@ function emitDocumentUpdated(
   row: DocumentRow,
   change: string,
 ): void {
+  if (row.source.path === null) throw new Error(`Live document ${row.id} has no source path`);
   appendAuditEntryAtPathUnlocked(
     "DOCUMENT_UPDATED",
-    { Space: space, Document: row.id, Change: change, Digest: row.sha256 },
+    {
+      Space: space,
+      Document: row.id,
+      Change: change,
+      Source: row.source.path,
+      Digest: row.sha256,
+    },
     projectDir,
     spaceAuditShardPath(projectDir, space),
   );
+}
+
+function spaceAuditBlocks(projectDir: string, space: string): string[] {
+  const spaceAuditDir = dirname(spaceAuditShardPath(projectDir, space));
+  return readAuditShardEvents(projectDir, undefined, space)
+    .filter((row) => dirname(row.shard) === spaceAuditDir)
+    .sort((a, b) =>
+      a.timestamp.localeCompare(b.timestamp) ||
+      a.shard.localeCompare(b.shard) ||
+      a.pos - b.pos
+    )
+    .map((row) => row.block);
+}
+
+interface DocumentAuditProjection {
+  seen: boolean;
+  latestRevision?: {
+    event: "DOCUMENT_INDEXED" | "DOCUMENT_UPDATED" | "DOCUMENT_REMOVED";
+    digest?: string;
+    source?: string;
+  };
+  intents: Set<string>;
+}
+
+interface DocumentAuditState {
+  documents: Map<string, DocumentAuditProjection>;
+}
+
+function applyDocumentAuditEvent(
+  state: DocumentAuditState,
+  event: string,
+  fields: Record<string, string>,
+): void {
+  const id = fields.Document;
+  if (!id) return;
+  let projection = state.documents.get(id);
+  if (!projection) {
+    projection = { seen: false, intents: new Set() };
+    state.documents.set(id, projection);
+  }
+  projection.seen = true;
+  if (event === "DOCUMENT_REMOVED") {
+    projection.latestRevision = { event };
+  } else if ((event === "DOCUMENT_INDEXED" || event === "DOCUMENT_UPDATED") && fields.Digest) {
+    projection.latestRevision = {
+      event,
+      digest: fields.Digest,
+      source: fields.Source ?? projection.latestRevision?.source,
+    };
+  }
+  if (event === "DOCUMENT_INDEXED" && fields.Intents) {
+    try {
+      const values = JSON.parse(fields.Intents) as unknown;
+      if (Array.isArray(values)) {
+        for (const value of values) if (typeof value === "string") projection.intents.add(value);
+      }
+    } catch { /* malformed historical snapshots contribute no associations */ }
+  }
+  if (event === "DOCUMENT_UPDATED" && fields.Intent) {
+    if (fields.Change === "associate") projection.intents.add(fields.Intent);
+    if (fields.Change === "dissociate") projection.intents.delete(fields.Intent);
+  }
+}
+
+function documentAuditState(projectDir: string, space: string): DocumentAuditState {
+  const state: DocumentAuditState = { documents: new Map() };
+  for (const block of spaceAuditBlocks(projectDir, space)) {
+    const event = auditBlockField(block, "Event");
+    if (!event?.startsWith("DOCUMENT_")) continue;
+    const fields: Record<string, string> = {};
+    for (const name of ["Document", "Change", "Digest", "Source", "Intent", "Intents"]) {
+      const value = auditBlockField(block, name);
+      if (value !== null) fields[name] = value;
+    }
+    applyDocumentAuditEvent(state, event, fields);
+  }
+  return state;
+}
+
+function ensureDocumentRevisionAudit(
+  projectDir: string,
+  space: string,
+  row: DocumentRow,
+  state: DocumentAuditState = documentAuditState(projectDir, space),
+): void {
+  const projection = state.documents.get(row.id);
+  if (
+    projection?.latestRevision?.event !== "DOCUMENT_REMOVED" &&
+    projection?.latestRevision?.digest === row.sha256 &&
+    projection.latestRevision.source === row.source.path
+  ) return;
+  if (projection?.seen) {
+    const fields = {
+      Space: space,
+      Document: row.id,
+      Change: "audit-repair",
+      Source: row.source.path,
+      Digest: row.sha256,
+    };
+    appendAuditEntryAtPathUnlocked(
+      "DOCUMENT_UPDATED",
+      fields,
+      projectDir,
+      spaceAuditShardPath(projectDir, space),
+    );
+    applyDocumentAuditEvent(state, "DOCUMENT_UPDATED", fields);
+  } else {
+    const fields = {
+      Space: space,
+      Document: row.id,
+      Source: row.source.path,
+      Digest: row.sha256,
+      ...(row.related_intent_ids === undefined
+        ? {}
+        : { Intents: JSON.stringify(row.related_intent_ids) }),
+    };
+    appendAuditEntryAtPathUnlocked(
+      "DOCUMENT_INDEXED",
+      fields,
+      projectDir,
+      spaceAuditShardPath(projectDir, space),
+    );
+    applyDocumentAuditEvent(state, "DOCUMENT_INDEXED", fields);
+  }
+}
+
+function ensureDocumentRemovalAudit(
+  projectDir: string,
+  space: string,
+  row: DocumentRow,
+  state: DocumentAuditState = documentAuditState(projectDir, space),
+): void {
+  if (!isTombstoned(row)) return;
+  if (state.documents.get(row.id)?.latestRevision?.event === "DOCUMENT_REMOVED") return;
+  const fields = {
+    Space: space,
+    Document: row.id,
+    "Last Path": row.source.path,
+    "Last Digest": row.sha256,
+  };
+  appendAuditEntryAtPathUnlocked(
+    "DOCUMENT_REMOVED",
+    fields,
+    projectDir,
+    spaceAuditShardPath(projectDir, space),
+  );
+  applyDocumentAuditEvent(state, "DOCUMENT_REMOVED", fields);
+}
+
+function ensureDocumentAssociationAudit(
+  projectDir: string,
+  space: string,
+  row: DocumentRow,
+  state: DocumentAuditState = documentAuditState(projectDir, space),
+): void {
+  const audited = state.documents.get(row.id)?.intents ?? new Set<string>();
+  const current = new Set(row.related_intent_ids ?? []);
+  for (const intent of [...audited].filter((value) => !current.has(value)).sort()) {
+    const fields = { Space: space, Document: row.id, Change: "dissociate", Intent: intent };
+    appendAuditEntryAtPathUnlocked(
+      "DOCUMENT_UPDATED",
+      fields,
+      projectDir,
+      spaceAuditShardPath(projectDir, space),
+    );
+    applyDocumentAuditEvent(state, "DOCUMENT_UPDATED", fields);
+  }
+  for (const intent of [...current].filter((value) => !audited.has(value)).sort()) {
+    const fields = { Space: space, Document: row.id, Change: "associate", Intent: intent };
+    appendAuditEntryAtPathUnlocked(
+      "DOCUMENT_UPDATED",
+      fields,
+      projectDir,
+      spaceAuditShardPath(projectDir, space),
+    );
+    applyDocumentAuditEvent(state, "DOCUMENT_UPDATED", fields);
+  }
 }
 
 // --- intent association ------------------------------------------------------
@@ -3040,7 +3288,11 @@ export function setIntentAssociation(
     const has = current.includes(intentUuid);
 
     if (mode === "associate" ? has : !has) {
-      // Nothing to do. Reported, never swallowed, and no event.
+      // Nothing to mutate. Repair any audit-last gap from a prior failed call,
+      // then report the idempotent state.
+      const auditState = documentAuditState(projectDir, space);
+      ensureDocumentRevisionAudit(projectDir, space, row, auditState);
+      ensureDocumentAssociationAudit(projectDir, space, row, auditState);
       return { id, intent: intentUuid, status: "already" as const };
     }
 
@@ -3207,6 +3459,35 @@ export function rebindDocument(
           `rows one file, so nothing was changed.`,
       );
     }
+    if (
+      row.source.kind === "managed" &&
+      row.source.path === nextPath &&
+      row.sha256 === digest &&
+      !isTombstoned(row)
+    ) {
+      const auditState = documentAuditState(projectDir, space);
+      const latestRevision = auditState.documents.get(row.id)?.latestRevision;
+      const hasRebindAudit = latestRevision?.event !== "DOCUMENT_REMOVED" &&
+        latestRevision?.source === nextPath && latestRevision.digest === digest;
+      if (!hasRebindAudit) {
+        const fields = {
+          Space: space,
+          Document: row.id,
+          Change: "rebound",
+          Source: nextPath,
+          Digest: digest,
+        };
+        appendAuditEntryAtPathUnlocked(
+          "DOCUMENT_UPDATED",
+          fields,
+          projectDir,
+          spaceAuditShardPath(projectDir, space),
+        );
+        applyDocumentAuditEvent(auditState, "DOCUMENT_UPDATED", fields);
+      }
+      ensureDocumentAssociationAudit(projectDir, space, row, auditState);
+      return { id: row.id, from: nextPath, to: nextPath, sha256: digest };
+    }
     const from = row.source.path;
     row.source = { kind: "managed", path: nextPath };
     row.sha256 = digest;
@@ -3251,7 +3532,12 @@ function parseFlags(
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--space") {
-      space = args[++i];
+      const next = args[i + 1];
+      if (next === undefined || next.startsWith("--")) {
+        throw new Error("--space requires a non-empty space name");
+      }
+      space = next;
+      i++;
     } else if (a === "--intent") {
       // BARE `--intent` means "the active one", so an absent or flag-shaped next
       // token is not an error -- it is the bare form, distinguished from absent by

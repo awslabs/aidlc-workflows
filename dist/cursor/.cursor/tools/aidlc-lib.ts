@@ -2752,6 +2752,11 @@ const GATE_RESOLUTION_EVENTS = new Set([
   "QUESTION_ANSWERED",
   "SUMMARY_CONFIRMATION_RECORDED",
 ]);
+const DOCUMENT_AUDIT_EVENTS = new Set([
+  "DOCUMENT_INDEXED",
+  "DOCUMENT_UPDATED",
+  "DOCUMENT_REMOVED",
+]);
 export function humanActedSinceGate(projectDir: string): boolean {
   // Per-shard reads (not the concatenated buffer): buffer position across
   // shards is FILENAME order, not execution order, so it can only serve as an
@@ -2760,19 +2765,19 @@ export function humanActedSinceGate(projectDir: string): boolean {
   // below.
   const shards = auditShards(projectDir);
   const events: { ts: string; shard: number; pos: number; human: boolean }[] = [];
-  let ledgerBytes = 0;
+  let sawPresenceTrackingEvent = false;
   for (let s = 0; s < shards.length; s++) {
     let content: string;
     try {
-      content = readFileSync(shards[s], "utf-8");
+      content = readRegularFileNoFollowOrThrow(shards[s], "audit shard").toString("utf-8");
     } catch {
       continue; // a shard vanished between enumerate and read — skip it
     }
-    ledgerBytes += content.length;
     const blocks = content.replace(/\r\n/g, "\n").split(/\n---\n/);
     for (let i = 0; i < blocks.length; i++) {
       const ev = auditBlockField(blocks[i], "Event");
       if (!ev) continue;
+      if (!DOCUMENT_AUDIT_EVENTS.has(ev)) sawPresenceTrackingEvent = true;
       const isResolution =
         GATE_RESOLUTION_EVENTS.has(ev) ||
         (ev === "AUTONOMY_MODE_SET" &&
@@ -2786,7 +2791,9 @@ export function humanActedSinceGate(projectDir: string): boolean {
       });
     }
   }
-  if (ledgerBytes === 0) return true; // no ledger → no presence tracking → fail open
+  // DocumentKB provenance does not activate human-presence tracking. Any other
+  // audit event does, so a workflow ledger without HUMAN_TURN fails closed.
+  if (events.length === 0) return !sawPresenceTrackingEvent;
   const humans = events.filter((event) => event.human);
   if (humans.length === 0) return false; // no human turn on record
   const resolutions = events.filter((event) => !event.human);
@@ -3368,22 +3375,29 @@ export function auditShardDir(projectDir: string, intent?: string, space?: strin
 // an active intent exists. With no intent resolved only the space shard is read.
 // Readers merge-sort parsed events by **Timestamp**.
 export function auditShards(projectDir: string, intent?: string, space?: string): string[] {
-  const dirs = new Set<string>([join(spaceRecordRoot(projectDir, space), "audit")]);
+  const dirs: string[] = [join(spaceRecordRoot(projectDir, space), "audit")];
   const intentDir = auditShardDir(projectDir, intent, space);
-  if (intentDir !== null) dirs.add(intentDir);
+  if (intentDir !== null && !dirs.includes(intentDir)) dirs.push(intentDir);
   const paths: string[] = [];
   for (const shardDir of dirs) {
+    try {
+      assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, shardDir));
+    } catch {
+      continue;
+    }
     let entries: string[];
     try {
       entries = readdirSync(shardDir);
     } catch {
       continue;
     }
-    for (const file of entries) {
+    for (const file of entries.sort()) {
       if (file.endsWith(".md")) paths.push(join(shardDir, file));
     }
   }
-  return paths.sort();
+  // Space-level evidence is visible to every intent, but the active intent must
+  // remain last for the few hook paths that inspect the raw audit tail.
+  return paths;
 }
 
 // Concatenate every audit shard's content for an intent into one buffer the
@@ -3398,7 +3412,7 @@ export function readAllAuditShards(projectDir: string, intent?: string, space?: 
   const parts: string[] = [];
   for (const path of shards) {
     try {
-      parts.push(readFileSync(path, "utf-8"));
+      parts.push(readRegularFileNoFollowOrThrow(path, "audit shard").toString("utf-8"));
     } catch {
       // a shard vanished between enumerate and read — skip it
     }
@@ -3429,7 +3443,10 @@ export function readAuditShardEvents(
   for (let shardIndex = 0; shardIndex < shards.length; shardIndex++) {
     let content: string;
     try {
-      content = readFileSync(shards[shardIndex], "utf-8");
+      content = readRegularFileNoFollowOrThrow(
+        shards[shardIndex],
+        "audit shard",
+      ).toString("utf-8");
     } catch {
       continue;
     }

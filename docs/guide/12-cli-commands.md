@@ -260,10 +260,11 @@ carries two live rows — the outcomes are `fresh`, `already`, and `edited`, and
 are worth reading, because "no output changed" and "nothing happened" are different
 results.
 
-**Batch limits.** A pathless `onboard` (and `sync`) refuses a run of more than 20
-documents or 256 MiB in total, naming the cap it hit and what to do instead —
-onboard a subdirectory or a single file, or run `sync`. Nothing is indexed when a
-cap is hit, so the refusal is never a half-finished batch. A single document over
+**Batch limits.** A pathless `onboard` refuses a batch of more than 20 documents or
+256 MiB in total. `sync` applies the same limits only to new, changed, or retrying
+documents; an already-reconciled catalog can be larger. When a work batch exceeds a
+cap, onboard the affected files individually before syncing again. Nothing is
+indexed when a cap is hit, so the refusal is never half-finished. A single document over
 32 MiB is refused without being read at all; the message says so, because "refused"
 and "read, then refused" have very different costs on a large file.
 

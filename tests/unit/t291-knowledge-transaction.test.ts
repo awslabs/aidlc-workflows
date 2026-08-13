@@ -50,12 +50,14 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   collectStaleJournals,
   documentkbDir,
@@ -65,9 +67,16 @@ import {
   journalTxnDir,
   onboard,
   readIndex,
+  rebindDocument,
+  sha256Hex,
   spaceAuditShardPath,
+  syncDocuments,
 } from "../../dist/claude/.claude/tools/aidlc-knowledge.ts";
-import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import {
+  humanActedSinceGate,
+  readAllAuditShards,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const AIDLC_TOOLS = join(import.meta.dir, "..", "..", "dist", "claude", ".claude", "tools");
 const NOW = "2026-08-07T00:00:00Z";
@@ -130,6 +139,34 @@ afterEach(() => {
 });
 
 describe("t291 the audit row lands in the SPACE shard, not the active intent's", () => {
+  test("a failed audit-last append is repaired by an idempotent onboard retry", () => {
+    const p = projectWithIntent();
+    const abs = doc(p, "audit-repair.md");
+    const shard = spaceAuditShardPath(p, SPACE);
+    mkdirSync(dirname(shard), { recursive: true });
+    mkdirSync(shard);
+
+    expect(() => onboard(p, SPACE, abs, NOW)).toThrow();
+    expect(readIndex(p, SPACE).documents).toHaveLength(1);
+
+    rmSync(shard, { recursive: true, force: true });
+    expect(onboard(p, SPACE, abs, NOW).indexed[0].status).toBe("already");
+    expect(readAllAuditShards(p)).toContain("**Event**: DOCUMENT_INDEXED");
+  });
+
+  test("audit recovery projects space history from another clone shard", () => {
+    const p = projectWithIntent();
+    const source = doc(p, "other-clone.md");
+    onboard(p, SPACE, source, NOW);
+    const currentShard = spaceAuditShardPath(p, SPACE);
+    const otherShard = join(dirname(currentShard), "other-host-other-clone.md");
+    renameSync(currentShard, otherShard);
+
+    expect(onboard(p, SPACE, source, NOW).indexed[0].status).toBe("already");
+    expect(existsSync(currentShard)).toBe(false);
+    expect(readFileSync(otherShard, "utf-8")).toContain("**Event**: DOCUMENT_INDEXED");
+  });
+
   test("DOCUMENT_INDEXED is written to the space-level shard", () => {
     const p = projectWithIntent();
     doc(p, "policy.md");
@@ -143,6 +180,132 @@ describe("t291 the audit row lands in the SPACE shard, not the active intent's",
     expect(withEvent[0].path).toBe(spaceAuditShardPath(p, SPACE));
     expect(withEvent[0].path).toContain(join("intents", "audit"));
     expect(readAllAuditShards(p)).toContain("**Event**: DOCUMENT_INDEXED");
+  });
+
+  test("space events remain visible without hiding the active intent audit tail", () => {
+    const p = projectWithIntent();
+    for (const name of ["a.md", "b.md", "c.md"]) doc(p, name);
+    onboard(p, SPACE, undefined, NOW);
+    appendAuditEntry("STAGE_STARTED", { Stage: "requirements-analysis" }, p);
+    const blocks = readAllAuditShards(p).split(/\n---\n/).filter((block) => block.trim());
+    expect(blocks.at(-1)).toContain("**Event**: STAGE_STARTED");
+  });
+
+  test("DocumentKB-only audit rows do not activate the human-presence floor", () => {
+    proj = mkdtempSync(join(tmpdir(), "t291-presence-"));
+    mkdirSync(documentsDir(proj, SPACE), { recursive: true });
+    doc(proj, "policy.md");
+    expect(humanActedSinceGate(proj)).toBe(true);
+    onboard(proj, SPACE, undefined, NOW);
+    expect(humanActedSinceGate(proj)).toBe(true);
+    appendAuditEntry("STAGE_STARTED", { Stage: "requirements-analysis" }, proj);
+    expect(humanActedSinceGate(proj)).toBe(false);
+  });
+
+  test("audit repair refuses to append through a symlinked space shard", () => {
+    const p = projectWithIntent();
+    const external = join(p, "external-audit.md");
+    const original = "# External audit\n";
+    writeFileSync(external, original);
+    const shard = spaceAuditShardPath(p, SPACE);
+    mkdirSync(dirname(shard), { recursive: true });
+    try {
+      symlinkSync(external, shard);
+    } catch {
+      return; // Windows without symlink privilege.
+    }
+    doc(p, "policy.md");
+    expect(() => onboard(p, SPACE, undefined, NOW)).toThrow();
+    expect(readFileSync(external, "utf-8")).toBe(original);
+  });
+
+  test("audit append refuses a symlinked space-shard parent", () => {
+    const p = projectWithIntent();
+    const externalDir = join(p, "external-audit-dir");
+    mkdirSync(externalDir);
+    const shard = spaceAuditShardPath(p, SPACE);
+    mkdirSync(dirname(dirname(shard)), { recursive: true });
+    try {
+      symlinkSync(externalDir, dirname(shard));
+    } catch {
+      return; // Windows without symlink privilege.
+    }
+    doc(p, "policy.md");
+    expect(() => onboard(p, SPACE, undefined, NOW)).toThrow();
+    expect(readdirSync(externalDir)).toEqual([]);
+  });
+
+  test("audit repair records a reverted digest instead of matching stale history", () => {
+    const p = projectWithIntent();
+    const source = doc(p, "reverted.md", "A\n");
+    const row = onboard(p, SPACE, source, NOW).indexed[0];
+    writeFileSync(source, "B\n");
+    syncDocuments(p, SPACE, "2026-08-13T00:01:00Z");
+
+    writeFileSync(source, "A\n");
+    const shard = spaceAuditShardPath(p, SPACE);
+    renameSync(shard, `${shard}.saved`);
+    mkdirSync(shard);
+    expect(() => syncDocuments(p, SPACE, "2026-08-13T00:02:00Z")).toThrow();
+    rmSync(shard, { recursive: true, force: true });
+    renameSync(`${shard}.saved`, shard);
+
+    syncDocuments(p, SPACE, "2026-08-13T00:03:00Z");
+    const revisions = readFileSync(shard, "utf-8")
+      .split(/\n---\n/)
+      .filter((block) => block.includes(`**Document**: ${row.id}`) && block.includes("**Digest**:"));
+    expect(revisions.at(-1)).toContain(`**Digest**: ${sha256Hex(Buffer.from("A\n"))}`);
+    expect(revisions.at(-1)).toContain("**Change**: audit-repair");
+  });
+
+  test("audit repair records a pure move whose digest did not change", () => {
+    const p = projectWithIntent();
+    const source = doc(p, "before.md", "same\n");
+    const row = onboard(p, SPACE, source, NOW).indexed[0];
+    const moved = join(documentsDir(p, SPACE), "after.md");
+    renameSync(source, moved);
+    const shard = spaceAuditShardPath(p, SPACE);
+    renameSync(shard, `${shard}.saved`);
+    mkdirSync(shard);
+    expect(() => syncDocuments(p, SPACE, "2026-08-13T00:01:00Z")).toThrow();
+    rmSync(shard, { recursive: true, force: true });
+    renameSync(`${shard}.saved`, shard);
+
+    syncDocuments(p, SPACE, "2026-08-13T00:02:00Z");
+    const blocks = readFileSync(shard, "utf-8").split(/\n---\n/);
+    const latest = blocks.filter((block) => block.includes(`**Document**: ${row.id}`)).at(-1);
+    expect(latest).toContain("**Change**: audit-repair");
+    expect(latest).toContain("**Source**: documents/after.md");
+  });
+
+  test("same-path same-digest rebind revives a tombstoned row", () => {
+    const p = projectWithIntent();
+    const source = doc(p, "revive.md", "same\n");
+    const row = onboard(p, SPACE, source, NOW).indexed[0];
+    rmSync(source);
+    syncDocuments(p, SPACE, "2026-08-13T00:01:00Z");
+    writeFileSync(source, "same\n");
+
+    rebindDocument(p, SPACE, row.id, source, "2026-08-13T00:02:00Z");
+    expect(readIndex(p, SPACE).documents.find((candidate) => candidate.id === row.id)?.removed_at)
+      .toBeUndefined();
+  });
+
+  test("standard audit readers do not follow a symlinked space shard", () => {
+    const p = projectWithIntent();
+    const external = join(p, "external-audit.md");
+    writeFileSync(
+      external,
+      "# External\n\n---\n**Event**: DOCUMENT_INDEXED\n**Timestamp**: 2026-08-13T00:00:00Z\n**Document**: leaked\n",
+    );
+    const shardDir = dirname(spaceAuditShardPath(p, SPACE));
+    mkdirSync(shardDir, { recursive: true });
+    try {
+      symlinkSync(external, join(shardDir, "leak.md"));
+    } catch {
+      return; // Windows without symlink privilege.
+    }
+    expect(readAllAuditShards(p)).not.toContain("**Document**: leaked");
   });
 
   test("NO intent shard receives the event, even though an intent is active", () => {
@@ -578,6 +741,49 @@ describe("t291 an EDITED row is protected from the same race as a fresh one", ()
         ).toBe(before.sha256);
       }
     }
+  }, 60000);
+
+  test("a stale edited-onboard plan cannot overwrite a concurrent rebind", () => {
+    const p = projectWithIntent();
+    const abs = doc(p, "a.md", "v1\n");
+    onboard(p, SPACE, undefined, NOW);
+    writeFileSync(abs, "v2 staged edit\n");
+    const rebound = doc(p, "rebound.md", "rebound identity\n");
+
+    const holder = join(p, "holder-rebind.ts");
+    writeFileSync(
+      holder,
+      `const lib = await import(${JSON.stringify(join(AIDLC_TOOLS, "aidlc-lib.ts"))});\n` +
+        `lib.withAuditLock(${JSON.stringify(p)}, () => {\n` +
+        `  require("node:fs").writeFileSync(${JSON.stringify(join(p, "rebind-lock-held"))}, "1");\n` +
+        `  const until = Date.now() + 3000; while (Date.now() < until) {}\n` +
+        `  return 0;\n` +
+        `}, undefined, ${JSON.stringify(SPACE)});\n`,
+    );
+    const mutator = join(p, "mutator-rebind.ts");
+    writeFileSync(
+      mutator,
+      `const k = await import(${JSON.stringify(join(AIDLC_TOOLS, "aidlc-knowledge.ts"))});\n` +
+        `const fs = require("node:fs"); const until = Date.now() + 1500; while (Date.now() < until) {}\n` +
+        `const idx = k.readIndex(${JSON.stringify(p)}, ${JSON.stringify(SPACE)});\n` +
+        `const bytes = fs.readFileSync(${JSON.stringify(rebound)});\n` +
+        `idx.documents[0].source = { kind: "managed", path: "documents/rebound.md" };\n` +
+        `idx.documents[0].sha256 = k.sha256Hex(bytes); idx.documents[0].bytes = bytes.length;\n` +
+        `idx.documents[0].extraction = { state: "unsupported_type", detectedType: "text/plain" };\n` +
+        `delete idx.documents[0].content; delete idx.documents[0].content_sha256;\n` +
+        `k.writeIndex(${JSON.stringify(p)}, ${JSON.stringify(SPACE)}, idx);\n`,
+    );
+    const script =
+      `bun ${JSON.stringify(holder)} >/dev/null 2>&1 &\n` +
+      `for i in $(seq 1 100); do [ -f ${JSON.stringify(join(p, "rebind-lock-held"))} ] && break; done\n` +
+      `bun ${JSON.stringify(mutator)} >/dev/null 2>&1 &\n` +
+      `bun ${JSON.stringify(join(AIDLC_TOOLS, "aidlc-knowledge.ts"))} onboard ` +
+      `${JSON.stringify(abs)} --project-dir ${JSON.stringify(p)} >/dev/null 2>&1\nwait\n`;
+    spawnSync("bash", ["-c", script], { encoding: "utf-8", env: CHILD_ENV, timeout: 40_000 });
+
+    const row = readIndex(p, SPACE).documents[0];
+    expect(row.source.path).toBe("documents/rebound.md");
+    expect(row.sha256).toBe(sha256Hex(readFileSync(rebound)));
   }, 60000);
 });
 

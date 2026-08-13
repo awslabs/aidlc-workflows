@@ -1,8 +1,22 @@
 import { createHash } from "node:crypto";
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
-import { dirname } from "node:path";
+import {
+  appendFileSync,
+  closeSync,
+  constants as fsConstants,
+  copyFileSync,
+  existsSync,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  writeSync,
+} from "node:fs";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import {
   acquireAuditLock,
+  assertNoSymlinkInChainOrThrow,
   auditFilePath,
   cloneIdPath,
   errorMessage,
@@ -509,6 +523,16 @@ export function appendAuditEntryUnlocked(
 // transaction, and the locking variant would deadlock on itself. Validation,
 // rendering, and the metric tap are identical to every other append, so a row
 // written this way is indistinguishable from one written the usual way.
+function writeAll(fd: number, content: string): void {
+  const bytes = Buffer.from(content, "utf-8");
+  let offset = 0;
+  while (offset < bytes.length) {
+    const written = writeSync(fd, bytes, offset, bytes.length - offset);
+    if (written <= 0) throw new Error("Audit append made no write progress");
+    offset += written;
+  }
+}
+
 export function appendAuditEntryAtPathUnlocked(
   eventType: string,
   fields: Record<string, string>,
@@ -519,9 +543,33 @@ export function appendAuditEntryAtPathUnlocked(
   validateAuditEntry(entry);
   const ts = isoTimestamp();
   const dir = dirname(shardPath);
+  const projectAbs = resolve(projectDir);
+  const projectReal = realpathSync(projectAbs);
+  const rel = relative(projectAbs, resolve(shardPath));
+  if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    throw new Error(`Refusing audit shard outside project: ${shardPath}`);
+  }
+  assertNoSymlinkInChainOrThrow(projectReal, rel);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  if (!existsSync(shardPath)) appendFileSync(shardPath, "# AI-DLC Audit Log\n", "utf-8");
-  appendFileSync(shardPath, renderAuditBlock(entry, ts), "utf-8");
+  assertNoSymlinkInChainOrThrow(projectReal, rel);
+  let fd: number | undefined;
+  try {
+    fd = openSync(
+      shardPath,
+      fsConstants.O_WRONLY |
+        fsConstants.O_APPEND |
+        fsConstants.O_CREAT |
+        fsConstants.O_NOFOLLOW |
+        fsConstants.O_NONBLOCK,
+      0o666,
+    );
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) throw new Error(`Refusing non-regular audit shard: ${shardPath}`);
+    if (stat.size === 0) writeAll(fd, "# AI-DLC Audit Log\n");
+    writeAll(fd, renderAuditBlock(entry, ts));
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
   tapAuditMetric(eventType, fields, projectDir);
   return { appended: true, event: eventType, timestamp: ts };
 }

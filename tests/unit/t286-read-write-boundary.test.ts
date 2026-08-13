@@ -1,6 +1,6 @@
 // covers: function:readRegularFileNoFollowOrThrow function:writeBufferAtomic function:validSpaceFlag function:assertNoSymlinkInChainOrThrow function:SPACE_NAME_REGEX
 //
-// t275 - the shared read/write boundary primitives DocumentKB indexing is built
+// t286 - the shared read/write boundary primitives DocumentKB indexing is built
 // on. All four arrive in this slice: three ported from the unmerged #660 line
 // (which was reviewed only internally and never landed on upstream/v2, so
 // nothing here inherits a "covered" status) and one generalised from a
@@ -70,7 +70,7 @@ import {
 let dir: string | undefined;
 
 function scratch(): string {
-  dir = mkdtempSync(join(tmpdir(), "t275-"));
+  dir = mkdtempSync(join(tmpdir(), "t286-"));
   return dir;
 }
 
@@ -83,7 +83,7 @@ afterEach(() => {
   }
 });
 
-describe("t275 readRegularFileNoFollowOrThrow - TYPE: only a regular file", () => {
+describe("t286 readRegularFileNoFollowOrThrow - TYPE: only a regular file", () => {
   test("reads a regular file byte-for-byte, including NUL bytes", () => {
     const d = scratch();
     const p = join(d, "doc.bin");
@@ -191,7 +191,7 @@ describe("t275 readRegularFileNoFollowOrThrow - TYPE: only a regular file", () =
   });
 });
 
-describe("t275 writeBufferAtomic", () => {
+describe("t286 writeBufferAtomic", () => {
   test("round-trips arbitrary bytes sha256-identically", () => {
     const d = scratch();
     const p = join(d, "content.bin");
@@ -229,7 +229,7 @@ describe("t275 writeBufferAtomic", () => {
   });
 });
 
-describe("t275 validSpaceFlag - a --space value is a path SEGMENT", () => {
+describe("t286 validSpaceFlag - a --space value is a path SEGMENT", () => {
   test("accepts the shapes `space create` can produce", () => {
     for (const ok of ["default", "a", "my-space", "team-b2", "x9-y8-z7"]) {
       expect(validSpaceFlag(ok), ok).toBe(ok);
@@ -270,7 +270,7 @@ describe("t275 validSpaceFlag - a --space value is a path SEGMENT", () => {
   });
 });
 
-describe("t275 assertNoSymlinkInChainOrThrow - EVERY component, not just the leaf", () => {
+describe("t286 assertNoSymlinkInChainOrThrow - EVERY component, not just the leaf", () => {
   test("returns the joined path when the whole chain is clean", () => {
     const d = scratch();
     mkdirSync(join(d, "a", "b"), { recursive: true });

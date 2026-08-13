@@ -440,6 +440,13 @@ describe("t285 - the knowledge skill ships everywhere, and its prose matches the
       expect(r.stdout).toContain("second.md");
     });
 
+    test("a valueless --space is refused instead of mutating the active space", () => {
+      const { p } = withOneDoc();
+      const r = knowledge(p, "sync", "--space");
+      expect(r.status).not.toBe(0);
+      expect(`${r.stdout}${r.stderr}`).toContain("--space requires");
+    });
+
     test("rebind <id> --to routes and repairs the row", () => {
       const { p, id } = withOneDoc();
       // A move AND an edit: neither path nor digest survives, which is the one

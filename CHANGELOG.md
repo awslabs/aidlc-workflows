@@ -128,6 +128,15 @@ the surviving originals as new rows.
   as `present_but_refused`, not tombstoned as though the user deleted them.
 * Standard audit readers merge the space-level shard with the active intent shards,
   so `DOCUMENT_*` history remains visible to `--doctor --export` after work starts.
+* Idempotent retries repair missing `DOCUMENT_*` rows after an audit-last failure;
+  edited onboard plans compare their full pre-lock row snapshot so they cannot
+  overwrite a concurrent rebind or association update.
+* Space-level audit shards are read before the active intent tail and every shard is
+  opened no-follow, preserving transition-triggered graph rebuilds and refusing
+  redirected audit files. Document-only audit rows do not activate human-presence
+  enforcement on a legacy ledger.
+* A valueless `--space` is refused instead of silently mutating the active space,
+  and tombstoned content cleanup is retried until the derived text is gone.
 
 ## [2.5.75] - 2026-08-13
 

@@ -1854,7 +1854,7 @@ describe("t289 the completeness property is keyed to the fs-mutation CALL, not t
     return { total: calls.length, violations };
   }
 
-  test("the pinned COUNT of fs-mutation calls in aidlc-knowledge.ts is 18", () => {
+  test("the pinned COUNT of fs-mutation calls in aidlc-knowledge.ts is 19", () => {
     // Counted as CALLS -- `(`-suffixed -- not mentions, so this doc comment's
     // own prose (which names every one of these tokens) does not inflate the
     // number. A future write path -- a new export, a new branch in an existing
@@ -1879,13 +1879,15 @@ describe("t289 the completeness property is keyed to the fs-mutation CALL, not t
     // (`writeRowContentOnly`) regardless of how many call sites route through
     // it -- fewer raw call SITES, not fewer safe writes; every one still
     // traces to the funnel or the bare anchor, per the test below.
+    // 18 -> 19 adds rollback of a freshly-renamed document directory when the
+    // authoritative index write fails; its target is documentDir(...).
     const { total } = auditMutationCalls(KNOWLEDGE_SRC);
     expect(
       total,
       "the number of raw fs-mutation calls in aidlc-knowledge.ts changed -- if you " +
         "added one, verify its target traces to documentDir/journalDir/journalTxnDir " +
         "or the bare documentkb anchor (the test below), then move this pin",
-    ).toBe(18);
+    ).toBe(19);
   });
 
   test("EVERY fs-mutation call's target traces to the funnel or the bare anchor", () => {
@@ -1928,7 +1930,7 @@ export function pruneContentReallyDangerously(pd: string, spaceName: string, id:
 `;
     const poisoned = `${KNOWLEDGE_SRC}\n${defeat}`;
     const { total, violations } = auditMutationCalls(poisoned);
-    expect(total, "the defeat function's rmSync must be counted").toBe(19);
+    expect(total, "the defeat function's rmSync must be counted").toBe(20);
     expect(
       violations.some((v) => v.includes("pruneContentReallyDangerously") && v.includes("rmSync")),
       `expected a violation naming pruneContentReallyDangerously's rmSync; got: ${violations.join("; ")}`,

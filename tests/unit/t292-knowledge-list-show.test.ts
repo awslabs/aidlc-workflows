@@ -79,7 +79,7 @@ afterEach(() => {
   }
 });
 
-describe("t281 list shows EVERY row, with its state visible", () => {
+describe("t292 list shows EVERY row, with its state visible", () => {
   test("an empty catalog says so, and names the remedy", () => {
     const p = scratchProject();
     expect(listDocuments(p, SPACE)).toEqual([]);
@@ -203,7 +203,7 @@ describe("t281 list shows EVERY row, with its state visible", () => {
   }, 20000);
 });
 
-describe("t281 show carries the untrusted notice INLINE with the content", () => {
+describe("t292 show carries the untrusted notice INLINE with the content", () => {
   test("content and the notice arrive in the SAME payload", () => {
     // The whole point: a caller cannot receive `content` without also receiving
     // the declaration that it is data. A separate call, or a sidecar file, would
@@ -386,7 +386,7 @@ describe("t281 show carries the untrusted notice INLINE with the content", () =>
   });
 });
 
-describe("t281 show withholds STALE text rather than serving it with a caveat", () => {
+describe("t292 show withholds STALE text rather than serving it with a caveat", () => {
   test("a derivative whose source_revision no longer matches is NOT served", () => {
     // A caveat is not a boundary: stale extracted text describes a revision that
     // no longer exists, and quoting it would mis-attribute the document.
@@ -407,7 +407,7 @@ describe("t281 show withholds STALE text rather than serving it with a caveat", 
   });
 });
 
-describe("t281 show's other guarantees", () => {
+describe("t292 show's other guarantees", () => {
   test("an unknown id is refused with the remedy named", () => {
     const p = scratchProject();
     const err = (() => {

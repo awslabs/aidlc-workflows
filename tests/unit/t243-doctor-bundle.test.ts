@@ -244,6 +244,22 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(rel).toContain("evidence/normalized.json");
   }, 30000);
 
+  test("2b: normalized evidence includes space-level DocumentKB events", () => {
+    const proj = freshProject();
+    seedCanaryIntent(proj);
+    const spaceAudit = join(proj, "aidlc", "spaces", "default", "intents", "audit");
+    mkdirSync(spaceAudit, { recursive: true });
+    writeFileSync(
+      join(spaceAudit, "documents.md"),
+      "## Document Indexed\n**Timestamp**: 2026-05-19T12:00:00Z\n" +
+        "**Event**: DOCUMENT_INDEXED\n**Document**: doc-id\n",
+    );
+    const { bundleDir } = runExport(proj);
+    expect(bundleDir).not.toBeNull();
+    const normalized = readFileSync(join(bundleDir!, "evidence", "normalized.json"), "utf-8");
+    expect(normalized).toContain("DOCUMENT_INDEXED");
+  }, 30000);
+
   test("3: report.json exposes findings + timeline.stages and the gate-unresolved error", () => {
     const proj = freshProject();
     seedCanaryIntent(proj);
