@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.75] - 2026-08-13
+
+Add dependency-aware validity projection for completed stages. No manual migration is required; existing audit ledgers remain compatible and become tracked when stages complete again. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* Resolve canonical artifact aliases, active Bolt DAG units, and `produces_kinds` through one shared runtime resolver.
+* Record compact schema-2 structure/content fingerprints per observed canonical artifact.
+* Propagate revalidation through artifact inputs observed by completed consumers.
+* Preserve historical completion checkboxes while blocking routing past stale tracked AI-DLC artifacts.
+
 ## [2.5.74] - 2026-08-13
 
 Kiro CLI now ships the same five MCP servers as Claude Code, with every server disabled until a user explicitly enables it. **Upgrade:** refresh `dist/kiro/`, then flip `"disabled": false` on each server you want to enable in `.kiro/settings/mcp.json`.
