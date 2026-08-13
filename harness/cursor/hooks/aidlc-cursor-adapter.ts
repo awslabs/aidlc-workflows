@@ -9,9 +9,11 @@
 // shares the hooks.json surface) are near-isomorphic to Claude Code's with
 // these load-bearing differences:
 //   1. Event names are camelCase (sessionStart, preToolUse, ...) and each
-//      event has its OWN stdout output schema — a PreToolUse deny is
-//      {"permission":"deny","agent_message"} JSON, NOT exit 2 + stderr
-//      (exit 2 does block, but the reason channel is the JSON field);
+//      event has its OWN stdout output schema — PreToolUse must emit
+//      {"permission":"allow"|"deny"} JSON (deny may add agent_message),
+//      NOT Claude's exit 2 + stderr (exit 2 does block, but the reason
+//      channel is the JSON field; empty allow stdout is invalid JSON, so
+//      failClosed IDE denies while the CLI treats silence as allow);
 //      sessionStart context is {"additional_context"} (snake_case), and stop
 //      cannot block at all — only {"followup_message"} (advisory nudge).
 //   2. The shell tool is named "Shell" (tool_input.command, like Bash).
@@ -689,6 +691,12 @@ export async function run(
     return true;
   }
 
+  // Cursor IDE failClosed preToolUse treats empty stdout as invalid JSON and
+  // blocks. Cursor CLI treats the same silence as allow. Always emit allow JSON.
+  function writeAllow(): void {
+    process.stdout.write(`${JSON.stringify({ permission: "allow" })}\n`);
+  }
+
   // --- Targets ------------------------------------------------------------------
 
   switch (target) {
@@ -798,6 +806,7 @@ export async function run(
       // it feeds the identity ledger. Block contract conversion: core exit 2 + stderr becomes
       // Cursor's {"permission":"deny","agent_message"} stdout JSON
       // (live-verified: the deny blocks the call and relays the reason).
+      // Allow paths write {"permission":"allow"} — required under failClosed.
       if (toolName === "Task") {
         const parentAgent = activeSubagent();
         if (parentAgent) {
@@ -816,6 +825,7 @@ export async function run(
         }
         const sub = cursor.tool_input?.subagent_type;
         if (typeof sub === "string" && sub.length > 0) recordSpawn(sub);
+        writeAllow();
         return 0;
       }
       const agent = attributed();
@@ -871,6 +881,7 @@ export async function run(
       for (const guard of guards) {
         if (blockedByGuard(guard.file, guard.input)) return 0;
       }
+      writeAllow();
       return 0;
     }
 

@@ -554,3 +554,75 @@ describe("t114 parked branch (#367)", () => {
     expect(out).toContain('"kind":"run-stage"');
   });
 });
+
+// ===========================================================================
+// Branch 9c - mid-flow freeform prose -> routing ask (the offer backstop).
+// Fresh-start prose gets Branch 8's routing ask; mid-flow prose used to fall
+// through to Branch 10 with the typed text silently discarded, which let a
+// conductor skip the continue-vs-new-work judgment and pour new-work prose
+// into the active intent's stage. The engine now surfaces the question.
+// ===========================================================================
+describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
+  test("freeform prose over an active workflow -> ask carrying both texts", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, ["a completely separate standalone metrics dashboard"]).out;
+    const directive = JSON.parse(out) as {
+      ask_type?: string;
+      response_route?: string;
+      question?: string;
+      new_work_description?: string;
+      proposed_scope?: string;
+    };
+    expect(out).toContain('"kind":"ask"');
+    expect(directive.ask_type).toBe("new-work-routing");
+    expect(directive.response_route).toBe("next");
+    expect(directive.new_work_description).toBe(
+      "a completely separate standalone metrics dashboard",
+    );
+    expect(directive.proposed_scope).toBeTruthy();
+    // The ask names the active work and echoes the typed prose.
+    expect(out).toContain("already in progress");
+    expect(out).toContain("standalone metrics dashboard");
+    // The three routes ride the question; the affirmative leads with Yes.
+    expect(out).toContain("continue");
+    expect(out).toContain("Yes, set it up alongside");
+    expect(out).toContain("plan");
+    expect(directive.question).toContain(
+      `as "${directive.proposed_scope}" work`,
+    );
+  });
+
+  test("keyword-matching prose names the scope a confirmed new intent would get", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, ["fix the broken login button"]).out;
+    expect(out).toContain('"kind":"ask"');
+    expect(out).toContain('as \\"bugfix\\" work');
+    expect(out).toContain('"proposed_scope":"bugfix"');
+  });
+
+  test("bare next still advances the current stage (no ask without prose)", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, []).out;
+    expect(out).toContain('"kind":"run-stage"');
+    expect(out).not.toContain('"kind":"ask"');
+  });
+
+  test("prose WITH an explicit --scope stays a scope-change, never the ask", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION); // state scope differs from bugfix
+    const out = runNext(proj, ["--scope", "bugfix", "fix the login flow"]).out;
+    expect(out).toContain('"kind":"print"');
+    expect(out).toContain("scope-change --scope bugfix");
+  });
+
+  test("--new-intent with prose still births (Branch 4a precedes the ask)", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, ["--new-intent", "--scope", "poc", "a standalone dashboard"]).out;
+    expect(out).toContain('"kind":"print"');
+    expect(out).toContain("intent-create");
+  });
+});

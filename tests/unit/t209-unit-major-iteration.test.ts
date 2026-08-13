@@ -55,6 +55,7 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 resetAidlcEnv();
 
@@ -74,6 +75,7 @@ const PRODUCES: Record<string, string[]> = {
     "business-rules",
     "domain-entities",
     "frontend-components",
+    "traceability",
   ],
   "nfr-requirements": [
     "performance-requirements",
@@ -81,6 +83,7 @@ const PRODUCES: Record<string, string[]> = {
     "scalability-requirements",
     "reliability-requirements",
     "tech-stack-decisions",
+    "traceability",
   ],
   "nfr-design": [
     "performance-design",
@@ -88,6 +91,7 @@ const PRODUCES: Record<string, string[]> = {
     "scalability-design",
     "reliability-design",
     "logical-components",
+    "traceability",
   ],
   "infrastructure-design": [
     "deployment-architecture",
@@ -95,8 +99,9 @@ const PRODUCES: Record<string, string[]> = {
     "monitoring-design",
     "cicd-pipeline",
     "shared-infrastructure",
+    "traceability",
   ],
-  "code-generation": ["code-generation-plan", "code-summary"],
+  "code-generation": ["code-generation-plan", "code-summary", "traceability"],
 };
 // The walk's inner list in graph order: the four inline design stages, then
 // code-generation (mode: subagent, in the walk since the block filter was
@@ -187,7 +192,7 @@ function coverUnit(proj: string, unit: string, slug: string): void {
   const dir = join(seededRecordDir(proj), "construction", unit, slug);
   mkdirSync(dir, { recursive: true });
   for (const name of PRODUCES[slug]) {
-    writeFileSync(join(dir, `${name}.md`), `# ${name} for ${unit}\n`);
+    writeFileSync(join(dir, artifactFilename(name)), `# ${name} for ${unit}\n`);
   }
 }
 

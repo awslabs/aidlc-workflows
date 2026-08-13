@@ -281,12 +281,18 @@ describe("t-tui-t29 env-scope (AWS_AIDLC_DEFAULT_SCOPE seeds new-workflow scope 
         drive(["send", "--session", session, "--keys", "/aidlc", "--literal", "--no-enter"]);
         drive(["send", "--session", session, "--keys", "Enter", "--no-enter"]);
 
-        // Synchronize through the driver on the stable engine error lead, then
-        // assert the durable no-write contract. Do not inspect the captured pane:
-        // Claude can collapse the remainder of the tool result behind "+N lines".
-        expect(waitFor(session, "No workflow state found", 240000, 0)).toBe(true);
-        // No-scope run births no intent, so no per-intent state file resolves
-        // (stateFilePathFor falls to the never-created flat fallback path).
+        // Synchronize on TURN END, not on the engine error lead: the TUI
+        // collapses tool results ("Ran 1 shell command" / "+N lines") and the
+        // quiet-voice conductor may end the turn without re-quoting the error
+        // text, so the literal lead never reliably reaches the pane
+        // (live-observed 3x). The prompt glyph is always present; the high
+        // stable-ms means "screen unchanged for 12s", which only happens once
+        // the spinner (repainting every second while the conductor works)
+        // has stopped - i.e. the turn is over.
+        expect(waitFor(session, "❯", 240000, 12000)).toBe(true);
+        // The DURABLE contract: a no-scope run births no intent, so no
+        // per-intent state file resolves (stateFilePathFor falls to the
+        // never-created flat fallback path).
         expect(existsSync(stateFilePathFor(proj))).toBe(false);
       } finally {
         drive(["kill", "--session", session]);

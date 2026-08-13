@@ -17,6 +17,7 @@ produces:
   - stories
   - personas
   - user-stories-assessment
+  - traceability
 consumes:
   - artifact: requirements
     required: true
@@ -33,13 +34,14 @@ requires_stage:
 sensors:
   - required-sections
   - upstream-coverage
+  - traceability
 scopes:
   - enterprise
   - feature
   - mvp
   - workshop
 inputs: <record>/inception/requirements-analysis/requirements.md, RE artifacts (if brownfield)
-outputs: stories.md, personas.md, user-stories-assessment.md (under this stage's record dir, engine-resolved)
+outputs: stories.md, personas.md, user-stories-assessment.md, traceability.json (under this stage's record dir, engine-resolved)
 ---
 
 # User Stories
@@ -126,8 +128,8 @@ participants, and the Product Leader reviews afterwards (§12a).
 - Persona relationships and priority ranking
 
 **`<record>/inception/user-stories/stories.md`:**
-- User stories in standard format: "As a [persona], I want [goal], so that [benefit]"
-- Acceptance criteria for each story
+- User stories in standard format: "As a [persona], I want [goal], so that [benefit]". Give each story a stable `US{group}.{seq}` ID (for example `US1.1`).
+- Acceptance criteria for each story. Give each criterion a three-segment `AC{story-group}.{story-seq}.{criterion-seq}` ID (for example `AC1.1.1`).
 - Story priority (Must Have / Should Have / Could Have / Won't Have)
 - Story dependencies and relationships
 - INVEST compliance notes
@@ -150,6 +152,24 @@ revised draft and the other participants' positions (they update their own
 contribution files). Maintained dissent is quoted verbatim in the Step 10
 completion summary. The three contribution files are this stage's ensemble
 evidence — the engine refuses approval while any is missing.
+
+**Write element-level traceability.** Create
+`<record>/inception/user-stories/traceability.json`. Enumerate every `FR` and
+`NFR` ID from `requirements.md` in `upstream_ids`, with one `coverage` row per
+ID. `OK` targets must name one or more existing `USx.y` IDs. Use `Deferred`
+only with a named downstream stage and `N/A` only with a justification:
+
+```json
+{
+  "stage": "user-stories",
+  "upstream_ids": ["FR1", "FR2", "NFR1"],
+  "coverage": [
+    { "id": "FR1", "status": "OK", "target": "US1.1, US1.2" },
+    { "id": "NFR1", "status": "Deferred", "target": "nfr-requirements" },
+    { "id": "FR2", "status": "GAP" }
+  ]
+}
+```
 
 ### Step 9: Open the Approval Gate
 
@@ -184,6 +204,7 @@ The imported sensors check those outputs:
 
 - **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `<record>/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
 - **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `requirements`, `team-practices`).
+- **`traceability`** validates `traceability.json`, checks every requirement ID is declared and covered, and verifies `OK` targets exist in `stories.md`.
 
 ## Learn
 

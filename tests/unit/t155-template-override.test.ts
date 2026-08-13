@@ -148,6 +148,28 @@ describe("t155 templateEligibleArtifacts (function unit, in-process)", () => {
 });
 
 describe("t155 template-override sensor branch (cli, spawnSync)", () => {
+  test("non-Markdown output quiet-passes with the locked result shape", () => {
+    const ws = makeWorkspace();
+    const out = join(ws.outDir, "traceability.json");
+    writeFile(out, '{"upstream_ids":[],"coverage":[]}\n');
+    const r = runSensor({
+      stage: "user-stories",
+      outputPath: out,
+      templatesDir: ws.templatesDir,
+      eligible: ["traceability"],
+    });
+    expect(r.status).toBe(0);
+    expect(r.raw).toBe(
+      '{"pass":true,"h2_count":0,"headings":[],"findings_count":0}\n',
+    );
+    expect(r.pass).toBe(true);
+    expect(r.h2_count).toBe(0);
+    expect(r.headings).toEqual([]);
+    expect(r.findings_count).toBe(0);
+    expect(r.template).toBeUndefined();
+    expect(r.edge_block).toBeUndefined();
+  });
+
   // 1 — resolution: template `##` set ⊆ output → pass, template:"applied".
   test("resolved template, all headings present → pass + template:applied", () => {
     const ws = makeWorkspace();

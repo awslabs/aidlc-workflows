@@ -34,12 +34,14 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 resetAidlcEnv();
 
 const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
+const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const RP = `aidlc/spaces/${DEFAULT_SPACE}/intents/${DEFAULT_RECORD_DIR}`;
 
 // nfr-requirements produces[] and their per-kind applicability (verified against
@@ -51,11 +53,12 @@ const NFR_REQ_ALL = [
   "scalability-requirements",
   "reliability-requirements",
   "tech-stack-decisions",
+  "traceability",
 ];
 // A spec unit keeps only the two unannotated ones.
-const NFR_REQ_SPEC = ["security-requirements", "tech-stack-decisions"];
+const NFR_REQ_SPEC = ["security-requirements", "tech-stack-decisions", "traceability"];
 
-const FD_PRODUCES = ["business-logic-model", "business-rules", "domain-entities", "frontend-components"];
+const FD_PRODUCES = ["business-logic-model", "business-rules", "domain-entities", "traceability", "frontend-components"];
 
 const tempDirs: string[] = [];
 afterEach(() => {
@@ -110,7 +113,7 @@ function constructionState(current: string, skeletonStance = "on"): string {
 function coverUnit(proj: string, unit: string, slug: string, names: string[]): void {
   const dir = join(seededRecordDir(proj), "construction", unit, slug);
   mkdirSync(dir, { recursive: true });
-  for (const name of names) writeFileSync(join(dir, `${name}.md`), `# ${name} for ${unit}\n`);
+  for (const name of names) writeFileSync(join(dir, artifactFilename(name)), `# ${name} for ${unit}\n`);
 }
 
 function seedProject(current: string): string {
@@ -154,12 +157,17 @@ function runReport(proj: string, args: string[], enforceGuard = false): Directiv
   }
 }
 
-function logReviewReady(proj: string, unit: string, iteration = 1): void {
+function logReviewReady(
+  proj: string,
+  unit: string,
+  iteration = 1,
+  stage = "functional-design",
+): void {
   const args = [
     LOG,
     "review",
     "--stage",
-    "functional-design",
+    stage,
     "--reviewer",
     "aidlc-architecture-reviewer-agent",
     "--unit",
@@ -174,6 +182,28 @@ function logReviewReady(proj: string, unit: string, iteration = 1): void {
     if ((r.status ?? -1) !== 0) {
       throw new Error(`review log failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
     }
+  }
+}
+
+function completeWave(proj: string, unit: string, stage: string): void {
+  const result = spawnSync(
+    BUN,
+    [
+      STATE,
+      "unit",
+      "complete",
+      "--wave",
+      "--stage",
+      stage,
+      "--unit",
+      unit,
+      "--project-dir",
+      proj,
+    ],
+    { encoding: "utf-8" },
+  );
+  if ((result.status ?? -1) !== 0) {
+    throw new Error(`wave completion failed: ${result.stdout}${result.stderr}`);
   }
 }
 
@@ -218,7 +248,7 @@ describe("t208 engine unit-kind pruning", () => {
     expect(d.stage).toBe("nfr-requirements");
     expect(d.unit).toBe("api");
     for (const keep of NFR_REQ_SPEC) {
-      expect(d.produces).toContain(`${RP}/construction/api/nfr-requirements/${keep}.md`);
+      expect(d.produces).toContain(`${RP}/construction/api/nfr-requirements/${artifactFilename(keep)}`);
     }
     for (const gone of ["performance-requirements", "scalability-requirements", "reliability-requirements"]) {
       expect(d.produces?.some((p) => p.includes(`/${gone}.md`))).toBe(false);
@@ -231,6 +261,8 @@ describe("t208 engine unit-kind pruning", () => {
     const proj = seedProject("nfr-requirements");
     seedBoltDag(proj, [{ name: "api", kind: "spec" }, { name: "svc" }]);
     coverUnit(proj, "api", "nfr-requirements", NFR_REQ_SPEC);
+    logReviewReady(proj, "api", 1, "nfr-requirements");
+    completeWave(proj, "api", "nfr-requirements");
     const d = runNext(proj);
     // api is covered by its two-artifact pruned set; the engine moves to svc.
     expect(d.unit).toBe("svc");
@@ -244,7 +276,7 @@ describe("t208 engine unit-kind pruning", () => {
     const d = runNext(proj);
     expect(d.unit).toBe("svc");
     for (const name of NFR_REQ_ALL) {
-      expect(d.produces).toContain(`${RP}/construction/svc/nfr-requirements/${name}.md`);
+      expect(d.produces).toContain(`${RP}/construction/svc/nfr-requirements/${artifactFilename(name)}`);
     }
   }, 30000);
 
@@ -418,7 +450,7 @@ describe("t208 engine unit-kind pruning", () => {
     expect(d.unit).toBe("alpha");
     expect(d.gate).toBe(false);
     for (const name of FD_PRODUCES) {
-      expect(d.produces).toContain(`${RP}/construction/alpha/functional-design/${name}.md`);
+      expect(d.produces).toContain(`${RP}/construction/alpha/functional-design/${artifactFilename(name)}`);
     }
   }, 30000);
 
@@ -443,18 +475,21 @@ describe("t208 engine unit-kind pruning", () => {
     expect(d2.unit).toBe("api");
     expect(d2.produces?.some((p) => p.includes("/frontend-components.md"))).toBe(false);
     for (const name of ["business-logic-model", "business-rules", "domain-entities"]) {
-      expect(d2.produces).toContain(`${RP}/construction/api/functional-design/${name}.md`);
+      expect(d2.produces).toContain(`${RP}/construction/api/functional-design/${artifactFilename(name)}`);
     }
   }, 30000);
 
   // 8b: optional stays coverage-EXEMPT even for the kind it applies to. A ui
-  // unit that wrote only its required artifact (business-logic-model) is
+  // unit that wrote only its required artifacts (business-logic-model and
+  // traceability) is
   // covered without frontend-components on disk - the per-unit iteration
   // advances to the next unit.
   test("8b: a ui unit is covered without its optional artifact on disk", () => {
     const proj = seedProject("functional-design");
     seedBoltDag(proj, [{ name: "web", kind: "ui" }, { name: "svc" }]);
-    coverUnit(proj, "web", "functional-design", ["business-logic-model"]);
+    coverUnit(proj, "web", "functional-design", ["business-logic-model", "traceability"]);
+    logReviewReady(proj, "web");
+    completeWave(proj, "web", "functional-design");
     const d = runNext(proj);
     expect(d.unit).toBe("svc");
   }, 30000);

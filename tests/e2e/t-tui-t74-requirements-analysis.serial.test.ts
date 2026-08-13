@@ -397,16 +397,23 @@ describe("t-tui-t74-requirements-analysis (answering AUQ gates commits the requi
         expect(questionAnsweredAt).toBeGreaterThan(-1);
         expect(gateOpenedAt).toBeGreaterThan(questionAnsweredAt);
         // Interview answers also emit QUESTION_ANSWERED, so the ordering pin
-        // alone passes when the ritual is skipped outright. Require a
-        // learnings-flavored answer (§13 pins the option labels verbatim)
-        // before the last gate open.
-        const learningsAnswers = [
-          ...auditMd.matchAll(
-            /\*\*Event\*\*: QUESTION_ANSWERED\n(?:\*\*[^\n]+\n)*?\*\*Details\*\*: [^\n]*(?:Nothing to add|Add a note)/g,
-          ),
-        ];
-        expect(learningsAnswers.length).toBeGreaterThanOrEqual(1);
-        expect(gateOpenedAt).toBeGreaterThan(learningsAnswers.at(-1)!.index);
+        // alone passes when the ritual is skipped outright. The ANSWER's
+        // Details is free conductor paraphrase (live-observed: "Keep: probe
+        // vague bugfix briefs" - no pinned token survives), but the ritual's
+        // DECISION row is deterministic: §13 mandates the structured question
+        // ship the verbatim "Nothing to add" / "Add a note" labels in its
+        // --options. Pin the ritual on that row, then require an answer row
+        // after it and before the gate - the §3 logging pair, wording-free.
+        const learningsDecisionAt = auditMd.search(
+          /\*\*Event\*\*: DECISION_RECORDED\n(?:\*\*[^\n]+\n)*?\*\*Options\*\*: [^\n]*Nothing to add[^\n]*Add a note/,
+        );
+        expect(learningsDecisionAt).toBeGreaterThan(-1);
+        const learningsAnswerAt = auditMd.indexOf(
+          "**Event**: QUESTION_ANSWERED",
+          learningsDecisionAt,
+        );
+        expect(learningsAnswerAt).toBeGreaterThan(learningsDecisionAt);
+        expect(gateOpenedAt).toBeGreaterThan(learningsAnswerAt);
 
         // --- render assertion (the tui-only value-add) ------------------------
         // The captured grid showed a waiting AskUserQuestion menu (the `❯` caret +

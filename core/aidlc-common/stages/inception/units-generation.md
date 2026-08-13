@@ -15,6 +15,7 @@ produces:
   - unit-of-work
   - unit-of-work-dependency
   - unit-of-work-story-map
+  - traceability
 consumes:
   - artifact: components
     required: true
@@ -35,13 +36,14 @@ requires_stage:
 sensors:
   - required-sections
   - upstream-coverage
+  - traceability
 scopes:
   - enterprise
   - feature
   - mvp
   - workshop
 inputs: <record>/inception/application-design/ (all design artifacts), <record>/inception/requirements-analysis/requirements.md, <record>/inception/user-stories/stories.md (if produced)
-outputs: unit-of-work.md, unit-of-work-dependency.md, unit-of-work-story-map.md (under this stage's record dir, engine-resolved)
+outputs: unit-of-work.md, unit-of-work-dependency.md, unit-of-work-story-map.md, traceability.json (under this stage's record dir, engine-resolved)
 ---
 
 # Units Generation
@@ -101,6 +103,7 @@ Based on the approved plan, generate 3 artifacts in `<record>/inception/units-ge
 
 **unit-of-work.md:**
 - Unit definitions (name, description, boundaries)
+- A stable short ID `U{n}` for every Unit and its construction directory name `u{n}-{description}`. Include both in a table (`Unit ID` and `Directory`) so downstream tools can join story-map IDs to filesystem paths.
 - Unit responsibilities (what each unit owns and delivers)
 - Deployment model per unit (standalone, shared, embedded)
 - Relative complexity estimate per unit (S/M/L/XL)
@@ -128,10 +131,26 @@ units:
 NOTE: This artifact describes topology only. It does NOT pick a single "recommended build order" or identify a critical path — those are economic decisions made in 2.8 using this DAG as input.
 
 **unit-of-work-story-map.md:**
-- Each user story mapped to its implementing unit(s)
+- Each user story mapped by `USx.y` ID to its implementing Unit `U{n}` ID and directory name
 - Stories that span multiple units (cross-cutting concerns)
 - Story implementation order within each unit
 - Coverage verification: every story assigned, every unit has stories
+
+Create `<record>/inception/units-generation/traceability.json`. When
+`stories.md` exists, enumerate every `USx.y`; otherwise enumerate every `FR`.
+Each `OK` target is one Unit ID or construction directory that also appears on
+the story's row in `unit-of-work-story-map.md`:
+
+```json
+{
+  "stage": "units-generation",
+  "upstream_ids": ["US1.1", "US1.2"],
+  "coverage": [
+    { "id": "US1.1", "status": "OK", "target": "U1" },
+    { "id": "US1.2", "status": "GAP" }
+  ]
+}
+```
 
 ### Step 7: Completion Handoff
 
@@ -154,6 +173,7 @@ The imported sensors check those outputs:
 
 - **`required-sections`** verifies the output contains the registry default (≥2 H2 headings), and — for `unit-of-work-dependency.md` specifically — that the required fenced `yaml` edge block is present, well-formed, and cycle-free. Failure mode: missing headings or an absent/malformed/cyclic edge block emit `SENSOR_FAILED` with detail at `<record>/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
 - **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `components`, `component-methods`, `services`, `component-dependency`, `decisions`, `requirements`, `stories`).
+- **`traceability`** validates `traceability.json`, derives the Unit set from the generated Unit artifacts, and verifies every story is mapped to its declared target Unit.
 
 ## Learn
 

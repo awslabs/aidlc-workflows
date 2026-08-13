@@ -338,6 +338,28 @@ describe("Kiro numbered-prose answer classification", () => {
     expect(state.approvalsAnswered).toBe(1);
   });
 
+  test("answers one summary confirmation per checkpoint-bearing stage, not once per journey", () => {
+    // Post-checkpoint-enforcement journeys present one consolidated-summary
+    // confirmation per stage that ran a Q&A (observed live: reverse-engineering
+    // "before I finalize", then requirements-analysis "before I generate the
+    // requirements artifact"). The retained viewport still shows the earlier
+    // answered prompt, so the classifier keys on the newest prompt's
+    // "before I ..." tail: a repaint of the SAME checkpoint is not re-answered,
+    // a LATER stage's checkpoint is.
+    const state = createKiroNumberedProseAnswerState();
+    const reConfirm =
+      "Does this all look correct before I finalize?\n1. Looks correct\n2. Request changes";
+    expect(nextKiroNumberedProseAnswer(reConfirm, state)).toBe("Looks correct");
+    expect(nextKiroNumberedProseAnswer(reConfirm, state)).toBeNull();
+    const raConfirm =
+      `${reConfirm}\n\n` +
+      "Does this all look correct before I generate the requirements artifact?\n" +
+      "1. Looks correct\n2. Request changes";
+    expect(nextKiroNumberedProseAnswer(raConfirm, state)).toBe("Looks correct");
+    expect(nextKiroNumberedProseAnswer(raConfirm, state)).toBeNull();
+    expect(state.confirmedSummaries.size).toBe(2);
+  });
+
   test("answers an ad-hoc lettered clarification menu once, and a distinct one after it", () => {
     // A live hub that spots a contradiction between two recorded answers may
     // invent a mid-stage lettered menu (observed live: intent-capture Q3-vs-Q5

@@ -4,7 +4,7 @@ display_name: Architecture Reviewer
 description: >
   Senior solutions architect who reviews technical design artifacts for soundness, implementability, and coherence. Finds broken cross-references, hidden dependencies, unachievable quality targets, and designs that won't survive contact with reality.
 disallowedTools: Task
-model: openai.gpt-5.4
+model: openai.gpt-5.6-terra
 effort: medium
 ---
 

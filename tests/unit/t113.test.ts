@@ -75,6 +75,32 @@ function runStage(): Record<string, unknown> {
   };
 }
 
+function wave() {
+  return {
+    batch_index: 0,
+    entries: [
+      {
+        unit: "auth",
+        unit_kind: "service",
+        build_required: true,
+        completion_required: true,
+        review_state: "outstanding",
+        review_iteration: 1,
+        unit_memory_path:
+          "aidlc-docs/construction/auth/functional-design/memory.md",
+        consumes: ["aidlc-docs/inception/requirements/requirements.md"],
+        consumes_absent: [],
+        produces: [
+          "aidlc-docs/construction/auth/functional-design/business-logic-model.md",
+        ],
+        required_produces: [
+          "aidlc-docs/construction/auth/functional-design/business-logic-model.md",
+        ],
+      },
+    ],
+  };
+}
+
 function dispatchSubagent(): Record<string, unknown> {
   return {
     kind: "dispatch-subagent",
@@ -119,6 +145,17 @@ function presentGate(): Record<string, unknown> {
 
 function ask(): Record<string, unknown> {
   return { kind: "ask", question: "Resume from the last checkpoint, or start fresh?" };
+}
+
+function newWorkRoutingAsk(): Record<string, unknown> {
+  return {
+    kind: "ask",
+    ask_type: "new-work-routing",
+    response_route: "next",
+    question: "Continue, start separate work, or reshape the plan?",
+    new_work_description: "build a standalone metrics dashboard",
+    proposed_scope: "feature",
+  };
 }
 
 function print(): Record<string, unknown> {
@@ -190,6 +227,27 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
 
   test("ask well-formed -> VALID", () => {
     expect(validateDirective(ask()).valid).toBe(true);
+  });
+
+  test("new-work-routing ask carries its direct next response contract", () => {
+    expect(validateDirective(newWorkRoutingAsk()).valid).toBe(true);
+  });
+
+  test("new-work-routing ask rejects a report response route", () => {
+    expect(
+      errs({ ...newWorkRoutingAsk(), response_route: "report" }),
+    ).toContain('ask: new-work-routing response_route must be "next"');
+  });
+
+  test("new-work route metadata requires the typed ask subtype", () => {
+    expect(
+      errs({
+        ...ask(),
+        response_route: "next",
+        new_work_description: "standalone dashboard",
+        proposed_scope: "feature",
+      }),
+    ).toContain('ask: response_route requires ask_type "new-work-routing"');
   });
 
   test("print well-formed -> VALID", () => {
@@ -371,6 +429,37 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     expect(errs({ ...runStage(), review_class: "advisory" })).toContain(
       "run-stage: review_class requires reviewer",
     );
+  });
+
+  test("run-stage accepts a complete engine-resolved wave entry", () => {
+    expect(
+      errs({
+        ...runStage(),
+        unit: "auth",
+        gate: false,
+        wave: wave(),
+      }),
+    ).toBe("VALID");
+  });
+
+  test("run-stage wave validates completion and retry state fields", () => {
+    const malformed = structuredClone(wave());
+    malformed.entries[0].completion_required = "yes" as unknown as boolean;
+    malformed.entries[0].review_state =
+      "stale" as typeof malformed.entries[0]["review_state"];
+    const result = errs({ ...runStage(), wave: malformed });
+    expect(result).toContain(
+      "run-stage: wave.entries[0].completion_required must be boolean",
+    );
+    expect(result).toContain(
+      "run-stage: wave.entries[0].review_state must be one of",
+    );
+
+    const retry = structuredClone(wave());
+    retry.entries[0].build_required = false;
+    retry.entries[0].review_state =
+      "retry-required" as typeof retry.entries[0]["review_state"];
+    expect(errs({ ...runStage(), wave: retry })).toBe("VALID");
   });
 
   test("invoke-swarm review_class validates the advisory/adversarial enum", () => {

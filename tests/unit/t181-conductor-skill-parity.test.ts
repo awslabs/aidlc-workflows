@@ -93,11 +93,25 @@ const ENSEMBLE_TOKENS = [
   "directive.single === true",
   "directive.rules_in_context",
   "directive.inline_context_paths",
+  "the first tool calls after receiving `run-stage`",
+  "do not batch those reads with later stage reads",
+  "blocking context-load precondition",
+  "A mob MUST explicitly read its lead persona path first",
+  "path's presence in `inline_context_paths` is not evidence",
   "`subagent` (hub-and-spoke:",
   "`pipeline` (chain:",
   "`mob` (mesh",
   "ensemble's completion evidence",
   '--result skipped --reason "<specific reason>"',
+];
+
+const COMPOSER_ROUTE_TOKENS = [
+  "**Composition-moment authority.**",
+  "apply ONLY to front/report composition",
+  "mode: in-flight",
+  "`nearest_stock` is advisory",
+  "`changes.skip` / `changes.add` arrays",
+  "no stock grid or scope-registry write is allowed",
 ];
 
 const KIRO_TASK_LIST_TOKEN =
@@ -182,6 +196,17 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     for (const rel of skills) {
       const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
       for (const tok of REQUIRED_TOKENS) {
+        if (!body.includes(tok)) missing.push(`${rel}  missing: ${tok}`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
+  test("every shipped conductor SKILL separates in-flight deltas from stock routing", () => {
+    const missing: string[] = [];
+    for (const rel of skills) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      for (const tok of COMPOSER_ROUTE_TOKENS) {
         if (!body.includes(tok)) missing.push(`${rel}  missing: ${tok}`);
       }
     }
@@ -362,6 +387,19 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       }
     }
     expect(missing).toEqual([]);
+  });
+
+  test("Codex routes typed new-work questions through next, not report", () => {
+    const annex = readFileSync(
+      join(
+        REPO_ROOT,
+        "harness/codex/skills/aidlc/question-rendering.md",
+      ),
+      "utf-8",
+    );
+    expect(annex).toContain('ask_type: "new-work-routing"');
+    expect(annex).toContain("routes through `next`");
+    expect(annex).toContain("never through `report`");
   });
 
   test("prose renderers remap file-backed source letters to numbered prose", () => {

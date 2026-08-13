@@ -98,6 +98,7 @@ import {
   resolveConstructionRepo,
   resolveProjectDir,
   resolveStage,
+  terminalReviewVerdict,
   validateUnitName,
   worktreeAuditFilePath,
   worktreePath,
@@ -259,6 +260,8 @@ function verdictFor(
 interface ReviewerRequirement {
   stage: string;
   reviewer: string | null;
+  reviewClass: "adversarial" | "advisory";
+  maxIterations: number;
   error?: string;
 }
 
@@ -269,6 +272,8 @@ function reviewerRequirement(projectDir: string): ReviewerRequirement {
       return {
         stage: "",
         reviewer: null,
+        reviewClass: "adversarial",
+        maxIterations: 2,
         error: "cannot resolve reviewer requirement: Current Stage is empty",
       };
     }
@@ -277,14 +282,27 @@ function reviewerRequirement(projectDir: string): ReviewerRequirement {
       return {
         stage,
         reviewer: null,
+        reviewClass: "adversarial",
+        maxIterations: 2,
         error: `cannot resolve reviewer requirement: stage "${stage}" is absent from the stage graph`,
       };
     }
-    return { stage, reviewer: definition.reviewer?.trim() || null };
+    const reviewClass = definition.review_class ?? "adversarial";
+    return {
+      stage,
+      reviewer: definition.reviewer?.trim() || null,
+      reviewClass,
+      maxIterations:
+        reviewClass === "advisory"
+          ? 1
+          : definition.reviewer_max_iterations ?? 2,
+    };
   } catch (e) {
     return {
       stage: "",
       reviewer: null,
+      reviewClass: "adversarial",
+      maxIterations: 2,
       error: `cannot resolve reviewer requirement: ${e instanceof Error ? e.message : String(e)}`,
     };
   }
@@ -299,6 +317,8 @@ function reviewerReceiptError(
   unit: string,
   stage: string,
   reviewer: string,
+  reviewClass: "adversarial" | "advisory",
+  maxIterations: number,
 ): string | null {
   const boltSlug = swarmBoltSlug(unit);
   const audit = readAllAuditShards(worktreePath(projectDir, boltSlug));
@@ -306,7 +326,11 @@ function reviewerReceiptError(
     return `claimed converged but worktree audit is missing; expected a terminal review by ${reviewer}`;
   }
 
-  const relevant = new Set(["BOLT_STARTED", "REVIEW_COMPLETED"]);
+  const relevant = new Set([
+    "BOLT_STARTED",
+    "REVIEW_REQUESTED",
+    "REVIEW_COMPLETED",
+  ]);
   const events = audit
     .replace(/\r\n/g, "\n")
     .split(/\n---\n/)
@@ -335,15 +359,34 @@ function reviewerReceiptError(
     return `claimed converged but worktree audit has no BOLT_STARTED boundary for unit "${unit}"`;
   }
 
+  const pendingRequests = new Set<string>();
   for (let i = boltStart + 1; i < events.length; i++) {
     const event = events[i];
-    if (event.event !== "REVIEW_COMPLETED") continue;
+    if (
+      event.event !== "REVIEW_REQUESTED" &&
+      event.event !== "REVIEW_COMPLETED"
+    ) {
+      continue;
+    }
     if (auditBlockField(event.block, "Workflow")?.startsWith("single-stage:")) continue;
     if (auditBlockField(event.block, "Stage") !== stage) continue;
     if (auditBlockField(event.block, "Reviewer") !== reviewer) continue;
     if (auditBlockField(event.block, "Unit") !== unit) continue;
-    const verdict = auditBlockField(event.block, "Verdict");
-    if (verdict !== "READY" && verdict !== "NOT-READY") continue;
+    const iteration = auditBlockField(event.block, "Iteration");
+    if (!iteration || !/^[1-9][0-9]*$/.test(iteration)) continue;
+    const requestKey = `${unit}\u0000${iteration}`;
+    if (event.event === "REVIEW_REQUESTED") {
+      pendingRequests.add(requestKey);
+      continue;
+    }
+    if (!pendingRequests.delete(requestKey)) continue;
+    const verdict = terminalReviewVerdict(
+      auditBlockField(event.block, "Verdict"),
+      iteration,
+      reviewClass,
+      maxIterations,
+    );
+    if (verdict === null) continue;
     const definition = resolveStage(stage);
     if (!definition) continue;
     const recordedFingerprint = auditBlockField(event.block, "Artifact Fingerprint");
@@ -779,7 +822,14 @@ function handleFinalize(rest: string[]): void {
       } else if (verdict.converged) {
         const reviewError = review.error ?? (
           review.reviewer
-            ? reviewerReceiptError(projectDir, unit, review.stage, review.reviewer)
+            ? reviewerReceiptError(
+                projectDir,
+                unit,
+                review.stage,
+                review.reviewer,
+                review.reviewClass,
+                review.maxIterations,
+              )
             : null
         );
         if (reviewError) {

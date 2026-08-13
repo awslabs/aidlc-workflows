@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-swarm:prepare, subcommand:aidlc-swarm:finalize, audit:REVIEW_COMPLETED, audit:SWARM_STARTED, audit:SWARM_COMPLETED, audit:SWARM_BATON_RETURNED
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-swarm:prepare, subcommand:aidlc-swarm:finalize, function:terminalReviewVerdict, audit:REVIEW_COMPLETED, audit:SWARM_STARTED, audit:SWARM_COMPLETED, audit:SWARM_BATON_RETURNED
 //
 // CLI-contract port of tests/integration/t135-invoke-swarm.sh (TAP plan 8),
 // mechanism = cli. The .sh proves invoke-swarm end-to-end across TWO real
@@ -82,6 +82,7 @@ import {
   seededStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
+import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 resetAidlcEnv();
 
@@ -182,6 +183,7 @@ let wtproj: string | undefined;
 let reviewRefusalProj: string | undefined;
 let staleReviewProj: string | undefined;
 let missingArtifactsProj: string | undefined;
+const notReadyProjects: string[] = [];
 let finalizeStatus = -1;
 let finalizeOut = "";
 let auditBody = "";
@@ -233,14 +235,24 @@ function seedRefereeProject(): string {
   return proj;
 }
 
-function logWorktreeReview(proj: string, unit: string, seedArtifacts = true): void {
+function logWorktreeReview(
+  proj: string,
+  unit: string,
+  seedArtifacts = true,
+  verdict: "READY" | "NOT-READY" = "READY",
+  iteration = 1,
+): void {
   const wt = join(proj, ".aidlc", "worktrees", `bolt-${unit}`);
   if (seedArtifacts) {
     const dir = join(seededRecordDir(wt), "construction", unit, "code-generation");
     mkdirSync(dir, { recursive: true });
-    for (const name of ["code-generation-plan", "code-summary"]) {
-      const artifact = join(dir, `${name}.md`);
-      if (!existsSync(artifact)) writeFileSync(artifact, `# ${name}\n`);
+    for (const name of ["code-generation-plan", "code-summary", "traceability"]) {
+      const artifact = join(dir, artifactFilename(name));
+      const body =
+        name === "traceability"
+          ? '{"stage":"code-generation","upstream_ids":[],"coverage":[]}\n'
+          : `# ${name}\n`;
+      if (!existsSync(artifact)) writeFileSync(artifact, body);
     }
   }
   for (const terminal of [false, true]) {
@@ -254,15 +266,78 @@ function logWorktreeReview(proj: string, unit: string, seedArtifacts = true): vo
       "--reviewer",
       "aidlc-architecture-reviewer-agent",
       "--iteration",
-      "1",
+      String(iteration),
     ];
-    if (terminal) args.push("--verdict", "READY");
+    if (terminal) args.push("--verdict", verdict);
     args.push("--project-dir", wt);
     const logged = spawnSync(BUN, args, { encoding: "utf-8" });
     if (logged.status !== 0) {
       throw new Error(`worktree review log failed: ${logged.stdout}${logged.stderr}`);
     }
   }
+}
+
+function finalizeWithNotReady(iteration: number): {
+  status: number;
+  out: string;
+} {
+  const proj = seedRefereeProject();
+  notReadyProjects.push(proj);
+  const unit = `not-ready-${iteration}`;
+  spawnSync(
+    BUN,
+    [
+      SWARM_TOOL,
+      "--project-dir",
+      proj,
+      "prepare",
+      "--batch",
+      "1",
+      "--units",
+      unit,
+      "--base",
+      "main",
+    ],
+    { encoding: "utf-8" },
+  );
+  const worktree = join(proj, ".aidlc", "worktrees", `bolt-${unit}`);
+  writeFileSync(join(worktree, `${unit}.txt`), "done\n");
+  if (iteration > 1) {
+    logWorktreeReview(proj, unit, true, "NOT-READY", 1);
+    writeFileSync(
+      join(
+        seededRecordDir(worktree),
+        "construction",
+        unit,
+        "code-generation",
+        "code-summary.md",
+      ),
+      "# repaired after iteration 1\n",
+    );
+  }
+  logWorktreeReview(proj, unit, true, "NOT-READY", iteration);
+  const result = spawnSync(
+    BUN,
+    [
+      SWARM_TOOL,
+      "--project-dir",
+      proj,
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      unit,
+      "--claimed",
+      unit,
+      "--check-cmd",
+      "true",
+    ],
+    { encoding: "utf-8" },
+  );
+  return {
+    status: result.status ?? -1,
+    out: `${result.stdout ?? ""}${result.stderr ?? ""}`,
+  };
 }
 
 function setupReferee(): void {
@@ -416,6 +491,10 @@ afterAll(() => {
     spawnSync("chmod", ["-R", "u+w", missingArtifactsProj]);
     cleanupWorktreeFixture(missingArtifactsProj);
   }
+  for (const project of notReadyProjects) {
+    spawnSync("chmod", ["-R", "u+w", project]);
+    cleanupWorktreeFixture(project);
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -537,5 +616,19 @@ describe("t135 referee - autonomous reviewer receipt is a finalize precondition"
     expect(missingArtifactsOut).toContain('"converged": 0');
     expect(missingArtifactsOut).toContain('"failed": 1');
     expect(missingArtifactsAudit).not.toContain("**Event**: SWARM_UNIT_CONVERGED");
+  }, 60000);
+
+  test("11: a below-cap NOT-READY receipt cannot satisfy swarm finalize", () => {
+    const result = finalizeWithNotReady(1);
+    expect(result.status).toBe(2);
+    expect(result.out).toContain("no terminal REVIEW_COMPLETED");
+    expect(result.out).toContain('"converged": 0');
+  }, 60000);
+
+  test("12: a NOT-READY receipt at the configured cap satisfies swarm finalize", () => {
+    const result = finalizeWithNotReady(2);
+    expect(result.status).toBe(0);
+    expect(result.out).toContain('"converged": 1');
+    expect(result.out).toContain('"failed": 0');
   }, 60000);
 });

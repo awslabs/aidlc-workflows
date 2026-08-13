@@ -1,7 +1,7 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
-## [2.5.64] - 2026-08-11
+## [2.5.72] - 2026-08-11
 
 Add dependency-aware validity projection for completed stages. No manual migration is required; existing audit ledgers remain compatible and become tracked when stages complete again.
 
@@ -9,6 +9,55 @@ Add dependency-aware validity projection for completed stages. No manual migrati
 - Record compact schema-2 structure/content fingerprints per observed canonical artifact.
 - Propagate revalidation through artifact inputs observed by completed consumers.
 - Preserve historical completion checkboxes while blocking routing past stale tracked AI-DLC artifacts.
+
+## [2.5.71] - 2026-08-13
+
+Stages now carry deterministic element-level traceability from requirements through stories, Units, design, code, and the Construction exit checks. **Upgrade:** refresh `dist/<harness>/`; for an existing intent whose current or completed in-flight stage predates `traceability.json`, revisit that stage and create its declared traceability artifact before attempting completion or downstream phase verification.
+
+* Requirements, stories, acceptance criteria, Units, business rules, and detailed NFRs use stable IDs (`FR`, `NFR`, `US`, three-segment `AC`, `U`/Unit directory, `BRx.y`, and `NFRx.y`) in stage deliverables.
+* Eight Inception and Construction stages declare and write `traceability.json`; the new advisory `traceability` sensor validates JSON shape and statuses, fails closed on missing upstream evidence, verifies deterministic targets, and derives unexplained business-rule orphans.
+* Delivery Planning aggregates Inception traceability, Build and Test writes a cross-Unit final coverage deliverable, and CI Pipeline keeps the Construction phase-boundary check at the real transition while consuming those results.
+* `aidlc-sensor list` now reports six framework sensors. No command or flag changes.
+
+## [2.5.69] - 2026-08-13
+
+Cursor IDE no longer blocks every tool call on a fail-closed PreToolUse hook that allowed with empty stdout. The Cursor adapter now emits `{"permission":"allow"}` on both allow returns, matching Cursor's required permission JSON; deny JSON and `failClosed: true` are unchanged. Cursor CLI already treated silence as allow, so CLI-only verification missed this. **Upgrade:** refresh `dist/cursor/` and rerun `bun dist/cursor/install.ts <project>`.
+
+* Cursor `preToolUse` (`guards`) allow paths write `{"permission":"allow"}` before exit 0. Empty stdout is invalid JSON; with `failClosed: true` the IDE denied the call (`Hook "bun .cursor/hooks/aidlc-cursor-adapter.ts guards" returned no output`).
+* Unit coverage in t276 asserts allow stdout is that JSON, and still deny JSON on block or malformed input.
+* No command or flag changes.
+
+## [2.5.68] - 2026-08-13
+
+Codex balanced and templated agents now use a supported model on Amazon Bedrock. **Upgrade:** re-copy `dist/codex/` into the project.
+
+* Codex tier projections now pin `openai.gpt-5.6-terra` for balanced and templated agents.
+* Codex onboarding and harness documentation now describe the updated model pin.
+
+## [2.5.67] - 2026-08-12
+
+Stage-major Construction design can now run dependency-safe per-Unit waves from an engine-emitted directive, with current lifecycle, review-class, and crash-recovery contracts preserved. The engine resolves each wave from one healed Bolt-DAG snapshot and keeps the batch active until every applicable Unit has build evidence, paired terminal review evidence when enabled, crash-safe diary fan-in, and a `UNIT_COMPLETED` receipt. **Upgrade:** re-copy `dist/<harness>/` into your project and start a fresh `/aidlc` turn; an in-flight pre-upgrade steering continuation token intentionally fails closed and must be restarted with `next`.
+
+* Eligible `run-stage` directives gain optional `directive.wave` entries with resolved Unit kind, present/absent consumes, outputs, kind-applicable `required_produces`, `unit_memory_path`, build state, completion state, and review progress (`outstanding`, `retry-required`, `repair-required`, or terminal).
+* Wave builders remain confined to the four inline design stages on the default stage-major walk. Code Generation, unit-major iteration, and plugin-contributed stages remain on their existing serial or swarm paths.
+* `aidlc-state.ts unit complete --wave --stage <slug> --unit <name>` verifies the live wave entry, copies new Unit diary entries verbatim into the parent stage diary with deterministic deduplication, binds the receipt to the final artifact fingerprint, and emits `UNIT_COMPLETED`; a crash before that transaction or a later artifact change leaves the entry open for recovery.
+* Wave review settlement uses paired `REVIEW_REQUESTED` / `REVIEW_COMPLETED` rows and the effective review class: `none` requires no review, advisory verdicts settle after one pass, adversarial NOT-READY stays open below its iteration cap, and unmatched requests resume with `--retry-pending`.
+* All seven shipped harnesses receive the same branch-before-gate contract, steering/context inheritance, kind-aware blocked-output rule, reviewer-scope serialization rule, and deterministic same-batch transport prefixing.
+
+## [2.5.64] - 2026-08-11
+
+Composed-workflow routing is now deterministic from proposal through execution, and the affected test-runner and live-journey paths fail closed. Stock matches present exactly the grid that will run, incomplete model-produced grids cannot match a stock scope, in-flight recomposition preserves the running plan, isolated stages no longer wait on nonexistent questions, and mid-flow new work carries one typed continuation contract with a named scope. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* `aidlc-graph.ts validate-grid` returns `nearest_stock`, ranking graph/plugin-authored stock scopes by proposal distance, and requires one explicit EXECUTE/SKIP entry for every compiled stage. Missing and extra keys count as differences; composer-authored registry entries remain runnable but cannot become stock-match candidates for unrelated work.
+* Front/report composition routes solely on `validate-grid.nearest_stock` for the final proposal. The earlier mechanical ARS distance is advisory and cannot erase evidence-driven folds, while a matched proposal adopts and revalidates the stock grid before rebuilding its summary and stage-decision table.
+* Editing a matched stock plan converts it to a custom plan so the approved edits persist. In-flight proposals instead use `mode: in-flight`, preserve the current scope, depth, full grid, and frozen actions, and pass exact `changes.skip` / `changes.add` arrays to `recompose`.
+* Isolated single-stage runs (`--stage <slug> --single`) present the pre-generation summary confirmation only after file-backed Q&A. Stages that ask no questions proceed directly to artifact work instead of waiting for an answer that cannot exist.
+* Mid-flow new-work offers emit `ask_type: "new-work-routing"` with `response_route: "next"`, `new_work_description`, and `proposed_scope`; every harness uses that typed route instead of `report`, including rich prose that falls back to the selected default scope.
+* Scan reports are scored as fixes rather than new projects: captured findings screen out ideation framing stages, and pre-existing test or CI gaps do not inflate the plan unless the fix cannot ship without them.
+* Persona files named by `inline_context_paths` are a blocking first-read precondition across every harness, including the mob lead before drafting or support dispatch.
+* Concurrency and live-journey regressions fail on contender crashes or malformed evidence, require actual persona reads and coherent completed-stage advancement, and verify that the new-work offer was rendered before confirmation.
+* Test-runner verbose log directories are per-process (`tests/logs/<stamp>-p<pid>`), preventing concurrent runners started in the same second from deleting or corrupting each other's results. Consumers must read the emitted `Verbose mode: logging to <dir>` line rather than reconstructing the path.
+* No command or flag changes; no breaking change for CI or scripts beyond the log-directory naming note above.
 
 ## [2.5.63] - 2026-08-11
 

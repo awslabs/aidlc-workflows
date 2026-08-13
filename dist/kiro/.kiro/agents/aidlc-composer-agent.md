@@ -42,6 +42,17 @@ entropy, failure cost, or verification weakness more than it costs.
 2. **Report** (scan input): read the user-supplied report file (e.g.
    SonarQube-style JSON), triage findings into auto-fixable vs
    human-decision, estimate risk, and compose a compact fix-and-ship grid.
+   Score for a FIX, not a project: the report IS the captured intent, so the
+   ideation framing stages (intent-capture, market-research, feasibility,
+   scope-definition, team-formation, rough-mockups, approval-handoff) are
+   answered by its existence - screen them out rather than scoring them in.
+   VE covers verifying the FIX (each finding's fix ships with its regression
+   test); missing project infrastructure (no test suite, no CI) is
+   PRE-EXISTING debt the report did not ask you to erect - it justifies
+   ci-pipeline/practices-discovery only when the fix cannot ship without
+   them. A code-findings report lands in stock `bugfix` (or
+   `security-patch` when a hotspot must deploy) unless it contains work no
+   stock incremental scope covers.
 3. **In-flight** (a workflow is running): read the live state file, RE-ESTIMATE
    the ARS from current evidence (completed stages reduced entropy), and
    propose SKIP / un-SKIP flips for PENDING ahead-of-cursor stages only.
@@ -453,7 +464,7 @@ and name that trigger in the rationale.
 | requirements-analysis | intent-capture (+ application-design absorbs spec) | IAE ≤ 0.20 after intent-capture (task clearly described, ≤2 interpretations), AND no downstream EXECUTE stage consumes its UNIQUE outputs (functional decomposition, constraints, out-of-scope boundary) that couldn't be derived inline by application-design | multiple distinct technical contracts need specification BEFORE design (e.g. embedding API, error taxonomy, acceptance criteria), OR regulatory/compliance context demands a standalone reviewed requirements artifact, OR ≥3 personas with conflicting acceptance criteria, OR application-design is SKIPPED |
 
 When you fold a stage whose output a downstream EXECUTE stage nominally consumes,
-expect the validator (Step 7, lenient mode) to flag a starved input as an
+expect the validator (Step 6, lenient mode) to flag a starved input as an
 advisory. In BROWNFIELD that is an advisory, not a defect: the consuming stage
 adapts to the existing artifact plus upstream outputs (reverse-engineered
 screens, the requirements perf target, existing monitoring). Disclose these
@@ -538,27 +549,9 @@ gate.
 
 ---
 
-### Step 6: Read the Repertoire and Match or Synthesize
+### Step 6: Validate and Read the Distance
 
-Read the grid at the printed `scopeGridPath` (a single JSON file containing all
-stock scope grids). Compare your ARS-derived grid against stock scopes using a
-simple diff-count: for each stock scope, count how many stages differ from your
-proposed grid.
-
-**Efficiency rule**: Do NOT read individual scope `.md` files under `scopesDir`
-unless the diff count is ≤2 for a candidate scope (you need to check its depth
-to confirm compatibility). The grid JSON contains the complete EXECUTE/SKIP data;
-the `.md` files only add depth and keywords metadata.
-
-- If a stock scope matches within ±2 stage flips AND has a compatible depth,
-  propose the stock scope. It's pre-validated and well-understood.
-- If no stock scope fits (diff > 2 for all), synthesize a custom grid. Do NOT
-  read the individual `.md` files — you already know no stock scope matches.
-- `--new-scope` forces synthesis even on an obvious match.
-
-### Step 7: Validate
-
-Write the proposed grid to a temp file and run:
+Write your ARS-derived grid to a temp file and run:
 ```
 bun .kiro/tools/aidlc-graph.ts validate-grid --proposal <path> --project-type <greenfield|brownfield>
 ```
@@ -566,7 +559,55 @@ Lenient mode for a front/report proposal; for an IN-FLIGHT proposal add
 `--strict` (the same strict check the recompose verb re-runs after approval -
 a starved required input rejects, so catch it here, before the gate).
 Exit 1 = rejected grid. Fix or withdraw the SKIP. Never show an invalid grid.
-Copy the validator's `summary` field into the proposal VERBATIM.
+Copy the validator's `summary` field into the proposal VERBATIM for the grid
+that validation checked.
+
+The validator's `nearest_stock` field ranks every graph/plugin-authored stock
+scope by grid distance from YOUR final proposal (`{scope, diff, differs}`,
+ascending). Composer-authored scopes are excluded. For front/report
+composition, this final validated distance is the SOLE match authority - never
+route on your own diff-count or the earlier mechanical screen's distance.
+
+### Step 7: Route the Composition Moment
+
+**In-flight branch - never match or synthesize.** Keep the running workflow's
+current `scopeName`, depth, and full effective grid. Preserve every frozen
+action byte-for-byte and return only the validated pending changes as exact
+`changes.skip` / `changes.add` slug arrays. Set `mode: "in-flight"`.
+`ars.nearestScopes` and `validate-grid.nearest_stock` are advisory in this
+branch: NEVER adopt a stock grid, rename the scope, change its depth, or erase a
+requested flip because a stock scope is nearby. Approval lands only through
+`recompose --skip <changes.skip> --add <changes.add>`.
+
+**Front/report branch - match or synthesize on the validator's final number.**
+The `ars` tool's `nearestScopes` describes the MECHANICAL screen before folds;
+keep it as advisory evidence only. Route solely on
+`validate-grid.nearest_stock[0]` from the final proposal:
+
+- If that final distance is `<= 2` for a scope whose depth is compatible, propose
+  that stock scope: set `mode: "matched"`, `scopeName` to the stock name, and
+  **adopt the stock grid verbatim as your proposal's `grid`**. Any flips or
+  folds between your grid and the stock grid are dropped - note each in the
+  `rationale` array ("folded into stock <name>: <slug> stays <action>") so
+  the human can pull it back at the gate. A matched proposal writes NO scope
+  file, and nobody downstream re-derives the verdict: matched is matched.
+  **After adoption, validate the adopted stock grid again** with the same
+  project-type and strictness flags. Replace `summary` and `nearest_stock` with
+  that second result; require the selected stock scope to rank at `diff: 0`.
+  The proposal is not ready until its grid, summary, distance, and rendered
+  stage decisions all describe this same adopted stock grid.
+- The mechanical screen's distance never overrides the final validated grid.
+  If evidence-driven folds move the proposal beyond 2 flips, keep those folds
+  and synthesize rather than restoring an earlier near-stock screen.
+- To confirm depth compatibility, read that one scope's `.md` under
+  `scopesDir`. **Efficiency rule**: never read scope `.md` files otherwise -
+  the grid JSON has the complete EXECUTE/SKIP data; the `.md` files only add
+  depth and keywords metadata.
+- If the final validator distance is `> 2` (or the depth is incompatible),
+  synthesize:
+  set `mode: "custom"` and keep your grid. Re-run validate-grid after any
+  edit so `summary` and `nearest_stock` describe the grid you propose.
+- `--new-scope` forces synthesis even on an obvious match.
 
 ### Step 8: Propose
 
@@ -577,8 +618,8 @@ one SHORT line per stage (≤15 words), not a paragraph.
 
 ```json
 {
-  "mode": "matched | custom",
-  "scopeName": "<stock name or custom kebab name>",
+  "mode": "matched | custom | in-flight",
+  "scopeName": "<stock name, custom kebab name, or current running scope>",
   "ars": {
     "total": 52,
     "iae": 0.35,
@@ -591,10 +632,15 @@ one SHORT line per stage (≤15 words), not a paragraph.
   },
   "arsRationale": "<2-3 sentences explaining the score and what drove the high/low components>",
   "grid": { "<stage-slug>": "EXECUTE | SKIP", "...": "..." },
+  "changes": { "skip": ["<slug>"], "add": ["<slug>"] },
   "rationale": [{"stage": "<slug>", "reason": "<1 sentence with ARS ref>"}, "..."],
   "summary": "...from validate-grid verbatim..."
 }
 ```
+
+`changes` is REQUIRED only for `mode: "in-flight"` and must be the exact
+pending-stage delta from the current effective grid. It is omitted for
+front/report proposals.
 
 The `ars.total` composite is an ADVISORY heuristic index: the weights in Step
 2.3 are uncalibrated priors, and nothing deterministic routes on the number.
@@ -609,9 +655,13 @@ recompute or reconstruct anything, so what you return is exactly what the
 human sees: if a table is missing from your output, it is missing at the
 gate. Do NOT hand-render the numbers: both tables come from the `ars` tool's
 `tables` output. Copy `tables.arsScores` (Table 1) verbatim. Start Table 2
-from `tables.stageDecisions` and update ONLY the rows your Step 4 folds
-changed (decision + reason, same format) — every untouched row keeps the
-tool's mechanical screen verbatim.
+from `tables.stageDecisions`, then update EVERY row whose decision differs
+from the final proposal grid (decision + reason, same format). That includes
+Step 4 folds and every Step 7 stock-adoption change. For an adopted stock row,
+name the selected stock scope in the reason and preserve the dropped-flip
+explanation in the advisories below the table. Every untouched row keeps the
+tool's mechanical screen verbatim. Before returning, compare every table
+decision to `grid`; any mismatch means the proposal is not ready.
 
 **These tables are supporting evidence, not the headline.** The user is a
 developer who asked for help with their project, so the conductor presents
@@ -670,7 +720,21 @@ holds approve/edit/reject. The human sees the proposed plan in their own terms
 first, with the measurable scores and per-stage reasoning right below it, all
 before deciding. Never write before explicit human approval.
 
+On **Edit**, apply the requested grid changes, re-run `validate-grid`, and
+rebuild both `summary` and the full stage-decision table before re-presenting.
+For in-flight, also rebuild the exact `changes.skip` / `changes.add` delta
+against the unchanged running plan; edits never enter stock matching.
+If the proposal was `matched` and an edit changes the adopted stock grid,
+convert it to `mode: "custom"` and assign a custom `scopeName`; it no longer
+matches the stock plan and approval must follow the custom persistence path.
+Never leave an edited stock grid in `matched` mode, because matched approval
+writes no scope file and would silently discard the edit.
+
 ### Step 10: Write (after approval)
+
+For `mode: "in-flight"`, skip this step entirely. Return the approved
+`changes.skip` / `changes.add` arrays to the conductor; only its deterministic
+`recompose` command writes the running plan.
 
 Author BOTH files at the paths printed by `detect --json`:
 - `aidlc-<name>.md` in `scopesDir` (frontmatter: `name`, `depth`, `keywords: []`)
@@ -679,7 +743,8 @@ Author BOTH files at the paths printed by `detect --json`:
 **NEVER run `aidlc-graph.ts compile` after the write.** The runtime reads the
 JSON verbatim. To confirm the write landed, re-run `detect --json`.
 
-Skip the write entirely when a stock scope matched.
+Skip the write entirely when a stock scope matched or the proposal is
+in-flight.
 
 ---
 

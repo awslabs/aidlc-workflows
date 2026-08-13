@@ -54,7 +54,7 @@
 // no-self-key directive-wide invariant rather than a single substring grep):
 //   .sh test 1  (BF produces 'components' path)             -> "1: brownfield ..."
 //   .sh test 2  (BF produces 'decisions' path)              -> "2: brownfield ..."
-//   .sh test 3  (BF resolves all 5 produces)                -> "3: brownfield ..."
+//   .sh test 3  (BF resolves all declared produces)         -> "3: brownfield ..."
 //   .sh test 4  (BF consume 'architecture' under producer)  -> "4: brownfield ..."
 //   .sh test 5  (BF consume 'component-inventory' under prod)-> "5: brownfield ..."
 //   .sh test 6  (GF drops conditional 'architecture')        -> "6: greenfield ..."
@@ -276,18 +276,19 @@ describe("t116 brownfield application-design (migrated from t116-directive-path-
     );
   });
 
-  // .sh test 3: the full produces set resolves (5 names). STRONGER than the .sh:
+  // .sh test 3: the full produces set resolves. STRONGER than the .sh:
   // assert the EXACT set, not just the count — every produces name maps to a path
-  // under application-design's own dir, and there are exactly five.
-  test("3: brownfield resolves all 5 produces to inception/application-design/ paths", () => {
+  // under application-design's own dir, including the JSON artifact.
+  test("3: brownfield resolves all 6 produces to inception/application-design/ paths", () => {
     expect(BF.produces).toEqual([
       `${RP}/inception/application-design/components.md`,
       `${RP}/inception/application-design/component-methods.md`,
       `${RP}/inception/application-design/services.md`,
       `${RP}/inception/application-design/component-dependency.md`,
       `${RP}/inception/application-design/decisions.md`,
+      `${RP}/inception/application-design/traceability.json`,
     ]);
-    expect(BF.produces.length).toBe(5);
+    expect(BF.produces.length).toBe(6);
   });
 
   // .sh test 4: conditional_on:brownfield consume 'architecture' is PRESENT for a

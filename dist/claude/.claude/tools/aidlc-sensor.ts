@@ -46,6 +46,7 @@ import {
 	templateEligibleArtifacts,
 } from "./aidlc-graph.ts";
 import {
+	artifactFilename,
 	codekbDir,
 	errorMessage,
 	isoTimestamp,
@@ -176,6 +177,7 @@ const BUNDLED_SENSOR_IDS = new Set([
 	"claim-sources",
 	"linter",
 	"required-sections",
+	"traceability",
 	"type-check",
 	"upstream-coverage",
 ]);
@@ -295,7 +297,7 @@ function presentConsumes(pd: string, slugs: string[]): string[] {
 		const producer = producersOf(name)[0];
 		if (!producer) return true;
 		for (const dir of artifactDirsForProducer(pd, producer)) {
-			if (existsSync(join(dir, `${name}.md`))) return true;
+			if (existsSync(join(dir, artifactFilename(name)))) return true;
 		}
 		return false;
 	});

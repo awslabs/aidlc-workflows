@@ -20,6 +20,7 @@ import {
 const ARTIFACT_FILENAMES: Readonly<Record<string, string>> = {
   "build-test-results": "test-results.md",
   "load-test-results": "test-results.md",
+  "traceability": "traceability.json",
 };
 
 const KNOWN_CODEKB_STAGES: ReadonlySet<string> = new Set([

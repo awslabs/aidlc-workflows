@@ -28,7 +28,16 @@ export function discoverClaudeRequiredTests(
     if (!existsSync(dir)) continue;
     for (const entry of readdirSync(dir).sort()) {
       if (!entry.endsWith(".test.ts")) continue;
-      const src = readFileSync(join(dir, entry), "utf-8");
+      // A sibling runner (smoke's t05) plants transient tZZ-*.test.ts files in
+      // this shared dir and removes them when its case ends; a file listed by
+      // readdir may legitimately be gone by the read. Skip it - a vanished
+      // file cannot need the claude gate.
+      let src: string;
+      try {
+        src = readFileSync(join(dir, entry), "utf-8");
+      } catch {
+        continue;
+      }
       const dependencies = claudeDependenciesOf(entry, src);
       if (dependencies.length === 0) continue;
       out.push({

@@ -148,10 +148,12 @@ wire identifier, not the filename.
 ## Filesystem mapping
 
 Artifacts live on disk at paths that are derivable from `(canonical
-name) + (producing stage) + (per-unit flag)`. Two shapes today:
+name) + (producing stage) + (per-unit flag)`. Markdown is the default extension;
+the canonical `traceability` artifact is the structured-data exception and
+resolves to `traceability.json`. Two placement shapes apply:
 
 - **Non-per-unit stages (24 of 29):**
-  `<record>/<phase>/<stage>/<canonical-name>.md`
+  `<record>/<phase>/<stage>/<artifact-filename>`
   Example: `feasibility-assessment` (produced by the Ideation
   `feasibility` stage) lives at
   `<record>/ideation/feasibility/feasibility-assessment.md`.
@@ -160,7 +162,7 @@ name) + (producing stage) + (per-unit flag)`. Two shapes today:
   `nfr-design`, `functional-design`, `infrastructure-design`, and
   `code-generation`. These emit one copy of each artifact per Unit of
   Work during Construction:
-  `<record>/construction/{unit-name}/<stage>/<canonical-name>.md`
+  `<record>/construction/{unit-name}/<stage>/<artifact-filename>`
   Example: `business-logic-model` (produced by `functional-design`) lives
   at
   `<record>/construction/{unit-name}/functional-design/business-logic-model.md`.
@@ -169,6 +171,11 @@ Per-unit status is declared by the stage's `for_each: unit-of-work`
 frontmatter field — the five Construction stages that run once per Unit carry
 it; the rest omit it. A future helper could compute the path mechanically from
 stage graph + canonical name.
+
+`artifactFilename()` in `aidlc-lib.ts` is the shared extension resolver used by
+directives, per-Unit coverage, completion guards, and review fingerprints.
+Every artifact except `traceability` resolves to `<canonical-name>.md`;
+`traceability` resolves to `traceability.json`.
 
 **Codekb is the space-level exception.** Reverse-engineering's 9 artifacts
 (`business-overview`, `architecture`, `code-structure`, `api-documentation`,

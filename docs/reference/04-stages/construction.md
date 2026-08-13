@@ -86,6 +86,30 @@ Generation included — is covered, one human approval per stage.
 Only the exact value `unit-major` activates it; absent or `stage-major` is the
 default.
 
+**Per-unit batch waves (optional, stage-major only).** On the default
+stage-major walk, the engine MAY emit `directive.wave` for one of the four
+inline design stages (3.1–3.4). The wave comes from one healed DAG snapshot;
+the conductor does not read `runtime-graph.json` or derive sibling paths.
+Code Generation (3.5, `workspace_requires: true`) is NEVER wave-eligible:
+concurrent builders would collide writing into the shared workspace (the
+swarm path's per-unit worktrees exist for exactly this isolation), and its
+Step 3 Plan Approval is a mandatory hard stop in every execution mode that
+cannot fold into a builder's return message.
+
+Each entry carries kind-resolved consumes, explicit absent consumes, all
+produces, the applicable required subset, a Unit-local diary path, build state,
+paired-review state, and whether its wave completion receipt is still required.
+Builders receive the parent stage file, inline context roster, warnings, and
+exact accumulated steering content. A blocked builder withholds an applicable
+required path, not an optional or kind-exempt path. After build and review,
+`unit complete --wave` verifies the live entry, fans Unit diary entries into the
+parent diary idempotently, and emits `UNIT_COMPLETED`. The engine holds the
+current batch until every applicable Unit has all of that evidence, then permits
+a dependent batch or the single stage gate. Waves never apply under
+`Construction Iteration: unit-major`; harnesses without a parallel dispatch
+primitive process the entries serially. See
+`stage-protocol.md` §3 "Per-unit batch waves" for the full contract.
+
 **Parallel batches.** When two or more Bolts share dependency-satisfaction
 and don't depend on each other, the conductor dispatches their Code
 Generation stages concurrently by issuing N `Task` calls in a single

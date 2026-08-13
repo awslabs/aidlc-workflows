@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 544,
+    "total": 548,
     "enumeratedByClass": {
-      "function": 298,
+      "function": 302,
       "audit": 82,
       "scope": 9,
       "stage": 32,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 141,
+      "function": 144,
       "audit": 40,
       "scope": 9,
       "stage": 9,
@@ -1026,6 +1026,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:artifactFilename",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t281-sensor-traceability.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:artifactsRegistry",
       "minMechanism": "none",
       "coveredBy": [
@@ -1438,6 +1450,13 @@
     {
       "unitClass": "function",
       "unitId": "function:CURRENT_SESSION_FILE",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:currentUnitLifecycleMode",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -2491,6 +2510,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:nearestStockScopes",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t277-validate-grid-nearest-stock.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -3572,6 +3603,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t155-template-override.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:terminalReviewVerdict",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t135-invoke-swarm.test.ts",
           "mechanism": "cli"
         }
       ],

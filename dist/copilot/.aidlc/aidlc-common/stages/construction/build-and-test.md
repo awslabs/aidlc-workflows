@@ -15,6 +15,7 @@ produces:
   - security-test-instructions
   - build-and-test-summary
   - build-test-results
+  - cross-unit-traceability
 consumes:
   - artifact: code-generation-plan
     required: true
@@ -36,7 +37,7 @@ scopes:
   - security-patch
   - workshop
 inputs: ALL code generation outputs across all units
-outputs: build-instructions.md, unit-test-instructions.md, integration-test-instructions.md, performance-test-instructions.md, security-test-instructions.md, build-and-test-summary.md, test-results.md (under this stage's record dir, engine-resolved)
+outputs: build-instructions.md, unit-test-instructions.md, integration-test-instructions.md, performance-test-instructions.md, security-test-instructions.md, build-and-test-summary.md, test-results.md, cross-unit-traceability.md (under this stage's record dir, engine-resolved)
 ---
 
 # Build and Test
@@ -121,13 +122,31 @@ Attempt to execute the build and test commands documented in the instruction fil
 
 **On success**: Update the Build and Test Summary with actual results (not just instructions).
 
-### Step 11: Completion Handoff
+### Step 11: Cross-Unit Final Coverage Gate
+
+This is a stage-level gate, not the Construction phase boundary. Enumerate:
+
+- every `FR` and `NFR` from
+  `<record>/inception/requirements-analysis/requirements.md`
+- every three-segment `AC` from
+  `<record>/inception/user-stories/stories.md` when that stage executed
+
+Read every
+`<record>/construction/*/code-generation/traceability.json`. Verify each
+enumerated ID is covered with status `OK` in at least one Unit and that its
+target file exists. Write
+`<record>/construction/build-and-test/cross-unit-traceability.md` with a
+pass/fail verdict, per-ID coverage, owning Unit, target file, and every
+uncovered element. Any uncovered ID is a build-and-test finding that must be
+surfaced at the approval gate.
+
+### Step 12: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
 `bun .aidlc/tools/aidlc-orchestrate.ts report --stage build-and-test --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
-### Step 12: Completion
+### Step 13: Completion
 
 Present completion message and approval gate:
 
