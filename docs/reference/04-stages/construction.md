@@ -131,7 +131,7 @@ SKILL.md §CONSTRUCTION Flow for the canonical specification.
 | Stage | Name                  | Execution   | Condition                                                                                          | Lead Agent          | Support Agents    | Mode                       | Per-Unit |
 |-------|-----------------------|-------------|----------------------------------------------------------------------------------------------------|---------------------|-------------------|-----------------------------|----------|
 | 3.1   | Functional Design     | CONDITIONAL | New data models, complex business logic, or business rules need design                             | aidlc-architect-agent     | aidlc-developer-agent   | inline                      | Yes      |
-| 3.2   | NFR Requirements      | CONDITIONAL | Performance, security, scalability concerns, or tech stack selection needed                         | aidlc-architect-agent     | aidlc-devsecops-agent, aidlc-compliance-agent, aidlc-quality-agent   | inline                      | Yes      |
+| 3.2   | NFR Requirements      | CONDITIONAL | Performance, security, scalability, reliability, or observability requirements needed, or tech stack selection needed | aidlc-architect-agent     | aidlc-devsecops-agent, aidlc-compliance-agent, aidlc-quality-agent   | inline                      | Yes      |
 | 3.3   | NFR Design            | CONDITIONAL | NFR Requirements was executed and NFR patterns need design                                          | aidlc-architect-agent     | aidlc-aws-platform-agent| inline                      | Yes      |
 | 3.4   | Infrastructure Design | CONDITIONAL | Infrastructure services need mapping, deployment architecture required, or cloud resources needed   | aidlc-aws-platform-agent  | aidlc-devsecops-agent, aidlc-compliance-agent   | inline                      | Yes      |
 | 3.5   | Code Generation       | ALWAYS      | Always executes for every unit in the execution plan                                               | aidlc-developer-agent     | (none)            | subagent (aidlc-developer-agent)  | Yes      |
@@ -254,18 +254,18 @@ Strictly 2-option: Approve / Request Changes.
 | Stage             | 3.2                                                                                               |
 | Phase             | Construction                                                                                      |
 | Execution         | CONDITIONAL (per execution plan)                                                                  |
-| Condition         | Performance requirements, security considerations, scalability concerns, or tech stack selection needed. Skip if no NFR requirements and tech stack already determined. |
+| Condition         | Performance, security, scalability, reliability, or observability requirements needed, or tech stack selection needed. Skip if no NFR requirements and tech stack already determined. |
 | Per-Unit          | Yes                                                                                               |
 | Lead Agent        | aidlc-architect-agent                                                                                   |
 | support_agents    | aidlc-devsecops-agent, aidlc-compliance-agent, aidlc-quality-agent                                       |
 | mode              | inline                                                                                            |
 | Inputs            | functional design artifacts, requirements.md, RE artifacts                                        |
-| Outputs           | `<record>/construction/{unit-name}/nfr-requirements/` -- performance-requirements.md, security-requirements.md, scalability-requirements.md, reliability-requirements.md, tech-stack-decisions.md |
+| Outputs           | `<record>/construction/{unit-name}/nfr-requirements/` -- performance-requirements.md, security-requirements.md, scalability-requirements.md, reliability-requirements.md, observability-requirements.md, tech-stack-decisions.md |
 
 ### Purpose
 
 Define non-functional requirements across performance, security, scalability,
-reliability, and technology selection for a single unit. The aidlc-architect-agent
+reliability, observability, and technology selection for a single unit. The aidlc-architect-agent
 leads, with the aidlc-devsecops-agent providing security input, the
 aidlc-compliance-agent providing regulatory input, and the aidlc-quality-agent
 providing testability and measurability input.
@@ -321,6 +321,9 @@ providing testability and measurability input.
      capacity planning, data growth, concurrency targets
    - **reliability-requirements.md**: Availability targets (SLA/SLO), fault
      tolerance requirements, backup/recovery, graceful degradation
+   - **observability-requirements.md**: Monitoring requirements, logging
+     standards, distributed tracing needs, alerting thresholds, dashboard
+     requirements, SLI/SLO definitions
    - **tech-stack-decisions.md**: Technology selections and rationale --
      languages, frameworks, databases, infrastructure tools, and justification
      for each choice
@@ -338,6 +341,7 @@ providing testability and measurability input.
 | security-requirements.md     | Authentication, authorization, data protection, compliance, threats        |
 | scalability-requirements.md  | Load projections, scaling triggers, capacity planning, concurrency         |
 | reliability-requirements.md  | Availability targets (SLA/SLO), fault tolerance, backup/recovery           |
+| observability-requirements.md | Monitoring, logging, tracing, alerting, dashboards, SLI/SLO definitions    |
 | tech-stack-decisions.md      | Technology selections with rationale for each choice                       |
 
 ### Approval Gate
@@ -346,13 +350,13 @@ Strictly 2-option: Approve / Request Changes.
 
 ### Notes -- NFR Granularity Expansion
 
-This stage produces **5 artifact files**, expanded from the upstream reference
+This stage produces **6 artifact files**, expanded from the upstream reference
 which defines only 2 files for NFR Requirements. This is a deliberate deviation
 documented in SKILL.md ("Deliberate Deviations from Reference"). The finer
 granularity improves traceability and allows per-concern review without
-overloading a single document. The five files separate performance, security,
-scalability, and reliability into dedicated artifacts, and add a dedicated
-tech-stack-decisions.md for technology selection rationale.
+overloading a single document. The six files separate performance, security,
+scalability, reliability, and observability into dedicated artifacts, and add
+a dedicated tech-stack-decisions.md for technology selection rationale.
 
 ---
 
@@ -371,7 +375,7 @@ tech-stack-decisions.md for technology selection rationale.
 | support_agents    | aidlc-aws-platform-agent                                                                                |
 | mode              | inline                                                                                            |
 | Inputs            | NFR requirements artifacts, functional design artifacts                                           |
-| Outputs           | `<record>/construction/{unit-name}/nfr-design/` -- performance-design.md, security-design.md, scalability-design.md, reliability-design.md, logical-components.md |
+| Outputs           | `<record>/construction/{unit-name}/nfr-design/` -- performance-design.md, security-design.md, scalability-design.md, reliability-design.md, observability-design.md, logical-components.md |
 
 ### Purpose
 
@@ -405,6 +409,8 @@ infrastructure and platform input.
    - Performance optimization (latency budgets, throughput targets, resource
      pooling)
    - Security approach (defense in depth, zero trust, encryption standards)
+   - Observability approach (metrics and SLI/SLO targets, structured logging,
+     tracing depth, alerting philosophy, dashboard needs)
    - Logical component boundaries (service isolation, failure domains, blast
      radius)
 
@@ -427,6 +433,9 @@ infrastructure and platform input.
      data partitioning/sharding, queue-based decoupling, stateless design
    - **Reliability**: Circuit breakers, retry policies with backoff, health
      checks, graceful degradation, failover strategies, data replication
+   - **Observability**: Metrics collection strategy, structured logging design,
+     distributed tracing architecture, alerting rules, dashboard specifications,
+     SLI/SLO tracking, correlation ID propagation
 
 6. **Generate Artifacts** -- Generate the following in
    `<record>/construction/{unit-name}/nfr-design/`:
@@ -440,6 +449,9 @@ infrastructure and platform input.
    - **reliability-design.md**: Resilience patterns, circuit breaker
      configuration, retry policies, health check design, failover procedures,
      backup strategy
+   - **observability-design.md**: Metrics collection architecture, structured
+     logging design, distributed tracing strategy, alerting rules and escalation,
+     dashboard specifications, SLI/SLO definitions, correlation ID propagation
    - **logical-components.md**: Logical infrastructure component inventory --
      service boundaries, failure domains, blast radius mapping, component
      isolation strategy, shared resource identification. Bridges NFR design
@@ -459,6 +471,7 @@ infrastructure and platform input.
 | security-design.md     | Auth architecture, encryption design, input validation, security headers        |
 | scalability-design.md  | Scaling architecture, load distribution, data partitioning, auto-scaling rules  |
 | reliability-design.md  | Resilience patterns, circuit breakers, retry policies, failover procedures      |
+| observability-design.md | Metrics, structured logs, tracing, alerts, dashboards, SLI/SLO definitions      |
 | logical-components.md  | Component inventory, service boundaries, failure domains, blast radius mapping  |
 
 ### Approval Gate
@@ -467,7 +480,7 @@ Strictly 2-option: Approve / Request Changes.
 
 ### Notes -- NFR Design Granularity
 
-This stage produces **5 artifact files** (4 NFR-specific designs plus
+This stage produces **6 artifact files** (5 NFR-specific designs plus
 logical-components.md), expanded from the upstream reference which defines only
 2 files for NFR Design. This is a deliberate deviation documented in SKILL.md
 ("Deliberate Deviations from Reference"). The logical-components.md artifact
@@ -556,9 +569,10 @@ aidlc-compliance-agent checking data residency and regulatory constraints.
      environment definitions, infrastructure-as-code approach, resource sizing
    - **infrastructure-services.md**: Database design, caching layer, messaging
      infrastructure, external service integrations, service discovery
-   - **monitoring-design.md**: Metrics and KPIs, log strategy, tracing
-     configuration, alert definitions, dashboard specifications, incident
-     response
+   - **monitoring-design.md**: Platform-specific tooling implementing the
+     observability-design strategy, including metrics and KPIs, log strategy,
+     tracing configuration, alert definitions, dashboard specifications, and
+     incident response
    - **cicd-pipeline.md**: Pipeline stages, build configuration, test
      automation integration, deployment strategy (blue-green, canary, rolling),
      rollback procedures, secrets management in CI/CD
@@ -1066,7 +1080,7 @@ through a phased construction flow:
 **Per-unit stages (3.1-3.5):**
 - 3.1 Functional Design -- Business logic, domain models, rules (architect-led)
 - 3.2 NFR Requirements -- Performance, security, scalability, reliability,
-  tech stack (architect-led)
+  observability, tech stack (architect-led)
 - 3.3 NFR Design -- Concrete patterns for NFR categories (architect-led)
 - 3.4 Infrastructure Design -- Deployment, services, monitoring, CI/CD
   (aws-platform-led)
@@ -1083,7 +1097,7 @@ through a phased construction flow:
 - Stages 3.1-3.4 are CONDITIONAL; 3.5-3.6 ALWAYS execute; 3.7 is CONDITIONAL
 - All conditional stages follow the execution plan from Delivery Planning
 - Per-unit loop ensures one unit completes fully before the next begins
-- NFR artifacts use expanded granularity (5 files for requirements, 5 for
+- NFR artifacts use expanded granularity (6 files for requirements, 6 for
   design) compared to the upstream reference
 - Infrastructure Design is expanded to 5 artifacts with dedicated monitoring
   and CI/CD files
@@ -1094,8 +1108,8 @@ through a phased construction flow:
   Operation
 
 **Deliberate deviations from upstream reference:**
-- NFR Requirements: 5 files (expanded from 2 in reference)
-- NFR Design: 5 files including logical-components.md (expanded from 2 in
+- NFR Requirements: 6 files (expanded from 2 in reference)
+- NFR Design: 6 files including logical-components.md (expanded from 2 in
   reference)
 - Infrastructure Design: 5 files including monitoring-design.md and
   cicd-pipeline.md (expanded from 2-3 in reference)

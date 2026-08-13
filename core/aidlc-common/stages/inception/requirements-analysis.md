@@ -91,7 +91,7 @@ Extract and organize what is already known from the user's input:
 
 Evaluate coverage across six dimensions:
 1. **Functional requirements** — Core behaviors, features, use cases
-2. **Non-functional requirements** — Performance, security, scalability, reliability
+2. **Non-functional requirements** - Performance, security, scalability, reliability, observability
 3. **User scenarios** — User workflows, edge cases, error scenarios
 4. **Business context** — Goals, success metrics, stakeholders, constraints
 5. **Technical context** — Integration points, platform requirements, technology constraints
@@ -155,7 +155,7 @@ confirmation `[Answer]:` to blank, and repeat this step. Do NOT create
 Create `<record>/inception/requirements-analysis/requirements.md` containing:
 - **Intent analysis** — What the user is trying to achieve (goals, not just features)
 - **Functional requirements** — Organized by feature area or domain. Give every requirement a stable `FR{n}` ID (for example `FR1`) and every sub-requirement an `FR{n}.{m}` ID (for example `FR1.2`).
-- **Non-functional requirements** — Performance, security, scalability, and reliability targets. Give every requirement a stable `NFR{n}` ID (for example `NFR3`).
+- **Non-functional requirements** — Performance, security, scalability, reliability, and observability targets. Give every requirement a stable `NFR{n}` ID (for example `NFR3`).
 - **Constraints** — Technical, business, and organizational constraints
 - **Assumptions** — Documented assumptions with rationale
 - **Out of scope** — Explicitly excluded items

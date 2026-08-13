@@ -1609,7 +1609,7 @@
     "name": "NFR Requirements",
     "phase": "construction",
     "execution": "CONDITIONAL",
-    "condition": "Performance requirements, security considerations, scalability concerns, or tech stack selection needed. Skip if no NFR requirements and tech stack already determined.",
+    "condition": "Performance, security, scalability, reliability, or observability requirements needed, or tech stack selection needed. Skip if no NFR requirements and tech stack already determined.",
     "lead_agent": "aidlc-architect-agent",
     "support_agents": [
       "aidlc-devsecops-agent",
@@ -1623,6 +1623,7 @@
       "security-requirements",
       "scalability-requirements",
       "reliability-requirements",
+      "observability-requirements",
       "tech-stack-decisions",
       "traceability"
     ],
@@ -1635,6 +1636,9 @@
         "service"
       ],
       "reliability-requirements": [
+        "service"
+      ],
+      "observability-requirements": [
         "service"
       ]
     },
@@ -1681,7 +1685,7 @@
     "review_class": "adversarial",
     "summary_confirmation": "required",
     "inputs": "functional design artifacts, requirements.md, RE artifacts",
-    "outputs": "performance-requirements.md, security-requirements.md, scalability-requirements.md, reliability-requirements.md, tech-stack-decisions.md, traceability.json (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)",
+    "outputs": "performance-requirements.md, security-requirements.md, scalability-requirements.md, reliability-requirements.md, observability-requirements.md, tech-stack-decisions.md, traceability.json (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)",
     "rules_in_context": [
       {
         "path": "aidlc/spaces/default/memory/org.md",
@@ -1746,6 +1750,7 @@
       "security-design",
       "scalability-design",
       "reliability-design",
+      "observability-design",
       "logical-components",
       "traceability"
     ],
@@ -1758,6 +1763,9 @@
         "service"
       ],
       "reliability-design": [
+        "service"
+      ],
+      "observability-design": [
         "service"
       ],
       "logical-components": [
@@ -1781,6 +1789,10 @@
       },
       {
         "artifact": "reliability-requirements",
+        "required": true
+      },
+      {
+        "artifact": "observability-requirements",
         "required": true
       },
       {
@@ -1815,7 +1827,7 @@
     "review_class": "adversarial",
     "summary_confirmation": "required",
     "inputs": "NFR requirements artifacts, functional design artifacts",
-    "outputs": "performance-design.md, security-design.md, scalability-design.md, reliability-design.md, logical-components.md, traceability.json (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)",
+    "outputs": "performance-design.md, security-design.md, scalability-design.md, reliability-design.md, observability-design.md, logical-components.md, traceability.json (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)",
     "rules_in_context": [
       {
         "path": "aidlc/spaces/default/memory/org.md",
@@ -1928,6 +1940,10 @@
       },
       {
         "artifact": "reliability-design",
+        "required": true
+      },
+      {
+        "artifact": "observability-design",
         "required": true
       },
       {

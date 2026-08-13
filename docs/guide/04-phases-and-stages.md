@@ -321,7 +321,7 @@ Failures always stop Construction, even in autonomous mode. That's the one place
 | # | Stage | Lead | Supporting | Key Artifacts | Runs |
 |---|-------|------|-----------|---------------|------|
 | 3.1 | Functional Design | aidlc-architect-agent | aidlc-developer-agent | `business-logic-model.md`, `business-rules.md` | Per Bolt (CONDITIONAL by execution plan) |
-| 3.2 | NFR Requirements | aidlc-architect-agent | aidlc-devsecops-agent, aidlc-compliance-agent, aidlc-quality-agent | Security, performance, reliability NFRs | Per Bolt (CONDITIONAL) |
+| 3.2 | NFR Requirements | aidlc-architect-agent | aidlc-devsecops-agent, aidlc-compliance-agent, aidlc-quality-agent | Performance, security, scalability, reliability, observability NFRs | Per Bolt (CONDITIONAL) |
 | 3.3 | NFR Design | aidlc-architect-agent | aidlc-aws-platform-agent | NFR design specifications | Per Bolt (CONDITIONAL) |
 | 3.4 | Infrastructure Design | aidlc-aws-platform-agent | aidlc-devsecops-agent, aidlc-compliance-agent | Infrastructure specifications, IaC designs | Per Bolt (CONDITIONAL) |
 | 3.5 | Code Generation | aidlc-developer-agent | — | Application code + code docs | Per Bolt (ALWAYS, per Unit within the Bolt) |

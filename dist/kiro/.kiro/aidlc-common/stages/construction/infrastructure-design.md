@@ -35,6 +35,8 @@ consumes:
     required: true
   - artifact: reliability-design
     required: true
+  - artifact: observability-design
+    required: true
   - artifact: logical-components
     required: true
   - artifact: components
@@ -138,7 +140,7 @@ Generate the following in `<record>/construction/{unit-name}/infrastructure-desi
 
 - **deployment-architecture.md**: Compute resources, networking, storage, environment definitions, infrastructure-as-code approach, resource sizing
 - **infrastructure-services.md**: Database design, caching layer, messaging infrastructure, external service integrations, service discovery
-- **monitoring-design.md**: Metrics and KPIs, log strategy, tracing configuration, alert definitions, dashboard specifications, incident response
+- **monitoring-design.md**: Platform-specific tooling that implements the observability-design strategy from NFR Design, including metrics and KPIs, log strategy, tracing configuration, alert definitions, dashboard specifications, and incident response
 - **cicd-pipeline.md**: Pipeline stages, build configuration, test automation integration, deployment strategy (blue-green, canary, rolling), rollback procedures, secrets management in CI/CD
 - **shared-infrastructure.md** (CONDITIONAL — produce when multiple units share infrastructure resources): Shared databases, shared caches, shared message queues, shared networking, cross-unit service discovery, resource ownership and access boundaries
 
@@ -188,7 +190,7 @@ This stage's outputs are markdown design artefacts under `<record>/construction/
 The imported sensors check those outputs:
 
 - **`required-sections`** verifies the output contains the registry default (≥2 H2 headings).
-- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter (this stage consumes `performance-design`, `security-design`, `scalability-design`, `reliability-design`, `logical-components`, `components`, `services`, `business-logic-model`).
+- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter (this stage consumes `performance-design`, `security-design`, `scalability-design`, `reliability-design`, `observability-design`, `logical-components`, `components`, `services`, `business-logic-model`).
 - **`linter`** runs against any TypeScript/JavaScript snippets the design includes (matches `**/*.{ts,js}`).
 - **`type-check`** runs against any TypeScript/TSX snippets the design includes (matches `**/*.{ts,tsx}`).
 - **`traceability`** validates that every infrastructure-relevant `NFRx.y` design decision is declared and covered.

@@ -16,12 +16,14 @@ produces:
   - security-design
   - scalability-design
   - reliability-design
+  - observability-design
   - logical-components
   - traceability
 produces_kinds:
   performance-design: [service, ui]
   scalability-design: [service]
   reliability-design: [service]
+  observability-design: [service]
   logical-components: [service, ui, library]
 consumes:
   - artifact: performance-requirements
@@ -31,6 +33,8 @@ consumes:
   - artifact: scalability-requirements
     required: true
   - artifact: reliability-requirements
+    required: true
+  - artifact: observability-requirements
     required: true
   - artifact: tech-stack-decisions
     required: true
@@ -52,7 +56,7 @@ scopes:
   - infra
   - workshop
 inputs: NFR requirements artifacts, functional design artifacts
-outputs: "performance-design.md, security-design.md, scalability-design.md, reliability-design.md, logical-components.md, traceability.json (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)"
+outputs: "performance-design.md, security-design.md, scalability-design.md, reliability-design.md, observability-design.md, logical-components.md, traceability.json (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)"
 ---
 
 # NFR Design
@@ -98,6 +102,7 @@ Focus areas:
 - Scalability patterns (horizontal vs vertical, data partitioning, caching tiers)
 - Performance optimization (latency budgets, throughput targets, resource pooling)
 - Security approach (defense in depth, zero trust, encryption standards)
+- Observability approach (metrics and SLI/SLO targets, structured logging, tracing depth, alerting philosophy, dashboard needs)
 - Logical component boundaries (service isolation, failure domains, blast radius)
 
 ### Step 4: Collect and Analyze Answers
@@ -117,6 +122,7 @@ Design concrete solutions for each NFR category:
 - **Security**: Authentication flows, authorization model, encryption (at rest and in transit), input validation, CSRF/XSS protection, secrets management, audit logging
 - **Scalability**: Horizontal/vertical scaling approach, load balancing, data partitioning/sharding, queue-based decoupling, stateless design
 - **Reliability**: Circuit breakers, retry policies with backoff, health checks, graceful degradation, failover strategies, data replication
+- **Observability**: Metrics collection strategy, structured logging design, distributed tracing architecture, alerting rules, dashboard specifications, SLI/SLO tracking, correlation ID propagation
 
 ### Step 6: Generate Artifacts
 
@@ -126,6 +132,7 @@ Generate the following in `<record>/construction/{unit-name}/nfr-design/`:
 - **security-design.md**: Authentication/authorization architecture, encryption design, input validation strategy, security headers, compliance controls
 - **scalability-design.md**: Scaling architecture, load distribution, data partitioning strategy, capacity thresholds, auto-scaling rules
 - **reliability-design.md**: Resilience patterns, circuit breaker configuration, retry policies, health check design, failover procedures, backup strategy
+- **observability-design.md**: Metrics collection architecture, structured logging design, distributed tracing strategy, alerting rules and escalation, dashboard specifications, SLI/SLO definitions, correlation ID propagation
 - **logical-components.md**: Logical infrastructure component inventory — service boundaries, failure domains, blast radius mapping, component isolation strategy, shared resource identification. Bridges NFR design decisions with Infrastructure Design by providing a component-level view of where NFR patterns apply.
 
 Create `<record>/construction/{unit-name}/nfr-design/traceability.json`.
@@ -173,7 +180,7 @@ This stage's outputs are markdown design artefacts under `<record>/construction/
 The imported sensors check those outputs:
 
 - **`required-sections`** verifies the output contains the registry default (≥2 H2 headings).
-- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter (this stage consumes `performance-requirements`, `security-requirements`, `scalability-requirements`, `reliability-requirements`, `tech-stack-decisions`, `business-logic-model`).
+- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter (this stage consumes `performance-requirements`, `security-requirements`, `scalability-requirements`, `reliability-requirements`, `observability-requirements`, `tech-stack-decisions`, `business-logic-model`).
 - **`linter`** runs against any TypeScript/JavaScript snippets the design includes (matches `**/*.{ts,js}`).
 - **`type-check`** runs against any TypeScript/TSX snippets the design includes (matches `**/*.{ts,tsx}`).
 - **`traceability`** validates that every detailed NFR requirement is declared and covered by a design solution.

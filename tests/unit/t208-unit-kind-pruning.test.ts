@@ -45,13 +45,15 @@ const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const RP = `aidlc/spaces/${DEFAULT_SPACE}/intents/${DEFAULT_RECORD_DIR}`;
 
 // nfr-requirements produces[] and their per-kind applicability (verified against
-// the stage frontmatter): performance/scalability/reliability are kind-gated;
-// security-requirements + tech-stack-decisions are unannotated = all kinds.
+// the stage frontmatter): performance/scalability/reliability/observability are
+// kind-gated; security-requirements + tech-stack-decisions are unannotated =
+// all kinds.
 const NFR_REQ_ALL = [
   "performance-requirements",
   "security-requirements",
   "scalability-requirements",
   "reliability-requirements",
+  "observability-requirements",
   "tech-stack-decisions",
   "traceability",
 ];
@@ -240,7 +242,7 @@ function seedDependencyArtifact(
 
 describe("t208 engine unit-kind pruning", () => {
   // 1: a spec unit's nfr-requirements directive carries only the unannotated
-  // (all-kinds) artifacts; the three service-gated ones are pruned out.
+  // (all-kinds) artifacts; the four service-gated ones are pruned out.
   test("1: a spec unit's directive prunes the kind-gated produces paths", () => {
     const proj = seedProject("nfr-requirements");
     seedBoltDag(proj, [{ name: "api", kind: "spec" }]);
@@ -250,7 +252,12 @@ describe("t208 engine unit-kind pruning", () => {
     for (const keep of NFR_REQ_SPEC) {
       expect(d.produces).toContain(`${RP}/construction/api/nfr-requirements/${artifactFilename(keep)}`);
     }
-    for (const gone of ["performance-requirements", "scalability-requirements", "reliability-requirements"]) {
+    for (const gone of [
+      "performance-requirements",
+      "scalability-requirements",
+      "reliability-requirements",
+      "observability-requirements",
+    ]) {
       expect(d.produces?.some((p) => p.includes(`/${gone}.md`))).toBe(false);
     }
   }, 30000);
@@ -269,7 +276,7 @@ describe("t208 engine unit-kind pruning", () => {
   }, 30000);
 
   // 3: an untagged unit in the SAME dag still owes the FULL matrix (per-unit
-  // conservatism). svc (no kind) must still produce all five paths.
+  // conservatism). svc (no kind) must still produce all six paths.
   test("3: an untagged unit still requires the full matrix", () => {
     const proj = seedProject("nfr-requirements");
     seedBoltDag(proj, [{ name: "svc" }]);

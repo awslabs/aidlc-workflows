@@ -314,7 +314,7 @@ When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** sect
 ✓ Enabled plugins: all enabled (no selection); enabled stage counts: aidlc=32
 ✓ Scope validation: 9 scopes valid (29 advisories)
 ✓ Schema validation: 32/32 stages valid
-✓ Graph references: 122 artifacts + edges resolved
+✓ Graph references: 126 artifacts + edges resolved
 ✓ Keyword overlap: no conflicts
 ✓ Rule drift: no team/project rule overlaps org policy
 ✓ Paired sensor coverage: no sensor-bound rules (0 feedforward-only)

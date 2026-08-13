@@ -183,9 +183,11 @@ produces:
   - performance-requirements
   - security-requirements
   - scalability-requirements
+  - observability-requirements
 produces_kinds:
   performance-requirements: [service, ui]
   scalability-requirements: [service]
+  observability-requirements: [service]
 ```
 
 Why it exists: the four construction design stages ran with a fixed produces
@@ -210,6 +212,9 @@ where *every* Unit prunes to empty approves as a no-op rather than deadlocking
 at the artifact guard. The default kind matrix for the four stages is stage
 frontmatter data, reviewable and revertible per entry; removing a wrong entry
 restores the full matrix for that artifact.
+
+The stock NFR stages map both `observability-requirements` and
+`observability-design` to service units.
 
 One trust note: the `kind:` value is enum-checked at the units-generation gate
 (the `required-sections` sensor fails loud on a typo), but the compiled

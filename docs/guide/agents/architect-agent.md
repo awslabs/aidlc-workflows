@@ -15,7 +15,7 @@ The aidlc-architect-agent leads the most stages of any single agent in the lifec
 | 2.7 Units Generation | Inception | Decomposes design into implementable units of work |
 | 3.1 Functional Design | Construction | Detailed domain models and business logic (per unit) |
 | 3.2 NFR Requirements | Construction | Non-functional requirements with measurable targets (per unit) |
-| 3.3 NFR Design | Construction | Technical approaches for caching, resilience, security (per unit) |
+| 3.3 NFR Design | Construction | Technical approaches for caching, resilience, security, observability (per unit) |
 
 It also leads the synthesis step of stage 2.1 (Reverse Engineering), where it receives code scan results from the aidlc-developer-agent and produces the 9 architectural artifacts.
 

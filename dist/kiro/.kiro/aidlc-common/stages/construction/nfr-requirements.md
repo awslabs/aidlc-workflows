@@ -2,7 +2,7 @@
 slug: nfr-requirements
 phase: construction
 execution: CONDITIONAL
-condition: Performance requirements, security considerations, scalability concerns, or tech stack selection needed. Skip if no NFR requirements and tech stack already determined.
+condition: Performance, security, scalability, reliability, or observability requirements needed, or tech stack selection needed. Skip if no NFR requirements and tech stack already determined.
 lead_agent: aidlc-architect-agent
 support_agents:
   - aidlc-devsecops-agent
@@ -18,12 +18,14 @@ produces:
   - security-requirements
   - scalability-requirements
   - reliability-requirements
+  - observability-requirements
   - tech-stack-decisions
   - traceability
 produces_kinds:
   performance-requirements: [service, ui]
   scalability-requirements: [service]
   reliability-requirements: [service]
+  observability-requirements: [service]
 consumes:
   - artifact: business-logic-model
     required: true
@@ -51,7 +53,7 @@ scopes:
   - security-patch
   - workshop
 inputs: functional design artifacts, requirements.md, RE artifacts
-outputs: "performance-requirements.md, security-requirements.md, scalability-requirements.md, reliability-requirements.md, tech-stack-decisions.md, traceability.json (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)"
+outputs: "performance-requirements.md, security-requirements.md, scalability-requirements.md, reliability-requirements.md, observability-requirements.md, tech-stack-decisions.md, traceability.json (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)"
 ---
 
 # NFR Requirements
@@ -114,6 +116,7 @@ Generate the following in `<record>/construction/{unit-name}/nfr-requirements/`:
 - **security-requirements.md**: Authentication requirements, authorization model, data protection, compliance, threat considerations
 - **scalability-requirements.md**: Load projections, scaling triggers, capacity planning, data growth, concurrency targets
 - **reliability-requirements.md**: Availability targets (SLA/SLO), fault tolerance requirements, backup/recovery, graceful degradation
+- **observability-requirements.md**: Monitoring requirements, logging standards, distributed tracing needs, alerting thresholds, dashboard requirements, SLI/SLO definitions
 - **tech-stack-decisions.md**: Technology selections and rationale — languages, frameworks, databases, infrastructure tools, and justification for each choice
 
 Every detailed requirement inherits its inception NFR ID and appends a

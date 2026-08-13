@@ -27,7 +27,7 @@ produce dominantly templated planning, CI/CD, and runbook output.
 | application-design | Application Design | Designs system architecture: bounded contexts, component interfaces, architectural style selection, ADRs |
 | units-generation | Units Generation | Decomposes application design into implementable Units of Work with boundaries and the dependency DAG. Economic ordering (what ships first, why) is the delivery-planning stage's decision |
 | functional-design | Functional Design | Creates detailed domain models, sequence diagrams, API specifications, data models, and state transitions |
-| nfr-requirements | NFR Requirements | Enumerates non-functional requirements with measurable targets for performance, security, scalability, reliability |
+| nfr-requirements | NFR Requirements | Enumerates non-functional requirements with measurable targets for performance, security, scalability, reliability, observability |
 | nfr-design | NFR Design | Designs technical approaches for NFRs: caching, circuit breakers, resilience, security architecture, observability |
 
 ### Support Stages

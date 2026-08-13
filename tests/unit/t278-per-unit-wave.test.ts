@@ -375,6 +375,7 @@ describe("t278 engine-emitted wave contract", () => {
       "performance-requirements",
       "scalability-requirements",
       "reliability-requirements",
+      "observability-requirements",
       "business-logic-model",
     ]) {
       expect(consumePaths.some((path) => path.endsWith(`/${pruned}.md`))).toBe(

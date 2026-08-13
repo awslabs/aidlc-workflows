@@ -605,7 +605,7 @@ The following intentional differences from the upstream `aidlc-workflows/` refer
 
 | # | Deviation | Reference | Implementation | Rationale |
 |---|-----------|-----------|----------------|-----------|
-| 1 | NFR artifact granularity | 2 files each | 5 NFR Requirements + 5 NFR Design files | Finer granularity improves traceability |
+| 1 | NFR artifact granularity | 2 files each | 6 NFR Requirements + 6 NFR Design files | Finer granularity improves traceability |
 | 2 | Plan/question file co-location | Flat centralized pattern | Co-located with stage artifacts | Improves discoverability |
 | 3 | Infrastructure Design expansion | 2-3 files | 5 files (+monitoring-design.md, +cicd-pipeline.md) | Operational visibility |
 | 4 | Inline questions | All questions in files | `AskUserQuestion` for 1-3 simple options | Claude Code's structured UI |

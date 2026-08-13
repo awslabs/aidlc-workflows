@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.75] - 2026-08-13
+
+Observability is now a first-class NFR artifact flow for service units, from requirements through architecture and platform-specific monitoring design. This integrates the design of community PR #404 by jeromevdl for issue #398 while retaining the existing `monitoring-design` infrastructure handoff. **Upgrade:** refresh `dist/<harness>/` in your project.
+
+* NFR Requirements produces `observability-requirements.md` for service units, and NFR Design consumes it as a required input.
+* NFR Design asks observability-focused design questions and produces `observability-design.md` for service units.
+* Infrastructure Design consumes `observability-design.md` and continues producing platform-specific `monitoring-design.md` for Observability Setup.
+* Construction and artifact documentation now describes the observability flow and its service-unit applicability.
+
 ## [2.5.74] - 2026-08-13
 
 Kiro CLI now ships the same five MCP servers as Claude Code, with every server disabled until a user explicitly enables it. **Upgrade:** refresh `dist/kiro/`, then flip `"disabled": false` on each server you want to enable in `.kiro/settings/mcp.json`.
