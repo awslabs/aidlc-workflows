@@ -1579,6 +1579,10 @@ export function onboard(
       for (const outcome of outcomes) {
         const row = current.documents.find((candidate) => candidate.id === outcome.id);
         if (!row) continue;
+        // A prior audit-last attempt may have committed index.json and then
+        // failed before metadata.json. Idempotent retry repairs every derived
+        // representation before it repairs provenance.
+        writeMetadataTo(documentDir(projectDir, space, row.id), row);
         ensureDocumentRevisionAudit(projectDir, space, row, auditState);
         ensureDocumentAssociationAudit(projectDir, space, row, auditState);
       }
@@ -1800,7 +1804,13 @@ export function onboard(
       for (const row of edited) {
         appendAuditEntryAtPathUnlocked(
           "DOCUMENT_UPDATED",
-          { Space: space, Document: row.id, Change: "edited", Digest: row.sha256 },
+          {
+            Space: space,
+            Document: row.id,
+            Change: "edited",
+            Source: row.source.path,
+            Digest: row.sha256,
+          },
           projectDir,
           spaceAuditShardPath(projectDir, space),
         );
@@ -2314,8 +2324,14 @@ export function syncDocuments(
   // it from the per-document metadata.json files before reconciling. The
   // duplication across the two files IS the recovery mechanism.
   if (!existsSync(indexPath(projectDir, space)) && existsSync(documentkbDir(projectDir, space))) {
-    const rebuilt = rebuildIndex(projectDir, space);
-    if (rebuilt.documents.length > 0) writeIndex(projectDir, space, rebuilt);
+    withAuditLock(projectDir, () => {
+      // Recheck after acquiring: another writer may have restored or advanced
+      // the index while this sync waited. Never overwrite that fresh state with
+      // a metadata snapshot assembled before its transaction completed.
+      if (existsSync(indexPath(projectDir, space))) return;
+      const rebuilt = rebuildIndex(projectDir, space);
+      if (rebuilt.documents.length > 0) writeIndex(projectDir, space, rebuilt);
+    }, undefined, space);
   }
 
   const before = readIndex(projectDir, space);
@@ -2479,7 +2495,12 @@ export function syncDocuments(
     );
     if (rows.length === 1 && candidates.length === 1) {
       claimed.add(candidates[0][0]);
-      plans.push({ row: rows[0], change: "moved", nextPath: candidates[0][0] });
+      plans.push({
+        row: rows[0],
+        change: "moved",
+        nextPath: candidates[0][0],
+        abs: candidates[0][1].abs,
+      });
       continue;
     }
     for (const row of rows) plans.push({ row, change: "removed" });
@@ -2512,6 +2533,26 @@ export function syncDocuments(
         `\`/aidlc knowledge onboard <path>\` before syncing.`,
     );
   }
+  const snapshotDisk = (paths: string[]): Map<string, string> => {
+    const snapshot = new Map<string, string>();
+    for (const abs of paths) {
+      try {
+        const stat = lstatSync(abs);
+        let digest = "refused";
+        try {
+          digest = sha256Hex(readCandidate(documentsReal, abs));
+        } catch { /* type/cap refusal remains part of the snapshot */ }
+        snapshot.set(
+          portableSourcePath(projectDir, space, abs),
+          `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${digest}`,
+        );
+      } catch {
+        // A vanished entry makes the later comparison fail closed.
+      }
+    }
+    return snapshot;
+  };
+  const plannedDiskSnapshot = snapshotDisk(onDisk);
   let workBytes = 0;
   for (const { here } of needsChanged) workBytes += here.bytes;
   for (const { here } of needsRetry) workBytes += here.bytes;
@@ -2641,6 +2682,21 @@ export function syncDocuments(
       const expected = plan.change === "changed" ? plan.nextDigest : plan.row.sha256;
       return current === expected;
     };
+    const sourcePathPresent = (path: string): boolean => {
+      try {
+        lstatSync(join(knowledgeDir(projectDir, space), path));
+        return true;
+      } catch (error) {
+        return (error as NodeJS.ErrnoException).code !== "ENOENT";
+      }
+    };
+    const currentDiskSnapshot = snapshotDisk(
+      existsSync(documentsReal) ? walkDocuments(documentsReal) : [],
+    );
+    const diskShapeStillMatches = currentDiskSnapshot.size === plannedDiskSnapshot.size &&
+      [...currentDiskSnapshot].every(([path, signature]) =>
+        plannedDiskSnapshot.get(path) === signature
+      );
 
     for (const plan of plans) {
       const row = rows.get(plan.row.id);
@@ -2658,6 +2714,31 @@ export function syncDocuments(
         // derivative for bytes that no longer exist anywhere. Skip -- the
         // next sync re-reads the source fresh and replans from its current
         // truth, exactly like the row CAS above.
+        continue;
+      }
+      if (plan.change === "removed" &&
+          (!diskShapeStillMatches || sourcePathPresent(plan.row.source.path))) {
+        // The source was recreated while this sync waited for the lock. The
+        // removal decision is stale; leave the live identity untouched.
+        continue;
+      }
+      if (plan.change === "moved") {
+        const targetClaimed = index.documents.some((candidate) =>
+          candidate.id !== row.id &&
+          !isTombstoned(candidate) &&
+          candidate.source.path === plan.nextPath
+        );
+        if (!diskShapeStillMatches || sourcePathPresent(plan.row.source.path) ||
+            targetClaimed || !sourceStillMatches(plan)) {
+          // A move is valid only while the old path remains absent and the
+          // unique target still carries the bytes planning identified.
+          continue;
+        }
+      }
+      if (plan.change === "new" && !diskShapeStillMatches) {
+        // Fresh-row identity also depends on global topology: a concurrent
+        // deletion or move may make this candidate the continuation of an
+        // existing row. Replan instead of minting a second identity.
         continue;
       }
       switch (plan.change) {
@@ -2718,6 +2799,7 @@ export function syncDocuments(
     }
 
     for (const { abs, row, text } of fresh) {
+      if (!diskShapeStillMatches) continue;
       let currentDigest: string;
       try {
         currentDigest = sha256Hex(readRegularFileNoFollowOrThrow(abs, row.source.path));
@@ -2876,15 +2958,29 @@ function emitDocumentUpdated(
 }
 
 function spaceAuditBlocks(projectDir: string, space: string): string[] {
-  const spaceAuditDir = dirname(spaceAuditShardPath(projectDir, space));
+  const currentShard = spaceAuditShardPath(projectDir, space);
+  const spaceAuditDir = dirname(currentShard);
   return readAuditShardEvents(projectDir, undefined, space)
     .filter((row) => dirname(row.shard) === spaceAuditDir)
-    .sort((a, b) =>
-      a.timestamp.localeCompare(b.timestamp) ||
-      a.shard.localeCompare(b.shard) ||
-      a.pos - b.pos
-    )
-    .map((row) => row.block);
+    .sort((a, b) => {
+      // Append position is authoritative within one shard even if its wall
+      // clock moves backwards. Imported shards are projected first; the current
+      // shard is last because repairs written here were computed after reading
+      // all imported evidence and must outrank future-dated stale rows.
+      const currentOrder = Number(a.shard === currentShard) - Number(b.shard === currentShard);
+      if (currentOrder !== 0) return currentOrder;
+      if (a.shard === b.shard) return a.pos - b.pos;
+      // Cross-shard timestamps are not causal and combining them with per-shard
+      // append order creates comparator cycles when one clock regresses. A fixed
+      // shard order is a deterministic provisional projection; current catalog
+      // reconciliation supplies the canonical final state.
+      return a.shard.localeCompare(b.shard);
+    })
+    // A torn append can fuse a truncated block with the next complete block.
+    // Split renderer headings again so complete repairs stand independently
+    // instead of lending their fields to the torn row before them.
+    .flatMap((row) => row.block.split(/\n(?=## )/))
+    .filter((block) => (block.match(/^\*\*Event\*\*:/gm) ?? []).length === 1);
 }
 
 interface DocumentAuditProjection {
@@ -2908,28 +3004,42 @@ function applyDocumentAuditEvent(
 ): void {
   const id = fields.Document;
   if (!id) return;
+  const validIndexed = event === "DOCUMENT_INDEXED" && Boolean(fields.Digest && fields.Source);
+  const validRevision = event === "DOCUMENT_UPDATED" && Boolean(fields.Digest && fields.Source);
+  const validAssociation = event === "DOCUMENT_UPDATED" && Boolean(fields.Intent) &&
+    (fields.Change === "associate" || fields.Change === "dissociate");
+  const validRemoval = event === "DOCUMENT_REMOVED" &&
+    Boolean(fields["Last Path"] && fields["Last Digest"]);
+  if (!validIndexed && !validRevision && !validAssociation && !validRemoval) return;
   let projection = state.documents.get(id);
   if (!projection) {
     projection = { seen: false, intents: new Set() };
     state.documents.set(id, projection);
   }
   projection.seen = true;
-  if (event === "DOCUMENT_REMOVED") {
-    projection.latestRevision = { event };
-  } else if ((event === "DOCUMENT_INDEXED" || event === "DOCUMENT_UPDATED") && fields.Digest) {
+  if (validRemoval) {
+    projection.latestRevision = {
+      event,
+      digest: fields["Last Digest"],
+      source: fields["Last Path"],
+    };
+  } else if ((validIndexed || validRevision) && fields.Digest) {
     projection.latestRevision = {
       event,
       digest: fields.Digest,
       source: fields.Source ?? projection.latestRevision?.source,
     };
   }
-  if (event === "DOCUMENT_INDEXED" && fields.Intents) {
-    try {
-      const values = JSON.parse(fields.Intents) as unknown;
-      if (Array.isArray(values)) {
-        for (const value of values) if (typeof value === "string") projection.intents.add(value);
-      }
-    } catch { /* malformed historical snapshots contribute no associations */ }
+  if (event === "DOCUMENT_INDEXED") {
+    projection.intents.clear();
+    if (fields.Intents) {
+      try {
+        const values = JSON.parse(fields.Intents) as unknown;
+        if (Array.isArray(values)) {
+          for (const value of values) if (typeof value === "string") projection.intents.add(value);
+        }
+      } catch { /* malformed historical snapshots contribute no associations */ }
+    }
   }
   if (event === "DOCUMENT_UPDATED" && fields.Intent) {
     if (fields.Change === "associate") projection.intents.add(fields.Intent);
@@ -2941,9 +3051,13 @@ function documentAuditState(projectDir: string, space: string): DocumentAuditSta
   const state: DocumentAuditState = { documents: new Map() };
   for (const block of spaceAuditBlocks(projectDir, space)) {
     const event = auditBlockField(block, "Event");
-    if (!event?.startsWith("DOCUMENT_")) continue;
+    if (event !== "DOCUMENT_INDEXED" &&
+        event !== "DOCUMENT_UPDATED" &&
+        event !== "DOCUMENT_REMOVED") continue;
     const fields: Record<string, string> = {};
-    for (const name of ["Document", "Change", "Digest", "Source", "Intent", "Intents"]) {
+    for (const name of [
+      "Document", "Change", "Digest", "Source", "Intent", "Intents", "Last Path", "Last Digest",
+    ]) {
       const value = auditBlockField(block, name);
       if (value !== null) fields[name] = value;
     }
@@ -3006,7 +3120,9 @@ function ensureDocumentRemovalAudit(
   state: DocumentAuditState = documentAuditState(projectDir, space),
 ): void {
   if (!isTombstoned(row)) return;
-  if (state.documents.get(row.id)?.latestRevision?.event === "DOCUMENT_REMOVED") return;
+  const latest = state.documents.get(row.id)?.latestRevision;
+  if (latest?.event === "DOCUMENT_REMOVED" &&
+      latest.source === row.source.path && latest.digest === row.sha256) return;
   const fields = {
     Space: space,
     Document: row.id,
@@ -3290,6 +3406,7 @@ export function setIntentAssociation(
     if (mode === "associate" ? has : !has) {
       // Nothing to mutate. Repair any audit-last gap from a prior failed call,
       // then report the idempotent state.
+      writeMetadataTo(documentDir(projectDir, space, row.id), row);
       const auditState = documentAuditState(projectDir, space);
       ensureDocumentRevisionAudit(projectDir, space, row, auditState);
       ensureDocumentAssociationAudit(projectDir, space, row, auditState);
@@ -3437,11 +3554,23 @@ export function rebindDocument(
         `copy it under documents/ first.`,
     );
   }
-  const buf = readCandidate(documentsReal, real);
-  const digest = sha256Hex(buf);
-  const nextPath = portableSourcePath(projectDir, space, real);
-
   return withAuditLock(projectDir, () => {
+    // The target may change while rebind waits for the lock. Resolve and read it
+    // again inside the commit boundary so the published digest describes the
+    // bytes that exist at the moment the catalog changes.
+    assertKnowledgeRootTrusted(projectDir, space);
+    const commitDocumentsReal = realpathSync(documentsDir(projectDir, space));
+    if (!existsSync(abs)) throw new Error(`No such path: ${toPath}`);
+    const commitReal = realpathSync(abs);
+    const commitWithSep = commitDocumentsReal.endsWith(sep)
+      ? commitDocumentsReal
+      : commitDocumentsReal + sep;
+    if (!commitReal.startsWith(commitWithSep)) {
+      throw new Error(`${toPath} moved outside knowledge/documents/ while rebind waited.`);
+    }
+    const buf = readCandidate(commitDocumentsReal, commitReal);
+    const digest = sha256Hex(buf);
+    const nextPath = portableSourcePath(projectDir, space, commitReal);
     const index = readIndex(projectDir, space);
     const row = index.documents.find((r) => r.id === id);
     if (row === undefined) {
@@ -3465,6 +3594,7 @@ export function rebindDocument(
       row.sha256 === digest &&
       !isTombstoned(row)
     ) {
+      writeMetadataTo(documentDir(projectDir, space, row.id), row);
       const auditState = documentAuditState(projectDir, space);
       const latestRevision = auditState.documents.get(row.id)?.latestRevision;
       const hasRebindAudit = latestRevision?.event !== "DOCUMENT_REMOVED" &&

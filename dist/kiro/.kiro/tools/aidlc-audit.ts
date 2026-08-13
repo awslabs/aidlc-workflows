@@ -1,14 +1,14 @@
 import { createHash } from "node:crypto";
 import {
-  appendFileSync,
   closeSync,
   constants as fsConstants,
-  copyFileSync,
   existsSync,
   fstatSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
+  readSync,
   realpathSync,
   statSync,
   writeSync,
@@ -24,11 +24,13 @@ import {
   isoTimestamp,
   parseFieldArgs,
   relativeRecordDir,
+  readRegularFileNoFollowOrThrow,
   releaseAuditLock,
   resolveProjectDir,
   validateBoltSlug,
   worktreeAuditFilePath,
   worktreePath,
+  writeBufferAtomic,
 } from "./aidlc-lib.ts";
 
 // --- Canonical event types (the parity tests derive the count from this set) ---
@@ -181,7 +183,6 @@ const VALID_EVENT_TYPES = new Set([
   "SWARM_COMPLETED",
   "SWARM_DEGRADED",
 ]);
-
 // --- Event type to human-readable heading ---
 
 const EVENT_HEADINGS: Record<string, string> = {
@@ -274,18 +275,6 @@ const EVENT_HEADINGS: Record<string, string> = {
 
 // --- Helpers ---
 
-function ensureAuditFile(projectDir: string, intent?: string, space?: string): string {
-  const path = auditFilePath(projectDir, intent, space);
-  const dir = dirname(path);
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
-  }
-  if (!existsSync(path)) {
-    appendFileSync(path, "# AI-DLC Audit Log\n", "utf-8");
-  }
-  return path;
-}
-
 function jsonSuccess(data: Record<string, unknown>): void {
   process.stdout.write(`${JSON.stringify(data)}\n`);
 }
@@ -368,6 +357,20 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "UNIT_RESUMED",
   "UNIT_COMPLETED",
 ]);
+const MERGE_PROTECTED_EVENT_TYPES = new Set([
+  ...CLI_PROTECTED_EVENT_TYPES,
+  "SUMMARY_CONFIRMATION_RECORDED",
+  "ARTIFACT_CREATED",
+  "ARTIFACT_UPDATED",
+]);
+function mergeEventIsProtected(eventType: string): boolean {
+  if (MERGE_PROTECTED_EVENT_TYPES.has(eventType)) return true;
+  if (eventType === "STAGE_STARTED") return false;
+  return [
+    "AUDIT_", "BOLT_", "DOCUMENT_", "GATE_", "PHASE_", "REVIEW_", "SENSOR_",
+    "STAGE_", "STATE_", "SWARM_", "UNIT_", "WORKFLOW_", "WORKTREE_",
+  ].some((prefix) => eventType.startsWith(prefix));
+}
 
 function directAuditEventsAllowed(): boolean {
   return process.env.AIDLC_ALLOW_DIRECT_AUDIT_EVENTS === "1";
@@ -497,8 +500,11 @@ export function appendAuditEntryUnlocked(
   const entry = { eventType, fields };
   validateAuditEntry(entry);
   const ts = isoTimestamp();
-  const path = ensureAuditFile(projectDir, intent, space);
-  appendFileSync(path, renderAuditBlock(entry, ts), "utf-8");
+  appendAuditBlockAtPath(
+    projectDir,
+    auditFilePath(projectDir, intent, space),
+    renderAuditBlock(entry, ts),
+  );
 
   tapAuditMetric(eventType, fields, projectDir);
 
@@ -533,15 +539,18 @@ function writeAll(fd: number, content: string): void {
   }
 }
 
-export function appendAuditEntryAtPathUnlocked(
-  eventType: string,
-  fields: Record<string, string>,
+interface AuditFileIdentity { dev: number; ino: number }
+interface AuditAppendExpectation extends AuditFileIdentity {
+  prefixLength: number;
+  prefixHash: string;
+}
+
+function appendAuditBlockAtPath(
   projectDir: string,
   shardPath: string,
-): { appended: true; event: string; timestamp: string } {
-  const entry = { eventType, fields };
-  validateAuditEntry(entry);
-  const ts = isoTimestamp();
+  block: string,
+  expectedIdentity?: AuditAppendExpectation,
+): void {
   const dir = dirname(shardPath);
   const projectAbs = resolve(projectDir);
   const projectReal = realpathSync(projectAbs);
@@ -552,24 +561,129 @@ export function appendAuditEntryAtPathUnlocked(
   assertNoSymlinkInChainOrThrow(projectReal, rel);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   assertNoSymlinkInChainOrThrow(projectReal, rel);
+  const noFollow = typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0;
   let fd: number | undefined;
   try {
     fd = openSync(
       shardPath,
-      fsConstants.O_WRONLY |
+      fsConstants.O_RDWR |
         fsConstants.O_APPEND |
         fsConstants.O_CREAT |
-        fsConstants.O_NOFOLLOW |
+        noFollow |
         fsConstants.O_NONBLOCK,
       0o666,
     );
-    const stat = fstatSync(fd);
-    if (!stat.isFile()) throw new Error(`Refusing non-regular audit shard: ${shardPath}`);
-    if (stat.size === 0) writeAll(fd, "# AI-DLC Audit Log\n");
-    writeAll(fd, renderAuditBlock(entry, ts));
+    const opened = fstatSync(fd);
+    if (!opened.isFile()) throw new Error(`Refusing non-regular audit shard: ${shardPath}`);
+    if (opened.nlink !== 1) throw new Error(`Refusing multiply-linked audit shard: ${shardPath}`);
+    if (expectedIdentity &&
+        (opened.dev !== expectedIdentity.dev || opened.ino !== expectedIdentity.ino)) {
+      throw new Error(`Audit shard changed after validation: ${shardPath}`);
+    }
+    const verifyExpectedPrefix = (): void => {
+      if (!expectedIdentity) return;
+      const current = fstatSync(fd as number);
+      if (current.nlink !== 1) throw new Error(`Audit shard became multiply linked: ${shardPath}`);
+      const prefix = Buffer.alloc(expectedIdentity.prefixLength);
+      let offset = 0;
+      while (offset < prefix.length) {
+        const count = readSync(fd as number, prefix, offset, prefix.length - offset, offset);
+        if (count === 0) break;
+        offset += count;
+      }
+      const hash = createHash("sha256").update(prefix.subarray(0, offset)).digest("hex");
+      if (offset !== expectedIdentity.prefixLength || hash !== expectedIdentity.prefixHash) {
+        throw new Error(`Audit shard prefix changed after validation: ${shardPath}`);
+      }
+    };
+
+    // O_NOFOLLOW is not available on every platform and protects only the leaf.
+    // Re-resolve after opening, require containment, and prove the pathname still
+    // names the descriptor's inode before writing through the pinned descriptor.
+    const verifyPathStillNamesDescriptor = (): void => {
+      assertNoSymlinkInChainOrThrow(projectReal, rel);
+      if (lstatSync(shardPath).isSymbolicLink()) {
+        throw new Error(`Refusing symlinked audit shard: ${shardPath}`);
+      }
+      const currentReal = realpathSync(shardPath);
+      if (currentReal !== projectReal && !currentReal.startsWith(`${projectReal}${sep}`)) {
+        throw new Error(`Refusing audit shard outside project: ${shardPath}`);
+      }
+      const current = statSync(currentReal);
+      if (current.dev !== opened.dev || current.ino !== opened.ino) {
+        throw new Error(`Audit shard changed while opening: ${shardPath}`);
+      }
+    };
+    verifyPathStillNamesDescriptor();
+    verifyExpectedPrefix();
+    if (opened.size === 0) writeAll(fd, "# AI-DLC Audit Log\n");
+    writeAll(fd, block);
+    // If an attacker renamed the leaf/parent during the descriptor write, fail
+    // the enclosing audit-first transaction instead of reporting a ledger row
+    // that is no longer discoverable at the canonical path.
+    verifyPathStillNamesDescriptor();
+    verifyExpectedPrefix();
   } finally {
     if (fd !== undefined) closeSync(fd);
   }
+}
+
+function readAuditSnapshot(projectDir: string, shardPath: string): {
+  bytes: Buffer;
+  identity: AuditFileIdentity;
+} {
+  const projectReal = realpathSync(projectDir);
+  const rel = relative(resolve(projectDir), resolve(shardPath));
+  if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    throw new Error(`Refusing audit shard outside project: ${shardPath}`);
+  }
+  assertNoSymlinkInChainOrThrow(projectReal, rel);
+  const noFollow = typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0;
+  const fd = openSync(shardPath, fsConstants.O_RDONLY | noFollow | fsConstants.O_NONBLOCK);
+  try {
+    const opened = fstatSync(fd);
+    if (!opened.isFile() || opened.nlink !== 1) {
+      throw new Error(`Refusing non-regular or multiply-linked audit shard: ${shardPath}`);
+    }
+    const verify = (): void => {
+      assertNoSymlinkInChainOrThrow(projectReal, rel);
+      if (lstatSync(shardPath).isSymbolicLink()) {
+        throw new Error(`Refusing symlinked audit shard: ${shardPath}`);
+      }
+      const real = realpathSync(shardPath);
+      if (real !== projectReal && !real.startsWith(`${projectReal}${sep}`)) {
+        throw new Error(`Refusing audit shard outside project: ${shardPath}`);
+      }
+      const current = statSync(real);
+      if (current.dev !== opened.dev || current.ino !== opened.ino) {
+        throw new Error(`Audit shard changed while reading: ${shardPath}`);
+      }
+    };
+    verify();
+    const bytes = readFileSync(fd);
+    verify();
+    const after = fstatSync(fd);
+    if (after.nlink !== 1 || after.size !== opened.size ||
+        after.mtimeMs !== opened.mtimeMs || after.ctimeMs !== opened.ctimeMs ||
+        bytes.length !== opened.size) {
+      throw new Error(`Audit shard changed while reading: ${shardPath}`);
+    }
+    return { bytes, identity: { dev: opened.dev, ino: opened.ino } };
+  } finally {
+    closeSync(fd);
+  }
+}
+
+export function appendAuditEntryAtPathUnlocked(
+  eventType: string,
+  fields: Record<string, string>,
+  projectDir: string,
+  shardPath: string,
+): { appended: true; event: string; timestamp: string } {
+  const entry = { eventType, fields };
+  validateAuditEntry(entry);
+  const ts = isoTimestamp();
+  appendAuditBlockAtPath(projectDir, shardPath, renderAuditBlock(entry, ts));
   tapAuditMetric(eventType, fields, projectDir);
   return { appended: true, event: eventType, timestamp: ts };
 }
@@ -598,11 +712,7 @@ export function appendAuditEntries(
     const payload = entries
       .map((entry, index) => renderAuditBlock(entry, timestamps[index]))
       .join("");
-    appendFileSync(
-      ensureAuditFile(projectDir, intent, space),
-      payload,
-      "utf-8",
-    );
+    appendAuditBlockAtPath(projectDir, auditFilePath(projectDir, intent, space), payload);
     for (const entry of entries) {
       tapAuditMetric(entry.eventType, entry.fields, projectDir);
     }
@@ -714,15 +824,13 @@ function handleAppendRaw(
   }
 
   try {
-    const path = ensureAuditFile(projectDir);
-
     // Interpret literal \n sequences in the body as actual newlines
     let block = `\n## ${heading}\n`;
     block += `**Timestamp**: ${ts}\n`;
     block += `${expandedBody}\n`;
     block += `\n---\n`;
 
-    appendFileSync(path, block, "utf-8");
+    appendAuditBlockAtPath(projectDir, auditFilePath(projectDir), block);
   } finally {
     releaseAuditLock(projectDir);
   }
@@ -788,6 +896,46 @@ function parseSlugFlag(args: string[], subcommand: string): string {
   return slug;
 }
 
+function validateMergeDelta(delta: string): void {
+  if (delta !== "" && !delta.endsWith("\n---\n")) {
+    throw new Error("worktree audit delta ends with an incomplete block");
+  }
+  for (const block of delta.split(/\n---\n/).filter((part) => part.trim() !== "")) {
+    const eventMatches = [...block.matchAll(/^(?:-\s*)?\*\*Event\*\*:\s*(.+)$/gm)];
+    const timestampMatches = [...block.matchAll(/^(?:-\s*)?\*\*Timestamp\*\*:\s*(.+)$/gm)];
+    if (eventMatches.length === 0) {
+      const timestamps = block.match(/^(?:-\s*)?\*\*Timestamp\*\*:/gm) ?? [];
+      if (timestamps.length !== 1) throw new Error("worktree audit delta has malformed note block");
+      continue; // complete append-raw diagnostic note
+    }
+    if (eventMatches.length !== 1) throw new Error("worktree audit delta has duplicate Event fields");
+    if (timestampMatches.length !== 1) {
+      throw new Error("worktree audit delta must contain exactly one Timestamp field");
+    }
+    const eventType = eventMatches[0][1].trim();
+    if (!VALID_EVENT_TYPES.has(eventType)) {
+      throw new Error(`worktree audit delta contains unknown event ${eventType}`);
+    }
+    if (mergeEventIsProtected(eventType)) {
+      throw new Error(`worktree audit delta contains protected authority event ${eventType}`);
+    }
+    const fields: Record<string, string> = {};
+    for (const match of block.matchAll(/^(?:-\s*)?\*\*([^*]+)\*\*:\s*(.*)$/gm)) {
+      const key = match[1].trim();
+      if (key !== "Event" && key !== "Timestamp") fields[key] = match[2];
+    }
+    validateAuditEntry({ eventType, fields });
+  }
+}
+
+function exactAuditField(block: string, name: string): string | null {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const matches = [...block.matchAll(
+    new RegExp(`^(?:-\\s*)?\\*\\*${escaped}\\*\\*:\\s*(.*)$`, "gm"),
+  )];
+  return matches.length === 1 ? matches[0][1].trim() : null;
+}
+
 function handleAuditFork(args: string[], projectDir: string): void {
   const slug = parseSlugFlag(args, "audit-fork");
   // Pin the main-side audit shard AND the worktree mirror to ONE intent so
@@ -819,59 +967,105 @@ function handleAuditFork(args: string[], projectDir: string): void {
     );
   }
 
-  // Byte-offset of main audit BEFORE the AUDIT_FORKED row lands. This is the
-  // prefix that Source Audit Hash covers; audit-merge re-hashes the same range
-  // to detect tampering.
-  const boundary = statSync(mainAuditPath).size;
-  const sourceHash = createHash("sha256")
-    .update(readFileSync(mainAuditPath))
-    .digest("hex");
-
-  // Audit-of-intent: emit BEFORE the disk copy. appendAuditEntry throws on
-  // lock failure — audit-of-intent constraint preserved (no disk side effect
-  // when emit fails).
-  const result = appendAuditEntry(
-    "AUDIT_FORKED",
-    {
-      "Bolt slug": slug,
-      "Source Audit Hash": sourceHash,
-      "Fork Boundary": String(boundary),
-    },
-    projectDir,
-    intent,
-    space,
-  );
-  const auditTs = result.timestamp;
-
-  // Post-emit disk operations. On failure, emit ERROR_LOGGED with the
-  // [fork-emitted:<ts>] correlation tag and exit non-zero so doctor
-  // can identify the orphan AUDIT_FORKED row.
+  if (!acquireAuditLock(projectDir, 50, 100, intent, space)) {
+    jsonError("Failed to acquire audit lock after retries");
+  }
+  let boundary = 0;
+  let sourceHash = "";
+  let auditTs = "";
   try {
+    if (existsSync(wtAuditPath)) {
+      throw new Error(
+        `worktree audit already exists at ${wtAuditPath}; refusing to overwrite (audit-fork is one-shot)`,
+      );
+    }
+    const before = readAuditSnapshot(projectDir, mainAuditPath);
+    boundary = before.bytes.length;
+    sourceHash = createHash("sha256").update(before.bytes).digest("hex");
+    const forkEntry = {
+      eventType: "AUDIT_FORKED",
+      fields: {
+        "Bolt slug": slug,
+        "Source Audit Hash": sourceHash,
+        "Fork Boundary": String(boundary),
+      },
+    };
+    validateAuditEntry(forkEntry);
+    auditTs = isoTimestamp();
+    appendAuditBlockAtPath(
+      projectDir,
+      mainAuditPath,
+      renderAuditBlock(forkEntry, auditTs),
+      {
+        ...before.identity,
+        prefixLength: boundary,
+        prefixHash: sourceHash,
+      },
+    );
+    tapAuditMetric("AUDIT_FORKED", forkEntry.fields, projectDir);
+
+    const projectReal = realpathSync(projectDir);
+    const wtRel = relative(resolve(projectDir), resolve(wtPath));
+    if (wtRel === "" || wtRel === ".." || wtRel.startsWith(`..${sep}`) || isAbsolute(wtRel)) {
+      throw new Error(`worktree path is outside project: ${wtPath}`);
+    }
+    assertNoSymlinkInChainOrThrow(projectReal, wtRel);
+    const wtReal = realpathSync(wtPath);
+    const verifyWorktreeIdentity = (): void => {
+      assertNoSymlinkInChainOrThrow(projectReal, wtRel);
+      if (realpathSync(wtPath) !== wtReal) {
+        throw new Error(`worktree path changed during audit-fork: ${wtPath}`);
+      }
+    };
     // Worktree-local tools must append to the fork shard that audit-merge
     // consumes. Share the parent clone token inside this isolated worktree;
     // each worktree still has its own copy of the shard, so concurrent writes
     // remain isolated until the serial merge. Copy this before the one-shot
     // audit file so a token-copy failure leaves audit-fork retryable.
     const wtCloneIdPath = cloneIdPath(wtPath);
+    const cloneBytes = readRegularFileNoFollowOrThrow(cloneIdPath(projectDir), "clone id");
+    verifyWorktreeIdentity();
+    assertNoSymlinkInChainOrThrow(wtReal, relative(wtPath, wtCloneIdPath));
     mkdirSync(dirname(wtCloneIdPath), { recursive: true });
-    copyFileSync(cloneIdPath(projectDir), wtCloneIdPath);
+    verifyWorktreeIdentity();
+    assertNoSymlinkInChainOrThrow(wtReal, relative(wtPath, wtCloneIdPath));
+    writeBufferAtomic(wtCloneIdPath, cloneBytes);
+    verifyWorktreeIdentity();
+    const mainAfterForkSnapshot = readAuditSnapshot(projectDir, mainAuditPath);
+    if (mainAfterForkSnapshot.identity.dev !== before.identity.dev ||
+        mainAfterForkSnapshot.identity.ino !== before.identity.ino) {
+      throw new Error("main audit changed identity during audit-fork");
+    }
+    const mainAfterFork = mainAfterForkSnapshot.bytes;
+    verifyWorktreeIdentity();
+    assertNoSymlinkInChainOrThrow(wtReal, relative(wtPath, wtAuditPath));
     mkdirSync(dirname(wtAuditPath), { recursive: true });
-    copyFileSync(mainAuditPath, wtAuditPath);
+    verifyWorktreeIdentity();
+    assertNoSymlinkInChainOrThrow(wtReal, relative(wtPath, wtAuditPath));
+    writeBufferAtomic(wtAuditPath, mainAfterFork);
+    verifyWorktreeIdentity();
   } catch (e) {
     const message = e instanceof Error ? errorMessage(e) : String(e);
-    appendAuditEntry(
-      "ERROR_LOGGED",
-      {
-        Tool: "aidlc-audit",
-        Command: "audit-fork",
-        Error: `[slug=${slug}] [fork-emitted:${auditTs}] ${message}`,
-      },
-      projectDir,
-      intent,
-      space,
-    );
-    process.exit(1);
+    try {
+      if (auditTs !== "") {
+        appendAuditEntryUnlocked(
+          "ERROR_LOGGED",
+          {
+            Tool: "aidlc-audit",
+            Command: "audit-fork",
+            Error: `[slug=${slug}] [fork-emitted:${auditTs}] ${message}`,
+          },
+          projectDir,
+          intent,
+          space,
+        );
+      }
+    } finally {
+      releaseAuditLock(projectDir, intent, space);
+    }
+    jsonError(message);
   }
+  releaseAuditLock(projectDir, intent, space);
 
   jsonSuccess({
     emitted: "AUDIT_FORKED",
@@ -931,7 +1125,8 @@ function handleAuditMerge(args: string[], projectDir: string): void {
     jsonError(`main audit not found at ${mainAuditPath}; start a workflow first (describe what to build, e.g. /aidlc "build the auth service")`);
   }
 
-  const wtContent = readFileSync(wtAuditPath, "utf-8");
+  const wtSnapshot = readAuditSnapshot(projectDir, wtAuditPath);
+  const wtContent = wtSnapshot.bytes.toString("utf-8");
 
   // Locate the most recent AUDIT_FORKED block matching this slug. Block
   // structure per appendAuditEntry: "\n## <heading>\n**Timestamp**: <ts>\n
@@ -940,7 +1135,8 @@ function handleAuditMerge(args: string[], projectDir: string): void {
   let forkBlock: string | undefined;
   for (let i = blocks.length - 1; i >= 0; i--) {
     const b = blocks[i];
-    if (b.includes("**Event**: AUDIT_FORKED") && b.includes(`**Bolt slug**: ${slug}`)) {
+    if (exactAuditField(b, "Event") === "AUDIT_FORKED" &&
+        exactAuditField(b, "Bolt slug") === slug) {
       forkBlock = b;
       break;
     }
@@ -949,42 +1145,19 @@ function handleAuditMerge(args: string[], projectDir: string): void {
     jsonError(`worktree audit missing AUDIT_FORKED entry for slug ${slug}`);
   }
 
-  const boundaryMatch = forkBlock.match(/\*\*Fork Boundary\*\*:\s*(\d+)/);
-  const sourceHashMatch = forkBlock.match(/\*\*Source Audit Hash\*\*:\s*([0-9a-f]+)/);
-  const timestampMatch = forkBlock.match(/\*\*Timestamp\*\*:\s*([^\n]+)/);
-  if (!boundaryMatch || !sourceHashMatch || !timestampMatch) {
+  const boundaryField = exactAuditField(forkBlock, "Fork Boundary");
+  const sourceHash = exactAuditField(forkBlock, "Source Audit Hash");
+  const forkTs = exactAuditField(forkBlock, "Timestamp");
+  if (!boundaryField || !/^\d+$/.test(boundaryField) ||
+      !sourceHash || !/^[0-9a-f]+$/.test(sourceHash) || !forkTs) {
     jsonError(
       `worktree audit AUDIT_FORKED entry for slug ${slug} missing Fork Boundary, Source Audit Hash, or Timestamp field`
     );
   }
-  const boundary = parseInt(boundaryMatch[1], 10);
-  const sourceHash = sourceHashMatch[1];
+  const boundary = parseInt(boundaryField, 10);
   // forkTs anchors the audit-of-intent correlation tag for any post-emit
   // failure on this merge — doctor joins this back to the matching
   // AUDIT_FORKED row in main audit by exact-string timestamp match.
-  const forkTs = timestampMatch[1].trim();
-
-  // Sanity check: re-hash main audit's first `boundary` bytes; refuse if it
-  // disagrees with the recorded Source Audit Hash. Catches the case where
-  // the prefix has been edited (length-preserving mutation) or truncated
-  // (length less than boundary — hash differs because we hash fewer bytes
-  // than were originally hashed).
-  const mainBuf = readFileSync(mainAuditPath);
-  const prefixLen = Math.min(boundary, mainBuf.length);
-  const prefixHash = createHash("sha256")
-    .update(mainBuf.subarray(0, prefixLen))
-    .digest("hex");
-  if (prefixHash !== sourceHash) {
-    if (mainBuf.length < boundary) {
-      jsonError(
-        `main audit prefix-hash does not match recorded Source Audit Hash (expected at least ${boundary} bytes, got ${mainBuf.length}); refusing to merge (main-audit truncation suspected)`
-      );
-    } else {
-      jsonError(
-        `main audit prefix-hash at byte ${boundary} does not match recorded Source Audit Hash; refusing to merge (mid-Bolt tampering suspected)`
-      );
-    }
-  }
 
   // Compute delta-start by locating the byte position immediately after the
   // "\n---\n" that closes the AUDIT_FORKED block. indexOf on the matched
@@ -997,6 +1170,11 @@ function handleAuditMerge(args: string[], projectDir: string): void {
   }
   const deltaStart = sepIdx + blockEndSep.length;
   const delta = wtContent.slice(deltaStart);
+  try {
+    validateMergeDelta(delta);
+  } catch (error) {
+    jsonError(`refusing malformed or unauthorized worktree audit delta: ${errorMessage(error)}`);
+  }
 
   // Acquire outer lock with extended budget for parallel-Bolt contention.
   // Defaults: 200 retries × 100ms = 20s, sized for N=4-8 contention. The
@@ -1034,26 +1212,79 @@ function handleAuditMerge(args: string[], projectDir: string): void {
   let entriesMerged = 0;
   let result: { appended: true; event: string; timestamp: string };
   try {
-    const trimmed = delta.trim();
-    if (trimmed !== "") {
-      // Delta is already a sequence of well-formed audit blocks (each ending
-      // in "\n---\n"). Append verbatim — running it through appendAuditEntry
-      // would double-wrap each block.
-      appendFileSync(mainAuditPath, delta, "utf-8");
-      entriesMerged = delta.split(/\n---\n/).filter((b) => b.trim()).length;
+    // Validate the main prefix only after acquiring the same lock that protects
+    // the append. The prior pre-lock read allowed another writer to change the
+    // ledger between validation and merge.
+    const mainSnapshot = readAuditSnapshot(projectDir, mainAuditPath);
+    const mainBuf = mainSnapshot.bytes;
+    const wtCurrent = readAuditSnapshot(projectDir, wtAuditPath);
+    if (wtCurrent.identity.dev !== wtSnapshot.identity.dev ||
+        wtCurrent.identity.ino !== wtSnapshot.identity.ino ||
+        !wtCurrent.bytes.equals(wtSnapshot.bytes)) {
+      throw new Error("worktree audit changed while merge was preparing; retry the merge");
     }
-    result = appendAuditEntryUnlocked(
-      "AUDIT_MERGED",
-      {
+
+    // The worktree copy is writable and cannot authoritatively choose how much
+    // of main to validate. Recover the matching fork row from main and require
+    // every correlation field to agree before trusting the boundary.
+    const mainFork = mainBuf.toString("utf-8").split(/\n---\n/).reverse().find((block) =>
+      exactAuditField(block, "Event") === "AUDIT_FORKED" &&
+      exactAuditField(block, "Bolt slug") === slug
+    );
+    if (!mainFork) throw new Error(`main audit is missing AUDIT_FORKED for slug ${slug}`);
+    const mainBoundary = exactAuditField(mainFork, "Fork Boundary");
+    const mainHash = exactAuditField(mainFork, "Source Audit Hash");
+    const mainTimestamp = exactAuditField(mainFork, "Timestamp");
+    if (mainBoundary !== String(boundary) || mainHash !== sourceHash || mainTimestamp !== forkTs) {
+      throw new Error("worktree AUDIT_FORKED metadata does not match the authoritative main row");
+    }
+    if (!Number.isSafeInteger(boundary) || boundary < 0 || boundary > mainBuf.length) {
+      throw new Error(`invalid Fork Boundary ${boundary} for ${mainBuf.length}-byte main audit`);
+    }
+    const prefixLen = boundary;
+    const prefixHash = createHash("sha256")
+      .update(mainBuf.subarray(0, prefixLen))
+      .digest("hex");
+    if (prefixHash !== sourceHash) {
+      if (mainBuf.length < boundary) {
+        throw new Error(
+          `main audit prefix-hash does not match recorded Source Audit Hash ` +
+            `(expected at least ${boundary} bytes, got ${mainBuf.length}); ` +
+            `refusing to merge (main-audit truncation suspected)`,
+        );
+      }
+      throw new Error(
+        `main audit prefix-hash at byte ${boundary} does not match recorded Source Audit Hash; ` +
+          `refusing to merge (mid-Bolt tampering suspected)`,
+      );
+    }
+    const trimmed = delta.trim();
+    if (trimmed !== "") entriesMerged = delta.split(/\n---\n/).filter((b) => b.trim()).length;
+    const mergedEntry = {
+      eventType: "AUDIT_MERGED",
+      fields: {
         "Bolt slug": slug,
         "Entries Merged": String(entriesMerged),
         "Source Audit Hash": sourceHash,
         "Fork Boundary": String(boundary),
       },
+    };
+    validateAuditEntry(mergedEntry);
+    const mergedTimestamp = isoTimestamp();
+    // Delta and receipt share one descriptor-pinned append, so no unsafe raw
+    // append can bypass the normal shard protections or interleave between them.
+    appendAuditBlockAtPath(
       projectDir,
-      intent,
-      space,
+      mainAuditPath,
+      delta + renderAuditBlock(mergedEntry, mergedTimestamp),
+      {
+        ...mainSnapshot.identity,
+        prefixLength: boundary,
+        prefixHash: sourceHash,
+      },
     );
+    tapAuditMetric("AUDIT_MERGED", mergedEntry.fields, projectDir);
+    result = { appended: true, event: "AUDIT_MERGED", timestamp: mergedTimestamp };
   } catch (e) {
     const message = e instanceof Error ? errorMessage(e) : String(e);
     // We still hold the outer lock in the catch path. Use the unlocked
@@ -1074,7 +1305,7 @@ function handleAuditMerge(args: string[], projectDir: string): void {
     } finally {
       releaseAuditLock(projectDir, intent, space);
     }
-    process.exit(1);
+    jsonError(message);
   }
   releaseAuditLock(projectDir, intent, space);
 

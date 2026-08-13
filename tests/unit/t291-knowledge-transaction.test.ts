@@ -46,6 +46,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -57,7 +58,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import {
   collectStaleJournals,
   documentkbDir,
@@ -68,12 +69,17 @@ import {
   onboard,
   readIndex,
   rebindDocument,
+  setIntentAssociation,
   sha256Hex,
   spaceAuditShardPath,
   syncDocuments,
 } from "../../dist/claude/.claude/tools/aidlc-knowledge.ts";
-import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
+  appendAuditEntry,
+  appendAuditEntryAtPathUnlocked,
+} from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import {
+  auditFilePath,
   humanActedSinceGate,
   readAllAuditShards,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -105,6 +111,14 @@ function doc(p: string, name: string, body = "text\n"): string {
   const full = join(documentsDir(p, SPACE), name);
   writeFileSync(full, body);
   return full;
+}
+
+function intentUuid(p: string): string {
+  const rows = JSON.parse(readFileSync(
+    join(p, "aidlc", "spaces", SPACE, "intents", "intents.json"),
+    "utf-8",
+  )) as { uuid: string }[];
+  return rows[0].uuid;
 }
 
 function runOnboard(p: string, args: string[] = []): { status: number; out: string } {
@@ -974,4 +988,355 @@ describe("t291 I12: every refusal's prescribed remedy actually repairs the state
     expect(readIndex(p, SPACE).documents.map((d) => d.source.path))
       .toEqual(["documents/elsewhere.md"]);
   }, 30000);
+});
+
+describe("t291 commit-time reconciliation and idempotent recovery", () => {
+  test("sync does not tombstone a source recreated while it waits for the lock", () => {
+    const p = projectWithIntent();
+    const source = doc(p, "recreated.md", "original\n");
+    const indexed = onboard(p, SPACE, source, NOW).indexed[0];
+    rmSync(source);
+    const holder = join(p, "hold-removal.ts");
+    writeFileSync(holder,
+      `const l=await import(${JSON.stringify(join(AIDLC_TOOLS,"aidlc-lib.ts"))});` +
+      `l.withAuditLock(${JSON.stringify(p)},()=>{require("node:fs").writeFileSync(${JSON.stringify(join(p,"held"))},"1");const u=Date.now()+3000;while(Date.now()<u){}},undefined,${JSON.stringify(SPACE)});`);
+    const script =
+      `bun ${JSON.stringify(holder)} >/dev/null 2>&1 & ` +
+      `for i in $(seq 1 100); do [ -f ${JSON.stringify(join(p, "held"))} ] && break; done; ` +
+      `(sleep 1; printf 'recreated\n' > ${JSON.stringify(source)}) & ` +
+      `bun ${JSON.stringify(join(AIDLC_TOOLS, "aidlc-knowledge.ts"))} sync --project-dir ${JSON.stringify(p)} >/dev/null; rc=$?; wait; exit $rc`;
+    expect(spawnSync("bash", ["-c", script], { env: CHILD_ENV, timeout: 40_000 }).status).toBe(0);
+    const row = readIndex(p, SPACE).documents.find((candidate) => candidate.id === indexed.id)!;
+    expect(row.removed_at).toBeUndefined();
+    expect(readIndex(p, SPACE).documents).toHaveLength(1);
+  }, 45_000);
+
+  test("sync does not commit a move whose target changed while waiting", () => {
+    const p = projectWithIntent();
+    const source = doc(p, "move-from.md", "original\n");
+    const indexed = onboard(p, SPACE, source, NOW).indexed[0];
+    const target = join(documentsDir(p, SPACE), "move-to.md");
+    renameSync(source, target);
+    const holder = join(p, "hold-move.ts");
+    writeFileSync(holder,
+      `const l=await import(${JSON.stringify(join(AIDLC_TOOLS,"aidlc-lib.ts"))});` +
+      `l.withAuditLock(${JSON.stringify(p)},()=>{require("node:fs").writeFileSync(${JSON.stringify(join(p,"held"))},"1");const u=Date.now()+3000;while(Date.now()<u){}},undefined,${JSON.stringify(SPACE)});`);
+    const script =
+      `bun ${JSON.stringify(holder)} >/dev/null 2>&1 & ` +
+      `for i in $(seq 1 100); do [ -f ${JSON.stringify(join(p, "held"))} ] && break; done; ` +
+      `(sleep 1; printf 'changed\n' > ${JSON.stringify(target)}) & ` +
+      `bun ${JSON.stringify(join(AIDLC_TOOLS, "aidlc-knowledge.ts"))} sync --project-dir ${JSON.stringify(p)} >/dev/null; rc=$?; wait; exit $rc`;
+    expect(spawnSync("bash", ["-c", script], { env: CHILD_ENV, timeout: 40_000 }).status).toBe(0);
+    const row = readIndex(p, SPACE).documents.find((candidate) => candidate.id === indexed.id)!;
+    expect(row.source.path).toBe("documents/move-from.md");
+    expect(row.sha256).toBe(indexed.sha256);
+  }, 45_000);
+
+  test("rebind hashes the target again after acquiring the lock", () => {
+    const p = projectWithIntent();
+    const source = doc(p, "old.md", "old\n");
+    const id = onboard(p, SPACE, source, NOW).indexed[0].id;
+    const target = doc(p, "new.md", "first\n");
+    const holder = join(p, "hold-rebind.ts");
+    writeFileSync(holder,
+      `const l=await import(${JSON.stringify(join(AIDLC_TOOLS,"aidlc-lib.ts"))});` +
+      `l.withAuditLock(${JSON.stringify(p)},()=>{require("node:fs").writeFileSync(${JSON.stringify(join(p,"held"))},"1");const u=Date.now()+3000;while(Date.now()<u){}},undefined,${JSON.stringify(SPACE)});`);
+    const script =
+      `bun ${JSON.stringify(holder)} >/dev/null 2>&1 & ` +
+      `for i in $(seq 1 100); do [ -f ${JSON.stringify(join(p, "held"))} ] && break; done; ` +
+      `(sleep 1; printf 'second\n' > ${JSON.stringify(target)}) & ` +
+      `bun ${JSON.stringify(join(AIDLC_TOOLS, "aidlc-knowledge.ts"))} rebind ${id} --to ${JSON.stringify(target)} --project-dir ${JSON.stringify(p)} >/dev/null; rc=$?; wait; exit $rc`;
+    expect(spawnSync("bash", ["-c", script], { env: CHILD_ENV, timeout: 40_000 }).status).toBe(0);
+    const row = readIndex(p, SPACE).documents.find((candidate) => candidate.id === id)!;
+    expect(row.sha256).toBe(sha256Hex(Buffer.from("second\n")));
+    expect(row.bytes).toBe(Buffer.byteLength("second\n"));
+  }, 45_000);
+
+  test("an idempotent association retry repairs metadata committed after the index", () => {
+    const p = projectWithIntent();
+    const source = doc(p, "scoped.md");
+    const id = onboard(p, SPACE, source, NOW).indexed[0].id;
+    const metadata = join(documentkbDir(p, SPACE), id, "metadata.json");
+    rmSync(metadata);
+    mkdirSync(metadata);
+    expect(() => setIntentAssociation(p, SPACE, id, intentUuid(p), "associate")).toThrow();
+    rmSync(metadata, { recursive: true });
+    expect(setIntentAssociation(p, SPACE, id, intentUuid(p), "associate").status).toBe("already");
+    expect(JSON.parse(readFileSync(metadata, "utf-8")).related_intent_ids).toEqual([intentUuid(p)]);
+  });
+
+  test("an edited onboard retry repairs metadata committed after the index", () => {
+    const p = projectWithIntent();
+    const source = doc(p, "edited-metadata.md", "v1\n");
+    const id = onboard(p, SPACE, source, NOW).indexed[0].id;
+    const metadata = join(documentkbDir(p, SPACE), id, "metadata.json");
+    writeFileSync(source, "v2\n");
+    rmSync(metadata);
+    mkdirSync(metadata);
+    expect(() => onboard(p, SPACE, source, NOW)).toThrow();
+    rmSync(metadata, { recursive: true });
+    expect(onboard(p, SPACE, source, NOW).indexed[0].status).toBe("edited");
+    expect(JSON.parse(readFileSync(metadata, "utf-8")).sha256)
+      .toBe(sha256Hex(Buffer.from("v2\n")));
+  });
+
+  test("an idempotent rebind retry repairs metadata committed after the index", () => {
+    const p = projectWithIntent();
+    const source = doc(p, "rebind-old.md", "old\n");
+    const id = onboard(p, SPACE, source, NOW).indexed[0].id;
+    const target = doc(p, "rebind-new.md", "new\n");
+    const metadata = join(documentkbDir(p, SPACE), id, "metadata.json");
+    rmSync(metadata);
+    mkdirSync(metadata);
+    expect(() => rebindDocument(p, SPACE, id, target, "2026-08-13T01:00:00Z")).toThrow();
+    rmSync(metadata, { recursive: true });
+    expect(rebindDocument(p, SPACE, id, target, "2026-08-13T01:01:00Z").to)
+      .toBe("documents/rebind-new.md");
+    expect(JSON.parse(readFileSync(metadata, "utf-8")).source.path)
+      .toBe("documents/rebind-new.md");
+  });
+
+  test("a malformed removal row does not suppress a complete repair", () => {
+    const p = projectWithIntent();
+    const source = doc(p, "removed-audit.md");
+    const id = onboard(p, SPACE, source, NOW).indexed[0].id;
+    rmSync(source);
+    const shard = spaceAuditShardPath(p, SPACE);
+    renameSync(shard, `${shard}.saved`);
+    mkdirSync(shard);
+    expect(() => syncDocuments(p, SPACE, "2026-08-13T01:00:00Z")).toThrow();
+    rmSync(shard, { recursive: true });
+    renameSync(`${shard}.saved`, shard);
+    appendAuditEntryAtPathUnlocked(
+      "DOCUMENT_REMOVED",
+      { Space: SPACE, Document: id },
+      p,
+      shard,
+    );
+
+    syncDocuments(p, SPACE, "2026-08-13T01:01:00Z");
+    const latest = readFileSync(shard, "utf-8")
+      .split(/\n---\n/)
+      .filter((block) => block.includes("**Event**: DOCUMENT_REMOVED") &&
+        block.includes(`**Document**: ${id}`))
+      .at(-1)!;
+    expect(latest).toContain("**Last Path**: documents/removed-audit.md");
+    expect(latest).toContain("**Last Digest**:");
+  });
+
+  test("standard audit append refuses symlinked and hard-linked shards", () => {
+    const p = projectWithIntent();
+    const shard = auditFilePath(p);
+    const external = join(p, "external-standard-audit.md");
+    const original = "external\n";
+    writeFileSync(external, original);
+    mkdirSync(dirname(shard), { recursive: true });
+    rmSync(shard, { force: true });
+    try {
+      symlinkSync(external, shard);
+    } catch {
+      return; // Windows without symlink privilege.
+    }
+    expect(() => appendAuditEntry("STAGE_STARTED", { Stage: "requirements-analysis" }, p))
+      .toThrow();
+    expect(readFileSync(external, "utf-8")).toBe(original);
+
+    rmSync(shard);
+    linkSync(external, shard);
+    expect(() => appendAuditEntry("STAGE_STARTED", { Stage: "requirements-analysis" }, p))
+      .toThrow();
+    expect(readFileSync(external, "utf-8")).toBe(original);
+  });
+
+  test("same-second imported association events cannot outrank the current shard", () => {
+    const p = projectWithIntent();
+    const source = doc(p, "same-second.md");
+    const indexed = onboard(p, SPACE, source, NOW).indexed[0];
+    const uuid = intentUuid(p);
+    const current = spaceAuditShardPath(p, SPACE);
+    const other = join(dirname(current), basename(current).replace(/\.md$/, "z.md"));
+    const timestamp = "2026-08-13T02:00:00Z";
+    const block = (event: string, fields: Record<string, string>): string =>
+      `\n---\n**Event**: ${event}\n**Timestamp**: ${timestamp}\n` +
+      Object.entries(fields).map(([key, value]) => `**${key}**: ${value}\n`).join("");
+    writeFileSync(
+      other,
+      `# AI-DLC Audit Log\n${block("DOCUMENT_UPDATED", {
+        Document: indexed.id,
+        Change: "associate",
+        Intent: uuid,
+      })}`,
+    );
+    const currentBody = "# AI-DLC Audit Log\n" +
+      block("DOCUMENT_INDEXED", {
+        Document: indexed.id,
+        Source: "documents/same-second.md",
+        Digest: indexed.sha256,
+      }) +
+      block("DOCUMENT_UPDATED", {
+        Document: indexed.id,
+        Change: "dissociate",
+        Intent: uuid,
+      });
+    writeFileSync(current, currentBody);
+
+    syncDocuments(p, SPACE, "2026-08-13T02:01:00Z");
+    expect(readFileSync(current, "utf-8")).toBe(currentBody);
+  });
+
+  test("index recovery does not overwrite an index restored while waiting for the lock", () => {
+    const p = projectWithIntent();
+    const source = doc(p, "recovery-race.md");
+    onboard(p, SPACE, source, NOW);
+    const restored = readIndex(p, SPACE);
+    restored.documents[0].related_intent_ids = [intentUuid(p)];
+    rmSync(indexPath(p, SPACE));
+    const holder = join(p, "hold-recovery.ts");
+    writeFileSync(holder,
+      `const l=await import(${JSON.stringify(join(AIDLC_TOOLS,"aidlc-lib.ts"))});` +
+      `l.withAuditLock(${JSON.stringify(p)},()=>{require("node:fs").writeFileSync(${JSON.stringify(join(p,"held"))},"1");const u=Date.now()+3000;while(Date.now()<u){}},undefined,${JSON.stringify(SPACE)});`);
+    const restoredJson = `${JSON.stringify(restored, null, 2)}\n`;
+    const restorer = join(p, "restore-index.ts");
+    writeFileSync(
+      restorer,
+      `await new Promise(resolve => setTimeout(resolve, 1000));` +
+        `require("node:fs").writeFileSync(${JSON.stringify(indexPath(p, SPACE))},` +
+        `${JSON.stringify(restoredJson)});`,
+    );
+    const script =
+      `bun ${JSON.stringify(holder)} >/dev/null 2>&1 & ` +
+      `for i in $(seq 1 100); do [ -f ${JSON.stringify(join(p, "held"))} ] && break; done; ` +
+      `bun ${JSON.stringify(restorer)} >/dev/null 2>&1 & ` +
+      `bun ${JSON.stringify(join(AIDLC_TOOLS, "aidlc-knowledge.ts"))} sync --project-dir ${JSON.stringify(p)} >/dev/null; rc=$?; wait; exit $rc`;
+    expect(spawnSync("bash", ["-c", script], { env: CHILD_ENV, timeout: 40_000 }).status).toBe(0);
+    expect(readIndex(p, SPACE).documents[0].related_intent_ids).toEqual([intentUuid(p)]);
+  }, 45_000);
+
+  test("sync does not tombstone a source moved while it waits for the lock", () => {
+    const p = projectWithIntent();
+    const source = doc(p, "late-move-from.md", "same\n");
+    const indexed = onboard(p, SPACE, source, NOW).indexed[0];
+    rmSync(source);
+    const target = join(documentsDir(p, SPACE), "late-move-to.md");
+    const holder = join(p, "hold-late-move.ts");
+    writeFileSync(holder,
+      `const l=await import(${JSON.stringify(join(AIDLC_TOOLS,"aidlc-lib.ts"))});` +
+      `l.withAuditLock(${JSON.stringify(p)},()=>{require("node:fs").writeFileSync(${JSON.stringify(join(p,"held"))},"1");const u=Date.now()+3000;while(Date.now()<u){}},undefined,${JSON.stringify(SPACE)});`);
+    const script =
+      `bun ${JSON.stringify(holder)} >/dev/null 2>&1 & ` +
+      `for i in $(seq 1 100); do [ -f ${JSON.stringify(join(p, "held"))} ] && break; done; ` +
+      `(sleep 1; printf 'same\n' > ${JSON.stringify(target)}) & ` +
+      `bun ${JSON.stringify(join(AIDLC_TOOLS, "aidlc-knowledge.ts"))} sync --project-dir ${JSON.stringify(p)} >/dev/null; rc=$?; wait; exit $rc`;
+    expect(spawnSync("bash", ["-c", script], { env: CHILD_ENV, timeout: 40_000 }).status).toBe(0);
+    const row = readIndex(p, SPACE).documents.find((candidate) => candidate.id === indexed.id)!;
+    expect(row.removed_at).toBeUndefined();
+    expect(row.source.path).toBe("documents/late-move-from.md");
+  }, 45_000);
+
+  test("sync abandons a planned move when a second matching candidate appears", () => {
+    const p = projectWithIntent();
+    const source = doc(p, "ambiguous-from.md", "same\n");
+    const indexed = onboard(p, SPACE, source, NOW).indexed[0];
+    const first = join(documentsDir(p, SPACE), "candidate-one.md");
+    const second = join(documentsDir(p, SPACE), "candidate-two.md");
+    renameSync(source, first);
+    writeFileSync(second, "diff\n");
+    const holder = join(p, "hold-ambiguous.ts");
+    writeFileSync(holder,
+      `const l=await import(${JSON.stringify(join(AIDLC_TOOLS,"aidlc-lib.ts"))});` +
+      `l.withAuditLock(${JSON.stringify(p)},()=>{require("node:fs").writeFileSync(${JSON.stringify(join(p,"held"))},"1");const u=Date.now()+3000;while(Date.now()<u){}},undefined,${JSON.stringify(SPACE)});`);
+    const script =
+      `bun ${JSON.stringify(holder)} >/dev/null 2>&1 & ` +
+      `for i in $(seq 1 100); do [ -f ${JSON.stringify(join(p, "held"))} ] && break; done; ` +
+      `(sleep 1; printf 'same\n' > ${JSON.stringify(second)}) & ` +
+      `bun ${JSON.stringify(join(AIDLC_TOOLS, "aidlc-knowledge.ts"))} sync --project-dir ${JSON.stringify(p)} >/dev/null; rc=$?; wait; exit $rc`;
+    expect(spawnSync("bash", ["-c", script], { env: CHILD_ENV, timeout: 40_000 }).status).toBe(0);
+    expect(readIndex(p, SPACE).documents.find((candidate) => candidate.id === indexed.id)?.source.path)
+      .toBe("documents/ambiguous-from.md");
+  }, 45_000);
+
+  test("append position outranks a future-dated stale event in the current shard", () => {
+    const p = projectWithIntent();
+    const source = doc(p, "clock-skew.md", "current\n");
+    const indexed = onboard(p, SPACE, source, NOW).indexed[0];
+    const shard = spaceAuditShardPath(p, SPACE);
+    appendAuditEntryAtPathUnlocked(
+      "DOCUMENT_UPDATED",
+      {
+        Space: SPACE,
+        Document: indexed.id,
+        Change: "changed",
+        Source: "documents/clock-skew.md",
+        Digest: sha256Hex(Buffer.from("stale\n")),
+      },
+      p,
+      shard,
+    );
+    const blocks = readFileSync(shard, "utf-8").split(/\n---\n/);
+    const staleIndex = blocks.findLastIndex((block) => block.includes("**Event**: DOCUMENT_UPDATED"));
+    blocks[staleIndex] = blocks[staleIndex].replace(
+      /\*\*Timestamp\*\*: [^\n]+/,
+      "**Timestamp**: 2999-01-01T00:00:00Z",
+    );
+    writeFileSync(shard, blocks.join("\n---\n"));
+
+    syncDocuments(p, SPACE, "2026-08-13T03:00:00Z");
+    const repaired = readFileSync(shard, "utf-8");
+    syncDocuments(p, SPACE, "2026-08-13T03:01:00Z");
+    expect(readFileSync(shard, "utf-8")).toBe(repaired);
+  });
+
+  test("a truncated first event cannot replace missing DOCUMENT_INDEXED provenance", () => {
+    const p = projectWithIntent();
+    const source = doc(p, "truncated-first.md");
+    const indexed = onboard(p, SPACE, source, NOW).indexed[0];
+    const shard = spaceAuditShardPath(p, SPACE);
+    writeFileSync(
+      shard,
+      "# AI-DLC Audit Log\n\n---\n**Event**: DOCUMENT_UPDATED\n" +
+        "**Timestamp**: 2026-08-13T04:00:00Z\n" +
+        `**Document**: ${indexed.id}\n`,
+    );
+    syncDocuments(p, SPACE, "2026-08-13T04:01:00Z");
+    const repaired = readFileSync(shard, "utf-8");
+    expect(repaired).toContain("**Event**: DOCUMENT_INDEXED");
+    expect(repaired).not.toContain("**Change**: audit-repair");
+    syncDocuments(p, SPACE, "2026-08-13T04:02:00Z");
+    expect(readFileSync(shard, "utf-8")).toBe(repaired);
+  });
+
+  test("sync does not mint a fresh id when topology changes while waiting", () => {
+    const p = projectWithIntent();
+    const original = doc(p, "identity.md", "same\n");
+    const id = onboard(p, SPACE, original, NOW).indexed[0].id;
+    doc(p, "candidate.md", "same\n");
+    const holder = join(p, "hold-fresh-topology.ts");
+    writeFileSync(holder,
+      `const l=await import(${JSON.stringify(join(AIDLC_TOOLS,"aidlc-lib.ts"))});` +
+      `l.withAuditLock(${JSON.stringify(p)},()=>{require("node:fs").writeFileSync(${JSON.stringify(join(p,"held"))},"1");const u=Date.now()+3000;while(Date.now()<u){}},undefined,${JSON.stringify(SPACE)});`);
+    const script =
+      `bun ${JSON.stringify(holder)} >/dev/null 2>&1 & ` +
+      `for i in $(seq 1 100); do [ -f ${JSON.stringify(join(p, "held"))} ] && break; done; ` +
+      `(sleep 1; rm ${JSON.stringify(original)}) & ` +
+      `bun ${JSON.stringify(join(AIDLC_TOOLS, "aidlc-knowledge.ts"))} sync --project-dir ${JSON.stringify(p)} >/dev/null; rc=$?; wait; exit $rc`;
+    expect(spawnSync("bash", ["-c", script], { env: CHILD_ENV, timeout: 40_000 }).status).toBe(0);
+    const rows = readIndex(p, SPACE).documents;
+    expect(rows).toHaveLength(1);
+    expect(rows[0].id).toBe(id);
+    expect(rows[0].removed_at).toBeUndefined();
+  }, 45_000);
+
+  test("a successful edited onboard event carries its source path", () => {
+    const p = projectWithIntent();
+    const source = doc(p, "edited-source.md", "v1\n");
+    const id = onboard(p, SPACE, source, NOW).indexed[0].id;
+    writeFileSync(source, "v2\n");
+    expect(onboard(p, SPACE, source, NOW).indexed[0].status).toBe("edited");
+    const latest = readFileSync(spaceAuditShardPath(p, SPACE), "utf-8")
+      .split(/\n---\n/)
+      .filter((block) => block.includes(`**Document**: ${id}`) &&
+        block.includes("**Change**: edited"))
+      .at(-1)!;
+    expect(latest).toContain("**Source**: documents/edited-source.md");
+  });
 });

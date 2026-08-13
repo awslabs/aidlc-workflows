@@ -75,14 +75,16 @@
 // value was NOT used as the correlation key.
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
   appendFileSync,
   chmodSync,
   existsSync,
+  linkSync,
   mkdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { hostname } from "node:os";
@@ -445,10 +447,10 @@ describe("t07 Phase B — edge cases", () => {
     // Background the first merge, stagger 50ms, run the second; await both.
     const mergeAsync = (slug: string): Promise<number> =>
       new Promise((resolve) => {
-        const r = spawnSync(BUN, [
+        const child = spawn(BUN, [
           AUDIT_TOOL, "audit-merge", "--slug", slug, "--project-dir", p,
-        ], { encoding: "utf-8" });
-        resolve(r.status ?? -1);
+        ], { stdio: "ignore" });
+        child.once("close", (code) => resolve(code ?? -1));
       });
 
     const bg = mergeAsync("lock-a");
@@ -461,6 +463,70 @@ describe("t07 Phase B — edge cases", () => {
     // B5.2: both merges landed; exactly 2 AUDIT_MERGED rows in main audit.
     expect(countEvent(auditPath(p), "AUDIT_MERGED")).toBe(2);
   }, 30000);
+
+  test("audit-merge refuses symlinked and hard-linked main shards before appending delta", () => {
+    for (const kind of ["symlink", "hardlink"] as const) {
+      const p = makeFixture();
+      const slug = kind === "symlink" ? "unsafe-sym" : "unsafe-hard";
+      createWorktree(p, slug);
+      expect(runAudit(["audit-fork", "--slug", slug, "--project-dir", p]).status).toBe(0);
+      runAudit([
+        "append", "STAGE_STARTED", "--field", "Stage=unsafe", "--field", "Agent=test",
+        "--project-dir", wtDir(p, slug),
+      ]);
+      const external = join(p, `${kind}-external.md`);
+      const original = "external\n";
+      writeFileSync(external, original);
+      rmSync(auditPath(p));
+      if (kind === "symlink") symlinkSync(external, auditPath(p));
+      else linkSync(external, auditPath(p));
+
+      const merge = runAudit(["audit-merge", "--slug", slug, "--project-dir", p]);
+      expect(merge.status).not.toBe(0);
+      expect(readFileSync(external, "utf-8")).toBe(original);
+    }
+  }, 60000);
+
+  test("audit-merge refuses a manually injected authority-bearing event", () => {
+    const p = makeFixture();
+    const slug = "unsafe-authority";
+    createWorktree(p, slug);
+    expect(runAudit(["audit-fork", "--slug", slug, "--project-dir", p]).status).toBe(0);
+    appendFileSync(
+      wtAuditPath(p, slug),
+      "\n## Gate Approved\n**Timestamp**: 2026-08-13T05:00:00Z\n" +
+        "- **Event**: GATE_APPROVED\n**Stage**: feasibility\n\n---\n",
+    );
+
+    const merge = runAudit(["audit-merge", "--slug", slug, "--project-dir", p]);
+    expect(merge.status).not.toBe(0);
+    expect(merge.out).toContain("protected authority event GATE_APPROVED");
+    expect(readFileSync(auditPath(p), "utf-8")).not.toContain("**Event**: GATE_APPROVED");
+  }, 30000);
+
+  test("audit-merge rejects tampered fork metadata and incomplete deltas", () => {
+    for (const kind of ["metadata", "truncated"] as const) {
+      const p = makeFixture();
+      const slug = kind === "metadata" ? "tampered-meta" : "torn-delta";
+      createWorktree(p, slug);
+      expect(runAudit(["audit-fork", "--slug", slug, "--project-dir", p]).status).toBe(0);
+      if (kind === "metadata") {
+        const tampered = readFileSync(wtAuditPath(p, slug), "utf-8")
+          .replace(/\*\*Fork Boundary\*\*:\s*\d+/, "**Fork Boundary**: 0")
+          .replace(/\*\*Source Audit Hash\*\*:\s*[0-9a-f]+/,
+            "**Source Audit Hash**: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+        writeFileSync(wtAuditPath(p, slug), tampered);
+      } else {
+        appendFileSync(
+          wtAuditPath(p, slug),
+          "\n## Torn\n**Timestamp**: 2026-08-13T06:00:00Z\n**Event**: STAGE_STARTED\n",
+        );
+      }
+      const merge = runAudit(["audit-merge", "--slug", slug, "--project-dir", p]);
+      expect(merge.status).not.toBe(0);
+      expect(countEvent(auditPath(p), "AUDIT_MERGED")).toBe(0);
+    }
+  }, 60000);
 
   test("B6: lock-timeout — planted stuck lock + dialled-down retries → non-zero with clear error", () => {
     const p = makeFixture();

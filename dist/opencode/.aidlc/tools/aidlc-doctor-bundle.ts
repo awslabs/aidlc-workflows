@@ -40,7 +40,6 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
-  readFileSync,
   readSync,
   readdirSync,
   realpathSync,
@@ -64,6 +63,7 @@ import {
   parseCheckboxes,
   planFilePath,
   readAllAuditShards,
+  readRegularFileNoFollowOrThrow,
   recordDir,
   recoveryFilePath,
   relativeRecordDir,
@@ -1531,8 +1531,11 @@ function withinProjectRoot(path: string): boolean {
 function safeRead(path: string): string {
   try {
     if (lstatSync(path).isSymbolicLink()) return "";
-    if (!withinProjectRoot(path)) return "";
-    return readFileSync(path, "utf-8");
+    const real = realpathSync(path);
+    if (!withinProjectRoot(real)) return "";
+    const content = readRegularFileNoFollowOrThrow(real, "doctor input").toString("utf-8");
+    if (!withinProjectRoot(real)) return "";
+    return content;
   } catch {
     return "";
   }

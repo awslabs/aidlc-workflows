@@ -2770,6 +2770,7 @@ export function humanActedSinceGate(projectDir: string): boolean {
     let content: string;
     try {
       content = readRegularFileNoFollowOrThrow(shards[s], "audit shard").toString("utf-8");
+      assertNoSymlinkInChainOrThrow(realpathSync(projectDir), relative(projectDir, shards[s]));
     } catch {
       continue; // a shard vanished between enumerate and read — skip it
     }
@@ -3412,7 +3413,9 @@ export function readAllAuditShards(projectDir: string, intent?: string, space?: 
   const parts: string[] = [];
   for (const path of shards) {
     try {
-      parts.push(readRegularFileNoFollowOrThrow(path, "audit shard").toString("utf-8"));
+      const content = readRegularFileNoFollowOrThrow(path, "audit shard").toString("utf-8");
+      assertNoSymlinkInChainOrThrow(realpathSync(projectDir), relative(projectDir, path));
+      parts.push(content);
     } catch {
       // a shard vanished between enumerate and read — skip it
     }
@@ -3447,6 +3450,10 @@ export function readAuditShardEvents(
         shards[shardIndex],
         "audit shard",
       ).toString("utf-8");
+      assertNoSymlinkInChainOrThrow(
+        realpathSync(projectDir),
+        relative(projectDir, shards[shardIndex]),
+      );
     } catch {
       continue;
     }
@@ -5622,7 +5629,8 @@ export function readRegularFileNoFollowOrThrow(path: string, what: string): Buff
     // sample showed the process parked in open(), not read().) O_NONBLOCK is
     // harmless for a regular file — it does not make reads short — and the
     // descriptor is rejected below anyway if it is not a regular file.
-    fd = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
+    const noFollow = typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0;
+    fd = openSync(path, fsConstants.O_RDONLY | noFollow | fsConstants.O_NONBLOCK);
   } catch (e) {
     const code = (e as NodeJS.ErrnoException).code;
     if (code === "ELOOP") {
@@ -5650,7 +5658,28 @@ export function readRegularFileNoFollowOrThrow(path: string, what: string): Buff
           `forever or never reach EOF, so it is refused before any read.`,
       );
     }
-    return readFileSync(fd);
+    if (st.nlink !== 1) {
+      throw new Error(`${what} is multiply linked and is not trusted: ${path}`);
+    }
+    // Fallback for platforms without O_NOFOLLOW, and a pathname/descriptor
+    // identity check for races on every platform.
+    if (lstatSync(path).isSymbolicLink()) {
+      throw new Error(`${what} is a symlink, which is not followed: ${path}`);
+    }
+    const current = statSync(realpathSync(path));
+    if (current.dev !== st.dev || current.ino !== st.ino) {
+      throw new Error(`${what} changed while opening: ${path}`);
+    }
+    const bytes = readFileSync(fd);
+    const after = statSync(realpathSync(path));
+    const afterFd = fstatSync(fd);
+    if (after.dev !== st.dev || after.ino !== st.ino ||
+        afterFd.nlink !== 1 || afterFd.size !== st.size ||
+        afterFd.mtimeMs !== st.mtimeMs || afterFd.ctimeMs !== st.ctimeMs ||
+        bytes.length !== st.size) {
+      throw new Error(`${what} changed while reading: ${path}`);
+    }
+    return bytes;
   } finally {
     closeSync(fd);
   }

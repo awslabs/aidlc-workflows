@@ -48,6 +48,7 @@ import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -93,6 +94,16 @@ describe("t286 readRegularFileNoFollowOrThrow - TYPE: only a regular file", () =
     writeFileSync(p, bytes);
     const got = readRegularFileNoFollowOrThrow(p, "source");
     expect(Buffer.compare(got, bytes)).toBe(0);
+  });
+
+  test("refuses a multiply-linked regular file", () => {
+    const d = scratch();
+    const original = join(d, "original.txt");
+    const linked = join(d, "linked.txt");
+    writeFileSync(original, "secret\n");
+    linkSync(original, linked);
+    expect(() => readRegularFileNoFollowOrThrow(linked, "doctor input"))
+      .toThrow(/multiply linked/);
   });
 
   test("refuses a symlink WITHOUT following it, naming it as a symlink", () => {
