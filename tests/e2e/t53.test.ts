@@ -141,7 +141,7 @@ function seedBugfixState(proj: string): void {
   // at the first orchestrator directive, before any gate, so it needs no mode.
   const res = spawnSync(
     process.execPath,
-    [utility, "intent-birth", "--scope", "bugfix", "--project-dir", proj],
+    [utility, "intent-create", "--scope", "bugfix", "--project-dir", proj],
     { cwd: proj, encoding: "utf8" },
   );
   expect(res.status).toBe(0);
@@ -224,7 +224,10 @@ describe("t53 /aidlc bugfix scope routing (sdk)", () => {
           timeoutMs: DRIVE_TIMEOUT_MS,
           stopAfterToolResult: {
             toolName: "Bash",
-            resultIncludes: '"stage":"requirements-analysis"',
+            // The run-stage directive, not the load-steering part that now
+            // precedes it (that result also names the stage and would stop
+            // the drive one beat early).
+            resultIncludes: '"kind":"run-stage","stage":"requirements-analysis"',
           },
         });
 

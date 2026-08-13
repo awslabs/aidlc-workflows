@@ -26,7 +26,7 @@
 //               byte-identical (the OFF-path gate).
 //
 // Mechanism: cli - spawns the shipped tools against temp projects born via
-// intent-birth (the real state-file shape, not a fixture).
+// intent-create (the real state-file shape, not a fixture).
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -85,7 +85,7 @@ afterAll(() => {
 function bornProject(scope = "feature"): string {
   const proj = setupIntegrationProject({ noAidlcDocs: true, stripEnvScope: true });
   tempDirs.push(proj);
-  const r = run(proj, "aidlc-utility.ts", ["intent-birth", "--scope", scope]);
+  const r = run(proj, "aidlc-utility.ts", ["intent-create", "--scope", scope]);
   expect(r.status).toBe(0);
   return proj;
 }

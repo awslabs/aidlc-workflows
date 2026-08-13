@@ -76,7 +76,7 @@ const SLUG = "requirements-analysis";
 
 let proj: string;
 
-// P4: intent-birth writes state into the born intent's per-intent record dir
+// P4: intent-create writes state into the born intent's per-intent record dir
 // (aidlc/spaces/<space>/intents/<slug>-<id8>/), not the flat aidlc-docs/. After
 // the init the active-intent cursor points at the born record, so every later
 // gate-start/reject/revise/approve (default-resolving the active intent)
@@ -172,7 +172,7 @@ beforeAll(() => {
   // Init bugfix scope — leaves requirements-analysis in [-] ready to gate.
   const init = spawnSync(
     BUN,
-    [UTIL, "intent-birth", "--scope", "bugfix", "--project-dir", proj],
+    [UTIL, "intent-create", "--scope", "bugfix", "--project-dir", proj],
     { encoding: "utf-8", env: { ...process.env, AIDLC_WORKFLOW_INTENT: "revision loop test" } },
   );
   expect(init.status, `init stderr=${init.stderr ?? ""}`).toBe(0);
@@ -200,6 +200,7 @@ beforeAll(() => {
   // requirements-analysis declares a reviewer; the §12a gate precondition needs
   // a fresh terminal REVIEW_COMPLETED (after the last revise) before approve
   // commits. This test targets the revision loop, not the reviewer gate.
+  spawnSync(BUN, [LOG, "review", "--stage", SLUG, "--reviewer", "aidlc-product-lead-agent", "--iteration", "1", "--project-dir", proj], { encoding: "utf-8" });
   spawnSync(BUN, [LOG, "review", "--stage", SLUG, "--reviewer", "aidlc-product-lead-agent", "--iteration", "1", "--verdict", "READY", "--project-dir", proj], { encoding: "utf-8" });
   state(["approve", SLUG, "--user-input", "accept as-is"]);
   snap.cbFinal = checkboxMarker(readState());

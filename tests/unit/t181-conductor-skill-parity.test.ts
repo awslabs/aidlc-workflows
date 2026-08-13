@@ -16,7 +16,7 @@
 //   (a) NEGATIVE — the retired `/aidlc --init` command (a bare `--init` flag
 //       token; `git init`/`npm init` are NOT the aidlc command, same predicate as
 //       t174) must be ABSENT from every shipped conductor SKILL.
-//   (b) POSITIVE — the workspace-anchor vocabulary (`intent-birth`, `--repo`,
+//   (b) POSITIVE — the workspace-anchor vocabulary (`intent-create`, `--repo`,
 //       "offer a second intent", "intent and space verbs") must be PRESENT in
 //       every shipped conductor SKILL. Catches a future fork that drops `--init`
 //       yet still lacks the new verbs.
@@ -41,6 +41,16 @@ function harnessSkills(): string[] {
     .sort();
 }
 
+/** Authored question-rendering annexes for every shipped distribution. */
+function harnessQuestionAnnexes(): string[] {
+  return HARNESS_MATRIX
+    .map(
+      (harness) =>
+        `harness/${harness.name}/skills/aidlc/question-rendering.md`,
+    )
+    .sort();
+}
+
 // A bare `--init` flag token: `--init` not preceded by another flag char — the
 // retired aidlc command. NOT `git init`/`npm init` (no leading hyphen). Same
 // predicate as t174's `--init` scan.
@@ -48,10 +58,23 @@ const BARE_INIT = /(^|[^-\w])--init\b/;
 
 // The workspace-anchor conductor vocabulary every shipped SKILL must define.
 const REQUIRED_TOKENS = [
-  "intent-birth", // run-then-continue birth verb (replaced `init`)
+  "intent-create", // run-then-continue birth verb (replaced `init`)
   "--repo", // multi-repo swarm prepare flag
   "offer a second intent", // P4-completion new-work conductor prose
   "intent and space verbs", // frontmatter utilities tail
+];
+
+// The narration layer: the engine authors a spoken line on the directive and
+// every harness relays it. The failure this pins is asymmetric and silent - the
+// field is emitted harness-independently (aidlc-orchestrate.ts), so a SKILL that
+// lacks the relay rule drops it on the floor and the harness keeps narrating its
+// own internals with nothing red. That is exactly how it shipped Claude-only
+// before this pin existed.
+const NARRATION_TOKENS = [
+  "narration", // the field name the relay rule is written around
+  "**Quiet in between.**", // the resting-state rule between tool calls
+  "**SAY:**", // the marker whose quoted text is the only speakable prose
+  "the very first turn", // the one moment no carrier reaches
 ];
 
 const LEARNINGS_QUESTION_TOKENS = [
@@ -70,6 +93,11 @@ const ENSEMBLE_TOKENS = [
   "directive.single === true",
   "directive.rules_in_context",
   "directive.inline_context_paths",
+  "the first tool calls after receiving `run-stage`",
+  "do not batch those reads with later stage reads",
+  "blocking context-load precondition",
+  "A mob MUST explicitly read its lead persona path first",
+  "path's presence in `inline_context_paths` is not evidence",
   "`subagent` (hub-and-spoke:",
   "`pipeline` (chain:",
   "`mob` (mesh",
@@ -77,11 +105,56 @@ const ENSEMBLE_TOKENS = [
   '--result skipped --reason "<specific reason>"',
 ];
 
+const COMPOSER_ROUTE_TOKENS = [
+  "**Composition-moment authority.**",
+  "apply ONLY to front/report composition",
+  "mode: in-flight",
+  "`nearest_stock` is advisory",
+  "`changes.skip` / `changes.add` arrays",
+  "no stock grid or scope-registry write is allowed",
+];
+
 const KIRO_TASK_LIST_TOKEN =
   '{command:"create", task_list_description:"...", tasks:[{task_description:"..."}]}';
 
 const KIRO_SUBAGENT_TOKEN =
   '{mode:"blocking", task:"...", stages:[{name:"...", role:"aidlc-...", prompt_template:"..."}]}';
+
+const SUMMARY_STOP_SKILL_TOKENS = [
+  "before running the stage body or writing `produces`",
+  "checkpoint-specific `aidlc-log.ts decision` / `answer` pair with `--single`",
+  "only after that separate human turn and receipt",
+  "PRE-GENERATION SUMMARY STOP",
+  "before artifact generation, reviewer, learnings, or approval",
+  "--checkpoint summary-confirmation --questions-file",
+  '`--unit "<directive.unit>"`',
+  "`--single`",
+  '**"What should change?"**',
+];
+
+const SUMMARY_STOP_ANNEX_TOKENS = [
+  "## Mandatory consolidated-summary checkpoint",
+  "both options without A/B file-letter prefixes",
+  "and a blank",
+  "END THE TURN",
+  "`[Answer]: Looks correct`",
+  "`[Answer]: A. Looks correct`, `[Answer]: 1. Looks correct`",
+  "a self-selected answer",
+  "receipt command succeeds",
+  "checkpoint-specific `aidlc-log.ts decision`",
+  "checkpoint-specific `aidlc-log.ts answer`",
+  '**"What should change?"**',
+];
+
+const FRESH_SESSION_TOKENS: Record<string, string[]> = {
+  claude: ["/clear", "`/aidlc`"],
+  codex: ["restart Codex CLI", "`$aidlc`"],
+  kiro: ["restart Kiro CLI", "`/aidlc`"],
+  "kiro-ide": ["new Kiro IDE chat", "`/aidlc`"],
+  opencode: ["restart OpenCode", "`/aidlc`"],
+  copilot: ["new Copilot CLI session", "new VS Code agent chat", "`/aidlc`"],
+  cursor: ["new Cursor chat", "`/aidlc`"],
+};
 
 function stageTableRows(body: string): string[] {
   const lines = body.split(/\r?\n/);
@@ -127,6 +200,84 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       }
     }
     expect(missing).toEqual([]);
+  });
+
+  test("every shipped conductor SKILL separates in-flight deltas from stock routing", () => {
+    const missing: string[] = [];
+    for (const rel of skills) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      for (const tok of COMPOSER_ROUTE_TOKENS) {
+        if (!body.includes(tok)) missing.push(`${rel}  missing: ${tok}`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
+  test("every shipped conductor SKILL relays engine-authored narration", () => {
+    const missing: string[] = [];
+    for (const rel of skills) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      for (const tok of NARRATION_TOKENS) {
+        if (!body.includes(tok)) missing.push(`${rel}  missing: ${tok}`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
+  test("the narration rule is worded identically across every harness", () => {
+    // Byte-alignment, not just presence: the rule is authored once and ported,
+    // so a per-harness reword is drift. Extracted by its own anchors rather than
+    // line numbers, which move as each SKILL gains harness-specific prose.
+    const blocks = new Map<string, string[]>();
+    for (const rel of skills) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const start = body.indexOf("**Saying what is happening");
+      const end = body.indexOf("**Isolated stage-runner branch.**");
+      expect(start, `${rel} lacks the narration rule`).toBeGreaterThan(-1);
+      expect(end, `${rel} lacks the isolated-run anchor`).toBeGreaterThan(start);
+      const block = body.slice(start, end).trim();
+      const seen = blocks.get(block) ?? [];
+      seen.push(rel);
+      blocks.set(block, seen);
+    }
+    // One distinct block text => every harness agrees.
+    expect([...blocks.values()].map((v) => v.sort())).toHaveLength(1);
+  });
+
+  test("every shipped conductor SKILL stops new-intent births and names its fresh-session flow", () => {
+    const failures: string[] = [];
+    for (const harness of HARNESS_MATRIX) {
+      const rel = `harness/${harness.name}/skills/aidlc/SKILL.md`;
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      for (const token of [
+        "**run-then-stop**",
+        "Then **STOP and hand off to a fresh session** rather than re-running `next`",
+        ...(FRESH_SESSION_TOKENS[harness.name] ?? []),
+      ]) {
+        if (!body.includes(token)) failures.push(`${rel}  missing: ${token}`);
+      }
+      if (body.includes("run it, then re-run `next` to land on the new intent's first stage")) {
+        failures.push(`${rel}  still continues a new intent in the prior session`);
+      }
+    }
+    expect(failures).toEqual([]);
+  });
+
+  test("Codex conductor guidance uses its native $aidlc invocation", () => {
+    const body = readFileSync(
+      join(REPO_ROOT, "harness/codex/skills/aidlc/SKILL.md"),
+      "utf-8",
+    );
+    for (const stale of [
+      "`/aidlc --resume`",
+      "fresh `/aidlc`",
+      "`/aidlc intent",
+      "`/aidlc space",
+      "on `/aidlc compose",
+      "second `/aidlc` invocation",
+    ]) {
+      expect(body).not.toContain(stale);
+    }
   });
 
   test("every shipped conductor SKILL requires a valid two-option learning question", () => {
@@ -212,9 +363,48 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
-  test("Kiro file-backed questions are presented as numbered prose", () => {
+  test("every conductor stops for summary confirmation before artifact work", () => {
     const missing: string[] = [];
-    for (const harness of ["kiro", "kiro-ide"]) {
+    for (const rel of skills) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      for (const token of SUMMARY_STOP_SKILL_TOKENS) {
+        if (!body.includes(token)) {
+          missing.push(`${rel}  missing: ${token}`);
+        }
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
+  test("every question renderer pins the mandatory summary checkpoint", () => {
+    const missing: string[] = [];
+    for (const rel of harnessQuestionAnnexes()) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      for (const token of SUMMARY_STOP_ANNEX_TOKENS) {
+        if (!body.includes(token)) {
+          missing.push(`${rel}  missing: ${token}`);
+        }
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
+  test("Codex routes typed new-work questions through next, not report", () => {
+    const annex = readFileSync(
+      join(
+        REPO_ROOT,
+        "harness/codex/skills/aidlc/question-rendering.md",
+      ),
+      "utf-8",
+    );
+    expect(annex).toContain('ask_type: "new-work-routing"');
+    expect(annex).toContain("routes through `next`");
+    expect(annex).toContain("never through `report`");
+  });
+
+  test("prose renderers remap file-backed source letters to numbered prose", () => {
+    const missing: string[] = [];
+    for (const harness of ["cursor", "kiro", "kiro-ide"]) {
       const skillRel = `harness/${harness}/skills/aidlc/SKILL.md`;
       const annexRel =
         `harness/${harness}/skills/aidlc/question-rendering.md`;
@@ -231,6 +421,37 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       }
       if (!annex.includes("Never present file letters as response keys")) {
         missing.push(`${annexRel}  missing no-letter response rule`);
+      }
+      if (!annex.includes("1. **Looks correct**")) {
+        missing.push(`${annexRel}  missing numbered Looks correct option`);
+      }
+      if (!annex.includes("options have no source letters")) {
+        missing.push(`${annexRel}  missing file-label exception`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
+  test("every prose question renderer starts a fresh local numbering scope", () => {
+    const missing: string[] = [];
+    for (const harness of [
+      "copilot",
+      "codex",
+      "cursor",
+      "kiro",
+      "kiro-ide",
+      "opencode",
+    ]) {
+      const rel = `harness/${harness}/skills/aidlc/question-rendering.md`;
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      if (!body.includes("start every question at `1`")) {
+        missing.push(`${rel}  missing fresh numbering`);
+      }
+      if (!/Use unordered\s+bullets/.test(body)) {
+        missing.push(`${rel}  missing summary-list separation`);
+      }
+      if (!/Visible `1`\s+maps/.test(body)) {
+        missing.push(`${rel}  missing visible-key mapping`);
       }
     }
     expect(missing).toEqual([]);

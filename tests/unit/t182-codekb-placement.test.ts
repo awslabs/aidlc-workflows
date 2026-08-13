@@ -38,6 +38,8 @@ import {
   createTestProject,
   DEFAULT_SPACE,
   resetAidlcEnv,
+  runOrchestrateNext,
+  seedAidlcMemory,
   seededStateFile,
   seedStateFile,
   sedReplaceInFile,
@@ -203,6 +205,7 @@ interface RunStageDirective {
 
 function emitReverseEngineering(): { dir: RunStageDirective; proj: string } {
   const proj = freshProject();
+  seedAidlcMemory(proj);
   seedStateFile(proj, join(FIXTURES_DIR, "state-brownfield-feature.md"));
   const state = seededStateFile(proj);
   sedReplaceInFile(
@@ -215,14 +218,11 @@ function emitReverseEngineering(): { dir: RunStageDirective; proj: string } {
     /^- \[.\] reverse-engineering — EXECUTE/m,
     `- [-] reverse-engineering — EXECUTE`,
   );
-  const res = spawnSync(BUN, [ORCH, "next", "--project-dir", proj], {
-    encoding: "utf-8",
-    env: childEnv(),
-  });
-  const out = `${res.stdout ?? ""}${res.stderr ?? ""}`;
+  const res = runOrchestrateNext(ORCH, proj, [], { env: childEnv() });
+  const out = res.out;
   let dir: RunStageDirective;
   try {
-    dir = JSON.parse((res.stdout ?? "").trim());
+    dir = JSON.parse(res.stdout.trim());
   } catch {
     throw new Error(
       `emitReverseEngineering did not emit parseable JSON. status=${res.status}\n${out}`,

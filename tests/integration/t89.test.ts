@@ -262,15 +262,16 @@ describe("t89 sensors_applicable resolution (in-process compileStageGraph)", () 
   });
 
   // Case 13 (.sh:170-173): unknown manifest keys tolerated; sensors still resolve.
+  // intent-capture imports 3 sensors since claim-sources landed (2.5.11).
   test("unknown-keys-tolerated: compile succeeds; sensors still resolve", () => {
     const { stages } = compileWithSensors(join(FIXTURES, "unknown-keys-tolerated"));
-    expect(stageBySlug(stages, "intent-capture").sensors_applicable).toHaveLength(2);
+    expect(stageBySlug(stages, "intent-capture").sensors_applicable).toHaveLength(3);
   });
 
   // Case 14 (.sh:175-178): BOM-prefixed frontmatter parses correctly.
   test("BOM-frontmatter: leading BOM byte does not break the parser", () => {
     const { stages } = compileWithSensors(join(FIXTURES, "bom-frontmatter"));
-    expect(stageBySlug(stages, "intent-capture").sensors_applicable).toHaveLength(2);
+    expect(stageBySlug(stages, "intent-capture").sensors_applicable).toHaveLength(3);
   });
 
   // Case 15 (.sh:180-187): round-trip determinism — same input, identical JSON.
@@ -349,6 +350,7 @@ describe("t89 sensors_applicable resolution (in-process compileStageGraph)", () 
     __resetGraphCache();
     const byId = loadSensors();
     expect([...byId.keys()].sort()).toEqual([
+      "claim-sources",
       "linter",
       "required-sections",
       "type-check",

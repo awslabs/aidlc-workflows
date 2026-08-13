@@ -6,8 +6,10 @@ condition: Always executes — depth scales with project complexity
 lead_agent: aidlc-product-agent
 support_agents: []
 mode: inline
+summary_confirmation: required
 reviewer: aidlc-product-lead-agent
 reviewer_max_iterations: 2
+review_class: advisory
 produces:
   - requirements
   - requirements-analysis-questions
@@ -101,7 +103,7 @@ Identify gaps in each dimension.
 
 PROACTIVE: Always generate clarifying questions unless requirements are exceptionally clear and complete across all six dimensions.
 
-Create `<record>/inception/requirements-analysis/requirements-analysis-questions.md` using the [Answer]: tag format from stage-protocol.md. Include context-appropriate questions with A-E options. EVERY question MUST end with `X. Other (please specify)` as the final option. Leave all [Answer]: tags blank.
+Create `<record>/inception/requirements-analysis/requirements-analysis-questions.md` using the [Answer]: tag format from stage-protocol.md. Include context-appropriate questions with A-E options. Every ordinary clarifying question MUST end with `X. Other (please specify)` as the final option; the later Consolidated Summary Confirmation is the unlettered exception. Leave all [Answer]: tags blank.
 
 Then follow the unified question flow from stage-protocol.md section 3: offer the user a choice between guided (interactive) and self-guided (file edit) modes. In either case, ensure all answers are written to the file before proceeding.
 
@@ -130,18 +132,23 @@ filled, append or update a `## Consolidated Summary Confirmation` entry in
 `<record>/inception/requirements-analysis/requirements-analysis-questions.md`.
 The entry MUST contain:
 
-- A clear list summarizing every answer
+- An unordered bullet list summarizing every answer (never number these summary
+  items; the following structured question starts its own response keys at 1)
 - `Does this all look correct before I generate the requirements artifact?`
 - `Looks correct` and `Request changes` options
 - A blank `[Answer]:` tag
 
 Present that prompt as a structured question using the
 `Looks correct` / `Request changes` options from `stage-protocol.md`, then end
-the turn and wait for the user's response. Fill the confirmation `[Answer]:`
-tag only after the user responds. If the user requests changes, update the
-affected answers, reset the confirmation `[Answer]:` to blank, and repeat this
-step. Do NOT create `requirements.md` until the confirmation entry contains the
-user's explicit `Looks correct` answer.
+the turn and wait for the user's response. Use the checkpoint-specific
+`aidlc-log.ts decision` / `answer` commands from that protocol, including this
+questions-file path; fill the confirmation `[Answer]:` before recording the
+answer receipt. If the user requests changes, ask **"What should change?"** and
+end the turn again. Do not update any answer until the user supplies that
+feedback. Then record the feedback, update the affected answers, reset the
+confirmation `[Answer]:` to blank, and repeat this step. Do NOT create
+`requirements.md` until the confirmation entry contains the user's explicit
+`Looks correct` answer and the receipt command succeeds.
 
 ### Step 11: Generate Requirements
 
@@ -158,7 +165,7 @@ Create `<record>/inception/requirements-analysis/requirements.md` containing:
 
 Hand completion to `stage-protocol.md` via
 `bun .codex/tools/aidlc-orchestrate.ts report --stage requirements-analysis --result <outcome>`.
-The engine owns all lifecycle transitions and advancement.
+That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
 ### Step 13: Present Completion & Request Approval
 

@@ -1,1 +1,0 @@
-{"version":"1.0.0","enabled":true,"name":"aidlc-sync-statusline","description":"Syncs aidlc-state.md on spec task status transitions.","when":{"type":"postToolUse","toolTypes":["spec"]},"then":{"type":"runCommand","command":"bun .kiro/hooks/aidlc-kiro-adapter.ts state-sync"}}

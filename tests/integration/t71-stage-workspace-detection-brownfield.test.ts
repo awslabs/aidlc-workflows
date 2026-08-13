@@ -4,13 +4,13 @@
 // tests/integration/t71-stage-workspace-detection-brownfield.sh (plan 10).
 //
 // P4 MIGRATION. The user-facing --init/--force are RETIRED. Naming a scope on a
-// fresh workspace BIRTHS the first intent (the engine NAMES intent-birth, the
+// fresh workspace BIRTHS the first intent (the engine NAMES intent-create, the
 // conductor runs it); the deterministic birth handler runs the same
 // detectWorkspace scan + state/audit write the old --init did, now into the BORN
 // intent's per-intent record. This test drives a CLEAN birth
 // (`/aidlc --scope poc "build a todo app"`) over the brownfield stub — NO
 // --init --force, and NO seeded state. A seeded flat state would trigger birth's
-// migrate-flat short-circuit (handleIntentBirth aidlc-utility.ts:2022-2037 MOVES
+// migrate-flat short-circuit (handleIntentCreate aidlc-utility.ts:2022-2037 MOVES
 // the flat tree into a record and RETURNS without running the scan), which would
 // skip the very WORKSPACE_SCANNED classification this test pins. A clean birth on
 // the brownfield stub runs the scan and writes the classification (mirrors how
@@ -25,8 +25,8 @@
 // The SDK driver replaces that subprocess wholesale, and sdk-drive's readers
 // (readStateFile/readAuditEvents) resolve the BORN intent's per-intent record.
 // The birth path is a single deterministic Bash dispatch: the engine names
-// `bun .claude/tools/aidlc-utility.ts intent-birth --scope <scope> --arguments "..."`
-// and the conductor prints its stdout VERBATIM. handleIntentBirth
+// `bun .claude/tools/aidlc-utility.ts intent-create --scope <scope> --arguments "..."`
+// and the conductor prints its stdout VERBATIM. handleIntentCreate
 // (aidlc-utility.ts:1986) runs detectWorkspace over the brownfield-todo stub and
 // WRITES the classification into the per-intent aidlc-state.md + emits
 // WORKSPACE_SCANNED (:2144). So every .sh assertion maps to a surface the TOOL
@@ -41,12 +41,12 @@
 // React from package.json deps (:1505). The stub's package.json carries
 // react@^18 as a runtime dep and vite.config.ts at the root.
 //
-// ASSERTION MAP (.sh test -> SDK surface). Source: handleIntentBirth
+// ASSERTION MAP (.sh test -> SDK surface). Source: handleIntentCreate
 // (aidlc-utility.ts:1986) runs the SAME detectWorkspace scan + state/audit write
 // the old --init did, now per-intent. The surfaces below are unchanged; only the
 // dispatch (clean birth, not --init --force) and the record location (per-intent,
 // resolved by sdk-drive's readers) moved.
-//   1 state file still exists          -> r.stateFile !== undefined (per-intent record, written by handleIntentBirth)
+//   1 state file still exists          -> r.stateFile !== undefined (per-intent record, written by handleIntentCreate)
 //   2 Completed counter == [x] count   -> on disk: "Completed" field === count of `^- [x]` lines.
 //                                          birth writes Completed=completedInit (3 init stages) and marks all 3
 //                                          init stages [x]. Both sides computed off the written file — stronger
@@ -54,7 +54,7 @@
 //   3 Project Type ~ [Bb]rownfield     -> assertStateField "Project Type" === "Brownfield"  (state write :2377; scan:1666)
 //   4 Frameworks lists React           -> assertStateFieldContains "Frameworks" "React"     (state write; detectFrameworks:1505)
 //   5 Languages lists TypeScript       -> assertStateFieldContains "Languages" "TypeScript" (state write; LANG_BY_EXT .ts/.tsx)
-//   6 audit has WORKSPACE_SCANNED      -> assertAuditEvent "WORKSPACE_SCANNED"              (handleIntentBirth:2144; aidlc-audit.ts)
+//   6 audit has WORKSPACE_SCANNED      -> assertAuditEvent "WORKSPACE_SCANNED"              (handleIntentCreate:2144; aidlc-audit.ts)
 //   7 [x] count >= 3 (all init stages) -> on disk: count of `^- [x]` >= 3                   (3 init stages marked [x])
 //   8 State Version is 7               -> assertStateField "State Version" === "7"          (birth state template)
 //   9 Languages field present          -> readStateField "Languages" !== undefined          (state write)
@@ -110,7 +110,7 @@ const LANGUAGES = "TypeScript"; // scan.languages,  birth state write / stdout :
 const FRAMEWORKS = "Vite, React"; // scan.frameworks, birth state write / stdout :2379
 const BUILD_SYSTEM = "npm (package.json)"; // scan.buildSystem, birth state write / stdout :2380
 const STATE_VERSION = "7"; // birth state template
-const WORKSPACE_SCANNED = "WORKSPACE_SCANNED"; // handleIntentBirth:2144
+const WORKSPACE_SCANNED = "WORKSPACE_SCANNED"; // handleIntentCreate:2144
 // Verbatim birth stdout block lines (utility.ts:2377-2380) — the deterministic
 // surface that proves the birth dispatch ran.
 const STDOUT_TYPE = `Project type: ${PROJECT_TYPE}`;
@@ -130,7 +130,7 @@ describe("t71 workspace detection — brownfield classification writes state (sd
   // A CLEAN birth (`/aidlc --scope poc "build a todo app"`) over a brownfield
   // stub — NO --init --force, NO seeded state (a seeded flat state would trigger
   // birth's migrate-flat short-circuit and skip the scan; see header). The
-  // birth path has no gate. handleIntentBirth runs the scan +
+  // birth path has no gate. handleIntentCreate runs the scan +
   // state write deterministically; the scan classifies the stub Brownfield and
   // the written per-intent state + audit carry the result. We assert on the
   // verbatim birth stdout (proves the dispatch fired), then on the on-disk
@@ -164,7 +164,7 @@ describe("t71 workspace detection — brownfield classification writes state (sd
         assertToolResultContains(r, "Bash", STDOUT_FW);
         assertToolResultContains(r, "Bash", STDOUT_BUILD);
 
-        // .sh test 1: the state file still exists after the run. handleIntentBirth
+        // .sh test 1: the state file still exists after the run. handleIntentCreate
         // writes it into the born intent's record; driveAidlc reads it back off
         // disk via the per-intent resolver (recordDirFor).
         expect(r.stateFile).toBeDefined();
@@ -203,7 +203,7 @@ describe("t71 workspace detection — brownfield classification writes state (sd
         // .sh test 7: [x] count >= 3 (all three initialization stages complete).
         expect(xCount).toBeGreaterThanOrEqual(3);
 
-        // .sh test 6: audit recorded WORKSPACE_SCANNED (handleIntentBirth:2144). The
+        // .sh test 6: audit recorded WORKSPACE_SCANNED (handleIntentCreate:2144). The
         // named event is stronger than the .sh's bare grep — it proves the scan
         // stage emitted, not just that the string appears somewhere.
         assertAuditEvent(r, WORKSPACE_SCANNED);

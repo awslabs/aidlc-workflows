@@ -27,17 +27,20 @@ import {
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
   resetAidlcEnv,
+  runOrchestrateNext,
+  seedAidlcMemory,
   seedBoltDag,
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 
 resetAidlcEnv();
 
 const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
-const AUDIT = join(AIDLC_SRC, "tools", "aidlc-audit.ts");
+const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const RP = `aidlc/spaces/${DEFAULT_SPACE}/intents/${DEFAULT_RECORD_DIR}`;
 
 // nfr-requirements produces[] and their per-kind applicability (verified against
@@ -114,6 +117,7 @@ function coverUnit(proj: string, unit: string, slug: string, names: string[]): v
 function seedProject(current: string): string {
   const proj = createTestProject();
   tempDirs.push(proj);
+  seedAidlcMemory(proj);
   writeFileSync(seededStateFile(proj), constructionState(current));
   return proj;
 }
@@ -125,12 +129,11 @@ function envNoScope(): NodeJS.ProcessEnv {
 }
 
 function runNext(proj: string): Directive {
-  const r = spawnSync(BUN, [ORCH, "next", "--project-dir", proj], { encoding: "utf-8", env: envNoScope() });
-  try {
-    return JSON.parse((r.stdout ?? "").trim()) as Directive;
-  } catch {
+  const r = runOrchestrateNext(ORCH, proj, [], { env: envNoScope() });
+  if (r.directive === null) {
     throw new Error(`runNext no JSON. status=${r.status}\n${r.stdout}\n${r.stderr}`);
   }
+  return r.directive as Directive;
 }
 
 /**
@@ -152,25 +155,53 @@ function runReport(proj: string, args: string[], enforceGuard = false): Directiv
   }
 }
 
-function logReviewReady(proj: string, unit: string): void {
-  const r = spawnSync(BUN, [
+function logReviewReady(
+  proj: string,
+  unit: string,
+  iteration = 1,
+  stage = "functional-design",
+): void {
+  const args = [
     LOG,
     "review",
     "--stage",
-    "functional-design",
+    stage,
     "--reviewer",
     "aidlc-architecture-reviewer-agent",
     "--unit",
     unit,
     "--iteration",
-    "1",
-    "--verdict",
-    "READY",
+    String(iteration),
     "--project-dir",
     proj,
-  ], { encoding: "utf-8" });
-  if ((r.status ?? -1) !== 0) {
-    throw new Error(`review log failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
+  ];
+  for (const suffix of [[], ["--verdict", "READY"]]) {
+    const r = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
+    if ((r.status ?? -1) !== 0) {
+      throw new Error(`review log failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
+    }
+  }
+}
+
+function completeWave(proj: string, unit: string, stage: string): void {
+  const result = spawnSync(
+    BUN,
+    [
+      STATE,
+      "unit",
+      "complete",
+      "--wave",
+      "--stage",
+      stage,
+      "--unit",
+      unit,
+      "--project-dir",
+      proj,
+    ],
+    { encoding: "utf-8" },
+  );
+  if ((result.status ?? -1) !== 0) {
+    throw new Error(`wave completion failed: ${result.stdout}${result.stderr}`);
   }
 }
 
@@ -182,22 +213,11 @@ function logArtifactUpdated(proj: string, unit: string): void {
     "functional-design",
     "business-rules.md",
   );
-  const r = spawnSync(BUN, [
-    AUDIT,
-    "append",
-    "ARTIFACT_UPDATED",
-    "--field",
-    "Tool=Edit",
-    "--field",
-    `File=${file}`,
-    "--field",
-    `Context=construction > ${unit} > functional-design > business-rules.md`,
-    "--project-dir",
-    proj,
-  ], { encoding: "utf-8" });
-  if ((r.status ?? -1) !== 0) {
-    throw new Error(`artifact log failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
-  }
+  appendAuditEntry("ARTIFACT_UPDATED", {
+    Tool: "Edit",
+    File: file,
+    Context: `construction > ${unit} > functional-design > business-rules.md`,
+  }, proj);
 }
 
 function seedDependencyArtifact(
@@ -239,6 +259,8 @@ describe("t208 engine unit-kind pruning", () => {
     const proj = seedProject("nfr-requirements");
     seedBoltDag(proj, [{ name: "api", kind: "spec" }, { name: "svc" }]);
     coverUnit(proj, "api", "nfr-requirements", NFR_REQ_SPEC);
+    logReviewReady(proj, "api", 1, "nfr-requirements");
+    completeWave(proj, "api", "nfr-requirements");
     const d = runNext(proj);
     // api is covered by its two-artifact pruned set; the engine moves to svc.
     expect(d.unit).toBe("svc");
@@ -396,7 +418,7 @@ describe("t208 engine unit-kind pruning", () => {
     expect(refused.message).toContain("1 of 2 applicable units");
     expect(refused.message).toContain("(beta)");
 
-    logReviewReady(proj, "beta");
+    logReviewReady(proj, "beta", 2);
     const accepted = runReport(
       proj,
       ["--stage", "functional-design", "--result", "approved"],
@@ -463,6 +485,8 @@ describe("t208 engine unit-kind pruning", () => {
     const proj = seedProject("functional-design");
     seedBoltDag(proj, [{ name: "web", kind: "ui" }, { name: "svc" }]);
     coverUnit(proj, "web", "functional-design", ["business-logic-model"]);
+    logReviewReady(proj, "web");
+    completeWave(proj, "web", "functional-design");
     const d = runNext(proj);
     expect(d.unit).toBe("svc");
   }, 30000);

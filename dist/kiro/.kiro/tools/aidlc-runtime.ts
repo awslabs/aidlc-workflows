@@ -7,7 +7,7 @@
 //   read    <stage-slug>          Print one stage row from runtime-graph.json
 //
 // The compile subcommand is invoked by the PostToolUse Bash hook
-// (aidlc-runtime-compile.ts) on every transition-class audit emit. Pure
+// (aidlc-rebuild-stage-graph.ts) on every transition-class audit emit. Pure
 // observer — never mutates state.md, never asks the user, only reads the
 // audit log + memory.md files and writes runtime-graph.json + emits
 // MEMORY_EMPTY rows for zero-entry approved stages.
@@ -303,7 +303,7 @@ function computeBoltDag(projectDir: string): BoltDag | undefined {
   const parsed = parseBoltDag(body);
   if (!parsed.ok) {
     process.stderr.write(
-      `runtime-compile: unit-of-work-dependency.md edge block ${parsed.reason} ` +
+      `aidlc-runtime: unit-of-work-dependency.md edge block ${parsed.reason} ` +
         `(${parsed.detail}); bolt_dag node omitted\n`
     );
     return undefined;
@@ -320,7 +320,7 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
   const statePath = stateFilePath(projectDir);
   if (!existsSync(statePath)) {
     process.stderr.write(
-      "runtime-compile: no aidlc-state.md, skipping (likely pre-init)\n"
+      "aidlc-runtime: no aidlc-state.md, skipping (likely pre-init)\n"
     );
     return { skipped: "no-state" };
   }
@@ -596,13 +596,13 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
       const existing = terminalByFireId.get(fireId);
       if (existing && existing.ts >= ev.timestamp) {
         process.stderr.write(
-          `runtime-compile: duplicate terminal for Fire id ${fireId} (keeping latest-ts)\n`
+          `aidlc-runtime: duplicate terminal for Fire id ${fireId} (keeping latest-ts)\n`
         );
         continue;
       }
       if (existing) {
         process.stderr.write(
-          `runtime-compile: duplicate terminal for Fire id ${fireId} (keeping latest-ts)\n`
+          `aidlc-runtime: duplicate terminal for Fire id ${fireId} (keeping latest-ts)\n`
         );
       }
       terminalByFireId.set(fireId, {
@@ -1108,7 +1108,7 @@ Learnings captured
 //
 // No content-merge in fragment-merge: main's runtime-graph.json is rebuilt
 // event-source from main audit by the post-Bash hook (AUDIT_MERGED is in
-// the transition regex per aidlc-runtime-compile.ts:87). Content-merge
+// the transition regex per aidlc-rebuild-stage-graph.ts:87). Content-merge
 // would compete with compile.
 
 // fragment-fork --slug <slug> [--project-dir <path>]
@@ -1310,7 +1310,7 @@ Subcommands:
   --help, -h                        Show this message
 
 The compile subcommand is invoked automatically by the PostToolUse Bash
-hook (aidlc-runtime-compile.ts) on every transition-class audit emit.
+hook (aidlc-rebuild-stage-graph.ts) on every transition-class audit emit.
 Manual invocation is a debug surface.
 
 fragment-fork / fragment-merge are invoked by aidlc-bolt.ts during the

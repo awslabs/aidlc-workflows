@@ -9,8 +9,10 @@ support_agents:
   - aidlc-developer-agent
   - aidlc-quality-agent
 mode: mob
+summary_confirmation: required
 reviewer: aidlc-product-lead-agent
 reviewer_max_iterations: 2
+review_class: advisory
 produces:
   - stories
   - personas
@@ -48,9 +50,9 @@ MANDATORY: Follow stage-protocol.md for approval gates, question format, and com
 
 ### Step 1: Load the Lead Persona (mob stage)
 
-Read every path in `directive.inline_context_paths`. For this mob the roster
-contains the aidlc-product-agent persona and its shared/role knowledge only; the
-product manager owns the inline draft and integration work.
+Read every path in `directive.inline_context_paths` per the stage protocol. For
+this mob the roster contains the aidlc-product-agent persona and its shared/role
+knowledge only; the product manager owns the inline draft and integration work.
 
 This stage runs `mode: mob` (stage-protocol.md §5 "Multi-agent stages"): the support agents (aidlc-design-agent for user experience, aidlc-developer-agent for implementability, aidlc-quality-agent for testability) are NOT voices to adopt — they are dispatched as independent participants during PART 2. Do not load their personas into your own context.
 
@@ -131,9 +133,9 @@ participants, and the Product Leader reviews afterwards (§12a).
 - INVEST compliance notes
 
 **Round 1 — dispatch the mob.** Per stage-protocol.md §5 `mode: mob`,
-dispatch all three support agents in parallel against the draft (paths-only
-briefs: the two draft artifacts, the Q&A file, requirements.md), mutually
-blind. Each WRITES its contribution file at
+dispatch all three support agents in parallel against the draft (artifacts
+by path: the two draft artifacts, the Q&A file, requirements.md; rules as the
+accumulated steering bundle), mutually blind. Each WRITES its contribution file at
 `<record>/inception/user-stories/contributions/<agent-slug>.md` (§11 format:
 identity-marker first line, Contribution, Positions): design on UX and
 persona fidelity, developer on implementability and story sizing, quality on
@@ -166,7 +168,7 @@ evidence before presenting the human gate.
 Use stage-protocol.md completion template with completion emoji: :books:
 - Summary of personas and stories produced
 - Review path: `<record>/inception/user-stories/`
-- Structured approval question with options: Approve (continue to `directive.next_stage`) / Request Changes
+- Structured approval question with options: Approve / Request Changes. On the Approve option's description write `Continue to <next stage name>`, taking that name from the run-stage directive's `next_stage` field (`Complete workflow` when it is null) - the user sees the real stage name, never a field name.
 
 STOP for the human response. Report **Approve** with
 `--result approved --user-input "<exact choice>"`; report

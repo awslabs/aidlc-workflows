@@ -117,7 +117,7 @@ describe("t55 /aidlc birth (--scope bugfix) then resume continuity (sdk)", () =>
         // P4 retired `/aidlc --init`: on a fresh workspace the engine auto-births
         // the first intent from a resolved scope (the old --init had no scope and
         // now errors directing the user to a scope/description). A named scope on a
-        // clean workspace NAMES intent-birth, which scaffolds state + marks the 3
+        // clean workspace NAMES intent-create, which scaffolds state + marks the 3
         // init stages [x] — the birth this journey starts from.
         const r1 = await driveAidlc("/aidlc --scope bugfix", {
           projectDir: proj,

@@ -19,13 +19,13 @@
   "toolsSettings": {
     "execute_bash": {
       "allowedCommands": [
-        "bun \\.kiro/tools/.*",
-        "bun \\$\\{?KIRO_PROJECT_DIR\\}?/\\.kiro/tools/.*",
-        "date -u .*"
+        "bun (run )?[\"']?\\.kiro/tools/[A-Za-z0-9._-]+\\.ts[\"']?( .*)?",
+        "date -u( .*)?"
       ],
       "deniedCommands": [
-        "rm -rf /.*",
-        "git push .*"
+        "([^\\s]*/)?rm( [^\\s]+)* -[A-Za-z]*[rR][A-Za-z]*( .*)?",
+        "([^\\s]*/)?rm( [^\\s]+)* --recursive( .*)?",
+        "([^\\s]*/)?git( -[^\\s]+( (\"[^\"]*\"|'[^']*'|[^\\s]+))?)* push( .*)?"
       ]
     },
     "fs_write": {
@@ -79,7 +79,27 @@
       },
       {
         "matcher": "execute_bash",
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts pretool-block",
+        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts guard-tool-call",
+        "timeout_ms": 15000
+      },
+      {
+        "matcher": "fs_write",
+        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts review-freeze",
+        "timeout_ms": 15000
+      },
+      {
+        "matcher": "execute_bash",
+        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts review-freeze",
+        "timeout_ms": 15000
+      },
+      {
+        "matcher": "subagent",
+        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts deliver-stage-rules",
+        "timeout_ms": 15000
+      },
+      {
+        "matcher": "subagent",
+        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts plan-approval-guard",
         "timeout_ms": 15000
       }
     ],
@@ -91,12 +111,12 @@
       },
       {
         "matcher": "execute_bash",
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts runtime-compile",
+        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts rebuild-stage-graph",
         "timeout_ms": 45000
       },
       {
         "matcher": "todo_list",
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts state-sync"
+        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts sync-workflow-state"
       },
       {
         "matcher": "subagent",
@@ -105,7 +125,7 @@
     ],
     "stop": [
       {
-        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts stop",
+        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts continue-workflow",
         "timeout_ms": 30000
       }
     ]

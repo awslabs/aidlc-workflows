@@ -1,4 +1,4 @@
-// covers: hook:aidlc-stop
+// covers: hook:aidlc-continue-workflow
 //
 // t187 - park + conversational carve-out (live SDK). The shipped end-to-end
 // proof of the #365 / #366 / #367 park umbrella: drive a REAL agent through the

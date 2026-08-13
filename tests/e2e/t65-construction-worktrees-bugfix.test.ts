@@ -142,7 +142,7 @@ describe("t65 Construction-worktrees per-scope contract — bugfix (migrated fro
     proj = setupIntegrationProject({ withGreenfieldStub: true });
     const init = spawnSync(
       BUN,
-      [UTIL, "intent-birth", "--project-dir", proj, "--force", "--scope", SCOPE],
+      [UTIL, "intent-create", "--project-dir", proj, "--force", "--scope", SCOPE],
       { encoding: "utf-8" },
     );
     if (init.status !== 0) {

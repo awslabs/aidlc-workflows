@@ -10,16 +10,16 @@ const fills: OnboardingFills = {
   slots: {
     title_block: `# Project Name <!-- Replace with your project name -->
 
-This project uses AI-DLC (AI-Driven Development Life Cycle) for structured development, running on the **Kiro CLI harness**. The workspace shell ships in \`.kiro/\` (no setup command); the engine auto-births the first intent when you describe what to build. Run \`/aidlc\` followed by a scope or project description to begin. Run \`/aidlc --doctor\` to validate your setup, \`/aidlc --version\` to print the framework version, \`/aidlc --stage <slug>\` to jump to a specific stage, \`/aidlc --phase <name>\` to jump to a phase, \`/aidlc --depth <level>\` to override depth, \`/aidlc --test-strategy <level>\` to override test volume. Run \`/aidlc compose "<task>"\` to have the adaptive composer propose a tailored EXECUTE/SKIP plan (works up front, from a scan report via \`--report <path>\`, and mid-workflow to re-shape the pending stages - every proposal stops at an approve/edit/reject gate).`,
+This project uses AI-DLC (AI-Driven Development Life Cycle) for structured development, running on the **Kiro CLI harness**. The workspace shell ships in \`.kiro/\` (no setup command); describe what you want to build and it sets up the workflow for you. Run \`/aidlc\` followed by a scope or project description to begin. Run \`/aidlc --doctor\` to validate your setup, \`/aidlc --version\` to print the framework version, \`/aidlc --stage <slug>\` to jump to a specific stage, \`/aidlc --phase <name>\` to jump to a phase, \`/aidlc --depth <level>\` to override depth, \`/aidlc --test-strategy <level>\` to override test volume, \`/aidlc --review <class>\` to cap stage reviews (adversarial, advisory, none). Run \`/aidlc compose "<task>"\` to get a plan tailored to that task (works up front, from a scan report via \`--report <path>\`, and mid-workflow to re-shape the pending stages - every proposal stops at an approve/edit/reject gate).`,
 
     prereq_bullets: `- **Kiro CLI ≥ 2.6**: the hooks/skills/agent features this install relies on (stop hook with blocking, preToolUse/postToolUse matchers, \`.kiro/skills/\` slash commands, workspace \`chat.defaultAgent\`) shipped in the 2.x line. Check with \`kiro-cli --version\`.
-- **bun**: Required for the CLI tools and hook scripts (state management, audit logging, orchestration engine). Install via \`curl -fsSL https://bun.sh/install | bash\`. \`bun\` must be on your PATH for the non-interactive shells the harness spawns — these source \`~/.zshenv\` (zsh) or \`~/.bashrc\` (bash), NOT \`~/.zshrc\`.
+- **bun**: Required for the CLI tools and hook scripts (tracking progress, writing the decision log, deciding what runs next). Install via \`curl -fsSL https://bun.sh/install | bash\`. \`bun\` must be on your PATH for the non-interactive shells the harness spawns — these source \`~/.zshenv\` (zsh) or \`~/.bashrc\` (bash), NOT \`~/.zshrc\`.
 - **Activation**: this install ships \`.kiro/settings/cli.json\` setting \`chat.defaultAgent: "aidlc"\`, so a plain \`kiro-cli chat\` in this project uses the AI-DLC agent and \`/aidlc\` just works. **Note: the workspace default takes precedence over any global default agent you have configured.** If you prefer your own default, delete that settings line and start sessions with \`kiro-cli chat --agent aidlc\` instead.
-- **Permissions**: the \`aidlc\` agent pre-approves ONLY \`bun .kiro/tools/*\` shell commands (plus read-only tools); everything else prompts. There is no blanket shell trust. In \`--no-interactive\` runs, tools that would prompt are auto-approved by the harness — prefer interactive sessions for gated workflows.`,
+- **Permissions**: the \`aidlc\` agent pre-approves ONLY project-relative \`bun .kiro/tools/<tool>.ts\` calls (including the \`bun run\` and quoted-path spellings), \`date -u\`, and its listed read-only native tools; everything else prompts. There is no blanket shell trust. Start Kiro from the project root so those relative tool paths resolve correctly. In \`--no-interactive\` runs, a command that would prompt is refused because no approver is present. \`--trust-all-tools\` bypasses the deny list too; use it only in a disposable sandbox.`,
 
     prereq_bullets_tail: "",
 
-    agents_note: `On Kiro the conductor is \`agents/aidlc.json\`; all 14 personas have JSON configs, and workers for the four dispatched stages (2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent), reviewer passes, and composer requests run through the Kiro \`subagent\` tool, while inline-stage personas are adopted in-context.`,
+    agents_note: `On Kiro the \`/aidlc\` session runs from \`agents/aidlc.json\`; all 14 expert roles have JSON configs, and the four delegated stages (2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent), reviewer passes, and composer requests run through the Kiro \`subagent\` tool, while inline-stage personas are adopted in-context.`,
 
     structure_extra: "",
 
@@ -27,7 +27,7 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
 
     sections_before_resumption: `## What's different on this harness
 
-This is the same AI-DLC core that ships to every harness — one deterministic engine, state machine, audit trail, and stage set, rendered onto Kiro CLI. On Kiro:
+This is the same AI-DLC core that ships to every harness: the same ordered steps, the same approval gates, and the same written record of what was decided, rendered onto Kiro CLI. On Kiro:
 
 - Approval gates and questions render as **numbered prose options** (no structured-question widget); the questions FILE with \`[Answer]:\` tags remains the source of truth.
 - There is **no statusline** and **no welcome message**; use \`/aidlc --status\` and the progress lines at gates.

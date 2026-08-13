@@ -62,7 +62,7 @@ Runs individual stages in isolation with known workspace + state fixtures. Verif
 
 **What it tests:**
 - Preflight health gate: Claude CLI on PATH, AWS credentials valid, Claude responds (exit 0), response non-empty (preflight)
-- CLI tool utility handlers: intent-birth, --doctor, --status, --stage, --phase (integration)
+- CLI tool utility handlers: intent-create, --doctor, --status, --stage, --phase (integration)
 - Individual stages with greenfield/brownfield stubs, artifact verification (integration)
 
 **Run:** `bun tests/run-tests.ts --ci`
@@ -154,6 +154,12 @@ The stack defaults to **`c5.4xlarge`** — the proven size for the full `--all -
 ## Preflight Validation
 
 Before running unfiltered live-capable levels (integration or e2e), the runner executes `tests/integration/t19.test.ts` as a gate. It drives a tiny real turn through the **Claude Agent SDK** (the same live path the integration tier uses) and asserts only on deterministic surfaces. If the preflight fails, deterministic files still run and Claude-dependent files are skipped with per-file `SKIP` entries.
+
+The SDK driver gives each `driveAidlc()` call an ephemeral `CLAUDE_CONFIG_DIR`
+and disables session persistence. Live tests therefore leave the user's
+`~/.claude.json` and Claude transcripts untouched, including when the home
+directory is read-only inside a command sandbox. A per-call
+`env.CLAUDE_CONFIG_DIR` remains available for focused calibration.
 
 | Assertion | Surface | On fail |
 |-----------|---------|---------|
@@ -317,12 +323,21 @@ bash tests/run-tests.sh       # POSIX compatibility wrapper
 
 # Output modifiers
 --verbose       # Write per-test logs to tests/logs/
+--no-llm        # Force all live-model gates closed while deterministic
+                # integration/e2e tests still run. Also via AIDLC_NO_LLM=1.
 --debug         # Implies --verbose; streams per-test output and writes SDK/TUI
                 # driver traces to tests/logs/
 --filter PAT    # Only run tests whose filename matches extended regex PAT
 --parallel N    # Run up to N test files concurrently within a tier (alias: -P N).
                 # Default: 1 (serial). Smoke and unit tiers are always serial.
 ```
+
+`--no-llm` (or `AIDLC_NO_LLM=1`) closes the derived Claude gate and forces every
+live-model opt-in to `0`: Claude TUI, Kiro ACP/TUI/IDE, Codex exec, and opencode
+run. Deterministic tests in those tiers still run, including the token-free TUI
+substrate preflight. This gives CI a full-tier deterministic profile without
+live-model cost or flakiness, even when CLIs are installed and live variables
+were inherited as `1`.
 
 Live SDK and TUI harness drivers default to project-only Claude setting sources.
 That means they load the copied test `.claude/` project settings and hooks while

@@ -91,7 +91,7 @@ beforeAll(() => {
   proj = setupIntegrationProject({ withGreenfieldStub: true });
   const r = spawnSync(
     BUN,
-    [UTILITY, "intent-birth", "--project-dir", proj, "--force", "--scope", SCOPE],
+    [UTILITY, "intent-create", "--project-dir", proj, "--force", "--scope", SCOPE],
     { encoding: "utf-8" },
   );
   if (r.status !== 0) {

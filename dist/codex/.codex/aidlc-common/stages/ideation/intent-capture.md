@@ -7,8 +7,10 @@ lead_agent: aidlc-product-agent
 support_agents:
   - aidlc-architect-agent
 mode: inline
+summary_confirmation: required
 reviewer: aidlc-product-lead-agent
 reviewer_max_iterations: 2
+review_class: advisory
 produces:
   - intent-statement
   - stakeholder-map
@@ -158,7 +160,7 @@ confirmation `[Answer]:` is blank.
 
 Hand completion to `stage-protocol.md` via
 `bun .codex/tools/aidlc-orchestrate.ts report --stage intent-capture --result <outcome>`.
-The engine owns all lifecycle transitions and advancement.
+That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
 ### Step 8: Present Completion & Request Approval
 

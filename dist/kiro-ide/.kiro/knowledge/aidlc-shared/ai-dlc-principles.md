@@ -28,7 +28,7 @@ Each agent carries context across stages because they are present throughout. Th
 
 ## Scope System
 
-Not every task requires all 32 stages. Scopes (enterprise, feature, mvp, poc, bugfix, refactor, infra, security-patch, workshop) determine which stages execute and at what depth.
+Not every task requires every stage. Scopes (see the compiled scope grid or run `/aidlc --doctor` for the enabled set) determine which stages execute and at what depth.
 
 ## Self-Learning Guardrails
 

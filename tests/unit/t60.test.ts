@@ -336,7 +336,7 @@ describe("t60 valid-scopes derived from .claude/scopes/*.md (migrated from t60-v
     const proj = freshProject();
     setupFixtureScope(proj);
     const r = run(utilityIn(proj), [
-      "intent-birth",
+      "intent-create",
       "--scope",
       "fixture-scope",
       "--project-dir",
@@ -352,7 +352,7 @@ describe("t60 valid-scopes derived from .claude/scopes/*.md (migrated from t60-v
     const proj = freshProject();
     setupFixtureScope(proj);
     const r = run(utilityIn(proj), [
-      "intent-birth",
+      "intent-create",
       "--scope",
       "bogus-notascope",
       "--project-dir",

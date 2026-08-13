@@ -1,1 +1,1 @@
-{"version":"1.0.0","enabled":true,"name":"aidlc-session-start","description":"Emits SESSION_STARTED and injects workflow context on prompt submit.","when":{"type":"promptSubmit"},"then":{"type":"runCommand","command":"bun .kiro/hooks/aidlc-kiro-adapter.ts session-start"}}
+{"version":"1.0.0","enabled":true,"name":"aidlc-session-start","description":"Starts an AIDLC session: notes the session opened and gives the assistant the current workflow context.","when":{"type":"promptSubmit"},"then":{"type":"runCommand","command":"bun .kiro/hooks/aidlc-kiro-adapter.ts session-start"}}

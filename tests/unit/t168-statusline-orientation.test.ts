@@ -18,7 +18,7 @@
 // this twin SPAWNS the real shipped hook with the workspace JSON on stdin (the
 // same shape Claude Code pipes), exactly like t61's runStatusline helper.
 //
-// SEEDING the per-intent workspace layout: birthIntent() (aidlc-lib.ts) is the
+// SEEDING the per-intent workspace layout: createIntent() (aidlc-lib.ts) is the
 // real deterministic primitive that mints a record dir under
 // aidlc/spaces/<space>/intents/<slug>-<id8>/, appends the intents.json row, and
 // sets the active-intent cursor — exactly the on-disk shape activeIntent()/
@@ -35,7 +35,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  birthIntent,
+  createIntent,
   setActiveSpaceCursor,
   stateFilePath,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -75,8 +75,8 @@ function runStatusline(p: string): string {
  * phase + stage so phaseProgress/extractField resolve a non-"ready" line).
  */
 function seedIntent(p: string, slug: string, space: string): void {
-  const born = birthIntent(p, slug, space, "feature");
-  // birthIntent leaves a header-only stub; overwrite with a phase-bearing body
+  const born = createIntent(p, slug, space, "feature");
+  // createIntent leaves a header-only stub; overwrite with a phase-bearing body
   // (stateFilePath resolves the active intent's record dir → born.recordDir).
   writeFileSync(
     stateFilePath(p, born.dirName, space),
@@ -126,7 +126,7 @@ describe("t168 statusline orientation prefix (mechanism cli — spawned hook + p
     // Birth leaves a header-only stub (no Lifecycle Phase) — the hook's !phase
     // gate fires BEFORE the orientation prefix is computed, so the no-workflow
     // line stays clean even with an active record.
-    birthIntent(proj, "stub-only", "default");
+    createIntent(proj, "stub-only", "default");
     const out = runStatusline(proj);
     expect(out).toContain("[AIDLC] ready");
     expect(out).not.toContain("stub-only");

@@ -1,11 +1,11 @@
-// covers: hook:aidlc-sensor-fire
+// covers: hook:aidlc-run-sensors, function:readActiveDirectiveMarker
 //
 // t94 — unit-level behavioural contract for the PostToolUse sensor-fire hook:
 // every GUARD and EARLY-EXIT branch of its 12-step flow. Migrated from
 // tests/unit/t94-sensor-fire-hook-unit.sh (TAP plan 18). The .sh carried NO
 // `# covers:` header; its subject is the shipped hook
-// dist/claude/.claude/hooks/aidlc-sensor-fire.ts, whose registry unit is
-// `hook:aidlc-sensor-fire` (the same id t95 and t131 credit). t94 is the
+// dist/claude/.claude/hooks/aidlc-run-sensors.ts, whose registry unit is
+// `hook:aidlc-run-sensors` (the same id t95 and t131 credit). t94 is the
 // guard/early-exit half (no-spawn proofs + heartbeat placement); t95 is the
 // dispatch/timeout/heartbeat-advance half — complementary subjects, one hook.
 //
@@ -27,7 +27,7 @@
 // dispatch loop never fired. The heartbeat file (sensor-fire.last) under
 // aidlc-docs/.aidlc-hooks-health/ is checked directly on disk.
 //
-// SOURCE UNDER TEST (dist/claude/.claude/hooks/aidlc-sensor-fire.ts):
+// SOURCE UNDER TEST (dist/claude/.claude/hooks/aidlc-run-sensors.ts):
 //   :53      TTY guard — process.stdin.isTTY -> exit 0.
 //   :59-67   stdin parse — malformed JSON / non-hook-shaped input -> exit 0.
 //   :73-74   empty tool_input.file_path -> exit 0.
@@ -82,6 +82,7 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -100,7 +101,7 @@ import {
 } from "../harness/fixtures.ts";
 
 const BUN = process.execPath; // the bun running this test
-const HOOK = join(AIDLC_SRC, "hooks", "aidlc-sensor-fire.ts");
+const HOOK = join(AIDLC_SRC, "hooks", "aidlc-run-sensors.ts");
 const FRAMEWORK_GRAPH = join(AIDLC_SRC, "tools", "data", "stage-graph.json");
 
 // ISO-8601-ish prefix the .sh grepped for: YYYY-MM-DDThh:mm:ss... (isoTimestamp
@@ -209,7 +210,7 @@ function spawnLogPath(proj: string): string {
   return join(proj, ".spawn.log");
 }
 function heartbeatPath(proj: string): string {
-  return join(seededRecordDir(proj), ".aidlc-hooks-health", "sensor-fire.last");
+  return join(seededRecordDir(proj), ".aidlc-hooks-health", "run-sensors.last");
 }
 
 interface HookRun {
@@ -249,7 +250,7 @@ function inceptionMd(proj: string): string {
   return join(proj, "aidlc-docs", "inception", "x.md");
 }
 
-describe("t94 aidlc-sensor-fire hook — guards + early exits (migrated from t94-sensor-fire-hook-unit.sh, plan 18)", () => {
+describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94-sensor-fire-hook-unit.sh, plan 18)", () => {
   // ===========================================================================
   // Step 2-5 — input guards.
   // ===========================================================================
@@ -322,6 +323,46 @@ describe("t94 aidlc-sensor-fire hook — guards + early exits (migrated from t94
       "--output-path",
       filePath,
     ]);
+  });
+
+  test("malformed, stale, and unknown active-directive markers fall back to Current Stage", () => {
+    for (const marker of [
+      "{not json",
+      JSON.stringify({
+        version: 1,
+        stage: "code-generation",
+        state_sha256: "0".repeat(64),
+      }),
+      "UNKNOWN_STAGE",
+    ]) {
+      const proj = makeProjectActive();
+      const state = readFileSync(seededStateFile(proj), "utf-8");
+      const body =
+        marker === "UNKNOWN_STAGE"
+          ? JSON.stringify({
+            version: 1,
+            stage: "unknown-stage",
+            state_sha256: createHash("sha256").update(state, "utf-8").digest("hex"),
+          })
+          : marker;
+      writeFileSync(
+        join(seededRecordDir(proj), ".aidlc-active-directive.json"),
+        body,
+      );
+      const filePath = join(
+        proj,
+        "aidlc-docs",
+        "inception",
+        "requirements-analysis",
+        "intent.md",
+      );
+      expect(runHook(proj, filePath).status).toBe(0);
+      const argv = JSON.parse(
+        readFileSync(spawnLogPath(proj), "utf-8").split("\n")[0],
+      ) as string[];
+      const stageFlag = argv.indexOf("--stage");
+      expect(argv[stageFlag + 1]).toBe("requirements-analysis");
+    }
   });
 
   test("recursion guard skips writes under .aidlc-sensors/ [.sh case 4]", () => {

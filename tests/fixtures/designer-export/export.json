@@ -6,7 +6,7 @@
       "name": "Workspace Scaffold",
       "phase": "initialization",
       "execution": "ALWAYS",
-      "condition": "Ensure-exists the per-intent record and artifact dirs — idempotent (creates on demand, skips existing)",
+      "condition": "Ensure-exists the per-intent record and in-scope phase dirs, idempotent (creates on demand, skips existing)",
       "lead_agent": "orchestrator",
       "support_agents": [],
       "mode": "inline",
@@ -26,7 +26,7 @@
         "workshop"
       ],
       "inputs": "none (first stage after session start)",
-      "outputs": "the per-intent record tree (stage artifact dirs + verification dir) and the space-level knowledge/ dir",
+      "outputs": "the per-intent record tree (one dir per in-scope phase + verification dir) and the space-level knowledge/ dir",
       "rules_in_context": [
         {
           "path": "aidlc/spaces/default/memory/org.md",
@@ -153,6 +153,7 @@
       "consumes": [],
       "requires_stage": [],
       "sensors": [
+        "claim-sources",
         "required-sections",
         "upstream-coverage"
       ],
@@ -162,6 +163,10 @@
         "mvp",
         "poc"
       ],
+      "reviewer": "aidlc-product-lead-agent",
+      "reviewer_max_iterations": 2,
+      "review_class": "advisory",
+      "summary_confirmation": "required",
       "inputs": "User's project description ($ARGUMENTS), scope selection",
       "outputs": "intent-statement.md, stakeholder-map.md, intent-capture-questions.md (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
@@ -183,6 +188,11 @@
         }
       ],
       "sensors_applicable": [
+        {
+          "id": "claim-sources",
+          "path": ".claude/sensors/aidlc-claim-sources.md",
+          "matches": "**/{aidlc-docs,intents}/**"
+        },
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
@@ -228,6 +238,7 @@
         "enterprise",
         "feature"
       ],
+      "summary_confirmation": "required",
       "inputs": "Intent statement from intent-capture stage",
       "outputs": "competitive-analysis.md, market-trends.md, build-vs-buy.md, market-research-questions.md (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
@@ -311,6 +322,7 @@
         "feature",
         "mvp"
       ],
+      "summary_confirmation": "required",
       "inputs": "Intent statement from intent-capture stage, market research from market-research stage (if executed)",
       "outputs": "feasibility-assessment.md, constraint-register.md, raid-log.md, feasibility-questions.md (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
@@ -388,6 +400,7 @@
         "feature",
         "mvp"
       ],
+      "summary_confirmation": "required",
       "inputs": "Intent statement, feasibility assessment, constraint register",
       "outputs": "scope-document.md, intent-backlog.md, scope-definition-questions.md (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
@@ -462,6 +475,7 @@
         "enterprise",
         "feature"
       ],
+      "summary_confirmation": "required",
       "inputs": "Scope definition, intent backlog, feasibility assessment",
       "outputs": "team-assessment.md, skill-matrix.md, mob-composition.md, team-formation-questions.md (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
@@ -541,6 +555,8 @@
       ],
       "reviewer": "aidlc-product-lead-agent",
       "reviewer_max_iterations": 2,
+      "review_class": "advisory",
+      "summary_confirmation": "required",
       "inputs": "Intent statement, scope definition, intent backlog",
       "outputs": "wireframes.md, user-flow.md, rough-mockups-questions.md (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
@@ -597,6 +613,10 @@
           "required": true
         },
         {
+          "artifact": "stakeholder-map",
+          "required": true
+        },
+        {
           "artifact": "scope-document",
           "required": true
         },
@@ -640,6 +660,7 @@
         "enterprise",
         "feature"
       ],
+      "summary_confirmation": "required",
       "inputs": "All Ideation phase artifacts (intent, market research, feasibility, scope, team, mockups)",
       "outputs": "initiative-brief.md, decision-log.md, approval-handoff-questions.md (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
@@ -679,7 +700,7 @@
       "name": "Reverse Engineering",
       "phase": "inception",
       "execution": "CONDITIONAL",
-      "condition": "Execute when project is brownfield. Always rerun for freshness. Skip for greenfield projects.",
+      "condition": "Execute when project is brownfield. On rerun the Step 1 guard checks store freshness (codekb-scope-diff) - verified-CURRENT stores may be reused by human choice, anything else rescans. Skip for greenfield projects.",
       "lead_agent": "aidlc-developer-agent",
       "support_agents": [
         "aidlc-architect-agent"
@@ -814,6 +835,7 @@
         "infra",
         "workshop"
       ],
+      "summary_confirmation": "required",
       "inputs": "<record>/aidlc-state.md + (brownfield) reverse-engineering evidence",
       "outputs": "team-practices.md, discovered-rules.md, evidence.md, practices-discovery-timestamp.md, plus one contribution file per support agent. On affirmation, content is promoted to aidlc/spaces/<active-space>/memory/team.md and project.md.",
       "rules_in_context": [
@@ -911,6 +933,8 @@
       ],
       "reviewer": "aidlc-product-lead-agent",
       "reviewer_max_iterations": 2,
+      "review_class": "advisory",
+      "summary_confirmation": "required",
       "inputs": "RE artifacts (if brownfield), user's project description (from <record>/audit/<host>-<clone>.md)",
       "outputs": "requirements.md, requirements-analysis-questions.md (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
@@ -998,6 +1022,8 @@
       ],
       "reviewer": "aidlc-product-lead-agent",
       "reviewer_max_iterations": 2,
+      "review_class": "advisory",
+      "summary_confirmation": "required",
       "inputs": "<record>/inception/requirements-analysis/requirements.md, RE artifacts (if brownfield)",
       "outputs": "stories.md, personas.md, user-stories-assessment.md (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
@@ -1087,6 +1113,8 @@
       ],
       "reviewer": "aidlc-product-lead-agent",
       "reviewer_max_iterations": 2,
+      "review_class": "advisory",
+      "summary_confirmation": "required",
       "inputs": "Rough mockups from rough-mockups stage, user stories from user-stories stage, requirements from requirements-analysis stage",
       "outputs": "mockups.md, interaction-spec.md, design-system-mapping.md, accessibility-checklist.md, refined-mockups-questions.md (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
@@ -1180,6 +1208,8 @@
       ],
       "reviewer": "aidlc-architecture-reviewer-agent",
       "reviewer_max_iterations": 2,
+      "review_class": "advisory",
+      "summary_confirmation": "required",
       "inputs": "<record>/inception/requirements-analysis/requirements.md, <record>/inception/user-stories/stories.md (if produced), RE artifacts (if brownfield)",
       "outputs": "components.md, component-methods.md, services.md, component-dependency.md, decisions.md (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
@@ -1275,6 +1305,8 @@
       ],
       "reviewer": "aidlc-architecture-reviewer-agent",
       "reviewer_max_iterations": 2,
+      "review_class": "advisory",
+      "summary_confirmation": "required",
       "inputs": "<record>/inception/application-design/ (all design artifacts), <record>/inception/requirements-analysis/requirements.md, <record>/inception/user-stories/stories.md (if produced)",
       "outputs": "unit-of-work.md, unit-of-work-dependency.md, unit-of-work-story-map.md (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
@@ -1374,6 +1406,7 @@
         "mvp",
         "workshop"
       ],
+      "summary_confirmation": "required",
       "inputs": "All Inception artifacts (requirements, stories, mockups, architecture, units)",
       "outputs": "bolt-plan.md, team-allocation.md, risk-and-sequencing-rationale.md, external-dependency-map.md, delivery-planning-questions.md (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
@@ -1492,6 +1525,8 @@
       ],
       "reviewer": "aidlc-architecture-reviewer-agent",
       "reviewer_max_iterations": 2,
+      "review_class": "adversarial",
+      "summary_confirmation": "required",
       "inputs": "unit-of-work.md, unit-of-work-story-map.md, requirements.md, application design artifacts",
       "outputs": "business-logic-model.md, business-rules.md, domain-entities.md, CONDITIONAL: frontend-components.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)",
       "rules_in_context": [
@@ -1608,6 +1643,8 @@
       ],
       "reviewer": "aidlc-architecture-reviewer-agent",
       "reviewer_max_iterations": 2,
+      "review_class": "adversarial",
+      "summary_confirmation": "required",
       "inputs": "functional design artifacts, requirements.md, RE artifacts",
       "outputs": "performance-requirements.md, security-requirements.md, scalability-requirements.md, reliability-requirements.md, tech-stack-decisions.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)",
       "rules_in_context": [
@@ -1733,6 +1770,8 @@
       ],
       "reviewer": "aidlc-architecture-reviewer-agent",
       "reviewer_max_iterations": 2,
+      "review_class": "adversarial",
+      "summary_confirmation": "required",
       "inputs": "NFR requirements artifacts, functional design artifacts",
       "outputs": "performance-design.md, security-design.md, scalability-design.md, reliability-design.md, logical-components.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)",
       "rules_in_context": [
@@ -1873,6 +1912,8 @@
       ],
       "reviewer": "aidlc-architecture-reviewer-agent",
       "reviewer_max_iterations": 2,
+      "review_class": "adversarial",
+      "summary_confirmation": "required",
       "inputs": "NFR design artifacts, application design, functional design",
       "outputs": "deployment-architecture.md, infrastructure-services.md, monitoring-design.md, cicd-pipeline.md, CONDITIONAL: shared-infrastructure.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)",
       "rules_in_context": [
@@ -1989,6 +2030,7 @@
       ],
       "reviewer": "aidlc-architecture-reviewer-agent",
       "reviewer_max_iterations": 2,
+      "review_class": "adversarial",
       "inputs": "ALL prior design artifacts for this unit",
       "outputs": "application code + code-generation-plan.md, code-generation-questions.md, code-summary.md (under this stage's per-unit record dir, engine-resolved)",
       "rules_in_context": [
@@ -2154,6 +2196,7 @@
         "infra",
         "workshop"
       ],
+      "summary_confirmation": "required",
       "inputs": "Code generation output from code-generation stage, build/test results from build-and-test stage",
       "outputs": "ci-config.md, quality-gates.md, ci-pipeline-questions.md (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
@@ -2246,6 +2289,7 @@
         "security-patch",
         "workshop"
       ],
+      "summary_confirmation": "required",
       "inputs": "CI pipeline config from ci-pipeline stage, infrastructure design from infrastructure-design stage",
       "outputs": "cd-config.md, deployment-strategy.md, rollback-runbook.md, deployment-pipeline-questions.md (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
@@ -2325,6 +2369,7 @@
         "infra",
         "workshop"
       ],
+      "summary_confirmation": "required",
       "inputs": "Infrastructure design from infrastructure-design stage, CD pipeline config from deployment-pipeline stage",
       "outputs": "environment-inventory.md, validation-report.md, environment-provisioning-questions.md (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
@@ -2409,6 +2454,7 @@
         "security-patch",
         "workshop"
       ],
+      "summary_confirmation": "required",
       "inputs": "CD pipeline config from deployment-pipeline stage, provisioned environments from environment-provisioning stage, built artifacts from Construction",
       "outputs": "deployment-log.md, smoke-test-results.md, health-check-report.md, deployment-execution-questions.md (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
@@ -2498,6 +2544,7 @@
         "infra",
         "workshop"
       ],
+      "summary_confirmation": "required",
       "inputs": "NFR design from nfr-design stage, infrastructure design from infrastructure-design stage, deployed application",
       "outputs": "dashboards.md, alarms.md, slo-config.md, log-queries.md, tracing-config.md, anomaly-config.md, observability-setup-questions.md (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
@@ -2581,6 +2628,7 @@
         "feature",
         "workshop"
       ],
+      "summary_confirmation": "required",
       "inputs": "Observability setup from observability-setup stage, NFR design from nfr-design stage, infrastructure design from infrastructure-design stage",
       "outputs": "runbooks.md, incident-plan.md, escalation-matrix.md, incident-response-questions.md (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
@@ -2666,6 +2714,7 @@
         "feature",
         "workshop"
       ],
+      "summary_confirmation": "required",
       "inputs": "NFR requirements from nfr-requirements stage, NFR design from nfr-design stage, deployed application, observability data from observability-setup stage",
       "outputs": "load-test-plan.md, test-results.md, nfr-validation-matrix.md, performance-validation-questions.md (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
@@ -2759,6 +2808,7 @@
         "feature",
         "workshop"
       ],
+      "summary_confirmation": "required",
       "inputs": "All Operation phase artifacts, production monitoring data",
       "outputs": "slo-report.md, cost-analysis.md, drift-report.md, feedback-loop.md, feedback-optimization-questions.md (under this stage's record dir, engine-resolved)",
       "rules_in_context": [

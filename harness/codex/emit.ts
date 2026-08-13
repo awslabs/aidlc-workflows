@@ -20,6 +20,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, wri
 import { dirname, join, posix, relative, win32 } from "node:path";
 import { stringify } from "smol-toml";
 import type { EmitContext } from "../../scripts/manifest-types.ts";
+import { absorbReviewerKnowledge } from "../../scripts/agent-knowledge.ts";
 import { renderOnboarding } from "../../scripts/onboarding.ts";
 import onboardingFills from "./onboarding.fills.ts";
 import { projectTier } from "../../core/tools/aidlc-tiers.ts";
@@ -30,19 +31,26 @@ import { projectTier } from "../../core/tools/aidlc-tiers.ts";
 // ---------------------------------------------------------------------------
 const HOOK_WIRING: Array<{ event: string; matcher?: string; target: string }> = [
   { event: "SessionStart", target: "session-start" },
-  { event: "UserPromptSubmit", target: "mint" },
+  { event: "UserPromptSubmit", target: "record-human-turn" },
+  { event: "PreToolUse", matcher: "spawn_agent", target: "deliver-stage-rules" },
   { event: "PreToolUse", target: "state-transition-guard" },
   // No matcher: the reviewer-scope target self-filters (Bash + apply_patch;
   // everything else exits 0 instantly), and Codex read access rides the shell
   // tool anyway. Verified on 0.142.5: subagent tool calls carry agent_type,
   // and a PreToolUse exit 2 + stderr blocks the call with the reason relayed.
   { event: "PreToolUse", target: "reviewer-scope" },
+  // No matcher for the same reason: the review-freeze target self-filters to
+  // apply_patch and mutation-capable Bash commands.
+  { event: "PreToolUse", target: "review-freeze" },
+  // No matcher: the plan-approval-guard target self-filters (spawn_agent
+  // naming the developer agent; everything else exits 0 instantly).
+  { event: "PreToolUse", target: "plan-approval-guard" },
   { event: "PostToolUse", matcher: "apply_patch", target: "audit-and-sensors" },
-  { event: "PostToolUse", matcher: "update_plan", target: "state-sync" },
-  { event: "PostToolUse", matcher: "Bash", target: "runtime-compile" },
+  { event: "PostToolUse", matcher: "update_plan", target: "sync-workflow-state" },
+  { event: "PostToolUse", matcher: "Bash", target: "rebuild-stage-graph" },
   { event: "PreCompact", target: "validate-state" },
   { event: "SubagentStop", target: "log-subagent" },
-  { event: "Stop", target: "stop" },
+  { event: "Stop", target: "continue-workflow" },
 ];
 
 const adapterCmd = (harnessDir: string, target: string) =>
@@ -67,7 +75,7 @@ function emitConfigToml(): string {
 #
 # Model: these session defaults are what judgment-tier agent roles inherit
 # (their TOMLs omit model/model_reasoning_effort by design - see the tier
-# projection); balanced/templated roles pin gpt-5.4 per the tier table.
+# projection); balanced/templated roles pin gpt-5.6-terra per the tier table.
 # D-9: Amazon Bedrock is the shipped default provider (web_search is
 # unavailable there; the market-research stage degrades gracefully). For
 # OpenAI-auth setups, comment out model_provider and the [model_providers]
@@ -304,6 +312,10 @@ export default function emit(ctx: EmitContext): void {
     const raw = readFileSync(mdPath, "utf-8");
     const { fm, body } = parseAgentMd(raw);
     const name = fm.name ?? "";
+    // Reviewer knowledge absorption (scripts/agent-knowledge.ts): the emit
+    // plugin reads core/agents/*.md directly, so the packager's transform
+    // never runs here - absorb into the body the same way it does.
+    const absorbedBody = absorbReviewerKnowledge(body, name, coreRoot);
     const description = (fm.description ?? "").replace(/\s+/g, " ").trim();
     // The authored source of truth is `tier:` on the core .md; the packager's
     // frontmatter transform doesn't run against emit.ts (Codex reads directly
@@ -315,7 +327,7 @@ export default function emit(ctx: EmitContext): void {
     const tier = fm.tier?.trim();
     if (!tier) throw new Error(`${mdPath}: agent frontmatter has no tier: line.`);
     const proj = projectTier(tier, "codex", tierCap); // throws on unknown tier
-    const instructions = rewriteProse(body);
+    const instructions = rewriteProse(absorbedBody);
     const modelLines =
       (proj.model !== null ? `model = "${proj.model}"\n` : "") +
       (proj.effort !== null ? `model_reasoning_effort = "${proj.effort}"\n` : "");
@@ -335,6 +347,7 @@ export default function emit(ctx: EmitContext): void {
   // carries no compiled JSON, so requiring it from coreRoot would fail.)
   const IMPLICIT_GUARD = "policy:\n  allow_implicit_invocation: false\n";
   process.env.AIDLC_HARNESS_DIR = harnessDir;
+  process.env.AIDLC_HARNESS_NAME = "codex";
   const gen = require(join(CODEX_ROOT, "tools", "aidlc-runner-gen.ts")) as {
     runnableStages: () => Array<{ slug: string }>;
     renderStageRunner: (node: { slug: string }) => string;

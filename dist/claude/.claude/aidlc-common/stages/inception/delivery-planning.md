@@ -7,6 +7,7 @@ lead_agent: aidlc-delivery-agent
 support_agents:
   - aidlc-architect-agent
 mode: inline
+summary_confirmation: required
 produces:
   - bolt-plan
   - team-allocation
@@ -81,25 +82,37 @@ This stage plans the Bolt sequence — the order in which Units of Work are exec
 
 **Definitions for this stage:**
 - **Bolt** — per `stage-protocol.md` Glossary: "a deployable unit of work within Construction — one pass through stages 3.1–3.7." A Bolt wraps one or more Units of Work and runs once through the Construction stages.
+
+These definitions are for YOU. They are not written to be read out, and the user
+has not seen them. Every one of them names something that is about to appear in
+the questions you ask and the artifacts you write, so the first time a term
+reaches the user it carries its own one-clause definition, in the sentence that
+uses it rather than as a separate glossary. "Bolt" is the one that matters most,
+because it is the vocabulary of the whole next phase: its first user-facing
+mention reads as a Bolt plus what a Bolt is (one build pass over a piece of the
+work, ending in something that runs), and later mentions read as just "Bolt".
+Same treatment for a scoring model you propose by name and for the walking
+skeleton. A term whose definition would not survive being compressed to a clause
+is a term to replace with plain words instead.
 - **Confidence hypothesis** — the observable behaviour that shipping the Bolt validates or falsifies (e.g., "latency stays under 200ms under 1k-rps load," "users complete signup without support tickets," "the event pipeline survives a 10x burst").
 - **WSJF** (Reinertsen / SAFe) — Weighted Shortest Job First. Sequence score = (user-business value + time criticality + risk-reduction value) ÷ job size. Higher score ships first.
 - **Walking skeleton** (Cockburn) — the first Bolt is a minimal end-to-end slice touching every architectural layer that proves the architecture works; features come in later Bolts.
 
 Create `<record>/inception/delivery-planning/delivery-planning-questions.md` with questions. Strategic questions (one answer per project):
 
-- Which sequencing heuristic applies: risk-first, value-first, walking-skeleton-first, or hybrid? If hybrid, name which heuristics apply to which Bolts.
-- Is a WSJF-style scoring model used? If so, what weightings on risk, value, and job size?
-- What is Bolt granularity — one Unit per Bolt, bundled related Units per Bolt, or thin slices that span Units?
-- Can multiple Bolts run in parallel through Construction, or is the pipeline strictly sequential?
-- Are there external dependencies (APIs, data availability, approvals, external-team hand-offs)? For each gated item capture: owner, lead time, which Bolt it blocks, mitigation/workaround.
-- What are the key risk items that should be tackled earliest?
+- What should we build first: the riskiest parts, the most valuable parts, a thin end-to-end slice that proves the whole thing hangs together, or some mix? If a mix, say which approach applies where.
+- Should we score and rank the work with a formal model (WSJF-style: value and urgency against size)? If so, how much weight goes on risk, on value, and on size?
+- How big should one Bolt be: a single Unit of Work, several related Units bundled together, or thin slices that cut across Units?
+- Can several Bolts be built at the same time, or do they need to go one after another?
+- Is anything outside this team going to hold us up (APIs, data, approvals, another team's hand-off)? For each one, capture who owns it, how long it takes, which Bolt it blocks, and what we do if it slips.
+- What worries you most about this build, so we tackle it early?
 
 Per-Bolt questions (the aidlc-delivery-agent loops these during artifact generation, one set of answers per Bolt in the plan):
 
 - Which Units of Work does this Bolt bundle?
-- Is this Bolt the walking skeleton? If yes, which architectural layers does it prove?
-- What is the Definition of Done for this Bolt?
-- What is the confidence hypothesis for this Bolt — what will shipping it prove?
+- Is this Bolt the thin end-to-end slice (the walking skeleton)? If yes, which parts of the architecture does it prove out?
+- What has to be true for this Bolt to count as done?
+- What will shipping this Bolt tell us that we do not know yet?
 - Which mob owns this Bolt? (References teams from 1.5 when 1.5 ran; when 1.5 was SKIP — mvp, workshop — default to aidlc-developer-agent for all Bolts.)
 
 NOTE: Bolt sequencing is economic, not topological. Bolt order may deviate from 2.7's topological order when a risk-first or walking-skeleton-first argument justifies it. The deviation must be captured in `risk-and-sequencing-rationale.md`.
@@ -114,7 +127,14 @@ Validate the chosen Bolt sequence respects 2.7's dependency DAG (with aidlc-arch
 
 ### Step 5: Generate Artifacts
 
-Create four artifacts in `<record>/inception/delivery-planning/`:
+Create four artifacts in `<record>/inception/delivery-planning/`. These are
+documents the user opens and reads at the gate, so the same rule the questions
+follow applies to the prose inside them: a term of art carries a one-clause
+definition at its first appearance in that file, and each file stands alone (the
+reader may open `team-allocation.md` without having read `bolt-plan.md`). "Bolt",
+"mob", "walking skeleton", "Program Board", and any scoring model named by
+initials all qualify. Gloss and move on; do not restructure the artifact around
+the explanation.
 
 - `bolt-plan.md` — the ordered sequence of Bolts. Each Bolt entry: included Unit(s) of Work, walking-skeleton marker if applicable, Definition of Done for that Bolt, confidence hypothesis ("what will shipping this Bolt prove?"), expected demo.
 - `team-allocation.md` — Bolt-to-mob assignment. References teams from 1.5 when 1.5 ran (enterprise, feature). When 1.5 is SKIP (mvp, workshop), states that all Bolts are executed by aidlc-developer-agent (AI). When team count > 1, this is the Program Board analog.
@@ -133,21 +153,25 @@ Run Inception → Construction verification check:
 
 Hand completion to `stage-protocol.md` via
 `bun .claude/tools/aidlc-orchestrate.ts report --stage delivery-planning --result <outcome>`.
-The engine owns all lifecycle transitions and advancement.
+That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
 **Construction iteration.** Classify how the approved `bolt-plan.md` wants the
-inline construction DESIGN stages (functional-design, nfr-requirements,
-nfr-design, infrastructure-design) to iterate over Units of Work. A
-unit-at-a-time or walking-skeleton-first plan typically calls for authoring one
-unit's four design documents consecutively before the next unit begins; a plan
+per-unit construction stages (functional-design, nfr-requirements, nfr-design,
+infrastructure-design, code-generation) to iterate over Units of Work. A
+unit-at-a-time or walking-skeleton-first plan typically calls for designing AND
+building one unit completely before the next unit begins — the first working
+code lands after one unit's design, honoring a skeleton-first sequence; a plan
 that reasons stage-by-stage across all units does not. Only when the plan calls
 for the unit-first order, record it:
 `bun .claude/tools/aidlc-state.ts set-construction-iteration unit-major`.
 The default is `stage-major` (each design stage runs for every unit, then the
-next stage), needs no write, and is byte-identical to prior behaviour. Under
-`unit-major` the same four per-stage design gates still fire, but late and in a
-cascade at the end of the design block (one human approval per stage), so opt in
-only when the plan justifies the per-unit design coherence.
+next stage, with code-generation last), needs no write, and is byte-identical
+to prior behaviour. Under `unit-major` the same per-stage gates still fire, but
+late and in a cascade at the end of the block (one human approval per stage),
+and the autonomous Construction swarm never fires (the walk owns
+code-generation serially, in Bolt build order), so opt in when the plan
+justifies per-unit coherence and early working code over parallel batch
+builds.
 
 ### Step 8: Present Completion & Request Approval
 

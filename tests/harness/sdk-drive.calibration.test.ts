@@ -67,7 +67,7 @@ const DRIVE_TIMEOUT_MS = Math.max(60_000, TEST_TIMEOUT_MS - 15_000);
 const DOCTOR_HEADER = "AI-DLC Health Check";
 const DOCTOR_RULE = "─".repeat(37); // 37 box-drawing horizontals
 const DOCTOR_BUN_LABEL = "bun installed (required for CLI tools and hooks)";
-const DOCTOR_HOOK_LABEL = "aidlc-audit-logger.ts present";
+const DOCTOR_HOOK_LABEL = "aidlc-write-audit-log.ts present";
 const DOCTOR_SETTINGS_LABEL = "settings.json present";
 const DOCTOR_DOCS_LABEL = "aidlc-docs/ directory exists";
 

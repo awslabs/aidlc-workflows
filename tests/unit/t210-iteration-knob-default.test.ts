@@ -38,6 +38,8 @@ import {
   cleanupTestProject,
   createTestProject,
   resetAidlcEnv,
+  runOrchestrateNext,
+  seedAidlcMemory,
   seedBoltDag,
   seedBoltDagBatches,
   seededRecordDir,
@@ -46,8 +48,9 @@ import {
 
 resetAidlcEnv();
 
-const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
+const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
+const BUN = process.execPath;
 
 const FD_PRODUCES = [
   "business-logic-model",
@@ -134,6 +137,31 @@ function coverUnit(
   }
 }
 
+function reviewUnit(proj: string, unit: string): void {
+  const args = [
+    LOG,
+    "review",
+    "--stage",
+    "functional-design",
+    "--reviewer",
+    "aidlc-architecture-reviewer-agent",
+    "--unit",
+    unit,
+    "--iteration",
+    "1",
+  ];
+  for (const suffix of [[], ["--verdict", "READY"]]) {
+    const result = spawnSync(
+      BUN,
+      [...args, ...suffix, "--project-dir", proj],
+      { encoding: "utf-8" },
+    );
+    if ((result.status ?? -1) !== 0) {
+      throw new Error(`review failed: ${result.stdout}${result.stderr}`);
+    }
+  }
+}
+
 /** Seed a fresh Construction project. Returns the proj dir. */
 function seedProject(opts: {
   current?: string;
@@ -142,6 +170,7 @@ function seedProject(opts: {
 }): string {
   const proj = createTestProject();
   tempDirs.push(proj);
+  seedAidlcMemory(proj);
   writeFileSync(
     seededStateFile(proj),
     constructionState({ current: opts.current ?? "functional-design", ...opts }),
@@ -151,33 +180,31 @@ function seedProject(opts: {
 
 /** Run `aidlc-orchestrate.ts next` and parse the emitted directive. */
 function runNext(proj: string): Directive {
-  const r = spawnSync(BUN, [ORCH, "next", "--project-dir", proj], {
-    encoding: "utf-8",
-    env: (() => {
-      const e = { ...process.env };
-      delete e.AWS_AIDLC_DEFAULT_SCOPE;
-      return e;
-    })(),
-  });
-  try {
-    return JSON.parse((r.stdout ?? "").trim()) as Directive;
-  } catch {
+  const env = { ...process.env };
+  delete env.AWS_AIDLC_DEFAULT_SCOPE;
+  env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD = "1";
+  const r = runOrchestrateNext(ORCH, proj, [], { env });
+  if (r.directive === null) {
     throw new Error(
       `runNext did not emit parseable JSON. status=${r.status}\n${r.stdout}\n${r.stderr}`,
     );
   }
+  return r.directive as Directive;
 }
 
 // Cover alpha's functional-design produces before `next`, to reach the
 // stage-major "advance to beta" shape.
 function coverAlphaFd(proj: string): void {
   coverUnit(proj, "alpha", "functional-design", FD_PRODUCES);
+  reviewUnit(proj, "alpha");
 }
 
 // Cover both units' functional-design produces, to reach the all-covered gate.
 function coverBothFd(proj: string): void {
   coverUnit(proj, "alpha", "functional-design", FD_PRODUCES);
   coverUnit(proj, "beta", "functional-design", FD_PRODUCES);
+  reviewUnit(proj, "alpha");
+  reviewUnit(proj, "beta");
 }
 
 // Drive `next` for a given knob value at a given coverage state and return the
@@ -194,8 +221,8 @@ function directiveFor(
 
 describe("t210 construction-iteration knob default (off / non-activating)", () => {
   // The three coverage states and their known stage-major expectations (t186
-  // shapes): empty -> functional-design/alpha; alpha-fd-covered ->
-  // functional-design/beta; both-fd-covered -> functional-design gate on beta.
+  // shapes): empty -> functional-design/alpha build; covered/reviewed Units
+  // remain on functional-design/alpha until the wave completion receipt lands.
   const STATES: Array<{
     name: string;
     cover: (p: string) => void;
@@ -209,12 +236,12 @@ describe("t210 construction-iteration knob default (off / non-activating)", () =
     {
       name: "alpha functional-design covered",
       cover: coverAlphaFd,
-      expected: { stage: "functional-design", unit: "beta", gate: false },
+      expected: { stage: "functional-design", unit: "alpha", gate: false },
     },
     {
       name: "both functional-design covered",
       cover: coverBothFd,
-      expected: { stage: "functional-design", unit: "beta", gate: true },
+      expected: { stage: "functional-design", unit: "alpha", gate: false },
     },
   ];
 
@@ -241,22 +268,26 @@ describe("t210 construction-iteration knob default (off / non-activating)", () =
   }
 
   // 3: the pivotal ordering difference is REAL: at alpha-fd-covered, stage-major
-  // emits functional-design/beta while unit-major emits nfr-requirements/alpha.
+  // emits functional-design/alpha completion work while unit-major, which uses
+  // the serial legacy coverage path in this fixture, emits nfr-requirements/alpha.
   // This is the negative control proving the deep-equals above are meaningful.
   test("3: unit-major diverges from stage-major at the same coverage state", () => {
     const stageMajor = directiveFor("stage-major", coverAlphaFd);
     const unitMajor = directiveFor("unit-major", coverAlphaFd);
     expect(stageMajor.stage).toBe("functional-design");
-    expect(stageMajor.unit).toBe("beta");
+    expect(stageMajor.unit).toBe("alpha");
     expect(unitMajor.stage).toBe("nfr-requirements");
     expect(unitMajor.unit).toBe("alpha");
   }, 30000);
 
-  // 4: swarm untouched. An autonomous code-generation fixture with a multi-batch
-  // DAG AND `Construction Iteration: unit-major` still emits invoke-swarm for
-  // batch 1: the unit-major walk only covers mode:inline design stages, and
-  // tryEmitSwarm has first refusal before emitForSlug is reached.
-  test("4: autonomous code-generation with unit-major set still swarms batch 1", () => {
+  // 4: the swarm is SUPPRESSED under unit-major. An autonomous code-generation
+  // fixture with a multi-batch DAG AND `Construction Iteration: unit-major`
+  // does NOT emit invoke-swarm: the walk owns code-generation (disk coverage),
+  // and a swarm firing mid-walk would re-fan units the walk already built
+  // (its coverage signal is SWARM_UNIT_CONVERGED audit rows, which walk-built
+  // units never write). The engine instead emits the walk's per-unit run-stage
+  // for the first uncovered unit in DAG order, gate suppressed.
+  test("4: autonomous code-generation with unit-major set does NOT swarm - the walk owns it", () => {
     const proj = seedProject({
       current: "code-generation",
       iteration: "unit-major",
@@ -265,6 +296,38 @@ describe("t210 construction-iteration knob default (off / non-activating)", () =
     // code-generation is not the skeleton-gate stage for feature scope, so no
     // stance is needed for it to swarm; mark the upstream design stages [x] and
     // code-generation [-] so the run lands cleanly on the construction stage.
+    const statePath = seededStateFile(proj);
+    let state = readFileSync(statePath, "utf-8");
+    for (const s of [
+      "functional-design",
+      "nfr-requirements",
+      "nfr-design",
+      "infrastructure-design",
+    ]) {
+      state = state.replace(`- [-] ${s} — EXECUTE`, `- [x] ${s} — EXECUTE`)
+        .replace(`- [ ] ${s} — EXECUTE`, `- [x] ${s} — EXECUTE`);
+    }
+    state = state.replace(
+      "- [ ] code-generation — EXECUTE",
+      "- [-] code-generation — EXECUTE",
+    );
+    writeFileSync(statePath, state);
+    seedBoltDagBatches(proj, [["alpha"], ["beta"]]);
+    const d = runNext(proj);
+    expect(d.kind).toBe("run-stage");
+    expect(d.stage).toBe("code-generation");
+    expect(d.unit).toBe("alpha");
+    expect(d.gate).toBe(false);
+  }, 30000);
+
+  // 4b: the negative control for case 4 - the SAME fixture minus the knob
+  // (stage-major default) still swarms batch 1, proving case 4's suppression
+  // is the knob's doing and the swarm path is otherwise untouched.
+  test("4b: autonomous code-generation WITHOUT the knob still swarms batch 1", () => {
+    const proj = seedProject({
+      current: "code-generation",
+      autonomy: "autonomous",
+    });
     const statePath = seededStateFile(proj);
     let state = readFileSync(statePath, "utf-8");
     for (const s of [

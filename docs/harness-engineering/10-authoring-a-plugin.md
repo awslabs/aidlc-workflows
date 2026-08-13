@@ -102,14 +102,26 @@ A plugin stage is an ordinary stage file (see
 - Any artifact it `produces:` must be prefixed `<plugin>-` (e.g.
   `test-pro-integration-test-results`).
 
+The same logical plugin name must appear in every owned stage, scope, agent,
+and contribution. Compose derives that identity from the emitted host manifest
+(`aidlc-<name>` at the host layer, `<name>` in AIDLC frontmatter); content cannot
+rename or impersonate its package. A mismatch is skipped and recorded for
+`/aidlc --doctor`.
+
 `bundle:` was the pre-rename ownership key and is rejected with an error naming the fix - write `plugin:`. The word is reserved for a possible future collection-of-plugins concept.
 
 Stage **identity is the slug**, everywhere that matters (edges, jumps,
-resolution). The `number:` is a **display hint** only — it orders the stage in
-status output and the SKILL.md stage table, but a stage's graph position comes
-from its slug-based `requires_stage` edges. So you author a `number:` that reads
-sensibly (`test-pro-integration` is `3.85`, after `build-and-test` at `3.6`), but
-inserting it never renumbers core and you claim no range.
+resolution). The `number:` is a **display hint** only — a stage's graph
+position comes from its slug-based `requires_stage` edges, and the compiled
+number values are assigned by the ENGINE, never by you: on first compile,
+your plugin's new stages are ordered by their own `requires_stage` edges,
+using your authored `number:` values only to break ties among independent
+stages, and given the next free indices in their phase. So author numbers
+that read sensibly and agree with your edges (`test-pro-integration` is
+`3.85`, after `build-and-test` at `3.6`) — the RELATIVE order is what
+carries — but the absolute values never land in the graph, inserting a stage
+never renumbers core, and you claim no range (which is why two uncoordinated
+plugins can never collide on numbers).
 
 Gate a stage onto a scope with `scopes:` (it is SKIP everywhere else), and
 optionally declare a `when:` predicate. `test-pro-full-suite` is *intended* to run
@@ -169,9 +181,18 @@ marks what the compose hook merges today vs. designed-but-deferred (mirrors doc 
   does not reach the compiled graph node, and the shipped `required-sections`
   sensor derives its expectations from templates, so nothing yet fails a stage for
   a missing section. Treat it as declarative intent for now.
-- `adds.requires_stage` / `adds.scopes` — ⏳ **deferred**: a contribution may
-  declare them, but compose records them to the drops log rather than merging
-  (they are not yet DAG/scope edges). Don't rely on them to gate behavior yet.
+- `adds.scopes` — ✅ set-unioned into the target stage's `scopes:` list, with
+  two guard rails (each violation dropped-with-log, never merged): the scope's
+  identity file must be installed (`scopes/<name>.md` ships in the same
+  plugin), and that file's `plugin:` frontmatter must name YOUR plugin exactly
+  — you cannot put a core stage under a core or foreign-plugin scope, and
+  ownership is read from the installed file's declared owner, not inferred
+  from a name prefix. Use it to route existing core stages under your
+  plugin's scope — e.g. a methodology plugin whose scope carries its own
+  discovery stages plus core Inception onward.
+- `adds.requires_stage` — ⏳ **deferred**: a contribution may declare it, but
+  compose records it to the drops log rather than merging (it is not yet a
+  DAG edge). Don't rely on it to gate behavior yet.
 - `fragments` — ✅ prose blocks spliced into the stage body. Each fragment's prose
   is the `## fragment: <anchor>` block in the contribution file.
 
@@ -223,8 +244,14 @@ projection remains deferred (doc 18 §8 Status).
   [Adding an Agent](03-adding-an-agent.md).
 - **Sensors.** Ship the manifest `sensors/aidlc-<id>.md` **and** its script under
   `tools/` (both — a manifest alone is discoverable but its script must live in
-  `tools/` to run). Bind it to your own stages via `sensors:`, or to a core stage
-  via a contribution's `adds.sensors`. See [Sensors](06-sensors.md).
+  `tools/` to run). The `aidlc-<id>.md` name at the top of `sensors/` is a hard
+  requirement, not a convention: sensor discovery flatly scans `sensors/` and
+  indexes only basenames matching `aidlc-<id>.md`, so a manifest under any other
+  name (or one nested in a subdirectory) would compose but never fire. Compose
+  now rejects such a manifest with a degraded drop (surfaced by `--doctor`) that
+  names the file and the required shape, rather than letting it land dead. Bind
+  the sensor to your own stages via `sensors:`, or to a core stage via a
+  contribution's `adds.sensors`. See [Sensors](06-sensors.md).
 - **Method/rules.** *(⏳ deferred.)* Ship a `memory/` subtree — `memory/phases/<phase>.md` (or
   `memory/{org,team,project}.md`) — via `contributes.memory`. It **merges into
   the default-space method seed** (`aidlc/spaces/default/memory/`) in the design,
@@ -241,17 +268,20 @@ projection remains deferred (doc 18 §8 Status).
   `scopes/<plugin>-<name>.md`. The plugin prefix replaces core's `aidlc-`
   filename prefix, and the filename stem must equal frontmatter `name` (for
   example, `scopes/test-pro-validation.md` has `name: test-pro-validation`).
-  Membership for plugin-authored stages is their `scopes:` frontmatter list. A
-  contribution's `adds.scopes` (§3) is still deferred and drop-logged rather than
-  merged, so do not rely on it to add your scope to an existing core stage yet.
-  See [Scopes](04-scopes.md).
+  Set `freeform_default: true` to nominate a plugin scope as the fallback when
+  the core `feature`/`poc` default is disabled; at most one enabled scope across
+  the selected core/plugin set may claim it, and graph compilation rejects an
+  ambiguous set. Membership for plugin-authored stages is their `scopes:`
+  frontmatter list; a contribution's `adds.scopes` (§3) adds YOUR scope to an
+  existing core stage. See [Scopes](04-scopes.md).
 
 ## 5. Distribution + install
 
 The packager emits your plugin as **a real host plugin** (one projection target
-per harness: `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`, plus a
-Kiro folder projection). You publish the output to a git repo with semver tags
-and a `marketplace.json`, and teams install through the host's native commands.
+per harness, including `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`,
+Copilot's `.plugin/plugin.json`, and Kiro's folder projection). You publish the
+output to a git repo with semver tags and a `marketplace.json`, and teams install
+through the host's native commands.
 
 ### Claude / Codex (host store)
 

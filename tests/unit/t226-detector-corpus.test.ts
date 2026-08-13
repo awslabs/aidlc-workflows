@@ -1,4 +1,4 @@
-// covers: hook:aidlc-stop, hook:aidlc-runtime-compile
+// covers: hook:aidlc-continue-workflow, hook:aidlc-rebuild-stage-graph
 //
 // Pins the both-shape detector contract for the stop hook and runtime-compile
 // hook. The legacy tool-file shape is a permanent input: plugin manifests and
@@ -122,7 +122,7 @@ const corpus: CorpusCase[] = [
     d1: false,
     d2: "pass",
     kind: "readonly",
-    note: "Read-only carve-out described in core/hooks/aidlc-stop.ts lines 556-577.",
+    note: "Read-only carve-out described in core/hooks/aidlc-continue-workflow.ts lines 556-577.",
   },
   {
     id: "new-orchestrate-next-status",
@@ -430,7 +430,7 @@ const corpus: CorpusCase[] = [
     d1: false,
     d2: "fire",
     kind: "old",
-    note: "core/hooks/aidlc-sync-statusline.ts lines 108-111 and core/tools/aidlc-utility.ts line 3757.",
+    note: "core/hooks/aidlc-sync-workflow-state.ts lines 108-111 and core/tools/aidlc-utility.ts line 3757.",
   },
   {
     id: "new-state-set-status",
@@ -464,7 +464,7 @@ const corpus: CorpusCase[] = [
     d1: false,
     d2: "pass",
     kind: "old",
-    note: "core/hooks/aidlc-sensor-fire.ts lines 4 and 198-203, normalized to .claude.",
+    note: "core/hooks/aidlc-run-sensors.ts lines 4 and 198-203, normalized to .claude.",
   },
   {
     id: "new-sensor-fire",
@@ -481,7 +481,7 @@ const corpus: CorpusCase[] = [
     d1: false,
     d2: "reject",
     kind: "guard",
-    note: "core/hooks/aidlc-runtime-compile.ts lines 63-74 recursion guard.",
+    note: "core/hooks/aidlc-rebuild-stage-graph.ts lines 63-74 recursion guard.",
   },
   {
     id: "new-runtime-compile",
@@ -553,7 +553,7 @@ const corpus: CorpusCase[] = [
   },
   {
     id: "plain-cat",
-    cmd: "cat core/hooks/aidlc-stop.ts",
+    cmd: "cat core/hooks/aidlc-continue-workflow.ts",
     d1: false,
     d2: "pass",
     kind: "negative",

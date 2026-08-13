@@ -1,4 +1,4 @@
-// covers: hook:aidlc-audit-logger, hook:aidlc-validate-state, hook:aidlc-session-start, hook:aidlc-statusline, hook:aidlc-log-subagent, hook:aidlc-sensor-fire, hook:aidlc-runtime-compile
+// covers: hook:aidlc-write-audit-log, hook:aidlc-validate-state, hook:aidlc-session-start, hook:aidlc-statusline, hook:aidlc-log-subagent, hook:aidlc-run-sensors, hook:aidlc-rebuild-stage-graph
 //
 // t13 — adversarial-input robustness for the framework's stdin-driven hooks.
 // Migrated from tests/unit/t13-hook-input-robustness.sh (TAP plan 20).
@@ -29,7 +29,7 @@
 // the raw file_path into its `**File**:` field; the shell never expands it).
 //
 // SOURCE UNDER TEST — the always-exit-0 / robustness contract per hook:
-//   hooks/aidlc-audit-logger.ts   :31 TTY exit0; :37-40 bad-JSON exit0;
+//   hooks/aidlc-write-audit-log.ts   :31 TTY exit0; :37-40 bad-JSON exit0;
 //                                   :43 tool_name ?? ""; :44 file_path ?? "";
 //                                   :100-105 emit failure -> recordHookDrop + exit0
 //   hooks/aidlc-validate-state.ts :30 no-state-file exit0; reads STATE not stdin
@@ -43,10 +43,10 @@
 //   hooks/aidlc-log-subagent.ts   :28 TTY exit0; :34-37 bad-JSON exit0;
 //                                   :40-42 agent_* ?? defaults; :45 no-audit exit0;
 //                                   :53-58 emit failure -> recordHookDrop + exit0
-//   hooks/aidlc-sensor-fire.ts    :17 "always exit 0" contract; :53 TTY exit0;
+//   hooks/aidlc-run-sensors.ts    :17 "always exit 0" contract; :53 TTY exit0;
 //                                   :61-67 bad-JSON exit0; :74 empty path exit0;
 //                                   :90 no-audit exit0
-//   hooks/aidlc-runtime-compile.ts:40 TTY exit0; :45-51 bad-JSON exit0;
+//   hooks/aidlc-rebuild-stage-graph.ts:40 TTY exit0; :45-51 bad-JSON exit0;
 //                                   :52 command ?? ""; :64 no-command-match exit0
 //
 // FIXTURE DISCIPLINE (mirrors the .sh's create_test_project / seed_audit_file /
@@ -106,13 +106,13 @@ import {
 
 const BUN = process.execPath; // the bun running this test
 
-const HOOK_AUDIT = join(AIDLC_SRC, "hooks", "aidlc-audit-logger.ts");
+const HOOK_AUDIT = join(AIDLC_SRC, "hooks", "aidlc-write-audit-log.ts");
 const HOOK_VALIDATE = join(AIDLC_SRC, "hooks", "aidlc-validate-state.ts");
 const HOOK_SESSION = join(AIDLC_SRC, "hooks", "aidlc-session-start.ts");
 const HOOK_STATUS = join(AIDLC_SRC, "hooks", "aidlc-statusline.ts");
 const HOOK_SUBAGENT = join(AIDLC_SRC, "hooks", "aidlc-log-subagent.ts");
-const HOOK_SENSOR = join(AIDLC_SRC, "hooks", "aidlc-sensor-fire.ts");
-const HOOK_RUNTIME = join(AIDLC_SRC, "hooks", "aidlc-runtime-compile.ts");
+const HOOK_SENSOR = join(AIDLC_SRC, "hooks", "aidlc-run-sensors.ts");
+const HOOK_RUNTIME = join(AIDLC_SRC, "hooks", "aidlc-rebuild-stage-graph.ts");
 
 // P9 per-intent layout: the audit-logger now gates on the file_path being UNDER
 // the active intent's record root (docsRoot()), not on a bare "aidlc-docs/"

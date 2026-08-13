@@ -3,7 +3,7 @@
 > Part of the [AI-DLC documentation](../README.md) · [User Guide](../guide/00-introduction.md) · **Harness Engineer Guide** · [Developer Reference](../reference/00-overview.md)
 
 AI-DLC is a methodology, and this implementation ships it working out of the box
-on the harness you use — Claude Code, Kiro CLI, Kiro IDE, Codex CLI, or opencode: 14 agents
+on the harness you use — Claude Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode, or GitHub Copilot: 14 agents
 (11 domain experts, 2 reviewers, and the composer), 32 stages, 9 scopes, a set
 of rules and sensors. This guide is for the person who
 wants to **reshape** that methodology — change which stages run, add an agent for
@@ -52,9 +52,10 @@ until a stage opts to use it.
 
 Two pieces of machinery move work through these stages, and as a harness
 engineer you shape the **data** both of them read. The deterministic **engine**
-(`core/tools/aidlc-orchestrate.ts`, with exactly three subcommands: `next`,
-`report`, and `park`) reads `aidlc-state.md` and the compiled `stage-graph.json`,
-decides what runs next, and emits one typed directive. The **conductor**
+(`core/tools/aidlc-orchestrate.ts`, with exactly four subcommands: `next`,
+`continue`, `report`, and `park`; `continue` is internal steering transport)
+reads `aidlc-state.md` and the compiled `stage-graph.json`, decides what runs
+next, and emits one typed directive. The **conductor**
 (`skills/aidlc/SKILL.md`) is a thin forwarding loop that carries each directive
 out. Routing lives in the engine; your stage files, scopes, and rules are the
 inputs that steer it.
@@ -113,8 +114,8 @@ Everything a harness engineer authors lives in **`core/`** — the hand-authored
 harness-neutral source of truth (stages under `core/aidlc-common/stages/`,
 agents under `core/agents/`, scopes, rules, sensors, knowledge, tools, hooks).
 The per-harness `dist/<harness>/` trees you actually run (`dist/claude/.claude/`,
-`dist/kiro/.kiro/`, `dist/kiro-ide/.kiro/`, `dist/codex/`, and
-`dist/opencode/`) are **generated**
+`dist/kiro/.kiro/`, `dist/kiro-ide/.kiro/`, `dist/codex/`, `dist/cursor/`,
+`dist/opencode/`, and `dist/copilot/`) are **generated**
 from `core/` plus a thin `harness/<name>/` surface, and they are
 **drift-guarded** — a hand-edit there is rejected by CI. The loop is always:
 

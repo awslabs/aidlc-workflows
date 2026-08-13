@@ -4,6 +4,7 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   errorMessage,
+  parsePluginCommand,
   parseWorkspaceCommand,
   workspaceCommandUtilityArgv,
 } from "./aidlc-lib.ts";
@@ -92,14 +93,14 @@ export const ROUTES: readonly Route[] = [
     group: "top",
     kind: "top-passthrough",
     classification: "passthrough",
-    verbs: ["next", "report", "park"],
+    verbs: ["next", "continue", "report", "park"],
     tool: TOOLS.orchestrate,
     human: [
       { command: "next [args]", summary: "run the next orchestrator action" },
       { command: "report [args]", summary: "render the orchestrator report" },
       { command: "park [args]", summary: "park the current workflow" },
     ],
-    all: ["next [args]", "report [args]", "park [args]"],
+    all: ["next [args]", "continue <token>", "report [args]", "park [args]"],
   },
   {
     id: "top-compose",
@@ -175,6 +176,7 @@ export const ROUTES: readonly Route[] = [
       "merge",
       "park",
       "unpark",
+      "unit",
     ],
   },
   {
@@ -300,10 +302,10 @@ export const ROUTES: readonly Route[] = [
     group: "intent",
     kind: "custom",
     classification: "translation",
-    verbs: ["list", "switch", "<name>", "birth"],
+    verbs: ["list", "switch", "<name>", "create"],
     custom: "workspace",
-    human: [{ command: "intent [list|switch|birth]", summary: "list, switch, or create intent context" }],
-    all: ["list [--json]", "switch <name>", "<name>", "birth [args]"],
+    human: [{ command: "intent [list|switch|create]", summary: "list, switch, or create intent context" }],
+    all: ["list [--json]", "switch <name>", "<name>", "create [args]"],
   },
   {
     id: "space",
@@ -329,11 +331,12 @@ export const ROUTES: readonly Route[] = [
     group: "config",
     kind: "custom",
     classification: "translation",
-    verbs: ["set depth", "set test-strategy", "get", "list"],
+    verbs: ["set depth", "set test-strategy", "set review", "get", "list"],
     custom: "config",
     targets: {
       "set depth": "config-change",
       "set test-strategy": "config-change",
+      "set review": "config-change",
       get: "config-get",
       list: "config-list",
     },
@@ -342,7 +345,7 @@ export const ROUTES: readonly Route[] = [
       { command: "config set <key> <value>", summary: "change supported project configuration" },
       { command: "config list", summary: "list supported project configuration" },
     ],
-    all: ["set depth <value>", "set test-strategy <value>", "get <key>", "list"],
+    all: ["set depth <value>", "set test-strategy <value>", "set review <value>", "get <key>", "list"],
   },
   {
     id: "plugin",
@@ -440,16 +443,23 @@ function toolsDir(): string {
   return dispatcherDir();
 }
 
-type AdapterHarness = "codex" | "kiro" | "kiro-ide";
+type AdapterHarness = "codex" | "cursor" | "kiro" | "kiro-ide";
 
 const ADAPTER_HARNESS_LEAF: Record<AdapterHarness, string> = {
   codex: ".codex",
+  cursor: ".cursor",
   kiro: ".kiro",
   "kiro-ide": ".kiro",
 };
 
 function isAdapterHarness(value: string): value is AdapterHarness {
   return Object.hasOwn(ADAPTER_HARNESS_LEAF, value);
+}
+
+function adapterFile(harness: AdapterHarness): string {
+  if (harness === "codex") return "aidlc-codex-adapter.ts";
+  if (harness === "cursor") return "aidlc-cursor-adapter.ts";
+  return "aidlc-kiro-adapter.ts";
 }
 
 function resolveHookPath(
@@ -468,6 +478,7 @@ function resolveHookPath(
         ".claude",
         ".kiro",
         ".codex",
+        ".cursor",
       ].filter((value, index, values): value is string =>
         typeof value === "string" && value.length > 0 && values.indexOf(value) === index
       );
@@ -582,20 +593,26 @@ function handleConfig(route: Route, argv: string[]): Action {
     if (missing) return missing;
     return { type: "delegate", tool: TOOLS.utility, args: ["config-change", "--test-strategy", value, ...argv.slice(4)] };
   }
+  if (key === "review") {
+    const missing = requireValue("config", "set review", value);
+    if (missing) return missing;
+    return { type: "delegate", tool: TOOLS.utility, args: ["config-change", "--review", value, ...argv.slice(4)] };
+  }
   return nounError("config", key ? `set ${key}` : "set");
 }
 
-function handlePlugin(route: Route, argv: string[]): Action {
-  const verb = argv[1];
-  if (verb === "select") {
-    const target = route.targets?.select ?? "select-plugins";
-    return { type: "delegate", tool: TOOLS.utility, args: [target, ...argv.slice(2)] };
+function handlePlugin(argv: string[]): Action {
+  const command = parsePluginCommand(argv);
+  if (command.kind === "help") {
+    return { type: "help", all: false };
   }
-  if (verb === "sync" || verb === "list") {
-    const target = route.targets?.[verb];
-    if (target) return { type: "delegate", tool: TOOLS.utility, args: [target, ...argv.slice(2)] };
+  if (command.kind === "error") {
+    return { type: "error", code: 1, message: `${command.message}\n` };
   }
-  return nounError("plugin", verb);
+  if (command.kind === "run") {
+    return { type: "delegate", tool: TOOLS.utility, args: command.argv };
+  }
+  return nounError("plugin", argv[1]);
 }
 
 function handleGen(argv: string[]): Action {
@@ -623,7 +640,7 @@ function handleGen(argv: string[]): Action {
 function handleCustom(route: Route, argv: string[]): Action {
   if (route.custom === "workspace") return handleWorkspace(argv);
   if (route.custom === "config") return handleConfig(route, argv);
-  if (route.custom === "plugin") return handlePlugin(route, argv);
+  if (route.custom === "plugin") return handlePlugin(argv);
   if (route.custom === "gen") return handleGen(argv);
   return nounError(argv[0], argv[1]);
 }
@@ -645,7 +662,7 @@ function handleRouteOnly(route: Route, argv: string[]): Action {
     if (!isAdapterHarness(harness)) return nounError("adapter", harness);
     if (!target) return nounError("adapter", undefined);
     if (!isSafeName(target)) return nounError("adapter", target);
-    const file = harness === "codex" ? "aidlc-codex-adapter.ts" : "aidlc-kiro-adapter.ts";
+    const file = adapterFile(harness);
     return {
       type: "adapter",
       harness,
@@ -798,9 +815,7 @@ export function resolveAction(argv: string[]): Action {
       action.path = resolveHookPath("aidlc-statusline.ts", undefined, absoluteProjectDir);
     } else if (action.type === "adapter") {
       action.projectDir = absoluteProjectDir;
-      const file = action.harness === "codex"
-        ? "aidlc-codex-adapter.ts"
-        : "aidlc-kiro-adapter.ts";
+      const file = adapterFile(action.harness);
       action.path = resolveHookPath(file, action.harness, absoluteProjectDir);
     } else if (action.type === "sensor-script-file") {
       action.projectDir = absoluteProjectDir;
@@ -921,6 +936,39 @@ async function readStdin(): Promise<string> {
   return await Bun.stdin.text();
 }
 
+async function readStdinWithTimeout(timeoutMs: number): Promise<string> {
+  return await new Promise<string>((resolve) => {
+    const chunks: Buffer[] = [];
+    let settled = false;
+    let timeout: ReturnType<typeof setTimeout>;
+    const cleanup = () => {
+      clearTimeout(timeout);
+      process.stdin.off("data", onData);
+      process.stdin.off("end", onEnd);
+      process.stdin.off("error", onError);
+    };
+    const finish = (value: string) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(value);
+    };
+    const onData = (chunk: Buffer | string) => {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    };
+    const onEnd = () => finish(Buffer.concat(chunks).toString("utf-8"));
+    const onError = () => finish("");
+    timeout = setTimeout(() => {
+      process.stdin.pause();
+      finish("");
+    }, timeoutMs);
+    process.stdin.on("data", onData);
+    process.stdin.once("end", onEnd);
+    process.stdin.once("error", onError);
+    process.stdin.resume();
+  });
+}
+
 async function withProjectDir(
   projectDir: string | undefined,
   run: () => Promise<number>,
@@ -983,11 +1031,31 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
       text(2, `aidlc adapter ${action.harness} ${action.target}: adapter does not export run(target, input, extraArgs)\n`);
       return 1;
     }
-    // kiro-ide: NEVER read stdin - the IDE opens hook stdin without writing
-    // or closing it, so awaiting it hangs the hook process forever. The IDE
-    // adapter's run() ignores its input parameter (context arrives via the
-    // USER_PROMPT env var); mirrors the adapter's own entry guard.
-    const input = action.harness === "kiro-ide" ? "" : await readStdin();
+    let input = "";
+    if (action.harness !== "kiro-ide") {
+      input = await readStdin();
+    } else if (
+      action.target === "audit-and-sensors" ||
+      action.target === "log-subagent" ||
+      action.target === "rebuild-stage-graph" ||
+      action.target === "session-start" ||
+      action.target === "continue-workflow"
+    ) {
+      // Mirror the adapter entry point's dual-generation channel contract.
+      // IDE 0.12 provides USER_PROMPT and leaves stdin open forever, so consume
+      // a non-empty env payload immediately. IDE 1.x leaves USER_PROMPT empty
+      // and writes+closes stdin; the timeout is only a broken-channel ceiling.
+      const legacyPayload = process.env.USER_PROMPT ?? "";
+      if (legacyPayload.trim().length > 0) {
+        input = legacyPayload;
+      } else if (!process.stdin.isTTY) {
+        // AIDLC_IDE_STDIN_TIMEOUT_MS mirrors the adapter's test seam so both
+        // entry points share one contract.
+        const override = Number(process.env.AIDLC_IDE_STDIN_TIMEOUT_MS ?? "");
+        const ceiling = Number.isFinite(override) && override > 0 ? override : 2000;
+        input = await readStdinWithTimeout(ceiling);
+      }
+    }
     return await mod.run(action.target, input, action.extraArgs);
   } finally {
     if (previousHarness === undefined) delete process.env.AIDLC_HARNESS_DIR;
@@ -1067,6 +1135,11 @@ async function execute(action: Action): Promise<number> {
 
 export async function main(argv: string[]): Promise<void> {
   process.exitCode = 0;
+  if (argv.length === 1 && argv[0] === "--internal-metrics-send") {
+    const metrics = await import("./aidlc-metrics.ts");
+    await metrics.sendMetricFromStdin();
+    return;
+  }
   if (import.meta.url.includes("/$bunfs/") && !process.env.AIDLC_HARNESS_DIR) {
     // Compiled, no explicit harness: probe the project install (.claude /
     // .kiro / .codex by tools/data/harness.json) rather than assuming

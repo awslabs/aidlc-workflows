@@ -246,22 +246,27 @@ describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override
     expect(auditField(f, "PRACTICES_OVERRIDE", "Bolt slug")).toBe("t81-bolt-1");
   });
 
-  // --- Test 3: t28 audit count unchanged BY THIS PR's discriminator reuse ---
-  test("3: framework event count pinned at 74 (no bump from this PR's discriminator reuse)", () => {
+  // --- Test 3: canonical event count includes both new receipts -------------
+  test("3: framework event count pinned at 82", () => {
     // The .sh read t28's pinned $TS_COUNT. Under milestone 4, t28 is now a
     // .test.ts (no `assert_eq N "$TS_COUNT"` line to grep), so pin the SAME
     // observable against the SOURCE OF TRUTH instead — VALID_EVENT_TYPES in
     // aidlc-audit.ts — which is stronger (it asserts the real count, not a
     // sibling test's transcription of it). bolt-plan-marker-conflict reuses
     // PRACTICES_OVERRIDE (discriminator-field disambiguation) and registers no
-    // new event. The framework total is 74: the v0.6.0 Wave 4 milestone 16
+    // new event. The framework total is 82: the v0.6.0 Wave 4 milestone 16
     // baseline of 67 (SWARM_DEGRADED was the last event born then), plus
     // WORKFLOW_PARKED + WORKFLOW_UNPARKED (the park/unpark lifecycle, +2),
     // less TEST_RUN_MODE_ENABLED (removed, -1), plus HUMAN_TURN (+1), plus
     // RECOMPOSED (the adaptive composer's in-flight re-shape, +1), plus
     // REVIEWER_SCOPE_BLOCKED (the reviewer-scope PreToolUse hook, +1), plus
     // PLUGIN_SELECTION_CHANGED (select-plugins set-mode, +1), plus
-    // REVIEW_REQUESTED + REVIEW_COMPLETED (reviewer-enforcement RFC Track 1, +2).
+    // REVIEW_REQUESTED + REVIEW_COMPLETED (reviewer-enforcement RFC Track 1,
+    // +2), plus SUMMARY_CONFIRMATION_RECORDED (+1), plus
+    // REVIEW_FREEZE_BLOCKED (the review-freeze PreToolUse hook, +1), plus
+    // PLAN_APPROVAL_BLOCKED (the plan-approval PreToolUse guard, +1), plus
+    // REVIEW_CLASS_CHANGED (the --review per-run override, +1), plus
+    // UNIT_STARTED + UNIT_PAUSED + UNIT_RESUMED + UNIT_COMPLETED (+4) = 82.
     const auditSrc = readFileSync(
       join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-audit.ts"),
       "utf-8",
@@ -269,7 +274,7 @@ describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override
     const block = auditSrc.match(/const VALID_EVENT_TYPES = new Set\(\[([\s\S]*?)\]\)/);
     expect(block).not.toBeNull();
     const count = (block ? block[1].match(/"[A-Z0-9_]+"/g) : null)?.length ?? -1;
-    expect(count).toBe(74);
+    expect(count).toBe(82);
   });
 
   // --- Test 4: milestone 8 write-failure path coexists (different Reason value) ---

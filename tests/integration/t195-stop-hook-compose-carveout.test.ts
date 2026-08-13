@@ -1,4 +1,4 @@
-// covers: hook:aidlc-stop
+// covers: hook:aidlc-continue-workflow
 //
 // t195 - the P4 pending-compose Stop-hook carve-out (tier 2b).
 //
@@ -52,7 +52,7 @@ import {
 
 const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
-const HOOK_TS = join(REPO_ROOT, "dist", "claude", ".claude", "hooks", "aidlc-stop.ts");
+const HOOK_TS = join(REPO_ROOT, "dist", "claude", ".claude", "hooks", "aidlc-continue-workflow.ts");
 
 const PINNED_CLONE_ID = "testcloneid195";
 function pinnedShardPath(proj: string): string {

@@ -2,7 +2,7 @@
 slug: reverse-engineering
 phase: inception
 execution: CONDITIONAL
-condition: Execute when project is brownfield. Always rerun for freshness. Skip for greenfield projects.
+condition: Execute when project is brownfield. On rerun the Step 1 guard checks store freshness (codekb-scope-diff) - verified-CURRENT stores may be reused by human choice, anything else rescans. Skip for greenfield projects.
 lead_agent: aidlc-developer-agent
 support_agents:
   - aidlc-architect-agent
@@ -60,25 +60,92 @@ The engine records the skip and advances to the next in-scope stage.
 
 #### Resolve the intent's repo set (multi-repo)
 
-This stage runs **per repo** the intent touches. Resolve the repo set from the
-intent's registry row before scanning:
+This stage runs **per repo** the intent touches. Resolve the complete repo set
+from the intent's registry row before making any reuse or scan decision:
 
 1. Read the active intent's `repos` array from
    `aidlc/spaces/<active-space>/intents/intents.json` (the row whose `uuid`/`slug`
    matches the active intent). This is the set captured at intent birth (an explicit
    `--repos a,b` or sibling auto-discovery).
 2. **Single-repo / unrecorded:** if `repos` is absent, empty, or has exactly one
-   entry, RE runs once against the lone repo — the same flow as before. (An
+   entry, RE runs once against the lone repo - the same flow as before. (An
    unrecorded set means the workspace root is itself the single repo.)
-3. **Multi-repo:** if `repos` has more than one entry, run Steps 2–3 **once per
-   repo**, scanning that repo's sibling directory (`<workspace>/<repo>/`) and writing
-   its 9 artifacts to the directory `codekb-path --repo <repo>` prints (the
-   space-level `aidlc/spaces/<active-space>/codekb/<repo>/`; see Step 3). Each repo's codekb is independent;
-   nothing in one repo's scan blocks another's, so the per-repo scans may run as
-   parallel subagents.
+3. **Multi-repo:** if `repos` has more than one entry, resolve the Step 1 guard
+   decision for every repo, then run Steps 2-3 once for each repo selected for a
+   scan. Scan that repo's sibling directory (`<workspace>/<repo>/`) and write its
+   9 artifacts to the directory `codekb-path --repo <repo>` prints (the
+   space-level `aidlc/spaces/<active-space>/codekb/<repo>/`; see Step 3). Each
+   repo's codekb is independent, so selected scans may run as parallel subagents.
 
-In the steps below, `<repo>` is the repo currently being scanned; repeat for each
-repo in the set.
+In the steps below, `<repo>` is the repository whose decision or scan is being
+processed.
+
+#### Rerun guard: check each existing store before scanning
+
+The codekb is a space-level store shared across intents; a rerun REPLACES it.
+For every repo in the resolved set, run the read-only check:
+
+```
+bun .codex/tools/aidlc-utility.ts codekb-scope-diff --repo <repo>
+```
+
+- **NO_STORE** - first scan for this repo. Proceed to Step 2; no question.
+- **CURRENT** - the store's analyzed paths are unchanged since it was built.
+  If the recorded coverage plausibly serves this intent's area, present the
+  reuse question below. If this intent clearly targets code OUTSIDE the
+  store's analyzed paths, skip the reuse option and ask rescan vs focused only.
+- **STALE / UNVERIFIED / UNKNOWN_SCOPE** - the store's knowledge is out of
+  date, unverifiable, or predates scope tracking. Present the rescan question
+  below WITHOUT the reuse option.
+
+Reuse question (CURRENT + coverage fits the intent) - fold the tool's output
+(store intent, analyzed paths) into the prompt so the human decides on
+evidence:
+
+```question
+prompt: "An up-to-date code knowledge base exists for <repo> (built by intent <store-intent>; verified unchanged). Deep coverage: <analyzed paths>. Reuse it, or rescan?"
+header: "Code KB"
+multiSelect: false
+options:
+  - label: "Reuse existing knowledge base"
+    description: "Skip the scan; downstream stages read the current store as-is"
+  - label: "Full rescan"
+    description: "Rebuild the store covering the whole repo (replaces all 9 artifacts)"
+  - label: "Focused scan"
+    description: "Scan only this intent's area - the store will describe ONLY that area afterward"
+```
+
+Rescan question (STALE / UNVERIFIED / UNKNOWN_SCOPE, or CURRENT with coverage
+that does not fit) - include the verdict line in the prompt:
+
+```question
+prompt: "A code knowledge base exists for <repo> but <verdict summary - e.g. its analyzed paths have changed since it was built / it does not cover this intent's area>. Rescanning replaces it. How should the scan run?"
+header: "Code KB"
+multiSelect: false
+options:
+  - label: "Full rescan"
+    description: "Rebuild the store covering the whole repo (replaces all 9 artifacts)"
+  - label: "Focused scan"
+    description: "Scan only this intent's area - prior deep knowledge outside it is discarded (recoverable from git history)"
+```
+
+Record one decision per repo: reuse, full rescan, or focused scan. A reuse
+decision does NOT report or advance the stage while another repository may
+still need scanning. On a scan choice, also record its breadth; that choice
+sets the developer brief, and Step 3's scope block records what the scan
+actually covered.
+
+Only after every repository decision has been resolved:
+
+- If every repo is reused on an ordinary workflow run, report the stage as
+  skipped exactly once:
+  `bun .codex/tools/aidlc-orchestrate.ts report --stage reverse-engineering --result skipped --reason "codekb reuse: all resolved stores CURRENT, human chose reuse"`.
+- If every repo is reused on an isolated run (`directive.single === true`), do
+  NOT call the main-workflow skipped report. Return the reused-repositories
+  summary to the orchestrator's isolated stage-runner branch; it owns the
+  single `report --single --stage "reverse-engineering" --result completed`.
+- If any repo needs scanning, do not report a skip. Proceed to Steps 2-3 for
+  only the full/focused scan repos; leave each reused repo's store unchanged.
 
 ### Step 2: Developer Code Scan
 
@@ -87,8 +154,14 @@ Delegate to Task tool with aidlc-developer-agent:
 - The agent persona and knowledge are loaded automatically. Do NOT manually inject the persona.
 - Include workspace state from aidlc-state.md as context
 
-Developer scans `<repo>`'s codebase (the sibling dir `<workspace>/<repo>/`; for a
-single-repo intent this is the whole codebase) for:
+Brief the developer with the scan breadth chosen at the Step 1 guard (full
+rescan = the whole repo; focused scan = the intent's area, named explicitly in
+the brief) and require the scan results' Scan Coverage section (re-artifacts.md
+template) to list what was actually analyzed deeply vs skimmed.
+
+For each repo selected for scanning, the developer scans `<repo>`'s codebase
+(the sibling dir `<workspace>/<repo>/`; for a single-repo intent this is the
+whole codebase) for:
 - All packages, modules, and their purposes
 - Build systems, configuration, and dependency relationships
 - External and internal APIs (endpoints, contracts, methods)
@@ -118,7 +191,11 @@ Architect synthesizes scan results into 9 artifacts:
 6. **technology-stack.md** — Languages, frameworks, libraries with versions
 7. **dependencies.md** — External dependencies, internal cross-package dependencies
 8. **code-quality-assessment.md** — Test coverage, linting, CI/CD, documentation quality, tech debt
-9. **reverse-engineering-timestamp.md** — Records when reverse engineering was performed (date, commit hash if available, scope of analysis). This is the freshness/staleness marker for the per-repo codekb store — a stale timestamp triggers a rerun (see the `condition` frontmatter: "Always rerun for freshness").
+9. **reverse-engineering-timestamp.md** - Records when reverse engineering was performed (date, commit hash if available) and MUST end with the structured `## Scope of Analysis` block from the re-artifacts.md template, filled from the developer's Scan Coverage - what the run ACTUALLY analyzed deeply, not what was aspired to. This is the freshness/staleness marker the Step 1 rerun guard reads. For the block's `fingerprint:` line, run the mint command with the analyzed paths (comma-separated) and paste its output verbatim:
+
+   ```
+   bun .codex/tools/aidlc-utility.ts codekb-scope-diff --repo <repo> --mint --paths <analyzed paths>
+   ```
 
 **Resolve the write directory with the engine, do NOT compose the path yourself.**
 Run the read-only tool
@@ -129,16 +206,37 @@ bun .codex/tools/aidlc-utility.ts codekb-path --repo <repo>
 
 (omit `--repo` for a single/unrecorded repo — the engine resolves the repo name).
 It prints ONE line: the exact directory, e.g. `aidlc/spaces/<active-space>/codekb/<repo>/`.
-Write all 9 artifacts into the directory the tool printed — verbatim, creating it if
-absent. This is the durable per-repo code knowledge base, a space-level store shared
-across every intent in the space. Never substitute the intent slug, the record dir, or
-a hand-composed path for what the tool prints.
+
+**Overwrite backstop - run BEFORE writing (the compare needs the store still
+un-replaced).** When the Step 1 guard found an existing store (any verdict but
+NO_STORE), write the new timestamp content to
+`<record>/inception/reverse-engineering/scope-draft-<repo>.md` (one draft per
+repo; NOT the timestamp filename - record-dir placement checks key on the
+artifact stems) and run
+
+```
+bun .codex/tools/aidlc-utility.ts codekb-scope-diff --repo <repo> --compare <record>/inception/reverse-engineering/scope-draft-<repo>.md
+```
+
+Keep the output keyed by `<repo>` for Step 5's completion summary. This is the
+deterministic check that the scan delivered the breadth chosen at Step 1 - a
+focused run after a "Full rescan" choice surfaces here as NARROWER, before
+approval. Delete that repo's `scope-draft-<repo>.md` immediately after
+preserving the compare output; scope drafts are temporary and MUST NOT remain
+in the intent record.
+
+Write all 9 artifacts into the directory `codekb-path` printed - verbatim,
+creating it if absent. This is the durable per-repo code knowledge base, a
+space-level store shared across every intent in the space. Never substitute
+the intent slug, the record dir, or a hand-composed path for what the tool
+prints.
 
 ### Step 4: Completion Handoff
 
-Hand completion to `stage-protocol.md` via
+After every selected repo scan has completed, hand completion to
+`stage-protocol.md` exactly once via
 `bun .codex/tools/aidlc-orchestrate.ts report --stage reverse-engineering --result <outcome>`.
-The engine owns all lifecycle transitions and advancement.
+That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
 ### Step 5: Present Completion & Request Approval
 
@@ -146,9 +244,22 @@ Use stage-protocol.md completion template:
 - Announcement with completion summary
 - Summary of all 9 artifacts produced **per repo** (for a multi-repo intent, list
   each repo's `aidlc/spaces/<active-space>/codekb/<repo>/` set — the directory
-  `codekb-path --repo <repo>` printed in Step 3)
+  `codekb-path --repo <repo>` printed in Step 3); identify reused repos whose
+  existing stores were left unchanged
+- **For every repo whose Step 3 compare returned NARROWER**, the summary MUST
+  carry a repo-labeled warning before the question, quoting that repo's tool
+  discard list verbatim:
+
+  ```
+  WARNING for <repo>: this scan covered less than the store it replaced. Deep
+  knowledge of the following was discarded (recoverable from git history):
+  <discarded paths and components from the compare output>
+  Choose Request Changes to widen the scan instead.
+  ```
+
+  (COVERS, or no prior store, needs no warning line.)
 - Review path: `aidlc/spaces/<active-space>/codekb/<repo>/` for each repo in the set
-- Structured approval question with options: Approve (continue to Requirements Analysis) / Request Changes
+- Structured approval question with options: Approve (continue to Requirements Analysis) / Request Changes. If any repo returned NARROWER, the Approve option's description must say which stores were replaced by narrower scans (e.g. "Accept the narrower stores for <repos>; continue to Requirements Analysis").
 
 ## Sensors
 

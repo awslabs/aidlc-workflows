@@ -1,0 +1,11 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "aidlc-record-human-turn",
+      "trigger": "UserPromptSubmit",
+      "description": "Notes that a real person typed something this turn, which is what lets approval gates tell a human response from the assistant continuing on its own.",
+      "action": { "type": "command", "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts record-human-turn" }
+    }
+  ]
+}

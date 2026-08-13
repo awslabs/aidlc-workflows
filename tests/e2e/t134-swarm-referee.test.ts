@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-swarm:prepare, subcommand:aidlc-swarm:check, subcommand:aidlc-swarm:finalize, audit:SWARM_STARTED, audit:SWARM_DEGRADED, audit:SWARM_UNIT_CONVERGED, audit:SWARM_UNIT_FAILED, audit:SWARM_BATON_RETURNED, audit:SWARM_COMPLETED
+// covers: subcommand:aidlc-swarm:prepare, subcommand:aidlc-swarm:check, subcommand:aidlc-swarm:finalize, function:boltSlugForUnit, audit:SWARM_STARTED, audit:SWARM_DEGRADED, audit:SWARM_UNIT_CONVERGED, audit:SWARM_UNIT_FAILED, audit:SWARM_BATON_RETURNED, audit:SWARM_COMPLETED
 //
 // CLI-contract port of tests/e2e/t134-swarm-referee.sh (TAP plan 13),
 // mechanism = cli. The .sh exercises aidlc-swarm.ts — the STATELESS convergence
@@ -16,7 +16,7 @@
 // anti-tamper baseline, and the exit-2-baton-returns shell the .sh keys on. So
 // we SPAWN the real tool via spawnSync(BUN, [SWARM_TOOL, ...]) and assert on
 // res.status / res.stdout and the on-disk audit, exactly as the .sh did with
-// run_ref. spawnCount = all 13 cases.
+// run_ref.
 //
 // Source under test (dist/claude/.claude/tools/aidlc-swarm.ts):
 //   - handlePrepare (:296): forks a worktree per unit via aidlc-worktree create
@@ -69,8 +69,9 @@
 //   .sh 12 conductor attribution (--reasons unsatisfiable)   -> "12 conductor attribution: --reasons unsatisfiable lands the typed reason"
 //   .sh 13 --reasons cannot override the lying-conductor guard-> "13 --reasons cannot launder a claimed-but-red unit (stays error)"
 //
-// 13 .sh asserts -> 13 expect()-bearing test() cases (same count, same
-// observables). STRONGER than the .sh in several places: the .sh grepped loose
+// The 13 migrated .sh cases retain their 1:1 tests; case 14 adds the
+// exact-attempt stale-finalize regression. STRONGER than the .sh in several
+// places: the .sh grepped loose
 // substrings (`grep -q '"converged":true'`); here the stdout is JSON.parse'd and
 // asserted field-by-field (e.g. the lying unit's status === "failed" + reason
 // === "error" on the parsed envelope row), and audit-event presence is an exact
@@ -85,10 +86,14 @@ import {
   DEFAULT_RECORD_DIR,
   FIXTURES_DIR,
   cleanupWorktreeFixture,
+  seedBoltDag,
   seededAuditDir,
+  seededAuditShard,
+  seededRecordDir,
   seededStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
+import { boltSlugForUnit } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath;
 const SWARM_TOOL = join(AIDLC_SRC, "tools", "aidlc-swarm.ts");
@@ -149,9 +154,9 @@ function makeSwarmFixture(): string {
   return proj;
 }
 
-/** The per-unit worktree path the tool derives (aidlc-lib worktreePath). */
-function wtPath(proj: string, slug: string): string {
-  return join(proj, ".aidlc", "worktrees", `bolt-${slug}`);
+/** The per-unit worktree path the swarm derives from its internal Bolt slug. */
+function wtPath(proj: string, unit: string): string {
+  return join(proj, ".aidlc", "worktrees", `bolt-${boltSlugForUnit(unit)}`);
 }
 
 interface RefResult {
@@ -175,6 +180,12 @@ function runRef(proj: string, args: string[]): RefResult {
 
 function logWorktreeReview(proj: string, unit: string): void {
   const worktree = wtPath(proj, unit);
+  const dir = join(seededRecordDir(worktree), "construction", unit, "functional-design");
+  mkdirSync(dir, { recursive: true });
+  for (const name of ["business-logic-model", "business-rules", "domain-entities"]) {
+    const artifact = join(dir, `${name}.md`);
+    if (!existsSync(artifact)) writeFileSync(artifact, `# ${name}\n`);
+  }
   for (const terminal of [false, true]) {
     const args = [
       LOG_TOOL,
@@ -217,6 +228,54 @@ function eventCount(p: string, event: string): number {
     .filter((l) => l === `**Event**: ${event}`).length;
 }
 
+function prepareAsLegacy(proj: string, unit: string): void {
+  const shard = seededAuditShard(proj);
+  mkdirSync(seededAuditDir(proj), { recursive: true });
+  writeFileSync(
+    shard,
+    [
+      "# AI-DLC Audit Log",
+      "",
+      "## Swarm Started",
+      "**Timestamp**: 2026-08-05T00:00:00Z",
+      "**Event**: SWARM_STARTED",
+      "**Batch number**: 1",
+      `**Unit names**: ${unit}`,
+      "**Concurrency cap**: 1",
+      "",
+      "---",
+      "",
+    ].join("\n"),
+    "utf-8",
+  );
+  expect(
+    runRef(proj, [
+      "prepare",
+      "--batch",
+      "1",
+      "--units",
+      unit,
+      "--base",
+      "main",
+    ]).rc,
+  ).toBe(0);
+
+  // Current prepare writes a stamped row after the fork. Remove only that row
+  // to reproduce an in-flight worktree created by the pre-stamp release; the
+  // frozen audit prefix still contains the legacy row and full fork evidence.
+  const withoutStamped = readFileSync(shard, "utf-8")
+    .split("\n---\n")
+    .filter(
+      (block) =>
+        !(
+          block.includes("**Event**: SWARM_STARTED") &&
+          block.includes("**Run floor**:")
+        ),
+    )
+    .join("\n---\n");
+  writeFileSync(shard, withoutStamped, "utf-8");
+}
+
 describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swarm-referee.sh, plan 13)", () => {
   // ===========================================================================
   // Cases 1-4 + 6 share ONE fixture: prepare + stateless check + finalize on a
@@ -234,6 +293,11 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     expect(env.units.find((u: { unit: string }) => u.unit === "alpha")?.ok).toBe(true);
     // SWARM_STARTED fired exactly once for the batch.
     expect(eventCount(proj, "SWARM_STARTED")).toBe(1);
+    const startedBlock = auditBody(proj)
+      .split("\n---\n")
+      .find((b) => b.includes("**Event**: SWARM_STARTED"));
+    expect(startedBlock).toContain("**Stage**: functional-design");
+    expect(startedBlock).toContain("**Run floor**: unstarted#0");
     // The worktree directory landed on disk via the real `git worktree add`.
     expect(existsSync(wtPath(proj, "alpha"))).toBe(true);
 
@@ -276,14 +340,258 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     expect(fEnv.converged).toBe(1);
     expect(fEnv.merge_failures).toEqual([]);
     expect(eventCount(proj, "SWARM_UNIT_CONVERGED")).toBe(1);
-    // The row carries the attempt-identity stamp: Stage from the state file's
-    // Current Stage, Run floor = the stage's latest main-workflow
-    // STAGE_STARTED ("" here - the fixture audit has none).
+    // Finalize preserves prepare's exact attempt stamp.
     const convergedBlock = auditBody(proj)
       .split("\n---\n")
       .find((b) => b.includes("**Event**: SWARM_UNIT_CONVERGED"));
     expect(convergedBlock).toContain("**Stage**: functional-design");
-    expect(convergedBlock).toContain("**Run floor**: ");
+    expect(convergedBlock).toContain("**Run floor**: unstarted#0");
+  }, 120000);
+
+  test("1b legacy-safe Unit names complete the autonomous swarm lifecycle", () => {
+    const proj = makeSwarmFixture();
+    const unit = "2fa";
+    const boltSlug = boltSlugForUnit(unit);
+    expect(boltSlug).toBe("unit-2fa-46897518ceceb41f");
+    expect(boltSlug).toMatch(/^[a-z][a-z0-9-]*$/);
+    expect(boltSlug).not.toBe(unit);
+    expect(boltSlug.length).toBeLessThanOrEqual(64);
+    expect(boltSlugForUnit("unit-a")).toBe("unit-a");
+    expect(boltSlugForUnit("api_v2")).toMatch(/^[a-z][a-z0-9-]*$/);
+    expect(boltSlugForUnit("WebUI")).toMatch(/^[a-z][a-z0-9-]*$/);
+    expect(boltSlugForUnit("api_v2")).not.toBe(boltSlugForUnit("api.v2"));
+    expect(() => boltSlugForUnit("../escape")).toThrow("Invalid Unit name");
+
+    seedBoltDag(proj, [unit, boltSlug], [[unit], [boltSlug]]);
+    const collision = runRef(proj, [
+      "prepare",
+      "--batch",
+      "1",
+      "--units",
+      unit,
+      "--base",
+      "main",
+    ]);
+    expect(collision.rc).not.toBe(0);
+    expect(existsSync(wtPath(proj, unit))).toBe(false);
+
+    const failedUnit = "WebUI";
+    seedBoltDag(proj, [unit, failedUnit], [[unit], [failedUnit]]);
+    const prepared = runRef(proj, [
+      "prepare",
+      "--batch",
+      "1",
+      "--units",
+      unit,
+      "--base",
+      "main",
+    ]);
+    expect(prepared.rc).toBe(0);
+    expect(JSON.parse(prepared.out).units[0].worktree_path).toBe(wtPath(proj, unit));
+    expect(auditBody(wtPath(proj, unit))).toContain(`**Bolt slug**: ${boltSlug}`);
+
+    writeFileSync(join(wtPath(proj, unit), "impl.txt"), "done\n");
+    logWorktreeReview(proj, unit);
+    expect(runRef(proj, ["check", unit, "--check-cmd", "test -f impl.txt"]).rc).toBe(0);
+
+    const finalized = runRef(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      unit,
+      "--claimed",
+      unit,
+      "--check-cmd",
+      "test -f impl.txt",
+    ]);
+    expect(finalized.rc).toBe(0);
+    expect(JSON.parse(finalized.out).converged).toBe(1);
+    expect(auditBody(proj)).toContain(`**Unit name**: ${unit}`);
+
+    expect(
+      runRef(proj, [
+        "prepare",
+        "--batch",
+        "2",
+        "--units",
+        failedUnit,
+        "--base",
+        "main",
+      ]).rc,
+    ).toBe(0);
+    const failed = runRef(proj, [
+      "finalize",
+      "--batch",
+      "2",
+      "--units",
+      failedUnit,
+      "--claimed",
+      failedUnit,
+      "--check-cmd",
+      "test -f impl.txt",
+    ]);
+    expect(failed.rc).toBe(2);
+    const failedBlock = auditBody(proj)
+      .split("\n---\n")
+      .find(
+        (block) =>
+          block.includes("**Event**: BOLT_FAILED") &&
+          block.includes(`**Failed Bolt**: ${failedUnit}`),
+      );
+    expect(failedBlock).toContain(`**Bolt slug**: ${boltSlugForUnit(failedUnit)}`);
+  }, 120000);
+
+  test("1c malformed authoritative DAG refuses before worktree creation", () => {
+    const proj = makeSwarmFixture();
+    const dependencyDir = join(
+      seededRecordDir(proj),
+      "inception",
+      "units-generation",
+    );
+    mkdirSync(dependencyDir, { recursive: true });
+    writeFileSync(
+      join(dependencyDir, "unit-of-work-dependency.md"),
+      "# Dependencies\n\n```yaml\nunits:\n  - name: ../escape\n    depends_on: []\n```\n",
+      "utf-8",
+    );
+
+    const prepared = runRef(proj, [
+      "prepare",
+      "--batch",
+      "1",
+      "--units",
+      "alpha",
+      "--base",
+      "main",
+    ]);
+    expect(prepared.rc).not.toBe(0);
+    expect(existsSync(wtPath(proj, "alpha"))).toBe(false);
+  }, 120000);
+
+  test("14a stale finalize is refused before merge after the stage attempt changes", () => {
+    const proj = makeSwarmFixture();
+    expect(
+      runRef(proj, [
+        "prepare",
+        "--batch",
+        "1",
+        "--units",
+        "stale",
+        "--base",
+        "main",
+      ]).rc,
+    ).toBe(0);
+    writeFileSync(join(wtPath(proj, "stale"), "impl.txt"), "done\n");
+    writeFileSync(
+      join(seededAuditDir(proj), "fixture.md"),
+      [
+        "",
+        "## Stage Start",
+        "**Timestamp**: 2026-08-05T00:00:00Z",
+        "**Event**: STAGE_STARTED",
+        "**Stage**: functional-design",
+        "",
+        "---",
+        "",
+      ].join("\n"),
+      { flag: "a" },
+    );
+
+    // A failed re-prepare must not stamp the preserved attempt-1 worktree with
+    // attempt 2. The existing worktree makes create fail, and SWARM_STARTED
+    // remains the single attempt-1 receipt.
+    const reprepare = runRef(proj, [
+      "prepare",
+      "--batch",
+      "1",
+      "--units",
+      "stale",
+      "--base",
+      "main",
+    ]);
+    expect(reprepare.rc).toBe(2);
+    expect(eventCount(proj, "SWARM_STARTED")).toBe(1);
+
+    const finalized = runRef(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "stale",
+      "--claimed",
+      "stale",
+      "--check-cmd",
+      "test -f impl.txt",
+    ]);
+    expect(finalized.rc).toBe(2);
+    expect(JSON.parse(finalized.out).units[0].detail).toContain(
+      "does not match the current attempt",
+    );
+    expect(eventCount(proj, "SWARM_UNIT_CONVERGED")).toBe(0);
+  }, 120000);
+
+  test("14b a fully proven pre-upgrade swarm can finalize without re-prepare", () => {
+    const proj = makeSwarmFixture();
+    prepareAsLegacy(proj, "legacy");
+    writeFileSync(join(wtPath(proj, "legacy"), "impl.txt"), "done\n");
+    logWorktreeReview(proj, "legacy");
+
+    const finalized = runRef(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "legacy",
+      "--claimed",
+      "legacy",
+      "--check-cmd",
+      "test -f impl.txt",
+    ]);
+    expect(finalized.rc).toBe(0);
+    expect(JSON.parse(finalized.out).converged).toBe(1);
+    const convergedBlock = auditBody(proj)
+      .split("\n---\n")
+      .find((block) => block.includes("**Event**: SWARM_UNIT_CONVERGED"));
+    expect(convergedBlock).toContain("**Stage**: functional-design");
+    expect(convergedBlock).toContain("**Run floor**: unstarted#0");
+  }, 120000);
+
+  test("14c a pre-upgrade swarm from a prior attempt remains refused", () => {
+    const proj = makeSwarmFixture();
+    prepareAsLegacy(proj, "legacy-stale");
+    writeFileSync(join(wtPath(proj, "legacy-stale"), "impl.txt"), "done\n");
+    writeFileSync(
+      join(seededAuditDir(proj), "fixture.md"),
+      [
+        "",
+        "## Stage Start",
+        "**Timestamp**: 2026-08-05T00:00:01Z",
+        "**Event**: STAGE_STARTED",
+        "**Stage**: functional-design",
+        "",
+        "---",
+        "",
+      ].join("\n"),
+      { flag: "a" },
+    );
+
+    const finalized = runRef(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "legacy-stale",
+      "--claimed",
+      "legacy-stale",
+      "--check-cmd",
+      "test -f impl.txt",
+    ]);
+    expect(finalized.rc).toBe(2);
+    expect(JSON.parse(finalized.out).units[0].detail).toContain(
+      "does not match the current attempt",
+    );
+    expect(eventCount(proj, "SWARM_UNIT_CONVERGED")).toBe(0);
   }, 120000);
 
   // Cases 2, 3, 4, 6 are asserted inside test 1's shared-fixture flow above

@@ -67,19 +67,48 @@ Bolt execution. Only its Step 7 per-Unit completion approval gate is
 (or batch-level) completion gate replaces it. The per-Unit completion gate
 remains for direct-invocation use (e.g., `/aidlc --stage code-generation`).
 
-**Design-stage iteration order (opt-in).** By default the engine iterates the
-four inline design stages (3.1 through 3.4) stage-major: it runs 3.1 for every Unit,
-then 3.2 for every Unit, and so on. When the state file records
-`Construction Iteration: unit-major` under `## Runtime State` (set at
-delivery-planning via `aidlc-state.ts set-construction-iteration unit-major`, or
-by a human), the engine walks unit-major instead: for each Unit in Bolt build
-order, it authors that Unit's four design documents (3.1 through 3.4)
-consecutively before the next Unit begins. The four per-stage approval gates are
-unchanged in count and machinery; under unit-major they fire late, in stage
-order, once the whole (stage by Unit) design grid is covered, one human approval
-per stage.
-`code-generation` (3.5, `mode: subagent`) is never part of this walk. Only the
-exact value `unit-major` activates it; absent or `stage-major` is the default.
+**Construction iteration order (opt-in).** By default the engine iterates the
+per-unit construction stages stage-major: it runs 3.1 for every Unit, then 3.2
+for every Unit, and so on, with 3.5 Code Generation last for every Unit. When
+the state file records `Construction Iteration: unit-major` under
+`## Runtime State` (set at delivery-planning via
+`aidlc-state.ts set-construction-iteration unit-major`, or by a human), the
+engine walks unit-major instead: for each Unit in Bolt build order, it authors
+that Unit's four design documents (3.1 through 3.4) and then generates its code
+(3.5) before the next Unit begins — the first working code lands after one
+Unit's design, not after every Unit's. Code Generation's per-Unit Plan Approval
+(Step 3) still hard-stops before generation, and the autonomous Construction
+swarm never fires while the knob is set (the walk owns the build, serially in
+Bolt build order; parallel batch swarms are stage-major territory). The
+per-stage approval gates are unchanged in count and machinery; under unit-major
+they fire late, in stage order, once the whole (stage by Unit) grid — Code
+Generation included — is covered, one human approval per stage.
+Only the exact value `unit-major` activates it; absent or `stage-major` is the
+default.
+
+**Per-unit batch waves (optional, stage-major only).** On the default
+stage-major walk, the engine MAY emit `directive.wave` for one of the four
+inline design stages (3.1–3.4). The wave comes from one healed DAG snapshot;
+the conductor does not read `runtime-graph.json` or derive sibling paths.
+Code Generation (3.5, `workspace_requires: true`) is NEVER wave-eligible:
+concurrent builders would collide writing into the shared workspace (the
+swarm path's per-unit worktrees exist for exactly this isolation), and its
+Step 3 Plan Approval is a mandatory hard stop in every execution mode that
+cannot fold into a builder's return message.
+
+Each entry carries kind-resolved consumes, explicit absent consumes, all
+produces, the applicable required subset, a Unit-local diary path, build state,
+paired-review state, and whether its wave completion receipt is still required.
+Builders receive the parent stage file, inline context roster, warnings, and
+exact accumulated steering content. A blocked builder withholds an applicable
+required path, not an optional or kind-exempt path. After build and review,
+`unit complete --wave` verifies the live entry, fans Unit diary entries into the
+parent diary idempotently, and emits `UNIT_COMPLETED`. The engine holds the
+current batch until every applicable Unit has all of that evidence, then permits
+a dependent batch or the single stage gate. Waves never apply under
+`Construction Iteration: unit-major`; harnesses without a parallel dispatch
+primitive process the entries serially. See
+`stage-protocol.md` §3 "Per-unit batch waves" for the full contract.
 
 **Parallel batches.** When two or more Bolts share dependency-satisfaction
 and don't depend on each other, the conductor dispatches their Code
@@ -686,6 +715,10 @@ This stage has a **two-part structure**: planning followed by generation.
    (subagent_type="aidlc-developer-agent").
 
    **Context passed to subagent:**
+   - As the first prompt line, the exact target marker
+     `AIDLC-UNIT: <directive.unit>` (or the current unit name for a
+     single-iteration directive without `unit`). Contextual dependencies do
+     not receive additional markers.
    - The lead agent's persona from `agents/aidlc-developer-agent.md` and knowledge
      from `.claude/knowledge/aidlc-developer-agent/` (included in the prompt
      since subagents cannot access conversation history)

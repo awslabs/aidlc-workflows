@@ -1,7 +1,7 @@
-// covers: hook:aidlc-audit-logger
+// covers: hook:aidlc-write-audit-log
 //
 // t170 — the P8 fix to the audit-logger GATE. Pre-workspace-move the hook gated
-// artifact logging on `file.includes("aidlc-docs/")` (aidlc-audit-logger.ts:49).
+// artifact logging on `file.includes("aidlc-docs/")` (aidlc-write-audit-log.ts:49).
 // After the record re-roots per intent
 // (aidlc/spaces/<space>/intents/<slug>-<id8>/<phase>/<stage>/…), that path no
 // longer contains "aidlc-docs/", so the old gate DROPPED every ARTIFACT_CREATED/
@@ -13,7 +13,7 @@
 // WHY CLI: the SUBJECT is a hook (top-level run + process.exit gates + stdin),
 // spawned exactly as PostToolUse drives it — the same twin pattern as t07.
 //
-// SEEDING: birthIntent() mints a real per-intent record + sets the active-intent
+// SEEDING: createIntent() mints a real per-intent record + sets the active-intent
 // cursor; auditFilePath() then resolves the per-clone shard under that record's
 // audit/ dir (the precondition for the emit — the hook self-gates on the shard
 // existing, :57). We touch the shard, fire a Write under the record's stage dir,
@@ -24,7 +24,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { hostname } from "node:os";
 import { join } from "node:path";
 import {
-  birthIntent,
+  createIntent,
   docsRoot,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
@@ -34,7 +34,7 @@ import {
 } from "../harness/fixtures.ts";
 
 const BUN = process.execPath;
-const HOOK = join(AIDLC_SRC, "hooks", "aidlc-audit-logger.ts");
+const HOOK = join(AIDLC_SRC, "hooks", "aidlc-write-audit-log.ts");
 
 let proj: string;
 beforeEach(() => {
@@ -79,7 +79,7 @@ function pinnedShardName(): string {
  *  passes. Assertions glob-read every shard in the dir (clone-id-name-agnostic,
  *  mirroring readAllAuditShards) to tolerate any extra shard. */
 function seedIntentWithShard(p: string, slug: string): { auditDir: string; recordRoot: string } {
-  const born = birthIntent(p, slug, "default", "feature");
+  const born = createIntent(p, slug, "default", "feature");
   // Pin the clone-id BEFORE the hook runs (the hook reads it from disk).
   writeFileSync(join(p, "aidlc", ".aidlc-clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
   const auditDir = join(docsRoot(p), "audit");

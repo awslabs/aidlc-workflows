@@ -123,7 +123,7 @@ The aidlc-delivery-agent acts as the engineering manager. It assesses team capac
 
 **Domain:** Application design, domain modelling, NFRs, component decomposition
 
-The aidlc-architect-agent is the central design authority. It has the broadest stage involvement (9 stages across 3 phases) and carries the `judgment` tier — alongside seven other high-judgment agents (product, design, developer, quality, devsecops, compliance, aws-platform). A judgment agent inherits your session's own model and effort, so it is never downgraded below what you chose. Only delivery, pipeline-deploy, and operations carry the `templated` tier (a mid-size model at reduced effort on Claude Code, Codex, and opencode; on Kiro all tiers inherit the session model and effort), because their output is dominantly templated planning, CI/CD YAML, and runbook scaffolding.
+The aidlc-architect-agent is the central design authority. It has the broadest stage involvement (9 stages across 3 phases) and carries the `judgment` tier — alongside seven other high-judgment agents (product, design, developer, quality, devsecops, compliance, aws-platform). A judgment agent inherits your session's own model and effort, so it is never downgraded below what you chose. Only delivery, pipeline-deploy, and operations carry the `templated` tier (a mid-size model at reduced effort on Claude Code, Codex, and opencode; on Kiro, Cursor, and Copilot all tiers inherit the session model and effort), because their output is dominantly templated planning, CI/CD YAML, and runbook scaffolding.
 
 - **Leads:** feasibility, application-design, units-generation, functional-design, nfr-requirements, nfr-design
 - **Supports:** intent-capture, reverse-engineering (synthesis), delivery-planning
@@ -167,7 +167,7 @@ The aidlc-developer-agent spans three phases — from reverse engineering in Inc
 - **Leads:** reverse-engineering (code scan), code-generation
 - **Supports:** practices-discovery, user-stories, functional-design, deployment-execution
 
-Workspace detection (workspace-detection) used to be a subagent of the aidlc-developer-agent; it now runs deterministically inside `aidlc-utility intent-birth` using rule-based file and manifest detection.
+Workspace detection (workspace-detection) used to be a subagent of the aidlc-developer-agent; it now runs deterministically inside `aidlc-utility intent-create` using rule-based file and manifest detection.
 - **Special tools:** Bash (for build and run commands)
 
 ### [aidlc-quality-agent](agents/quality-agent.md)
@@ -276,11 +276,21 @@ learnings ritual and approval gate, the conductor invokes the named reviewer as 
 **separate sub-agent**. The reviewer reads the stage definition, the Q&A, and the
 artifacts (never the builder's `memory.md` or plan — it forms independent
 judgment), then appends a `## Review` section with a verdict: **READY** or
-**NOT-READY**. On NOT-READY the builder re-runs to address the findings and the
-reviewer re-checks, looping up to `reviewer_max_iterations` times (default 2). If
-findings remain after the cap, the workflow proceeds to the approval gate with the
-unresolved findings noted — the reviewer never blocks, the human always has final
-say.
+**NOT-READY**. How the verdict is handled depends on the stage's review class:
+
+- **Advisory** (the human-gated ideation/inception prose stages): one review
+  pass, whatever the verdict. The findings are quoted verbatim at the approval
+  gate, ranked by severity, as decision support — you triage them, and a
+  Request Changes at the gate is how a finding becomes a revision.
+- **Adversarial** (the Construction design/build stages): on NOT-READY the
+  builder re-runs to address the findings and the reviewer re-checks, looping
+  up to `reviewer_max_iterations` times (default 2, engine-enforced). If
+  findings remain after the cap, the workflow proceeds to the approval gate
+  with the unresolved findings noted.
+
+The scope can cap the class (`bugfix`, `poc`, and `workshop` cap every stage to
+advisory) and `/aidlc --review <class>` caps it per run. Either way the
+reviewer never blocks — the human always has final say.
 
 (IMPORTANT: use plain agent names in backticks as shown — do NOT make them markdown links; per-agent reviewer doc pages do not exist yet.)
 

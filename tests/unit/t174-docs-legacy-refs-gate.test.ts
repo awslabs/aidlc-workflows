@@ -110,8 +110,8 @@ function scanOccurrences(): Occurrence[] {
       // Retired rules-DIR tokens (the dotted per-harness rules dirs). The method
       // tree relocated to `aidlc/spaces/<space>/memory/` (graph.ts MEMORY_SEGMENTS);
       // the dotted dirs survive ONLY in native-include prose (the `.claude/rules/
-      // aidlc.md` @-import stub mentions, the Kiro `.kiro/steering/` resources glob,
-      // the packager rename narrative) — those are pinned in the fixture.
+      // aidlc.md` @-import stub mentions, Kiro IDE's `.kiro/steering/` native
+      // include, the packager rename narrative) — those are pinned in the fixture.
       const hasRulesDir =
         line.includes(".claude/rules/") ||
         line.includes(".kiro/steering/") ||

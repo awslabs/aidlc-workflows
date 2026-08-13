@@ -20,7 +20,7 @@
 // WHY SUBPROCESS for (1). Same idiom as t141/t150: the packager is a CLI; we
 // pin its observable behavior, not its internals.
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -31,6 +31,7 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
+  rmdirSync,
   rmSync,
   statSync,
 } from "node:fs";
@@ -44,6 +45,26 @@ const CLAUDE_SRC = join(REPO_ROOT, "dist", "claude", ".claude");
 const OPENCODE_ROOT = join(REPO_ROOT, "dist", "opencode");
 const ENGINE = join(OPENCODE_ROOT, ".aidlc");
 const SHELL = join(OPENCODE_ROOT, ".opencode");
+const ADAPTER_ENTRYPOINT_TIMEOUT_MS = 60_000;
+const OPENCODE_INTENTS = join(
+  OPENCODE_ROOT,
+  "aidlc",
+  "spaces",
+  "default",
+  "intents",
+);
+
+afterEach(() => {
+  rmSync(join(OPENCODE_INTENTS, ".aidlc-hooks-health"), {
+    recursive: true,
+    force: true,
+  });
+  try {
+    rmdirSync(OPENCODE_INTENTS);
+  } catch {
+    // Keep a non-empty generated intents directory intact.
+  }
+});
 
 function* walk(dir: string): Generator<string> {
   for (const entry of readdirSync(dir).sort()) {
@@ -205,6 +226,9 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
     expect(cfg.permission?.edit?.[".aidlc/hooks/**"]).toBe("ask");
   });
 
+  // Each allowed bash call continues through two real core-hook subprocesses.
+  // Under cross-runner load the full shipped-entrypoint sweep can exceed Bun's
+  // 5s default even though every boundary assertion succeeds.
   test("9: the adapter embeds exactly the shipped tool and hook entrypoints", async () => {
     const moduleExports = await import(
       "../../dist/opencode/.opencode/plugin/aidlc-opencode-adapter.ts"
@@ -251,7 +275,7 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
     ).rejects.toThrow(
       "shipped tool or hook",
     );
-  });
+  }, ADAPTER_ENTRYPOINT_TIMEOUT_MS);
 
   test("10: doctor accepts an opencode.jsonc-only install", () => {
     const root = mkdtempSync(join(tmpdir(), "t240-opencode-doctor-"));

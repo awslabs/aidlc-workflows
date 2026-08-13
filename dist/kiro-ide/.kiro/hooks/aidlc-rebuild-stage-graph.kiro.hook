@@ -1,0 +1,1 @@
+{"version":"1.0.0","enabled":true,"name":"aidlc-rebuild-stage-graph","description":"Rebuilds the compiled plan of remaining stages after the workflow moves, so routing decisions use current state.","when":{"type":"postToolUse","toolTypes":["shell"]},"then":{"type":"runCommand","command":"bun .kiro/hooks/aidlc-kiro-adapter.ts rebuild-stage-graph"}}

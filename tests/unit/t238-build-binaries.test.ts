@@ -1,4 +1,4 @@
-// covers: file:scripts/build-binaries.ts, tool:aidlc, subcommand:aidlc-utility:version
+// covers: file:scripts/build-binaries.ts, tool:aidlc, subcommand:aidlc-utility:version, hook:aidlc-review-freeze
 // covers: subcommand:aidlc-utility:plugin-sync
 // covers: subcommand:aidlc-utility:doctor
 //
@@ -109,7 +109,15 @@ describe("t238 build-binaries release builder", () => {
     expect(existsSync(native.artifact)).toBe(true);
     expect(relative(REPO_ROOT, native.artifact).replace(/\\/g, "/").startsWith("build/binaries/")).toBe(true);
     expect(native.bytes).toBeGreaterThan(10 * 1024 * 1024);
-    for (const harness of ["claude", "codex", "kiro", "kiro-ide"]) {
+    for (const harness of [
+      "claude",
+      "codex",
+      "cursor",
+      "kiro",
+      "kiro-ide",
+      "copilot",
+      "opencode",
+    ]) {
       expect(existsSync(join(dirname(native.artifact), "runtime", harness))).toBe(true);
     }
 
@@ -126,7 +134,7 @@ describe("t238 build-binaries release builder", () => {
     for (const name of [
       "runtime-assets",
       "sensor-list",
-      "sensor-fire",
+      "run-sensors",
       "graph-compile-check",
       "packaged-runtime-immutable",
       "validate-outputs",
@@ -134,9 +142,14 @@ describe("t238 build-binaries release builder", () => {
       "stage-table-check",
       "scope-table-check",
       "runtime-codex",
+      "runtime-cursor",
       "runtime-kiro",
       "runtime-kiro-ide",
+      "runtime-copilot",
+      "runtime-opencode",
       "harness-probe-kiro",
+      "harness-probe-copilot",
+      "harness-probe-opencode",
       "plugin-select",
       "real-plugin-sync",
       "conductor-persona",
@@ -147,12 +160,21 @@ describe("t238 build-binaries release builder", () => {
       "pathless-park",
       "pathless-single-audit",
       "hook-validate-state",
+      "hook-review-freeze",
       "statusline",
       "adapter-codex-validate-state",
+      "adapter-cursor-validate-state",
       "routed-project-dir",
     ]) {
       expect(gate(native, name).ok, name).toBe(true);
     }
+
+    expect(gate(native, "harness-probe-copilot").stdout).toContain(
+      ".github/hooks/aidlc.json present (hook wiring)",
+    );
+    expect(gate(native, "harness-probe-opencode").stdout).toContain(
+      "opencode.json or opencode.jsonc present",
+    );
 
     const delegateDoctorData = gate(native, "delegate-doctor-data");
     expect(delegateDoctorData.ok).toBe(true);

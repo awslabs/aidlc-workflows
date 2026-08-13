@@ -181,6 +181,48 @@ describe("t130 scope-runners — structural conformance of the shipped first-bat
   });
 
   // ===========================================================================
+  // New-work escape hatch is present in EVERY scope-runner.
+  // A scope-runner forwards to `done` when the active intent is complete; without
+  // the new-work section the conductor dead-ends there with no path to start a
+  // second, unrelated intent. renderRunner is the single source, so assert the
+  // recognise, offer, `next --new-intent` guidance is rendered for every
+  // first-batch scope, that the offer proposes THIS runner's scope as the default
+  // (correctable to a different scope for genuinely unrelated work), and that the
+  // confirmed scope, not a hardcoded one, flows onto the birth command.
+  // ===========================================================================
+  for (const scope of BATCH) {
+    test(`aidlc-${scope}: carries the new-work offer routed through next --new-intent`, () => {
+      const body = readFileSync(runnerPath(scope), "utf-8");
+      // The section header + the AskUserQuestion offer (never auto-birth) + the
+      // --new-intent escape hatch driven by the CONFIRMED scope.
+      expect(body).toContain("Starting unrelated new work?");
+      expect(body).toContain("AskUserQuestion");
+      expect(body).toContain("next --new-intent --scope <the confirmed scope>");
+      expect(body).toContain("`intent-create` command");
+      expect(body).not.toContain("`intent-birth`");
+      // The offer defaults the proposed scope to THIS runner's baked scope
+      // (same-flavour follow-up) while allowing a different one, so the runner's
+      // own scope is named in the offer prose. (Asserted on newline-collapsed
+      // text: the prose wraps, so `baked` and the backticked scope can land on
+      // adjacent lines.)
+      const collapsed = body.replace(/\s+/g, " ");
+      expect(collapsed).toContain(`baked \`${scope}\``);
+      // On confirm the runner hands off to a fresh session: a 2nd, unrelated
+      // intent shouldn't inherit the prior intent's context, so the prose names
+      // /clear and stopping rather than continuing in-session.
+      expect(body).toContain("/clear");
+      expect(collapsed.toLowerCase()).toContain("fresh session");
+      // STRONGER: the on-disk bytes match the generator's own render.
+      const rendered = renderRunner(scope, DISCOVERED[scope]?.description ?? "");
+      expect(rendered).toContain("next --new-intent --scope <the confirmed scope>");
+      expect(rendered).toContain("`intent-create` command");
+      expect(rendered).not.toContain("`intent-birth`");
+      expect(rendered.replace(/\s+/g, " ")).toContain(`baked \`${scope}\``);
+      expect(rendered).toContain("/clear");
+    });
+  }
+
+  // ===========================================================================
   // Generator drift guard is clean over the shipped tree (1 test, mechanism cli).
   // The .sh: `bun GEN scopes --check >/dev/null 2>&1` exits 0. The exit code is a
   // process.exit contract (:474 exit 1 on drift / :476 returns clean), so it is

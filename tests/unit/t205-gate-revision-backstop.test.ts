@@ -42,7 +42,7 @@
 //   tools/aidlc-state.ts handleApprove (backstop block), unrecordedRevisionSinceGateOpen,
 //     producesArtifactFile;
 //   tools/aidlc-orchestrate.ts handleReport (production approval dispatcher);
-//   hooks/aidlc-audit-logger.ts (emits ARTIFACT_UPDATED with the production File shape);
+//   hooks/aidlc-write-audit-log.ts (emits ARTIFACT_UPDATED with the production File shape);
 //   tools/aidlc-audit.ts append (records the HUMAN_TURN event).
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -62,13 +62,14 @@ import {
   seedStateFile,
 } from "../harness/fixtures.ts";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 
 const BUN = process.execPath;
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const AUDIT = join(AIDLC_SRC, "tools", "aidlc-audit.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
-const HOOK = join(AIDLC_SRC, "hooks", "aidlc-audit-logger.ts");
+const HOOK = join(AIDLC_SRC, "hooks", "aidlc-write-audit-log.ts");
 const MID_IDEATION = "state-mid-ideation.md"; // Current Stage: feasibility ([-])
 // feasibility declares produces: feasibility-assessment, constraint-register, ...
 const PRIMARY_ARTIFACT = "feasibility-assessment";
@@ -120,13 +121,7 @@ function guardedNoBackstop(proj: string, args: string[]): { rc: number; out: str
 // Record a HUMAN_TURN via the real audit-append CLI (what the per-harness mint
 // hook does on a real prompt) - appends to the active-intent shard in ledger order.
 function recordHumanTurn(proj: string): void {
-  const r = spawnSync(BUN, [AUDIT, "append", "HUMAN_TURN", "--project-dir", proj], {
-    encoding: "utf-8",
-    env: process.env,
-  });
-  if ((r.status ?? -1) !== 0) {
-    throw new Error(`recordHumanTurn failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
-  }
+  appendAuditEntry("HUMAN_TURN", {}, proj);
 }
 
 // Record a STAGE_STARTED for the slug via the real audit-append CLI - the same
@@ -143,7 +138,7 @@ function recordStageStarted(proj: string, slug: string): void {
 }
 
 function recordReview(proj: string, slug: string, iteration: number): void {
-  const r = spawnSync(BUN, [
+  const args = [
     LOG,
     "review",
     "--stage",
@@ -152,18 +147,19 @@ function recordReview(proj: string, slug: string, iteration: number): void {
     "aidlc-product-lead-agent",
     "--iteration",
     String(iteration),
-    "--verdict",
-    "READY",
     "--project-dir",
     proj,
-  ], { encoding: "utf-8", env: process.env });
-  if ((r.status ?? -1) !== 0) {
-    throw new Error(`recordReview failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
+  ];
+  for (const suffix of [[], ["--verdict", "READY"]]) {
+    const r = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8", env: process.env });
+    if ((r.status ?? -1) !== 0) {
+      throw new Error(`recordReview failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
+    }
   }
 }
 
 // Fire the real audit-logger hook with an Edit PostToolUse over stdin (Edit
-// always emits ARTIFACT_UPDATED - aidlc-audit-logger.ts). The File is an
+// always emits ARTIFACT_UPDATED - aidlc-write-audit-log.ts). The File is an
 // absolute path under the active-intent record, matching production. The shard
 // must already exist (the hook never auto-creates the trail), so a prior audit
 // event (gate-start or a HUMAN_TURN append) must have run first.
@@ -182,7 +178,7 @@ function feasibilityArtifact(proj: string, name: string): string {
 // The unit fixture already seeds the production registry and active-intent
 // cursor around the requested brownfield state. Rewriting its lone repos field,
 // as t182 does, keeps this process-boundary test focused on report and approve;
-// intent-birth would replace the fixture state and test an unrelated transaction.
+// intent-create would replace the fixture state and test an unrelated transaction.
 function rewriteIntentRepos(proj: string, repos: string[]): void {
   const regPath = join(proj, "aidlc", "spaces", DEFAULT_SPACE, "intents", "intents.json");
   const rows = JSON.parse(readFileSync(regPath, "utf-8")) as Array<Record<string, unknown>>;
@@ -356,7 +352,7 @@ describe("t205: approve-time gate-revision backstop", () => {
     expect(field(proj, "Revision Count")).toBe("1");
     expect(stateContent(proj)).toContain(`- [?] ${slug}`);
 
-    recordReview(proj, slug, 2);
+    recordReview(proj, slug, 1);
     const accepted = guarded(proj, ["approve", slug, "--user-input", "looks good now"]);
     expect(accepted.rc).toBe(0);
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);

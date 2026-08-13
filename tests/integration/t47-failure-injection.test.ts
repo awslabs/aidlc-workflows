@@ -169,7 +169,7 @@ function proj(): string {
   return p;
 }
 
-// P4: intent-birth writes state into the born intent's per-intent record dir
+// P4: intent-create writes state into the born intent's per-intent record dir
 // (aidlc/spaces/<space>/intents/<slug>-<id8>/) and audit into per-clone SHARDS
 // under <record>/audit/<host>-<clone>.md — not the flat aidlc-docs/ trio. After
 // init the active-intent cursor points at the born record, so the later
@@ -231,7 +231,7 @@ interface CliResult {
 function init(p: string): CliResult {
   const res = spawnSync(
     BUN,
-    [UTIL, "intent-birth", "--scope", "bugfix", "--project-dir", p],
+    [UTIL, "intent-create", "--scope", "bugfix", "--project-dir", p],
     {
       encoding: "utf-8",
       env: { ...process.env, AIDLC_WORKFLOW_INTENT: "chaos" },

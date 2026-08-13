@@ -6,7 +6,7 @@
 // workspace shell. Normally the shell (aidlc/spaces/default/memory/) ships as a
 // SIBLING of the engine dir, so a complete dist/ copy already carries the method
 // tree. When it is absent, the first /aidlc — which routes through the engine's
-// intent-birth → ensureWorkspaceDirs — seeds aidlc/spaces/default/memory/ from a
+// intent-create → ensureWorkspaceDirs — seeds aidlc/spaces/default/memory/ from a
 // copy the packager bundled INSIDE the engine at tools/data/memory-seed/
 // (resolved by frameworkMemorySeedDir, mirroring frameworkTemplatesDir/DATA_DIR).
 //
@@ -22,7 +22,7 @@
 //
 // MECHANISM. (a) imports frameworkMemorySeedDir in-process from the shipped dist
 // tree (the `none` floor for an exported lib fn). (b)/(c) SPAWN the real engine
-// CLI (`aidlc-utility.ts intent-birth`) so the actual first-run path — birth →
+// CLI (`aidlc-utility.ts intent-create`) so the actual first-run path — birth →
 // ensureWorkspaceDirs → the guarded cpSync — is exercised end-to-end, with the
 // seed resolved relative to the SPAWNED tool's own location (DATA_DIR). Zero
 // tokens, zero network.
@@ -75,7 +75,7 @@ function mkTemp(tag: string): string {
 function birth(projectDir: string): ReturnType<typeof spawnSync> {
   return spawnSync(
     BUN,
-    [UTILITY, "intent-birth", "--scope", "poc", "--arguments", "x", "--project-dir", projectDir],
+    [UTILITY, "intent-create", "--scope", "poc", "--arguments", "x", "--project-dir", projectDir],
     { encoding: "utf-8" },
   );
 }
@@ -103,7 +103,7 @@ describe("t-memory-seed engine-only-install self-heal", () => {
     expect(existsSync(defaultMemory), "default memory absent before birth").toBe(false);
 
     const res = birth(proj);
-    expect(res.status, `intent-birth failed: ${res.stdout}\n${res.stderr}`).toBe(0);
+    expect(res.status, `intent-create failed: ${res.stdout}\n${res.stderr}`).toBe(0);
 
     // The self-heal seeded the default-space method tree from the engine bundle.
     const orgMd = join(defaultMemory, "org.md");
@@ -128,7 +128,7 @@ describe("t-memory-seed engine-only-install self-heal", () => {
     writeFileSync(orgMd, sentinel, "utf-8");
 
     const res = birth(proj);
-    expect(res.status, `intent-birth failed: ${res.stdout}\n${res.stderr}`).toBe(0);
+    expect(res.status, `intent-create failed: ${res.stdout}\n${res.stderr}`).toBe(0);
 
     // The existsSync guard skipped the seed — the sentinel survives byte-for-byte,
     // so a committed/hand-edited default tree never churns.

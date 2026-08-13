@@ -17,7 +17,7 @@ never hand-edit it (the drift guard fails CI).
 - **bun** — same requirement as the Claude harness; every tool and hook runs
   via bun.
 - **A model provider** — the shipped `config.toml` defaults to **Amazon
-  Bedrock** (`openai.gpt-5.5`; agents on `openai.gpt-5.4`). Set the AWS
+  Bedrock** (`openai.gpt-5.5`; agents on `openai.gpt-5.6-terra`). Set the AWS
   profile/region in `[model_providers.amazon-bedrock.aws]`. For OpenAI auth,
   comment out the provider lines. Note: `web_search` is unavailable on
   Bedrock; the market-research stage degrades gracefully.
@@ -168,4 +168,4 @@ with the neutral chapters:
 - [Scopes, Depth, and Test Strategy](../05-scopes-and-depth.md) — right-sizing a run.
 - [Glossary](../glossary.md) — every term defined.
 
-Other harnesses: [Running AI-DLC on Kiro IDE](kiro-ide.md) · [the harness family index](README.md).
+Other harnesses: [Running AI-DLC on Kiro IDE](kiro-ide.md) · [AI-DLC on Cursor](cursor.md) · [the harness family index](README.md).

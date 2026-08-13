@@ -1,0 +1,13 @@
+{
+  "_comment": "AI-DLC framework-default model rate table, USD per 1,000,000 tokens. These are PUBLIC Anthropic list prices (platform.claude.com/docs pricing) as of 2026-07, shipped as defaults ONLY. To override, set AIDLC_MODEL_RATES to a rates file of the same shape, or drop a model-rates.json into your install's tools/data/ dir. Keys are generation-discrete (one row per model generation, never family-collapsed) so a new generation is priced correctly rather than mis-priced onto an old row. input/output price ordinary prompt/completion tokens; cacheWrite5m/cacheWrite1h price cache CREATION at the two ephemeral TTLs (standard multipliers: 1.25x input for 5m, 2x input for 1h); cacheRead prices a cache HIT (0.1x input). An unknown model is recorded with tokens but a null cost - never mis-priced.",
+  "rates": {
+    "opus-5": { "input": 5.0, "output": 25.0, "cacheWrite5m": 6.25, "cacheWrite1h": 10.0, "cacheRead": 0.5 },
+    "opus-4-8": { "input": 5.0, "output": 25.0, "cacheWrite5m": 6.25, "cacheWrite1h": 10.0, "cacheRead": 0.5 },
+    "opus-4-7": { "input": 5.0, "output": 25.0, "cacheWrite5m": 6.25, "cacheWrite1h": 10.0, "cacheRead": 0.5 },
+    "opus-4-6": { "input": 5.0, "output": 25.0, "cacheWrite5m": 6.25, "cacheWrite1h": 10.0, "cacheRead": 0.5 },
+    "sonnet-5": { "input": 3.0, "output": 15.0, "cacheWrite5m": 3.75, "cacheWrite1h": 6.0, "cacheRead": 0.3 },
+    "sonnet-4-6": { "input": 3.0, "output": 15.0, "cacheWrite5m": 3.75, "cacheWrite1h": 6.0, "cacheRead": 0.3 },
+    "haiku-4-5": { "input": 1.0, "output": 5.0, "cacheWrite5m": 1.25, "cacheWrite1h": 2.0, "cacheRead": 0.1 },
+    "fable-5": { "input": 10.0, "output": 50.0, "cacheWrite5m": 12.5, "cacheWrite1h": 20.0, "cacheRead": 1.0 }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "aidlc-write-audit-log",
+      "trigger": "PostToolUse",
+      "matcher": "fs_write|str_replace|fs_append",
+      "description": "Records every artifact you create or update in the workflow's audit log, then runs the checks that apply to that file.",
+      "action": { "type": "command", "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts audit-and-sensors" }
+    }
+  ]
+}

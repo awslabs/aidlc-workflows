@@ -36,19 +36,18 @@
 //   :922 fires {kind:"done"} only when counter>=0 AND latchTurn===counter.
 
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
-  createTestProject,
+  createOrchestrationTestProject,
   FIXTURES_DIR,
   resetAidlcEnv,
+  runOrchestrateNext,
   seedStateFile,
 } from "../harness/fixtures.ts";
 
-const BUN = process.execPath; // the bun running this test
 const TOOL = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 
 const MID_IDEATION = join(FIXTURES_DIR, "state-mid-ideation.md");
@@ -61,25 +60,28 @@ interface RunResult {
 // Run `bun aidlc-orchestrate.ts next <args> --project-dir <proj>` — identical
 // spawn convention to t114's runNext.
 function runNext(proj: string, args: string[]): RunResult {
-  const res = spawnSync(BUN, [TOOL, "next", ...args, "--project-dir", proj], {
-    encoding: "utf-8",
+  const res = runOrchestrateNext(TOOL, proj, args, {
     cwd: proj,
   });
-  const stdout = res.stdout ?? "";
-  const stderr = res.stderr ?? "";
-  return { rc: res.status ?? -1, out: `${stdout}${stderr}` };
+  return { rc: res.status, out: res.out };
 }
 
 // Stamp the per-turn counter + the read-only latch the Kiro seam writes, at the
 // SAME paths the engine reads (resolveProjectDir(--project-dir)/aidlc/...). The
 // latch JSON shape matches aidlc-kiro-adapter.ts:137 ({turn,flag,source,ts}).
-function seedLatch(proj: string, counter: number, latchTurn: number): void {
+function seedLatch(
+  proj: string,
+  counter: number,
+  latchTurn: number,
+  flag = "status",
+  source = "read-only-flag",
+): void {
   const aidlc = join(proj, "aidlc");
   mkdirSync(aidlc, { recursive: true }); // already created by the fixture; idempotent
   writeFileSync(join(aidlc, ".aidlc-turn-counter"), `${counter}\n`, "utf-8");
   writeFileSync(
     join(aidlc, ".aidlc-readonly-latch"),
-    `${JSON.stringify({ turn: latchTurn, flag: "status", source: "read-only-flag", ts: Date.now() })}\n`,
+    `${JSON.stringify({ turn: latchTurn, flag, source, ts: Date.now() })}\n`,
     "utf-8",
   );
 }
@@ -103,7 +105,7 @@ afterEach(() => {
 // ===========================================================================
 describe("t179 Branch 0: fresh latch -> done", () => {
   test("1: counter=N, latch{turn:N}, bare next -> {kind:\"done\"} (guard fires)", () => {
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
     seedLatch(proj, 3, 3);
     const out = runNext(proj, []).out;
@@ -114,6 +116,15 @@ describe("t179 Branch 0: fresh latch -> done", () => {
     // It MUST NOT have routed into the active stage.
     expect(out).not.toContain('"kind":"run-stage"');
   });
+
+  test("1b: plugin latch renders the noun command without a leading --", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    seedLatch(proj, 3, 3, "plugin list --json", "plugin-verb");
+    const out = runNext(proj, []).out;
+    expect(out).toContain("(`plugin list --json`)");
+    expect(out).not.toContain("--plugin list --json");
+  });
 });
 
 // ===========================================================================
@@ -123,7 +134,7 @@ describe("t179 Branch 0: fresh latch -> done", () => {
 // ===========================================================================
 describe("t179 Branch 0: stale latch -> not done", () => {
   test("2: counter=N, latch{turn:N-1} (stale), bare next -> run-stage, NOT done", () => {
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
     seedLatch(proj, 3, 2);
     const out = runNext(proj, []).out;
@@ -142,7 +153,7 @@ describe("t179 Branch 0: stale latch -> not done", () => {
 // ===========================================================================
 describe("t179 Branch 0 exemption: --status -> print", () => {
   test("3: counter=N, latch{turn:N}, next --status -> {kind:\"print\"} (readOnly exempts Branch 0)", () => {
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
     seedLatch(proj, 3, 3);
     const out = runNext(proj, ["--status"]).out;
@@ -160,7 +171,7 @@ describe("t179 Branch 0 exemption: --status -> print", () => {
 // ===========================================================================
 describe("t179 Branch 0 exemption: --single -> not done", () => {
   test("4: counter=N, latch{turn:N}, next --single --stage feasibility -> NOT done (single exempts Branch 0)", () => {
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
     seedLatch(proj, 3, 3);
     const out = runNext(proj, ["--single", "--stage", "feasibility"]).out;
@@ -179,7 +190,7 @@ describe("t179 Branch 0 exemption: --single -> not done", () => {
 // ===========================================================================
 describe("t179 Branch 0 inert: no latch files -> not done", () => {
   test("5: NO counter/latch files, bare next -> NOT done (guard inert)", () => {
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
     // Deliberately seed NO latch/counter — the Claude/Codex (no-seam) shape.
     const out = runNext(proj, []).out;

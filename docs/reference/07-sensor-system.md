@@ -161,7 +161,7 @@ filename stem minus the `aidlc-` prefix. The compile resolver:
 5. Emits the per-stage resolved array on the canonical
    `data/stage-graph.json` (FIELD_ORDER pinned: after `rules_in_context`).
 
-The runtime PostToolUse hook (`aidlc-sensor-fire.ts`) reads
+The runtime PostToolUse hook (`aidlc-run-sensors.ts`) reads
 `sensors_applicable` off the graph node — never re-opens the manifest.
 `matches` is
 compile-snapshotted: a manifest edit during the workflow does NOT
@@ -204,7 +204,7 @@ the PostToolUse hook at fire time, not by the resolver at compile time.
 
 `matches` **is** the fire filter — it is not optional in practice. The hook
 compares the path being written against the glob and fires only on a match;
-an entry **without** a `matches` glob never fires at all (`aidlc-sensor-fire.ts`:
+an entry **without** a `matches` glob never fires at all (`aidlc-run-sensors.ts`:
 `if (!entry.matches) continue`). All five shipped manifests therefore declare
 one — the provenance and two document-shape sensors scope to the artifact tree
 (the shipped manifests carry the `matches` value shown above), the two

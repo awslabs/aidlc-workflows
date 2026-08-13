@@ -46,7 +46,7 @@ interface RuntimeGraph {
 }
 
 interface BoltDag {
-  units: { name: string; depends_on: string[]; kind?: string }[]; // verbatim from the authored edge block; kind (service|spec|ui|packaging|library) present only when the edge block tags the unit
+  units: { name: string; depends_on: string[]; kind?: string }[]; // verbatim from the authored edge block; new names use lowercase kebab-case, while safe legacy single-segment names beginning with a digit or containing uppercase letters, underscores, or dots remain accepted (the swarm derives a separate internal Bolt slug); kind (service|spec|ui|packaging|library) present only when the edge block tags the unit
   batches: string[][];            // topological levels; each level = units whose deps are all satisfied by prior levels; level entries sorted lexicographically (deterministic)
 }
 
@@ -102,7 +102,13 @@ fields and instance-array fields never coexist.
 
 The optional `bolt_dag` node is the machine-readable unit dependency
 graph the engine reads to compute a parallel build batch — "the DAG is
-the permission" for a swarm fan-out. Its source is the **fenced
+the permission" for a swarm fan-out. It is also an engine input for the
+optional `directive.wave` on the default stage-major walk. Before emitting a
+wave, the engine validates this cache against the authored dependency artifact
+and uses the healed in-memory batches and kinds to resolve every per-Unit entry,
+including build, completion-receipt, paired-review, and Unit-memory paths. The
+conductor consumes only that directive; it never reads this cached node or
+reconstructs sibling paths. Its source is the **fenced
 `yaml` `units:` edge block** that units-generation (2.7) authors on
 `unit-of-work-dependency.md`, beside the human-readable prose:
 
@@ -148,7 +154,7 @@ work, once, behind the 2.7 approval gate) is what keeps the hook-fired
 ## 3. Compile lifecycle
 
 The compile is invoked by the PostToolUse Bash hook
-(`.claude/hooks/aidlc-runtime-compile.ts`) on every transition-class
+(`.claude/hooks/aidlc-rebuild-stage-graph.ts`) on every transition-class
 audit emit. The hook fires on every `Bash` tool call from the
 conductor and filters cheaply:
 
@@ -157,7 +163,7 @@ conductor and filters cheaply:
    (recursion guard); `aidlc-log.ts` emits only chatty in-stage events;
    `aidlc-worktree.ts` emits only WORKTREE_* events.
 2. **Audit-existence guard** — exit if the intent's `audit/` shard doesn't exist yet.
-3. **Heartbeat** — write `<record>/.aidlc-hooks-health/runtime-compile.last`
+3. **Heartbeat** — write `<record>/.aidlc-hooks-health/rebuild-stage-graph.last`
    for doctor's silent-hook detection.
 4. **Last-3-block tail-read** — split `audit.md` on `\n---\n`, take the
    last 3 entries.
@@ -485,7 +491,7 @@ main's location. Its lifecycle is:
 - **The lifecycle that triggers compile** — the workflow / phase /
   stage transitions whose audit emits drive the compile hook. See
   [State Machine](12-state-machine.md).
-- **The audit log this graph is derived from** - the 74-event taxonomy
+- **The audit log this graph is derived from** - the 82-event taxonomy
   and the emitter registry. See [State Machine](12-state-machine.md)
   and the User Guide's [State and Audit
   Trail](../guide/10-state-and-audit.md).

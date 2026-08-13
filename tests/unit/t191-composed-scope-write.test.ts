@@ -1,4 +1,4 @@
-// covers: function:inferScopeFromText, function:validScopes, subcommand:aidlc-utility:intent-birth
+// covers: function:inferScopeFromText, function:validScopes, subcommand:aidlc-utility:intent-create
 //
 // t191 - the P2 composed-scope write contract (adaptive workflows).
 //
@@ -129,7 +129,7 @@ describe("t191 composed-scope write contract + keyword hygiene", () => {
   test("keywords: [] scope resolves by --scope AND the authored grid drives the born state", () => {
     const proj = freshProject();
     authorComposedScope(proj, "composed-t191", {});
-    const r = run(proj, ["intent-birth", "--scope", "composed-t191"]);
+    const r = run(proj, ["intent-create", "--scope", "composed-t191"]);
     expect(r.status).toBe(0);
     const state = readFileSync(statePath(proj), "utf-8");
     expect(state.split("\n")).toContain("- **Scope**: composed-t191");
@@ -163,7 +163,7 @@ describe("t191 composed-scope write contract + keyword hygiene", () => {
     const proj = freshProject();
     authorComposedScope(proj, "gridless-t191", { withGridEntry: false });
     // The scope is valid (presence = validity) so birth succeeds...
-    const r = run(proj, ["intent-birth", "--scope", "gridless-t191"]);
+    const r = run(proj, ["intent-create", "--scope", "gridless-t191"]);
     expect(r.status).toBe(0);
     const state = readFileSync(statePath(proj), "utf-8");
     expect(state.split("\n")).toContain("- **Scope**: gridless-t191");

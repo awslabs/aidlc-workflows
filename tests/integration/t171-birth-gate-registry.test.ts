@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-utility:intent-birth, function:intentPickPromptIfRecordsExist, function:birthPrintDirective, function:listIntents, function:activeSpace
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-utility:intent-create, function:intentPickPromptIfRecordsExist, function:createPrintDirective, function:listIntents, function:activeSpace
 //
 // Mechanism: cli (spawned dist tools) — birth + `next` run end-to-end the way
 // the conductor runs them.
@@ -91,8 +91,8 @@ describe("t171 birth gate consults the intent registry (Blocker B1)", () => {
     // last-born), then DELETE the active-intent cursor to simulate a fresh clone
     // (the cursor is gitignored per-user state, never carried by a clone).
     const seedTwoIntentsNoCursor = (): string[] => {
-      expect(util(["intent-birth", "--scope", "poc"]).status).toBe(0);
-      expect(util(["intent-birth", "--scope", "feature"]).status).toBe(0);
+      expect(util(["intent-create", "--scope", "poc"]).status).toBe(0);
+      expect(util(["intent-create", "--scope", "feature"]).status).toBe(0);
       const records = recordDirs(proj);
       expect(records.length).toBe(2);
       // Drop the per-user cursor → records on disk, nothing flagged active.
@@ -105,10 +105,10 @@ describe("t171 birth gate consults the intent registry (Blocker B1)", () => {
       seedTwoIntentsNoCursor();
       const r = next(["--scope", "poc"]);
       const d = JSON.parse(r.stdout.trim());
-      // NOT a birth print: the gate must not name intent-birth here.
+      // NOT a birth print: the gate must not name intent-create here.
       expect(d.kind).not.toBe("print");
       expect(d.kind).toBe("ask");
-      expect(d.message ?? "").not.toContain("intent-birth");
+      expect(d.message ?? "").not.toContain("intent-create");
       // It prompts to pick an existing intent by slug via `/aidlc intent <slug>`.
       expect(d.question).toContain("/aidlc intent <slug>");
       // The two existing intent slugs are named in the prompt. The engine lists
@@ -130,7 +130,7 @@ describe("t171 birth gate consults the intent registry (Blocker B1)", () => {
       const r = next(["poc"]); // positional valid-scope name, no --scope flag
       const d = JSON.parse(r.stdout.trim());
       expect(d.kind).toBe("ask");
-      expect(d.message ?? "").not.toContain("intent-birth");
+      expect(d.message ?? "").not.toContain("intent-create");
       expect(d.question).toContain("/aidlc intent <slug>");
       expect(recordDirs(proj).length).toBe(2); // no duplicate born
     });
@@ -139,12 +139,12 @@ describe("t171 birth gate consults the intent registry (Blocker B1)", () => {
   // ----------------------------------------------------------------
   // (2) ZERO intents → STILL births exactly as before
   // ----------------------------------------------------------------
-  describe("a fresh empty workspace still names intent-birth (unchanged)", () => {
+  describe("a fresh empty workspace still names intent-create (unchanged)", () => {
     test("Branch 9a births on zero intents", () => {
       const r = next(["--scope", "poc"]);
       const d = JSON.parse(r.stdout.trim());
       expect(d.kind).toBe("print");
-      expect(d.message).toContain("intent-birth --scope poc");
+      expect(d.message).toContain("intent-create --scope poc");
       // Read-only: next did not birth anything itself.
       expect(existsSync(intentsDir(proj))).toBe(false);
     });
@@ -153,7 +153,7 @@ describe("t171 birth gate consults the intent registry (Blocker B1)", () => {
       const r = next(["poc"]);
       const d = JSON.parse(r.stdout.trim());
       expect(d.kind).toBe("print");
-      expect(d.message).toContain("intent-birth --scope poc");
+      expect(d.message).toContain("intent-create --scope poc");
       expect(existsSync(intentsDir(proj))).toBe(false);
     });
   });
@@ -163,15 +163,15 @@ describe("t171 birth gate consults the intent registry (Blocker B1)", () => {
   //     (NOT a birth, NOT a prompt) — the active intent's state drives `next`.
   // ----------------------------------------------------------------
   test("one intent with a live cursor resolves to its workflow (neither birth nor prompt)", () => {
-    expect(util(["intent-birth", "--scope", "poc"]).status).toBe(0);
+    expect(util(["intent-create", "--scope", "poc"]).status).toBe(0);
     expect(recordDirs(proj).length).toBe(1);
     expect(existsSync(cursorPath(proj))).toBe(true);
     const r = next(["--scope", "poc"]);
     const d = JSON.parse(r.stdout.trim());
     // The lone born intent has a live cursor + state → the engine reads its
-    // position and advances; it must NOT re-name intent-birth nor prompt to pick.
+    // position and advances; it must NOT re-name intent-create nor prompt to pick.
     expect(d.kind).not.toBe("ask");
-    if (d.kind === "print") expect(d.message).not.toContain("intent-birth");
+    if (d.kind === "print") expect(d.message).not.toContain("intent-create");
     // The cursor was never disturbed.
     const cursor = readFileSync(cursorPath(proj), "utf-8").trim();
     expect(recordDirs(proj)).toContain(cursor);

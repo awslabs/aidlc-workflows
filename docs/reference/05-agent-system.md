@@ -87,21 +87,22 @@ The authored dial on every agent is `tier:` -- it names the KIND of work the per
 |------|--------|---------|
 | `judgment` | architect, aws-platform, compliance, composer, design, developer, devsecops, product, quality | Multi-constraint reasoning under ambiguity; output cascades downstream. Never downgraded: inherits the session's model AND effort |
 | `balanced` | architecture-reviewer, product-lead | Reviewer-shaped work -- novel input against explicit criteria. Mid-size model, session effort |
-| `templated` | delivery, operations, pipeline-deploy | Dominantly pattern-following output; methodology already in knowledge (delivery plans, CI/CD YAML, runbooks). Mid-size model at reduced effort on Claude Code, Codex, and opencode -- the one deliberate downgrade (on Kiro, inherits session model like all tiers) |
+| `templated` | delivery, operations, pipeline-deploy | Dominantly pattern-following output; methodology already in knowledge (delivery plans, CI/CD YAML, runbooks). Mid-size model at reduced effort on Claude Code, Codex, and opencode -- the one deliberate downgrade (on Kiro, Cursor, and Copilot, inherits session model like all tiers) |
 
 The projection per harness (`core/tools/aidlc-tiers.ts` is the single source of truth):
 
-| Tier | Claude Code (.md frontmatter) | Codex CLI (.toml) | Kiro CLI/IDE (agent JSON `"model"`, CLI / `.md` frontmatter `model:`, IDE) | Kiro cli.json `chat.modelDefaults` | opencode (.md frontmatter) |
-|------|-------------------------------|-------------------|--------------------------------------|-------------------------------------|-----------------------------|
-| `judgment` | `model: inherit`, no `effort:` line | no `model`/`model_reasoning_effort` keys (config.toml session defaults apply) | field OMITTED (schema fallback: the user's default model) | no tier entry | no `model:`/`variant:` keys (opencode.json session defaults apply) |
-| `balanced` | `model: sonnet`, no `effort:` line | `model = "openai.gpt-5.4"`, no effort key | field OMITTED (see below) | no tier entry | `model: amazon-bedrock/global.anthropic.claude-sonnet-4-6`, no variant key |
-| `templated` | `model: sonnet`, `effort: medium` | `model = "openai.gpt-5.4"`, `model_reasoning_effort = "medium"` | field OMITTED (see below) | no tier entry | same model, `variant: medium` |
+| Tier | Claude Code (.md frontmatter) | Codex CLI (.toml) | Kiro CLI/IDE (agent JSON `"model"`, CLI / `.md` frontmatter `model:`, IDE) | Kiro cli.json `chat.modelDefaults` | opencode (.md frontmatter) | Copilot (.md frontmatter) | Cursor (.md frontmatter) |
+|------|-------------------------------|-------------------|--------------------------------------|-------------------------------------|-----------------------------|-----------------------------|--------------------------|
+| `judgment` | `model: inherit`, no `effort:` line | no `model`/`model_reasoning_effort` keys (config.toml session defaults apply) | field OMITTED (schema fallback: the user's default model) | no tier entry | no `model:`/`variant:` keys (opencode.json session defaults apply) | omitted (inherits session model) | `model:` OMITTED (inherits the session model) |
+| `balanced` | `model: sonnet`, no `effort:` line | `model = "openai.gpt-5.6-terra"`, no effort key | field OMITTED (see below) | no tier entry | `model: amazon-bedrock/global.anthropic.claude-sonnet-4-6`, no variant key | omitted (inherits session model) | `model:` OMITTED (see below) |
+| `templated` | `model: sonnet`, `effort: medium` | `model = "openai.gpt-5.6-terra"`, `model_reasoning_effort = "medium"` | field OMITTED (see below) | no tier entry | same model, `variant: medium` | omitted (inherits session model) | `model:` OMITTED (see below) |
 
 Key facts behind the table:
 
 - **Omission is the inherit mechanism.** On Claude Code an agent .md with no `effort:` key inherits the session effort, and a pinned `effort:` overrides the session in BOTH directions (a pin is a cap, not a floor) -- so absence is the contract for judgment and balanced. On Codex a role TOML without `model` spawns on the shipped `.codex/config.toml` session defaults (verified live on codex-cli 0.139.0 and 0.142.5; the current doctor-enforced minimum is 0.145.0 for immediate compact-session reload). On Kiro the agent-v1 schema documents the absent-`"model"` fallback: "If not specified, uses the default model" (the `/model` persisted preference).
 - **Kiro never pins a model.** A shipped Kiro model ID resolves only when that model is enabled on the user's install; a session running any other model rejects every delegated spawn with `Invalid model ID`, and Kiro rejects the Claude-dialect tier aliases (`opus`/`sonnet`) outright -- so there is no universally safe pinnable value. Every Kiro tier therefore omits `"model"` (and the `.md` frontmatter `model:` line): all agents inherit the session model. The kiro slots in `TIER_PROJECTIONS` and the `kiroModelDefaults()` machinery remain in place, dormant, should a resolvable per-install pinning mechanism appear.
 - **Kiro has NO per-agent effort surface.** kiro-cli fail-closes on any effort-like key in agent JSON, so a per-model effort default can only ride on `settings/cli.json` `chat.modelDefaults[<modelId>].output_config.effort`. With no tier pinning a model, only the authored conditional entry ships (`claude-opus-4.8` -> `xhigh`, applied only when the session actually runs that model). That file is CLI-only: the Kiro IDE ignores cli.json entirely and applies its extension-embedded per-model default (or the user's `/effort` session state).
+- **Cursor never pins a model either.** Model availability on Cursor is plan-dependent (a Free account rejects every named model and can only run `Auto`), so a pinned agent model would hard-fail installs on lower plans. Every Cursor tier therefore omits the `.md` frontmatter `model:` line (Cursor has no per-agent effort key -- effort rides the model-id suffix), and all agents inherit the session model; the cursor slots in `TIER_PROJECTIONS` are model-only, dormant, should a plan-independent pinning mechanism appear.
 
 ### Tier cap (cost override)
 
@@ -137,7 +138,7 @@ access grant.
 
 **Observations:**
 - aidlc-architect-agent has the broadest stage involvement (9 stages across 3 phases).
-- Across the full 14-agent roster, nine agents carry the `judgment` tier and five step down on Claude Code, Codex, and opencode (the two `balanced` reviewers plus the three `templated` planners; on Kiro all tiers inherit the session model and effort, so no agent steps down there); the stepped-down agents produce reviews against explicit checklists or dominantly templated planning, CI/CD, and runbook work. The matrix above covers the 11 domain-expert agents.
+- Across the full 14-agent roster, nine agents carry the `judgment` tier and five step down on Claude Code, Codex, and opencode (the two `balanced` reviewers plus the three `templated` planners; on Kiro, Cursor, and Copilot all tiers inherit the session model and effort, so no agent steps down there); the stepped-down agents produce reviews against explicit checklists or dominantly templated planning, CI/CD, and runbook work. The matrix above covers the 11 domain-expert agents.
 - aidlc-compliance-agent operates purely in an advisory capacity (4 support stages, no lead stages).
 - Six of 11 agents are expected to use Bash for CLI interaction.
 - Three agents are expected to use WebSearch for research tasks.

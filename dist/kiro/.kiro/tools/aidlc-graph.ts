@@ -21,23 +21,26 @@
 //
 // Compile is the YAML -> JSON transform. It bootstraps number + name
 // from today's stage-graph.json so YAML stays the authored source of
-// truth for everything else while computed fields stay computed. number
-// and name are NOT authorable frontmatter keys (the stage schema rejects
-// them as unknown), they are derived, then pinned in the JSON so they
-// stay byte-stable across recompiles.
+// truth for everything else while computed fields stay computed. Numbers
+// are ALWAYS assigned by the engine, never claimed by authors — a plugin's
+// authored `number:` is a relative-ordering hint among its own new stages,
+// its absolute value never used, so uncoordinated plugins cannot collide.
 //
 // A NEW stage slug (a .md on disk with no row in stage-graph.json yet) is
-// auto-seeded on compile rather than rejected: its number is the next free
-// index in its phase (`<PHASES.indexOf(phase)>.<maxIndexInPhase + 1>`) and
-// its name defaults to the title-cased slug. Both are written into the
-// regenerated JSON, so the FIRST compile assigns them and every subsequent
-// compile harvests the pinned values, the assignment happens once and is
-// stable thereafter. An author who wants a hand-tuned display name (e.g.
-// "NFR Requirements", "CI Pipeline") edits that one JSON field after the
-// seeding compile; the next compile preserves it. Renumbering an existing
-// stage is still an explicit JSON edit. (Auto-seed only ever ADDS rows and
-// fills the next free per-phase index, it never renumbers a stage that
-// already has a row, so an in-flight workflow's slug-keyed state is safe.)
+// seeded on compile rather than rejected: each phase's batch of new
+// stages is ordered by its own requires_stage edges (Kahn's algorithm;
+// ties among independent stages break by the authored `number:` hint,
+// then slug), then assigned next-free contiguous indices
+// (`<PHASES.indexOf(phase)>.<maxIndexInPhase + 1>` onward); name comes
+// from authored `name:`, defaulting to the title-cased slug. Both are
+// written into the regenerated JSON, so the FIRST compile assigns them
+// and every subsequent compile harvests the pinned values, the assignment
+// happens once and is stable thereafter. An author who wants a hand-tuned
+// display name edits that one JSON field after the seeding compile; the
+// next compile preserves it. Renumbering an existing stage is still an
+// explicit JSON edit. (Seeding only ever ADDS rows, it never renumbers a
+// stage that already has a row, so an in-flight workflow's slug-keyed
+// state is safe.)
 //
 // See docs/reference/16-artifact-vocabulary.md for artifact naming.
 
@@ -55,6 +58,7 @@ import {
   _resetScopeMappingForTests,
   _resetStageGraphForTests,
   activeSpace,
+  auditLockOwnedByProcess,
   type AgentMetadata,
   errorMessage,
   gridCostSummary,
@@ -184,6 +188,15 @@ export interface GraphStage extends StageEntry {
   // reviewer_max_iterations — review cycle cap before escalating to human.
   // Defaults to 2 when reviewer is present.
   reviewer_max_iterations?: number;
+  // review_class — how the review runs: "adversarial" (refute + fix loop up
+  // to the cap, §12a classic) or "advisory" (single pass, findings quoted at
+  // the human gate, no fix loop). Defaults to "adversarial" when a reviewer
+  // is present (the pre-class behavior). Absent when no reviewer. The
+  // EFFECTIVE class at runtime may be lowered by the scope's review_cap or a
+  // run override — resolveReviewClass in aidlc-lib.ts owns that resolution.
+  review_class?: "adversarial" | "advisory";
+  // Deterministic pre-generation consolidated-summary checkpoint policy.
+  summary_confirmation?: "required" | "if-present";
 }
 
 export interface ScopeValidation {
@@ -194,6 +207,13 @@ export interface ScopeValidation {
   // counts). The composer copies this into its proposal verbatim so the gate the
   // human sees leads with numbers the validator computed, not an LLM recount.
   summary?: ScopeCostSummary;
+  // Graph/plugin-authored stock scopes ranked by grid distance from the
+  // validated proposal; composer-authored entries are excluded. A front/report
+  // matched-vs-custom verdict routes on nearest_stock[0].diff (match when <= 2
+  // and depth is compatible), so the routing is the final validator's number,
+  // not an LLM recount or the earlier mechanical screen. In-flight treats the
+  // ranking as advisory and preserves the running plan.
+  nearest_stock?: Array<{ scope: string; diff: number; differs: string[] }>;
 }
 
 // --- Module-local state ---
@@ -448,6 +468,8 @@ const FIELD_ORDER = [
   "scopes",
   "reviewer",
   "reviewer_max_iterations",
+  "review_class",
+  "summary_confirmation",
   "inputs",
   "outputs",
   "rules_in_context",
@@ -815,7 +837,7 @@ export function consumersOf(artifact: string): GraphStage[] {
  *  would yield spurious missing-section findings. The per-sensor
  *  required-sections script gets only --stage/--output-path and so cannot know
  *  the stage's artifact set — the dispatcher (aidlc-sensor.ts) and the
- *  PostToolUse fire hook (aidlc-sensor-fire.ts) both hold the GraphStage and
+ *  PostToolUse fire hook (aidlc-run-sensors.ts) both hold the GraphStage and
  *  thread this filtered set so a resolved template applies ONLY to a
  *  declared-prose artifact. Lives here so both invocation sites derive it
  *  identically without importing the dispatcher (whose top-level main() would
@@ -985,6 +1007,37 @@ export function subgraphForScope(scope: string): GraphStage[] {
     .sort((a, b) => numericStageOrder(a.number, b.number));
 }
 
+/** Rank every graph/plugin-authored stock scope by grid distance from the given
+ *  EXECUTE/SKIP grid: `{scope, diff, differs}` sorted by diff then name.
+ *  Composer-authored entries appended to scope-grid.json are deliberately
+ *  excluded. Distance covers the union of proposal and stock keys, so missing
+ *  proposal stages and unknown extras are differences rather than invisible
+ *  overlap. Shared by `ars` (against the complete mechanical screen grid) and
+ *  `validate-grid` (against the composer's proposal); only the latter is a
+ *  front/report stock-match authority. */
+export function nearestStockScopes(
+  grid: Record<string, "EXECUTE" | "SKIP">
+): Array<{ scope: string; diff: number; differs: string[] }> {
+  const stockScopeNames = stageDeclaredScopeNames(loadGraph());
+  return Object.entries(loadScopeGrid())
+    // Composer-authored scopes are appended only to scope-grid.json; no stage
+    // declares them. They remain runnable but must never become stock-match
+    // candidates for an unrelated later composition.
+    .filter(([scope]) => stockScopeNames.has(scope))
+    .map(([scope, def]) => {
+      const differs: string[] = [];
+      const slugs = new Set([
+        ...Object.keys(def.stages),
+        ...Object.keys(grid),
+      ]);
+      for (const slug of slugs) {
+        if (grid[slug] !== def.stages[slug]) differs.push(slug);
+      }
+      return { scope, diff: differs.length, differs };
+    })
+    .sort((a, b) => a.diff - b.diff || a.scope.localeCompare(b.scope));
+}
+
 /** Resolve a scope's plan: the EXECUTE/SKIP slice over the full graph in
  *  numeric order, shaped `{slug, phase, action}` — byte-identical to
  *  lib.ts's stagesInScope() / the legacy scope-mapping-derived plan. The
@@ -1090,6 +1143,15 @@ export function validateGrid(
       );
     }
   }
+  const missingSlugs = graph
+    .map((stage) => stage.slug)
+    .filter((slug) => !(slug in grid));
+  if (missingSlugs.length > 0) {
+    errors.push(
+      `Grid is missing ${missingSlugs.length} compiled stage entr${missingSlugs.length === 1 ? "y" : "ies"}: ` +
+        `${missingSlugs.join(", ")}. Every compiled stage must be explicitly EXECUTE or SKIP.`,
+    );
+  }
 
   const onPath = new Set(
     Object.entries(grid)
@@ -1144,7 +1206,14 @@ export function validateGrid(
   const summary = gridCostSummary(
     grid as Record<string, "EXECUTE" | "SKIP">,
   );
-  return { valid: errors.length === 0, errors, advisories, summary };
+  // Distance to each stock scope travels with the validation for the same
+  // reason as summary: the match decision must ride the validator's numbers.
+  // Unknown and missing slugs already errored above; the ranking still counts
+  // them so an invalid partial grid can never look like an exact stock match.
+  const nearest_stock = nearestStockScopes(
+    grid as Record<string, "EXECUTE" | "SKIP">,
+  );
+  return { valid: errors.length === 0, errors, advisories, summary, nearest_stock };
 }
 
 /** Check proposed (granted-at-the-gate) keywords against the keywords the
@@ -1565,6 +1634,10 @@ export function compileStageGraph(): {
   gridJson: string;
   stages: GraphStage[];
 } {
+  // Load selected scope metadata up front so scope authoring invariants, such
+  // as a single enabled freeform default, fail during compile.
+  loadScopeMetadata();
+
   // Harvest number + name mappings from existing JSON. A slug already in
   // the JSON keeps its pinned number + name (the "computed not authored,
   // stable thereafter" contract); a NEW slug is auto-seeded below.
@@ -1586,8 +1659,11 @@ export function compileStageGraph(): {
       Math.max(maxIndexByPhasePrefix.get(prefix) ?? 0, index)
     );
   }
-
   const stages: GraphStage[] = [];
+  // NEW slugs (no pinned row yet), grouped by phase prefix for the
+  // topological number seed after the walk.
+  type NewStageSeed = { data: StageFrontmatter; phase: string; prefix: number; name: string };
+  const newByPrefix = new Map<number, NewStageSeed[]>();
   // Track slug-to-first-file so duplicate-slug errors name both files.
   const slugToFile = new Map<string, string>();
 
@@ -1672,28 +1748,98 @@ export function compileStageGraph(): {
       }
       slugToFile.set(slug, filePath);
 
-      // Existing slug -> keep its pinned number + name. New slug -> auto-seed
-      // both: number = next free index in this phase, name = title-cased slug.
-      let number = numberBySlug.get(slug);
-      let name = nameBySlug.get(slug);
-      if (!number || !name) {
-        const prefix = PHASES.indexOf(phase as Phase);
-        if (prefix < 0) {
-          // A stage directory whose name is not one of the five canonical
-          // phases can't be placed on the numeric spine, fail loud rather
-          // than invent a prefix.
-          throw new Error(
-            `Stage "${slug}" (${filePath}) is in an unknown phase directory ` +
-              `"${phase}". Stage phase directories must be one of: ${PHASES.join(", ")}.`
-          );
-        }
-        const nextIndex = (maxIndexByPhasePrefix.get(prefix) ?? 0) + 1;
-        maxIndexByPhasePrefix.set(prefix, nextIndex);
-        number = number ?? `${prefix}.${nextIndex}`;
-        name = name ?? titleCaseSlug(slug);
+      // Existing slug -> keep its pinned number + name (the "computed once,
+      // stable thereafter" contract; a pinned row missing only its name
+      // seeds the name inline). New slug -> DEFER numbering to the per-phase
+      // topological seed after the file walk (below): with several new
+      // stages arriving in one compile (a multi-stage plugin), numbering
+      // them in file-walk (alphabetical) order can contradict their own
+      // requires_stage edges and fail the lower-numbered-dependency
+      // invariant, so the batch is ordered by its edges first.
+      const prefix = PHASES.indexOf(phase as Phase);
+      if (prefix < 0) {
+        // A stage directory whose name is not one of the five canonical
+        // phases can't be placed on the numeric spine, fail loud rather
+        // than invent a prefix.
+        throw new Error(
+          `Stage "${slug}" (${filePath}) is in an unknown phase directory ` +
+            `"${phase}". Stage phase directories must be one of: ${PHASES.join(", ")}.`
+        );
       }
+      const number = numberBySlug.get(slug);
+      const name =
+        nameBySlug.get(slug) ?? validation.data.name ?? titleCaseSlug(slug);
+      if (number) {
+        stages.push(buildGraphStage(validation.data, phase, number, name));
+      } else {
+        newByPrefix.get(prefix)?.push({ data: validation.data, phase, prefix, name }) ??
+          newByPrefix.set(prefix, [{ data: validation.data, phase, prefix, name }]);
+      }
+    }
+  }
 
-      stages.push(buildGraphStage(validation.data, phase, number, name));
+  // Per-phase topological seed for NEW slugs. Numbers are assigned by the
+  // ENGINE, never claimed by authors: within one phase's batch of new
+  // stages, order by the batch's own requires_stage edges (Kahn), breaking
+  // ties among independent stages by the authored `number:` hint (a
+  // relative-ordering hint only — its absolute value is never used) and
+  // then slug; assign next-free contiguous indices in that order. Edges to
+  // stages OUTSIDE the batch need no handling here: an already-pinned
+  // same-phase dependency is lower-numbered by construction (new indices
+  // start past the phase max), and cross-phase edges are ordered by the
+  // phase prefix — the edge-local invariant below still backstops all of
+  // it. Uncoordinated plugins therefore cannot collide on numbers, and a
+  // batch whose file order contradicts its flow order still seeds validly.
+  for (const prefix of [...newByPrefix.keys()].sort((a, b) => a - b)) {
+    const batch = newByPrefix.get(prefix)!;
+    const inBatch = new Map(batch.map((e) => [e.data.slug, e]));
+    // Dedupe each stage's edges: the decrement below fires once per
+    // dependent, so a duplicated requires_stage entry would strand the
+    // stage at indegree > 0 and misreport a copy-paste duplicate as a
+    // cycle (the schema shape-checks the list but does not dedupe it).
+    const indegree = new Map(batch.map((e) => [e.data.slug, 0]));
+    for (const e of batch) {
+      for (const dep of new Set(e.data.requires_stage ?? [])) {
+        if (inBatch.has(dep)) indegree.set(e.data.slug, (indegree.get(e.data.slug) ?? 0) + 1);
+      }
+    }
+    const hint = (e: NewStageSeed): number => {
+      const authored = e.data.number;
+      if (!authored) return Number.POSITIVE_INFINITY;
+      const idx = parseInt(authored.split(".")[1], 10);
+      return Number.isFinite(idx) ? idx : Number.POSITIVE_INFINITY;
+    };
+    const byHintThenSlug = (a: NewStageSeed, b: NewStageSeed): number =>
+      hint(a) - hint(b) || a.data.slug.localeCompare(b.data.slug);
+    const ready = batch.filter((e) => indegree.get(e.data.slug) === 0).sort(byHintThenSlug);
+    const seeded: NewStageSeed[] = [];
+    while (ready.length > 0) {
+      const e = ready.shift()!;
+      seeded.push(e);
+      for (const other of batch) {
+        if (!(other.data.requires_stage ?? []).includes(e.data.slug)) continue;
+        const d = (indegree.get(other.data.slug) ?? 0) - 1;
+        indegree.set(other.data.slug, d);
+        if (d === 0) {
+          ready.push(other);
+          ready.sort(byHintThenSlug);
+        }
+      }
+    }
+    if (seeded.length < batch.length) {
+      // The unseeded set = the cycle's members plus anything downstream of
+      // them, so name it "stuck", not "the cycle" — a stage can appear here
+      // solely because its dependency is cyclic.
+      const stuck = batch.filter((e) => !seeded.includes(e)).map((e) => e.data.slug);
+      throw new Error(
+        `Cannot seed stage numbers for phase "${batch[0].phase}": ` +
+          `requires_stage cycle among new stages (stuck: ${stuck.join(", ")}). Break the cycle.`
+      );
+    }
+    for (const e of seeded) {
+      const nextIndex = (maxIndexByPhasePrefix.get(prefix) ?? 0) + 1;
+      maxIndexByPhasePrefix.set(prefix, nextIndex);
+      stages.push(buildGraphStage(e.data, e.phase, `${prefix}.${nextIndex}`, e.name));
     }
   }
 
@@ -1820,7 +1966,10 @@ function buildGraphStage(
   // (parseStageFrontmatter normalises empty).
   const support_agents = parsed.support_agents ?? [];
   const produces = parsed.produces ?? [];
-  const requires_stage = parsed.requires_stage ?? [];
+  // Dependency edges are set-valued. Normalize copy-paste duplicates here so
+  // every graph consumer, including topoSort's indegree accounting, observes
+  // the same edge cardinality as the compile-time number seeder.
+  const requires_stage = [...new Set(parsed.requires_stage ?? [])];
   const consumesRaw = parsed.consumes ?? [];
   const consumes: Consume[] = consumesRaw.map((c) => {
     const out: Consume = {
@@ -1894,6 +2043,15 @@ function buildGraphStage(
       cap >= 1
         ? cap
         : 2;
+    // Default the class to "adversarial" (the pre-class behavior) when a
+    // reviewer is declared without one. Schema (V2) rejects any value other
+    // than adversarial/advisory upstream; keep the coercion defensive so a
+    // bad value degrades to the strict default rather than leaking through.
+    stage.review_class =
+      parsed.review_class === "advisory" ? "advisory" : "adversarial";
+  }
+  if (parsed.summary_confirmation !== undefined) {
+    stage.summary_confirmation = parsed.summary_confirmation;
   }
   return stage;
 }
@@ -1964,6 +2122,415 @@ function printSlugs(stages: GraphStage[]): void {
   for (const s of stages) console.log(s.slug);
 }
 
+// --- ARS (Autonomy Risk Score) deterministic scoring ---
+//
+// The composer persona scores the five entropy components from evidence (the
+// knowledge half); THIS code owns every downstream number: the weighted
+// composite, band labels, the per-stage expected-value screen against the
+// cost-prior table, nearest stock scopes by grid diff count, and the two
+// pre-rendered gate tables. Same component scores in, same proposal numbers
+// out — auditable and runnable without an LLM. All constants live in
+// tools/data/ars-priors.json (schema-versioned); the persona's tables are
+// documentation of that file, not the source. The composite stays an
+// ADVISORY index: nothing deterministic routes on it.
+
+const ARS_COMPONENTS = ["iae", "csu", "ve", "r", "ua"] as const;
+export type ArsComponent = (typeof ARS_COMPONENTS)[number];
+type ArsBand = "LOW" | "MED" | "HIGH";
+type ArsDecision = "EXECUTE" | "SKIP" | "COMPLETED";
+const ARS_PROJECT_TYPES = ["brownfield", "greenfield"] as const;
+type ArsProjectType = (typeof ARS_PROJECT_TYPES)[number];
+
+/** IEEE summation of the weighted terms can land a hair under an exact
+ *  half-point - 0.75 + 12.45 + 7.3 evaluates to 20.499999999999996, which
+ *  Math.round would drop into the band BELOW the one the documented formula
+ *  computes exactly, and the band label is the one thing the gate table
+ *  bolds. Normalising the sum at a precision far above the accumulated
+ *  error (~1e-14 at composite magnitudes) makes the rounded total agree
+ *  with exact arithmetic and keeps `raw` free of 62.74999999999999 noise. */
+const ARS_RAW_PRECISION = 9;
+
+interface ArsPriors {
+  schemaVersion: number;
+  weights: Record<ArsComponent, number>;
+  componentInfo: Record<ArsComponent, { name: string }>;
+  componentBands: { lowMax: number; medMax: number };
+  compositeBands: Array<{ min: number; max: number; label: string; shape: string }>;
+  evThresholds: Record<string, number>;
+  stages: Record<
+    string,
+    {
+      targets: ArsComponent[];
+      cost: number | null;
+      role?: string;
+      // Present only on stages whose compiled `condition:` restricts them to
+      // one kind of project (today: reverse-engineering, brownfield-only).
+      // Absent = the stage runs on either project type.
+      projectTypes?: ArsProjectType[];
+    }
+  >;
+}
+
+export interface ArsScreenRow {
+  stage: string;
+  number: string;
+  decision: ArsDecision;
+  screen:
+    | "component"
+    | "initialization"
+    | "core"
+    | "phase-gate"
+    | "structural"
+    | "project-type"
+    | "no-cost-prior"
+    | "no-prior"
+    | "completed";
+  targets: ArsComponent[];
+  cost: number | null;
+  maxTargetScore: number | null;
+  threshold: number | null;
+  reason: string;
+}
+
+export interface ArsResult {
+  schemaVersion: 1;
+  components: Record<ArsComponent, { name: string; score: number; band: ArsBand }>;
+  composite: { raw: number; total: number; label: string; shape: string };
+  evScreen: ArsScreenRow[];
+  screenGrid: Record<string, "EXECUTE" | "SKIP">;
+  nearestScopes: Array<{ scope: string; diff: number; differs: string[] }>;
+  completed: string[];
+  projectType: ArsProjectType | null;
+  tables: { arsScores: string; stageDecisions: string };
+}
+
+/** Resolve tools/data/ars-priors.json. AIDLC_ARS_PRIORS mirrors the
+ *  AIDLC_SCOPE_GRID test seam. Evaluated at call time. */
+function arsPriorsPath(): string {
+  return process.env.AIDLC_ARS_PRIORS ?? join(resolveDataDir(), "ars-priors.json");
+}
+
+/** Load + schema-validate the priors file. Throws (-> exit 1 via main's
+ *  catch) on any violation: a silent fallback default would reintroduce
+ *  exactly the unauditable arithmetic this file exists to remove. */
+export function loadArsPriors(): ArsPriors {
+  const p = arsPriorsPath();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(p, "utf-8"));
+  } catch (err) {
+    throw new Error(`cannot read ars priors at ${p}: ${errorMessage(err)}`);
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`ars priors at ${p}: not a JSON object.`);
+  }
+  const priors = parsed as ArsPriors;
+  if (priors.schemaVersion !== 1) {
+    throw new Error(
+      `ars priors at ${p}: unsupported schemaVersion ${String(priors.schemaVersion)} (expected 1).`
+    );
+  }
+  let weightSum = 0;
+  for (const c of ARS_COMPONENTS) {
+    const w = priors.weights?.[c];
+    if (typeof w !== "number" || w < 0 || w > 1) {
+      throw new Error(`ars priors: weights.${c} must be a number in [0,1].`);
+    }
+    weightSum += w;
+    if (typeof priors.componentInfo?.[c]?.name !== "string") {
+      throw new Error(`ars priors: componentInfo.${c}.name is missing.`);
+    }
+  }
+  if (Math.abs(weightSum - 1) > 1e-9) {
+    throw new Error(`ars priors: weights must sum to 1.0 (got ${weightSum}).`);
+  }
+  const lowMax = priors.componentBands?.lowMax;
+  const medMax = priors.componentBands?.medMax;
+  if (
+    typeof lowMax !== "number" ||
+    typeof medMax !== "number" ||
+    !(0 < lowMax && lowMax < medMax && medMax <= 1)
+  ) {
+    throw new Error("ars priors: componentBands must satisfy 0 < lowMax < medMax <= 1.");
+  }
+  if (!Array.isArray(priors.compositeBands) || priors.compositeBands.length === 0) {
+    throw new Error("ars priors: compositeBands must be a non-empty array.");
+  }
+  let expectMin = 0;
+  for (const b of priors.compositeBands) {
+    if (
+      b.min !== expectMin ||
+      typeof b.max !== "number" ||
+      b.max < b.min ||
+      typeof b.label !== "string" ||
+      typeof b.shape !== "string"
+    ) {
+      throw new Error("ars priors: compositeBands must tile 0..100 contiguously with label + shape.");
+    }
+    expectMin = b.max + 1;
+  }
+  if (expectMin !== 101) {
+    throw new Error("ars priors: compositeBands must end at 100.");
+  }
+  for (const [key, t] of Object.entries(priors.evThresholds ?? {})) {
+    if (typeof t !== "number" || t < 0 || t > 1) {
+      throw new Error(`ars priors: evThresholds["${key}"] must be a number in [0,1].`);
+    }
+  }
+  for (const [slug, st] of Object.entries(priors.stages ?? {})) {
+    if (!Array.isArray(st.targets) || st.targets.some((t) => !ARS_COMPONENTS.includes(t))) {
+      throw new Error(
+        `ars priors: stages.${slug}.targets must be a subset of {${ARS_COMPONENTS.join(", ")}}.`
+      );
+    }
+    // Type before lookup: `String(cost) in evThresholds` alone accepts the
+    // STRING "1", which then leaks into the result JSON's cost fields and
+    // breaks the `number | null` contract this interface declares.
+    if (st.cost !== null && typeof st.cost !== "number") {
+      throw new Error(
+        `ars priors: stages.${slug}.cost must be a number or null (got ${typeof st.cost}).`
+      );
+    }
+    if (st.cost !== null && !(String(st.cost) in (priors.evThresholds ?? {}))) {
+      throw new Error(`ars priors: stages.${slug}.cost ${String(st.cost)} has no evThresholds entry.`);
+    }
+    if (st.projectTypes !== undefined) {
+      if (
+        !Array.isArray(st.projectTypes) ||
+        st.projectTypes.length === 0 ||
+        st.projectTypes.some((t) => !ARS_PROJECT_TYPES.includes(t))
+      ) {
+        throw new Error(
+          `ars priors: stages.${slug}.projectTypes must be a non-empty subset of {${ARS_PROJECT_TYPES.join(", ")}}.`
+        );
+      }
+    }
+  }
+  return priors;
+}
+
+/** The deterministic half of the composer's Step 2/4/6/8a: composite +
+ *  bands + EV screen + nearest stock scopes + gate tables. Pure with
+ *  respect to its inputs; throws on out-of-range scores or unknown stage
+ *  slugs (same typo discipline as validate-grid). */
+export function computeArs(
+  scores: Record<ArsComponent, number>,
+  opts?: { completed?: string[]; projectType?: ArsProjectType }
+): ArsResult {
+  const priors = loadArsPriors();
+  for (const c of ARS_COMPONENTS) {
+    const v = scores[c];
+    if (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > 1) {
+      throw new Error(`--${c} must be a number in [0.00, 1.00] (got ${String(v)}).`);
+    }
+    // The rubric and every rendered table speak in two decimals. Banding reads
+    // the EXACT value while `fmt` renders it rounded, so a finer input makes
+    // the two disagree in print: 0.299 renders "0.30 | LOW" against the
+    // documented LOW < 0.30, and 0.4004 yields "reduces CSU=0.40 > threshold
+    // 0.4". Rejecting here keeps table and band incapable of contradicting.
+    if (Number(v.toFixed(2)) !== v) {
+      throw new Error(`--${c} must have at most two decimals (got ${String(v)}).`);
+    }
+  }
+  const graph = loadGraph();
+  const knownSlugs = new Set(graph.map((s) => s.slug));
+  const completed = opts?.completed ?? [];
+  for (const slug of completed) {
+    if (!knownSlugs.has(slug)) {
+      throw new Error(`--completed names unknown stage "${slug}" - not in the compiled stage graph.`);
+    }
+  }
+  // Same discipline for the priors themselves: an entry naming a stage the
+  // compiled graph does not know is stale data, not a screening input. The
+  // check runs against the UNFILTERED graph on purpose - loadGraph() drops
+  // stages a plugin selection marked `enabled: false`, and the shipped
+  // priors name every core stage, so screening against the filtered set
+  // would make every `ars` call exit 1 on an install that disabled one.
+  // A slug missing from the unfiltered graph is still stale and still throws.
+  const compiledSlugs = new Set(loadStageGraphAll().map((s) => s.slug));
+  for (const slug of Object.keys(priors.stages)) {
+    if (!compiledSlugs.has(slug)) {
+      throw new Error(`ars priors: stages.${slug} is not in the compiled stage graph.`);
+    }
+  }
+
+  const band = (v: number): ArsBand =>
+    v < priors.componentBands.lowMax ? "LOW" : v < priors.componentBands.medMax ? "MED" : "HIGH";
+  const fmt = (v: number): string => v.toFixed(2);
+  const sym = (c: ArsComponent): string => c.toUpperCase();
+
+  const components = {} as ArsResult["components"];
+  for (const c of ARS_COMPONENTS) {
+    components[c] = { name: priors.componentInfo[c].name, score: scores[c], band: band(scores[c]) };
+  }
+  const raw = Number(
+    (100 * ARS_COMPONENTS.reduce((acc, c) => acc + priors.weights[c] * scores[c], 0)).toFixed(
+      ARS_RAW_PRECISION
+    )
+  );
+  const total = Math.round(raw);
+  const compositeBand = priors.compositeBands.find((b) => total >= b.min && total <= b.max);
+  if (!compositeBand) {
+    throw new Error(`composite ${total} falls outside the compositeBands coverage.`);
+  }
+
+  // Pass 1 - decide every stage except phase-gates (they key off the other
+  // decisions in their phase). COMPLETED (in-flight context) wins over any
+  // screen: the stage already ran, so it stays EXECUTE in the derived grid.
+  const completedSet = new Set(completed);
+  const projectType = opts?.projectType;
+  // A stage whose compiled `condition:` restricts it to one project type is
+  // decided by that condition, not by the component arithmetic: without this
+  // the screen could emit `reverse-engineering EXECUTE` on a greenfield
+  // project, contradicting the stage the composer would have to run. Only a
+  // COMPLETED stage outranks it (it already ran; in-flight evidence wins).
+  const offProjectType = (p?: { projectTypes?: ArsProjectType[] }): boolean =>
+    projectType !== undefined &&
+    p?.projectTypes !== undefined &&
+    !p.projectTypes.includes(projectType);
+  const decisionOf = new Map<string, ArsDecision>();
+  const deferred = new Set<string>();
+  for (const s of graph) {
+    const p = priors.stages[s.slug];
+    if (completedSet.has(s.slug)) {
+      decisionOf.set(s.slug, "COMPLETED");
+    } else if (offProjectType(p)) {
+      decisionOf.set(s.slug, "SKIP");
+    } else if (p?.role === "phase-gate") {
+      deferred.add(s.slug);
+    } else if (p?.role === "initialization" || p?.role === "core") {
+      decisionOf.set(s.slug, "EXECUTE");
+    } else if (!p || p.role === "structural" || p.cost === null) {
+      decisionOf.set(s.slug, "SKIP");
+    } else {
+      const maxTarget = p.targets.length > 0 ? Math.max(...p.targets.map((t) => scores[t])) : 0;
+      const threshold = priors.evThresholds[String(p.cost)];
+      decisionOf.set(s.slug, maxTarget > threshold ? "EXECUTE" : "SKIP");
+    }
+  }
+  // Pass 2 - a phase-gate executes iff any OTHER stage in its phase does
+  // (persona: approval-handoff is "Always at ideation->inception boundary";
+  // when the whole phase folds away, the boundary does not exist).
+  for (const s of graph) {
+    if (!deferred.has(s.slug)) continue;
+    const phaseActive = graph.some(
+      (o) => o.phase === s.phase && o.slug !== s.slug && decisionOf.get(o.slug) !== "SKIP"
+    );
+    decisionOf.set(s.slug, phaseActive ? "EXECUTE" : "SKIP");
+  }
+
+  // Pass 3 - render the screen rows in graph order with the reasoning the
+  // gate table shows verbatim.
+  const evScreen: ArsScreenRow[] = [];
+  for (const s of graph) {
+    const p = priors.stages[s.slug];
+    const decision = decisionOf.get(s.slug) as ArsDecision;
+    const base = {
+      stage: s.slug,
+      number: s.number,
+      decision,
+      targets: p?.targets ?? [],
+      cost: p?.cost ?? null,
+      maxTargetScore: null as number | null,
+      threshold: null as number | null,
+    };
+    if (decision === "COMPLETED") {
+      evScreen.push({
+        ...base,
+        screen: "completed",
+        reason: "completed - in-flight evidence; kept as EXECUTE in the derived grid",
+      });
+    } else if (!p) {
+      evScreen.push({
+        ...base,
+        screen: "no-prior",
+        reason: "no entry in ars-priors.json - not screenable",
+      });
+    } else if (offProjectType(p)) {
+      evScreen.push({
+        ...base,
+        screen: "project-type",
+        reason: `project is ${String(projectType)} - the stage's compiled condition restricts it to ${(p.projectTypes ?? []).join("/")} projects`,
+      });
+    } else if (p.role === "initialization") {
+      evScreen.push({ ...base, screen: "initialization", reason: "initialization - always runs" });
+    } else if (p.role === "core") {
+      evScreen.push({ ...base, screen: "core", reason: "spine - always (core implementation / verification)" });
+    } else if (p.role === "phase-gate") {
+      evScreen.push({
+        ...base,
+        screen: "phase-gate",
+        reason:
+          decision === "EXECUTE"
+            ? `phase gate - other ${s.phase} stages execute, so the boundary exists`
+            : `phase gate - every other ${s.phase} stage folds away, so the boundary does not exist`,
+      });
+    } else if (p.role === "structural") {
+      evScreen.push({
+        ...base,
+        screen: "structural",
+        reason: "structural (decomposition) - not numerically screenable; mechanical default SKIP, human judgment at the gate",
+      });
+    } else if (p.cost === null) {
+      evScreen.push({
+        ...base,
+        screen: "no-cost-prior",
+        reason: "no cost prior in the shipped table - not numerically screenable; human judgment at the gate",
+      });
+    } else {
+      const maxSym = p.targets.reduce((a, b) => (scores[a] >= scores[b] ? a : b));
+      const maxTarget = scores[maxSym];
+      const threshold = priors.evThresholds[String(p.cost)];
+      evScreen.push({
+        ...base,
+        maxTargetScore: maxTarget,
+        threshold,
+        screen: "component",
+        reason:
+          decision === "EXECUTE"
+            ? `reduces ${sym(maxSym)}=${fmt(maxTarget)} > threshold ${threshold} (cost ${p.cost})`
+            : `max target ${sym(maxSym)}=${fmt(maxTarget)} <= threshold ${threshold} (cost ${p.cost})`,
+      });
+    }
+  }
+
+  const screenGrid: Record<string, "EXECUTE" | "SKIP"> = {};
+  for (const s of graph) {
+    screenGrid[s.slug] = decisionOf.get(s.slug) === "SKIP" ? "SKIP" : "EXECUTE";
+  }
+
+  // Nearest stock scopes by grid diff count against the mechanical screen
+  // grid. The composer's folded grid may differ - this is the deterministic
+  // starting signal, not the proposal.
+  const nearestScopes = nearestStockScopes(screenGrid);
+
+  const arsScores = [
+    "| Component | Symbol | Score | Band |",
+    "|-----------|--------|-------|------|",
+    ...ARS_COMPONENTS.map(
+      (c) => `| ${components[c].name} | ${sym(c)} | ${fmt(scores[c])} | ${components[c].band} |`
+    ),
+    `| **Composite ARS (advisory)** | - | **${total} / 100** | **${compositeBand.label}** |`,
+  ].join("\n");
+  const stageDecisions = [
+    "| # | Stage | Decision | Reasoning |",
+    "|---|-------|----------|-----------|",
+    ...evScreen.map((r) => `| ${r.number} | ${r.stage} | ${r.decision} | ${r.reason} |`),
+  ].join("\n");
+
+  return {
+    schemaVersion: 1,
+    components,
+    composite: { raw, total, label: compositeBand.label, shape: compositeBand.shape },
+    evScreen,
+    screenGrid,
+    nearestScopes,
+    completed,
+    projectType: opts?.projectType ?? null,
+    tables: { arsScores, stageDecisions },
+  };
+}
+
 const COMMANDS: Record<string, Handler> = {
   artifacts: () => {
     for (const name of [...artifactsRegistry()].sort()) {
@@ -2001,6 +2568,68 @@ const COMMANDS: Record<string, Handler> = {
       for (const e of r.errors) console.error(`[error] ${e}`);
       process.exit(1);
     }
+  },
+  // ars --iae <s> --csu <s> --ve <s> --r <s> --ua <s> [--completed <csv>]
+  // [--project-type <bg>] - the deterministic ARS arithmetic: weighted
+  // composite + band labels, the per-stage EV screen against the cost-prior
+  // table, nearest stock scopes by grid diff count, and the two gate tables
+  // pre-rendered as markdown - all constants read from
+  // tools/data/ars-priors.json. The composer scores the five components from
+  // evidence, runs this, and copies the output verbatim; a model never does
+  // the multiplication. --project-type screens out the stages whose compiled
+  // condition restricts them to the other kind of project (greenfield ->
+  // reverse-engineering SKIPs) so the mechanical screen cannot contradict a
+  // stage's own execution condition. Prints a JSON ArsResult on stdout; exit
+  // 1 on out-of-range scores, unknown stage slugs (same typo discipline as
+  // validate-grid), or a priors-schema violation. The composite is advisory:
+  // nothing deterministic routes on it.
+  ars: (args) => {
+    const scores = {} as Record<ArsComponent, number>;
+    for (const c of ARS_COMPONENTS) {
+      const rawScore = requireFlag(args, `--${c}`);
+      const v = Number(rawScore);
+      if (rawScore.trim() === "" || !Number.isFinite(v) || v < 0 || v > 1) {
+        console.error(`ars: --${c} must be a number in [0.00, 1.00] (got "${rawScore}").`);
+        process.exit(1);
+      }
+      if (Number(v.toFixed(2)) !== v) {
+        console.error(`ars: --${c} must have at most two decimals (got "${rawScore}").`);
+        process.exit(1);
+      }
+      scores[c] = v;
+    }
+    const compIdx = args.indexOf("--completed");
+    const compRaw = compIdx >= 0 ? args[compIdx + 1] : undefined;
+    if (compIdx >= 0 && (compRaw === undefined || compRaw.startsWith("--"))) {
+      console.error("ars: --completed requires a comma-separated value.");
+      process.exit(1);
+    }
+    const completed =
+      compRaw === undefined
+        ? undefined
+        : compRaw.split(",").map((s) => s.trim()).filter(Boolean);
+    const ptIdx = args.indexOf("--project-type");
+    const ptRaw = ptIdx >= 0 ? args[ptIdx + 1] : undefined;
+    // Same shape as the --completed guard one screen up: a trailing flag with
+    // no value must not fall through to "unset". Silently ignoring it would
+    // report EXECUTE for a stage the caller believes the screen excluded.
+    // (A flag-as-value, `--project-type --completed x`, is already rejected by
+    // the enum check below, which names what it read.)
+    if (ptIdx >= 0 && ptRaw === undefined) {
+      console.error("ars: --project-type requires a value (brownfield or greenfield).");
+      process.exit(1);
+    }
+    let projectType: ArsProjectType | undefined;
+    if (ptRaw !== undefined) {
+      const lowered = ptRaw.toLowerCase();
+      if (lowered !== "brownfield" && lowered !== "greenfield") {
+        console.error(`ars: --project-type must be brownfield or greenfield (got "${ptRaw}").`);
+        process.exit(1);
+      }
+      projectType = lowered;
+    }
+    const result = computeArs(scores, { completed, projectType });
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   },
   // validate-grid --proposal <path> [--strict] [--project-type <bg>]
   // [--keywords <csv>] - validate an ARBITRARY {slug: EXECUTE|SKIP} grid
@@ -2081,11 +2710,26 @@ const COMMANDS: Record<string, Handler> = {
     // written under the one lock so they never diverge.
     const pd = resolveProjectDir();
     requireInstalledHarness(pd);
-    withAuditLock(pd, () => {
+    const writeCompiledGraph = (): void => {
       const { json, gridJson } = compileStageGraph();
       writeFileAtomic(mutableStageGraphPath(pd), json);
       writeFileAtomic(mutableScopeGridPath(pd), gridJson);
-    });
+    };
+    const inheritedOwnerRaw = process.env.AIDLC_WORKSPACE_LOCK_OWNER_PID;
+    if (inheritedOwnerRaw !== undefined) {
+      const inheritedOwner = Number(inheritedOwnerRaw);
+      if (
+        inheritedOwner !== process.ppid ||
+        !auditLockOwnedByProcess(pd, inheritedOwner)
+      ) {
+        throw new Error(
+          "Refusing inherited workspace lock: the declared owner is not this process's live parent lock holder."
+        );
+      }
+      writeCompiledGraph();
+    } else {
+      withAuditLock(pd, writeCompiledGraph);
+    }
   },
   resolve: (args) => {
     // resolve <scope> — emit the active scope's plan (.aidlc-plan.json) to
@@ -2172,6 +2816,10 @@ Common forms:
                                        Validate an arbitrary EXECUTE/SKIP grid
                                        (--strict rejects a starved required input;
                                        --keywords rejects keywords an existing scope claims)
+  aidlc-graph ars --iae <s> --csu <s> --ve <s> --r <s> --ua <s> [--completed <csv>] [--project-type <t>]
+                                       Deterministic ARS arithmetic: composite + bands,
+                                       per-stage EV screen, nearest stock scopes, and the
+                                       two gate tables (data: tools/data/ars-priors.json)
   aidlc-graph compile                  Regenerate stage-graph.json + scope-grid.json from YAML
   aidlc-graph compile --check          CI drift guard (exit 1 on mismatch)
   aidlc-graph resolve <name>           Emit .aidlc-plan.json for a scope (AIDLC_GRAPH_RESOLVE=1)

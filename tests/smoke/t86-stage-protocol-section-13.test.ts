@@ -196,8 +196,19 @@ describe("t86 stage-protocol §13 + MEMORY_EMPTY + SKILL.md gate wiring (migrate
     expect(body.includes('label: Request changes')).toBe(true);
     expect(body.includes("**Consolidated Summary Confirmation**")).toBe(true);
     expect(body.includes("blank `[Answer]:` tag")).toBe(true);
-    expect(body.includes("Fill that tag only after the user responds")).toBe(true);
+    expect(body.includes("Fill its tag only after the user responds")).toBe(true);
     expect(body.includes("Never ask for this confirmation as bare prose")).toBe(true);
+    expect(body.includes("as unordered bullets (never a numbered list)")).toBe(true);
+    expect(body.includes("every question creates a fresh")).toBe(true);
+    expect(body.includes("response-key scope")).toBe(true);
+    expect(
+      body.includes(
+        "aidlc-log.ts decision --stage <slug>\n  --checkpoint summary-confirmation --questions-file",
+      ),
+    ).toBe(true);
+    expect(body.includes("aidlc-log.ts answer --stage <slug>")).toBe(true);
+    expect(body.includes('**"What should change?"**')).toBe(true);
+    expect(body.includes("Editing the source file does not waive")).toBe(true);
     expect(
       body.includes(
         "same **Looks correct / Request changes** structured confirmation from Step 3a",

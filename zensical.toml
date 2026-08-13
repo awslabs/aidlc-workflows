@@ -50,6 +50,7 @@ nav = [
       "guide/harnesses/kiro-cli.md",
       "guide/harnesses/kiro-ide.md",
       "guide/harnesses/codex-cli.md",
+      "guide/harnesses/cursor.md",
       "guide/harnesses/opencode.md",
     ] },
     { "Help and Examples" = [
@@ -170,6 +171,11 @@ name = "Switch to light mode"
 admonition = {}
 
 [markdown_extensions."pymdownx.details"]
+
+# Renders markdown inside HTML blocks carrying markdown="1" (the per-harness
+# <details> dropdowns in the install docs). GitHub ignores the attribute and
+# renders the same blocks natively.
+[markdown_extensions.md_in_html]
 
 [markdown_extensions."pymdownx.superfences"]
 custom_fences = [

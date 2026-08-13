@@ -6,6 +6,7 @@ condition: Execute when CD pipeline needs creation or significant modification
 lead_agent: aidlc-pipeline-deploy-agent
 support_agents: []
 mode: inline
+summary_confirmation: required
 produces:
   - cd-config
   - deployment-strategy
@@ -73,7 +74,7 @@ Create CD pipeline configuration, deployment strategy document, rollback runbook
 
 Hand completion to `stage-protocol.md` via
 `bun .codex/tools/aidlc-orchestrate.ts report --stage deployment-pipeline --result <outcome>`.
-The engine owns all lifecycle transitions and advancement.
+That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
 ### Step 6: Present Completion & Request Approval
 

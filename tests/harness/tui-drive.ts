@@ -68,6 +68,8 @@
 //   answer-gate --session <name> --project-dir <dir>
 //          [--per-gate-timeout-ms N] [--overall-timeout-ms N]
 //          [--until-file <relpath>] [--until-state-field <name=regex>]
+//          [--assert-file-absent-at-option <label>
+//           --assert-file-absent <relpath>]
 //          [--reject-first-gate] [--stop-at-approval-gate]
 //          Answer an AI-DLC AskUserQuestion gate sequence by taking the
 //          Recommended default on each tab/menu (Enter per tab; Enter again on
@@ -97,6 +99,13 @@
 //            --until-state-field <n=re>    STOP when aidlc-state.md's `- **<n>**:`
 //                                          line value matches /re/ — e.g.
 //                                          `Status=Completed`.
+//            --assert-file-absent-at-option <label>
+//            --assert-file-absent <relpath>
+//                                          When the named option is first painted,
+//                                          assert the relative file/glob does not
+//                                          exist. The flags must be supplied
+//                                          together. The run also fails if the
+//                                          option is never observed.
 //            (neither)                     STOP on the practices-affirmation
 //                                          timestamp (the workshop default;
 //                                          existing callers unchanged).
@@ -950,7 +959,11 @@ type Terminator = { describe: string; done: () => boolean };
 
 // Does a relative path (optionally containing a single `*` glob in its last
 // segment, or any segment) resolve to an existing, non-empty file under root?
-function fileSignalMet(root: string, rel: string): boolean {
+function fileSignalMet(
+  root: string,
+  rel: string,
+  requireNonEmpty = true,
+): boolean {
   // Walk the path segment by segment, expanding a `*` segment to its dir entries.
   let dirs = [root];
   const segs = rel.split("/").filter((s) => s.length > 0);
@@ -993,7 +1006,13 @@ function fileSignalMet(root: string, rel: string): boolean {
   // Any matched terminal path that is an existing, non-empty file = signal met.
   for (const p of dirs) {
     try {
-      if (existsSync(p) && statSync(p).isFile() && statSync(p).size > 0) return true;
+      if (
+        existsSync(p) &&
+        statSync(p).isFile() &&
+        (!requireNonEmpty || statSync(p).size > 0)
+      ) {
+        return true;
+      }
     } catch {
       // ignore
     }
@@ -1131,6 +1150,17 @@ function parseMenuOptions(grid: string): { num: number; label: string }[] {
     if (m) out.push({ num: Number(m[1]), label: m[2].trim() });
   }
   return out;
+}
+
+/** True when the painted menu contains an option with the given label text. */
+export function gridHasOption(grid: string, optionLabel: string): boolean {
+  const wanted = optionLabel.trim().toLowerCase();
+  return (
+    wanted.length > 0 &&
+    parseMenuOptions(grid).some((option) =>
+      option.label.toLowerCase().includes(wanted)
+    )
+  );
 }
 
 /** True only for a numbered approval menu carrying both canonical choices. */
@@ -1336,6 +1366,28 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
   let rejectFirstGate = a.bools["reject-first-gate"] === true;
   const stopAtApprovalGate =
     a.bools["stop-at-approval-gate"] === true;
+  const assertFileAbsentAtOption =
+    a.flags["assert-file-absent-at-option"];
+  const assertFileAbsent = a.flags["assert-file-absent"];
+  if (
+    (assertFileAbsentAtOption === undefined) !==
+      (assertFileAbsent === undefined)
+  ) {
+    fail(
+      "--assert-file-absent-at-option and --assert-file-absent must be supplied together",
+      2,
+    );
+  }
+  let absenceAssertionObserved = false;
+  const assertAbsenceObservationCompleted = (): void => {
+    if (assertFileAbsentAtOption && !absenceAssertionObserved) {
+      fail(
+        `option '${assertFileAbsentAtOption}' was never observed; ` +
+          `could not assert '${assertFileAbsent}' absent`,
+        1,
+      );
+    }
+  };
   let revisionFeedbackPending = false;
 
   const overallDeadline = Date.now() + overallMs;
@@ -1349,6 +1401,8 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
     terminator: term.describe,
     rejectFirstGate,
     stopAtApprovalGate,
+    assertFileAbsentAtOption,
+    assertFileAbsent,
   });
 
   const maybeTracePoll = (grid: string, gateDeadline: number): void => {
@@ -1369,6 +1423,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
     // Disk is the terminator — check it FIRST so we exit the instant the
     // journey's completion signal lands, even if a stale menu lingers on screen.
     if (!stopAtApprovalGate && term.done()) {
+      assertAbsenceObservationCompleted();
       writeTuiTrace(session, "answer_gate_done", {
         answered,
         terminator: term.describe,
@@ -1401,6 +1456,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
     let sawMenu = false;
     while (Date.now() < gateDeadline) {
       if (!stopAtApprovalGate && term.done()) {
+        assertAbsenceObservationCompleted();
         writeTuiTrace(session, "answer_gate_done", {
           answered,
           terminator: term.describe,
@@ -1457,7 +1513,28 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
     // SINGLE-SELECT question (no checkbox): Enter SELECTS the highlighted/Recommended
     // option and auto-advances to the next tab (or approves a lone-question gate).
     const grid = backend.capture(session, false);
+    if (
+      !absenceAssertionObserved &&
+      assertFileAbsentAtOption &&
+      assertFileAbsent &&
+      gridHasOption(grid, assertFileAbsentAtOption)
+    ) {
+      if (fileSignalMet(projectDir, assertFileAbsent, false)) {
+        fail(
+          `'${assertFileAbsent}' already exists while option ` +
+            `'${assertFileAbsentAtOption}' is awaiting an answer`,
+          1,
+        );
+      }
+      absenceAssertionObserved = true;
+      writeTuiTrace(session, "answer_gate_absence_assertion", {
+        option: assertFileAbsentAtOption,
+        absentFile: assertFileAbsent,
+        screen: grid,
+      });
+    }
     if (stopAtApprovalGate && gridIsApprovalGate(grid)) {
+      assertAbsenceObservationCompleted();
       writeTuiTrace(session, "answer_gate_stopped_at_approval", {
         answered,
         screen: grid,

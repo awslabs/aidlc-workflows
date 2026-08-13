@@ -554,6 +554,20 @@ function handleFire(args: string[]): void {
 	process.exit(0);
 }
 
+// --- Stdout noise stripping ---
+//
+// Slice leading stdout noise down to the first structural JSON character
+// (startChar). Package managers such as pnpm print run banners and lockfile
+// warnings before a wrapped tool's JSON when a sensor runs against a sibling
+// repo; without this the payload never parses and the verdict is silently
+// discarded as script-error: bad-output. When startChar is absent the string
+// is returned unchanged so the caller's JSON.parse still throws and degrades
+// gracefully.
+export function stripStdoutNoise(stdout: string, startChar: string): string {
+	const idx = stdout.indexOf(startChar);
+	return idx >= 0 ? stdout.slice(idx) : stdout;
+}
+
 // --- Truth table ---
 //
 // Branch ordering is LOAD-BEARING: branch a (timeout) precedes branch 0
@@ -608,7 +622,7 @@ function decideOutcome(
 			// spawnSync's overload set isn't narrowed by encoding alone; check
 			// with typeof to keep TS narrowing.
 			const stdout = typeof result.stdout === "string" ? result.stdout : "";
-			parsed = JSON.parse(stdout);
+			parsed = JSON.parse(stripStdoutNoise(stdout, "{"));
 		} catch {
 			return {
 				kind: "passed",

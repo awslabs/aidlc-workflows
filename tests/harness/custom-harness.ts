@@ -76,7 +76,7 @@
 //     schema-snapshot's gate.
 //   - sensor->stage binding ........... stage frontmatter `sensors: [<id>]` only
 //     (aidlc-graph.ts:497 resolveSensorsForStage); manifest `matches:` glob is
-//     the fire filter (aidlc-sensor-fire.ts:198)
+//     the fire filter (aidlc-run-sensors.ts:198)
 //
 // The recipe was proven end-to-end in a throwaway project: compile succeeds,
 // `aidlc-graph scope data-migration` routes exactly [workspace-scaffold,

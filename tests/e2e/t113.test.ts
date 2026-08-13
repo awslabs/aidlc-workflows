@@ -75,6 +75,7 @@ import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts
 
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
+const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 
 // Spawn a state/utility subcommand via the SAME bun that runs this test
 // (process.execPath), cwd-independent. Mirrors t51's `bun "$STATE" ...` calls.
@@ -104,6 +105,39 @@ function run(
 function walkStage(slug: string, proj: string): void {
   const gs = run(STATE, ["gate-start", slug], proj);
   expect(gs.status).toBe(0);
+  // Reviewer-bearing stages need a terminal REVIEW_COMPLETED before approve
+  // commits (§12a gate precondition), recorded by the stage's DECLARED reviewer.
+  // Record one for the two reviewer-bearing stages this walk crosses; a
+  // no-reviewer stage ignores the extra row. This walk drives transitions to
+  // accumulate the audit trail, not to test the reviewer gate. Mirrors t51.
+  const reviewerFor: Record<string, string> = {
+    "requirements-analysis": "aidlc-product-lead-agent",
+    "code-generation": "aidlc-architecture-reviewer-agent",
+  };
+  if (reviewerFor[slug]) {
+    const requested = run(LOG, [
+      "review",
+      "--stage",
+      slug,
+      "--reviewer",
+      reviewerFor[slug],
+      "--iteration",
+      "1",
+    ], proj);
+    expect(requested.status).toBe(0);
+    const rv = run(LOG, [
+      "review",
+      "--stage",
+      slug,
+      "--reviewer",
+      reviewerFor[slug],
+      "--iteration",
+      "1",
+      "--verdict",
+      "READY",
+    ], proj);
+    expect(rv.status).toBe(0);
+  }
   const ap = run(STATE, ["approve", slug, "--user-input", "approve"], proj);
   expect(ap.status).toBe(0);
 }
@@ -143,7 +177,7 @@ function driveBugfixToCompletion(): { proj: string } {
   const proj = createTestProject();
   const init = run(
     UTIL,
-    ["intent-birth", "--scope", "bugfix"],
+    ["intent-create", "--scope", "bugfix"],
     proj,
     { AIDLC_WORKFLOW_INTENT: "t113 terminal-ordering test" },
   );

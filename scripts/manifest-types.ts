@@ -67,7 +67,7 @@ export type OnboardingSpec = {
 export type HarnessManifest = {
   /** Harness name; matches the dist/<name>/ and harness/<name>/ dir. */
   name: string;
-  /** The harness directory the token substitutes to (".claude" | ".kiro" | ".codex" | ".aidlc"). */
+  /** The harness directory the token substitutes to (".claude" | ".kiro" | ".codex" | ".aidlc" | ".cursor"). */
   harnessDir: string;
   /**
    * Which tier-projection flavor this harness's agent surfaces use
@@ -75,7 +75,7 @@ export type HarnessManifest = {
    * new harness picks its projection shape in its manifest - the packager
    * never infers it from the harness name.
    */
-  tierFlavor: "claude" | "codex" | "kiro" | "opencode";
+  tierFlavor: "claude" | "codex" | "kiro" | "opencode" | "copilot" | "cursor";
   /** core/<src> → <harnessDir>/<dst> projections. */
   coreDirs: DirMap[];
   /** harness/<name>/<src> → <harnessDir>/<dst> authored-file copies. */
@@ -94,6 +94,12 @@ export type HarnessManifest = {
    * JSON - without the injected line an IDE delegate runs toolless.
    */
   frontmatterAdditions?: Array<{ file: string; lines: string[] }>;
+  /**
+   * Harness-native YAML fields appended to every generated stage/scope runner
+   * skill. The packager persists these in tools/data/harness.json so runner
+   * regeneration during plugin composition applies the same host contract.
+   */
+  runnerFrontmatterAdditions?: string[];
   /**
    * How to render this harness's onboarding doc from core/templates/onboarding.md.
    * null when the harness generates it elsewhere (codex, via emit) or ships none.
@@ -123,11 +129,13 @@ export type HarnessManifest = {
    * NEW harness added per the one-core-many-harnesses promise automatically
    * gets a plugin projection instead of being silently skipped. A harness with
    * no host plugin store (folder-drop + hook, like Kiro) sets kind "kiro".
+   * Cursor sets kind "cursor" for its flat camelCase hook schema.
    */
   plugin?: {
-    /** Host plugin-manifest dir name (".claude-plugin", ".codex-plugin", ".kiro-plugin"). */
+    /** Host plugin-manifest dir name (for example ".claude-plugin", ".plugin", ".kiro-plugin"). */
+    /** Host plugin-manifest dir name (for example ".claude-plugin" or ".cursor-plugin"). */
     manifestDir: string;
-    /** "store" = host plugin store (Claude/Codex); "kiro" = folder-drop + .kiro.hook. */
-    kind: "store" | "kiro";
+    /** Host-specific plugin hook projection shape. */
+    kind: "store" | "kiro" | "cursor";
   };
 };

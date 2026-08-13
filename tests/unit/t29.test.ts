@@ -1,8 +1,8 @@
-// covers: hook:aidlc-sync-statusline
+// covers: hook:aidlc-sync-workflow-state
 //
 // Mechanism = none. Port of tests/unit/t29-hook-sync-statusline.sh (TAP plan 7).
 // The unit under test is the PostToolUse hook dist/claude/.claude/hooks/
-// aidlc-sync-statusline.ts. A hook is mechanism=none — it has no CLI arg
+// aidlc-sync-workflow-state.ts. A hook is mechanism=none — it has no CLI arg
 // surface; it is driven by feeding Claude Code's PostToolUse JSON on stdin.
 // So every .sh case is preserved here by SPAWNING the hook via
 // node:child_process spawnSync with the JSON piped through `input:`, exactly
@@ -67,7 +67,7 @@ import {
 } from "../harness/fixtures.ts";
 
 const BUN = process.execPath; // the bun running this test
-const HOOK = join(AIDLC_SRC, "hooks", "aidlc-sync-statusline.ts");
+const HOOK = join(AIDLC_SRC, "hooks", "aidlc-sync-workflow-state.ts");
 const MID_IDEATION = join(FIXTURES_DIR, "state-mid-ideation.md");
 
 const tempDirs: string[] = [];
@@ -93,7 +93,7 @@ function hookProject(): string {
 // and the set-status tool it shells out to both anchor under that record).
 const statePath = (p: string): string => seededStateFile(p);
 const heartbeatPath = (p: string): string =>
-  join(seededRecordDir(p), ".aidlc-hooks-health", "sync-statusline.last");
+  join(seededRecordDir(p), ".aidlc-hooks-health", "sync-workflow-state.last");
 
 interface HookResult {
   status: number;
@@ -118,7 +118,7 @@ function stateField(proj: string, label: string): string {
   return m ? m[1].trim() : "";
 }
 
-describe("t29 aidlc-sync-statusline hook (migrated from t29-hook-sync-statusline.sh, plan 7)", () => {
+describe("t29 aidlc-sync-workflow-state hook (migrated from t29-hook-sync-statusline.sh, plan 7)", () => {
   // --- T1: in_progress + [slug] -> Current Stage updated to that slug ---
   test("1: updates Current Stage on in_progress with [slug]", () => {
     const p = hookProject();

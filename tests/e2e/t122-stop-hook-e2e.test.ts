@@ -5,7 +5,7 @@
 // port carried them as 4 test() blocks, and the human-wait carve-out adds a
 // 5th — the (7)-labelled real-engine case below, numbered to continue the .sh
 // assertion map, not the test()-block count). WORKFLOW-TIER end-to-end
-// enforcement of the Stop hook aidlc-stop.ts — the framework's FIRST
+// enforcement of the Stop hook aidlc-continue-workflow.ts — the framework's FIRST
 // flow-altering hook. The feature-tier twin t121-stop-hook-enforce.test.ts
 // proves the hook's block/done/guard LOGIC against a MOCK engine; THIS file
 // closes the gap t121's mock leaves open: the REAL hook against the REAL
@@ -25,7 +25,7 @@
 //       -> driveAidlc("/aidlc --status") over a COMPLETED workflow under the
 //          LIVE skill-scoped Stop hook (the project carries the real
 //          .claude/settings.json whose Stop hook entry points at the real
-//          aidlc-stop.ts — settings.json:110-118). The engine answers `done`,
+//          aidlc-continue-workflow.ts — settings.json:110-118). The engine answers `done`,
 //          the hook ALLOWS, and the headless session runs to completion: the
 //          terminal result event exists and is not an error (the .sh's
 //          "no exit-124 hang"), AND the deterministic status stdout landed in a
@@ -35,17 +35,17 @@
 //   3 the live hook fired and took the done->allow path
 //       -> GUARDED exactly like the .sh: the skill-scoped Stop hook does not
 //          fire on every headless turn, so when the heartbeat
-//          (aidlc-docs/.aidlc-hooks-health/stop.last, aidlc-stop.ts:90) is
+//          (aidlc-docs/.aidlc-hooks-health/continue-workflow.last, aidlc-continue-workflow.ts:90) is
 //          absent we SKIP this sub-assertion (record the skip, never fail).
 //          When it IS present, the done branch ran resetGuard()
-//          (aidlc-stop.ts:241-248,357) which wrote block-count.json with
+//          (aidlc-continue-workflow.ts:241-248,357) which wrote block-count.json with
 //          count 0 — assert the parsed count === 0.
 //   4 pending directive -> the REAL hook BLOCKS, against the REAL engine
 //       -> seed state-final-stage (final stage [-], engine emits a real
 //          run-stage for feedback-optimization), pipe {"stop_hook_active":false}
 //          into the real hook: stdout is a parseable {"decision":"block"} whose
 //          reason names the pending stage + re-feeds the loop
-//          (continuationReason, aidlc-stop.ts:298-307) and carries no
+//          (continuationReason, aidlc-continue-workflow.ts:298-307) and carries no
 //          override-shaped verbs. Deterministic — verified by direct invocation
 //          on this exact fixture (block reason names "feedback-optimization" +
 //          "aidlc-orchestrate"). Exit 0 (a block rides stdout, never the code).
@@ -56,10 +56,10 @@
 //     the exhaustive matrix)
 //       -> seed state-final-stage + the no-progress counter AT the cap (8) with
 //          the project's matching progress signature
-//          (`${Current Stage}::${audit line count}`, aidlc-stop.ts:137) +
+//          (`${Current Stage}::${audit line count}`, aidlc-continue-workflow.ts:137) +
 //          stop_hook_active:true: the hook RELEASES (empty stdout, exit 0) and
 //          appends the drop record "recursion guard released the stop"
-//          (aidlc-stop.ts:370) to .aidlc-hooks-health/stop.drops — a stuck loop
+//          (aidlc-continue-workflow.ts:370) to .aidlc-hooks-health/continue-workflow.drops — a stuck loop
 //          can never trap the session even with the directive genuinely pending.
 //          Deterministically confirmed on this fixture (sig
 //          feedback-optimization::2, drop line written).
@@ -86,14 +86,14 @@
 //          feedback-optimization checkbox stays [-] and Parked / Parked At Stage
 //          are written (aidlc-state.ts:418-441). The real hook then sees the
 //          engine re-emit `parked` and ALLOWS the stop (empty stdout, exit 0;
-//          aidlc-stop.ts:760-771), the supported multi-session exit.
+//          aidlc-continue-workflow.ts:760-771), the supported multi-session exit.
 //   10 PARK under autonomous Construction is REFUSED (NEW, issue #365 guard)
 //       -> inject `Construction Autonomy Mode: autonomous`; the REAL
 //          `aidlc-state.ts park` refuses (NON-ZERO exit, stderr names the
 //          autonomous refusal, aidlc-state.ts:420-424). Defence-in-depth: with
 //          Parked markers injected by hand, the hook's parked branch DECLINES
 //          the allow under autonomous and falls through to the cap-bounded BLOCK
-//          (aidlc-stop.ts:760-771).
+//          (aidlc-continue-workflow.ts:760-771).
 //   11 CONVERSATIONAL carve-out (tier 3) against the REAL engine (NEW, issue
 //      #365 broader reading)
 //       -> keep the final stage [-] (engine emits a pending run-stage, as test
@@ -107,14 +107,14 @@
 // do not fire on user interrupt (the .sh's closing note, kept).
 //
 // Known-answer literals (read from the SHIPPED hook/tool/fixtures, not guessed):
-//   - Stop hook registration:    dist settings.json:110-118 (matcher "", aidlc-stop.ts)
-//   - heartbeat write:           aidlc-stop.ts:90 (stop.last)
-//   - guard file:                aidlc-stop.ts:130 (block-count.json)
-//   - progress signature:        aidlc-stop.ts:137 (`${stage}::${auditLines}`)
-//   - resetGuard on done/allow:  aidlc-stop.ts:241-248 (count 0), invoked :357
-//   - block JSON + reason:       aidlc-stop.ts:104,298-307
-//   - release + drop record:     aidlc-stop.ts:364-371 ("recursion guard released the stop")
-//   - block cap env:             aidlc-stop.ts:69 (CLAUDE_CODE_STOP_HOOK_BLOCK_CAP, default 8)
+//   - Stop hook registration:    dist settings.json:110-118 (matcher "", aidlc-continue-workflow.ts)
+//   - heartbeat write:           aidlc-continue-workflow.ts:90 (continue-workflow.last)
+//   - guard file:                aidlc-continue-workflow.ts:130 (block-count.json)
+//   - progress signature:        aidlc-continue-workflow.ts:137 (`${stage}::${auditLines}`)
+//   - resetGuard on done/allow:  aidlc-continue-workflow.ts:241-248 (count 0), invoked :357
+//   - block JSON + reason:       aidlc-continue-workflow.ts:104,298-307
+//   - release + drop record:     aidlc-continue-workflow.ts:364-371 ("recursion guard released the stop")
+//   - block cap env:             aidlc-continue-workflow.ts:69 (CLAUDE_CODE_STOP_HOOK_BLOCK_CAP, default 8)
 //   - status stdout:             aidlc-utility.ts:296-310 ("Status:         Completed")
 //   - fixtures: state-completed.md (Status=Completed, 32/32) /
 //     state-final-stage.md (feedback-optimization [-], Status=Running)
@@ -162,14 +162,14 @@ const BUN = process.execPath;
 const guardPath = (proj: string): string =>
   join(stopHookDir(proj), "block-count.json");
 const heartbeatPath = (proj: string): string =>
-  join(hooksHealthDir(proj), "stop.last");
+  join(hooksHealthDir(proj), "continue-workflow.last");
 const dropsPath = (proj: string): string =>
-  join(hooksHealthDir(proj), "stop.drops");
+  join(hooksHealthDir(proj), "continue-workflow.drops");
 
 // Known-answer literals from the SHIPPED handlers (see header for cites).
 const STATUS_COMPLETED_LINE = "Status:         Completed"; // utility.ts:302 (padEnd shape confirmed by direct run)
 const PENDING_STAGE = "feedback-optimization"; // state-final-stage.md:90 ([-] final stage)
-const DROP_RECORD = "recursion guard released the stop"; // aidlc-stop.ts:370
+const DROP_RECORD = "recursion guard released the stop"; // aidlc-continue-workflow.ts:370
 
 /** Pipe a real Stop payload into the SHIPPED hook with the project's REAL
  *  engine resolved via CLAUDE_PROJECT_DIR. Returns exit code + trimmed stdout
@@ -184,7 +184,7 @@ function runRealHook(
     CLAUDE_PROJECT_DIR: proj,
   };
   if (cap !== undefined) env.CLAUDE_CODE_STOP_HOOK_BLOCK_CAP = cap;
-  const res = spawnSync(BUN, [join(proj, ".claude", "hooks", "aidlc-stop.ts")], {
+  const res = spawnSync(BUN, [join(proj, ".claude", "hooks", "aidlc-continue-workflow.ts")], {
     input: payload,
     encoding: "utf-8",
     env,
@@ -194,7 +194,7 @@ function runRealHook(
 }
 
 /** The hook's progress signature for a project — Current Stage + audit.md line
- *  count (aidlc-stop.ts:137) — so test 6 can seed the counter AT the cap under
+ *  count (aidlc-continue-workflow.ts:137) — so test 6 can seed the counter AT the cap under
  *  the matching key. Mirrors the .sh's progress_sig. */
 function progressSig(proj: string): string {
   const s = readFileSync(seededStateFile(proj), "utf-8");
@@ -289,7 +289,7 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
       });
       try {
         const r = runRealHook(proj, '{"stop_hook_active":false}');
-        // A block rides STDOUT; the exit code stays 0 (aidlc-stop.ts:104-107).
+        // A block rides STDOUT; the exit code stays 0 (aidlc-continue-workflow.ts:104-107).
         expect(r.rc).toBe(0);
         // STRONGER than the .sh's substring greps: parse the JSON and assert
         // the exact decision shape + the reason's contract in one pass.
@@ -298,9 +298,26 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
         // The reason names the pending stage and re-feeds the loop...
         expect(parsed.reason).toContain(PENDING_STAGE);
         expect(parsed.reason).toContain("aidlc-orchestrate");
-        // ...and uses no override-shaped verbs (the security property SPIKE 1
-        // pinned; aidlc-stop.ts:298-307 phrases continuation, never override).
-        expect(/ignore|override|disregard|bypass/i.test(parsed.reason)).toBe(
+        // ...and the hook's OWN framing uses no override-shaped verbs (the
+        // security property SPIKE 1 pinned: the hook phrases continuation,
+        // never override). A load-steering reason EMBEDS rule-file text
+        // verbatim as a single-line JSON rules_content payload
+        // (continuationReason JSON.stringifies it, so the payload carries no
+        // raw newlines), and rule PROSE may legitimately contain these verbs
+        // (e.g. operation.md's "Never remove or bypass existing security
+        // controls"). Scan only the hook-authored lines, not the quoted
+        // payload — delivered content is not the hook speaking.
+        const hookFraming = parsed.reason
+          .split("\n")
+          .filter((line) => {
+            try {
+              return !Array.isArray(JSON.parse(line));
+            } catch {
+              return true;
+            }
+          })
+          .join("\n");
+        expect(/ignore|override|disregard|bypass/i.test(hookFraming)).toBe(
           false,
         );
       } finally {
@@ -358,7 +375,7 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
         // but the cap wins — decideBlock :231 returns false at count >= cap).
         expect(r.rc).toBe(0);
         expect(r.out).toBe("");
-        // The drop record documents the release (aidlc-stop.ts:364-371).
+        // The drop record documents the release (aidlc-continue-workflow.ts:364-371).
         const drops = readFileSync(dropsPath(proj), "utf-8");
         expect(drops).toContain(DROP_RECORD);
       } finally {
@@ -459,7 +476,7 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
   // and emits WORKFLOW_PARKED (aidlc-state.ts:418-441), WITHOUT advancing any
   // stage. The real hook then consults the engine, which now re-emits the
   // terminal `parked` directive (aidlc-orchestrate.ts:1094-1102), and ALLOWS the
-  // turn to end (aidlc-stop.ts:760-771), the supported multi-session exit, so
+  // turn to end (aidlc-continue-workflow.ts:760-771), the supported multi-session exit, so
   // the agent never rubber-stamps the remaining stages to force a `done`. We
   // also pin that park did NOT flip the feedback-optimization checkbox (still
   // [-]) and DID write the Parked / Parked At Stage runtime markers.
@@ -525,7 +542,7 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
   //     autonomous refusal (aidlc-state.ts:420-424);
   //   - even if the Parked markers were somehow present, the hook's parked
   //     branch DECLINES the allow under autonomous and falls through to the
-  //     cap-bounded BLOCK (aidlc-stop.ts:760-771), defence-in-depth beside the
+  //     cap-bounded BLOCK (aidlc-continue-workflow.ts:760-771), defence-in-depth beside the
   //     tool refusal. We inject Parked markers + autonomous mode and assert the
   //     real hook still BLOCKS (the real engine re-emits `parked`, but the hook
   //     declines it). Deterministic (no model in the loop).
@@ -572,7 +589,7 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
         // parked branch declines the allow under autonomous. Inject the markers
         // by hand (the tool refused to write them) and confirm the hook BLOCKS:
         // the real engine re-emits `parked`, but the autonomy guard
-        // (aidlc-stop.ts:760-771) falls through to the cap-bounded block.
+        // (aidlc-continue-workflow.ts:760-771) falls through to the cap-bounded block.
         const sf = seededStateFile(proj);
         sedReplaceInFile(
           sf,

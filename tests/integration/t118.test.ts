@@ -38,11 +38,11 @@
 //   SP3 jump redo   (2): --stage == current; run-stage(code-generation) +
 //       resolve `.direction` === "redo".
 //   SP4 resume (2): kind==="ask"; out contains "existing workflow was found".
-//   SP5 birth (P4: --init retired, engine names intent-birth):
+//   SP5 birth (P4: --init retired, engine names intent-create):
 //     - (a) named scope on a clean workspace -> kind==="print" naming
-//       intent-birth + NO aidlc-state.md created by next (read-only — mutation
+//       intent-create + NO aidlc-state.md created by next (read-only — mutation
 //       stays conductor-side).
-//     - (b) named scope over existing state -> NOT a birth (no intent-birth
+//     - (b) named scope over existing state -> NOT a birth (no intent-create
 //       print; the old --force re-init guard is gone).
 //   SP6 scope-change (2): kind==="print" + out contains "scope-change --scope mvp".
 //   SP7 normal gate (1):
@@ -89,6 +89,8 @@ import {
   createTestProject,
   FIXTURES_DIR,
   removeWorkspaceRecord,
+  runOrchestrateNext,
+  seedAidlcMemory,
   seededAuditDir,
   seededStateFile,
   seedStateFile,
@@ -126,17 +128,30 @@ function run(tool: string, args: string[]): CliResult {
   };
 }
 
-/** Fresh temp project seeded from a FIXTURES_DIR state fixture. */
+/** Fresh temp project seeded from a FIXTURES_DIR state fixture. Seeds the
+ *  shipped method tree too: since the load-steering migration, `next` on a
+ *  run-stage route FAILS CLOSED when a required rule file is missing, so a
+ *  walk that reaches run-stage needs the memory tree the engine ships. */
 function projWithState(fixtureName: string): string {
   const p = createTestProject();
   tempDirs.push(p);
+  seedAidlcMemory(p);
   seedStateFile(p, join(FIXTURES_DIR, fixtureName));
   return p;
 }
 
+/** Steering-aware `next`: consume load-steering parts, return the routing
+ *  directive (t248 owns the transport; these walks assert routing). */
+// biome-ignore lint/suspicious/noExplicitAny: directives are a typed union; the test reads scalar fields
+function nextDirective(p: string, args: string[] = []): any {
+  const r = runOrchestrateNext(ORCHESTRATE, p, args);
+  expect(r.directive).not.toBeNull();
+  return r.directive;
+}
+
 /** Fresh CLEAN temp project — an empty workspace, NO intent record (SP5a). P9:
  *  createTestProject seeds a default record + cursor, so strip it; otherwise the
- *  engine resolves the seeded intent instead of naming intent-birth. */
+ *  engine resolves the seeded intent instead of naming intent-create. */
 function cleanProj(): string {
   const p = createTestProject();
   tempDirs.push(p);
@@ -353,12 +368,37 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(readFileSync(statePath(p), "utf-8")).toBe(before);
   });
 
+  test("SP4d: exact numbered resume-menu answers map to the four semantic choices", () => {
+    const p = projWithState("state-jumped.md");
+    const before = readFileSync(statePath(p), "utf-8");
+    const report = (answer: string) =>
+      directive(run(ORCHESTRATE, [
+        "report",
+        "--result",
+        "resumed",
+        "--user-input",
+        answer,
+        "--project-dir",
+        p,
+      ]));
+
+    expect(report("1").message).toContain("Re-run `next`");
+    expect(report("2").message).toContain("--direction redo");
+    expect(report("3").message).toContain("next --stage");
+    expect(report("4").message).toContain("--new-intent");
+
+    const outOfRange = report("5");
+    expect(outOfRange.kind).toBe("error");
+    expect(outOfRange.message).toContain("Accepted choices: 1/resume");
+    expect(readFileSync(statePath(p), "utf-8")).toBe(before);
+  });
+
   // ============================================================
   // Special path 5: BIRTH (P4: --init retired) — (a) named scope on a clean
-  // workspace prints the intent-birth move + creates NO state; (b) a named scope
+  // workspace prints the intent-create move + creates NO state; (b) a named scope
   // over existing state is a resume/scope-change, NOT a birth.
   // ============================================================
-  test("SP5a: named scope (clean) -> print naming intent-birth, next creates NO state (read-only)", () => {
+  test("SP5a: named scope (clean) -> print naming intent-create, next creates NO state (read-only)", () => {
     const p = cleanProj();
     const r = run(ORCHESTRATE, [
       "next",
@@ -368,7 +408,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
       p,
     ]);
     expect(directive(r).kind).toBe("print");
-    expect(directive(r).message).toContain("intent-birth");
+    expect(directive(r).message).toContain("intent-create");
     // Mutation stays conductor-side: next must not have birthed/scaffolded state.
     expect(existsSync(statePath(p))).toBe(false);
   });
@@ -387,7 +427,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     ]);
     const d = directive(r);
     expect(d.kind).toBe("print");
-    expect(d.message).toContain("intent-birth --scope bugfix");
+    expect(d.message).toContain("intent-create --scope bugfix");
     expect(d.message).toContain(
       '--arguments "Fix duplicate todo persistence"',
     );
@@ -395,10 +435,10 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(existsSync(statePath(p))).toBe(false);
   });
 
-  test("SP5b: named scope over existing state -> not a birth (no intent-birth print)", () => {
+  test("SP5b: named scope over existing state -> not a birth (no intent-create print)", () => {
     const p = projWithState("state-mid-ideation.md"); // feature scope state
     const r = run(ORCHESTRATE, ["next", "--scope", "feature", "--project-dir", p]);
-    expect(r.out).not.toContain("intent-birth");
+    expect(r.out).not.toContain("intent-create");
     expect(r.out).not.toContain("Use --force to reinitialize");
   });
 
@@ -447,7 +487,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
   // ============================================================
   test("WALK A (non-gated): next gate:false -> report advance -> next state-init", () => {
     const p = projWithState("state-pre-workspace-detection.md");
-    const n1 = directive(run(ORCHESTRATE, ["next", "--project-dir", p]));
+    const n1 = nextDirective(p);
     expect(n1.stage).toBe("workspace-detection");
     expect(n1.gate).toBe(false);
     const r = run(ORCHESTRATE, [
@@ -459,7 +499,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     ]);
     // report dispatched advance (not approve) — the done reason names it.
     expect(r.out).toContain("Committed advance for");
-    const n2 = directive(run(ORCHESTRATE, ["next", "--project-dir", p]));
+    const n2 = nextDirective(p);
     expect(n2.stage).toBe("state-init");
   }, 30000);
 
@@ -471,7 +511,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
   // ============================================================
   test("WALK B (gated): next gate:true -> approve emits one STAGE_STARTED -> next scope-definition", () => {
     const p = projWithState("state-mid-ideation.md");
-    const n1 = directive(run(ORCHESTRATE, ["next", "--project-dir", p]));
+    const n1 = nextDirective(p);
     expect(n1.stage).toBe("feasibility");
     expect(n1.gate).toBe(true);
     run(ORCHESTRATE, [
@@ -493,7 +533,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
       p,
     ]);
     expect(eventCount(p, "STAGE_STARTED")).toBe(1);
-    const n2 = directive(run(ORCHESTRATE, ["next", "--project-dir", p]));
+    const n2 = nextDirective(p);
     expect(n2.stage).toBe("scope-definition");
   }, 30000);
 
@@ -514,7 +554,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     const p = projWithState("state-construction-bolt1.md");
     // Step 1: the next decision rule defers the skeleton gate -> gate is the
     // STRING "unresolved" (not the boolean), still naming the same EXECUTE stage.
-    const n1 = directive(run(ORCHESTRATE, ["next", "--project-dir", p]));
+    const n1 = nextDirective(p);
     expect(n1.stage).toBe("functional-design");
     expect(n1.gate).toBe("unresolved");
     // Step 2: the report dispatcher's STANCE branch records the typed stance and
@@ -537,7 +577,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     // Step 3: the next decision rule reads the recorded stance and re-emits the
     // SAME stage with the now-DETERMINED gate (the boolean true). The round-trip
     // closes deterministically — no model in the loop.
-    const n2 = directive(run(ORCHESTRATE, ["next", "--project-dir", p]));
+    const n2 = nextDirective(p);
     expect(n2.stage).toBe("functional-design");
     expect(n2.gate).toBe(true);
   }, 30000);

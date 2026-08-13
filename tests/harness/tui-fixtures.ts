@@ -68,6 +68,16 @@ const CLAUDE_MEMORY_SRC = join(REPO_ROOT, "dist", "claude", "aidlc");
 const KIRO_MEMORY_SRC = join(REPO_ROOT, "dist", "kiro", "aidlc");
 const KIRO_IDE_MEMORY_SRC = join(REPO_ROOT, "dist", "kiro-ide", "aidlc");
 
+export function markdownH2Section(body: string, heading: string): string {
+  const lines = body.split(/\r?\n/);
+  const start = lines.findIndex((line) => line.trimEnd() === `## ${heading}`);
+  if (start < 0) return "";
+  const next = lines.findIndex(
+    (line, index) => index > start && /^##\s+\S/.test(line),
+  );
+  return lines.slice(start + 1, next < 0 ? undefined : next).join("\n");
+}
+
 export interface KiroNumberedProseAnswerState {
   guideModeChosen: boolean;
   answeredQuestions: Set<number>;
@@ -75,7 +85,10 @@ export interface KiroNumberedProseAnswerState {
   answeredFollowUps: Set<number>;
   /** Ad-hoc lettered clarification menus already answered, keyed by option text. */
   answeredClarifications: Set<string>;
-  summaryConfirmed: boolean;
+  /** Consolidated-summary confirmations already answered, keyed by the
+   *  prompt's distinct "before I ..." tail (one checkpoint per stage that ran
+   *  a Q&A, so a multi-stage journey presents several). */
+  confirmedSummaries: Set<string>;
   learningsAnswered: number;
   approvalsAnswered: number;
 }
@@ -87,7 +100,7 @@ export function createKiroNumberedProseAnswerState(): KiroNumberedProseAnswerSta
     confirmedQuestions: new Set(),
     answeredFollowUps: new Set(),
     answeredClarifications: new Set(),
-    summaryConfirmed: false,
+    confirmedSummaries: new Set(),
     learningsAnswered: 0,
     approvalsAnswered: 0,
   };
@@ -124,7 +137,9 @@ export function nextKiroNumberedProseAnswer(
 
   if (
     !state.guideModeChosen &&
-    /How would you like to answer[\s\S]*Guide me/i.test(screen)
+    /How would you like to\s+(?:answer|provide your answers|proceed)[\s\S]*Guide me/i.test(
+      screen,
+    )
   ) {
     state.guideModeChosen = true;
     return "1";
@@ -158,12 +173,32 @@ export function nextKiroNumberedProseAnswer(
     return pendingFollowUps.map((id) => `F${id}: 1`).join(", ");
   }
 
-  if (
-    !state.summaryConfirmed &&
-    /Looks correct[\s\S]*Request changes/i.test(screen)
-  ) {
-    state.summaryConfirmed = true;
-    return "Looks correct";
+  // Consolidated-summary confirmation: one PER checkpoint-bearing stage, so a
+  // multi-stage journey presents several (e.g. reverse-engineering "before I
+  // finalize", then requirements-analysis "before I generate the requirements
+  // artifact"). Key on the newest prompt's distinct "before I ..." tail - the
+  // retained viewport still shows earlier answered prompts, so a bare boolean
+  // (the pre-fix shape) answered only the first and stranded every later one.
+  if (/Looks correct[\s\S]*Request changes/i.test(screen)) {
+    const summaryPrompts = [
+      ...screen.matchAll(/look correct before I ([^?]{1,120})\?/gi),
+    ];
+    if (summaryPrompts.length > 0) {
+      const key = summaryPrompts
+        .at(-1)![1]
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase();
+      if (!state.confirmedSummaries.has(key)) {
+        state.confirmedSummaries.add(key);
+        return "Looks correct";
+      }
+    } else if (state.confirmedSummaries.size === 0) {
+      // Prompt without the "before I ..." sentence (looser conductor
+      // phrasing): answer it once, as the pre-fix recognizer did.
+      state.confirmedSummaries.add("");
+      return "Looks correct";
+    }
   }
   if (learningPromptIndex > approvalPromptIndex) {
     state.learningsAnswered += 1;
@@ -179,6 +214,18 @@ export function nextKiroNumberedProseAnswer(
     }
     state.approvalsAnswered += 1;
     return "Approve";
+  }
+
+  const assumptionMenuKey =
+    "Assumption Confirmation|Accept assumptions|Convert to follow-up questions";
+  if (
+    /Assumption Confirmation[\s\S]{0,2000}\bAccept assumptions\b[\s\S]{0,1000}\bConvert to follow-up questions\b/i.test(
+      screen,
+    ) &&
+    !state.answeredClarifications.has(assumptionMenuKey)
+  ) {
+    state.answeredClarifications.add(assumptionMenuKey);
+    return "Accept assumptions";
   }
 
   // Ad-hoc lettered clarification: a live hub that spots a contradiction
@@ -423,7 +470,7 @@ export function setupTuiProject(opts: TuiProjectOptions = {}): string {
 
 /**
  * Compile the copied harness's runtime graph and ensure it contains the state
- * file's current stage. Seeded state fixtures bypass intent-birth and stage
+ * file's current stage. Seeded state fixtures bypass intent-create and stage
  * transitions, so append only the missing production audit rows, recompile,
  * and verify through the shipped `aidlc-runtime.ts read` command.
  */

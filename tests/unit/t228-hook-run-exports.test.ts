@@ -1,4 +1,4 @@
-// covers: hook:aidlc-stop, hook:aidlc-session-start, hook:aidlc-statusline, hook:aidlc-mint-presence
+// covers: hook:aidlc-continue-workflow, hook:aidlc-session-start, hook:aidlc-statusline, hook:aidlc-record-human-turn, hook:aidlc-deliver-stage-rules, hook:aidlc-review-freeze, hook:aidlc-plan-approval-guard
 import { afterAll, describe, expect, test } from "bun:test";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,16 +18,19 @@ import {
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const BUN = process.execPath;
 const CORE_HOOKS = [
-  "aidlc-audit-logger.ts",
+  "aidlc-write-audit-log.ts",
+  "aidlc-deliver-stage-rules.ts",
   "aidlc-log-subagent.ts",
-  "aidlc-mint-presence.ts",
-  "aidlc-runtime-compile.ts",
-  "aidlc-sensor-fire.ts",
+  "aidlc-record-human-turn.ts",
+  "aidlc-plan-approval-guard.ts",
+  "aidlc-review-freeze.ts",
+  "aidlc-rebuild-stage-graph.ts",
+  "aidlc-run-sensors.ts",
   "aidlc-session-end.ts",
   "aidlc-session-start.ts",
   "aidlc-statusline.ts",
-  "aidlc-stop.ts",
-  "aidlc-sync-statusline.ts",
+  "aidlc-continue-workflow.ts",
+  "aidlc-sync-workflow-state.ts",
   "aidlc-validate-state.ts",
 ];
 
@@ -40,7 +43,10 @@ const authoredCoreHooksDir = process.env.AIDLC_T227_HOOKS_DIR;
 const coreHooksDir = authoredCoreHooksDir ?? join(REPO_ROOT, "dist", "claude", ".claude", "hooks");
 let materializedAdapterRoot: string | null = null;
 
-function materializedAdapterPath(harnessName: "kiro" | "kiro-ide" | "codex", fileName: string): string {
+function materializedAdapterPath(
+  harnessName: "kiro" | "kiro-ide" | "codex" | "cursor",
+  fileName: string,
+): string {
   if (materializedAdapterRoot === null) {
     materializedAdapterRoot = mkdtempSync(join(tmpdir(), "aidlc-t228-adapters-"));
   }
@@ -70,6 +76,10 @@ function adapterSubjects(): Subject[] {
         name: "codex adapter",
         path: materializedAdapterPath("codex", "aidlc-codex-adapter.ts"),
       },
+      {
+        name: "cursor adapter",
+        path: materializedAdapterPath("cursor", "aidlc-cursor-adapter.ts"),
+      },
     ];
   }
   return [
@@ -84,6 +94,10 @@ function adapterSubjects(): Subject[] {
     {
       name: "codex adapter",
       path: join(REPO_ROOT, "dist", "codex", ".codex", "hooks", "aidlc-codex-adapter.ts"),
+    },
+    {
+      name: "cursor adapter",
+      path: join(REPO_ROOT, "dist", "cursor", ".cursor", "hooks", "aidlc-cursor-adapter.ts"),
     },
   ];
 }
@@ -252,13 +266,13 @@ describe("spawned hook contract smoke", () => {
     }
   });
 
-  test("mint-presence exits zero and appends HUMAN_TURN when state exists", () => {
+  test("record-human-turn exits zero and appends HUMAN_TURN when state exists", () => {
     const projectDir = createTestProject();
     try {
       writeMinimalState(projectDir);
       seedAuditFile(projectDir);
       const result = spawnHook(
-        join(coreHooksDir, "aidlc-mint-presence.ts"),
+        join(coreHooksDir, "aidlc-record-human-turn.ts"),
         projectDir,
         JSON.stringify({ hook_event_name: "UserPromptSubmit" }),
       );

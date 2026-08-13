@@ -18,7 +18,7 @@ how that works and where everything lives.
 
 When you install AI-DLC you copy its engine into your project — a single
 harness-specific directory (`.claude/` on Claude Code, `.kiro/` on Kiro,
-`.codex/` on Codex). That directory is the *only* part of the layout that
+`.codex/` on Codex, `.aidlc/` on opencode and GitHub Copilot). That directory is the *only* part of the layout that
 differs by harness. From then on, everything AI-DLC produces lives under one
 neutral `aidlc/` directory at your project root — organized by *what you're
 working on*, not by which harness you happen to run. You browse `aidlc/`; you
@@ -193,7 +193,7 @@ When you switch spaces, two things follow the cursor automatically:
 1. **AI-DLC's own resolvers** — the next intent you start, and the practices and
    knowledge agents load, all come from the space you switched into.
 2. **The rules your harness loads into context** — switching re-points your
-   harness's native rule include (Claude's `@`-import, Kiro's resources glob,
+   harness's native rule include (Claude's `@`-import, Kiro CLI resources or IDE steering,
    Codex's rules dir) at the new space's `memory/`, so the next turn works under
    that team's method.
 
@@ -232,6 +232,41 @@ An intent that records no repos is the ordinary single-repo case. See
 [Artifacts Reference](14-artifacts-reference.md) for the record-dir details and
 [Multi-repo intent](glossary.md) in the glossary.
 
+### Declaring the repo set (optional manifest)
+
+Auto-discovery needs the sibling repos to already be cloned. On a fresh checkout
+of a shared workspace they are not, so a teammate would have to know which repos
+to clone and where. An **optional** `repos.json` manifest at the workspace root
+records that expected set so it can be reproduced with one command:
+
+```json
+{
+  "org": "your-github-org",
+  "repos": [
+    { "name": "checkout-api", "branch": "main" },
+    { "name": "checkout-web" }
+  ]
+}
+```
+
+`org` supplies the default clone host (a repo with no `url` clones from
+`git@github.com:<org>/<name>.git`; set `url` on an entry to override). `branch`
+selects the checkout for a new clone and is an advisory expectation for a repo
+already on disk; omit it to use the repo's own default. Repo names must be safe
+single path segments, matching the runtime's immediate-child discovery model. The
+[CLI Commands](12-cli-commands.md#aidlc-workspace-sync-clone-and-reconcile-the-declared-repo-set)
+guide documents the `aidlc-workspace-sync` tool that reads this file to clone
+missing repos, keep the gitignore block current, and generate a VSCode
+multi-root workspace.
+
+The manifest is a convenience, not a second source of truth. **Disk wins at
+runtime**: intent birth still auto-discovers whatever siblings are actually
+present, so a repo works the moment it is cloned whether or not it is declared,
+and a declared repo that was never cloned simply is not part of the set. The
+manifest only drives the sync tool and the advisory `--doctor` rows that flag
+when the declared set and the disk have drifted apart. (This "workspace
+manifest" is unrelated to a harness `manifest.ts`, which is a packaging file.)
+
 ---
 
 ## What's committed and what's not
@@ -242,8 +277,8 @@ repo. Two kinds of file are deliberately **gitignored** instead:
 
 | Gitignored (per-user, machine-local) | Why |
 |---|---|
-| `aidlc/active-space`, `…/intents/active-intent` | Cursors — "where am I right now." Committing them would dirty the tree on every `/aidlc` and have teammates fight over the cursor on each switch. |
-| `…/intents/<id>/runtime-graph.json`, `.aidlc-*`, `aidlc/.aidlc-sessions/` | Derived, machine-local runtime state. |
+| `aidlc/active-space`, `…/intents/active-intent` | Cursors — "where am I right now." Committing them would turn per-user navigation into shared repository state and have teammates fight over intent births and cursor switches. |
+| `…/intents/<id>/runtime-graph.json`, `.aidlc-*`, `aidlc/.aidlc-sessions/`, `aidlc/.aidlc-active-space-*.tmp` | Derived, machine-local runtime state. |
 
 Everything else under a space — `memory/**`, `knowledge/**`, `codekb/**`,
 `intents.json`, each record's `aidlc-state.md`, `audit/` shards, and artifacts — is

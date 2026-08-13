@@ -123,7 +123,12 @@ describe("t134 mechanism honesty and runner Claude gate", () => {
       {
         file: "tests/e2e/t-tui-preflight.serial.test.ts",
         mechanisms: ["tui"],
-        claudeDependencies: ["tui"],
+        claudeDependencies: [],
+      },
+      {
+        file: "tests/e2e/t-tui-kiro-status.serial.test.ts",
+        mechanisms: ["tui"],
+        claudeDependencies: [],
       },
       {
         file: "tests/unit/t34.test.ts",

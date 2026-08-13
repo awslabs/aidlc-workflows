@@ -36,7 +36,7 @@ const CLAUDE_LIB = join(CLAUDE_TOOLS, "aidlc-lib.ts");
 // Materialize a minimal <root>/<harness>/tools/ tree carrying the real lib
 // (plus its sibling imports) so script-path derivation sees the genuine shipped
 // layout for that harness dir. The packager emits tools/data/harness.json per
-// tree ({"rulesSubdir": ...}); we mirror that here so rulesSubdir() reads the
+// tree (manifest name + rulesSubdir); we mirror the fields needed here so rulesSubdir() reads the
 // open-set descriptor exactly as it would in a real install. Pass a rulesSubdir
 // to drive ANY harness — including a synthetic 4th (e.g. .gemini) — proving the
 // runtime needs zero edits to support a new harness.

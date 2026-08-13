@@ -1,17 +1,25 @@
-// t218-kiro-ide-hook-adapter: the Kiro IDE hook shim reads context from the
-// USER_PROMPT env var (NOT stdin) and normalizes it into the core hooks'
-// contract. Empirically, Kiro IDE 0.12-main delivers a JSON env var
-// { toolName, toolArgs (always {}), toolResult, toolSuccess } and never writes
-// stdin, so the IDE adapter scrapes the written file path out of toolResult and
-// drives the payload-free hooks (runtime-compile, sync-statusline) off the
-// audit tail.
+// t218-kiro-ide-hook-adapter: the Kiro IDE hook shim normalizes the IDE's hook
+// context into the core hooks' contract. The channel changed across IDE
+// generations and the adapter accepts BOTH (upstream #543/#555):
+//   - IDE 1.x: JSON on STDIN, snake_case { tool_name, tool_input,
+//     tool_response } — no success flag; USER_PROMPT arrives empty. PostToolUse
+//     write/shell captures have empty tool_input, while later builds populate
+//     some PreToolUse/delegation inputs. Read only for the three payload targets
+//     plus SessionStart/Stop identity, raced against a 2s ceiling.
+//   - IDE 0.12: JSON in the USER_PROMPT env var, camelCase { toolName,
+//     toolArgs, toolResult, toolSuccess }; stdin was opened but never
+//     written/closed. A non-empty USER_PROMPT is consumed immediately, without
+//     probing stdin.
+// Either way the adapter scrapes the written file path out of the result prose
+// and drives the audit-tail hooks (rebuild-stage-graph, sync-workflow-state).
 //
-// covers: file:hooks/aidlc-sync-statusline.ts, file:hooks/aidlc-audit-logger.ts, file:hooks/aidlc-runtime-compile.ts
+// covers: file:hooks/aidlc-sync-workflow-state.ts, file:hooks/aidlc-write-audit-log.ts, file:hooks/aidlc-rebuild-stage-graph.ts
 //
 // WHY SUBPROCESS. The adapter IS a subprocess shim — in-process unit testing
-// would bypass the exact env/stdout/exit-code surface being contracted. Each
-// case runs `bun dist/kiro-ide/.kiro/hooks/aidlc-kiro-adapter.ts <target>` with
-// USER_PROMPT set to a captured IDE context and asserts the observable effect.
+// would bypass the exact stdin/env/stdout/exit-code surface being contracted.
+// Each case runs `bun dist/kiro-ide/.kiro/hooks/aidlc-kiro-adapter.ts <target>`
+// with the context on stdin (1.x) or in USER_PROMPT (0.12) and asserts the
+// observable effect.
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -28,6 +36,9 @@ import {
 import { hostname, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  readIntentRegistry,
+} from "../../core/tools/aidlc-lib.ts";
 import {
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
@@ -107,8 +118,8 @@ function appendStageStarted(dir: string, slug: string, ts: string): void {
   writeFileSync(shard, readFileSync(shard, "utf-8") + block, "utf-8");
 }
 
-/** Run the IDE adapter with USER_PROMPT set (the IDE's context channel). stdin
- *  is intentionally NOT written — the IDE never writes it. */
+/** Run the IDE adapter with USER_PROMPT set (the 0.12 context channel). stdin
+ *  is closed empty — the 0.12 IDE never wrote it. */
 function runIde(
   projectDir: string,
   target: string,
@@ -128,43 +139,61 @@ function runIde(
   return { stdout: r.stdout ?? "", code: r.status ?? -1 };
 }
 
+/** Run the IDE adapter with the context written to STDIN (the 1.x channel).
+ *  USER_PROMPT is removed — 1.x delivers it empty. */
+function runIdeStdin(
+  projectDir: string,
+  target: string,
+  stdinPayload: string,
+): { stdout: string; code: number } {
+  const env: Record<string, string> = { ...process.env, CLAUDE_PROJECT_DIR: projectDir };
+  delete (env as Record<string, string | undefined>).USER_PROMPT;
+  const r = spawnSync(
+    "bun",
+    [join(projectDir, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), target],
+    { cwd: projectDir, input: stdinPayload, encoding: "utf-8", env, timeout: 30_000 },
+  );
+  return { stdout: r.stdout ?? "", code: r.status ?? -1 };
+}
+
+/** Exercise the public `aidlc adapter kiro-ide` dispatcher route rather than
+ * invoking the adapter file directly. */
+function runIdeDispatcherStdin(
+  projectDir: string,
+  target: string,
+  stdinPayload: string,
+): { stdout: string; code: number } {
+  const env: Record<string, string> = { ...process.env, CLAUDE_PROJECT_DIR: projectDir };
+  delete (env as Record<string, string | undefined>).USER_PROMPT;
+  const r = spawnSync(
+    "bun",
+    [join(projectDir, ".kiro", "tools", "aidlc.ts"), "adapter", "kiro-ide", target],
+    { cwd: projectDir, input: stdinPayload, encoding: "utf-8", env, timeout: 30_000 },
+  );
+  return { stdout: r.stdout ?? "", code: r.status ?? -1 };
+}
+
 function ctx(toolName: string, toolResult: string): string {
   return JSON.stringify({ toolName, toolArgs: {}, toolResult, toolSuccess: true });
 }
 
-/** Spawn the adapter with stdin held OPEN (piped, never written, never
- *  closed) - the live Kiro IDE condition. runIde/spawnSync's input:"" closes
- *  stdin at EOF, so it can never reproduce the hang this reproduces: the
- *  child must exit on its own with stdin still open, or the timeout kill
- *  marks the red. */
-async function runIdeOpenStdin(
-  projectDir: string,
-  target: string,
-  userPrompt: string | null,
-  entry: string[] = [join(projectDir, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), target],
-): Promise<{ code: number; timedOut: boolean; stdout: string }> {
-  const env: Record<string, string | undefined> = {
-    ...process.env,
-    CLAUDE_PROJECT_DIR: projectDir,
-  };
-  if (userPrompt === null) delete env.USER_PROMPT;
-  else env.USER_PROMPT = userPrompt;
-  const proc = Bun.spawn({
-    cmd: ["bun", ...entry],
-    cwd: projectDir,
-    stdin: "pipe",
-    stdout: "pipe",
-    stderr: "ignore",
-    env,
+/** The 1.x PostToolUse payload shape, field-verbatim from the live 1.0.165
+ *  capture: snake_case, empty tool_input for write/shell, no success flag,
+ *  session/cwd metadata. Later builds populate some other event inputs. */
+function ctx1x(
+  toolName: string,
+  toolResponse: string,
+  eventName = "PostToolUse",
+  sessionId = "sess_t218",
+): string {
+  return JSON.stringify({
+    session_id: sessionId,
+    hook_event_name: eventName,
+    cwd: "/tmp/t218",
+    tool_name: toolName,
+    tool_input: {},
+    tool_response: toolResponse,
   });
-  let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    proc.kill();
-  }, 15_000);
-  const code = await proc.exited;
-  clearTimeout(timer);
-  return { code, timedOut, stdout: await new Response(proc.stdout).text() };
 }
 
 describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
@@ -234,7 +263,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     try {
       // Seed a later STAGE_STARTED than the fixture's Current Stage.
       appendStageStarted(dir, "user-stories", "2026-06-30T10:00:00.000Z");
-      const r = runIde(dir, "state-sync", ctx("spec", "task updated"));
+      const r = runIde(dir, "sync-workflow-state", ctx("spec", "task updated"));
       expect(r.code).toBe(0);
       expect(/\*\*Current Stage\*\*:\s*user-stories/.test(readFileSync(seededStateFile(dir), "utf-8"))).toBe(true);
     } finally {
@@ -248,7 +277,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
       const current = (readFileSync(seededStateFile(dir), "utf-8").match(/\*\*Current Stage\*\*:\s*([a-z0-9-]+)/) ?? [])[1];
       expect(current).toBeDefined();
       appendStageStarted(dir, current as string, "2026-06-30T10:00:00.000Z");
-      const r = runIde(dir, "state-sync", ctx("spec", "task updated"));
+      const r = runIde(dir, "sync-workflow-state", ctx("spec", "task updated"));
       expect(r.code).toBe(0);
       expect(r.stdout.trim()).toBe("");
     } finally {
@@ -256,19 +285,19 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     }
   });
 
-  test("7: runtime-compile dispatches off the audit tail with no command", () => {
+  test("7: rebuild-stage-graph dispatches off the audit tail with no command", () => {
     const dir = scratchProject(true);
     try {
       // A transition in the tail makes the core hook recompile; with no
       // transition it self-gates. Either way the adapter exits 0.
-      const r = runIde(dir, "runtime-compile", ctx("execute_bash", "Output:\nok\n\nExit Code: 0"));
+      const r = runIde(dir, "rebuild-stage-graph", ctx("execute_bash", "Output:\nok\n\nExit Code: 0"));
       expect(r.code).toBe(0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  test("7b: runtime-compile actually compiles when the audit tail has a transition (no command needed)", () => {
+  test("7b: rebuild-stage-graph actually compiles when the audit tail has a transition (no command needed)", () => {
     const dir = scratchProject(true);
     try {
       // Seed a STAGE_STARTED transition in the tail. The IDE never surfaces the
@@ -276,13 +305,249 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
       // path (command filter skipped via the ide-audit-sync marker).
       appendStageStarted(dir, "intent-capture", "2026-06-30T10:00:00.000Z");
       const graphPath = join(seededRecordDir(dir), "runtime-graph.json");
-      const r = runIde(dir, "runtime-compile", ctx("execute_bash", "Output:\nok\n\nExit Code: 0"));
+      const r = runIde(dir, "rebuild-stage-graph", ctx("execute_bash", "Output:\nok\n\nExit Code: 0"));
       expect(r.code).toBe(0);
       // The compile wrote the runtime graph — proof the command filter was
       // bypassed and the audit-tail gate fired.
       expect(existsSync(graphPath)).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("7c: modern session identity survives second-intent handoff into payload-free Stop and SessionEnd", () => {
+    const dir = scratchProject(true);
+    try {
+      const sessionId = "sess_t218";
+      const originalUuid = readIntentRegistry(dir)[0]?.uuid;
+      const start = runIdeStdin(
+        dir,
+        "session-start",
+        ctx1x("", "", "SessionStart"),
+      );
+      expect(start.code).toBe(0);
+      expect(
+        readFileSync(
+          join(dir, "aidlc", ".aidlc-sessions", ".kiro-ide-current-session"),
+          "utf-8",
+        ).trim(),
+      ).toBe(sessionId);
+
+      expect(originalUuid).toBeDefined();
+      expect(
+        readFileSync(
+          join(dir, "aidlc", ".aidlc-sessions", sessionId),
+          "utf-8",
+        ).trim(),
+      ).toBe(originalUuid);
+
+      const create = spawnSync(
+        "bun",
+        [
+          join(dir, ".kiro", "tools", "aidlc-utility.ts"),
+          "intent-create",
+          "--scope",
+          "bugfix",
+          "--arguments",
+          "new handoff work",
+          "--project-dir",
+          dir,
+        ],
+        {
+          cwd: dir,
+          encoding: "utf-8",
+          env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
+          timeout: 30_000,
+        },
+      );
+      expect(create.status).toBe(0);
+      const result = `Output:\n${create.stdout}\n\nExit Code: 0`;
+      const bind = runIdeDispatcherStdin(
+        dir,
+        "rebuild-stage-graph",
+        ctx1x("execute_bash", result),
+      );
+      expect(bind.code).toBe(0);
+      expect(
+        readFileSync(
+          join(dir, "aidlc", ".aidlc-sessions", sessionId),
+          "utf-8",
+        ).trim(),
+      ).toBe(originalUuid);
+
+      const createdUuid = readIntentRegistry(dir).find(
+        (intent) => intent.uuid !== originalUuid,
+      )?.uuid;
+      expect(createdUuid).toBeDefined();
+      const handoffPath = join(
+        dir,
+        "aidlc",
+        ".aidlc-sessions",
+        `${sessionId}.handoff.json`,
+      );
+      expect(JSON.parse(readFileSync(handoffPath, "utf-8"))).toMatchObject({
+        fromIntentUuid: originalUuid,
+        toIntentUuid: createdUuid,
+      });
+
+      const stop = runIde(dir, "continue-workflow", null);
+      expect(stop.code).toBe(0);
+      expect(stop.stdout.trim()).toBe("");
+      expect(existsSync(handoffPath)).toBe(false);
+
+      const before = readAudit(dir).split("SESSION_ENDED").length - 1;
+      const end = runIde(dir, "session-end", null);
+      expect(end.code).toBe(0);
+      const after = readAudit(dir).split("SESSION_ENDED").length - 1;
+      expect(after - before).toBe(1);
+      expect(
+        existsSync(join(seededRecordDir(dir), ".aidlc-hooks-health", "session-end.last")),
+      ).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("7d: legacy intent creation binds through the remembered synthetic session identity", () => {
+    const dir = scratchProject(false);
+    try {
+      rmSync(intentsDirOf(dir, DEFAULT_SPACE), { recursive: true, force: true });
+      const sessionId = "kiro-ide-legacy-current";
+      expect(runIde(dir, "session-start", null).code).toBe(0);
+
+      const create = spawnSync(
+        "bun",
+        [
+          join(dir, ".kiro", "tools", "aidlc-utility.ts"),
+          "intent-create",
+          "--scope",
+          "bugfix",
+          "--arguments",
+          "legacy create work",
+          "--project-dir",
+          dir,
+        ],
+        {
+          cwd: dir,
+          encoding: "utf-8",
+          env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
+          timeout: 30_000,
+        },
+      );
+      expect(create.status).toBe(0);
+      const bind = runIde(
+        dir,
+        "rebuild-stage-graph",
+        ctx("execute_bash", `Output:\n${create.stdout}\n\nExit Code: 0`),
+      );
+      expect(bind.code).toBe(0);
+
+      const createdUuid = readIntentRegistry(dir)[0]?.uuid;
+      expect(createdUuid).toBeDefined();
+      expect(
+        readFileSync(
+          join(dir, "aidlc", ".aidlc-sessions", sessionId),
+          "utf-8",
+        ).trim(),
+      ).toBe(createdUuid);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("7e: Stop prefers its event session identity over the latest SessionStart", () => {
+    for (const entry of [
+      { label: "direct", run: runIdeStdin },
+      { label: "dispatcher", run: runIdeDispatcherStdin },
+    ]) {
+      const dir = scratchProject(true);
+      try {
+        const sessionOne = "sess_t218_one";
+        const sessionTwo = "sess_t218_two";
+        const originalUuid = readIntentRegistry(dir)[0]?.uuid;
+        expect(originalUuid, entry.label).toBeDefined();
+        expect(
+          runIdeStdin(
+            dir,
+            "session-start",
+            ctx1x("", "", "SessionStart", sessionOne),
+          ).code,
+          entry.label,
+        ).toBe(0);
+
+        const create = spawnSync(
+          "bun",
+          [
+            join(dir, ".kiro", "tools", "aidlc-utility.ts"),
+            "intent-create",
+            "--scope",
+            "bugfix",
+            "--arguments",
+            "session one handoff",
+            "--project-dir",
+            dir,
+          ],
+          {
+            cwd: dir,
+            encoding: "utf-8",
+            env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
+            timeout: 30_000,
+          },
+        );
+        expect(create.status, entry.label).toBe(0);
+        expect(
+          runIdeStdin(
+            dir,
+            "rebuild-stage-graph",
+            ctx1x(
+              "execute_bash",
+              `Output:\n${create.stdout}\n\nExit Code: 0`,
+              "PostToolUse",
+              sessionOne,
+            ),
+          ).code,
+          entry.label,
+        ).toBe(0);
+
+        const handoffPath = join(
+          dir,
+          "aidlc",
+          ".aidlc-sessions",
+          `${sessionOne}.handoff.json`,
+        );
+        expect(existsSync(handoffPath), entry.label).toBe(true);
+
+        expect(
+          runIdeStdin(
+            dir,
+            "session-start",
+            ctx1x("", "", "SessionStart", sessionTwo),
+          ).code,
+          entry.label,
+        ).toBe(0);
+        expect(
+          readFileSync(
+            join(dir, "aidlc", ".aidlc-sessions", ".kiro-ide-current-session"),
+            "utf-8",
+          ).trim(),
+          entry.label,
+        ).toBe(sessionTwo);
+
+        const stop = entry.run(
+          dir,
+          "continue-workflow",
+          JSON.stringify({
+            session_id: sessionOne,
+            hook_event_name: "Stop",
+            cwd: dir,
+          }),
+        );
+        expect(stop.code, entry.label).toBe(0);
+        expect(stop.stdout.trim(), entry.label).toBe("");
+        expect(existsSync(handoffPath), entry.label).toBe(false);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     }
   });
 
@@ -298,10 +563,53 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     }
   });
 
+  test("8b: session-start forwards modern session_id and uses a legacy fallback id", () => {
+    const dir = scratchProject(true);
+    try {
+      const modern = runIdeStdin(
+        dir,
+        "session-start",
+        ctx1x("", "", "SessionStart"),
+      );
+      expect(modern.code).toBe(0);
+      expect(
+        readFileSync(join(dir, "aidlc", ".aidlc-sessions", "sess_t218"), "utf-8").trim(),
+      ).toBe("00000000-0000-7000-8000-000000000001");
+
+      const dispatcherPayload = JSON.stringify({
+        session_id: "sess_t218_dispatcher",
+        hook_event_name: "SessionStart",
+      });
+      const dispatcher = runIdeDispatcherStdin(
+        dir,
+        "session-start",
+        dispatcherPayload,
+      );
+      expect(dispatcher.code).toBe(0);
+      expect(
+        readFileSync(
+          join(dir, "aidlc", ".aidlc-sessions", "sess_t218_dispatcher"),
+          "utf-8",
+        ).trim(),
+      ).toBe("00000000-0000-7000-8000-000000000001");
+
+      const legacy = runIde(dir, "session-start", null);
+      expect(legacy.code).toBe(0);
+      expect(
+        readFileSync(
+          join(dir, "aidlc", ".aidlc-sessions", "kiro-ide-legacy-current"),
+          "utf-8",
+        ).trim(),
+      ).toBe("00000000-0000-7000-8000-000000000001");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("9: stop blocks with a reason while the workflow has pending work", () => {
     const dir = scratchProject(true);
     try {
-      const r = runIde(dir, "stop", null);
+      const r = runIde(dir, "continue-workflow", null);
       expect(r.code).toBe(0);
       const out = JSON.parse(r.stdout) as { decision?: string };
       expect(out.decision).toBe("block");
@@ -332,11 +640,11 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     }
   });
 
-  test("12: the IDE adapter does NOT read stdin (no hang when stdin stays open)", () => {
-    // Regression guard for the root cause: the old adapter awaited stdin and
-    // hung 2s. The new one reads USER_PROMPT, so even with NO stdin written it
-    // returns promptly. spawnSync with input:"" closes stdin immediately; the
-    // contract we pin is "exits 0 fast off the env var".
+  test("12: an empty (closed) stdin falls back to USER_PROMPT — the 0.12 channel keeps working", () => {
+    // The payload targets now read stdin FIRST (the 1.x channel), raced
+    // against a timeout. With stdin closed empty (spawnSync input:"") the read
+    // resolves instantly and the adapter falls back to USER_PROMPT — the 0.12
+    // contract this test pins.
     const dir = scratchProject(true);
     try {
       const file = join(seededRecordDir(dir), "ideation", "intent-capture", "intent.md");
@@ -350,83 +658,6 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     }
   });
 
-  test("12b: EMPTY USER_PROMPT + stdin held open still runs the agentStop hooks (live IDE shape)", async () => {
-    // Regression guard for the entry-guard stdin read reintroduced by the
-    // run()-export refactor: `await Bun.stdin.text()` when USER_PROMPT is
-    // empty. Live-captured on Kiro IDE: agentStop fires with USER_PROMPT set
-    // but ZERO-LENGTH and stdin open-but-never-written, so that await hung
-    // the agentStop hooks (stop + session-end) forever. Test 12 cannot catch
-    // this (input:"" is instant EOF); this one holds the pipe open and
-    // requires each hook to finish AND do its real work. Both empty-string
-    // (the captured agentStop shape) and absent USER_PROMPT must survive,
-    // and each invocation is asserted on its own effect - a shared final
-    // assertion would let one variant silently no-op behind the other.
-    const dir = scratchProject(true);
-    try {
-      for (const userPrompt of ["", null] as const) {
-        const label = userPrompt === null ? "absent" : "empty";
-        // stop: the forwarding loop must emit its block decision.
-        const stop = await runIdeOpenStdin(dir, "stop", userPrompt);
-        expect(`stop/${label}:timedOut=${stop.timedOut}`).toBe(`stop/${label}:timedOut=false`);
-        expect(`stop/${label}:${stop.code}`).toBe(`stop/${label}:0`);
-        const decision = JSON.parse(stop.stdout) as { decision?: string };
-        expect(`stop/${label}:decision=${decision.decision}`).toBe(`stop/${label}:decision=block`);
-        // session-end: each invocation must append its own SESSION_ENDED row.
-        const before = readAudit(dir).split("SESSION_ENDED").length - 1;
-        const end = await runIdeOpenStdin(dir, "session-end", userPrompt);
-        expect(`session-end/${label}:timedOut=${end.timedOut}`).toBe(`session-end/${label}:timedOut=false`);
-        expect(`session-end/${label}:${end.code}`).toBe(`session-end/${label}:0`);
-        const after = readAudit(dir).split("SESSION_ENDED").length - 1;
-        expect(`session-end/${label}:delta=${after - before}`).toBe(`session-end/${label}:delta=1`);
-      }
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  }, 90_000);
-
-  test("12d: the DISPATCHER adapter route also never reads stdin for kiro-ide", async () => {
-    // Same hang, second door: `aidlc adapter kiro-ide <target>` acquired
-    // stdin in runAdapter() before invoking the adapter's run(), so the
-    // dispatcher path hung even after the adapter's own entry guard was
-    // fixed. Pin both agentStop targets through the dispatcher with stdin
-    // held open and the captured empty-USER_PROMPT shape.
-    const dir = scratchProject(true);
-    try {
-      const dispatcher = join(dir, ".kiro", "tools", "aidlc.ts");
-      const stop = await runIdeOpenStdin(dir, "stop", "", [dispatcher, "adapter", "kiro-ide", "stop"]);
-      expect(`stop:timedOut=${stop.timedOut}`).toBe("stop:timedOut=false");
-      expect(`stop:${stop.code}`).toBe("stop:0");
-      const decision = JSON.parse(stop.stdout) as { decision?: string };
-      expect(decision.decision).toBe("block");
-      const before = readAudit(dir).split("SESSION_ENDED").length - 1;
-      const end = await runIdeOpenStdin(dir, "session-end", "", [dispatcher, "adapter", "kiro-ide", "session-end"]);
-      expect(`session-end:timedOut=${end.timedOut}`).toBe("session-end:timedOut=false");
-      expect(`session-end:${end.code}`).toBe("session-end:0");
-      const after = readAudit(dir).split("SESSION_ENDED").length - 1;
-      expect(after - before).toBe(1);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  }, 90_000);
-
-  test("12c: USER_PROMPT + stdin held open still does the postToolUse work", async () => {
-    const dir = scratchProject(true);
-    try {
-      const file = join(seededRecordDir(dir), "ideation", "intent-capture", "intent.md");
-      mkdirSync(dirname(file), { recursive: true });
-      writeFileSync(file, "# intent\n");
-      const r = await runIdeOpenStdin(
-        dir,
-        "audit-and-sensors",
-        ctx("fs_write", `Created the ${file} file.`),
-      );
-      expect(r.timedOut).toBe(false);
-      expect(r.code).toBe(0);
-      expect(readAudit(dir)).toContain("ARTIFACT_CREATED");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  }, 45_000);
 
   test("13: hook-debug.log is OPT-IN — absent without AIDLC_HOOK_DEBUG, present with it", () => {
     const debugLogPath = (dir: string) =>
@@ -462,7 +693,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     try {
       fire(dirOn, true);
       expect(existsSync(debugLogPath(dirOn))).toBe(true);
-      expect(readFileSync(debugLogPath(dirOn), "utf-8")).toContain("audit-logger");
+      expect(readFileSync(debugLogPath(dirOn), "utf-8")).toContain("write-audit-log");
     } finally {
       rmSync(dirOn, { recursive: true, force: true });
     }
@@ -489,9 +720,425 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
         timeout: 30_000,
       });
       expect(existsSync(debugLogPath(dir))).toBe(true);
-      expect(readFileSync(debugLogPath(dir), "utf-8")).toContain("audit-logger");
+      expect(readFileSync(debugLogPath(dir), "utf-8")).toContain("write-audit-log");
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ============================================================
+// The IDE 1.x stdin channel (upstream #543/#555): snake_case JSON on stdin,
+// USER_PROMPT empty. Payload acquisition is raced against a 2s timeout and
+// GATED to the two payload-dependent targets — every other target must never
+// touch stdin (block fires on EVERY PreToolUse).
+// ============================================================
+
+/** Spawn the adapter with stdin OPENED BUT NEVER WRITTEN/CLOSED (the 0.12
+ *  stdin shape that hangs a bare read). Resolves with the exit code, or
+ *  code:null if the adapter was still running after killAfterMs. */
+interface OpenStdinRun {
+  code: number | null;
+  elapsedMs: number;
+  stdout: string;
+  timedOut: boolean;
+}
+
+/** The stdin ceiling raised far above any plausible CI scheduling delay. The
+ *  latency cases assert "this path never probed stdin" by requiring the process
+ *  to finish well inside this window: probing a held-open stdin would park for
+ *  the full RAISED_STDIN_TIMEOUT_MS, while the env-channel path returns in
+ *  milliseconds. That keeps the discriminator deterministic under load instead
+ *  of resting on a tight millisecond budget near the production 2s ceiling. */
+const RAISED_STDIN_TIMEOUT_MS = 15_000;
+const NO_STDIN_PROBE_BUDGET_MS = 8_000;
+
+async function runIdeOpenStdin(
+  projectDir: string,
+  target: string,
+  userPrompt: string | null,
+  killAfterMs: number,
+  extraEnv: Record<string, string> = {},
+): Promise<OpenStdinRun> {
+  return await runOpenStdinCommand(
+    projectDir,
+    [join(projectDir, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), target],
+    userPrompt,
+    killAfterMs,
+    extraEnv,
+  );
+}
+
+async function runIdeDispatcherOpenStdin(
+  projectDir: string,
+  target: string,
+  userPrompt: string | null,
+  killAfterMs: number,
+  extraEnv: Record<string, string> = {},
+): Promise<OpenStdinRun> {
+  return await runOpenStdinCommand(
+    projectDir,
+    [join(projectDir, ".kiro", "tools", "aidlc.ts"), "adapter", "kiro-ide", target],
+    userPrompt,
+    killAfterMs,
+    extraEnv,
+  );
+}
+
+async function runOpenStdinCommand(
+  projectDir: string,
+  args: string[],
+  userPrompt: string | null,
+  killAfterMs: number,
+  extraEnv: Record<string, string> = {},
+): Promise<OpenStdinRun> {
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    CLAUDE_PROJECT_DIR: projectDir,
+    ...extraEnv,
+  };
+  if (userPrompt === null) delete env.USER_PROMPT;
+  else env.USER_PROMPT = userPrompt;
+  const started = Date.now();
+  const proc = Bun.spawn({
+    cmd: ["bun", ...args],
+    cwd: projectDir,
+    stdin: "pipe", // held open: never written, never closed
+    stdout: "pipe",
+    stderr: "ignore",
+    env,
+  });
+  const timedOutMarker = Symbol("timedOut");
+  const outcome = await Promise.race([
+    proc.exited,
+    new Promise((settle) => setTimeout(() => settle(timedOutMarker), killAfterMs)),
+  ]);
+  const elapsedMs = Date.now() - started;
+  if (outcome === timedOutMarker) {
+    proc.kill();
+    await proc.exited;
+    return { code: null, elapsedMs, stdout: "", timedOut: true };
+  }
+  const stdout = await new Response(proc.stdout).text();
+  return { code: proc.exitCode, elapsedMs, stdout, timedOut: false };
+}
+
+describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", () => {
+  test("N1: audit-and-sensors resolves a RELATIVE tool_response path from stdin and logs CREATE", () => {
+    const dir = scratchProject(true);
+    try {
+      const file = join(seededRecordDir(dir), "ideation", "intent-capture", "intent.md");
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, "# intent\n");
+      const relPath = relative(dir, file);
+      expect(isAbsolute(relPath)).toBe(false);
+      const r = runIdeStdin(dir, "audit-and-sensors", ctx1x("fs_write", `Created the ${relPath} file.`));
+      expect(r.code).toBe(0);
+      const audit = readAudit(dir);
+      expect(audit).toContain("ARTIFACT_CREATED");
+      expect(audit).toContain("intent-capture");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("N2: a str_replace tool_response with NO success flag is audited as UPDATE (#417 guard only drops explicit false)", () => {
+    const dir = scratchProject(true);
+    try {
+      const file = join(seededRecordDir(dir), "ideation", "intent-capture", "intent.md");
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, "# intent edited\n");
+      const r = runIdeStdin(dir, "audit-and-sensors", ctx1x("str_replace", `Replaced text in ${file}`));
+      expect(r.code).toBe(0);
+      expect(readAudit(dir)).toContain("ARTIFACT_UPDATED");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("N3: a camelCase (0.12-shaped) payload arriving on stdin parses too", () => {
+    const dir = scratchProject(true);
+    try {
+      const file = join(seededRecordDir(dir), "ideation", "intent-capture", "intent.md");
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, "# intent\n");
+      const r = runIdeStdin(dir, "audit-and-sensors", ctx("fs_write", `Created the ${file} file.`));
+      expect(r.code).toBe(0);
+      expect(readAudit(dir)).toContain("ARTIFACT_CREATED");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("N4: a non-empty USER_PROMPT identifies 0.12 and wins without probing stdin", () => {
+    const dir = scratchProject(true);
+    try {
+      const stageDir = join(seededRecordDir(dir), "ideation", "intent-capture");
+      mkdirSync(stageDir, { recursive: true });
+      const fromStdin = join(stageDir, "from-stdin.md");
+      const fromEnv = join(stageDir, "from-env.md");
+      writeFileSync(fromStdin, "# stdin\n");
+      writeFileSync(fromEnv, "# env\n");
+      const env: Record<string, string> = {
+        ...process.env,
+        CLAUDE_PROJECT_DIR: dir,
+        USER_PROMPT: ctx("fs_write", `Created the ${fromEnv} file.`),
+      };
+      const r = spawnSync(
+        "bun",
+        [join(dir, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), "audit-and-sensors"],
+        {
+          cwd: dir,
+          input: ctx1x("fs_write", `Created the ${fromStdin} file.`),
+          encoding: "utf-8",
+          env,
+          timeout: 30_000,
+        },
+      );
+      expect(r.status).toBe(0);
+      const audit = readAudit(dir);
+      expect(audit).toContain("from-env.md");
+      expect(audit).not.toContain("from-stdin.md");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("N5a: log-subagent falls back to the captured subagent_<agent> tool name", () => {
+    const dir = scratchProject(true);
+    try {
+      const result = "Implementation complete. All files written and tests pass.";
+      const r = runIdeStdin(
+        dir,
+        "log-subagent",
+        ctx1x("subagent_aidlc-developer-agent", result),
+      );
+      expect(r.code).toBe(0);
+      const audit = readAudit(dir);
+      expect(audit).toContain("SUBAGENT_COMPLETED");
+      expect(audit).toContain("**Agent Type**: aidlc-developer-agent");
+      expect(audit).not.toContain("**Agent Type**: unknown");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("N5b: log-subagent keeps invoke_sub_agent compatibility and excludes subagent_response", () => {
+    const dir = scratchProject(true);
+    try {
+      const result = "**Agent:** aidlc-developer-agent\n\nImplementation complete";
+      expect(runIdeStdin(dir, "log-subagent", ctx1x("invoke_sub_agent", result)).code).toBe(0);
+      expect(readAudit(dir)).toContain("aidlc-developer-agent");
+      const beforeResponse = readAudit(dir);
+      expect(
+        runIdeStdin(dir, "log-subagent", ctx1x("subagent_response", "Response recorded.")).code,
+      ).toBe(0);
+      expect(readAudit(dir)).toBe(beforeResponse);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("N6: a payload-INDEPENDENT target never probes a held-open stdin", async () => {
+    // The stdin ceiling is raised to 15s for this run, so "never probed stdin"
+    // is decided by a wide margin rather than a tight budget near the 2s
+    // production ceiling: gating mint onto the read would park it for the full
+    // raised window (or hang outright on a bare read), while the skip path
+    // returns in milliseconds even on a loaded machine.
+    const dir = scratchProject(true);
+    try {
+      const r = await runIdeOpenStdin(dir, "record-human-turn", null, 30_000, {
+        AIDLC_IDE_STDIN_TIMEOUT_MS: String(RAISED_STDIN_TIMEOUT_MS),
+      });
+      expect(r.timedOut).toBe(false);
+      expect(r.code).toBe(0);
+      expect(r.elapsedMs).toBeLessThan(NO_STDIN_PROBE_BUDGET_MS);
+      expect(readAudit(dir)).toContain("HUMAN_TURN");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 40_000);
+
+  test("N7: a 0.12 payload target consumes USER_PROMPT without probing held-open stdin", async () => {
+    // The #543 0.12 shape: USER_PROMPT carries the payload while stdin is opened
+    // and never closed. With the ceiling raised to 15s, probing stdin first
+    // would be unmistakable; finishing inside the budget proves the env channel
+    // is consumed directly (the mandatory-2s-delay regression).
+    const dir = scratchProject(true);
+    try {
+      const file = join(seededRecordDir(dir), "ideation", "intent-capture", "intent.md");
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, "# intent\n");
+      const r = await runIdeOpenStdin(
+        dir,
+        "audit-and-sensors",
+        ctx("fs_write", `Created the ${file} file.`),
+        30_000,
+        { AIDLC_IDE_STDIN_TIMEOUT_MS: String(RAISED_STDIN_TIMEOUT_MS) },
+      );
+      expect(r.timedOut).toBe(false);
+      expect(r.code).toBe(0);
+      expect(r.elapsedMs).toBeLessThan(NO_STDIN_PROBE_BUDGET_MS);
+      expect(readAudit(dir)).toContain("ARTIFACT_CREATED");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 40_000);
+
+  test("N7b: the dispatcher route also consumes USER_PROMPT without probing held-open stdin", async () => {
+    const dir = scratchProject(true);
+    try {
+      const file = join(seededRecordDir(dir), "ideation", "intent-capture", "intent.md");
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, "# intent\n");
+      const r = await runIdeDispatcherOpenStdin(
+        dir,
+        "audit-and-sensors",
+        ctx("fs_write", `Created the ${file} file.`),
+        30_000,
+        { AIDLC_IDE_STDIN_TIMEOUT_MS: String(RAISED_STDIN_TIMEOUT_MS) },
+      );
+      expect(r.timedOut).toBe(false);
+      expect(r.code).toBe(0);
+      expect(r.elapsedMs).toBeLessThan(NO_STDIN_PROBE_BUDGET_MS);
+      expect(readAudit(dir)).toContain("ARTIFACT_CREATED");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 40_000);
+
+  test("N8: the public aidlc adapter dispatcher forwards the 1.x stdin payload", () => {
+    const dir = scratchProject(true);
+    try {
+      const result = "**Reviewer:** aidlc-product-lead-agent\n\nVerdict: READY";
+      const r = runIdeDispatcherStdin(
+        dir,
+        "log-subagent",
+        ctx1x("subagent_aidlc-product-lead-agent", result),
+      );
+      expect(r.code).toBe(0);
+      const audit = readAudit(dir);
+      expect(audit).toContain("SUBAGENT_COMPLETED");
+      expect(audit).toContain("aidlc-product-lead-agent");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("N9: dispatcher broken-channel timeout releases held-open stdin and exits", async () => {
+    // Both channels empty: the dispatcher must fall through the ceiling and
+    // exit rather than staying alive on the pending read. Pinned with a SHORT
+    // override so the case stays fast while still proving the release.
+    const dir = scratchProject(true);
+    try {
+      const r = await runIdeDispatcherOpenStdin(dir, "audit-and-sensors", null, 20_000, {
+        AIDLC_IDE_STDIN_TIMEOUT_MS: "500",
+      });
+      expect(r.timedOut).toBe(false);
+      expect(r.code).toBe(0);
+      expect(r.elapsedMs).toBeLessThan(NO_STDIN_PROBE_BUDGET_MS);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("N10: an empty context on either payload target records a VISIBLE hook drop", async () => {
+    // Both channels empty means a broken channel, not a no-op. Keep both
+    // payload-dependent legs in the same regression so their diagnostics
+    // cannot drift apart again.
+    for (const target of ["audit-and-sensors", "log-subagent"] as const) {
+      const dir = scratchProject(true);
+      try {
+        const r = await runIdeOpenStdin(dir, target, null, 20_000, {
+          AIDLC_IDE_STDIN_TIMEOUT_MS: "500",
+        });
+        expect(`${target}:timedOut=${r.timedOut}`).toBe(`${target}:timedOut=false`);
+        expect(`${target}:code=${r.code}`).toBe(`${target}:code=0`);
+        const dropFile = join(seededRecordDir(dir), ".aidlc-hooks-health", "kiro-adapter.drops");
+        expect(`${target}:drops=${existsSync(dropFile)}`).toBe(`${target}:drops=true`);
+        expect(readFileSync(dropFile, "utf-8")).toContain(`${target}: empty hook context`);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  }, 30_000);
+
+  test("N11: agentStop targets survive an empty USER_PROMPT with stdin held open (#639)", async () => {
+    // Restores the coverage deleted with 12b. The live IDE agentStop shape is a
+    // ZERO-LENGTH USER_PROMPT plus an open-but-never-written stdin, which hung
+    // stop and session-end forever. Each variant is asserted on its own effect
+    // so one cannot silently no-op behind the other.
+    const dir = scratchProject(true);
+    try {
+      // The payload-free legacy agentStop path uses one synthetic session id.
+      // Seed its ownership through the matching legacy SessionStart first;
+      // UUID-backed SessionEnd intentionally refuses an unstamped cursor
+      // fallback because another concurrent session may own that cursor.
+      expect(runIde(dir, "session-start", null).code).toBe(0);
+      for (const userPrompt of ["", null] as const) {
+        const label = userPrompt === null ? "absent" : "empty";
+        const stop = await runIdeOpenStdin(dir, "continue-workflow", userPrompt, 30_000);
+        expect(`stop/${label}:timedOut=${stop.timedOut}`).toBe(`stop/${label}:timedOut=false`);
+        expect(`stop/${label}:code=${stop.code}`).toBe(`stop/${label}:code=0`);
+        const decision = JSON.parse(stop.stdout) as { decision?: string };
+        expect(`stop/${label}:decision=${decision.decision}`).toBe(`stop/${label}:decision=block`);
+
+        const before = readAudit(dir).split("SESSION_ENDED").length - 1;
+        const end = await runIdeOpenStdin(dir, "session-end", userPrompt, 30_000);
+        expect(`end/${label}:timedOut=${end.timedOut}`).toBe(`end/${label}:timedOut=false`);
+        expect(`end/${label}:code=${end.code}`).toBe(`end/${label}:code=0`);
+        const after = readAudit(dir).split("SESSION_ENDED").length - 1;
+        expect(`end/${label}:delta=${after - before}`).toBe(`end/${label}:delta=1`);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 90_000);
+
+  test("N12: non-string tool names fail open on both channels and entry paths", () => {
+    const result = "Implementation complete.";
+    const snakeCasePayload = JSON.stringify({
+      tool_name: 7,
+      tool_input: {},
+      tool_response: result,
+    });
+    const camelCasePayload = JSON.stringify({
+      toolName: ["subagent_aidlc-developer-agent"],
+      toolArgs: {},
+      toolResult: result,
+      toolSuccess: true,
+    });
+    const scenarios = [
+      {
+        label: "1.x direct",
+        invoke: (dir: string) => runIdeStdin(dir, "log-subagent", snakeCasePayload),
+      },
+      {
+        label: "1.x dispatcher",
+        invoke: (dir: string) => runIdeDispatcherStdin(dir, "log-subagent", snakeCasePayload),
+      },
+      {
+        label: "0.12 direct",
+        invoke: (dir: string) => runIde(dir, "log-subagent", camelCasePayload),
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      const dir = scratchProject(true);
+      try {
+        const r = scenario.invoke(dir);
+        expect(`${scenario.label}:code=${r.code}`).toBe(`${scenario.label}:code=0`);
+        expect(readAudit(dir)).not.toContain("SUBAGENT_COMPLETED");
+        const dropFile = join(seededRecordDir(dir), ".aidlc-hooks-health", "kiro-adapter.drops");
+        expect(`${scenario.label}:drops=${existsSync(dropFile)}`).toBe(
+          `${scenario.label}:drops=true`,
+        );
+        expect(readFileSync(dropFile, "utf-8")).toContain(
+          "malformed hook context fields (toolName)",
+        );
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     }
   });
 });
@@ -535,7 +1182,7 @@ describe("t218 forward-only sync-statusline (finding 1: no state resurrection)",
       appendStageStarted(dir, "requirements-analysis", "2026-06-30T10:00:00.000Z");
       setStateField(dir, "Status", "Completed");
       setStateField(dir, "Current Stage", "none");
-      const r = runIde(dir, "state-sync", ctx("execute_bash", "Output:\nok\n\nExit Code: 0"));
+      const r = runIde(dir, "sync-workflow-state", ctx("execute_bash", "Output:\nok\n\nExit Code: 0"));
       expect(r.code).toBe(0);
       // State must NOT be dragged back to Running / requirements-analysis.
       expect(stateField(dir, "Status")).toBe("Completed");
@@ -559,7 +1206,7 @@ describe("t218 forward-only sync-statusline (finding 1: no state resurrection)",
       writeFileSync(path, content, "utf-8");
       setStateField(dir, "Current Stage", "user-stories");
       appendStageStarted(dir, "requirements-analysis", "2026-06-30T10:00:00.000Z");
-      const r = runIde(dir, "state-sync", ctx("execute_bash", "Output:\nok\n\nExit Code: 0"));
+      const r = runIde(dir, "sync-workflow-state", ctx("execute_bash", "Output:\nok\n\nExit Code: 0"));
       expect(r.code).toBe(0);
       expect(stateField(dir, "Current Stage")).toBe("user-stories");
     } finally {
@@ -582,7 +1229,7 @@ describe("t218 forward-only sync-statusline (finding 1: no state resurrection)",
       }
       writeFileSync(path, content, "utf-8");
       appendStageStarted(dir, "user-stories", "2026-06-30T10:00:00.000Z");
-      const r = runIde(dir, "state-sync", ctx("execute_bash", "Output:\nok\n\nExit Code: 0"));
+      const r = runIde(dir, "sync-workflow-state", ctx("execute_bash", "Output:\nok\n\nExit Code: 0"));
       expect(r.code).toBe(0);
       expect(stateField(dir, "Current Stage")).toBe("user-stories");
     } finally {
@@ -599,7 +1246,7 @@ describe("t218 latestStartedStageSlug filters single-stage rows (finding 2)", ()
       // appended a synthetic STAGE_STARTED. The sync must ignore it.
       appendSingleStageStarted(dir, "user-stories", "2026-06-30T10:00:00.000Z");
       const before = stateField(dir, "Current Stage");
-      const r = runIde(dir, "state-sync", ctx("execute_bash", "Output:\nok\n\nExit Code: 0"));
+      const r = runIde(dir, "sync-workflow-state", ctx("execute_bash", "Output:\nok\n\nExit Code: 0"));
       expect(r.code).toBe(0);
       expect(stateField(dir, "Current Stage")).toBe(before); // unchanged
     } finally {
@@ -656,6 +1303,85 @@ describe("t218 extractWrittenPath robustness (finding 4)", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  // =========================================================================
+  // F4d/F4e — CLASSIFY BEFORE LOGGING. Two very different situations reach the
+  // "no extractable path" branch, and conflating them made `--doctor` report
+  // hook degradation on workspaces whose hooks were working perfectly:
+  //
+  //   FAILED write    -> no artifact exists, so declining to forward it is
+  //                      CORRECT. Must NOT be recorded as decay.
+  //   SUCCEEDED write
+  //   with unknown
+  //   wording         -> the invisible decay this log exists to surface.
+  //                      Must still be recorded.
+  //
+  // The 1.x stdin channel carries no success flag, so the `toolSuccess === false`
+  // guard (#417, T1 above) cannot catch the first case — the failure arrives only
+  // as error prose. These two cases sit together deliberately: the CONTRAST is
+  // the contract, and pinning them apart would let a reordered guard or a
+  // tightened regex regress one while the other kept passing.
+  // =========================================================================
+  test("F4d: a FAILED write (error prose, 1.x channel) records NO drop", () => {
+    const dir = scratchProject(true);
+    try {
+      // Verbatim prose captured live on IDE 1.x: a str_replace whose old string
+      // matched more than once. The tool correctly refused; there is nothing to
+      // audit and nothing degraded.
+      const failure =
+        "Caught an error while replacing string String '[Answer]:' found multiple times in the file";
+      const r = runIdeStdin(
+        dir,
+        "audit-and-sensors",
+        ctx1x("str_replace", failure),
+      );
+      expect(r.code).toBe(0); // still fail-open
+      const dropFile = join(seededRecordDir(dir), ".aidlc-hooks-health", "kiro-adapter.drops");
+      expect(existsSync(dropFile)).toBe(false); // NOT decay
+      expect(readAudit(dir)).not.toContain("ARTIFACT_UPDATED"); // and never audited
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("F4e: the paired contrast — an unknown SUCCESS wording still records a drop", () => {
+    const dir = scratchProject(true);
+    try {
+      // Same branch, opposite verdict. Held beside F4d so the distinction cannot
+      // silently collapse in one direction.
+      const r = runIdeStdin(
+        dir,
+        "audit-and-sensors",
+        ctx1x("str_replace", "Swapped the text over there"),
+      );
+      expect(r.code).toBe(0);
+      const dropFile = join(seededRecordDir(dir), ".aidlc-hooks-health", "kiro-adapter.drops");
+      expect(existsSync(dropFile)).toBe(true);
+      expect(readFileSync(dropFile, "utf-8")).toContain("no extractable path");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("F4f: explicit toolSuccess=true outranks defensive failure-prose guesses", () => {
+    const dir = scratchProject(true);
+    try {
+      // Legacy IDE 0.12 supplies an authoritative success boolean. Even if an
+      // unrecognised success message starts with a defensive failure prefix,
+      // the missing path remains visible as harness decay.
+      const r = runIde(
+        dir,
+        "audit-and-sensors",
+        ctx("str_replace", "Failed to preserve file mode; requested text was replaced"),
+      );
+      expect(r.code).toBe(0);
+      const dropFile = join(seededRecordDir(dir), ".aidlc-hooks-health", "kiro-adapter.drops");
+      expect(existsSync(dropFile)).toBe(true);
+      expect(readFileSync(dropFile, "utf-8")).toContain("no extractable path");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("t218 log-subagent identity extraction (#459)", () => {
@@ -703,6 +1429,48 @@ describe("t218 log-subagent identity extraction (#459)", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test("S4: a conflicting prose marker cannot override the structured subagent_<agent> identity", () => {
+    // AUDIT INTEGRITY. The result prose is agent-authored and can be wrong or
+    // prompt-injected; `subagent_<agent>` is platform-provided. When the two
+    // disagree, the row must be attributed to the tool name, never to the prose.
+    const dir = scratchProject(true);
+    try {
+      const result = "**Agent:** aidlc-product-lead-agent\n\nDone";
+      const r = runIdeStdin(
+        dir,
+        "log-subagent",
+        ctx1x("subagent_aidlc-developer-agent", result),
+      );
+      expect(r.code).toBe(0);
+      const audit = readAudit(dir);
+      expect(audit).toContain("SUBAGENT_COMPLETED");
+      expect(audit).toContain("**Agent Type**: aidlc-developer-agent");
+      expect(audit).not.toContain("**Agent Type**: aidlc-product-lead-agent");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("S5: a degenerate subagent_ with an empty suffix still falls back to the prose marker", () => {
+    // The tool name only wins when it actually carries an identity; an empty
+    // suffix is no identity, so the 0.12-era prose contract still applies.
+    const dir = scratchProject(true);
+    try {
+      const r = runIdeStdin(
+        dir,
+        "log-subagent",
+        ctx1x("subagent_", "**Reviewer:** aidlc-product-lead-agent\n\nVerdict: READY"),
+      );
+      expect(r.code).toBe(0);
+      const audit = readAudit(dir);
+      expect(audit).toContain("SUBAGENT_COMPLETED");
+      expect(audit).toContain("**Agent Type**: aidlc-product-lead-agent");
+      expect(audit).not.toContain("**Agent Type**: unknown");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("t218 failed tool calls are not audited as writes (#417)", () => {
@@ -741,6 +1509,107 @@ describe("t218 failed tool calls are not audited as writes (#417)", () => {
       expect(readAudit(dir)).toContain("ARTIFACT_CREATED");
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("T3: present non-boolean success flags fail open without auditing the write", () => {
+    const scenarios = [
+      {
+        label: "1.x string false",
+        invoke: (dir: string, file: string) =>
+          runIdeStdin(
+            dir,
+            "audit-and-sensors",
+            JSON.stringify({
+              tool_name: "fs_write",
+              tool_input: {},
+              tool_response: `Created the ${file} file.`,
+              tool_success: "false",
+            }),
+          ),
+      },
+      {
+        label: "0.12 numeric false",
+        invoke: (dir: string, file: string) =>
+          runIde(
+            dir,
+            "audit-and-sensors",
+            JSON.stringify({
+              toolName: "fs_write",
+              toolArgs: {},
+              toolResult: `Created the ${file} file.`,
+              toolSuccess: 0,
+            }),
+          ),
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      const dir = scratchProject(true);
+      try {
+        const file = join(seededRecordDir(dir), "ideation", "intent-capture", "intent.md");
+        mkdirSync(dirname(file), { recursive: true });
+        writeFileSync(file, "# intent\n");
+        const r = scenario.invoke(dir, file);
+        expect(`${scenario.label}:code=${r.code}`).toBe(`${scenario.label}:code=0`);
+        expect(readAudit(dir)).not.toContain("ARTIFACT_");
+        const dropFile = join(seededRecordDir(dir), ".aidlc-hooks-health", "kiro-adapter.drops");
+        expect(`${scenario.label}:drops=${existsSync(dropFile)}`).toBe(
+          `${scenario.label}:drops=true`,
+        );
+        expect(readFileSync(dropFile, "utf-8")).toContain(
+          "malformed hook context fields (toolSuccess)",
+        );
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("T4: a null success flag follows the existing absent-value contract", () => {
+    const scenarios = [
+      {
+        label: "1.x null",
+        invoke: (dir: string, file: string) =>
+          runIdeStdin(
+            dir,
+            "audit-and-sensors",
+            JSON.stringify({
+              tool_name: "fs_write",
+              tool_input: {},
+              tool_response: `Created the ${file} file.`,
+              tool_success: null,
+            }),
+          ),
+      },
+      {
+        label: "0.12 null",
+        invoke: (dir: string, file: string) =>
+          runIde(
+            dir,
+            "audit-and-sensors",
+            JSON.stringify({
+              toolName: "fs_write",
+              toolArgs: {},
+              toolResult: `Created the ${file} file.`,
+              toolSuccess: null,
+            }),
+          ),
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      const dir = scratchProject(true);
+      try {
+        const file = join(seededRecordDir(dir), "ideation", "intent-capture", "intent.md");
+        mkdirSync(dirname(file), { recursive: true });
+        writeFileSync(file, "# intent\n");
+        const r = scenario.invoke(dir, file);
+        expect(`${scenario.label}:code=${r.code}`).toBe(`${scenario.label}:code=0`);
+        expect(readAudit(dir)).toContain("ARTIFACT_CREATED");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     }
   });
 });

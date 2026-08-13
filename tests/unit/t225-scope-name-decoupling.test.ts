@@ -5,7 +5,6 @@ import { spawnSync } from "node:child_process";
 import {
   cpSync,
   existsSync,
-  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -20,7 +19,11 @@ import {
   selectionAwareDefaultScope,
   stageEnabledBySelection,
 } from "../../core/tools/aidlc-lib.ts";
-import { withEnvAndFreshCaches } from "../harness/fixtures.ts";
+import {
+  runOrchestrateNext,
+  seedAidlcMemory,
+  withEnvAndFreshCaches,
+} from "../harness/fixtures.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CORE_TOOLS = join(REPO_ROOT, "core", "tools");
@@ -220,7 +223,7 @@ function makePluginOnlyInstall(): string {
     `${JSON.stringify(grid, null, 2)}\n`,
     "utf-8",
   );
-  mkdirSync(join(project, "aidlc"), { recursive: true });
+  seedAidlcMemory(project);
   return project;
 }
 
@@ -365,20 +368,16 @@ describe("t225 env-scope fallback under plugin-only selection", () => {
   test("AWS_AIDLC_DEFAULT_SCOPE naming disabled core falls back to the sole plugin scope", () => {
     const project = makePluginOnlyInstall();
     const tool = join(project, ".claude", "tools", "aidlc-orchestrate.ts");
-    const result = spawnSync(
-      BUN,
+    const result = runOrchestrateNext(
+      tool,
+      project,
       [
-        tool,
-        "next",
         "--stage",
         "requirements-analysis",
         "--single",
-        "--project-dir",
-        project,
       ],
       {
         cwd: project,
-        encoding: "utf-8",
         env: {
           ...process.env,
           AIDLC_HARNESS_DIR: ".claude",
@@ -386,7 +385,7 @@ describe("t225 env-scope fallback under plugin-only selection", () => {
         },
       },
     );
-    const out = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+    const out = result.out;
     expect(result.status).toBe(0);
     expect(out).not.toContain("Invalid AWS_AIDLC_DEFAULT_SCOPE");
     expect(out).toContain('"kind":"run-stage"');
@@ -394,5 +393,28 @@ describe("t225 env-scope fallback under plugin-only selection", () => {
     expect(result.stderr).toContain(
       'AWS_AIDLC_DEFAULT_SCOPE="feature" is not an enabled scope; using test-pro-validation (sole enabled plugin\'s first scope)',
     );
+  });
+
+  test("unknown AWS_AIDLC_DEFAULT_SCOPE still fails under plugin-only selection", () => {
+    const project = makePluginOnlyInstall();
+    const tool = join(project, ".claude", "tools", "aidlc-orchestrate.ts");
+    const result = spawnSync(
+      BUN,
+      [tool, "next", "--project-dir", project],
+      {
+        cwd: project,
+        encoding: "utf-8",
+        env: {
+          ...process.env,
+          AIDLC_HARNESS_DIR: ".claude",
+          AWS_AIDLC_DEFAULT_SCOPE: "featre",
+        },
+      },
+    );
+    const out = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+    const directive = JSON.parse(result.stdout) as { kind: string; message: string };
+    expect(directive.kind).toBe("error");
+    expect(directive.message).toContain('Invalid AWS_AIDLC_DEFAULT_SCOPE "featre"');
+    expect(out).not.toContain("using test-pro-validation");
   });
 });

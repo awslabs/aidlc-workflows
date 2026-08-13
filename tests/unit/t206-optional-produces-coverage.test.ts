@@ -33,6 +33,8 @@ import {
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
   resetAidlcEnv,
+  runOrchestrateNext,
+  seedAidlcMemory,
   seedBoltDag,
   seededRecordDir,
   seededStateFile,
@@ -43,17 +45,40 @@ resetAidlcEnv();
 const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
+const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 
 // functional-design declares a reviewer; the §12a gate precondition refuses an
 // approve without a terminal REVIEW_COMPLETED. These tests target the coverage
 // guard, not the reviewer gate, so record a READY review before approving.
 function logReviewReady(proj: string, stage: string, reviewer: string, unit?: string): void {
-  const args = [LOG, "review", "--stage", stage, "--reviewer", reviewer, "--iteration", "1", "--verdict", "READY"];
+  const args = [LOG, "review", "--stage", stage, "--reviewer", reviewer, "--iteration", "1"];
   if (unit) args.push("--unit", unit);
   args.push("--project-dir", proj);
-  const res = spawnSync(BUN, args, { encoding: "utf-8" });
-  // Keep a log-record failure local, not surfaced later as a confusing gate error.
-  expect(res.status).toBe(0);
+  for (const suffix of [[], ["--verdict", "READY"]]) {
+    const res = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
+    // Keep a log-record failure local, not surfaced later as a confusing gate error.
+    expect(res.status).toBe(0);
+  }
+}
+
+function completeWave(proj: string, stage: string, unit: string): void {
+  const result = spawnSync(
+    BUN,
+    [
+      STATE,
+      "unit",
+      "complete",
+      "--wave",
+      "--stage",
+      stage,
+      "--unit",
+      unit,
+      "--project-dir",
+      proj,
+    ],
+    { encoding: "utf-8" },
+  );
+  expect(result.status).toBe(0);
 }
 
 // The record-relative prefix every resolved per-unit path is rooted at.
@@ -75,6 +100,14 @@ interface Directive {
   unit?: string;
   gate?: unknown;
   produces?: string[];
+  wave?: {
+    entries: Array<{
+      unit: string;
+      build_required: boolean;
+      review_state: string;
+      required_produces: string[];
+    }>;
+  };
   message?: string;
   [k: string]: unknown;
 }
@@ -132,26 +165,21 @@ function coverUnit(proj: string, unit: string, slug: string, names: string[]): v
 function seedProject(current: string): string {
   const proj = createTestProject();
   tempDirs.push(proj);
+  seedAidlcMemory(proj);
   writeFileSync(seededStateFile(proj), constructionState(current));
   return proj;
 }
 
 function runNext(proj: string): Directive {
-  const r = spawnSync(BUN, [ORCH, "next", "--project-dir", proj], {
-    encoding: "utf-8",
-    env: (() => {
-      const e = { ...process.env };
-      delete e.AWS_AIDLC_DEFAULT_SCOPE;
-      return e;
-    })(),
-  });
-  try {
-    return JSON.parse((r.stdout ?? "").trim()) as Directive;
-  } catch {
+  const env = { ...process.env };
+  delete env.AWS_AIDLC_DEFAULT_SCOPE;
+  const r = runOrchestrateNext(ORCH, proj, [], { env });
+  if (r.directive === null) {
     throw new Error(
       `runNext did not emit parseable JSON. status=${r.status}\n${r.stdout}\n${r.stderr}`,
     );
   }
+  return r.directive as Directive;
 }
 
 function runReport(proj: string, args: string[]): Directive {
@@ -174,15 +202,36 @@ function runReport(proj: string, args: string[]): Directive {
 
 describe("t206 optional_produces exempt from per-unit coverage", () => {
   // 1: happy path - the conditional artifact is ABSENT and the unit still
-  // counts covered, so the loop advances. Cover alpha with ONLY the three
-  // required artifacts (no frontend-components.md) -> next emits beta.
+  // counts covered. Cover alpha with ONLY the three required artifacts (no
+  // frontend-components.md) -> alpha is review-only, then its receipt advances.
   test("1: a unit covered by required-only artifacts advances the iteration", () => {
     const proj = seedProject("functional-design");
     seedBoltDag(proj, ["alpha", "beta"]);
     coverUnit(proj, "alpha", "functional-design", FD_REQUIRED);
-    const d = runNext(proj);
-    expect(d.kind).toBe("run-stage");
-    expect(d.unit).toBe("beta");
+    const reviewOnly = runNext(proj);
+    expect(reviewOnly.kind).toBe("run-stage");
+    expect(reviewOnly.unit).toBe("alpha");
+    expect(reviewOnly.wave?.entries[0]).toMatchObject({
+      build_required: false,
+      review_state: "outstanding",
+      required_produces: FD_REQUIRED.map(
+        (name) =>
+          `${RP}/construction/alpha/functional-design/${name}.md`,
+      ),
+    });
+    expect(
+      reviewOnly.wave?.entries[0].required_produces.some((path) =>
+        path.endsWith(`/${FD_OPTIONAL}.md`)
+      ),
+    ).toBe(false);
+    logReviewReady(
+      proj,
+      "functional-design",
+      "aidlc-architecture-reviewer-agent",
+      "alpha",
+    );
+    completeWave(proj, "functional-design", "alpha");
+    expect(runNext(proj).unit).toBe("beta");
   }, 30000);
 
   // 2: guard - a MISSING REQUIRED artifact still blocks coverage even when the
@@ -211,6 +260,20 @@ describe("t206 optional_produces exempt from per-unit coverage", () => {
     seedBoltDag(proj, ["alpha", "beta"]);
     coverUnit(proj, "alpha", "functional-design", FD_REQUIRED);
     coverUnit(proj, "beta", "functional-design", FD_REQUIRED);
+    logReviewReady(
+      proj,
+      "functional-design",
+      "aidlc-architecture-reviewer-agent",
+      "alpha",
+    );
+    logReviewReady(
+      proj,
+      "functional-design",
+      "aidlc-architecture-reviewer-agent",
+      "beta",
+    );
+    completeWave(proj, "functional-design", "alpha");
+    completeWave(proj, "functional-design", "beta");
     const d = runNext(proj);
     expect(d.kind).toBe("run-stage");
     expect(d.unit).toBe("beta");

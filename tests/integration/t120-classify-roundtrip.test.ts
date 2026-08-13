@@ -90,9 +90,11 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   cleanupTestProject,
+  createOrchestrationTestProject,
   createTestProject,
   FIXTURES_DIR,
   resetAidlcEnv,
+  runOrchestrateNext,
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
@@ -124,6 +126,20 @@ interface CliResult {
 }
 
 function run(tool: string, args: string[]): CliResult {
+  if (tool === ORCHESTRATE && args[0] === "next") {
+    const projectIndex = args.indexOf("--project-dir");
+    const project = args[projectIndex + 1];
+    const nextArgs = [
+      ...args.slice(1, projectIndex),
+      ...args.slice(projectIndex + 2),
+    ];
+    const result = runOrchestrateNext(tool, project, nextArgs);
+    return {
+      status: result.status,
+      out: result.out,
+      stdout: result.stdout,
+    };
+  }
   const res = spawnSync(BUN, [tool, ...args], { encoding: "utf-8" });
   const stdout = res.stdout ?? "";
   return {
@@ -135,7 +151,7 @@ function run(tool: string, args: string[]): CliResult {
 
 /** Fresh temp project seeded from a FIXTURES_DIR state fixture. */
 function projWithState(fixtureName: string): string {
-  const p = createTestProject();
+  const p = createOrchestrationTestProject();
   tempDirs.push(p);
   seedStateFile(p, join(FIXTURES_DIR, fixtureName));
   return p;

@@ -7,8 +7,10 @@ lead_agent: aidlc-architect-agent
 support_agents:
   - aidlc-delivery-agent
 mode: inline
+summary_confirmation: required
 reviewer: aidlc-architecture-reviewer-agent
 reviewer_max_iterations: 2
+review_class: advisory
 produces:
   - unit-of-work
   - unit-of-work-dependency
@@ -111,7 +113,7 @@ Based on the approved plan, generate 3 artifacts in `<record>/inception/units-ge
 - Parallel development opportunities (sets of units with no dependency between them — multiple valid topological orderings exist)
 - A REQUIRED fenced `yaml` edge block (below) — the machine-readable mirror of the prose DAG. The downstream batch fan-out is computed from this block, not the prose, so it must be present, well-formed, and cycle-free. The `required-sections` sensor checks it at this stage's gate.
 
-The fenced block lists every unit with its direct dependencies (the unit names it depends on) and, optionally, each unit's `kind`. Independent units carry `depends_on: []`. Name each unit exactly once; every name in a `depends_on` list must be a declared unit; no unit may depend on itself; the edges must be acyclic. Each `kind:`, when present, must be one of `service | spec | ui | packaging | library` (an invalid value fails the edge-block sensor at this gate); omit it to keep the unit on the full construction design-artifact matrix:
+The fenced block lists every unit with its direct dependencies (the unit names it depends on) and, optionally, each unit's `kind`. Independent units carry `depends_on: []`. Author new Unit names as lowercase path-segment identifiers: a lowercase letter followed by lowercase letters, digits, or hyphens, with a maximum of 64 characters. The runtime also preserves safe legacy single-segment names beginning with a digit or containing uppercase letters, underscores, or dots; autonomous swarms map those names to deterministic internal Bolt slugs while retaining the original Unit identity in directives and audit records. Do not rename an in-flight legacy Unit merely to normalize its spelling. Name each unit exactly once; every name in a `depends_on` list must be a declared unit; no unit may depend on itself; the edges must be acyclic. Each `kind:`, when present, must be one of `service | spec | ui | packaging | library` (an invalid value fails the edge-block sensor at this gate); omit it to keep the unit on the full construction design-artifact matrix:
 
 ```yaml
 units:
@@ -135,7 +137,7 @@ NOTE: This artifact describes topology only. It does NOT pick a single "recommen
 
 Hand completion to `stage-protocol.md` via
 `bun .claude/tools/aidlc-orchestrate.ts report --stage units-generation --result <outcome>`.
-The engine owns all lifecycle transitions and advancement.
+That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
 ### Step 8: Present Completion & Request Approval
 

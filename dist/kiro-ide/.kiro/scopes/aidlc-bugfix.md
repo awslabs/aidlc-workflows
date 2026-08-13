@@ -8,6 +8,7 @@ keywords:
 description: Fix a specific bug
 skeleton: off
 runner: true
+review_cap: advisory
 ---
 
 # bugfix scope

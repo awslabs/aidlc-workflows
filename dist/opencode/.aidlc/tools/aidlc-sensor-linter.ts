@@ -8,8 +8,7 @@
 //   {"pass": <bool>, "errorCount": <n>, "warningCount": <n>,
 //    "violations": [{file, line, column, rule, severity, message}, ...]}
 //
-// Decisions (see tmp/v05-mr9-plan-draft.md § Per-sensor script contracts
-// → aidlc-sensor-linter.ts):
+// Per-sensor script contract decisions:
 //
 // * Project root resolution: walk up from --file-path to the nearest
 //   package.json. We DO NOT pre-locate the eslint config — eslint's own
@@ -293,6 +292,18 @@ function runEslint(
 
 // --- result parsing ---------------------------------------------------------
 
+// Slice leading stdout noise down to the first structural JSON character
+// (startChar). `bunx` and the project's package manager can print run banners
+// or lockfile warnings (pnpm etc.) before eslint's `--format json` array when
+// the sensor fires against a sibling repo; without this the payload never
+// parses and the linter verdict is silently discarded. When startChar is
+// absent the string is returned unchanged so the caller's JSON.parse still
+// throws and the graceful eslint-bad-output degradation holds.
+export function stripStdoutNoise(stdout: string, startChar: string): string {
+	const idx = stdout.indexOf(startChar);
+	return idx >= 0 ? stdout.slice(idx) : stdout;
+}
+
 function buildViolations(results: ESLintResult[]): Violation[] {
 	const out: Violation[] = [];
 	for (const r of results) {
@@ -337,7 +348,7 @@ export function main(argv: string[]): void {
 	// — eslint always writes JSON to stdout on either path.
 	let parsed: ESLintResult[];
 	try {
-		parsed = JSON.parse(stdout);
+		parsed = JSON.parse(stripStdoutNoise(stdout, "["));
 	} catch {
 		process.stderr.write("eslint-bad-output\n");
 		process.exit(1);

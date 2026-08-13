@@ -84,6 +84,7 @@ fields that carry the structural weight:
 | `support_agents` | Optional perspectives the conductor loads after the lead |
 | `mode` | `inline`, `subagent`, `pipeline`, `mob`, or the reserved `agent-team` |
 | `for_each` | Optional — names an artifact whose instances drive iteration |
+| `summary_confirmation` | Optional — `required` for stages that always collect file-backed answers, `if-present` for conditional question flows |
 
 The body opens with `## Steps` — the imperative prose the lead agent follows.
 The `## Sensors` and `## Learn` compartments come after it. For the complete
@@ -208,7 +209,7 @@ so it is typeable as `/aidlc-<slug>` (e.g. `/aidlc-application-design`). These a
 per runnable compiled stage slug, so the set of runners can never drift from the
 set of stages by hand. (The three bootstrap initialization stages get no per-stage
 runner — they have no standalone `--single` meaning; the whole init phase is the
-`/aidlc-init` command instead, packaging the engine's intent-birth move.) After adding (or removing)
+`/aidlc-init` command instead, packaging the engine's intent-create move.) After adding (or removing)
 a stage, regenerate the runners:
 
 ```bash

@@ -10,7 +10,7 @@
 // isolation (the leak the §11 promise forbids) + that a new intent born in the
 // space reads the space's OWN live memory, not default's.
 //
-// Mechanism: cli (spawn aidlc-utility space-create / space / intent-birth) +
+// Mechanism: cli (spawn aidlc-utility space-create / space / intent-create) +
 // on-disk content reads. Zero LLM, zero tokens — deterministic.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -111,7 +111,7 @@ describe("t175 space-create memory isolation (vision §11 — no learning leak)"
     );
     // Switch to the space and birth an intent there.
     expect(util(["space", "research"]).status).toBe(0);
-    expect(util(["intent-birth", "--scope", "poc"]).status).toBe(0);
+    expect(util(["intent-create", "--scope", "poc"]).status).toBe(0);
 
     // The space's live memory is the one on disk for this space (the reader keys
     // the record's space → spaces/research/memory), distinct from default's. The

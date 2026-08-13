@@ -8,6 +8,7 @@ keywords:
   - training
 description: Facilitated group session with mandatory gates
 skeleton: on
+review_cap: advisory
 ---
 
 # workshop scope

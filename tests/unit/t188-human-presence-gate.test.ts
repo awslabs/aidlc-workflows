@@ -1,4 +1,4 @@
-// covers: cli:aidlc-state(approve,gate-start), cli:aidlc-orchestrate(report), cli:aidlc-log(answer), cli:aidlc-audit(append), function:handleApprove, function:handleGateStart, function:handleAnswer, function:humanActedSinceGate, function:humanActedSinceLastAnswer, function:hasOpenGate, function:isAutonomousMode, function:humanPresenceGuardDisabled, file:hooks/aidlc-mint-presence.ts
+// covers: cli:aidlc-state(approve,gate-start), cli:aidlc-orchestrate(report), cli:aidlc-log(answer), audit:SUMMARY_CONFIRMATION_RECORDED, function:handleApprove, function:handleGateStart, function:handleAnswer, function:humanActedSinceGate, function:humanActedSinceLastAnswer, function:hasOpenGate, function:isAutonomousMode, function:humanPresenceGuardDisabled, function:checkSummaryConfirmationEvidence, function:summaryConfirmationGuardDisabled, file:hooks/aidlc-record-human-turn.ts
 //
 // t188 - human-presence approval gate (ledger-event design).
 //
@@ -50,17 +50,22 @@ import {
   cleanupTestProject,
   createTestProject,
   resetAidlcEnv,
+  seededRecordDir,
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
-import { readFileSync, writeFileSync } from "node:fs";
-import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  checkSummaryConfirmationEvidence,
+  findStageBySlug,
+  readAllAuditShards,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 
 const BUN = process.execPath;
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
-const AUDIT = join(AIDLC_SRC, "tools", "aidlc-audit.ts");
 const MID_IDEATION = "state-mid-ideation.md"; // Current Stage: feasibility
 
 // Drive a state subcommand with the PRESENCE guard ENABLED (clear the suite's
@@ -110,13 +115,7 @@ function guardedReport(proj: string, args: string[]): { rc: number; out: string 
 // per-harness mint hook does on a real human prompt). This appends to the
 // active-intent shard the gate later reads, in real ledger order.
 function recordHumanTurn(proj: string): void {
-  const r = spawnSync(BUN, [AUDIT, "append", "HUMAN_TURN", "--project-dir", proj], {
-    encoding: "utf-8",
-    env: process.env,
-  });
-  if ((r.status ?? -1) !== 0) {
-    throw new Error(`recordHumanTurn failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
-  }
+  appendAuditEntry("HUMAN_TURN", {}, proj);
 }
 
 function field(proj: string, name: string): string {
@@ -131,6 +130,25 @@ function eventCount(proj: string, ev: string): number {
     .filter((l) => l === `**Event**: ${ev}`).length;
 }
 
+function summaryEvidence(
+  project: string,
+  stage: NonNullable<ReturnType<typeof findStageBySlug>>,
+) {
+  const previous = process.env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD;
+  delete process.env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD;
+  try {
+    return checkSummaryConfirmationEvidence(project, stage, {
+      stateContent: readFileSync(seededStateFile(project), "utf-8"),
+    });
+  } finally {
+    if (previous === undefined) {
+      delete process.env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD;
+    } else {
+      process.env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD = previous;
+    }
+  }
+}
+
 // Append the autonomy field to the seeded state file (the mid-ideation fixture
 // carries no Construction Autonomy Mode field, and setField is a no-op for an
 // absent field, so write the field line directly - isAutonomousMode reads
@@ -139,6 +157,31 @@ function setAutonomous(proj: string): void {
   const sf = seededStateFile(proj);
   const content = readFileSync(sf, "utf-8");
   writeFileSync(sf, `${content}\n- **Construction Autonomy Mode**: autonomous\n`, "utf-8");
+}
+
+function summaryQuestions(proj: string, answer = ""): string {
+  const path = join(
+    seededRecordDir(proj),
+    "ideation",
+    "feasibility",
+    "feasibility-questions.md",
+  );
+  mkdirSync(join(path, ".."), { recursive: true });
+  writeFileSync(
+    path,
+    [
+      "# Feasibility Questions",
+      "",
+      "## Consolidated Summary Confirmation",
+      "",
+      "- Looks correct",
+      "- Request changes",
+      "",
+      `[Answer]: ${answer}`,
+      "",
+    ].join("\n"),
+  );
+  return path;
 }
 
 let proj: string;
@@ -345,6 +388,195 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
 
   // --- handleAnswer twin (interview path) ------------------------------------
   describe("handleAnswer twin (aidlc-log answer)", () => {
+    test("summary confirmation requires a matching prompt and a later human turn", () => {
+      const slug = field(proj, "Current Stage");
+      const questions = summaryQuestions(proj);
+      expect(
+        guardedLog(proj, [
+          "decision",
+          "--stage",
+          slug,
+          "--checkpoint",
+          "summary-confirmation",
+          "--questions-file",
+          questions,
+          "--decision",
+          "Does this all look correct?",
+          "--options",
+          "Looks correct,Request changes",
+        ]).rc,
+      ).toBe(0);
+
+      summaryQuestions(proj, "Looks correct");
+      const fabricated = guardedLog(proj, [
+        "answer",
+        "--stage",
+        slug,
+        "--checkpoint",
+        "summary-confirmation",
+        "--questions-file",
+        questions,
+        "--details",
+        "Looks correct",
+      ]);
+      expect(fabricated.rc).not.toBe(0);
+      expect(fabricated.out).toContain("real human has not responded");
+
+      recordHumanTurn(proj);
+      const confirmed = guardedLog(proj, [
+        "answer",
+        "--stage",
+        slug,
+        "--checkpoint",
+        "summary-confirmation",
+        "--questions-file",
+        questions,
+        "--details",
+        "Looks correct",
+      ]);
+      expect(confirmed.rc).toBe(0);
+      expect(confirmed.out).toContain(
+        '"emitted":"SUMMARY_CONFIRMATION_RECORDED"',
+      );
+      expect(confirmed.out).toContain('"checkpoint":"summary-confirmation"');
+      expect(eventCount(proj, "SUMMARY_CONFIRMATION_RECORDED")).toBe(1);
+      const audit = readAllAuditShards(proj);
+      expect(audit).toContain(
+        "**Checkpoint**: Consolidated Summary Confirmation",
+      );
+      expect(audit).toContain("**Questions SHA-256**:");
+    });
+
+    test("summary confirmation refuses a file whose stored answer differs", () => {
+      const slug = field(proj, "Current Stage");
+      const questions = summaryQuestions(proj);
+      expect(
+        guardedLog(proj, [
+          "decision",
+          "--stage",
+          slug,
+          "--checkpoint",
+          "summary-confirmation",
+          "--questions-file",
+          questions,
+          "--decision",
+          "Does this all look correct?",
+        ]).rc,
+      ).toBe(0);
+      recordHumanTurn(proj);
+      summaryQuestions(proj, "Request changes");
+      const result = guardedLog(proj, [
+        "answer",
+        "--stage",
+        slug,
+        "--checkpoint",
+        "summary-confirmation",
+        "--questions-file",
+        questions,
+        "--details",
+        "Looks correct",
+      ]);
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("must contain exactly one");
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(0);
+      expect(eventCount(proj, "SUMMARY_CONFIRMATION_RECORDED")).toBe(0);
+    });
+
+    test("per-unit evidence requires a unit-scoped receipt", () => {
+      const stage = findStageBySlug("functional-design");
+      expect(stage).toBeDefined();
+      const questions = join(
+        seededRecordDir(proj),
+        "construction",
+        "api",
+        "functional-design",
+        "functional-design-questions.md",
+      );
+      mkdirSync(join(questions, ".."), { recursive: true });
+      writeFileSync(
+        questions,
+        "# Questions\n\n## Consolidated Summary Confirmation\n\n- Looks correct\n- Request changes\n\n[Answer]: \n",
+      );
+      expect(
+        guardedLog(proj, [
+          "decision",
+          "--stage",
+          "functional-design",
+          "--checkpoint",
+          "summary-confirmation",
+          "--questions-file",
+          questions,
+          "--decision",
+          "Does this all look correct?",
+        ]).rc,
+      ).toBe(0);
+      recordHumanTurn(proj);
+      writeFileSync(
+        questions,
+        "# Questions\n\n## Consolidated Summary Confirmation\n\n- Looks correct\n- Request changes\n\n[Answer]: Looks correct\n",
+      );
+      expect(
+        guardedLog(proj, [
+          "answer",
+          "--stage",
+          "functional-design",
+          "--checkpoint",
+          "summary-confirmation",
+          "--questions-file",
+          questions,
+          "--details",
+          "Looks correct",
+        ]).rc,
+      ).toBe(0);
+
+      const wrongScope = summaryEvidence(proj, stage!);
+      expect(wrongScope.ok).toBe(false);
+      if (!wrongScope.ok) expect(wrongScope.message).toContain('unit "api"');
+
+      writeFileSync(
+        questions,
+        "# Questions\n\n## Consolidated Summary Confirmation\n\n- Looks correct\n- Request changes\n\n[Answer]: \n",
+      );
+      expect(
+        guardedLog(proj, [
+          "decision",
+          "--stage",
+          "functional-design",
+          "--unit",
+          "api",
+          "--checkpoint",
+          "summary-confirmation",
+          "--questions-file",
+          questions,
+          "--decision",
+          "Does this all look correct?",
+        ]).rc,
+      ).toBe(0);
+      recordHumanTurn(proj);
+      writeFileSync(
+        questions,
+        "# Questions\n\n## Consolidated Summary Confirmation\n\n- Looks correct\n- Request changes\n\n[Answer]: Looks correct\n",
+      );
+      expect(
+        guardedLog(proj, [
+          "answer",
+          "--stage",
+          "functional-design",
+          "--unit",
+          "api",
+          "--checkpoint",
+          "summary-confirmation",
+          "--questions-file",
+          questions,
+          "--details",
+          "Looks correct",
+        ]).rc,
+      ).toBe(0);
+      expect(
+        summaryEvidence(proj, stage!),
+      ).toEqual({ ok: true, required: true });
+    });
+
     test("REFUSES to record an answer when the ledger has events but no HUMAN_TURN", () => {
       const slug = field(proj, "Current Stage");
       // A decision row activates presence tracking without opening an approval
@@ -500,22 +732,60 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
     });
 
-    test("a redundant rejection answer with NO human turn refuses (reject carries no presence guard of its own)", () => {
+    test("rejection with NO human turn refuses without mutating state", () => {
       const slug = field(proj, "Current Stage");
       guarded(proj, ["checkbox", `${slug}=in-progress`]);
       guarded(proj, ["gate-start", slug]);
 
-      const answer = guardedLog(proj, [
-        "answer",
+      const reject = guardedReport(proj, [
         "--stage",
         slug,
-        "--details",
+        "--result",
+        "rejected",
+        "--user-input",
         "Request Changes: tighten the schema",
       ]);
-      expect(answer.rc).not.toBe(0);
-      expect(answer.out).toContain("Refusing to acknowledge this approval choice");
-      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(0);
+      expect(reject.rc).toBe(0);
+      expect(reject.out).toContain('"kind":"error"');
+      expect(reject.out).toContain("Refusing to reject");
       expect(eventCount(proj, "GATE_REJECTED")).toBe(0);
+      expect(field(proj, "Revision Count")).toBe("0");
+      expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(
+        `- [?] ${slug}`,
+      );
+    });
+
+    test("a rejection consumes its human turn", () => {
+      const slug = field(proj, "Current Stage");
+      guarded(proj, ["checkbox", `${slug}=in-progress`]);
+      guarded(proj, ["gate-start", slug]);
+      recordHumanTurn(proj);
+
+      const first = guardedReport(proj, [
+        "--stage",
+        slug,
+        "--result",
+        "rejected",
+        "--user-input",
+        "Request Changes: tighten the schema",
+      ]);
+      expect(first.rc).toBe(0);
+      expect(first.out).not.toContain('"kind":"error"');
+      expect(eventCount(proj, "GATE_REJECTED")).toBe(1);
+
+      guarded(proj, ["revise", slug]);
+      const second = guardedReport(proj, [
+        "--stage",
+        slug,
+        "--result",
+        "rejected",
+        "--user-input",
+        "Request Changes: tighten the schema again",
+      ]);
+      expect(second.rc).toBe(0);
+      expect(second.out).toContain('"kind":"error"');
+      expect(second.out).toContain("Refusing to reject");
+      expect(eventCount(proj, "GATE_REJECTED")).toBe(1);
     });
 
     test("a redundant rejection answer with a human turn is a no-op and report still rejects", () => {

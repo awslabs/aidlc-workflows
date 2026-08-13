@@ -41,7 +41,8 @@ Stage 2.2, and the User Stories mob at Stage 2.4.
   requirements stage, a mob story stage, and four inline design/planning stages.
 - Stage 2.1 uses a two-link pipeline: aidlc-developer-agent scans the code,
   then aidlc-architect-agent synthesizes the scan into 9 structured artifacts. It
-  has an always-rerun policy for brownfield projects.
+  checks each brownfield repository's existing store before the human chooses
+  reuse, a full rescan, or a focused scan.
 - Stage 2.2 runs the same topology on greenfield and brownfield work:
   pipeline-deploy lead draft, mutually blind quality/developer/devsecops
   spokes, human interview, then lead integration. On affirmation, content is promoted from
@@ -96,7 +97,7 @@ Stage 2.2, and the User Stories mob at Stage 2.4.
 |------------------|------------------------------------------------------------------------|
 | Phase            | Inception                                                              |
 | Stage #          | 2.1                                                                    |
-| Condition        | CONDITIONAL -- brownfield detected; always rerun for freshness         |
+| Condition        | CONDITIONAL -- brownfield; verified-current stores may be reused        |
 | Lead Agent       | aidlc-developer-agent                                                        |
 | Support Agents   | aidlc-architect-agent                                                        |
 | Mode             | pipeline (2-link chain: aidlc-developer-agent scans, aidlc-architect-agent synthesizes and writes) |
@@ -111,9 +112,11 @@ synthesizes the scan results into 9 structured artifacts and writes them. These 
 provide the technical foundation that all subsequent Inception and Construction
 stages build upon.
 
-**Always-rerun policy:** Reverse Engineering is always re-executed for
-brownfield projects even when prior artifacts exist. This ensures the
-artifacts reflect the current state of the codebase, not a stale snapshot.
+**Rerun guard:** Reverse Engineering checks each repository's recorded scope
+and working-tree fingerprint before scanning. The human may reuse a
+verified-current store whose coverage fits the intent; stale, unverified,
+legacy, or mismatched stores require a full or focused rescan. For multi-repo
+intents, all decisions are resolved before one stage-level lifecycle report.
 
 ### Inputs
 
@@ -191,10 +194,10 @@ Standard 2-option gate: **Approve** (continue to Requirements Analysis) /
 
 ### Notes
 
-- **Always-rerun policy:** This stage is always re-executed for brownfield
-  projects even when prior artifacts exist. This is a deliberate deviation from
-  the upstream reference, documented in SKILL.md's "Deliberate Deviations"
-  section.
+- **Rerun guard:** This stage verifies each brownfield repository's recorded
+  scope and fingerprint before the human chooses reuse or rescan. It is a
+  deliberate deviation from the upstream reference, documented in SKILL.md's
+  "Deliberate Deviations" section.
 - **Two-link pipeline:** The aidlc-developer-agent performs the raw code
   scan (link 1, the lead), then the aidlc-architect-agent synthesizes the scan
   into structured artifacts and writes them (link 2, the final link). This separation ensures the scan is thorough (developer
@@ -418,7 +421,7 @@ large scope with significant unknowns.
    all six dimensions. Create
    `<record>/inception/requirements-analysis/requirements-analysis-questions.md`
    using the `[Answer]:` tag format. Include context-appropriate questions with
-   A-E options. Every question must end with `X. Other (please specify)` as
+   A-E options. Every ordinary clarifying question must end with `X. Other (please specify)` as
    the final option. All `[Answer]:` tags left blank.
 
    Offer the tri-mode question flow: Guide Me / Edit File / Chat.
@@ -1280,5 +1283,6 @@ narrative.
 - **Construction Phase**: Construction stages execute per the delivery plan
   produced by Stage 2.8
 - **Deliberate Deviations**: SKILL.md documents intentional differences from
-  the upstream reference, including the always-rerun RE policy, aidlc-design-agent
-  support additions, ADR artifacts, and the Delivery Planning expansion
+  the upstream reference, including the RE scope/fingerprint rerun guard,
+  aidlc-design-agent support additions, ADR artifacts, and the Delivery
+  Planning expansion

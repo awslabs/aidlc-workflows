@@ -15,12 +15,21 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun .codex/hooks/aidlc-codex-adapter.ts mint"
+            "command": "bun .codex/hooks/aidlc-codex-adapter.ts record-human-turn"
           }
         ]
       }
     ],
     "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun .codex/hooks/aidlc-codex-adapter.ts deliver-stage-rules"
+          }
+        ],
+        "matcher": "spawn_agent"
+      },
       {
         "hooks": [
           {
@@ -34,6 +43,22 @@
           {
             "type": "command",
             "command": "bun .codex/hooks/aidlc-codex-adapter.ts reviewer-scope"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun .codex/hooks/aidlc-codex-adapter.ts review-freeze"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun .codex/hooks/aidlc-codex-adapter.ts plan-approval-guard"
           }
         ]
       }
@@ -52,7 +77,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun .codex/hooks/aidlc-codex-adapter.ts state-sync"
+            "command": "bun .codex/hooks/aidlc-codex-adapter.ts sync-workflow-state"
           }
         ],
         "matcher": "update_plan"
@@ -61,7 +86,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun .codex/hooks/aidlc-codex-adapter.ts runtime-compile"
+            "command": "bun .codex/hooks/aidlc-codex-adapter.ts rebuild-stage-graph"
           }
         ],
         "matcher": "Bash"
@@ -92,7 +117,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun .codex/hooks/aidlc-codex-adapter.ts stop"
+            "command": "bun .codex/hooks/aidlc-codex-adapter.ts continue-workflow"
           }
         ]
       }

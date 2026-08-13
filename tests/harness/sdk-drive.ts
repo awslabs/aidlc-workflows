@@ -34,7 +34,16 @@
 //   - state:  <projectDir>/aidlc-docs/aidlc-state.md   (aidlc-lib.ts:137)
 //   - audit:  <projectDir>/aidlc-docs/audit.md         (aidlc-lib.ts:141)
 
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { query } from "@anthropic-ai/claude-agent-sdk";
@@ -431,6 +440,14 @@ export async function driveAidlc(
   const permissionMode = opts.permissionMode ?? "bypassPermissions";
   const settingSources = opts.settingSources ?? ["project"];
   const sdkSettings = resolveDriveSdkSettings(projectDir, opts);
+  // settingSources does not relocate Claude's mutable runtime state. Keep live
+  // tests off the user's ~/.claude.json so they work with a read-only home.
+  const requestedConfigDir = opts.env?.CLAUDE_CONFIG_DIR?.trim();
+  const claudeConfigDir =
+    requestedConfigDir ||
+    mkdtempSync(join(process.env.TMPDIR || tmpdir(), "aidlc-sdk-claude-"));
+  const ephemeralConfigDir = requestedConfigDir ? undefined : claudeConfigDir;
+  sdkSettings.env.CLAUDE_CONFIG_DIR = claudeConfigDir;
 
   const toolResults: CapturedToolResult[] = [];
   const askedQuestions: CapturedAskUserQuestion[] = [];
@@ -440,6 +457,7 @@ export async function driveAidlc(
     string,
     { toolName: string; input: Record<string, unknown> }
   >();
+  const permissionToolInputs = new Map<string, Record<string, unknown>>();
   let assistantText = "";
   let resultEvent: ResultEvent | undefined;
   let askMenuIndex = 0;
@@ -482,60 +500,66 @@ export async function driveAidlc(
         }, opts.timeoutMs)
       : undefined;
 
-  const run = query({
-    prompt,
-    options: {
-      cwd: projectDir,
-      permissionMode,
-      settingSources,
-      abortController,
-      ...(sdkSettings.model ? { model: sdkSettings.model } : {}),
-      ...(Object.keys(sdkSettings.env).length > 0 ? { env: sdkSettings.env } : {}),
-      canUseTool: async (toolName, input) => {
-        if (toolName === "AskUserQuestion") {
-          const questions =
-            (input as { questions?: AskUserQuestionItem[] }).questions ?? [];
-          const answers = buildAnswers(questions, answerScript, askMenuIndex);
-          askMenuIndex++;
-          const captured: CapturedAskUserQuestion = { questions, answers };
-          askedQuestions.push(captured);
-          writeSdkTrace(tracePath, "ask_user_question", {
-            questions: questions.map((q) => ({
-              header: q.header,
-              question: q.question,
-              options: q.options.map((o) => o.label),
-            })),
-            answers,
-          });
-          opts.onAskUserQuestion?.(captured);
-          if (askMenuIndex === stopAfterAskUserQuestionAt) {
-            // Record the INTENT to stop, but do NOT abort here. Aborting inside
-            // canUseTool tears down the SDK permission transport before this
-            // `{ behavior: "allow" }` response can be delivered, so the gate's
-            // tool_result comes back as "Tool permission stream closed before
-            // response received" (isError) instead of carrying the scripted
-            // answer's bytes. The actual stop happens in the tool_result handler
-            // below, keyed on stopAfterAskUserQuestionToolUseId — that fires
-            // AFTER the answer has crossed the boundary and been captured in the
-            // AskUserQuestion tool_result, which is the deterministic surface the
-            // calibration asserts on. (MR10's Windows wave introduced an eager
-            // abort here; the original design stopped only post-tool_result.)
-            writeSdkTrace(tracePath, "will_stop_after_ask_user_question", {
-              menuIndex: askMenuIndex,
-            });
-          }
-          return {
-            behavior: "allow",
-            updatedInput: { ...(input as object), answers },
-          };
-        }
-        // Everything else passes through unchanged (Bash/Write/Edit/Skill/...).
-        return { behavior: "allow", updatedInput: input };
-      },
-    },
-  });
-
   try {
+    const run = query({
+      prompt,
+      options: {
+        cwd: projectDir,
+        permissionMode,
+        settingSources,
+        abortController,
+        // Each drive is independent; avoid transcript writes racing cleanup.
+        persistSession: false,
+        ...(sdkSettings.model ? { model: sdkSettings.model } : {}),
+        ...(Object.keys(sdkSettings.env).length > 0 ? { env: sdkSettings.env } : {}),
+        canUseTool: async (toolName, input, permissionOptions) => {
+          // PreToolUse rewrites have already run when this callback receives the
+          // input. Retain it as a fallback, but allowed tools can bypass this
+          // callback; Agent/Task tool results carry their executed prompt.
+          permissionToolInputs.set(permissionOptions.toolUseID, input);
+          if (toolName === "AskUserQuestion") {
+            const questions =
+              (input as { questions?: AskUserQuestionItem[] }).questions ?? [];
+            const answers = buildAnswers(questions, answerScript, askMenuIndex);
+            askMenuIndex++;
+            const captured: CapturedAskUserQuestion = { questions, answers };
+            askedQuestions.push(captured);
+            writeSdkTrace(tracePath, "ask_user_question", {
+              questions: questions.map((q) => ({
+                header: q.header,
+                question: q.question,
+                options: q.options.map((o) => o.label),
+              })),
+              answers,
+            });
+            opts.onAskUserQuestion?.(captured);
+            if (askMenuIndex === stopAfterAskUserQuestionAt) {
+              // Record the INTENT to stop, but do NOT abort here. Aborting inside
+              // canUseTool tears down the SDK permission transport before this
+              // `{ behavior: "allow" }` response can be delivered, so the gate's
+              // tool_result comes back as "Tool permission stream closed before
+              // response received" (isError) instead of carrying the scripted
+              // answer's bytes. The actual stop happens in the tool_result handler
+              // below, keyed on stopAfterAskUserQuestionToolUseId — that fires
+              // AFTER the answer has crossed the boundary and been captured in the
+              // AskUserQuestion tool_result, which is the deterministic surface the
+              // calibration asserts on. (MR10's Windows wave introduced an eager
+              // abort here; the original design stopped only post-tool_result.)
+              writeSdkTrace(tracePath, "will_stop_after_ask_user_question", {
+                menuIndex: askMenuIndex,
+              });
+            }
+            return {
+              behavior: "allow",
+              updatedInput: { ...(input as object), answers },
+            };
+          }
+          // Everything else passes through unchanged (Bash/Write/Edit/Skill/...).
+          return { behavior: "allow", updatedInput: input };
+        },
+      },
+    });
+
     for await (const msg of run) {
       writeSdkTrace(tracePath, "message", { type: msg.type });
       if (msg.type === "assistant") {
@@ -581,9 +605,12 @@ export async function driveAidlc(
       } else if (msg.type === "user") {
         // tool_result blocks arrive as a synthetic 'user' message. The
         // content is byte-identical to the tool's stdout (verified in the
-        // toolout spike) before the LLM rewords it.
+        // toolout spike) before the LLM rewords it. Agent/Task results also
+        // expose the executed prompt after PreToolUse rewrites.
         const content = (msg as { message?: { content?: unknown } }).message
           ?.content;
+        const toolUseResult = (msg as { tool_use_result?: unknown })
+          .tool_use_result;
         if (Array.isArray(content)) {
           for (const block of content as Array<Record<string, unknown>>) {
             if (block.type === "tool_result") {
@@ -593,11 +620,17 @@ export async function driveAidlc(
               const pending = pendingTools.get(toolUseId);
               toolResults.push({
                 toolName: pending?.toolName ?? "",
-                input: pending?.input ?? {},
+                input: resolveCapturedToolInput(
+                  pending?.toolName ?? "",
+                  pending?.input ?? {},
+                  permissionToolInputs.get(toolUseId),
+                  toolUseResult,
+                ),
                 toolUseId,
                 resultText,
                 isError: block.is_error === true,
               });
+              permissionToolInputs.delete(toolUseId);
               writeSdkTrace(tracePath, "tool_result", {
                 toolUseId,
                 toolName: pending?.toolName ?? "",
@@ -670,6 +703,14 @@ export async function driveAidlc(
     }
   } finally {
     if (timer) clearTimeout(timer);
+    if (ephemeralConfigDir && process.env.AIDLC_KEEP_TEMP !== "1") {
+      rmSync(ephemeralConfigDir, {
+        recursive: true,
+        force: true,
+        maxRetries: process.platform === "win32" ? 10 : 0,
+        retryDelay: 50,
+      });
+    }
     writeSdkTrace(tracePath, "end", {
       timedOut,
       stoppedAfterAskUserQuestion,
@@ -716,6 +757,35 @@ export function extractToolResultText(content: unknown): string {
       .join("");
   }
   return "";
+}
+
+/**
+ * Resolve the input a tool actually executed. Agent/Task calls allowed by
+ * settings may bypass canUseTool, but their SDK tool result reports the final
+ * prompt after PreToolUse rewrites.
+ */
+export function resolveCapturedToolInput(
+  toolName: string,
+  proposedInput: Record<string, unknown>,
+  permissionInput: Record<string, unknown> | undefined,
+  toolUseResult: unknown,
+): Record<string, unknown> {
+  const input = permissionInput ?? proposedInput;
+  if (
+    toolName !== "Agent" &&
+    toolName !== "Task"
+  ) {
+    return input;
+  }
+  if (
+    !toolUseResult ||
+    typeof toolUseResult !== "object" ||
+    !("prompt" in toolUseResult) ||
+    typeof toolUseResult.prompt !== "string"
+  ) {
+    return input;
+  }
+  return { ...input, prompt: toolUseResult.prompt };
 }
 
 // ---------------------------------------------------------------------------

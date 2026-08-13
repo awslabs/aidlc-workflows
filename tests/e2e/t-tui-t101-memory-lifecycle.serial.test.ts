@@ -85,8 +85,8 @@ const MEM_RELPATH = join("ideation", "approval-handoff", "memory.md");
 // memory-template.md). The init is an LLM-driven copy of that template; a faithful
 // copy reproduces this byte-for-byte.
 const OWNERSHIP_LINE =
-  "> This file is maintained by the orchestrator during stage execution. " +
-  "Add observations at the gate ritual, not by editing here directly.";
+  "> This file is kept up to date automatically while the stage runs. " +
+  "Add observations at the review step, not by editing here directly.";
 
 interface Run {
   rc: number;

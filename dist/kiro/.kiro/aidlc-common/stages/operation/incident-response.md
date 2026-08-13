@@ -6,6 +6,7 @@ condition: Execute when operational runbooks and incident response procedures ar
 lead_agent: aidlc-operations-agent
 support_agents: []
 mode: inline
+summary_confirmation: required
 produces:
   - runbooks
   - incident-plan
@@ -70,7 +71,7 @@ Create SSM Automation runbook library, incident response plan (integrated with A
 
 Hand completion to `stage-protocol.md` via
 `bun .kiro/tools/aidlc-orchestrate.ts report --stage incident-response --result <outcome>`.
-The engine owns all lifecycle transitions and advancement.
+That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
 ### Step 6: Present Completion & Request Approval
 

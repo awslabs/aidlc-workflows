@@ -68,7 +68,7 @@ Phases execute sequentially. At each phase boundary (except Initialization → I
 
 **Purpose:** Bootstrap the workspace — scaffold the docs directory, detect the workspace, and initialize state. The welcome message is shown at session start via the `companyAnnouncements` entry in `settings.json` (not a stage).
 
-Initialization stages run **automatically** without approval gates. All three execute inside a single deterministic tool call (`aidlc-utility intent-birth`) that completes in well under a second.
+Initialization stages run **automatically** without approval gates. All three execute inside a single deterministic tool call (`aidlc-utility intent-create`) that completes in well under a second.
 
 | # | Stage | Lead | Key Artifacts | Condition |
 |---|-------|------|---------------|-----------|
@@ -77,7 +77,7 @@ Initialization stages run **automatically** without approval gates. All three ex
 | 0.3 | State Initialization | orchestrator | `aidlc-state.md`, `audit/` shards | ALWAYS |
 
 **Execution notes:**
-- All three stages run inline inside `aidlc-utility intent-birth` - no LLM subagent delegation, no per-stage prompt.
+- All three stages run inline inside `aidlc-utility intent-create` - no LLM subagent delegation, no per-stage prompt.
 - Workspace detection is a rule-based scanner (file extensions, known config filenames, package manifests).
 - No user interaction is needed during this phase.
 
@@ -408,7 +408,7 @@ If verification fails, the conductor reports the issues and asks whether to proc
 
 | Mode | Stages | User Interaction | Description |
 |------|--------|-----------------|-------------|
-| Inline (auto-proceed) | 0.1, 0.2, 0.3 | None | Run deterministically inside `aidlc-utility intent-birth`, no approval gate |
+| Inline (auto-proceed) | 0.1, 0.2, 0.3 | None | Run deterministically inside `aidlc-utility intent-create`, no approval gate |
 | Inline | 28 stages | Full | Agent works in conversation, approval gate at end |
 | Subagent | 2.2, 3.5 | Practices interview + final gate for 2.2; approval gate for 3.5 | Hub-and-spoke Practices Discovery; focused Code Generation |
 | Pipeline (2-link) | 2.1 | Approval gate only | Developer scan, then architect synthesis-and-write |

@@ -18,7 +18,7 @@ the build if the JSON diverges from the YAML.
 
 ```yaml
 ---
-# YAML frontmatter — 14 top-level authored fields
+# YAML frontmatter — authored fields
 ---
 
 # [Stage Title]
@@ -40,7 +40,7 @@ and completion messages.
 
 ## Authored fields
 
-Fourteen top-level authored fields (plus three `consumes[]` subfields).
+Top-level authored fields (plus three `consumes[]` subfields).
 All required unless marked optional. The schema in `stage-schema.ts`
 copies this table verbatim.
 
@@ -53,6 +53,10 @@ copies this table verbatim.
 | `lead_agent` | string | yes | agent slug; validated dynamically against `{{HARNESS_DIR}}/agents/*.md` via `loadAgents()` — no hardcoded enum |
 | `support_agents` | string[] | yes | empty list allowed; each entry a valid agent slug. Renamed from prose `Supporting Agents:` (format-only rename) |
 | `mode` | string | yes | `inline` \| `subagent` \| `pipeline` \| `mob` \| `agent-team`. The stage's **communication topology** — who talks to whom while the body runs. `inline` (conductor adopts every voice, zero dispatches), `subagent` (hub-and-spoke: the conductor dispatches the lead for the draft, then each `support_agents[]` entry as a real, mutually-blind spoke, then the lead to integrate), `pipeline` (chain: the links collectively author the artifacts, each link seeing all upstream work and advancing the work product directly; the final link leaves the artifacts complete), and `mob` (mesh: one room, cross-talk, dissent recorded; judgment-call objections surface to the human mid-stage) are active; `pipeline`/`mob` require non-empty `support_agents`. Writing model: each dispatched support agent writes its own contribution file (`contributions/<agent-slug>.md`, stage-protocol §11); the lead alone edits the stage's `produces[]` artifacts; on `mob`/`subagent`-with-supports stages the engine refuses approval while a declared collaborator's contribution file is missing (the ensemble completion evidence). **`agent-team` is reserved** — the future native-bus transport for mesh collaboration (`mob` is the portable mode); no stage declares it until a consumer ships. Orchestrator code reading `mode` MUST handle `agent-team` explicitly (at minimum throw "not yet implemented") — do not fall through to a default path. The review loop is NOT a mode: `reviewer` + `reviewer_max_iterations` deliver the two-party critique topology on every mode (stage-protocol.md §12a) |
+| `reviewer` | string | optional | agent slug; invoked after artifact production and before the approval gate |
+| `reviewer_max_iterations` | integer | optional | positive integer; requires `reviewer`; defaults to `2` |
+| `review_class` | string | optional | `adversarial` \| `advisory`; requires `reviewer`; defaults to `adversarial`. `advisory` is one pass with findings quoted verbatim at the human gate. `none` is not a stage value; scope `review_cap` and per-run `--review` may only lower the effective class |
+| `summary_confirmation` | string | optional | `required` \| `if-present`. Marks stages using the consolidated answer review before artifact generation. `required` requires a questions file, exact `Looks correct` answer, human-backed receipt, unchanged questions-file digest, and native artifact writes after that receipt. `if-present` applies the same checks only when a conditional question flow created a questions file |
 | `for_each` | string | optional | artifact slug; stage runs once per instance of that artifact. Omit for once-per-workflow stages. Doctor validates the artifact is produced by an upstream stage |
 | `workspace_requires` | boolean | optional | Default `false`. `true` marks a stage that must write source code to the workspace root, not just planning docs under the per-intent record dir. The stage-completion artifact guard (`aidlc-state.ts` approve/advance/finalize/complete-workflow) then requires a file outside the `aidlc/` workspace tree and the harness dir before the stage can complete: a stage that wrote only its `produces[]` markdown but no code is refused. Today only `code-generation` declares it |
 | `produces` | string[] | yes | empty allowed; lowercase-kebab artifact names — see [Artifact Vocabulary](../../../../docs/reference/16-artifact-vocabulary.md) for rules and the live registry tool |
@@ -95,6 +99,7 @@ lead_agent: aidlc-product-agent
 support_agents:
   - aidlc-delivery-agent
 mode: inline
+summary_confirmation: required
 produces:
   - scope-document
   - intent-backlog

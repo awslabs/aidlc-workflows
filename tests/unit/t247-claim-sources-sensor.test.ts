@@ -484,4 +484,551 @@ describe("t247 claim-sources sensor", () => {
     expect(result.pass).toBe(true);
     expect(result.findings).toEqual([]);
   });
+
+  // A reference link resolves only against a link reference definition that the
+  // document actually carries. Without one, CommonMark renders the brackets as
+  // literal text, so the tags stay visible and still ground the claim.
+  for (const [label, replacement] of [
+    ["two adjacent tags", "[desc][Q1]"],
+    ["three adjacent tags", "[desc][Q1][Q2]"],
+    ["a collapsed reference", "[desc][]"],
+    ["an adjacent pair inside a longer run", "[desc] [Q1][Q2] [Q3]"],
+  ] as const) {
+    test(`${label} without a matching definition still grounds a claim`, () => {
+      const dir = makeStageDir();
+      replaceInFile(
+        dir,
+        "intent-statement.md",
+        "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+        `The initiative provides a local command that echoes supplied text. ${replacement}`,
+      );
+
+      const result = run(dir);
+      expect(result.pass).toBe(true);
+      expect(result.findings).toEqual([]);
+    });
+  }
+
+  // The mirror of the rule above: once the document defines the label, the
+  // brackets really are a link, the reader sees link text rather than a tag,
+  // and the claim is no longer grounded by it.
+  for (const [label, replacement, definition] of [
+    ["a full reference", "[desc][evidence]", "[evidence]: https://example.invalid"],
+    ["a collapsed reference", "[desc][]", "[desc]: https://example.invalid"],
+    ["a shortcut reference", "[desc]", "[desc]: https://example.invalid"],
+  ] as const) {
+    test(`${label} with a matching definition does not ground a claim`, () => {
+      const dir = makeStageDir();
+      replaceInFile(
+        dir,
+        "intent-statement.md",
+        "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+        `The initiative provides a local command that echoes supplied text. ${replacement}`,
+      );
+      const statementPath = join(dir, "intent-statement.md");
+      writeFileSync(
+        statementPath,
+        `${readFileSync(statementPath, "utf-8")}\n${definition}\n`,
+        "utf-8",
+      );
+
+      const result = run(dir);
+      expect(result.pass).toBe(false);
+      expect(result.findings.join("\n")).toContain(
+        "claim block has no source tag",
+      );
+    });
+  }
+
+  // Definition detection has to agree with CommonMark's definition grammar in
+  // both directions. A line that only looks like a definition is prose the
+  // reader sees, and a real definition stays real inside a container. Getting
+  // either wrong lets unsourced or invisible-tag content through silently.
+  for (const [label, line] of [
+    ["an empty label", "[]: /url"],
+    ["a whitespace-only label", "[   ]: /url"],
+    ["an unescaped bracket in the label", "[a[b]]: /url"],
+    ["trailing prose", "[evidence]: this is an unsupported assertion"],
+    ["an unclosed angle-bracket destination", "[evidence]: <broken"],
+    ["an unbalanced bare destination", "[evidence]: /foo(bar"],
+    ["a bare destination closing a group it never opened", "[evidence]: /foo)bar"],
+    ["an unescaped angle bracket in the destination", "[evidence]: <a<b>"],
+    ["an inline title without separating whitespace", '[evidence]: <url>"title"'],
+    ["a DEL control character in the destination", "[evidence]: foo\u007fbar"],
+    ["an unescaped parenthesis in the title", "[evidence]: /url (ti(tle)"],
+    [
+      "an indented code block after a list marker",
+      "-     [evidence]: https://example.invalid",
+    ],
+  ] as const) {
+    test(`a definition-shaped line with ${label} is inspected as prose`, () => {
+      const dir = makeStageDir();
+      replaceInFile(
+        dir,
+        "intent-statement.md",
+        "## Assumptions & Open Questions",
+        `${line}\n\n## Assumptions & Open Questions`,
+      );
+
+      const result = run(dir);
+      expect(result.pass).toBe(false);
+      expect(result.findings.join("\n")).toContain(
+        "claim block has no source tag",
+      );
+    });
+  }
+
+  test("a four-space-indented top-level definition is inspected as code", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      "    [evidence]: /url",
+    );
+
+    const result = run(dir);
+    expect(result.pass).toBe(false);
+    expect(result.findings.join("\n")).toContain(
+      "claim block has no source tag",
+    );
+  });
+
+  test("a tab-indented top-level definition is inspected as code", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      "\t[evidence]: /url",
+    );
+
+    const result = run(dir);
+    expect(result.pass).toBe(false);
+    expect(result.findings.join("\n")).toContain(
+      "claim block has no source tag",
+    );
+  });
+
+  test("an inline title leaves the following quoted assertion visible", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "## Assumptions & Open Questions",
+      '[evidence]: /url "title"\n"This is an unsupported assertion."\n\n## Assumptions & Open Questions',
+    );
+
+    const result = run(dir);
+    expect(result.pass).toBe(false);
+    expect(result.findings.join("\n")).toContain(
+      "claim block has no source tag",
+    );
+  });
+
+  test("a multiline definition resolves shortcut references document-wide", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      "The initiative provides a local command that echoes supplied text. [desc]",
+    );
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "## Review",
+      "## Review\n[desc]:\n/url",
+    );
+
+    const result = run(dir);
+    expect(result.pass).toBe(false);
+    expect(result.findings.join("\n")).toContain(
+      "claim block has no source tag",
+    );
+  });
+
+  test("a multiline destination inherits its parent list-item context", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      "This is an unsupported assertion. [desc][Q1]",
+    );
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "## Review",
+      "## Review\n- [Q1]:\n  /url",
+    );
+
+    const result = run(dir);
+    expect(result.pass).toBe(false);
+    expect(result.findings.join("\n")).toContain(
+      "claim block has no source tag",
+    );
+  });
+
+  test("a reference title may span physical lines", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      "This is an unsupported assertion. [desc][Q1]",
+    );
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "## Review",
+      '## Review\n[Q1]: /url "title\ncontinued"',
+    );
+
+    const result = run(dir);
+    expect(result.pass).toBe(false);
+    expect(result.findings.join("\n")).toContain(
+      "claim block has no source tag",
+    );
+  });
+
+  test("reference-label length counts Unicode code points", () => {
+    const dir = makeStageDir();
+    const astralLabel = String.fromCodePoint(0x1f600).repeat(500);
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      `This is an unsupported assertion. [Q1][${astralLabel}]`,
+    );
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "## Review",
+      `## Review\n[${astralLabel}]: /url`,
+    );
+
+    const result = run(dir);
+    expect(result.pass).toBe(false);
+    expect(result.findings.join("\n")).toContain(
+      "claim block has no source tag",
+    );
+  });
+
+  test("a bare destination nested 33 levels is inspected as prose", () => {
+    const dir = makeStageDir();
+    const destination = `a${"(".repeat(33)}b${")".repeat(33)}`;
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      `[evidence]: ${destination}`,
+    );
+
+    const result = run(dir);
+    expect(result.pass).toBe(false);
+    expect(result.findings.join("\n")).toContain(
+      "claim block has no source tag",
+    );
+  });
+
+  test("ordered-list items ending in a parenthesis are separate claims", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      '1) [evidence]: /url\n2) "This is an unsupported assertion."',
+    );
+
+    const result = run(dir);
+    expect(result.pass).toBe(false);
+    expect(result.findings.join("\n")).toContain(
+      "claim block has no source tag",
+    );
+  });
+
+  test("an indented definition inherits its parent list-item context", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      "- [desc]\n\n    [Q1]: /url\n\nThis is an unsupported assertion. [desc][Q1]",
+    );
+
+    const result = run(dir);
+    expect(result.pass).toBe(false);
+    expect(result.findings.join("\n")).toContain(
+      "claim block has no source tag",
+    );
+  });
+
+  test("a multiline reference label resolves after whitespace normalization", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      "This is an unsupported assertion. [desc][foo bar]",
+    );
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "## Review",
+      "## Review\n[foo\nbar]: /url",
+    );
+
+    const result = run(dir);
+    expect(result.pass).toBe(false);
+    expect(result.findings.join("\n")).toContain(
+      "claim block has no source tag",
+    );
+  });
+
+  test("reference labels use Unicode full case folding", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      "[ss]: /url\n\nThis is an unsupported assertion. [desc][\u1e9e]",
+    );
+
+    const result = run(dir);
+    expect(result.pass).toBe(false);
+    expect(result.findings.join("\n")).toContain(
+      "claim block has no source tag",
+    );
+  });
+
+  for (const [label, definition] of [
+    ["a list nested in a block quote", "> - [Q1]:\n>   /url"],
+    ["a block quote nested in a list", "- > [Q1]:\n  > /url"],
+    ["a tab-indented list continuation", "- [Q1]:\n\t/url"],
+  ] as const) {
+    test(`a multiline destination preserves ${label}`, () => {
+      const dir = makeStageDir();
+      replaceInFile(
+        dir,
+        "intent-statement.md",
+        "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+        "This is an unsupported assertion. [desc][Q1]",
+      );
+      replaceInFile(
+        dir,
+        "intent-statement.md",
+        "## Review",
+        `## Review\n${definition}`,
+      );
+
+      const result = run(dir);
+      expect(result.pass).toBe(false);
+      expect(result.findings.join("\n")).toContain(
+        "claim block has no source tag",
+      );
+    });
+  }
+
+  test("a multiline label cannot cross an ATX heading", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      "[Q1\n## Unsupported assertion]: /url",
+    );
+
+    const result = run(dir);
+    expect(result.pass).toBe(false);
+    expect(result.findings.join("\n")).toContain(
+      "claim block has no source tag",
+    );
+  });
+
+  test("a multiline title cannot cross a thematic break", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      '[Q1]: /url "title\n---\nThis is an unsupported assertion."',
+    );
+
+    const result = run(dir);
+    expect(result.pass).toBe(false);
+    expect(result.findings.join("\n")).toContain(
+      "claim block has no source tag",
+    );
+  });
+
+  test("an HTML block interrupts a malformed multiline title", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      '[Q1]: /url "title\n<div>\nThis is an unsupported assertion."',
+    );
+
+    const result = run(dir);
+    expect(result.pass).toBe(false);
+    expect(result.findings.join("\n")).toContain(
+      "claim block has no source tag",
+    );
+  });
+
+  test("an asterisk thematic break interrupts a malformed multiline title", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      '[Q1]: /url "title\n***\nThis is an unsupported assertion."',
+    );
+
+    const result = run(dir);
+    expect(result.pass).toBe(false);
+    expect(result.findings.join("\n")).toContain(
+      "claim block has no source tag",
+    );
+  });
+
+  for (const [label, definition, reference] of [
+    ["destination", "[Q1]:\n    /url", "[desc][Q1]"],
+    ["label", "[foo\n    bar]: /url", "[desc][foo bar]"],
+  ] as const) {
+    test(`a multiline reference ${label} permits lazy indentation`, () => {
+      const dir = makeStageDir();
+      replaceInFile(
+        dir,
+        "intent-statement.md",
+        "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+        `This is an unsupported assertion. ${reference}`,
+      );
+      replaceInFile(
+        dir,
+        "intent-statement.md",
+        "## Review",
+        `## Review\n${definition}`,
+      );
+
+      const result = run(dir);
+      expect(result.pass).toBe(false);
+      expect(result.findings.join("\n")).toContain(
+        "claim block has no source tag",
+      );
+    });
+  }
+
+  test("an outer block-quote blank preserves the active list item", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      "This is an unsupported assertion. [desc][Q1]",
+    );
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "## Review",
+      "## Review\n> - [desc]\n>\n>     [Q1]: /url",
+    );
+
+    const result = run(dir);
+    expect(result.pass).toBe(false);
+    expect(result.findings.join("\n")).toContain(
+      "claim block has no source tag",
+    );
+  });
+
+  for (const [label, definition] of [
+    ["a nested list", "- - [Q1]:\n    /url"],
+    ["a nested list inside a block quote", "> - - [Q1]:\n>     /url"],
+    ["a nested list around a block quote", "- > - [Q1]:\n  >   /url"],
+    ["an elided list marker", "- [Q1]:\n/url"],
+    ["an elided block-quote marker", "> [Q1]:\n/url"],
+    ["elided quote and list markers", "> - [Q1]:\n    /url"],
+  ] as const) {
+    test(`a multiline destination preserves ${label}`, () => {
+      const dir = makeStageDir();
+      replaceInFile(
+        dir,
+        "intent-statement.md",
+        "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+        "This is an unsupported assertion. [desc][Q1]",
+      );
+      replaceInFile(
+        dir,
+        "intent-statement.md",
+        "## Review",
+        `## Review\n${definition}`,
+      );
+
+      const result = run(dir);
+      expect(result.pass).toBe(false);
+      expect(result.findings.join("\n")).toContain(
+        "claim block has no source tag",
+      );
+    });
+  }
+
+  test("a bare destination nested 32 levels remains a definition", () => {
+    const dir = makeStageDir();
+    const destination = `a${"(".repeat(32)}b${")".repeat(32)}`;
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "## Assumptions & Open Questions",
+      `[evidence]: ${destination}\n\n## Assumptions & Open Questions`,
+    );
+
+    const result = run(dir);
+    expect(result.pass).toBe(true);
+    expect(result.findings).toEqual([]);
+  });
+
+  for (const [label, definition] of [
+    ["a block quote", "> [Q1]: https://example.invalid"],
+    ["a list item", "- [Q1]: https://example.invalid"],
+    ["a block quote inside a list item", "- > [Q1]: https://example.invalid"],
+    ["a list item inside a block quote", "> - [Q1]: https://example.invalid"],
+  ] as const) {
+    test(`a definition inside ${label} still turns its reference into a link`, () => {
+      const dir = makeStageDir();
+      replaceInFile(
+        dir,
+        "intent-statement.md",
+        "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+        "The initiative provides a local command that echoes supplied text. [desc][Q1]",
+      );
+      const statementPath = join(dir, "intent-statement.md");
+      writeFileSync(
+        statementPath,
+        `${readFileSync(statementPath, "utf-8")}\n${definition}\n`,
+        "utf-8",
+      );
+
+      const result = run(dir);
+      expect(result.pass).toBe(false);
+      expect(result.findings.join("\n")).toContain(
+        "claim block has no source tag",
+      );
+    });
+  }
+
+  test("a link reference definition is not itself a claim block", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "## Assumptions & Open Questions",
+      "[evidence]: https://example.invalid\n\n## Assumptions & Open Questions",
+    );
+
+    const result = run(dir);
+    expect(result.pass).toBe(true);
+    expect(result.findings).toEqual([]);
+  });
 });

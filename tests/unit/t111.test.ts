@@ -15,7 +15,7 @@
 //     escape (the forged-audit-entry defence the source comments on at :248)
 //   - that appending twice keeps BOTH blocks (append-not-overwrite invariant)
 //   - that an invalid event type is rejected by throw, before any disk write
-//   - that EVERY one of the 74 VALID_EVENT_TYPES is accepted
+//   - that EVERY one of the 78 VALID_EVENT_TYPES is accepted
 // A regression that dropped escaping, overwrote prior history, reordered the
 // header fields, or narrowed the accepted event set would turn one of these
 // red.
@@ -79,7 +79,7 @@ afterAll(() => {
   }
 });
 
-// The 74 canonical event types, mirrored from aidlc-audit.ts VALID_EVENT_TYPES.
+// The 78 canonical event types, mirrored from aidlc-audit.ts VALID_EVENT_TYPES.
 // Kept as an explicit literal (not re-derived from the source) so that a silent
 // addition/removal in the source surfaces here as a count mismatch worth a look.
 const VALID_EVENT_TYPES = [
@@ -109,6 +109,7 @@ const VALID_EVENT_TYPES = [
   "GATE_APPROVED",
   "GATE_REJECTED",
   "QUESTION_ANSWERED",
+  "SUMMARY_CONFIRMATION_RECORDED",
   "REVIEW_REQUESTED",
   "REVIEW_COMPLETED",
   "ARTIFACT_CREATED",
@@ -116,12 +117,15 @@ const VALID_EVENT_TYPES = [
   "ARTIFACT_REUSED",
   "SUBAGENT_COMPLETED",
   "REVIEWER_SCOPE_BLOCKED",
+  "REVIEW_FREEZE_BLOCKED",
+  "PLAN_APPROVAL_BLOCKED",
   "HEALTH_CHECKED",
   "SCOPE_DETECTED",
   "SCOPE_CHANGED",
   "PLUGIN_SELECTION_CHANGED",
   "DEPTH_CHANGED",
   "TEST_STRATEGY_CHANGED",
+  "REVIEW_CLASS_CHANGED",
   "RECOMPOSED",
   "ERROR_LOGGED",
   "RECOVERY_COMPLETED",
@@ -258,12 +262,9 @@ describe("appendAuditEntryUnlocked — escaping and append-not-overwrite", () =>
     expect(result.event).toBe("ERROR_LOGGED");
   });
 
-  test("collapses CRLF to one escape but leaves a lone CR untouched (regex is /\\r?\\n/)", () => {
-    // Source escape is value.replace(/\r?\n/g, "\\n"). A CRLF pair becomes a
-    // single "\n" escape; a bare carriage return (CR not followed by LF) is
-    // NOT matched and survives verbatim. Pinning both halves of that contract
-    // catches a regression that widened the regex to also swallow lone CRs
-    // (which would change byte output for Mac-classic line endings).
+  test("collapses CRLF and lone CR line breaks to one literal escape", () => {
+    // Every JavaScript line terminator must stay on one physical audit line:
+    // multiline event readers treat a bare CR as a line boundary too.
     const proj = freshProject();
     appendAuditEntryUnlocked(
       "DECISION_RECORDED",
@@ -271,10 +272,10 @@ describe("appendAuditEntryUnlocked — escaping and append-not-overwrite", () =>
       proj,
     );
     const content = readAudit(proj);
-    // CRLF -> single \n escape (one char each in the \r and \n collapsing).
+    // CRLF -> one escape, not two.
     expect(content).toContain(`**CrLf**: p\\nq\n`);
-    // Lone CR passes through as a literal carriage return.
-    expect(content).toContain(`**LoneCr**: x\ry\n`);
+    expect(content).toContain(`**LoneCr**: x\\ny\n`);
+    expect(content).not.toContain("\r");
   });
 
   test("a second append preserves the first block (append, never overwrite)", () => {
@@ -339,9 +340,9 @@ describe("appendAuditEntryUnlocked — escaping and append-not-overwrite", () =>
 });
 
 describe("VALID_EVENT_TYPES — every canonical type is accepted", () => {
-  test("the mirrored list has 74 entries with no duplicates", () => {
-    expect(VALID_EVENT_TYPES.length).toBe(74);
-    expect(new Set(VALID_EVENT_TYPES).size).toBe(74);
+  test("the mirrored list has 78 entries with no duplicates", () => {
+    expect(VALID_EVENT_TYPES.length).toBe(78);
+    expect(new Set(VALID_EVENT_TYPES).size).toBe(78);
   });
 
   // Loop over ALL valid types: each must append a block whose **Event**

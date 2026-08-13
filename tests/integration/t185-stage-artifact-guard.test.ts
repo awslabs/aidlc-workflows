@@ -50,6 +50,7 @@ import {
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 
 const BUN = process.execPath;
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
@@ -57,7 +58,7 @@ const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const MID_IDEATION = "state-mid-ideation.md"; // Current Stage: feasibility
 
 function reviewCodeGen(proj: string, unit: string): void {
-  spawnSync(BUN, [
+  const args = [
     LOG,
     "review",
     "--stage",
@@ -68,11 +69,12 @@ function reviewCodeGen(proj: string, unit: string): void {
     "aidlc-architecture-reviewer-agent",
     "--iteration",
     "1",
-    "--verdict",
-    "READY",
     "--project-dir",
     proj,
-  ], { encoding: "utf-8" });
+  ];
+  for (const suffix of [[], ["--verdict", "READY"]]) {
+    spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
+  }
 }
 
 // Drive a state subcommand with the artifact guard ENABLED (clear the suite's
@@ -102,6 +104,20 @@ function bypassed(proj: string, args: string[]): { rc: number; out: string } {
   return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
 
+function summaryGuarded(proj: string, args: string[]): { rc: number; out: string } {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    AIDLC_SKIP_ARTIFACT_GUARD: "1",
+    AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+  };
+  delete env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD;
+  const r = spawnSync(BUN, [STATE, ...args, "--project-dir", proj], {
+    encoding: "utf-8",
+    env,
+  });
+  return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+}
+
 function field(proj: string, name: string): string {
   return guarded(proj, ["get", name]).out.trim();
 }
@@ -113,6 +129,83 @@ function writeRecordDoc(proj: string, rel: string): void {
   const full = join(seededRecordDir(proj), rel);
   mkdirSync(join(full, ".."), { recursive: true });
   writeFileSync(full, "# stub\n\n## A\n\n## B\n");
+}
+
+function writeSummaryQuestions(proj: string, answer = ""): string {
+  const full = join(
+    seededRecordDir(proj),
+    "ideation",
+    "feasibility",
+    "feasibility-questions.md",
+  );
+  mkdirSync(join(full, ".."), { recursive: true });
+  writeFileSync(
+    full,
+    [
+      "# Feasibility Questions",
+      "",
+      "## Consolidated Summary Confirmation",
+      "",
+      "- Looks correct",
+      "- Request changes",
+      "",
+      `[Answer]: ${answer}`,
+      "",
+    ].join("\n"),
+  );
+  return full;
+}
+
+function appendAudit(
+  proj: string,
+  event: string,
+  fields: Record<string, string> = {},
+): void {
+  appendAuditEntry(event, fields, proj);
+}
+
+function confirmSummary(proj: string, questions: string): void {
+  const env = { ...process.env };
+  delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+  const decision = spawnSync(BUN, [
+    LOG,
+    "decision",
+    "--stage",
+    "feasibility",
+    "--checkpoint",
+    "summary-confirmation",
+    "--questions-file",
+    questions,
+    "--decision",
+    "Does this all look correct?",
+    "--project-dir",
+    proj,
+  ], { encoding: "utf-8", env });
+  expect(decision.status).toBe(0);
+  appendAudit(proj, "HUMAN_TURN");
+  writeSummaryQuestions(proj, "Looks correct");
+  const answer = spawnSync(BUN, [
+    LOG,
+    "answer",
+    "--stage",
+    "feasibility",
+    "--checkpoint",
+    "summary-confirmation",
+    "--questions-file",
+    questions,
+    "--details",
+    "Looks correct",
+    "--project-dir",
+    proj,
+  ], { encoding: "utf-8", env });
+  expect(answer.status).toBe(0);
+}
+
+function recordArtifactWrite(proj: string, rel: string): string {
+  const full = join(seededRecordDir(proj), rel);
+  writeRecordDoc(proj, rel);
+  appendAudit(proj, "ARTIFACT_CREATED", { File: full, Tool: "Write" });
+  return full;
 }
 
 // Write a file at the workspace root (outside the aidlc/ tree + harness dirs).
@@ -212,6 +305,58 @@ describe("t185: stage-completion artifact guard (#366)", () => {
     expect(r.rc).toBe(0);
     // Auto-advanced off feasibility.
     expect(field(proj, "Current Stage")).not.toBe(slug);
+  });
+
+  describe("consolidated-summary confirmation guard", () => {
+    test("refuses a self-written Looks correct with no human-backed receipt", () => {
+      writeSummaryQuestions(proj, "Looks correct");
+      recordArtifactWrite(
+        proj,
+        "ideation/feasibility/feasibility-assessment.md",
+      );
+      const result = summaryGuarded(proj, ["advance", "feasibility"]);
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain(
+        "no fresh human-backed consolidated summary confirmation",
+      );
+    });
+
+    test("refuses an artifact whose last native write predates confirmation", () => {
+      const questions = writeSummaryQuestions(proj);
+      recordArtifactWrite(
+        proj,
+        "ideation/feasibility/feasibility-assessment.md",
+      );
+      confirmSummary(proj, questions);
+      const result = summaryGuarded(proj, ["advance", "feasibility"]);
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("no recorded native-tool write after");
+    });
+
+    test("refuses when answers change after the receipt", () => {
+      const questions = writeSummaryQuestions(proj);
+      confirmSummary(proj, questions);
+      writeFileSync(questions, `${readFileSync(questions, "utf-8")}\nChanged\n`);
+      recordArtifactWrite(
+        proj,
+        "ideation/feasibility/feasibility-assessment.md",
+      );
+      const result = summaryGuarded(proj, ["advance", "feasibility"]);
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain("changed after the human confirmed");
+    });
+
+    test("passes with matching digest and a post-confirmation artifact write", () => {
+      const questions = writeSummaryQuestions(proj);
+      confirmSummary(proj, questions);
+      recordArtifactWrite(
+        proj,
+        "ideation/feasibility/feasibility-assessment.md",
+      );
+      const result = summaryGuarded(proj, ["advance", "feasibility"]);
+      expect(result.rc).toBe(0);
+      expect(field(proj, "Current Stage")).not.toBe("feasibility");
+    });
   });
 
   // --- Bypasses --------------------------------------------------------------
@@ -431,7 +576,8 @@ describe("t185: stage-completion artifact guard (#366)", () => {
       );
       // Referee convergence rows for the converged subset, carrying the
       // attempt-identity stamp (Stage + Run floor) the consumers require; the
-      // fixture has no STAGE_STARTED row, so the matching floor is "".
+      // fixture has no STAGE_STARTED row, so the matching floor is the exact
+      // no-boundary sentinel.
       const shard = seededAuditShard(proj);
       mkdirSync(join(shard, ".."), { recursive: true });
       const rows = converged
@@ -442,7 +588,7 @@ describe("t185: stage-completion artifact guard (#366)", () => {
             "**Event**: SWARM_UNIT_CONVERGED",
             `**Unit name**: ${unit}`,
             "**Stage**: code-generation",
-            "**Run floor**: ",
+            "**Run floor**: unstarted#0",
             "",
             "---",
             "",

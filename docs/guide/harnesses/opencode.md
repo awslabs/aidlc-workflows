@@ -84,7 +84,7 @@ git checkout v2
   registry; `.opencode/plugin/aidlc-opencode-adapter.ts` maps opencode's
   plugin hook moments onto the core hook bodies in `.aidlc/hooks/` (run as bun
   subprocesses): reviewer read-scope and the AIDLC bash boundary before tool
-  execution; audit + sensors on write/edit/apply_patch; runtime-compile on
+  execution; audit + sensors on write/edit/apply_patch; rebuild-stage-graph on
   bash; statusline sync on todowrite; subagent logging on task; presence
   minting on each human turn; state validation before compaction.
 - **Forwarding-loop enforcement is advisory.** The Stop seam is the

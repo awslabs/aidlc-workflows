@@ -96,8 +96,8 @@ judge novel input against explicit criteria. Pick `templated` only when the
 output is dominantly pattern-following and the methodology is already encoded
 in the agent's knowledge files, as with delivery plans, CI/CD YAML, and
 runbook scaffolding -- templated is the one tier that steps effort down (on
-Claude Code, Codex, and opencode; on Kiro all tiers inherit the session model
-and effort, so the tier changes nothing there). When
+Claude Code, Codex, and opencode; on Kiro, Cursor, and Copilot all tiers inherit
+the session model and effort, so the tier changes nothing there). When
 in doubt, use `judgment`: the projection table (and a project's `tier_cap`)
 can always step cost down later, but a persona authored too low silently
 under-reasons. See [Agent System](../reference/05-agent-system.md) for the
@@ -173,7 +173,7 @@ Mirroring the reference recipe, here is the workflow end to end.
    and the agent→examples table do not regenerate themselves (see what does NOT
    validate, below).
 
-The full recipe — with the discovery, intent-birth, and statusline verification
+The full recipe — with the discovery, intent-create, and statusline verification
 commands — is in [Contributing: Adding an Agent](../reference/11-contributing.md#adding-an-agent).
 To change an existing agent's tools, tier, or stage assignments rather than add
 one, see [Agent System: How to Modify an Agent](../reference/05-agent-system.md#how-to-modify-an-agent).

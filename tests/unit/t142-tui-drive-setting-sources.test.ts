@@ -19,6 +19,7 @@ import {
   SNAPSHOT_STAGE_SLUG,
 } from "../harness/custom-harness.ts";
 import {
+  gridHasOption,
   gridIsApprovalGate,
   normalizeTuiCommand,
   pickRevisionOption,
@@ -183,6 +184,8 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
 `;
 
     expect(gridIsApprovalGate(summaryConfirmation)).toBe(false);
+    expect(gridHasOption(summaryConfirmation, "Looks correct")).toBe(true);
+    expect(gridHasOption(summaryConfirmation, "Approve")).toBe(false);
   });
 
   test("does not treat a pending multi-tab learnings tab as revision feedback", () => {
@@ -241,6 +244,21 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
 });
 
 describe("Kiro numbered-prose answer classification", () => {
+  test("recognizes observed guide-mode prompt phrasings", () => {
+    for (const prompt of [
+      "How would you like to answer these?\n1. Guide me\n2. Edit",
+      "How would you like to\n  provide your answers?\n1. Guide Me\n2. Edit File",
+      "How would you like to proceed?\n1. Guide Me\n2. Edit File",
+    ]) {
+      expect(
+        nextKiroNumberedProseAnswer(
+          prompt,
+          createKiroNumberedProseAnswerState(),
+        ),
+      ).toBe("1");
+    }
+  });
+
   test("answers guide batches, summary, learnings, and approval in order", () => {
     const state = createKiroNumberedProseAnswerState();
     expect(
@@ -320,6 +338,28 @@ describe("Kiro numbered-prose answer classification", () => {
     expect(state.approvalsAnswered).toBe(1);
   });
 
+  test("answers one summary confirmation per checkpoint-bearing stage, not once per journey", () => {
+    // Post-checkpoint-enforcement journeys present one consolidated-summary
+    // confirmation per stage that ran a Q&A (observed live: reverse-engineering
+    // "before I finalize", then requirements-analysis "before I generate the
+    // requirements artifact"). The retained viewport still shows the earlier
+    // answered prompt, so the classifier keys on the newest prompt's
+    // "before I ..." tail: a repaint of the SAME checkpoint is not re-answered,
+    // a LATER stage's checkpoint is.
+    const state = createKiroNumberedProseAnswerState();
+    const reConfirm =
+      "Does this all look correct before I finalize?\n1. Looks correct\n2. Request changes";
+    expect(nextKiroNumberedProseAnswer(reConfirm, state)).toBe("Looks correct");
+    expect(nextKiroNumberedProseAnswer(reConfirm, state)).toBeNull();
+    const raConfirm =
+      `${reConfirm}\n\n` +
+      "Does this all look correct before I generate the requirements artifact?\n" +
+      "1. Looks correct\n2. Request changes";
+    expect(nextKiroNumberedProseAnswer(raConfirm, state)).toBe("Looks correct");
+    expect(nextKiroNumberedProseAnswer(raConfirm, state)).toBeNull();
+    expect(state.confirmedSummaries.size).toBe(2);
+  });
+
   test("answers an ad-hoc lettered clarification menu once, and a distinct one after it", () => {
     // A live hub that spots a contradiction between two recorded answers may
     // invent a mid-stage lettered menu (observed live: intent-capture Q3-vs-Q5
@@ -340,6 +380,20 @@ describe("Kiro numbered-prose answer classification", () => {
       "- A. Browser localStorage\n" +
       "- B. A server with accounts";
     expect(nextKiroNumberedProseAnswer(second, state)).toBe("A");
+  });
+
+  test("accepts a surfaced assumption menu once", () => {
+    const state = createKiroNumberedProseAnswerState();
+    const assumptionConfirmation =
+      "Assumption Confirmation:\n" +
+      "1. Accept assumptions - keep these open for later stages\n" +
+      "2. Convert to follow-up questions - answer these now";
+    expect(nextKiroNumberedProseAnswer(assumptionConfirmation, state)).toBe(
+      "Accept assumptions",
+    );
+    expect(
+      nextKiroNumberedProseAnswer(assumptionConfirmation, state),
+    ).toBeNull();
   });
 
   test("answers a new learning prompt when an older approval remains visible", () => {
@@ -402,7 +456,7 @@ describe("tui fixture runtime graph", () => {
         process.execPath,
         [
           join(projectDir, ".claude", "tools", "aidlc-utility.ts"),
-          "intent-birth",
+          "intent-create",
           "--scope",
           CUSTOM_SCOPE,
         ],

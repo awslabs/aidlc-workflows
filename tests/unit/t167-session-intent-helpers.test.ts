@@ -1,4 +1,4 @@
-// covers: function:activeIntentUuid function:findIntentByUuid function:readSessionIntentUuid function:writeSessionIntentUuid
+// covers: function:activeIntentUuid function:createIntent function:findIntentByUuid function:readSessionIntentUuid function:writeSessionIntentUuid function:clearSessionIntentUuid
 //
 // t167 — the P8 session→intent helper layer behind the resume rebind (the
 // session-start hook composes these). Mechanism: none (pure in-process reads/
@@ -11,18 +11,22 @@
 //     blank uuid is a no-op (never writes a stray file).
 //   - activeIntentUuid — the uuid of the active intent (cursor / lone), or null
 //     on flat-legacy (no per-intent record).
-//   - findIntentByUuid — resolves a uuid to {space, slug} across EVERY space, or
-//     null for an unknown uuid (a stale stamp from a deleted intent).
+//   - findIntentByUuid — resolves a uuid to {space, slug, dirName} across EVERY
+//     space, or null for an unknown uuid (a stale stamp from a deleted intent).
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import {
   activeIntentUuid,
-  birthIntent,
+  clearSessionIntentHandoff,
+  createIntent,
+  clearSessionIntentUuid,
   findIntentByUuid,
+  readSessionIntentHandoff,
   readSessionIntentUuid,
   setActiveIntentCursor,
+  writeSessionIntentHandoff,
   writeSessionIntentUuid,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
@@ -55,8 +59,27 @@ describe("t167 session→intent helpers (mechanism none — pure in-process)", (
     expect(readSessionIntentUuid(proj, "S2")).toBeNull();
   });
 
+  test("clearSessionIntentUuid removes an existing stamp", () => {
+    writeSessionIntentUuid(proj, "S-clear", "uuid-old");
+    clearSessionIntentUuid(proj, "S-clear");
+    expect(readSessionIntentUuid(proj, "S-clear")).toBeNull();
+  });
+
+  test("session handoff receipts round-trip and clear independently of ownership", () => {
+    writeSessionIntentUuid(proj, "S-handoff", "uuid-old");
+    writeSessionIntentHandoff(proj, "S-handoff", "uuid-old", "uuid-new");
+    expect(readSessionIntentHandoff(proj, "S-handoff")).toMatchObject({
+      fromIntentUuid: "uuid-old",
+      toIntentUuid: "uuid-new",
+    });
+
+    clearSessionIntentHandoff(proj, "S-handoff");
+    expect(readSessionIntentHandoff(proj, "S-handoff")).toBeNull();
+    expect(readSessionIntentUuid(proj, "S-handoff")).toBe("uuid-old");
+  });
+
   test("activeIntentUuid returns the active (lone) intent's uuid", () => {
-    const a = birthIntent(proj, "auth-service", "default", "feature");
+    const a = createIntent(proj, "auth-service", "default", "feature");
     expect(activeIntentUuid(proj, "default")).toBe(a.uuid);
   });
 
@@ -65,25 +88,32 @@ describe("t167 session→intent helpers (mechanism none — pure in-process)", (
   });
 
   test("activeIntentUuid follows the active-intent cursor among several", () => {
-    const a = birthIntent(proj, "first", "default", "feature");
-    const b = birthIntent(proj, "second", "default", "feature");
+    const a = createIntent(proj, "first", "default", "feature");
+    const b = createIntent(proj, "second", "default", "feature");
     setActiveIntentCursor(proj, a.dirName, "default");
     expect(activeIntentUuid(proj, "default")).toBe(a.uuid);
     setActiveIntentCursor(proj, b.dirName, "default");
     expect(activeIntentUuid(proj, "default")).toBe(b.uuid);
   });
 
-  test("findIntentByUuid resolves a uuid to {space, slug} across spaces", () => {
-    birthIntent(proj, "in-default", "default", "feature");
-    const t = birthIntent(proj, "in-teamb", "teamB", "feature");
+  test("findIntentByUuid resolves a uuid to its logical and on-disk identity across spaces", () => {
+    createIntent(proj, "in-default", "default", "feature");
+    const t = createIntent(proj, "in-teamb", "teamB", "feature");
     const found = findIntentByUuid(proj, t.uuid);
     expect(found).not.toBeNull();
     expect(found?.space).toBe("teamB");
     expect(found?.slug).toBe("in-teamb");
+    expect(found?.dirName).toBe(t.dirName);
   });
 
   test("findIntentByUuid returns null for an unknown uuid (stale stamp)", () => {
-    birthIntent(proj, "real", "default", "feature");
+    createIntent(proj, "real", "default", "feature");
     expect(findIntentByUuid(proj, "00000000-0000-0000-0000-000000000000")).toBeNull();
+  });
+
+  test("findIntentByUuid returns null when the registry row has no record", () => {
+    const removed = createIntent(proj, "removed", "default", "feature");
+    rmSync(removed.recordDir, { recursive: true, force: true });
+    expect(findIntentByUuid(proj, removed.uuid)).toBeNull();
   });
 });

@@ -33,7 +33,10 @@ const SUBJECTS = [
 const PROJECT_DIR = "$CLAUDE_PROJECT_DIR";
 const PROJECT_DIR_RE = /\$CLAUDE_PROJECT_DIR/g;
 const BUG_SHAPE_RE = /(^|[\s(])\$CLAUDE_PROJECT_DIR\b/;
-const EXPECTED_PROJECT_DIR_REFERENCES = 15; // 13 + both PreToolUse guards
+// Nineteen command registrations (mint-presence and fold-usage are each wired
+// to two events; review-freeze and the plan-approval guard joined the shared
+// PreToolUse group) plus the executable permission glob.
+const EXPECTED_PROJECT_DIR_REFERENCES = 20;
 const EXPECTED_PERMISSION_GLOB = 'Bash(bun "$CLAUDE_PROJECT_DIR/.claude/tools/"*)';
 
 interface Settings {
@@ -72,6 +75,26 @@ function permissionEntries(settings: unknown): string[] {
 
 function executableSettingsStrings(settings: unknown): string[] {
   return [...collectCommandStrings(settings), ...permissionEntries(settings)];
+}
+
+function eventHookGroups(settings: unknown, event: string): unknown[] {
+  if (!isRecord(settings) || !isRecord(settings.hooks)) return [];
+  const groups = settings.hooks[event];
+  return Array.isArray(groups) ? groups : [];
+}
+
+function hasUnfilteredFoldUsageHook(settings: unknown, event: string): boolean {
+  return eventHookGroups(settings, event).some((group) => {
+    if (!isRecord(group) || group.matcher !== "" || !Array.isArray(group.hooks)) {
+      return false;
+    }
+    return group.hooks.some(
+      (hook) =>
+        isRecord(hook) &&
+        hook.command ===
+          'bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-fold-usage.ts"',
+    );
+  });
 }
 
 function projectDirReferenceCount(values: string[]): number {
@@ -149,6 +172,12 @@ describe("t219 Claude settings quote CLAUDE_PROJECT_DIR command paths", () => {
       // Pin the original shell-splitting bug shape directly: reverting the fix
       // to `bun $CLAUDE_PROJECT_DIR/...` trips this even if formatting moves.
       expect(values.filter((value) => BUG_SHAPE_RE.test(value))).toEqual([]);
+    });
+
+    test(`${subject.label}: fold-usage is unfiltered on both tool events`, () => {
+      const settings = readSettings(subject.path);
+      expect(hasUnfilteredFoldUsageHook(settings, "PreToolUse")).toBe(true);
+      expect(hasUnfilteredFoldUsageHook(settings, "PostToolUse")).toBe(true);
     });
   }
 });

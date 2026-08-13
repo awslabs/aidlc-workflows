@@ -555,7 +555,7 @@ export interface MarkerSnapshot {
 
 // Freshness window past which a heartbeat is "frozen" relative to the newest
 // recorded audit activity. A hook that has not fired since well before the last
-// stage transition is the cold-hook signal (#571's runtime-compile case).
+// stage transition is the cold-hook signal (#571's rebuild-stage-graph case).
 export const FROZEN_HEARTBEAT_MS = 24 * 60 * 60 * 1000;
 
 // Run every diagnosis rule. Order is severity-stable (errors first) only after
@@ -698,7 +698,7 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
       remedy:
         "The compiled runtime graph is out of date. Re-run `bun " +
         "<harness>/tools/aidlc-graph.ts compile`; if this recurs, the " +
-        "runtime-compile hook may not be firing on this harness (check hook heartbeats).",
+        "rebuild-stage-graph hook may not be firing on this harness (check hook heartbeats).",
       safeToAutomate: true,
     });
   } else if (
@@ -717,7 +717,7 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
       evidence: { runtimeGraphExists: false },
       remedy:
         "No compiled runtime graph. Re-run `bun <harness>/tools/aidlc-graph.ts compile`. " +
-        "If it never appears, the runtime-compile hook is not firing on this harness.",
+        "If it never appears, the rebuild-stage-graph hook is not firing on this harness.",
       safeToAutomate: true,
     });
   }
@@ -861,6 +861,10 @@ const STATE_ALLOWLIST = [
   "Revision Count",
   "Parked",
   "Parked At Stage",
+  "Active Unit",
+  "Unit State",
+  "Unit Pause Reason",
+  "Unit Next Action",
 ] as const;
 
 // Audit event types that carry routing/gate signal. Other event types (and all
@@ -878,6 +882,7 @@ const AUDIT_EVENT_ALLOWLIST = new Set([
   "GATE_APPROVED",
   "GATE_REJECTED",
   "HUMAN_TURN",
+  "SUMMARY_CONFIRMATION_RECORDED",
   "PHASE_STARTED",
   "PHASE_COMPLETED",
   "SCOPE_DETECTED",

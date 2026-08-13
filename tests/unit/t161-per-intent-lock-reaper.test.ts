@@ -18,13 +18,14 @@
 //   WORKSPACE_LOCK_SENTINEL / DEFAULT_LOCK_STALE_MS (AIDLC_LOCK_STALE_MS env).
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   acquireAuditLock,
   auditLockDir,
   auditLockIdentity,
+  auditLockOwnedByProcess,
   detectLeakedLocks,
   holdsAuditLock,
   releaseAuditLock,
@@ -67,6 +68,23 @@ describe("t161 keying invariants", () => {
     expect(ws).not.toBe(b);
   });
 
+  test("physical and symlink project paths share one lock identity", () => {
+    const parent = mkdtempSync(join(tmpdir(), `aidlc-t161-alias-${process.pid}-`));
+    const real = join(parent, "real");
+    const alias = join(parent, "alias");
+    mkdirSync(real);
+    symlinkSync(real, alias, "dir");
+    try {
+      expect(auditLockIdentity(alias)).toBe(auditLockIdentity(real));
+      expect(auditLockDir(alias)).toBe(auditLockDir(real));
+      expect(acquireAuditLock(real, 0, 1)).toBe(true);
+      expect(acquireAuditLock(alias, 0, 1)).toBe(false);
+      releaseAuditLock(real);
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
   test("intent-omitted does NOT resolve activeIntent() (stable even with intents on disk)", () => {
     // auditLockIdentity for the omitted case is a pure sentinel — it must not
     // read the project's active-intent (at birth there is no active intent).
@@ -78,6 +96,16 @@ describe("t161 keying invariants", () => {
 });
 
 describe("t161 per-intent lock independence", () => {
+  test("lock ownership requires the live PID stamped into the requested lock", () => {
+    expect(auditLockOwnedByProcess(PD, process.pid)).toBe(false);
+    expect(acquireAuditLock(PD, 0, 1)).toBe(true);
+    expect(auditLockOwnedByProcess(PD, process.pid)).toBe(true);
+    expect(auditLockOwnedByProcess(PD, process.pid + 1)).toBe(false);
+    expect(auditLockOwnedByProcess(PD, 0)).toBe(false);
+    releaseAuditLock(PD);
+    expect(auditLockOwnedByProcess(PD, process.pid)).toBe(false);
+  });
+
   test("two intents can be held concurrently in-process without contention", () => {
     expect(acquireAuditLock(PD, 0, 1, "auth-aaaaaaaa", "default")).toBe(true);
     // A DIFFERENT intent acquires immediately (0 retries) — no shared lock.
@@ -152,6 +180,21 @@ describe("t161 stale-lock reaper", () => {
     } finally {
       // The lock dir is "held" by the fake stamp; clean it.
       rmSync(auditLockDir(PD, INTENT, "default"), { recursive: true, force: true });
+      delete process.env.AIDLC_LOCK_STALE_MS;
+    }
+  });
+
+  test("doctor does not clear an over-age live owner protected from stale reaping", () => {
+    process.env.AIDLC_LOCK_STALE_MS = "1";
+    try {
+      expect(
+        acquireAuditLock(PD, 0, 1, undefined, undefined, false),
+      ).toBe(true);
+      Bun.sleepSync(5);
+      expect(detectLeakedLocks(PD, true)).toEqual([]);
+      expect(existsSync(auditLockDir(PD))).toBe(true);
+      releaseAuditLock(PD);
+    } finally {
       delete process.env.AIDLC_LOCK_STALE_MS;
     }
   });

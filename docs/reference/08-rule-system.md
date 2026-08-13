@@ -6,7 +6,7 @@ This chapter is the schema-level reference for the v0.5.0 rule system: where rul
 
 ## Layout
 
-Rules live in the active space memory layer at `aidlc/spaces/<active-space>/memory/` (one hand-editable set at the workspace root, read by every harness via its native include — Claude `@`-import stub, Kiro CLI and Kiro IDE resources globs, Codex `AIDLC_RULES_DIR`) with neutral scope-named files:
+Rules live in the active space memory layer at `aidlc/spaces/<active-space>/memory/` (one hand-editable set at the workspace root, read by every harness via its native include — Claude `@`-import stub, Kiro CLI agent resources, Kiro IDE always-included steering with live file references, Codex `AIDLC_RULES_DIR`) with neutral scope-named files:
 
 ```
 aidlc/spaces/<active-space>/memory/
@@ -49,7 +49,7 @@ The compile output (`stage-graph.json` per-stage `rules_in_context` field) bakes
 
 ## Strict-additive runtime model
 
-Every applicable rule appears in `rules_in_context`. Org, team, and project rules concatenate; nothing drops at runtime. The phase rule attaches when the rule's filename matches the stage's `phase:` declaration — no glob filter, no concrete-path synthesis. The agent reads the full chain at session start.
+Every applicable rule appears in `rules_in_context`. Org, team, and project rules concatenate; nothing drops at runtime. The phase rule attaches when the rule's filename matches the stage's `phase:` declaration - no glob filter, no concrete-path synthesis. Before `run-stage`, the engine reads each substantive rule file from the active space and emits its text through one or more bounded `load-steering` directives. Continuation tokens carry an integrity MAC keyed by a random, machine-local secret under the active intent's gitignored `.aidlc-*` runtime state, or under the clone-local session runtime before an intent exists; the token binds the stage, workflow state, rule bundle, route, and next part and cannot be re-signed from the public project path. A fresh `next` lazily mints the key when needed. There is no size-based path fallback. Empty templates are dropped, while unreadable or invalid required rules stop with repair guidance. Delivery repeats every stage, so a learning admitted mid-workflow reaches the next stage.
 
 Conflicts (a narrower scope contradicting broader policy) are rejected at the memory gate — the §13 Learnings Ritual's admission check — before a learning reaches the resolver. The check is section-level: when a proposed dated learning entry is about to be written to `memory/project.md` (or `memory/team.md`), the orchestrator compares it against `memory/org.md`'s matching heading via an LLM check; if a conflict is found, the user **revises, skips, or escalates** (there is no override path). Practices-discovery's affirmation gate is the other admission gate, but its promotion is a deterministic section-replace (`aidlc-state.ts practices-promote`) legitimised by the user's affirmation — it does not run the automated org-conflict check. Post-write drift between org and team/project content is surfaced separately by the doctor's rule-drift row (below).
 

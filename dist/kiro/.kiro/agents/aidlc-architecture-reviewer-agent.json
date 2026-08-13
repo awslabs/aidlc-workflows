@@ -17,8 +17,13 @@
   "toolsSettings": {
     "execute_bash": {
       "allowedCommands": [
-        "bun \\.kiro/tools/.*",
-        "date -u .*"
+        "bun (run )?[\"']?\\.kiro/tools/[A-Za-z0-9._-]+\\.ts[\"']?( .*)?",
+        "date -u( .*)?"
+      ],
+      "deniedCommands": [
+        "([^\\s]*/)?rm( [^\\s]+)* -[A-Za-z]*[rR][A-Za-z]*( .*)?",
+        "([^\\s]*/)?rm( [^\\s]+)* --recursive( .*)?",
+        "([^\\s]*/)?git( -[^\\s]+( (\"[^\"]*\"|'[^']*'|[^\\s]+))?)* push( .*)?"
       ]
     },
     "fs_write": {
@@ -28,13 +33,16 @@
     }
   },
   "resources": [
-    "file://.kiro/agents/aidlc-architecture-reviewer-agent.md",
-    "file://.kiro/knowledge/aidlc-architecture-reviewer-agent/*.md",
     "file://.kiro/knowledge/aidlc-shared/*.md",
     "file://aidlc/spaces/default/memory/**/*.md"
   ],
   "hooks": {
     "preToolUse": [
+      {
+        "matcher": "execute_bash",
+        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts state-transition-guard aidlc-architecture-reviewer-agent",
+        "timeout_ms": 15000
+      },
       {
         "matcher": "fs_read",
         "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts reviewer-scope aidlc-architecture-reviewer-agent",
@@ -49,6 +57,23 @@
         "matcher": "execute_bash",
         "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts reviewer-scope aidlc-architecture-reviewer-agent",
         "timeout_ms": 15000
+      },
+      {
+        "matcher": "fs_write",
+        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts review-freeze",
+        "timeout_ms": 15000
+      },
+      {
+        "matcher": "execute_bash",
+        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts review-freeze",
+        "timeout_ms": 15000
+      }
+    ],
+    "postToolUse": [
+      {
+        "matcher": "fs_write",
+        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts audit-and-sensors",
+        "timeout_ms": 120000
       }
     ]
   }

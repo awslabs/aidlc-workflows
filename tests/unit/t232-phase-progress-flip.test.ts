@@ -1,8 +1,8 @@
-// covers: subcommand:aidlc-state:advance, subcommand:aidlc-state:finalize, subcommand:aidlc-state:complete-workflow, subcommand:aidlc-jump:execute, subcommand:aidlc-utility:scope-change, subcommand:aidlc-utility:recompose, subcommand:aidlc-utility:intent-birth, function:setPhaseProgress
+// covers: subcommand:aidlc-state:advance, subcommand:aidlc-state:finalize, subcommand:aidlc-state:complete-workflow, subcommand:aidlc-jump:execute, subcommand:aidlc-utility:scope-change, subcommand:aidlc-utility:recompose, subcommand:aidlc-utility:intent-create, function:setPhaseProgress
 //
 // t232 - the state file's `## Phase Progress` rows advance with the workflow.
 //
-// Regression pin for the write-once drift: intent-birth seeded the section and
+// Regression pin for the write-once drift: intent-create seeded the section and
 // no code ever flipped a row afterwards, so a reader saw `- **Ideation**:
 // Pending` above a fully-checked Ideation checkbox block. The section is
 // display-only (routing reads Lifecycle Phase + the checkboxes; --status
@@ -10,7 +10,7 @@
 // state file, not routing.
 //
 // The contract under test (setPhaseProgress in aidlc-lib.ts + its call sites):
-//   - intent-birth seeds Initialization=Verified (birth completes every init
+//   - intent-create seeds Initialization=Verified (birth completes every init
 //     stage), the first post-init stage's phase Active, later phases
 //     Pending/Skipped by EXECUTE presence.
 //   - advance: non-boundary leaves the section byte-identical; a boundary
@@ -120,12 +120,12 @@ function phaseProgressSection(proj: string): string {
 }
 
 function birth(proj: string, scope: string): RunResult {
-  return run(UTILITY_TOOL, proj, ["intent-birth", "--scope", scope]);
+  return run(UTILITY_TOOL, proj, ["intent-create", "--scope", scope]);
 }
 
 function recordRequiredReview(proj: string, slug: string): void {
   if (slug !== "intent-capture" && slug !== "rough-mockups") return;
-  const reviewed = run(LOG_TOOL, proj, [
+  const args = [
     "review",
     "--stage",
     slug,
@@ -133,11 +133,12 @@ function recordRequiredReview(proj: string, slug: string): void {
     "aidlc-product-lead-agent",
     "--iteration",
     "1",
-    "--verdict",
-    "READY",
-  ]);
-  if (reviewed.rc !== 0) {
-    throw new Error(`failed to record ${slug} review: ${reviewed.combined}`);
+  ];
+  for (const suffix of [[], ["--verdict", "READY"]]) {
+    const reviewed = run(LOG_TOOL, proj, [...args, ...suffix]);
+    if (reviewed.rc !== 0) {
+      throw new Error(`failed to record ${slug} review: ${reviewed.combined}`);
+    }
   }
 }
 

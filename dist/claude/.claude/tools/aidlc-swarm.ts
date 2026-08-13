@@ -16,7 +16,8 @@
 //   prepare  --batch <n> --units <a,b,c> [--base <branch>] [--concurrency <n>]
 //            [--degraded-from <subagent|ultracode>] [--repo <name>]
 //       Fork an isolated git worktree per unit (aidlc-worktree create +
-//       aidlc-bolt start --worktree) and emit SWARM_STARTED once for the batch.
+//       aidlc-bolt start --worktree) and emit SWARM_STARTED once for the units
+//       whose worktrees were successfully prepared.
 //       --repo (P7) selects the sibling repo the batch's worktrees fork inside (a
 //       multi-repo intent requires it; single-repo infers the lone repo); the
 //       resolved name is forwarded to every aidlc-worktree create + bolt start.
@@ -72,22 +73,37 @@
 //     (BOLT_FAILED paired with the BOLT_STARTED that `start --worktree` emitted).
 
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { basename, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import {
   auditBlockField,
+  auditShardDir,
+  boltSlugForUnit,
+  findAllEvents,
   getField,
-  latestMainWorkflowStageStarted,
+  isRegularFile,
+  latestMainWorkflowStageRunFloor,
+  latestMainWorkflowStageRunFloorForProject,
   parseArgs,
+  readAuditShardEvents,
   readAllAuditShards,
   readStateFile,
+  relativeRecordDir,
+  reviewArtifactFingerprint,
+  resolveBoltDag,
   resolveConstructionRepo,
   resolveProjectDir,
   resolveStage,
+  terminalReviewVerdict,
+  validateUnitName,
+  worktreeAuditFilePath,
   worktreePath,
+  worktreeRuntimeGraphPath,
+  worktreeStateFilePath,
 } from "./aidlc-lib.ts";
 import { compiledExecutable } from "./aidlc-runtime-paths.ts";
 
@@ -115,6 +131,11 @@ interface UnitResult {
   reason?: FailureReason;
   detail?: string;
   tampered?: boolean;
+}
+
+interface SwarmAttemptStamp {
+  stage: string;
+  floor: string;
 }
 
 // --- Sibling-tool composition (synchronous; these calls are quick) ----------
@@ -214,7 +235,7 @@ function verdictFor(
   checkCmd: string,
   testFile?: string
 ): Verdict {
-  const wt = worktreePath(projectDir, unit);
+  const wt = worktreePath(projectDir, swarmBoltSlug(unit));
   if (!existsSync(wt)) {
     return { exists: false, converged: false, tampered: false };
   }
@@ -239,6 +260,8 @@ function verdictFor(
 interface ReviewerRequirement {
   stage: string;
   reviewer: string | null;
+  reviewClass: "adversarial" | "advisory";
+  maxIterations: number;
   error?: string;
 }
 
@@ -249,6 +272,8 @@ function reviewerRequirement(projectDir: string): ReviewerRequirement {
       return {
         stage: "",
         reviewer: null,
+        reviewClass: "adversarial",
+        maxIterations: 2,
         error: "cannot resolve reviewer requirement: Current Stage is empty",
       };
     }
@@ -257,14 +282,27 @@ function reviewerRequirement(projectDir: string): ReviewerRequirement {
       return {
         stage,
         reviewer: null,
+        reviewClass: "adversarial",
+        maxIterations: 2,
         error: `cannot resolve reviewer requirement: stage "${stage}" is absent from the stage graph`,
       };
     }
-    return { stage, reviewer: definition.reviewer?.trim() || null };
+    const reviewClass = definition.review_class ?? "adversarial";
+    return {
+      stage,
+      reviewer: definition.reviewer?.trim() || null,
+      reviewClass,
+      maxIterations:
+        reviewClass === "advisory"
+          ? 1
+          : definition.reviewer_max_iterations ?? 2,
+    };
   } catch (e) {
     return {
       stage: "",
       reviewer: null,
+      reviewClass: "adversarial",
+      maxIterations: 2,
       error: `cannot resolve reviewer requirement: ${e instanceof Error ? e.message : String(e)}`,
     };
   }
@@ -279,13 +317,20 @@ function reviewerReceiptError(
   unit: string,
   stage: string,
   reviewer: string,
+  reviewClass: "adversarial" | "advisory",
+  maxIterations: number,
 ): string | null {
-  const audit = readAllAuditShards(worktreePath(projectDir, unit));
+  const boltSlug = swarmBoltSlug(unit);
+  const audit = readAllAuditShards(worktreePath(projectDir, boltSlug));
   if (!audit) {
     return `claimed converged but worktree audit is missing; expected a terminal review by ${reviewer}`;
   }
 
-  const relevant = new Set(["BOLT_STARTED", "REVIEW_COMPLETED"]);
+  const relevant = new Set([
+    "BOLT_STARTED",
+    "REVIEW_REQUESTED",
+    "REVIEW_COMPLETED",
+  ]);
   const events = audit
     .replace(/\r\n/g, "\n")
     .split(/\n---\n/)
@@ -305,7 +350,7 @@ function reviewerReceiptError(
   for (let i = 0; i < events.length; i++) {
     if (
       events[i].event === "BOLT_STARTED" &&
-      auditBlockField(events[i].block, "Bolt slug") === unit
+      auditBlockField(events[i].block, "Bolt slug") === boltSlug
     ) {
       boltStart = i;
     }
@@ -314,20 +359,56 @@ function reviewerReceiptError(
     return `claimed converged but worktree audit has no BOLT_STARTED boundary for unit "${unit}"`;
   }
 
+  const pendingRequests = new Set<string>();
   for (let i = boltStart + 1; i < events.length; i++) {
     const event = events[i];
-    if (event.event !== "REVIEW_COMPLETED") continue;
+    if (
+      event.event !== "REVIEW_REQUESTED" &&
+      event.event !== "REVIEW_COMPLETED"
+    ) {
+      continue;
+    }
     if (auditBlockField(event.block, "Workflow")?.startsWith("single-stage:")) continue;
     if (auditBlockField(event.block, "Stage") !== stage) continue;
     if (auditBlockField(event.block, "Reviewer") !== reviewer) continue;
     if (auditBlockField(event.block, "Unit") !== unit) continue;
-    const verdict = auditBlockField(event.block, "Verdict");
-    if (verdict === "READY" || verdict === "NOT-READY") return null;
+    const iteration = auditBlockField(event.block, "Iteration");
+    if (!iteration || !/^[1-9][0-9]*$/.test(iteration)) continue;
+    const requestKey = `${unit}\u0000${iteration}`;
+    if (event.event === "REVIEW_REQUESTED") {
+      pendingRequests.add(requestKey);
+      continue;
+    }
+    if (!pendingRequests.delete(requestKey)) continue;
+    const verdict = terminalReviewVerdict(
+      auditBlockField(event.block, "Verdict"),
+      iteration,
+      reviewClass,
+      maxIterations,
+    );
+    if (verdict === null) continue;
+    const definition = resolveStage(stage);
+    if (!definition) continue;
+    const recordedFingerprint = auditBlockField(event.block, "Artifact Fingerprint");
+    const currentFingerprint = reviewArtifactFingerprint(
+      worktreePath(projectDir, boltSlug),
+      definition,
+      unit,
+      { requireRequiredArtifacts: true },
+    );
+    if (
+      recordedFingerprint !== null &&
+      /^sha256:[0-9a-f]{64}$/.test(recordedFingerprint) &&
+      currentFingerprint !== null &&
+      recordedFingerprint === currentFingerprint
+    ) {
+      return null;
+    }
   }
 
   return (
     `claimed converged but no terminal REVIEW_COMPLETED for stage "${stage}", ` +
-    `unit "${unit}", reviewer "${reviewer}" exists after this Bolt started`
+    `unit "${unit}", reviewer "${reviewer}" with a current artifact fingerprint exists after this Bolt started`
   );
 }
 
@@ -343,7 +424,8 @@ function emitSwarmStarted(
   pd: string,
   batch: string,
   units: string[],
-  concurrency: string
+  concurrency: string,
+  attempt: SwarmAttemptStamp,
 ): void {
   appendAuditEntry(
     "SWARM_STARTED",
@@ -351,6 +433,8 @@ function emitSwarmStarted(
       "Batch number": batch,
       "Unit names": units.join(","),
       "Concurrency cap": concurrency,
+      Stage: attempt.stage,
+      "Run floor": attempt.floor,
     },
     pd
   );
@@ -371,31 +455,22 @@ function emitSwarmDegraded(pd: string, batch: string, requested: DriverName): vo
   );
 }
 
-// Each converged row is stamped with the stage it belongs to and the current
-// attempt's floor (the stage's latest main-workflow STAGE_STARTED timestamp).
-// The consumers require BOTH to match before counting a row, so a late
-// finalize retry against a prior attempt's preserved worktree, or another
-// swarm stage reusing the same unit names, can never satisfy the current
-// attempt's coverage. While a swarm is live the workflow cannot leave the
-// stage (the guards fail closed on unconverged units), so Current Stage is
-// reliable at finalize time.
-function emitUnitConverged(pd: string, batch: string, unit: string): void {
-  let stage = "";
-  let floor = "";
-  try {
-    stage = getField(readStateFile(pd), "Current Stage")?.trim() ?? "";
-    floor = latestMainWorkflowStageStarted(readAllAuditShards(pd), stage);
-  } catch {
-    // Absent state degrades to unstamped rows, which every consumer rejects —
-    // fail closed, never fail open.
-  }
+// Each converged row carries the exact attempt stamp captured by prepare.
+// Finalize must never recompute this from current state: a late retry against a
+// preserved prior-attempt worktree would otherwise be mislabeled as current.
+function emitUnitConverged(
+  pd: string,
+  batch: string,
+  unit: string,
+  attempt: SwarmAttemptStamp,
+): void {
   appendAuditEntry(
     "SWARM_UNIT_CONVERGED",
     {
       "Batch number": batch,
       "Unit name": unit,
-      Stage: stage,
-      "Run floor": floor,
+      Stage: attempt.stage,
+      "Run floor": attempt.floor,
     },
     pd
   );
@@ -452,7 +527,7 @@ function emitSwarmCompleted(
 function emitBoltFailed(pd: string, unit: string, errorSummary: string): void {
   runTool(
     "aidlc-bolt.ts",
-    ["fail", "--name", unit, "--slug", unit, "--error", errorSummary],
+    ["fail", "--name", unit, "--slug", swarmBoltSlug(unit), "--error", errorSummary],
     pd
   );
 }
@@ -473,6 +548,18 @@ function handlePrepare(rest: string[]): void {
   if (units.length === 0) {
     fail("--units resolved to an empty list");
   }
+  const dag = resolveBoltDag(projectDir);
+  if (dag.state === "malformed") {
+    fail(
+      `prepare cannot resolve the authoritative unit DAG: ${dag.reason} ` +
+        `(${dag.detail}). Fix unit-of-work-dependency.md before starting the swarm.`,
+    );
+  }
+  const slugUniverse =
+    dag.state === "ok"
+      ? [...new Set([...dag.units, ...units])]
+      : units;
+  assertUniqueSwarmBoltSlugs(slugUniverse);
 
   // P7: the construction repo this batch targets. resolveConstructionRepo errors
   // on a multi-repo intent with no --repo (forwarded as the batch failure), infers
@@ -494,6 +581,12 @@ function handlePrepare(rest: string[]): void {
     flags.concurrency && /^[1-9][0-9]*$/.test(flags.concurrency)
       ? flags.concurrency
       : String(units.length);
+  const attempt = currentSwarmAttempt(projectDir);
+  if (!attempt) {
+    fail(
+      "prepare could not resolve the current stage attempt from state and audit",
+    );
+  }
 
   // Record a loud downgrade BEFORE the batch-start row, if the conductor reports
   // one. The driver-selection read (AIDLC_USE_SWARM) is conductor-side; the tool
@@ -506,8 +599,6 @@ function handlePrepare(rest: string[]): void {
     emitSwarmDegraded(projectDir, flags.batch, requested);
   }
 
-  emitSwarmStarted(projectDir, flags.batch, units, concurrency);
-
   const prepared: {
     unit: string;
     ok: boolean;
@@ -519,9 +610,10 @@ function handlePrepare(rest: string[]): void {
   // create/merge/discard never re-resolve to a different repo than prepare chose.
   const repoArgs = repoName ? ["--repo", repoName] : [];
   for (const unit of units) {
+    const boltSlug = swarmBoltSlug(unit);
     const created = runTool(
       "aidlc-worktree.ts",
-      ["create", "--slug", unit, "--base", base, ...repoArgs],
+      ["create", "--slug", boltSlug, "--base", base, ...repoArgs],
       projectDir
     );
     if (!created.ok) {
@@ -545,7 +637,7 @@ function handlePrepare(rest: string[]): void {
     }
     const started = runTool(
       "aidlc-bolt.ts",
-      ["start", "--worktree", "--slug", unit, "--batch", flags.batch, "--name", unit, ...repoArgs],
+      ["start", "--worktree", "--slug", boltSlug, "--batch", flags.batch, "--name", unit, ...repoArgs],
       projectDir
     );
     if (!started.ok) {
@@ -558,6 +650,15 @@ function handlePrepare(rest: string[]): void {
       continue;
     }
     prepared.push({ unit, ok: true, worktree_path: worktreeDir });
+  }
+
+  // Stamp only worktrees this invocation actually created and started. Emitting
+  // before creation would let a failed re-prepare in a later stage attempt
+  // relabel an old preserved worktree with the current attempt, allowing stale
+  // data to pass finalize's exact-attempt check.
+  const readyUnits = prepared.filter((unit) => unit.ok).map((unit) => unit.unit);
+  if (readyUnits.length > 0) {
+    emitSwarmStarted(projectDir, flags.batch, readyUnits, concurrency, attempt);
   }
 
   console.log(
@@ -581,6 +682,7 @@ function handleCheck(rest: string[]): void {
   if (!unit) {
     fail("check requires a unit name (positional `check <unit>` or --unit <unit>)");
   }
+  swarmBoltSlug(unit);
   if (!flags["check-cmd"]) {
     fail("check requires --check-cmd <shell command; exit 0 = converged>");
   }
@@ -633,10 +735,12 @@ function handleFinalize(rest: string[]): void {
   // The universe of units in the batch; defaults to the claimed set when the
   // conductor passes only --claimed (then declined-unit accounting is a no-op).
   const allUnits = flags.units ? splitCsv(flags.units) : claimed.slice();
+  for (const unit of new Set([...allUnits, ...claimed])) swarmBoltSlug(unit);
   const claimedSet = new Set(claimed);
   const testFile = flags["test-file"];
   const checkCmd = flags["check-cmd"];
   const review = reviewerRequirement(projectDir);
+  const currentAttempt = currentSwarmAttempt(projectDir);
 
   // Optional per-declined-unit typed reasons: `--reasons a=unsatisfiable,b=budget-exhausted`.
   // The conductor judged WHY each unclaimed unit gave up (knowledge → conductor,
@@ -654,6 +758,7 @@ function handleFinalize(rest: string[]): void {
         fail(`--reasons entry must be <unit>=<reason>: "${pair}"`);
       }
       const unit = pair.slice(0, eq).trim();
+      swarmBoltSlug(unit);
       const reason = pair.slice(eq + 1).trim() as FailureReason;
       if (!DECLINED_REASONS.includes(reason)) {
         fail(`--reasons reason for "${unit}" must be one of: ${DECLINED_REASONS.join(", ")}`);
@@ -666,10 +771,38 @@ function handleFinalize(rest: string[]): void {
   // declined unit the conductor did not claim.
   const results: UnitResult[] = [];
   const genuine: string[] = [];
+  const preparedAttempts = new Map<string, SwarmAttemptStamp>();
   for (const unit of allUnits) {
     if (claimedSet.has(unit)) {
       const verdict = verdictFor(unit, projectDir, checkCmd, testFile);
-      if (!verdict.exists) {
+      const preparedAttempt = preparedSwarmAttempt(
+        projectDir,
+        batch,
+        unit,
+      );
+      if (!preparedAttempt) {
+        results.push({
+          unit,
+          status: "failed",
+          reason: "error",
+          detail:
+            "no stamped SWARM_STARTED boundary for this unit and batch; run prepare in the current attempt",
+        });
+      } else if (
+        !currentAttempt ||
+        preparedAttempt.stage !== currentAttempt.stage ||
+        preparedAttempt.floor !== currentAttempt.floor
+      ) {
+        results.push({
+          unit,
+          status: "failed",
+          reason: "error",
+          detail:
+            `prepared swarm attempt ${preparedAttempt.stage}/${preparedAttempt.floor} ` +
+            `does not match the current attempt ` +
+            `${currentAttempt ? `${currentAttempt.stage}/${currentAttempt.floor}` : "(unresolved)"}`,
+        });
+      } else if (!verdict.exists) {
         results.push({
           unit,
           status: "failed",
@@ -689,7 +822,14 @@ function handleFinalize(rest: string[]): void {
       } else if (verdict.converged) {
         const reviewError = review.error ?? (
           review.reviewer
-            ? reviewerReceiptError(projectDir, unit, review.stage, review.reviewer)
+            ? reviewerReceiptError(
+                projectDir,
+                unit,
+                review.stage,
+                review.reviewer,
+                review.reviewClass,
+                review.maxIterations,
+              )
             : null
         );
         if (reviewError) {
@@ -701,6 +841,7 @@ function handleFinalize(rest: string[]): void {
           });
         } else {
           genuine.push(unit);
+          preparedAttempts.set(unit, preparedAttempt);
           results.push({ unit, status: "converged" });
         }
       } else {
@@ -739,10 +880,11 @@ function handleFinalize(rest: string[]): void {
   // pinned at the composed surface by the worktree-merge tests.
   const mergeFailures: { unit: string; detail: string }[] = [];
   for (const unit of [...genuine].sort()) {
-    runTool("aidlc-bolt.ts", ["release-merge", "--slug", unit], projectDir);
+    const boltSlug = swarmBoltSlug(unit);
+    runTool("aidlc-bolt.ts", ["release-merge", "--slug", boltSlug], projectDir);
     const merged = runTool(
       "aidlc-bolt.ts",
-      ["complete", "--merge", "--slug", unit, "--batch", batch, "--name", unit],
+      ["complete", "--merge", "--slug", boltSlug, "--batch", batch, "--name", unit],
       projectDir
     );
     if (!merged.ok) {
@@ -762,7 +904,10 @@ function handleFinalize(rest: string[]): void {
   const mergeFailed = new Set(mergeFailures.map((f) => f.unit));
   for (const r of results) {
     if (r.status === "converged") {
-      if (!mergeFailed.has(r.unit)) emitUnitConverged(projectDir, batch, r.unit);
+      if (!mergeFailed.has(r.unit)) {
+        const attempt = preparedAttempts.get(r.unit);
+        if (attempt) emitUnitConverged(projectDir, batch, r.unit, attempt);
+      }
     } else {
       emitUnitFailed(projectDir, batch, r.unit, r.reason ?? "error");
       emitBoltFailed(projectDir, r.unit, r.detail ?? `unit "${r.unit}" failed: ${r.reason}`);
@@ -797,6 +942,185 @@ function splitCsv(value: string): string[] {
     .split(",")
     .map((u) => u.trim())
     .filter((u) => u !== "");
+}
+
+function swarmBoltSlug(unit: string): string {
+  const unitNameError = validateUnitName(unit);
+  if (unitNameError) fail(unitNameError);
+  return boltSlugForUnit(unit);
+}
+
+function assertUniqueSwarmBoltSlugs(units: string[]): void {
+  const owners = new Map<string, string>();
+  for (const unit of units) {
+    const boltSlug = swarmBoltSlug(unit);
+    const existing = owners.get(boltSlug);
+    if (existing && existing !== unit) {
+      fail(
+        `Units "${existing}" and "${unit}" resolve to the same internal Bolt slug ` +
+          `"${boltSlug}". Rename one Unit before starting the autonomous swarm.`,
+      );
+    }
+    owners.set(boltSlug, unit);
+  }
+}
+
+function currentSwarmAttempt(projectDir: string): SwarmAttemptStamp | null {
+  try {
+    const stage =
+      getField(readStateFile(projectDir), "Current Stage")?.trim() ?? "";
+    if (!stage) return null;
+    return {
+      stage,
+      floor: latestMainWorkflowStageRunFloorForProject(projectDir, stage),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function preparedSwarmAttempt(
+  projectDir: string,
+  batch: string,
+  unit: string,
+): SwarmAttemptStamp | null {
+  const matching = readAuditShardEvents(projectDir).filter((event) => {
+    if (event.event !== "SWARM_STARTED") return false;
+    if (auditBlockField(event.block, "Batch number") !== batch) return false;
+    const units = splitCsv(auditBlockField(event.block, "Unit names") ?? "");
+    return units.includes(unit);
+  });
+  const stamped = matching.filter(
+    (event) =>
+      auditBlockField(event.block, "Stage") !== null &&
+      auditBlockField(event.block, "Run floor") !== null,
+  );
+  if (stamped.length > 0) {
+    stamped.sort((a, b) => {
+      if (a.timestamp !== b.timestamp) {
+        return a.timestamp < b.timestamp ? -1 : 1;
+      }
+      if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+      return a.pos - b.pos;
+    });
+    const timestamp = stamped[stamped.length - 1].timestamp;
+    const latest = stamped.filter((event) => event.timestamp === timestamp);
+    const stamps = new Map<string, SwarmAttemptStamp>();
+    for (const event of latest) {
+      const stage = auditBlockField(event.block, "Stage");
+      const floor = auditBlockField(event.block, "Run floor");
+      if (!stage || !floor) continue;
+      stamps.set(`${stage}\0${floor}`, { stage, floor });
+    }
+    // Same-second starts in different shards are unordered. A shared stamp is
+    // harmless; differing stamps fail closed instead of picking by filename.
+    if (
+      new Set(latest.map((event) => event.shard)).size > 1 &&
+      stamps.size !== 1
+    ) {
+      return null;
+    }
+    return stamps.values().next().value ?? null;
+  }
+  return legacyPreparedSwarmAttempt(projectDir, batch, unit);
+}
+
+function legacyPreparedSwarmAttempt(
+  projectDir: string,
+  batch: string,
+  unit: string,
+): SwarmAttemptStamp | null {
+  const boltSlug = swarmBoltSlug(unit);
+  const wt = worktreePath(projectDir, boltSlug);
+  const recordPrefix = relativeRecordDir(projectDir);
+  const wtState = worktreeStateFilePath(wt, recordPrefix);
+  const wtAudit = worktreeAuditFilePath(wt, recordPrefix, projectDir);
+  const wtRuntime = worktreeRuntimeGraphPath(wt, recordPrefix);
+  if (
+    !existsSync(wt) ||
+    !isRegularFile(wtState) ||
+    !isRegularFile(wtAudit) ||
+    !isRegularFile(wtRuntime)
+  ) {
+    return null;
+  }
+
+  let worktreeAudit: string;
+  let state: string;
+  try {
+    worktreeAudit = readFileSync(wtAudit, "utf-8");
+    state = readFileSync(wtState, "utf-8");
+  } catch {
+    return null;
+  }
+  const fork = findAllEvents(worktreeAudit, "AUDIT_FORKED")
+    .filter((event) => auditBlockField(event.block, "Bolt slug") === boltSlug)
+    .at(-1);
+  const boundaryRaw = fork ? auditBlockField(fork.block, "Fork Boundary") : null;
+  const sourceHash = fork ? auditBlockField(fork.block, "Source Audit Hash") : null;
+  if (!boundaryRaw || !sourceHash || !/^[0-9]+$/.test(boundaryRaw)) return null;
+
+  const mainDir = auditShardDir(projectDir);
+  if (!mainDir) return null;
+  const mainShard = join(mainDir, basename(wtAudit));
+  let mainBytes: Buffer;
+  try {
+    mainBytes = readFileSync(mainShard);
+  } catch {
+    return null;
+  }
+  const boundary = Number(boundaryRaw);
+  if (!Number.isSafeInteger(boundary) || boundary < 0 || mainBytes.length < boundary) {
+    return null;
+  }
+  const frozenBytes = mainBytes.subarray(0, boundary);
+  if (createHash("sha256").update(frozenBytes).digest("hex") !== sourceHash) {
+    return null;
+  }
+  const frozenAudit = frozenBytes.toString("utf-8");
+  const frozenBlocks = frozenAudit.replace(/\r\n/g, "\n").split(/\n---\n/);
+  const legacyStarts: number[] = [];
+  const boltStarts: number[] = [];
+  const stateForks: number[] = [];
+  for (let index = 0; index < frozenBlocks.length; index++) {
+    const block = frozenBlocks[index];
+    const event = auditBlockField(block, "Event");
+    if (
+      event === "SWARM_STARTED" &&
+      auditBlockField(block, "Batch number") === batch &&
+      !auditBlockField(block, "Stage") &&
+      !auditBlockField(block, "Run floor") &&
+      splitCsv(auditBlockField(block, "Unit names") ?? "").includes(unit)
+    ) {
+      legacyStarts.push(index);
+    }
+    if (
+      event === "BOLT_STARTED" &&
+      auditBlockField(block, "Batch number") === batch &&
+      auditBlockField(block, "Bolt slug") === boltSlug
+    ) {
+      boltStarts.push(index);
+    }
+    if (
+      event === "STATE_FORKED" &&
+      auditBlockField(block, "Bolt slug") === boltSlug
+    ) {
+      stateForks.push(index);
+    }
+  }
+  const hasPreparationSequence = legacyStarts.some((started) =>
+    boltStarts.some((bolt) =>
+      bolt > started && stateForks.some((forked) => forked > bolt),
+    ),
+  );
+  if (!hasPreparationSequence) return null;
+
+  const stage = getField(state, "Current Stage")?.trim() ?? "";
+  if (!stage) return null;
+  return {
+    stage,
+    floor: latestMainWorkflowStageRunFloor(frozenAudit, stage),
+  };
 }
 
 function currentBranch(projectDir: string): string {

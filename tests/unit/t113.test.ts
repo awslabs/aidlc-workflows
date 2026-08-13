@@ -38,6 +38,20 @@ import {
 // --- Well-formed fixtures, one per kind (mirror t113-directive-schema.sh:18-56) ---
 // Fresh object per call so a `delete`/spread in one case can't bleed into another.
 
+function loadSteering(): Record<string, unknown> {
+  return {
+    kind: "load-steering",
+    stage: "application-design",
+    bundle: "sha256:0123456789abcdef",
+    part: 1,
+    parts: 2,
+    rules_content: [
+      { path: "aidlc/spaces/default/memory/org.md", text: "# Organization\n" },
+    ],
+    continue_token: "opaque-token",
+  };
+}
+
 function runStage(): Record<string, unknown> {
   return {
     kind: "run-stage",
@@ -58,6 +72,32 @@ function runStage(): Record<string, unknown> {
     rules_in_context: ["aidlc-org.md", "aidlc-team.md"],
     sensors_applicable: ["required-sections"],
     stage_file: ".claude/skills/aidlc/stages/inception/application-design.md",
+  };
+}
+
+function wave() {
+  return {
+    batch_index: 0,
+    entries: [
+      {
+        unit: "auth",
+        unit_kind: "service",
+        build_required: true,
+        completion_required: true,
+        review_state: "outstanding",
+        review_iteration: 1,
+        unit_memory_path:
+          "aidlc-docs/construction/auth/functional-design/memory.md",
+        consumes: ["aidlc-docs/inception/requirements/requirements.md"],
+        consumes_absent: [],
+        produces: [
+          "aidlc-docs/construction/auth/functional-design/business-logic-model.md",
+        ],
+        required_produces: [
+          "aidlc-docs/construction/auth/functional-design/business-logic-model.md",
+        ],
+      },
+    ],
   };
 }
 
@@ -107,6 +147,17 @@ function ask(): Record<string, unknown> {
   return { kind: "ask", question: "Resume from the last checkpoint, or start fresh?" };
 }
 
+function newWorkRoutingAsk(): Record<string, unknown> {
+  return {
+    kind: "ask",
+    ask_type: "new-work-routing",
+    response_route: "next",
+    question: "Continue, start separate work, or reshape the plan?",
+    new_work_description: "build a standalone metrics dashboard",
+    proposed_scope: "feature",
+  };
+}
+
 function print(): Record<string, unknown> {
   return { kind: "print", message: "AIDLC framework version 0.0.0" };
 }
@@ -136,6 +187,10 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
   // Positive baseline — a well-formed directive of each kind (8 assertions)
   // .sh lines 75-82
   // ============================================================
+
+  test("load-steering well-formed -> VALID", () => {
+    expect(validateDirective(loadSteering()).valid).toBe(true);
+  });
 
   test("run-stage well-formed -> VALID", () => {
     expect(validateDirective(runStage()).valid).toBe(true);
@@ -174,6 +229,27 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     expect(validateDirective(ask()).valid).toBe(true);
   });
 
+  test("new-work-routing ask carries its direct next response contract", () => {
+    expect(validateDirective(newWorkRoutingAsk()).valid).toBe(true);
+  });
+
+  test("new-work-routing ask rejects a report response route", () => {
+    expect(
+      errs({ ...newWorkRoutingAsk(), response_route: "report" }),
+    ).toContain('ask: new-work-routing response_route must be "next"');
+  });
+
+  test("new-work route metadata requires the typed ask subtype", () => {
+    expect(
+      errs({
+        ...ask(),
+        response_route: "next",
+        new_work_description: "standalone dashboard",
+        proposed_scope: "feature",
+      }),
+    ).toContain('ask: response_route requires ask_type "new-work-routing"');
+  });
+
   test("print well-formed -> VALID", () => {
     expect(validateDirective(print()).valid).toBe(true);
   });
@@ -208,6 +284,14 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
   // Per-kind missing required field — names the field + kind (8 assertions)
   // .sh lines 99-121
   // ============================================================
+
+  test("load-steering missing continue_token -> error", () => {
+    const d = loadSteering();
+    delete d.continue_token;
+    expect(errs(d)).toContain(
+      "load-steering: missing required field: continue_token",
+    );
+  });
 
   test("run-stage missing lead_agent -> error", () => {
     const d = runStage();
@@ -300,6 +384,23 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     );
   });
 
+  test("load-steering rejects part beyond parts", () => {
+    expect(errs({ ...loadSteering(), part: 3, parts: 2 })).toContain(
+      "load-steering: part must be less than or equal to parts",
+    );
+  });
+
+  test("load-steering validates path/text entry shape", () => {
+    expect(
+      errs({
+        ...loadSteering(),
+        rules_content: [{ path: 42, text: false }],
+      }),
+    ).toContain(
+      "load-steering: rules_content[0].path must be string, got number",
+    );
+  });
+
   test("run-stage single true -> VALID", () => {
     expect(errs({ ...runStage(), single: true, gate: false })).toBe("VALID");
   });
@@ -307,6 +408,69 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
   test("run-stage single non-boolean -> type error", () => {
     expect(errs({ ...runStage(), single: "yes" })).toContain(
       "run-stage: single must be boolean, got string",
+    );
+  });
+
+  test("run-stage review_class validates the advisory/adversarial enum", () => {
+    expect(
+      errs({
+        ...runStage(),
+        reviewer: "aidlc-product-lead-agent",
+        reviewer_max_iterations: 1,
+        review_class: "advisory",
+      }),
+    ).toBe("VALID");
+    expect(errs({ ...runStage(), review_class: "none" })).toContain(
+      "run-stage: review_class must be one of adversarial | advisory",
+    );
+    expect(errs({ ...runStage(), review_class: 1 })).toContain(
+      "run-stage: review_class must be string, got number",
+    );
+    expect(errs({ ...runStage(), review_class: "advisory" })).toContain(
+      "run-stage: review_class requires reviewer",
+    );
+  });
+
+  test("run-stage accepts a complete engine-resolved wave entry", () => {
+    expect(
+      errs({
+        ...runStage(),
+        unit: "auth",
+        gate: false,
+        wave: wave(),
+      }),
+    ).toBe("VALID");
+  });
+
+  test("run-stage wave validates completion and retry state fields", () => {
+    const malformed = structuredClone(wave());
+    malformed.entries[0].completion_required = "yes" as unknown as boolean;
+    malformed.entries[0].review_state =
+      "stale" as typeof malformed.entries[0]["review_state"];
+    const result = errs({ ...runStage(), wave: malformed });
+    expect(result).toContain(
+      "run-stage: wave.entries[0].completion_required must be boolean",
+    );
+    expect(result).toContain(
+      "run-stage: wave.entries[0].review_state must be one of",
+    );
+
+    const retry = structuredClone(wave());
+    retry.entries[0].build_required = false;
+    retry.entries[0].review_state =
+      "retry-required" as typeof retry.entries[0]["review_state"];
+    expect(errs({ ...runStage(), wave: retry })).toBe("VALID");
+  });
+
+  test("invoke-swarm review_class validates the advisory/adversarial enum", () => {
+    expect(errs({ ...invokeSwarm(), review_class: "adversarial" })).toBe(
+      "VALID",
+    );
+    expect(errs({ ...invokeSwarm(), review_class: "none" })).toContain(
+      "invoke-swarm: review_class must be one of adversarial | advisory",
+    );
+    expect(errs({ ...invokeSwarm(), reviewer: undefined, review_class: "advisory" })).toContain(
+      "invoke-swarm: review_class requires reviewer",
     );
   });
 

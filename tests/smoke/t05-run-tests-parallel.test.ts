@@ -75,7 +75,8 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
@@ -425,6 +426,11 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
       "";
     const logDir = logLine.replace("Verbose mode: logging to ", "").trim();
     expect(logDir).not.toBe("");
+    // The dir is per-process (stamp + pid): two runners launched in the same
+    // second (this suite's own child runners next to a sliced gate) must never
+    // share a log dir - the sharer's cleanup deletes the other's _results
+    // mid-run. The suffix is the collision guard; pin it.
+    expect(logDir).toMatch(/-p\d+$/);
     createdLogDirs.push(logDir);
     const resultsDir = join(logDir, "_results");
     expect(existsSync(resultsDir)).toBe(true);
@@ -448,5 +454,170 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
     );
     expect(explicitOff.status).toBe(0);
     expect(explicitOff.out).toContain("Live TUI coverage: AIDLC_TUI_LIVE=0 (explicit");
+
+    const noLlm = run(
+      ["--all", "--debug", "--no-llm", "--filter", "NO_SUCH_T05_TEST"],
+      { AIDLC_TUI_LIVE: undefined },
+    );
+    expect(noLlm.status).toBe(0);
+    expect(noLlm.out).toContain("Live TUI coverage: AIDLC_TUI_LIVE=0 (explicit");
+    expect(noLlm.out).not.toContain("AIDLC_TUI_LIVE=1 (defaulted");
+  }, PER_TEST_TIMEOUT);
+
+  // --- --no-llm closes every live-model gate --------------------------------
+  // The derived Claude gate skips Claude-dependent files while deterministic
+  // siblings run. Independent harness live gates are forced to 0 below.
+  const NO_LLM_FILTER = "t141-enterprise-scope-routing|t12-state-fixture-validation";
+  const NO_LLM_LIVE = "t141-enterprise-scope-routing.test.ts";
+  const NO_LLM_DETERMINISTIC = "t12-state-fixture-validation.test.ts";
+
+  test("--no-llm skips claude-required integration files while deterministic ones run", () => {
+    const r = run(["--integration", "--no-llm", "--filter", NO_LLM_FILTER]);
+    // The gate-closed banner is emitted.
+    expect(r.out).toContain("--no-llm: forcing all live-model gates closed");
+    // The claude-required file is SKIPPED (per-file SKIP done marker).
+    expect(r.out).toContain(`=== DONE ${NO_LLM_LIVE} (SKIP) ===`);
+    // The deterministic file actually RAN (its START marker fired and it did not
+    // take the SKIP path).
+    expect(r.out).toContain(`=== START ${NO_LLM_DETERMINISTIC} ===`);
+    expect(r.out).not.toContain(`=== DONE ${NO_LLM_DETERMINISTIC} (SKIP) ===`);
+    // A gate-closed run over deterministic content still passes and exits 0.
+    expect(r.status).toBe(0);
+    expect(r.out.split("\n").some((l) => l.startsWith("RESULT: PASS"))).toBe(true);
+  }, PER_TEST_TIMEOUT);
+
+  test("AIDLC_NO_LLM=1 forces the Claude gate closed like --no-llm", () => {
+    const r = run(["--integration", "--filter", NO_LLM_FILTER], {
+      AIDLC_NO_LLM: "1",
+    });
+    expect(r.out).toContain("--no-llm: forcing all live-model gates closed");
+    expect(r.out).toContain(`=== DONE ${NO_LLM_LIVE} (SKIP) ===`);
+    expect(r.out).toContain(`=== START ${NO_LLM_DETERMINISTIC} ===`);
+    expect(r.status).toBe(0);
+  }, PER_TEST_TIMEOUT);
+
+  test("--no-llm closes every live-model environment gate", () => {
+    const plant = join(TESTS_ROOT, "integration", "tZZ-no-llm-gates-t05.test.ts");
+    const gates = [
+      "AIDLC_TUI_LIVE",
+      "AIDLC_KIRO_ACP_LIVE",
+      "AIDLC_KIRO_TUI_LIVE",
+      "AIDLC_CODEX_EXEC_LIVE",
+      "AIDLC_KIRO_IDE_LIVE",
+      "AIDLC_OPENCODE_RUN_LIVE",
+    ];
+    writeFileSync(
+      plant,
+      plantedBunTestSource(
+        "all live-model gates are forced closed",
+        [
+          `  const gates = ${JSON.stringify(gates)};`,
+          '  for (const gate of gates) expect(process.env[gate]).toBe("0");',
+        ].join("\n"),
+      ),
+      "utf8",
+    );
+    try {
+      const liveEnv = Object.fromEntries(gates.map((gate) => [gate, "1"]));
+      const r = run(
+        ["--integration", "--no-llm", "--filter", "tZZ-no-llm-gates-t05"],
+        liveEnv,
+      );
+      expect(r.status).toBe(0);
+      expect(r.out).toContain("=== START tZZ-no-llm-gates-t05.test.ts ===");
+    } finally {
+      rmSync(plant, { force: true });
+    }
+  }, PER_TEST_TIMEOUT);
+
+  test("--no-llm runs the deterministic TUI substrate preflight", () => {
+    const r = run(["--e2e", "--no-llm", "--filter", "t-tui-preflight"]);
+    expect(r.status).toBe(0);
+    expect(r.out).toContain("=== START t-tui-preflight.serial.test.ts ===");
+    expect(r.out).not.toContain("=== DONE t-tui-preflight.serial.test.ts (SKIP) ===");
+  }, PER_TEST_TIMEOUT);
+
+  test("isolated git config preserves safe.directory and disables signing", () => {
+    const plant = join(TESTS_ROOT, "integration", "tZZ-git-config-t05.test.ts");
+    const fixtureDir = mkdtempSync(join(tmpdir(), "aidlc-t05-git-config-"));
+    const inheritedGlobalConfig = join(fixtureDir, "global.gitconfig");
+    const inheritedSystemConfig = join(fixtureDir, "system.gitconfig");
+    const globalSafeDirectory = "/aidlc/t05-global-safe-directory";
+    const systemSafeDirectory = "/aidlc/t05-system-safe-directory";
+    const countSafeDirectory = "/aidlc/t05-count-safe-directory";
+    const parametersSafeDirectory = "/aidlc/t05-parameters-safe-directory";
+    writeFileSync(
+      inheritedGlobalConfig,
+      [
+        "[safe]",
+        `\tdirectory = ${globalSafeDirectory}`,
+        "[commit]",
+        "\tgpgsign = true",
+        "[tag]",
+        "\tgpgsign = true",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    writeFileSync(
+      inheritedSystemConfig,
+      ["[safe]", `\tdirectory = ${systemSafeDirectory}`, ""].join("\n"),
+      "utf8",
+    );
+    writeFileSync(
+      plant,
+      [
+        'import { expect, test } from "bun:test";',
+        'import { spawnSync } from "node:child_process";',
+        'import { tmpdir } from "node:os";',
+        "",
+        'function config(...args: string[]): string {',
+        '  const result = spawnSync("git", ["config", ...args], { cwd: tmpdir(), encoding: "utf8" });',
+        "  expect(result.status).toBe(0);",
+        '  return (result.stdout ?? "").trim();',
+        "}",
+        "",
+        'test("git config is isolated without losing protected safety entries", () => {',
+        '  const safeDirectories = config("--get-all", "safe.directory").split(/\\r?\\n/);',
+        `  expect(safeDirectories).toContain(${JSON.stringify(globalSafeDirectory)});`,
+        `  expect(safeDirectories).toContain(${JSON.stringify(systemSafeDirectory)});`,
+        `  expect(safeDirectories).toContain(${JSON.stringify(countSafeDirectory)});`,
+        `  expect(safeDirectories).toContain(${JSON.stringify(parametersSafeDirectory)});`,
+        '  expect(config("--get", "commit.gpgsign")).toBe("false");',
+        '  expect(config("--get", "tag.gpgsign")).toBe("false");',
+        '  expect(process.env.GIT_CONFIG_GLOBAL).not.toBe("/dev/null");',
+        '  expect(process.env.GIT_CONFIG_GLOBAL).not.toBe("NUL");',
+        '  expect(process.env.GIT_CONFIG_GLOBAL).toMatch(/\\.gitconfig-aidlc-tests-[0-9]+$/);',
+        "  expect(process.env.GIT_CONFIG_COUNT).toBeUndefined();",
+        "  expect(process.env.GIT_CONFIG_PARAMETERS).toBeUndefined();",
+        "});",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    try {
+      const r = run(
+        ["--integration", "--filter", "tZZ-git-config-t05"],
+        {
+          GIT_CONFIG_GLOBAL: inheritedGlobalConfig,
+          GIT_CONFIG_SYSTEM: inheritedSystemConfig,
+          GIT_CONFIG_COUNT: "3",
+          GIT_CONFIG_KEY_0: "safe.directory",
+          GIT_CONFIG_VALUE_0: countSafeDirectory,
+          GIT_CONFIG_KEY_1: "commit.gpgsign",
+          GIT_CONFIG_VALUE_1: "true",
+          GIT_CONFIG_KEY_2: "tag.gpgsign",
+          GIT_CONFIG_VALUE_2: "true",
+          GIT_CONFIG_PARAMETERS:
+            `'safe.directory'='${parametersSafeDirectory}' ` +
+            "'commit.gpgsign'='true'",
+        },
+      );
+      expect(r.status).toBe(0);
+      expect(r.out).toContain("=== START tZZ-git-config-t05.test.ts ===");
+    } finally {
+      rmSync(plant, { force: true });
+      rmSync(fixtureDir, { recursive: true, force: true });
+    }
   }, PER_TEST_TIMEOUT);
 });

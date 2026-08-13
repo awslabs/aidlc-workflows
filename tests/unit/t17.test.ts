@@ -104,7 +104,7 @@ function runStateBare(args: string[]): RunResult {
 // Run the utility init driver. Mirrors
 // `bun "$AIDLC_SRC/tools/aidlc-utility.ts" init --scope <s> --project-dir "$PROJ"`.
 function runInit(proj: string, scope: string): RunResult {
-  const res = spawnSync(BUN, [UTILITY, "intent-birth", "--scope", scope, "--project-dir", proj], {
+  const res = spawnSync(BUN, [UTILITY, "intent-create", "--scope", scope, "--project-dir", proj], {
     encoding: "utf-8",
     cwd: proj,
   });
@@ -113,7 +113,7 @@ function runInit(proj: string, scope: string): RunResult {
   return { rc: res.status ?? -1, stdout, stderr, combined: `${stdout}${stderr}` };
 }
 
-// P4: intent-birth (which runInit triggers) writes state into the born intent's
+// P4: intent-create (which runInit triggers) writes state into the born intent's
 // per-intent record dir (aidlc/spaces/<space>/intents/<slug>-<id8>/), not the flat
 // aidlc-docs/. Resolve the record dir from the active-space + active-intent
 // cursors, falling back to the flat layout for a seeded-flat project (the many

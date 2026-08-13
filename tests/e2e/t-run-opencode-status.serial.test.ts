@@ -9,7 +9,7 @@
 //
 // LIVE-PROVEN (2026-07-12, opencode 1.17.18 on Bedrock): the same rig shape
 // ran skill + subagent discovery, this status journey, AND a real intent
-// birth (scope ask → poc → intent-birth → first run-stage directive with the
+// birth (scope ask → poc → intent-create → first run-stage directive with the
 // conductor persona) — transcripts in the build session. This test pins the
 // cheap status journey so CI can re-verify the shipped tree end-to-end
 // without burning a whole workflow.

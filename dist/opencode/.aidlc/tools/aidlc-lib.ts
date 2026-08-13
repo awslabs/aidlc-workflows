@@ -1,7 +1,8 @@
+import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { accessSync, appendFileSync, constants as fsConstants, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, appendFileSync, closeSync, constants as fsConstants, cpSync, existsSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve as resolvePath, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   resolveHarnessPath,
@@ -35,6 +36,11 @@ export interface StageEntry {
   condition?: string;
   reviewer?: string;
   reviewer_max_iterations?: number;
+  review_class?: "adversarial" | "advisory";
+  // Summary-confirmation policy for stages using the unified question flow.
+  // `required` means every execution owes a questions file and receipt;
+  // `if-present` enforces a receipt only when the conditional flow created one.
+  summary_confirmation?: "required" | "if-present";
   produces?: string[];
   // Artifacts the stage MAY write per unit; exempt from the per-unit
   // coverage check in aidlc-orchestrate.ts unitCovered. See GraphStage in
@@ -157,7 +163,7 @@ export const PHASE_NUMBERS: Record<string, Phase> = {
 // dev-repo CWD rung, where more than one harness dir can coexist and the Claude
 // tree is canonical (".claude" must win). A real single-harness install never
 // reaches the probe; it resolves by script path.
-export const KNOWN_HARNESS_DIRS = [".claude", ".kiro", ".codex", ".aidlc"] as const;
+export const KNOWN_HARNESS_DIRS = [".claude", ".kiro", ".codex", ".aidlc", ".cursor"] as const;
 
 // True for a plausible harness dir name: a dot-prefixed segment, e.g. ".claude"
 // / ".kiro" / ".gemini". Guards the script-path derivation so an unexpected
@@ -205,9 +211,10 @@ export function harnessDir(): string {
 // segment targets a directory that does not exist on a rename-rules harness.
 //
 // The rename is a fact only the harness MANIFEST knows, so the packager emits
-// it per-tree into tools/data/harness.json ({"rulesSubdir": "..."}) — the
-// open-set source of truth: a new harness ships its own harness.json and needs
-// no edit here. Resolution: AIDLC_RULES_SUBDIR env seam (fixtures) →
+// it per-tree into tools/data/harness.json (alongside the manifest name used
+// by runtime path resolution) — the open-set source of truth: a new harness
+// ships its own harness.json and needs no edit here. Resolution:
+// AIDLC_RULES_SUBDIR env seam (fixtures) →
 // AIDLC_HARNESS_DIR test-seam map (so "pretend to be .kiro" yields "steering"
 // without a .kiro tree on disk) → the shipped harness.json (the real-install
 // rung) → KNOWN_RULES_SUBDIR dev-fallback map → "rules". Returns the LAST path
@@ -219,11 +226,13 @@ const KNOWN_RULES_SUBDIR: Record<string, string> = {
   // opencode: the ENGINE dir is .aidlc (opencode auto-imports .opencode/tools/
   // *.ts as custom tools, so the engine cannot live there); no rename needed.
   ".aidlc": "rules",
+  ".cursor": "rules",
 };
 
 interface ShippedHarnessData {
   rulesSubdir: string | null;
   plugins: ReadonlySet<string> | null;
+  runnerFrontmatterAdditions: readonly string[];
 }
 
 let _shippedHarnessData: ShippedHarnessData | null = null;
@@ -240,7 +249,11 @@ function readShippedHarnessData(): ShippedHarnessData {
   const p = harnessDataPath();
   try {
     const raw = readFileSync(p, "utf-8");
-    const parsed = JSON.parse(raw) as { rulesSubdir?: unknown; plugins?: unknown };
+    const parsed = JSON.parse(raw) as {
+      rulesSubdir?: unknown;
+      plugins?: unknown;
+      runnerFrontmatterAdditions?: unknown;
+    };
     let plugins: ReadonlySet<string> | null = null;
     if (Object.hasOwn(parsed, "plugins")) {
       if (!Array.isArray(parsed.plugins)) {
@@ -259,13 +272,31 @@ function readShippedHarnessData(): ShippedHarnessData {
       typeof parsed.rulesSubdir === "string" && parsed.rulesSubdir.length > 0
         ? parsed.rulesSubdir
         : null;
-    _shippedHarnessData = { rulesSubdir, plugins };
+    let runnerFrontmatterAdditions: string[] = [];
+    if (Object.hasOwn(parsed, "runnerFrontmatterAdditions")) {
+      if (
+        !Array.isArray(parsed.runnerFrontmatterAdditions) ||
+        parsed.runnerFrontmatterAdditions.some(
+          (line) => typeof line !== "string" || !/^[A-Za-z_][\w-]*\s*:/.test(line),
+        )
+      ) {
+        throw new Error(
+          `${p}: harness.json field "runnerFrontmatterAdditions" must be an array of YAML key lines.`,
+        );
+      }
+      runnerFrontmatterAdditions = [...parsed.runnerFrontmatterAdditions];
+    }
+    _shippedHarnessData = { rulesSubdir, plugins, runnerFrontmatterAdditions };
     return _shippedHarnessData;
   } catch (err) {
     if (err instanceof Error && err.message.startsWith(`${p}:`)) throw err;
     // no harness.json (dev core/, or a tree built before this landed) → fall through
   }
-  _shippedHarnessData = { rulesSubdir: null, plugins: null };
+  _shippedHarnessData = {
+    rulesSubdir: null,
+    plugins: null,
+    runnerFrontmatterAdditions: [],
+  };
   return _shippedHarnessData;
 }
 
@@ -282,6 +313,10 @@ function shippedRulesSubdir(): string | null {
 
 export function pluginsEnabled(): ReadonlySet<string> | null {
   return readShippedHarnessData().plugins;
+}
+
+export function runnerFrontmatterAdditions(): readonly string[] {
+  return readShippedHarnessData().runnerFrontmatterAdditions;
 }
 
 export function isPluginEnabled(plugin: string): boolean {
@@ -461,7 +496,7 @@ export type WorkspaceNoun = "intent" | "space";
 export const INTENT_VERBS: ReadonlySet<string> = new Set([
   "list",
   "switch",
-  "birth",
+  "create",
 ]);
 
 export const SPACE_VERBS: ReadonlySet<string> = new Set([
@@ -474,13 +509,19 @@ export const RESERVED_FUTURE: ReadonlySet<string> = new Set([
   "archive",
   "rename",
   "show",
+  // Retired verb, still reserved: `intent birth` was the create verb before it
+  // was renamed, so a record named "birth" could not exist in an install made
+  // while it was grammar. Keeping it reserved means such a record stays
+  // switch-reachable and doctor keeps flagging it, instead of the name silently
+  // becoming creatable and colliding.
+  "birth",
 ]);
 
 export type WorkspaceCommand =
   | { kind: "list"; noun: WorkspaceNoun; json: boolean }
   | { kind: "switch"; noun: WorkspaceNoun; name: string; explicit: boolean }
   | { kind: "create"; noun: "space"; name: string }
-  | { kind: "birth"; noun: "intent"; rest: string[] }
+  | { kind: "create-intent"; noun: "intent"; rest: string[] }
   | { kind: "help"; noun: WorkspaceNoun }
   | {
       kind: "error";
@@ -574,8 +615,8 @@ export function parseWorkspaceCommand(tokens: string[]): WorkspaceCommand {
       if (name === undefined) return missingWorkspaceName(noun, "switch");
       return { kind: "switch", noun, name, explicit: true };
     }
-    if (verbOrName === "birth") {
-      return { kind: "birth", noun, rest: tokens.slice(2) };
+    if (verbOrName === "create") {
+      return { kind: "create-intent", noun, rest: tokens.slice(2) };
     }
   }
 
@@ -603,8 +644,8 @@ export function workspaceCommandUtilityArgv(command: WorkspaceCommand): string[]
     case "switch":
       // Explicit `switch <name>` must forward the literal "switch" token so
       // the utility reads <name> as the switch target even when it shadows a
-      // verb (e.g. `intent switch birth` reaching a pre-existing intent named
-      // "birth" instead of re-reading "birth" as the birth verb). Bare-name
+      // verb (e.g. `intent switch create` reaching a pre-existing intent named
+      // "create" instead of re-reading "create" as the create verb). Bare-name
       // sugar (`space teamB`, explicit: false) is unaffected by that bug and
       // must keep the original 2-token shape: the utility's bare
       // `[noun, name]` form IS the switch (see handleIntent/handleSpace's
@@ -616,8 +657,8 @@ export function workspaceCommandUtilityArgv(command: WorkspaceCommand): string[]
         : [command.noun, command.name];
     case "create":
       return ["space-create", command.name];
-    case "birth":
-      return ["intent-birth", ...command.rest];
+    case "create-intent":
+      return ["intent-create", ...command.rest];
     case "help":
       return ["help"];
     case "error":
@@ -675,7 +716,64 @@ export interface TerminalCommand {
   args?: string[];
   error?: string;
   display?: string;
-  source: "read-only-flag" | "workspace-verb";
+  source: "read-only-flag" | "workspace-verb" | "plugin-verb";
+}
+
+export type PluginCommand =
+  | { kind: "not-plugin" }
+  | { kind: "help" }
+  | { kind: "error"; message: string }
+  | { kind: "run"; argv: string[] };
+
+// Parse the public `plugin` noun once for every entrypoint. The slash
+// orchestrator, Kiro's pre-LLM interceptor, and the binary dispatcher must all
+// agree that these are terminal utilities rather than freeform workflow text.
+export function parsePluginCommand(args: string[]): PluginCommand {
+  if (args[0] !== "plugin") return { kind: "not-plugin" };
+  const verb = args[1];
+  if (verb === "help" || verb === "-h" || verb === "--help") {
+    return { kind: "help" };
+  }
+  const target = verb === "select"
+    ? "select-plugins"
+    : verb === "list"
+      ? "plugin-list"
+      : verb === "sync"
+        ? "plugin-sync"
+        : undefined;
+  if (target !== undefined) {
+    return { kind: "run", argv: [target, ...args.slice(2)] };
+  }
+  const detail = verb ? `unknown verb '${verb}'` : "missing verb";
+  return {
+    kind: "error",
+    message: `aidlc: ${detail} for noun 'plugin'; try 'aidlc help --all'`,
+  };
+}
+
+function terminalCommandFromPluginCommand(
+  command: PluginCommand,
+  originalArgs: string[],
+): TerminalCommand | null {
+  if (command.kind === "not-plugin") return null;
+  if (command.kind === "help") {
+    return { subcommand: "help", display: originalArgs.join(" "), source: "plugin-verb" };
+  }
+  if (command.kind === "error") {
+    return {
+      subcommand: "error",
+      error: command.message,
+      display: originalArgs.join(" "),
+      source: "plugin-verb",
+    };
+  }
+  const [subcommand, ...tail] = command.argv;
+  return {
+    subcommand,
+    ...(tail.length > 0 ? { args: tail } : {}),
+    display: originalArgs.join(" "),
+    source: "plugin-verb",
+  };
 }
 
 // The allowlisted trailing flags `--doctor` accepts (diagnostic export). Kept
@@ -749,11 +847,20 @@ export function classifyTerminalCommand(args: string[]): TerminalCommand | null 
   if (args.length === 1 && (args[0] === "help" || args[0] === "-h")) {
     return { subcommand: "help", source: "read-only-flag" };
   }
+  const pluginCommand = parsePluginCommand(args);
+  if (pluginCommand.kind !== "not-plugin") {
+    return terminalCommandFromPluginCommand(pluginCommand, args);
+  }
   // Leading workspace nouns own the command. Any later read-only-looking token
   // is part of that workspace command's argv, not a mode switch, because the
   // public grammar promises leading-token semantics.
   const workspaceCommand = parseWorkspaceCommand(args);
   if (workspaceCommand.kind !== "not-workspace") {
+    // Intent creation mutates workflow state and must remain on the normal
+    // engine/conductor/shell path. In particular, Kiro's prompt interceptor has
+    // no session_id, while the shell PostToolUse event does; executing creation
+    // off-band would make exact session ownership impossible.
+    if (workspaceCommand.kind === "create-intent") return null;
     return terminalCommandFromWorkspaceCommand(workspaceCommand, args);
   }
   for (let i = 0; i < args.length; i++) {
@@ -938,7 +1045,7 @@ function shellCommandSegments(command: string): string[] {
   return segments;
 }
 
-// Classify commands for the runtime-compile hook's cheap PostToolUse gate.
+// Classify commands for the rebuild-stage-graph hook's cheap PostToolUse gate.
 // Transition matching stays intentionally lexical, but the recursion guard
 // only examines real unquoted shell-command segments.
 const runtimeCompileHarnessPattern = KNOWN_HARNESS_DIRS
@@ -1128,6 +1235,208 @@ export function relativeCodekbDir(projectDir: string, repo: string, space?: stri
 export function codekbRepoName(projectDir: string, space?: string): string {
   const repos = intentRepos(projectDir, undefined, space);
   return repos.length === 1 ? repos[0] : basename(projectDir);
+}
+
+// --- Codekb scope of analysis -------------------------------------------------
+//
+// The reverse-engineering stage records WHAT its scan covered in a fenced yaml
+// block inside reverse-engineering-timestamp.md (the store's freshness marker).
+// The parser + fingerprint here are the deterministic half of the rerun
+// guard: `codekb-scope-diff` compares a store's recorded scope against the
+// live working tree (status) or an incoming run's scope (compare), so the
+// human at the RE gate decides reuse/rescan/replace on evidence instead of
+// silently losing a prior intent's knowledge to a narrower overwrite.
+//
+// Block shape (scope_version 1 - authored by the architect at synthesis,
+// behind the RE approval gate):
+//
+//   ```yaml
+//   scope_version: 1
+//   kind: partial            # or: full
+//   intent: fix-payment-timeout
+//   fingerprint: 3f2a9c...   # codekbScopeFingerprint over analyzed.paths
+//   analyzed:
+//     paths:
+//       - src/payments/
+//     components:
+//       - payment-gateway
+//   shallow:
+//     paths:
+//       - src/
+//   ```
+//
+// Pure data - no model call. Same idiom as parseBoltDag: a constrained
+// line-walker, no YAML dependency.
+
+export type ReScope = {
+  kind: "full" | "partial";
+  intent: string;
+  fingerprint: string | null;
+  analyzedPaths: string[];
+  analyzedComponents: string[];
+  shallowPaths: string[];
+};
+
+export type ReScopeParse =
+  | { ok: true; scope: ReScope }
+  | { ok: false; reason: "absent" | "malformed"; detail: string };
+
+// Find the fenced yaml block carrying `scope_version:` anywhere in the body
+// (keyed on the version line, not a heading, so prose edits around the block
+// don't break parsing). Returns the inner lines, or null when no block exists.
+function extractScopeBlock(body: string): string | null {
+  const lines = body.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    if (/^```ya?ml\s*$/.test(lines[i].trim())) {
+      const inner: string[] = [];
+      let j = i + 1;
+      for (; j < lines.length; j++) {
+        if (/^```\s*$/.test(lines[j].trim())) break;
+        inner.push(lines[j]);
+      }
+      const block = inner.join("\n");
+      if (/^\s*scope_version\s*:/m.test(block)) return block;
+      i = j; // not the scope block - resume past its close fence
+    }
+  }
+  return null;
+}
+
+// Parse the scope block out of a reverse-engineering-timestamp.md body.
+// Unknown scope_version parses as malformed (a future writer must not be
+// half-read by an old reader); a missing block is "absent" (legacy store).
+export function parseReScope(body: string): ReScopeParse {
+  const block = extractScopeBlock(body);
+  if (block === null) {
+    return { ok: false, reason: "absent", detail: "no fenced yaml scope_version block found" };
+  }
+  const scope: ReScope = {
+    kind: "partial",
+    intent: "",
+    fingerprint: null,
+    analyzedPaths: [],
+    analyzedComponents: [],
+    shallowPaths: [],
+  };
+  let section: "analyzed" | "shallow" | null = null;
+  let list: "paths" | "components" | null = null;
+  let sawKind = false;
+  for (const raw of block.split("\n")) {
+    const t = raw.trim();
+    if (t === "" || t.startsWith("#")) continue;
+    const indent = raw.length - raw.trimStart().length;
+    if (indent === 0) {
+      section = null;
+      list = null;
+      if (t.startsWith("scope_version:")) {
+        const v = t.slice("scope_version:".length).trim();
+        if (v !== "1") {
+          return { ok: false, reason: "malformed", detail: `unknown scope_version: ${v}` };
+        }
+      } else if (t.startsWith("kind:")) {
+        const k = t.slice("kind:".length).trim();
+        if (k !== "full" && k !== "partial") {
+          return { ok: false, reason: "malformed", detail: `kind must be full|partial, got: ${k}` };
+        }
+        scope.kind = k;
+        sawKind = true;
+      } else if (t.startsWith("intent:")) {
+        scope.intent = t.slice("intent:".length).trim();
+      } else if (t.startsWith("fingerprint:")) {
+        const f = t.slice("fingerprint:".length).trim();
+        scope.fingerprint = f === "" || f === "unknown" ? null : f;
+      } else if (t === "analyzed:") {
+        section = "analyzed";
+      } else if (t === "shallow:") {
+        section = "shallow";
+      }
+    } else if (section !== null && !t.startsWith("-") && t.endsWith(":")) {
+      list = t === "paths:" ? "paths" : t === "components:" ? "components" : null;
+    } else if (section !== null && list !== null && t.startsWith("-")) {
+      const item = t.slice(1).trim();
+      if (item === "") continue;
+      if (section === "analyzed" && list === "paths") scope.analyzedPaths.push(item);
+      else if (section === "analyzed" && list === "components") scope.analyzedComponents.push(item);
+      else if (section === "shallow" && list === "paths") scope.shallowPaths.push(item);
+    }
+  }
+  if (!sawKind) {
+    return { ok: false, reason: "malformed", detail: "missing kind: line" };
+  }
+  if (scope.kind === "partial" && scope.analyzedPaths.length === 0) {
+    return { ok: false, reason: "malformed", detail: "kind: partial requires analyzed.paths entries" };
+  }
+  if (scope.kind === "partial" && scope.analyzedPaths.includes("./")) {
+    return {
+      ok: false,
+      reason: "malformed",
+      detail: "repository-root coverage (./) requires kind: full",
+    };
+  }
+  if (scope.kind === "full" && !scope.analyzedPaths.includes("./")) {
+    return {
+      ok: false,
+      reason: "malformed",
+      detail: "kind: full requires repository-root coverage (analyzed.paths must include ./)",
+    };
+  }
+  return { ok: true, scope };
+}
+
+// Content fingerprint of the WORKING TREE restricted to the scope's analyzed
+// paths: `git write-tree` over a temporary index populated by `git add -A --
+// <paths>`. Hashes what is actually on disk (uncommitted edits included), so
+// rebases/squashes/amends that vaporise a recorded commit hash cannot break
+// the comparison, and reverting an edit restores the original fingerprint.
+// Ignored files stay excluded (git add semantics). Callers may exclude generated
+// paths that live inside an analyzed root, such as the codekb being fingerprinted.
+// Returns null when repoDir is not a git work tree, git is unavailable, or any
+// pathspec is invalid/unmatched (callers report UNVERIFIED, never a false verdict).
+export function codekbScopeFingerprint(
+  repoDir: string,
+  paths: string[],
+  excludedPaths: string[] = [],
+): string | null {
+  if (paths.length === 0) return null;
+  const inTree = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], {
+    cwd: repoDir,
+    encoding: "utf-8",
+  });
+  if (inTree.status !== 0 || inTree.stdout.trim() !== "true") return null;
+  const indexFile = join(tmpdir(), `.aidlc-scope-index-${randomUUID()}`);
+  const env = { ...process.env, GIT_INDEX_FILE: indexFile };
+  try {
+    const exclusions = excludedPaths
+      .map((p) => p.replaceAll("\\", "/").replace(/^\.?\//, "").replace(/\/+$/, ""))
+      .filter((p) => p !== "")
+      .map((p) => `:(exclude,literal)${p}`);
+    const add = spawnSync("git", ["add", "-A", "--", ...paths, ...exclusions], {
+      cwd: repoDir,
+      env,
+      encoding: "utf-8",
+    });
+    if (add.status !== 0) return null;
+    const wt = spawnSync("git", ["write-tree"], { cwd: repoDir, env, encoding: "utf-8" });
+    if (wt.status !== 0) return null;
+    const hash = wt.stdout.trim();
+    return /^[0-9a-f]{40,64}$/.test(hash) ? hash : null;
+  } finally {
+    try {
+      unlinkSync(indexFile);
+    } catch {
+      // best-effort cleanup - a leaked temp index is inert
+    }
+  }
+}
+
+// Coverage test for the compare mode: does the incoming run's analyzed set
+// cover a store entry? Literal match, or an incoming DIRECTORY prefix (entry
+// ending "/") subsuming the store path. Deliberately prefix-only - scope
+// paths are authored as repo-relative dirs/files, not globs.
+export function scopePathCovered(incoming: string[], storePath: string): boolean {
+  return incoming.some(
+    (p) => p === storePath || (p.endsWith("/") && storePath.startsWith(p)),
+  );
 }
 
 // The bare SPACE record root: `aidlc/spaces/<space>/intents/`. The absolute path
@@ -1494,10 +1803,36 @@ export function listIntents(projectDir: string, space?: string): IntentInfo[] {
   return infos;
 }
 
+// Materialize the active-space cursor without overwriting a concurrent explicit
+// switch. A clone does not carry this gitignored file, so SessionStart and any
+// active-intent write recreate the resolved pointer on first use. Publish a
+// fully-written staged file with link(), whose no-replace install is atomic: if
+// a space switch wins the race, its value stays untouched.
+export function ensureActiveSpaceCursor(projectDir: string): void {
+  const space = activeSpace(projectDir);
+  const root = workspaceRoot(projectDir);
+  const cursor = join(root, ACTIVE_SPACE_POINTER);
+  const staged = join(root, `.aidlc-active-space-${process.pid}-${randomUUID()}.tmp`);
+  try {
+    mkdirSync(root, { recursive: true });
+    writeFileSync(staged, `${space}\n`, { encoding: "utf-8", flag: "wx" });
+    linkSync(staged, cursor);
+  } catch {
+    /* existing cursor won, or per-user state is unwritable */
+  } finally {
+    try {
+      unlinkSync(staged);
+    } catch {
+      /* staging file was never created or is already gone */
+    }
+  }
+}
+
 // Write the active-intent cursor for a space (gitignored per-user pointer).
-// Best-effort: the cursor dir is created if absent; a write failure is swallowed
-// (the cursor is per-user state, never the source of truth — the registry is).
+// Best-effort: the cursor dirs are created if absent; a write failure is
+// swallowed (the cursors are per-user state, never the source of truth).
 export function setActiveIntentCursor(projectDir: string, dirName: string, space?: string): void {
+  ensureActiveSpaceCursor(projectDir);
   const dir = intentsDir(projectDir, space);
   try {
     mkdirSync(dir, { recursive: true });
@@ -1531,7 +1866,10 @@ export function setActiveSpaceCursor(projectDir: string, name: string): void {
 // harness-neutral artifact; the session merely enriches the cursor on resume.
 export const SESSIONS_DIR = ".aidlc-sessions";
 
-function sessionsDir(projectDir: string): string {
+// The gitignored runtime scratch dir `aidlc/.aidlc-sessions/`. Exported because
+// aidlc-usage.ts writes the usage ledger and the persisted-transcript-path
+// pointers here, and the statusline/state consumers read the ledger back.
+export function sessionsDir(projectDir: string): string {
   return join(workspaceRoot(projectDir), SESSIONS_DIR);
 }
 
@@ -1568,6 +1906,104 @@ export function writeSessionIntentUuid(projectDir: string, sessionId: string, uu
     writeFileSync(path, `${uuid}\n`, "utf-8");
   } catch {
     /* per-user runtime state; best-effort */
+  }
+}
+
+// Clear a conversation's intent stamp when it deliberately continues on a
+// UUID-less legacy/orphan record. Without this, the old UUID keeps winning
+// usage ownership even though the live cursor no longer resolves to that
+// workflow.
+export function clearSessionIntentUuid(projectDir: string, sessionId: string): void {
+  const path = sessionRecordPath(projectDir, sessionId);
+  if (!path) return;
+  try {
+    unlinkSync(path);
+  } catch {
+    /* absent/unwritable per-user runtime state; best-effort */
+  }
+}
+
+export const SESSION_INTENT_HANDOFF_TTL_MS = 5 * 60 * 1000;
+
+export interface SessionIntentHandoff {
+  fromIntentUuid: string;
+  toIntentUuid: string;
+  issuedAtMs: number;
+}
+
+function sessionIntentHandoffPath(projectDir: string, sessionId: string): string {
+  const recordPath = sessionRecordPath(projectDir, sessionId);
+  return recordPath ? `${recordPath}.handoff.json` : "";
+}
+
+// Record the exact second-intent boundary for the session that created it.
+// This receipt is transient and one-shot: the Stop hook validates both UUIDs
+// before allowing the old conversation to end, then clears it.
+export function writeSessionIntentHandoff(
+  projectDir: string,
+  sessionId: string,
+  fromIntentUuid: string,
+  toIntentUuid: string,
+): void {
+  const path = sessionIntentHandoffPath(projectDir, sessionId);
+  if (!path || !fromIntentUuid || !toIntentUuid || fromIntentUuid === toIntentUuid) return;
+  try {
+    mkdirSync(sessionsDir(projectDir), { recursive: true });
+    writeFileSync(
+      path,
+      `${JSON.stringify({
+        fromIntentUuid,
+        toIntentUuid,
+        issuedAtMs: Date.now(),
+      } satisfies SessionIntentHandoff)}\n`,
+      "utf-8",
+    );
+  } catch {
+    /* per-user runtime state; best-effort */
+  }
+}
+
+export function readSessionIntentHandoff(
+  projectDir: string,
+  sessionId: string,
+): SessionIntentHandoff | null {
+  const path = sessionIntentHandoffPath(projectDir, sessionId);
+  if (!path) return null;
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
+    if (
+      parsed !== null &&
+      typeof parsed === "object" &&
+      "fromIntentUuid" in parsed &&
+      typeof (parsed as { fromIntentUuid?: unknown }).fromIntentUuid === "string" &&
+      "toIntentUuid" in parsed &&
+      typeof (parsed as { toIntentUuid?: unknown }).toIntentUuid === "string" &&
+      "issuedAtMs" in parsed &&
+      typeof (parsed as { issuedAtMs?: unknown }).issuedAtMs === "number"
+    ) {
+      const handoff = parsed as SessionIntentHandoff;
+      if (
+        handoff.fromIntentUuid.length > 0 &&
+        handoff.toIntentUuid.length > 0 &&
+        handoff.fromIntentUuid !== handoff.toIntentUuid &&
+        Number.isFinite(handoff.issuedAtMs)
+      ) {
+        return handoff;
+      }
+    }
+  } catch {
+    // Missing or malformed runtime receipt.
+  }
+  return null;
+}
+
+export function clearSessionIntentHandoff(projectDir: string, sessionId: string): void {
+  const path = sessionIntentHandoffPath(projectDir, sessionId);
+  if (!path) return;
+  try {
+    unlinkSync(path);
+  } catch {
+    /* absent/unwritable per-user runtime state; best-effort */
   }
 }
 
@@ -1618,25 +2054,30 @@ export function activeIntentUuid(projectDir: string, space?: string): string | n
   return match?.uuid ? match.uuid : null;
 }
 
-// Resolve an intent UUID to its registry row across EVERY space (a conversation
-// may have been working an intent in a different space than the active one).
-// Returns the {space, slug} of the first match, or null when the uuid names no
-// known intent (a stale stamp from a since-deleted intent → no rebind offer).
+// Resolve an intent UUID to its record across EVERY space (a conversation may
+// have been working an intent in a different space than the active one).
+// Returns the logical slug plus the exact on-disk record dir. The latter is
+// required by explicit path/audit selectors: modern record dirs are date-
+// prefixed and cannot be reconstructed from the slug alone.
 export function findIntentByUuid(
   projectDir: string,
   uuid: string,
-): { space: string; slug: string } | null {
+): { space: string; slug: string; dirName: string } | null {
   if (!uuid) return null;
   for (const sp of listSpaces(projectDir)) {
-    const row = readIntentRegistry(projectDir, sp.name).find((e) => e.uuid === uuid);
-    if (row) return { space: sp.name, slug: row.slug };
+    const intent = listIntents(projectDir, sp.name).find(
+      (entry) => entry.uuid === uuid && entry.dirName !== null,
+    );
+    if (intent?.dirName) {
+      return { space: sp.name, slug: intent.slug, dirName: intent.dirName };
+    }
   }
   return null;
 }
 
 // --- Intent birth: the deterministic mutation behind the engine's directive ---
 //
-// birthIntent() is the single deterministic primitive the `intent-birth` tool
+// createIntent() is the single deterministic primitive the `intent-create` tool
 // handler calls: mint a UUIDv7, create the record dir, append the registry row,
 // set the active-intent cursor. It does NOT emit audit events or write the
 // aidlc-state.md body (the handler owns those, since they need the scope graph)
@@ -1654,7 +2095,7 @@ export interface BornIntent {
   space: string;
 }
 
-export function birthIntent(
+export function createIntent(
   projectDir: string,
   label: string,
   space: string,
@@ -1681,7 +2122,7 @@ export function birthIntent(
   // only treats a record dir as real once it holds an aidlc-state.md (the cursor
   // + lone-intent checks both gate on existsSync(<dir>/aidlc-state.md)). Birth
   // mkdir's the dir, but the full state body is written AFTER birth by the
-  // caller (handleIntentBirth, via the default-resolving writeStateFile). Write
+  // caller (handleIntentCreate, via the default-resolving writeStateFile). Write
   // a header-only stub here so the cursor resolves to THIS record between mint
   // and the full write — without it, activeIntent() returns null and the
   // post-birth state/audit writes leak to the flat fallback (a bootstrap gap).
@@ -1775,7 +2216,7 @@ export function migrateFlatLayout(projectDir: string): FlatMigrationResult | nul
     const uuid = uuidv7();
     const space = DEFAULT_SPACE;
     const intentsRoot = intentsDir(projectDir, space);
-    // SPIKE (date-prefix): same `<YYMMDD>-<short-label>` shape as birthIntent, with
+    // SPIKE (date-prefix): same `<YYMMDD>-<short-label>` shape as createIntent, with
     // a numeric-counter collision resolve.
     const intentDirName = resolveUniqueIntentDir(intentsRoot, intentDirNameBase(slug));
     const leaf = join(intentsRoot, intentDirName);
@@ -1861,11 +2302,7 @@ export function migrateFlatLayout(projectDir: string): FlatMigrationResult | nul
       { uuid, slug, dirName: intentDirName, scope: undefined, repos: undefined, status: "in-flight" },
       space,
     );
-    try {
-      writeFileSync(join(intentsRoot, ACTIVE_INTENT_POINTER), `${intentDirName}\n`, "utf-8");
-    } catch {
-      /* cursor is per-user/gitignored; best-effort */
-    }
+    setActiveIntentCursor(projectDir, intentDirName, space);
 
     // (5) Write the `.migrated` marker LAST (the sole idempotency key).
     mkdirSync(workspaceRoot(projectDir), { recursive: true });
@@ -1888,6 +2325,103 @@ export function stateFilePath(projectDir: string, intent?: string, space?: strin
   const dir = recordDir(projectDir, intent, space);
   if (dir === null) return join(spaceRecordRoot(projectDir, space), "aidlc-state.md");
   return join(dir, "aidlc-state.md");
+}
+
+// The engine's final validated run-stage is the active execution cursor. Most
+// stages match aidlc-state.md's Current Stage, but unit-major Construction can
+// interleave later stages while the durable cursor stays on the first block
+// stage. Persist that transient fact per intent so path-only PostToolUse hooks
+// can attribute diagnostics to the directive the conductor is actually running.
+const ACTIVE_DIRECTIVE_MARKER = ".aidlc-active-directive.json";
+
+export interface ActiveDirectiveMarker {
+  version: 1;
+  stage: string;
+  unit?: string;
+  state_sha256: string;
+}
+
+function activeDirectiveMarkerPath(
+  projectDir: string,
+  intent?: string,
+  space?: string,
+): string {
+  return join(dirname(stateFilePath(projectDir, intent, space)), ACTIVE_DIRECTIVE_MARKER);
+}
+
+function stateContentSha256(stateContent: string): string {
+  return createHash("sha256").update(stateContent, "utf-8").digest("hex");
+}
+
+export function writeActiveDirectiveMarker(
+  projectDir: string,
+  marker: Omit<ActiveDirectiveMarker, "version">,
+): void {
+  if (!/^[a-z][a-z0-9-]*$/.test(marker.stage)) {
+    throw new Error(`Invalid active-directive stage: ${marker.stage}`);
+  }
+  if (marker.unit !== undefined && marker.unit.trim().length === 0) {
+    throw new Error("Invalid active-directive unit: empty");
+  }
+  if (!/^[0-9a-f]{64}$/.test(marker.state_sha256)) {
+    throw new Error("Invalid active-directive state digest");
+  }
+  const path = activeDirectiveMarkerPath(projectDir);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileAtomic(path, `${JSON.stringify({ version: 1, ...marker }, null, 2)}\n`);
+}
+
+export function clearActiveDirectiveMarker(projectDir: string): void {
+  rmSync(activeDirectiveMarkerPath(projectDir), { force: true });
+}
+
+export function refreshActiveDirectiveMarker(
+  projectDir: string,
+  stage: string,
+  previousStateContent: string,
+  nextStateContent: string,
+): boolean {
+  const marker = readActiveDirectiveMarker(projectDir, previousStateContent);
+  if (!marker || marker.stage !== stage) return false;
+  writeActiveDirectiveMarker(projectDir, {
+    stage: marker.stage,
+    ...(marker.unit ? { unit: marker.unit } : {}),
+    state_sha256: stateContentSha256(nextStateContent),
+  });
+  return true;
+}
+
+export function readActiveDirectiveMarker(
+  projectDir: string,
+  stateContent: string,
+): ActiveDirectiveMarker | null {
+  try {
+    const parsed: unknown = JSON.parse(
+      readFileSync(activeDirectiveMarkerPath(projectDir), "utf-8"),
+    );
+    if (!isPlainObject(parsed)) return null;
+    const stage = typeof parsed.stage === "string" ? parsed.stage.trim() : "";
+    const unit = typeof parsed.unit === "string" ? parsed.unit.trim() : undefined;
+    const stateSha256 =
+      typeof parsed.state_sha256 === "string" ? parsed.state_sha256 : "";
+    if (
+      parsed.version !== 1 ||
+      !/^[a-z][a-z0-9-]*$/.test(stage) ||
+      ("unit" in parsed && !unit) ||
+      !/^[0-9a-f]{64}$/.test(stateSha256) ||
+      stateSha256 !== stateContentSha256(stateContent)
+    ) {
+      return null;
+    }
+    return {
+      version: 1,
+      stage,
+      ...(unit ? { unit } : {}),
+      state_sha256: stateSha256,
+    };
+  } catch {
+    return null;
+  }
 }
 
 // Per-clone audit SHARD path: `…/intents/<slug>-<id8>/audit/<host>-<clone>.md`.
@@ -1972,49 +2506,115 @@ function cloneId(projectDir: string): string {
 // the gate1 GATE_APPROVED -> refused. Stale (human turn long ago, then a fabricated
 // approve) likewise has the last resolution after the human turn -> refused.
 //
-// Ordering is CHRONOLOGICAL (Timestamp, then buffer position as the tiebreak),
-// matching findAllEvents: readAllAuditShards concatenates per-clone shards in
-// FILENAME order, so the raw buffer is NOT time-ordered across shards (a second
-// shard appears after a re-clone or on another machine) and a raw-position scan
-// could rank an OLD resolution from a lexically-later shard above a fresh
-// HUMAN_TURN. Within one shard the timestamps are non-decreasing and the position
-// tiebreak preserves append order, which is what makes same-second events (the
-// common case: one human turn drives mint + gate + resolution inside one second)
-// resolve by execution order. Fail-open when no ledger exists (no presence
-// tracking yet on this harness).
+// Ordering is CHRONOLOGICAL (Timestamp, then per-shard position as the SAME-SHARD
+// tiebreak): shards are per-clone files enumerated in FILENAME order (a second
+// shard appears after a re-clone or on another machine), so cross-shard position
+// carries no execution-order information. Within one shard the timestamps are
+// non-decreasing and the position tiebreak preserves append order, which is what
+// makes same-second events (the common case: one human turn drives mint + gate +
+// resolution inside one second) resolve by execution order. When a candidate
+// latest human turn shares one second-precision timestamp with ANY latest
+// resolution in a DIFFERENT shard, execution order is unknowable and the check
+// fails CLOSED (require a fresh turn) rather than let shard-filename order pick
+// a winner. Fail-open when no ledger exists (no presence tracking yet on this
+// harness).
 //
-// The resolution boundary is workflow-global (the most recent commit of ANY
-// gate), which is what makes a same-turn cascade across DIFFERENT stages refuse
-// correctly; there is no per-stage scoping.
-const GATE_RESOLUTION_EVENTS = new Set(["GATE_APPROVED", "GATE_REJECTED", "QUESTION_ANSWERED"]);
+// The resolution boundary is workflow-global (the most recent gate approval,
+// rejection, answered question, summary confirmation, or autonomous grant).
+// This makes a same-turn cascade across DIFFERENT stages refuse correctly;
+// there is no per-stage scoping. AUTONOMY_MODE_SET only counts when its Mode is
+// autonomous because that grant consumes the human turn that unlocks downstream
+// presence carve-outs.
+const GATE_RESOLUTION_EVENTS = new Set([
+  "GATE_APPROVED",
+  "GATE_REJECTED",
+  "QUESTION_ANSWERED",
+  "SUMMARY_CONFIRMATION_RECORDED",
+]);
 export function humanActedSinceGate(projectDir: string): boolean {
-  const audit = readAllAuditShards(projectDir);
-  if (audit.length === 0) return true; // no ledger → no presence tracking → fail open
-  const blocks = audit.replace(/\r\n/g, "\n").split(/\n---\n/);
-  const events: { ts: string; pos: number; human: boolean }[] = [];
-  for (let i = 0; i < blocks.length; i++) {
-    const ev = auditBlockField(blocks[i], "Event");
-    if (!ev) continue;
-    if (!GATE_RESOLUTION_EVENTS.has(ev) && ev !== "HUMAN_TURN") continue;
-    events.push({
-      ts: auditBlockField(blocks[i], "Timestamp") ?? "",
-      pos: i,
-      human: ev === "HUMAN_TURN",
-    });
+  // Per-shard reads (not the concatenated buffer): buffer position across
+  // shards is FILENAME order, not execution order, so it can only serve as an
+  // ordering tiebreak WITHIN one shard. Cross-shard same-second ties are
+  // genuinely unordered (isoTimestamp is second-precision) and fail closed
+  // below.
+  const shards = auditShards(projectDir);
+  const events: { ts: string; shard: number; pos: number; human: boolean }[] = [];
+  let ledgerBytes = 0;
+  for (let s = 0; s < shards.length; s++) {
+    let content: string;
+    try {
+      content = readFileSync(shards[s], "utf-8");
+    } catch {
+      continue; // a shard vanished between enumerate and read — skip it
+    }
+    ledgerBytes += content.length;
+    const blocks = content.replace(/\r\n/g, "\n").split(/\n---\n/);
+    for (let i = 0; i < blocks.length; i++) {
+      const ev = auditBlockField(blocks[i], "Event");
+      if (!ev) continue;
+      const isResolution =
+        GATE_RESOLUTION_EVENTS.has(ev) ||
+        (ev === "AUTONOMY_MODE_SET" &&
+          auditBlockField(blocks[i], "Mode") === "autonomous");
+      if (!isResolution && ev !== "HUMAN_TURN") continue;
+      events.push({
+        ts: auditBlockField(blocks[i], "Timestamp") ?? "",
+        shard: s,
+        pos: i,
+        human: ev === "HUMAN_TURN",
+      });
+    }
   }
-  events.sort((a, b) => {
-    if (a.ts !== b.ts) return a.ts < b.ts ? -1 : 1;
-    return a.pos - b.pos;
-  });
-  let lastResolution = -1;
-  let lastHuman = -1;
-  for (let i = 0; i < events.length; i++) {
-    if (events[i].human) lastHuman = i;
-    else lastResolution = i;
-  }
-  // A human turn appears after the last gate resolution (or there is a human turn
-  // and no resolution yet) => a fresh human acted this turn => allow.
-  return lastHuman > lastResolution && lastHuman !== -1;
+  if (ledgerBytes === 0) return true; // no ledger → no presence tracking → fail open
+  const humans = events.filter((event) => event.human);
+  if (humans.length === 0) return false; // no human turn on record
+  const resolutions = events.filter((event) => !event.human);
+  if (resolutions.length === 0) return true;
+
+  const latestHumanTimestamp = humans.reduce(
+    (latest, event) => (event.ts > latest ? event.ts : latest),
+    "",
+  );
+  const latestResolutionTimestamp = resolutions.reduce(
+    (latest, event) => (event.ts > latest ? event.ts : latest),
+    "",
+  );
+  if (latestHumanTimestamp > latestResolutionTimestamp) return true;
+  if (latestHumanTimestamp < latestResolutionTimestamp) return false;
+
+  // At equal second-precision timestamps, one turn must be provably after EVERY
+  // latest resolution. A same-shard append position proves that order; a
+  // resolution in any other shard remains unordered and therefore consumes the
+  // candidate turn fail-closed.
+  const latestHumans = humans.filter(
+    (event) => event.ts === latestHumanTimestamp,
+  );
+  const latestResolutions = resolutions.filter(
+    (event) => event.ts === latestResolutionTimestamp,
+  );
+  return latestHumans.some((human) =>
+    latestResolutions.every(
+      (resolution) =>
+        resolution.shard === human.shard && resolution.pos < human.pos,
+    )
+  );
+}
+
+// A cancelled / auto-resolved structured-question widget is NOT a human
+// answer. Harnesses that auto-complete a dismissed question hand the conductor
+// a completed-looking object whose answer text is cancellation boilerplate
+// ("Cancelled", "user dismissed", a timeout marker) — logging that as
+// QUESTION_ANSWERED or passing it as an approval choice would launder a
+// non-decision into human authority AND consume the turn's HUMAN_TURN. The
+// vocabulary is deliberately tight (cancellation/dismissal/timeout semantics
+// only): a substantive answer that merely CONTAINS these words ("cancel the
+// standing order") does not match, because the whole trimmed string must be
+// the cancellation phrase.
+const NON_ANSWER_RE =
+  /^(?:cancel(?:led|ed)?|cancellation|dismiss(?:ed)?|abort(?:ed)?|timed?[ -]?out|timeout|no (?:answer|response)|(?:user|question) (?:cancel(?:led|ed)|dismissed))[.!]?$/i;
+export function isNonAnswer(text: string | undefined | null): boolean {
+  const t = (text ?? "").trim();
+  return t.length === 0 || NON_ANSWER_RE.test(t);
 }
 
 // True when any stage sits at [?] (awaiting-approval) in the state file: the
@@ -2035,6 +2635,415 @@ export function humanActedSinceLastAnswer(projectDir: string): boolean {
   return humanActedSinceGate(projectDir);
 }
 
+// --- Consolidated-summary confirmation evidence ---
+//
+// The summary checkpoint is a human judgement that authorizes artifact
+// generation. Its markdown answer is useful context, but is not evidence by
+// itself: the conductor can write that text. The durable evidence is a
+// SUMMARY_CONFIRMATION_RECORDED row carrying this canonical Checkpoint field,
+// emitted by `aidlc-log.ts answer --checkpoint summary-confirmation` only after
+// a matching prompt record and a fresh HUMAN_TURN. The public audit CLI reserves
+// this event, so the conductor cannot mint it through `aidlc-audit append`.
+export const SUMMARY_CONFIRMATION_CHECKPOINT =
+  "Consolidated Summary Confirmation";
+
+export function summaryConfirmationGuardDisabled(): boolean {
+  return process.env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD === "1";
+}
+
+type SummaryConfirmationStage = Pick<
+  StageEntry,
+  | "slug"
+  | "name"
+  | "phase"
+  | "outputs"
+  | "produces"
+  | "optional_produces"
+  | "produces_kinds"
+  | "for_each"
+  | "summary_confirmation"
+>;
+
+export type SummaryConfirmationEvidence =
+  | { ok: true; required: boolean }
+  | { ok: false; message: string };
+
+interface SummaryQuestionFile {
+  path: string;
+  dir: string;
+  unit: string | null;
+}
+
+function stageDeclaresSummaryQuestions(
+  stage: SummaryConfirmationStage,
+): boolean {
+  return stage.summary_confirmation === "required";
+}
+
+function questionFilesInDir(
+  dir: string,
+  unit: string | null,
+): SummaryQuestionFile[] {
+  if (!existsSync(dir)) return [];
+  try {
+    return readdirSync(dir)
+      .filter((name) => name.endsWith("-questions.md"))
+      .sort()
+      .map((name) => ({ path: join(dir, name), dir, unit }));
+  } catch {
+    return [];
+  }
+}
+
+function summaryQuestionFiles(
+  projectDir: string,
+  stage: SummaryConfirmationStage,
+): SummaryQuestionFile[] {
+  const rec = recordDir(projectDir);
+  if (rec === null) return [];
+  if (!isPerUnitStage(stage)) {
+    return questionFilesInDir(join(rec, stage.phase, stage.slug), null);
+  }
+
+  const constructionDir = join(rec, "construction");
+  if (!existsSync(constructionDir)) return [];
+  const files: SummaryQuestionFile[] = [];
+  try {
+    for (const unit of readdirSync(constructionDir).sort()) {
+      files.push(
+        ...questionFilesInDir(
+          join(constructionDir, unit, stage.slug),
+          unit,
+        ),
+      );
+    }
+  } catch {
+    return [];
+  }
+  return files;
+}
+
+function summaryAnswerFromFile(path: string): string | null {
+  let body: string;
+  try {
+    body = readFileSync(path, "utf-8");
+  } catch {
+    return null;
+  }
+  const section = extractMarkdownSection(
+    body,
+    `## ${SUMMARY_CONFIRMATION_CHECKPOINT}`,
+  );
+  if (!section) return null;
+  const answers = [...section.matchAll(/^\[Answer\]:[ \t]*(.*)$/gm)];
+  if (answers.length !== 1) return null;
+  return answers[0][1].trim();
+}
+
+function summaryArtifactPaths(
+  stage: SummaryConfirmationStage,
+  question: SummaryQuestionFile,
+): string[] {
+  const names = [
+    ...(stage.produces ?? []),
+    ...(stage.optional_produces ?? []),
+  ].filter((name) => !name.endsWith("-questions"));
+  return names
+    .map((name) => join(question.dir, `${name}.md`))
+    .filter((path) => existsSync(path));
+}
+
+// Verify that every question-bearing iteration has a fresh human-backed
+// consolidated-summary receipt and that generated artifacts postdate it.
+// `workflow` identifies an isolated run; main-workflow callers omit it.
+export function checkSummaryConfirmationEvidence(
+  projectDir: string,
+  stage: SummaryConfirmationStage,
+  options: {
+    workflow?: string;
+    stateContent?: string | null;
+    unit?: string;
+  } = {},
+): SummaryConfirmationEvidence {
+  if (summaryConfirmationGuardDisabled()) {
+    return { ok: true, required: false };
+  }
+  if (
+    stage.phase === "initialization" ||
+    (
+      stage.phase === "construction" &&
+      options.stateContent &&
+      isAutonomousMode(options.stateContent)
+    )
+  ) {
+    return { ok: true, required: false };
+  }
+  if (stage.summary_confirmation === undefined) {
+    return { ok: true, required: false };
+  }
+
+  let questions = summaryQuestionFiles(projectDir, stage);
+  if (options.unit !== undefined) {
+    questions = questions.filter(
+      (question) => question.unit === options.unit,
+    );
+  }
+  const declared = stageDeclaresSummaryQuestions(stage);
+  if (questions.length === 0) {
+    if (!declared) return { ok: true, required: false };
+    const unitText = options.unit ? ` for unit "${options.unit}"` : "";
+    return {
+      ok: false,
+      message:
+        `Refusing to complete "${stage.slug}"${unitText}: its question flow has no ` +
+        `${stage.slug}-questions.md file. Create and answer the stage questions, ` +
+        `then record the consolidated summary checkpoint before generating artifacts.`,
+    };
+  }
+  if (
+    declared &&
+    isPerUnitStage(stage) &&
+    options.workflow === undefined &&
+    options.unit === undefined
+  ) {
+    const resolution = resolveBoltDag(projectDir);
+    if (resolution.state === "malformed") {
+      return {
+        ok: false,
+        message:
+          `Refusing to complete "${stage.slug}": its summary-confirmation unit ` +
+          `set cannot be resolved because unit-of-work-dependency.md is ${resolution.reason} ` +
+          `(${resolution.detail}).`,
+      };
+    }
+    if (resolution.state === "ok") {
+      const requiredUnits = resolution.units.filter((unit) =>
+        filterProducesByKind(
+          stage.produces_kinds,
+          stage.produces ?? [],
+          resolution.unitKinds?.get(unit) ?? null,
+        ).length > 0
+      );
+      const presentUnits = new Set(
+        questions
+          .map((question) => question.unit)
+          .filter((unit): unit is string => unit !== null),
+      );
+      const missing = requiredUnits.filter((unit) => !presentUnits.has(unit));
+      if (missing.length > 0) {
+        return {
+          ok: false,
+          message:
+            `Refusing to complete "${stage.slug}": ${missing.length} applicable ` +
+          `units have no questions file or summary confirmation (${missing.join(", ")}).`,
+        };
+      }
+      const requiredUnitSet = new Set(requiredUnits);
+      questions = questions.filter(
+        (question) =>
+          question.unit !== null && requiredUnitSet.has(question.unit),
+      );
+    }
+  }
+
+  const audit = readAllAuditShards(projectDir);
+  if (audit.length === 0) {
+    return {
+      ok: false,
+      message:
+        `Refusing to complete "${stage.slug}": no human-backed consolidated ` +
+        "summary confirmation receipt is recorded.",
+    };
+  }
+
+  const relevant = new Set([
+    "WORKFLOW_STARTED",
+    "STAGE_STARTED",
+    "STAGE_JUMPED",
+    "STAGE_COMPLETED",
+    "SUMMARY_CONFIRMATION_RECORDED",
+    "ARTIFACT_CREATED",
+    "ARTIFACT_UPDATED",
+  ]);
+  const events = audit
+    .replace(/\r\n/g, "\n")
+    .split(/\n---\n/)
+    .map((block, position) => ({
+      block,
+      position,
+      event: auditBlockField(block, "Event") ?? "",
+      timestamp: auditBlockField(block, "Timestamp") ?? "",
+    }))
+    .filter((entry) => relevant.has(entry.event))
+    .sort((a, b) =>
+      a.timestamp !== b.timestamp
+        ? (a.timestamp < b.timestamp ? -1 : 1)
+        : a.position - b.position
+    );
+
+  const workflow = options.workflow;
+  const unitMajor =
+    isPerUnitStage(stage) &&
+    getField(options.stateContent ?? "", "Construction Iteration")?.trim() ===
+      "unit-major";
+  let floor = -1;
+  for (let i = 0; i < events.length; i++) {
+    const entry = events[i];
+    const eventWorkflow = auditBlockField(entry.block, "Workflow");
+    if (workflow !== undefined) {
+      if (
+        entry.event === "STAGE_COMPLETED" &&
+        eventWorkflow === workflow &&
+        auditBlockField(entry.block, "Stage") === stage.slug
+      ) {
+        floor = i;
+      }
+      continue;
+    }
+    if (eventWorkflow?.startsWith("single-stage:")) continue;
+    if (
+      entry.event === "WORKFLOW_STARTED" ||
+      entry.event === "STAGE_JUMPED"
+    ) {
+      floor = i;
+      continue;
+    }
+    if (auditBlockField(entry.block, "Stage") !== stage.slug) continue;
+    if (entry.event === "STAGE_STARTED" && !unitMajor) {
+      floor = i;
+    }
+  }
+
+  if (workflow !== undefined && isPerUnitStage(stage)) {
+    let receiptFile: string | null = null;
+    for (let i = floor + 1; i < events.length; i++) {
+      const entry = events[i];
+      if (entry.event !== "SUMMARY_CONFIRMATION_RECORDED") continue;
+      if (auditBlockField(entry.block, "Stage") !== stage.slug) continue;
+      if (auditBlockField(entry.block, "Workflow") !== workflow) continue;
+      receiptFile = auditBlockField(entry.block, "Questions File");
+    }
+    if (receiptFile !== null) {
+      const matched = questions.find(
+        (question) =>
+          toPosix(relative(projectDir, question.path)) === receiptFile,
+      );
+      if (matched) questions = [{ ...matched, unit: null }];
+    } else if (questions.length === 1) {
+      questions = [{ ...questions[0], unit: null }];
+    }
+  }
+
+  for (const question of questions) {
+    const fileAnswer = summaryAnswerFromFile(question.path);
+    if (fileAnswer !== "Looks correct") {
+      return {
+        ok: false,
+        message:
+          `Refusing to complete "${stage.slug}": ${question.path} must contain ` +
+          "exactly one `[Answer]: Looks correct` in its Consolidated Summary " +
+          "Confirmation section.",
+      };
+    }
+
+    let receipt: (typeof events)[number] | null = null;
+    const questionRelative = toPosix(relative(projectDir, question.path));
+    for (let i = floor + 1; i < events.length; i++) {
+      const entry = events[i];
+      if (entry.event !== "SUMMARY_CONFIRMATION_RECORDED") continue;
+      if (auditBlockField(entry.block, "Stage") !== stage.slug) continue;
+      if (
+        auditBlockField(entry.block, "Checkpoint") !==
+          SUMMARY_CONFIRMATION_CHECKPOINT
+      ) {
+        continue;
+      }
+      const eventWorkflow = auditBlockField(entry.block, "Workflow");
+      if (workflow !== undefined) {
+        if (eventWorkflow !== workflow) continue;
+      } else if (eventWorkflow?.startsWith("single-stage:")) {
+        continue;
+      }
+      const eventUnit = auditBlockField(entry.block, "Unit");
+      if ((eventUnit ?? null) !== question.unit) continue;
+      if (
+        auditBlockField(entry.block, "Questions File") !== questionRelative
+      ) {
+        continue;
+      }
+      receipt = entry;
+    }
+    if (
+      receipt === null ||
+      auditBlockField(receipt.block, "Details") !== "Looks correct"
+    ) {
+      const unitText = question.unit ? ` for unit "${question.unit}"` : "";
+      return {
+        ok: false,
+        message:
+          `Refusing to complete "${stage.slug}"${unitText}: no fresh human-backed ` +
+          "consolidated summary confirmation is recorded. Present the summary, " +
+          "then run `aidlc-log.ts answer --checkpoint summary-confirmation " +
+          `--stage ${stage.slug}${question.unit ? ` --unit "${question.unit}"` : ""}` +
+          `${workflow ? " --single" : ""} --details "Looks correct"` +
+          " after the human responds.",
+      };
+    }
+
+    let currentHash: string;
+    try {
+      currentHash = createHash("sha256")
+        .update(readFileSync(question.path))
+        .digest("hex");
+    } catch {
+      currentHash = "";
+    }
+    if (
+      !currentHash ||
+      auditBlockField(receipt.block, "Questions SHA-256") !== currentHash
+    ) {
+      return {
+        ok: false,
+        message:
+          `Refusing to complete "${stage.slug}": ${question.path} changed after ` +
+          "the human confirmed its summary. Reset the confirmation, present the " +
+          "updated summary, and record a new response.",
+      };
+    }
+
+    const receiptIndex = events.indexOf(receipt);
+    for (const artifact of summaryArtifactPaths(stage, question)) {
+      const artifactAbs = resolvePath(artifact);
+      let lastWrite = -1;
+      for (let i = floor + 1; i < events.length; i++) {
+        const entry = events[i];
+        if (
+          entry.event !== "ARTIFACT_CREATED" &&
+          entry.event !== "ARTIFACT_UPDATED"
+        ) {
+          continue;
+        }
+        const file = auditBlockField(entry.block, "File");
+        if (!file) continue;
+        const resolved = resolvePath(projectDir, file);
+        if (resolved === artifactAbs) lastWrite = i;
+      }
+      if (lastWrite <= receiptIndex) {
+        return {
+          ok: false,
+          message:
+            `Refusing to complete "${stage.slug}": artifact ${artifact} has no ` +
+            "recorded native-tool write after the human's consolidated summary " +
+            "confirmation. Regenerate or re-save it after confirmation, then " +
+            "report completion again.",
+        };
+      }
+    }
+  }
+
+  return { ok: true, required: true };
+}
+
 // Read a `**Field**: value` line from one audit block (tolerates an optional
 // leading `- ` so it serves both audit blocks and the state file). Mirrors the
 // per-tool private auditField readers; shared here for humanActedSinceGate.
@@ -2045,6 +3054,65 @@ export function auditBlockField(block: string, fieldName: string): string | null
     if (line.startsWith(prefix)) return line.slice(prefix.length).trim();
   }
   return null;
+}
+
+// A DECISION_RECORDED / QUESTION_ANSWERED pair is the durable handshake for a
+// non-gate question. Return true when the named stage has an open decision in
+// chronological audit order. `afterEvent` scopes the scan to the most recent
+// matching main-workflow boundary; synthetic `--single` rows do not reset that
+// window. This distinguishes questions opened in the current stage attempt or
+// after an approval gate from earlier interactions.
+export function hasPendingDecision(
+  projectDir: string,
+  stage: string,
+  afterEvent?: string,
+): boolean {
+  const audit = readAllAuditShards(projectDir);
+  if (audit.length === 0) return false;
+
+  const relevant = new Set([
+    "DECISION_RECORDED",
+    "QUESTION_ANSWERED",
+    ...(afterEvent ? [afterEvent] : []),
+  ]);
+  const events = audit
+    .replace(/\r\n/g, "\n")
+    .split(/\n---\n/)
+    .map((block, position) => ({
+      event: auditBlockField(block, "Event") ?? "",
+      stage: auditBlockField(block, "Stage"),
+      workflow: auditBlockField(block, "Workflow"),
+      timestamp: auditBlockField(block, "Timestamp") ?? "",
+      position,
+    }))
+    .filter((event) => relevant.has(event.event))
+    .sort((a, b) => {
+      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+      return a.position - b.position;
+    });
+
+  let start = 0;
+  if (afterEvent) {
+    const boundary = events.findLastIndex(
+      (event) =>
+        event.event === afterEvent &&
+        event.stage === stage &&
+        !event.workflow?.startsWith("single-stage:"),
+    );
+    if (boundary === -1) return false;
+    start = boundary + 1;
+  }
+
+  let pending = false;
+  for (const event of events.slice(start)) {
+    if (event.stage !== stage) continue;
+    if (event.event === "DECISION_RECORDED") {
+      pending = true;
+    } else if (event.event === "QUESTION_ANSWERED") {
+      pending = false;
+    }
+  }
+  return pending;
 }
 
 // This clone's audit shard filename: `<host>-<clone-id>.md`. The clone-id token
@@ -2110,8 +3178,576 @@ export function readAllAuditShards(projectDir: string, intent?: string, space?: 
   return parts.join("\n");
 }
 
+export interface AuditShardEvent {
+  block: string;
+  event: string;
+  pos: number;
+  shard: string;
+  shardIndex: number;
+  timestamp: string;
+}
+
+// Preserve shard identity while parsing audit rows. A concatenated audit buffer
+// can preserve append order only within one shard; equal second-precision
+// timestamps across shards are causally unordered and must not be resolved by
+// filename position when authority or attempt freshness depends on the result.
+export function readAuditShardEvents(
+  projectDir: string,
+  intent?: string,
+  space?: string,
+): AuditShardEvent[] {
+  const rows: AuditShardEvent[] = [];
+  const shards = auditShards(projectDir, intent, space);
+  for (let shardIndex = 0; shardIndex < shards.length; shardIndex++) {
+    let content: string;
+    try {
+      content = readFileSync(shards[shardIndex], "utf-8");
+    } catch {
+      continue;
+    }
+    const blocks = content.replace(/\r\n/g, "\n").split(/\n---\n/);
+    for (let pos = 0; pos < blocks.length; pos++) {
+      const event = auditBlockField(blocks[pos], "Event");
+      const timestamp = auditBlockField(blocks[pos], "Timestamp");
+      if (!event || !timestamp) continue;
+      rows.push({
+        block: blocks[pos],
+        event,
+        pos,
+        shard: shards[shardIndex],
+        shardIndex,
+        timestamp,
+      });
+    }
+  }
+  return rows;
+}
+
 export function worktreePath(projectDir: string, boltSlug: string): string {
   return join(projectDir, ".aidlc", "worktrees", `bolt-${boltSlug}`);
+}
+
+// --- Fresh review receipts (the §12a completion precondition's scan) -----------
+//
+// ONE implementation, TWO consumers with opposite polarities:
+//   - aidlc-state.ts verifyReviewerPrecondition (approve/advance/finalize/
+//     complete-workflow) REFUSES completion when no fresh terminal receipt
+//     covers the stage/unit;
+//   - hooks/aidlc-review-freeze.ts REFUSES a produces[] write while a fresh
+//     READY receipt covers it (the write would invalidate the receipt and
+//     re-open the completion refusal - the receipt-invalidation loop).
+// Sharing the scan is load-bearing: if the two ever diverged, the hook could
+// block writes the engine would accept, or miss writes the engine will refuse.
+
+// The codekb stages - their produces live in the space-level codekb dir, keyed
+// by repo, NOT under a per-intent record dir. reverse-engineering is the sole
+// member; a future codekb stage joins this set (aidlc-orchestrate.ts and
+// aidlc-sensor.ts keep local mirrors - not exported from here historically).
+export const KNOWN_CODEKB_STAGES: ReadonlySet<string> = new Set([
+  "reverse-engineering",
+]);
+
+// True when a written File path (from an ARTIFACT_CREATED/ARTIFACT_UPDATED audit
+// row, or a PreToolUse file_path) is one of the stage's declared produces[]
+// artifacts. Matches on the path SUFFIX `/<slug>/<name>.md` rather than
+// resolving one absolute dir, so it covers BOTH the standard
+// <record>/<phase>/<slug>/ layout AND the per-unit construction/<unit>/<slug>/
+// layout without needing to know the {unit} segment. Codekb stages get their
+// own arm: their produces live DIRECTLY under a per-repo dir beneath the space
+// codekb root (codekb/<repo>/<name>.md) with no <slug> segment anywhere, so the
+// suffix idiom matches the codekb marker + one repo segment instead. When the
+// active intent records repos, that segment must belong to the recorded set so
+// a write to one repo's durable codekb cannot revise an unrelated intent. The
+// audit File field is stored forward-slash-normalised (aidlc-write-audit-log.ts),
+// so the forward-slash matching is harness-neutral; we still normalise
+// defensively in case a caller passes a raw OS path.
+export function producesArtifactFile(
+  stage: { slug: string; produces?: string[] },
+  file: string,
+  recordedRepos: ReadonlySet<string>
+): boolean {
+  const produces = stage.produces ?? [];
+  if (produces.length === 0) return false;
+  const norm = file.replace(/\\/g, "/");
+  if (KNOWN_CODEKB_STAGES.has(stage.slug)) {
+    return produces.some((name) => {
+      const idx = norm.lastIndexOf(`/${name}.md`);
+      if (idx === -1 || idx + `/${name}.md`.length !== norm.length) return false;
+      // Exactly one <repo> segment between /codekb/ and /<name>.md.
+      const head = norm.slice(0, idx);
+      const repoSlash = head.lastIndexOf("/");
+      if (repoSlash === -1 || !head.slice(0, repoSlash).endsWith("/codekb")) return false;
+      const repo = head.slice(repoSlash + 1);
+      if (repo.length === 0) return false;
+      // An empty registry is the legacy projectDir-is-the-repo case. Keep the
+      // historical any-repo match: codekbRepoName's basename is a write-path
+      // default, not ownership evidence for durable files that may predate repo
+      // recording or have been written with an explicit repo target.
+      return recordedRepos.size === 0 || recordedRepos.has(repo);
+    });
+  }
+  return produces.some((name) => norm.endsWith(`/${stage.slug}/${name}.md`));
+}
+
+// Resolve the unit targeted by a declared produces[] write. `undefined` means
+// the file does not belong to this stage, `null` means a matching stage-level
+// artifact (or an ambiguous per-unit path), and a string names the per-unit
+// Construction target.
+export function producesArtifactUnit(
+  stage: {
+    slug: string;
+    for_each?: string;
+    produces?: string[];
+    optional_produces?: string[];
+  },
+  file: string,
+  recordedRepos: ReadonlySet<string>,
+): string | null | undefined {
+  const reviewedArtifacts = [
+    ...(stage.produces ?? []),
+    ...(stage.optional_produces ?? []),
+  ];
+  if (
+    !producesArtifactFile(
+      { slug: stage.slug, produces: reviewedArtifacts },
+      file,
+      recordedRepos,
+    )
+  ) {
+    return undefined;
+  }
+  if (stage.for_each !== "unit-of-work") return null;
+
+  const norm = file.replace(/\\/g, "/");
+  for (const name of reviewedArtifacts) {
+    const suffix = `/${stage.slug}/${name}.md`;
+    if (!norm.endsWith(suffix)) continue;
+    const parent = norm.slice(0, -suffix.length);
+    const marker = "/construction/";
+    const markerIdx = parent.lastIndexOf(marker);
+    if (markerIdx === -1) return null;
+    const unit = parent.slice(markerIdx + marker.length);
+    return unit.length > 0 && !unit.includes("/") ? unit : null;
+  }
+  return null;
+}
+
+export type ReviewVerdict = "READY" | "NOT-READY";
+
+export function terminalReviewVerdict(
+  verdict: string | null,
+  iteration: string | null,
+  reviewClass: ReviewClass,
+  maxIterations = 2,
+): ReviewVerdict | null {
+  if (reviewClass === "none") return null;
+  if (verdict === "READY") return verdict;
+  if (
+    verdict === "NOT-READY" &&
+    iteration !== null &&
+    /^[1-9][0-9]*$/.test(iteration) &&
+    (reviewClass === "advisory" || Number(iteration) >= maxIterations)
+  ) {
+    return verdict;
+  }
+  return null;
+}
+
+export interface PendingReviewProgress {
+  state: "outstanding" | "retry-required" | "repair-required";
+  iteration: number;
+}
+
+export interface FreshReviewReceipts {
+  /** Verdict of the last fresh terminal receipt for the stage (any receipt,
+   *  unit-scoped included), or null when none survives. For NON-per-unit
+   *  stages a later declared-artifact write clears it; for per-unit stages it
+   *  mirrors the historical sawStageReview flag and is NOT cleared by unit
+   *  writes (only the floor resets it) - per-unit freshness lives in
+   *  unitVerdicts. */
+  stageVerdict: ReviewVerdict | null;
+  /** Last fresh verdict per unit. A later write to that unit's declared
+   *  artifacts deletes the entry; an ambiguous matching path fails closed by
+   *  clearing every unit entry. */
+  unitVerdicts: Map<string, ReviewVerdict>;
+  stageIteration: number | null;
+  unitIterations: Map<string, number>;
+  stagePending: PendingReviewProgress | null;
+  unitPending: Map<string, PendingReviewProgress>;
+}
+
+interface ReviewFingerprintStage {
+  slug: string;
+  phase: string;
+  for_each?: string;
+  produces?: string[];
+  optional_produces?: string[];
+  produces_kinds?: Record<string, string[]>;
+}
+
+interface ReviewArtifactEntry {
+  logicalPath: string;
+  path: string | null;
+  required: boolean;
+}
+
+function reviewArtifactEntries(
+  projectDir: string,
+  stage: ReviewFingerprintStage,
+  unit?: string,
+  boltDag?: BoltDagResolution,
+): ReviewArtifactEntry[] | null {
+  const artifactsForKind = (kind: string | null) => [
+    ...filterProducesByKind(stage.produces_kinds, stage.produces ?? [], kind).map(
+      (name) => ({ name, required: true }),
+    ),
+    ...filterProducesByKind(
+      stage.produces_kinds,
+      stage.optional_produces ?? [],
+      kind,
+    ).map((name) => ({ name, required: false })),
+  ];
+  const allArtifacts = artifactsForKind(null);
+
+  if (KNOWN_CODEKB_STAGES.has(stage.slug)) {
+    const root = dirname(codekbDir(projectDir, "_"));
+    let repos = intentRepos(projectDir);
+    if (repos.length === 0 && existsSync(root)) {
+      repos = readdirSync(root).filter((name) => {
+        try {
+          return statSync(join(root, name)).isDirectory();
+        } catch {
+          return false;
+        }
+      });
+    }
+    if (repos.length === 0) {
+      return allArtifacts.map((artifact) => ({
+        logicalPath: `codekb/*/${artifact.name}.md`,
+        path: null,
+        required: artifact.required,
+      }));
+    }
+    return repos.flatMap((repo) =>
+      allArtifacts.map((artifact) => ({
+        logicalPath: `codekb/${repo}/${artifact.name}.md`,
+        path: join(codekbDir(projectDir, repo), `${artifact.name}.md`),
+        required: artifact.required,
+      })),
+    );
+  }
+
+  const record = recordDir(projectDir);
+  if (record === null) return null;
+  if (stage.for_each !== "unit-of-work") {
+    return allArtifacts.map((artifact) => ({
+      logicalPath: `${stage.phase}/${stage.slug}/${artifact.name}.md`,
+      path: join(record, stage.phase, stage.slug, `${artifact.name}.md`),
+      required: artifact.required,
+    }));
+  }
+
+  let units: string[];
+  let unitKinds = new Map<string, string>();
+  const resolution = boltDag ?? resolveBoltDag(projectDir);
+  if (unit) {
+    units = [unit];
+    if (resolution.state === "ok" && resolution.unitKinds !== null) {
+      unitKinds = resolution.unitKinds;
+    }
+  } else if (resolution.state === "ok") {
+    units = resolution.units;
+    unitKinds = resolution.unitKinds ?? new Map();
+  } else {
+    const construction = join(record, "construction");
+    units = existsSync(construction)
+      ? readdirSync(construction).filter((name) => {
+          try {
+            return statSync(join(construction, name)).isDirectory();
+          } catch {
+            return false;
+          }
+        })
+      : [];
+  }
+  if (units.length === 0) {
+    return allArtifacts.map((artifact) => ({
+      logicalPath: `construction/*/${stage.slug}/${artifact.name}.md`,
+      path: null,
+      required: artifact.required,
+    }));
+  }
+  return units.flatMap((name) =>
+    artifactsForKind(unitKinds.get(name) ?? null).map((artifact) => ({
+      logicalPath: `construction/${name}/${stage.slug}/${artifact.name}.md`,
+      path: join(record, "construction", name, stage.slug, `${artifact.name}.md`),
+      required: artifact.required,
+    })),
+  );
+}
+
+/**
+ * Content identity covered by a terminal review receipt. Paths are logical
+ * record-relative names, so an identical Bolt worktree survives merge/re-root;
+ * missing declared artifacts are explicit manifest entries, so creating one
+ * after review also invalidates the receipt.
+ */
+export function reviewArtifactFingerprint(
+  projectDir: string,
+  stage: ReviewFingerprintStage,
+  unit?: string,
+  options: {
+    requireRequiredArtifacts?: boolean;
+    boltDag?: BoltDagResolution;
+  } = {},
+): string | null {
+  let entries: ReviewArtifactEntry[] | null;
+  try {
+    entries = reviewArtifactEntries(projectDir, stage, unit, options.boltDag);
+  } catch {
+    return null;
+  }
+  if (entries === null) return null;
+
+  const manifest: Array<[string, string]> = [];
+  for (const entry of entries.sort((a, b) => a.logicalPath.localeCompare(b.logicalPath))) {
+    if (entry.path === null || !existsSync(entry.path)) {
+      if (entry.required && options.requireRequiredArtifacts === true) return null;
+      manifest.push([entry.logicalPath, "missing"]);
+      continue;
+    }
+    try {
+      const stat = statSync(entry.path);
+      if (!stat.isFile()) {
+        if (entry.required && options.requireRequiredArtifacts === true) return null;
+        manifest.push([entry.logicalPath, "not-file"]);
+        continue;
+      }
+      const digest = createHash("sha256").update(readFileSync(entry.path)).digest("hex");
+      manifest.push([entry.logicalPath, `sha256:${digest}`]);
+    } catch {
+      return null;
+    }
+  }
+  return `sha256:${createHash("sha256").update(JSON.stringify(manifest)).digest("hex")}`;
+}
+
+// Collect the fresh terminal review receipts for a stage from the audit
+// ledger. Builds ONE position-tiebroken event stream (the same interleave
+// idiom unrecordedRevisionSinceGateOpen uses) - a timestamp-only floor is
+// unsafe because isoTimestamp() is second-precision, so a review and the
+// reject that should invalidate it can share a timestamp and a `<` compare
+// would keep the stale review. Ordering by (timestamp, buffer position)
+// breaks that tie.
+//
+// The attempt floor: WORKFLOW_STARTED and STAGE_JUMPED floor deliberately
+// stage-AGNOSTIC - any jump invalidates every stage's reviews, including
+// stages the jump never re-opens. That over-invalidation is harmless (a stage
+// that stays [x] never re-completes, so its stale floor is never consulted)
+// and it is what closes the redo-jump hole: a backward jump re-opens stages
+// WITHOUT emitting their GATE_REJECTED or (until re-entry) STAGE_STARTED, so
+// a stage-scoped floor would accept the prior attempt's reviews. Fail-closed
+// over precise. Unit-major construction may author a later stage's per-unit
+// artifacts before that stage's STAGE_STARTED row exists, so its floor
+// ignores STAGE_STARTED; stage-major and non-per-unit flows floor on it.
+export function freshReviewReceipts(
+  projectDir: string,
+  stateContent: string,
+  stage: {
+    slug: string;
+    phase: string;
+    for_each?: string;
+    reviewer?: string;
+    reviewer_max_iterations?: number;
+    review_class?: "adversarial" | "advisory";
+    produces?: string[];
+    optional_produces?: string[];
+    produces_kinds?: Record<string, string[]>;
+  },
+  options: {
+    boltDag?: BoltDagResolution;
+    reviewClass?: ReviewClass;
+  } = {},
+): FreshReviewReceipts {
+  const empty: FreshReviewReceipts = {
+    stageVerdict: null,
+    unitVerdicts: new Map(),
+    stageIteration: null,
+    unitIterations: new Map(),
+    stagePending: null,
+    unitPending: new Map(),
+  };
+  const reviewer = stage.reviewer;
+  if (!reviewer) return empty;
+  const reviewClass = options.reviewClass ?? stage.review_class ?? "adversarial";
+  if (reviewClass === "none") return empty;
+  const maxIterations =
+    reviewClass === "advisory" ? 1 : stage.reviewer_max_iterations ?? 2;
+  const audit = readAllAuditShards(projectDir);
+  if (audit.length === 0) return empty;
+
+  const RELEVANT = new Set([
+    "WORKFLOW_STARTED",
+    "STAGE_STARTED",
+    "STAGE_JUMPED",
+    "GATE_REJECTED",
+    "ARTIFACT_CREATED",
+    "ARTIFACT_UPDATED",
+    "REVIEW_REQUESTED",
+    "REVIEW_COMPLETED",
+  ]);
+  const blocks = audit.replace(/\r\n/g, "\n").split(/\n---\n/);
+  const events: { pos: number; ts: string; event: string; block: string }[] = [];
+  for (let i = 0; i < blocks.length; i++) {
+    const ev = auditBlockField(blocks[i], "Event");
+    if (!ev || !RELEVANT.has(ev)) continue;
+    events.push({ pos: i, ts: auditBlockField(blocks[i], "Timestamp") ?? "", event: ev, block: blocks[i] });
+  }
+  events.sort((a, b) => (a.ts !== b.ts ? (a.ts < b.ts ? -1 : 1) : a.pos - b.pos));
+
+  const perUnit = stage.for_each === "unit-of-work";
+  const unitMajor =
+    perUnit && getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
+
+  let floorIdx = -1;
+  for (let i = 0; i < events.length; i++) {
+    const e = events[i];
+    if (e.event === "WORKFLOW_STARTED" || e.event === "STAGE_JUMPED") {
+      floorIdx = i;
+      continue;
+    }
+    if (auditBlockField(e.block, "Stage") !== stage.slug) continue;
+    if (e.event === "STAGE_STARTED" && !unitMajor) {
+      if (auditBlockField(e.block, "Workflow")?.startsWith("single-stage:")) continue;
+      floorIdx = i;
+    } else if (e.event === "GATE_REJECTED") {
+      floorIdx = i;
+    }
+  }
+
+  // Collect fresh matching terminal reviews after the attempt floor. A later
+  // declared-artifact write clears the matching receipt. For per-unit stages,
+  // the path's construction/<unit>/ segment scopes invalidation to that unit;
+  // an ambiguous matching path fails closed by clearing every unit receipt.
+  const recordedRepos = new Set(intentRepos(projectDir));
+  const unitVerdicts = new Map<string, ReviewVerdict>();
+  const unitIterations = new Map<string, number>();
+  const unitPending = new Map<string, PendingReviewProgress>();
+  const pendingRequests = new Map<
+    string,
+    { unit: string | undefined; iteration: number }
+  >();
+  let stageVerdict: ReviewVerdict | null = null;
+  let stageIteration: number | null = null;
+  let stagePending: PendingReviewProgress | null = null;
+  for (let i = floorIdx + 1; i < events.length; i++) {
+    const e = events[i];
+    if (e.event === "ARTIFACT_CREATED" || e.event === "ARTIFACT_UPDATED") {
+      const file = auditBlockField(e.block, "File");
+      if (!file) continue;
+      const targetUnit = producesArtifactUnit(stage, file, recordedRepos);
+      if (targetUnit === undefined) continue;
+      if (!perUnit) {
+        stageVerdict = null;
+        stageIteration = null;
+      } else if (targetUnit === null) {
+        unitVerdicts.clear();
+        unitIterations.clear();
+      } else {
+        unitVerdicts.delete(targetUnit);
+        unitIterations.delete(targetUnit);
+      }
+      continue;
+    }
+    if (
+      e.event !== "REVIEW_REQUESTED" &&
+      e.event !== "REVIEW_COMPLETED"
+    ) {
+      continue;
+    }
+    if (auditBlockField(e.block, "Workflow")?.startsWith("single-stage:")) continue;
+    if (auditBlockField(e.block, "Stage") !== stage.slug) continue;
+    if (auditBlockField(e.block, "Reviewer") !== reviewer) continue;
+    const iterationField = auditBlockField(e.block, "Iteration");
+    if (!iterationField || !/^[1-9][0-9]*$/.test(iterationField)) continue;
+    const iteration = Number(iterationField);
+    const unit = auditBlockField(e.block, "Unit") || undefined;
+    const requestKey = `${unit ?? ""}\u0000${iterationField}`;
+    if (e.event === "REVIEW_REQUESTED") {
+      pendingRequests.set(requestKey, { unit, iteration });
+      continue;
+    }
+    const verdict = auditBlockField(e.block, "Verdict");
+    if (verdict !== "READY" && verdict !== "NOT-READY") continue;
+    if (!pendingRequests.delete(requestKey)) continue;
+    const recordedFingerprint = auditBlockField(e.block, "Artifact Fingerprint");
+    const currentFingerprint = reviewArtifactFingerprint(
+      projectDir,
+      stage,
+      unit,
+      { boltDag: options.boltDag },
+    );
+    const fingerprintUsable =
+      recordedFingerprint !== null &&
+      /^sha256:[0-9a-f]{64}$/.test(recordedFingerprint) &&
+      currentFingerprint !== null;
+    const fingerprintMatches =
+      fingerprintUsable && recordedFingerprint === currentFingerprint;
+    const terminalVerdict = terminalReviewVerdict(
+      verdict,
+      iterationField,
+      reviewClass,
+      maxIterations,
+    );
+    if (terminalVerdict === null) {
+      if (verdict !== "NOT-READY" || !fingerprintUsable) continue;
+      const pending: PendingReviewProgress = fingerprintMatches
+        ? { state: "repair-required", iteration }
+        : { state: "outstanding", iteration: iteration + 1 };
+      stageVerdict = null;
+      stageIteration = null;
+      stagePending = pending;
+      if (unit) {
+        unitVerdicts.delete(unit);
+        unitIterations.delete(unit);
+        unitPending.set(unit, pending);
+      }
+      continue;
+    }
+    if (!fingerprintMatches) continue;
+    stageVerdict = terminalVerdict;
+    stageIteration = iteration;
+    stagePending = null;
+    if (unit) {
+      unitVerdicts.set(unit, terminalVerdict);
+      unitIterations.set(unit, iteration);
+      unitPending.delete(unit);
+    }
+  }
+
+  for (const request of pendingRequests.values()) {
+    const pending: PendingReviewProgress = {
+      state: "retry-required",
+      iteration: request.iteration,
+    };
+    stageVerdict = null;
+    stageIteration = null;
+    stagePending = pending;
+    if (request.unit) {
+      unitVerdicts.delete(request.unit);
+      unitIterations.delete(request.unit);
+      unitPending.set(request.unit, pending);
+    }
+  }
+
+  return {
+    stageVerdict,
+    unitVerdicts,
+    stageIteration,
+    unitIterations,
+    stagePending,
+    unitPending,
+  };
 }
 
 // --- Multi-repo: repos are siblings of the workspace ----------------------------
@@ -2346,6 +3982,176 @@ export function stopHookDir(projectDir: string, intent?: string, space?: string)
   return join(docsRoot(projectDir, intent, space), ".aidlc-stop-hook");
 }
 
+// --- The turn-shape markers (the transcript-free conversational carve-out) ----
+//
+// The Stop hook's tier-3 conversational carve-out asks one question: "was the
+// ending turn the human's last prompt answered with NO workflow-engine
+// engagement?". On Claude and Codex the Stop payload carries `transcript_path`
+// and the hook reads that question straight off the transcript. Kiro (IDE and
+// CLI) and opencode deliver NO transcript and expose no per-turn history to a
+// hook at all, so the carve-out was inert there: every purely conversational
+// turn mid-stage fell through to the cap-bounded block and earned a spurious
+// forwarding-loop nudge.
+//
+// These two mtime markers reconstruct the same predicate from the filesystem:
+//
+//   .aidlc-human-turn   — touched by the UserPromptSubmit mint, once per human
+//                         prompt, alongside the HUMAN_TURN ledger event.
+//   .aidlc-engine-touch — touched by aidlc-orchestrate on every ADVANCING
+//                         invocation (`next` / `report` / `park`).
+//
+//   conversational  <=>  mtime(.aidlc-human-turn) > mtime(.aidlc-engine-touch)
+//
+// Why markers and not the audit ledger: `next` is read-only and emits NO audit
+// event, so a ledger-only predicate is BLIND to the exact failure the forwarding
+// loop exists to catch — a conductor that consulted the engine and then bailed
+// mid-loop. The engine marker sees it.
+//
+// THE LOAD-BEARING SUBTLETY: the Stop hook consults the engine ITSELF (it runs
+// `aidlc-orchestrate next` to learn whether work is pending). If that probe
+// touched the engine marker, the engine mtime would ALWAYS be newer than the
+// human mtime and the predicate would be false forever — the carve-out would
+// look implemented and do nothing. The probe is therefore marked with
+// STOP_HOOK_PROBE_ENV and the engine skips the touch when it sees it.
+//
+// Per-intent (under docsRoot), matching .aidlc-stop-hook/block-count.json — the
+// markers describe one workflow's turn shape, so they travel with the intent.
+// Already covered by the shipped `aidlc/spaces/*/intents/*/.aidlc-*` gitignore
+// rule, so neither marker is ever committed.
+export function humanTurnMarkerPath(projectDir: string, intent?: string, space?: string): string {
+  return join(docsRoot(projectDir, intent, space), ".aidlc-human-turn");
+}
+export function engineTouchMarkerPath(projectDir: string, intent?: string, space?: string): string {
+  return join(docsRoot(projectDir, intent, space), ".aidlc-engine-touch");
+}
+
+// The env marker that identifies the Stop hook's OWN read-only `next` probe.
+// Set by aidlc-continue-workflow.ts on its spawn; read by aidlc-orchestrate.ts
+// to suppress the engine touch. Without this the carve-out can never fire (see
+// above).
+export const STOP_HOOK_PROBE_ENV = "AIDLC_STOP_HOOK_PROBE";
+
+// Touch a turn-shape marker. Only the mtime carries meaning, so the body is a
+// timestamp purely as a debugging affordance. The CALL never throws: these
+// markers are an advisory optimisation of the Stop hook's block decision, and a
+// write failure must never block a human's turn nor fail an engine invocation.
+//
+// BUT A FAILED WRITE MUST NOT LEAVE A STALE MARKER BEHIND, because the two
+// markers fail in OPPOSITE directions and only one of them is harmless:
+//   - human marker missing  -> the predicate reads "no evidence" -> the stop is
+//     blocked. Costs at most one spurious nudge. Safe.
+//   - engine marker STALE   -> the human marker keeps advancing past it, so
+//     EVERY subsequent engaged-then-bailed turn reads as conversational and is
+//     released. A silent, persistent fail-OPEN in exactly the direction the
+//     forwarding loop exists to catch.
+// That second case is reachable: an engine run under sudo leaves the file
+// root-owned, after which every user-mode writeFileSync fails EACCES while the
+// stale file persists. So on any failure we DELETE the marker — a missing marker
+// fails closed on the read side, and the unlink succeeds in the root-owned case
+// because the containing directory stays user-writable. If even the unlink
+// fails there is nothing further to do; the block cap remains the backstop.
+function touchTurnMarker(path: string): void {
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `${isoTimestamp()}\n`, "utf-8");
+  } catch {
+    // Degrade to "no evidence" rather than leaving a stale mtime that would
+    // silently relax the carve-out from here on. `recursive` so a directory
+    // squatting on the path (an unlikely but possible way for the write to fail
+    // while the path survives) is cleared too, not just a stale file.
+    try {
+      rmSync(path, { force: true, recursive: true });
+    } catch {
+      /* nothing left to try - the cap-bounded block is the backstop */
+    }
+  }
+}
+
+// NO WORKFLOW => NO MARKER. Both markers describe one workflow's turn shape, so
+// with nothing born there is nothing to describe. This self-gate is load-bearing
+// for more than tidiness: without it a marker write on a FRESH workspace would
+// create the record tree as a side effect (touchTurnMarker mkdir -p's the parent,
+// and docsRoot falls back to the bare space record root before birth), which
+// would break the invariant that `aidlc-orchestrate next` is a PURE READ that
+// births nothing. Mirrors the mint hooks' own `existsSync(stateFilePath(...))`
+// self-gate, so all four write sites agree.
+function workflowIsBorn(projectDir: string, intent?: string, space?: string): boolean {
+  try {
+    return existsSync(stateFilePath(projectDir, intent, space));
+  } catch {
+    return false;
+  }
+}
+
+// Record that a human just submitted a prompt. Called from the UserPromptSubmit
+// seam of every harness: the core aidlc-record-human-turn.ts hook (Claude,
+// opencode) and both Kiro adapters' inlined `record-human-turn` targets.
+export function markHumanTurn(projectDir: string, intent?: string, space?: string): void {
+  if (!workflowIsBorn(projectDir, intent, space)) return;
+  touchTurnMarker(humanTurnMarkerPath(projectDir, intent, space));
+}
+
+// Record that the workflow engine was ADVANCED (not merely probed). Called from
+// aidlc-orchestrate.ts's `next` / `report` / `park` entry points. A no-op in three
+// cases: when STOP_HOOK_PROBE_ENV is set (the Stop hook's own probe — see above),
+// for read-only utility routing (excluded at the call site), and before birth.
+//
+// KNOWN COVERAGE GAP — the marker sees LESS than the transcript predicate does.
+// isEngineToolCall (below) counts as engagement any non-read-only aidlc-jump /
+// aidlc-bolt / aidlc-swarm invocation and the mutating aidlc-state verbs
+// (approve, advance, skip, set, …). NONE of those tools touch this marker: the
+// only writers are orchestrate's three subcommands. So on a transcript-free
+// harness a conductor that runs, say, `aidlc-jump` — mutating the stage pointer
+// and emitting audit — and then ends its turn without consulting the engine
+// reads as CONVERSATIONAL here, while the same turn BLOCKS on Claude/Codex where
+// the transcript is parsed. Those turns were always nudged before the marker
+// path existed, so this is a real (if narrow) relaxation on Kiro and opencode,
+// not merely an unimplemented nicety.
+//
+// It is documented rather than closed deliberately: closing it means touching
+// the marker from a seam all four tools cross (the audit-emission path, or
+// writeStateFile), which widens the blast radius well past this carve-out. If
+// that is ever done, delete this paragraph and the matching note in
+// docs/reference/06-hooks-and-tools.md rather than leaving a stale promise of
+// parity behind.
+export function markEngineTouch(projectDir: string, intent?: string, space?: string): void {
+  if (process.env[STOP_HOOK_PROBE_ENV] === "1") return;
+  if (!workflowIsBorn(projectDir, intent, space)) return;
+  touchTurnMarker(engineTouchMarkerPath(projectDir, intent, space));
+}
+
+// The transcript-free reading of "the ending turn was conversational": the last
+// human prompt is NEWER than the last engine advance. FAIL-CLOSED on every miss
+// — a missing marker (a pre-upgrade workspace, a workflow that has not yet
+// advanced once since the markers shipped), an unreadable stat, or an engine
+// touch at-or-after the human turn all return false, so the caller falls through
+// to the cap-bounded block. It can only ever ALLOW a stop, never cause one to
+// block, exactly like every other carve-out in the Stop hook.
+export function turnMarkersShowConversational(
+  projectDir: string,
+  intent?: string,
+  space?: string,
+): boolean {
+  try {
+    const humanPath = humanTurnMarkerPath(projectDir, intent, space);
+    const enginePath = engineTouchMarkerPath(projectDir, intent, space);
+    // Both markers must be present AND be regular files. An absent engine
+    // marker is NOT read as "the engine was never touched, therefore chat": it
+    // is read as "no evidence", because that is also the shape of a fresh
+    // install and of a wiped record dir. The isFile() check matters for the same
+    // fail-closed reason: anything else squatting on the path (a directory, a
+    // dangling symlink) would otherwise contribute a meaningless mtime to the
+    // comparison, and on the engine side a meaningless-but-old mtime reads as
+    // "chat" and releases the stop.
+    const humanStat = statSync(humanPath, { throwIfNoEntry: false });
+    const engineStat = statSync(enginePath, { throwIfNoEntry: false });
+    if (!humanStat?.isFile() || !engineStat?.isFile()) return false;
+    return humanStat.mtimeMs > engineStat.mtimeMs;
+  } catch {
+    return false; // unreadable markers: fall through to the cap
+  }
+}
+
 // `<root>/.aidlc-reviewer-dispatch.json` — the per-unit reviewer dispatch
 // record. The conductor writes it at stage-protocol 12a step 1 (per-unit
 // stages only) before invoking the reviewer sub-agent, and deletes it at step
@@ -2476,6 +4282,12 @@ export function worktreeRuntimeGraphPath(wtPath: string, recordPrefix?: string |
 // regex.
 export const BOLT_SLUG_REGEX = /^[a-z][a-z0-9-]*$/;
 export const BOLT_SLUG_MAX_LENGTH = 64;
+// New workflows author lowercase kebab-case names, but pre-lifecycle DAGs
+// accepted other filesystem-safe names. Keep those existing identifiers
+// routable while still excluding separators, traversal, whitespace, and
+// control characters.
+export const UNIT_NAME_REGEX = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+export const UNIT_NAME_MAX_LENGTH = 64;
 
 // --- Error helpers (catch-block discipline) ---
 //
@@ -2575,6 +4387,7 @@ export interface ClaudeCodeHookInput {
   };
   reason?: string;
   source?: string;
+  session_id?: string;
   prompt?: string;
   agent_type?: string;
   agent_id?: string;
@@ -2637,6 +4450,69 @@ export function validateBoltSlug(slug: string): string | null {
   return null;
 }
 
+// Unit names become path components under construction/<unit>/ and are also
+// mirrored into single-line state fields. Keep one canonical validator for the
+// authored DAG, cached runtime graph, and lifecycle CLI. Lowercase kebab-case is
+// the authoring convention; leading digits, uppercase letters, underscores,
+// and dots remain accepted for safe legacy DAG names.
+export function validateUnitName(name: string): string | null {
+  if (!name) return "Unit name is empty";
+  if (name.length > UNIT_NAME_MAX_LENGTH) {
+    return `Unit name "${name.slice(0, 32)}..." is ${name.length} chars; max is ${UNIT_NAME_MAX_LENGTH}`;
+  }
+  if (!UNIT_NAME_REGEX.test(name)) {
+    return (
+      `Invalid Unit name "${name}" - must match ${UNIT_NAME_REGEX} ` +
+      "(ASCII letter/digit, then ASCII letters/digits/dot/underscore/hyphen)"
+    );
+  }
+  return null;
+}
+
+// The autonomous swarm composes Bolt/worktree primitives whose slug contract is
+// deliberately narrower than the legacy Unit-name contract. Preserve modern
+// lowercase kebab names byte-for-byte; map any other safe legacy Unit name to a
+// deterministic, readable, collision-resistant internal slug. The original
+// Unit name remains the user/audit identity.
+export function boltSlugForUnit(name: string): string {
+  const unitNameError = validateUnitName(name);
+  if (unitNameError) throw new Error(unitNameError);
+  if (validateBoltSlug(name) === null) return name;
+
+  const digest = createHash("sha256").update(name).digest("hex").slice(0, 16);
+  let stem = name
+    .toLowerCase()
+    .replace(/[._]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (!/^[a-z]/.test(stem)) stem = `unit-${stem}`;
+  stem = stem.slice(0, BOLT_SLUG_MAX_LENGTH - digest.length - 1).replace(/-+$/g, "");
+  return `${stem}-${digest}`;
+}
+
+export function isRegularFile(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+export function hasUnsafeSingleLineCharacter(value: string): boolean {
+  for (const char of value) {
+    const codePoint = char.codePointAt(0) ?? 0;
+    if (
+      codePoint <= 0x1f ||
+      codePoint === 0x7f ||
+      codePoint === 0x2028 ||
+      codePoint === 0x2029
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // --- State file I/O ---
 
 export function readStateFile(projectDir: string, intent?: string, space?: string): string {
@@ -2697,6 +4573,31 @@ export const AUTONOMY_MODE_FIELD = "Construction Autonomy Mode";
 
 export function isAutonomousMode(stateContent: string | null): boolean {
   return !!stateContent && getField(stateContent, AUTONOMY_MODE_FIELD)?.trim() === "autonomous";
+}
+
+// True only for the topology the engine can dispatch as an autonomous swarm.
+// A truthy `--unit` is not proof: the four inline Construction design stages
+// are also per-unit. Keep this predicate shared by receipt and budget guards so
+// scope/run review caps are bypassed only for a real Bolt-capable stage.
+export function isAutonomousSwarmStage(
+  projectDir: string,
+  stateContent: string | null,
+  stage: {
+    slug: string;
+    phase: string;
+    for_each?: string;
+    mode?: string;
+  },
+): boolean {
+  if (stage.phase !== "construction") return false;
+  if (stage.for_each !== "unit-of-work" || stage.mode !== "subagent") return false;
+  if (!isAutonomousMode(stateContent)) return false;
+  const scope = stateContent ? getField(stateContent, "Scope") : null;
+  if (!scope) return false;
+  const first = firstInScopeStageOfPhase("construction", scope);
+  if (first !== null && first.slug === stage.slug) return false;
+  const resolution = resolveBoltDag(projectDir);
+  return resolution.state === "ok" && resolution.units.length > 0;
 }
 
 // Deterministic off-switch for the human-presence gate (mirrors
@@ -2961,11 +4862,18 @@ function lockStaleMs(): number {
 // given, the space is default-resolved (a per-intent lock is meaningless without
 // its space) but activeIntent() is NEVER consulted here.
 export function auditLockIdentity(projectDir: string, intent?: string, space?: string): string {
+  let canonicalProjectDir = resolvePath(projectDir);
+  try {
+    canonicalProjectDir = realpathSync(canonicalProjectDir);
+  } catch {
+    // Birth and diagnostics can lock before the project exists. The absolute
+    // lexical path is stable until realpath can resolve filesystem aliases.
+  }
   if (intent === undefined) {
-    return `${projectDir}\x00${WORKSPACE_LOCK_SENTINEL}`;
+    return `${canonicalProjectDir}\x00${WORKSPACE_LOCK_SENTINEL}`;
   }
   const sp = space ?? activeSpace(projectDir);
-  return `${projectDir}\x00${sp}\x00${intent}`;
+  return `${canonicalProjectDir}\x00${sp}\x00${intent}`;
 }
 
 export function auditLockDir(projectDir: string, intent?: string, space?: string): string {
@@ -2981,14 +4889,22 @@ export function auditLockDir(projectDir: string, intent?: string, space?: string
 interface LockOwner {
   pid: number;
   startedAtMs: number;
+  reapLiveOwnerAfterStale: boolean;
 }
 
 function ownerStampPath(lockDir: string): string {
   return join(lockDir, "owner.json");
 }
 
-function writeOwnerStamp(lockDir: string): void {
-  const owner: LockOwner = { pid: process.pid, startedAtMs: lockAcquireEpochMs() };
+function writeOwnerStamp(
+  lockDir: string,
+  reapLiveOwnerAfterStale = true,
+): void {
+  const owner: LockOwner = {
+    pid: process.pid,
+    startedAtMs: lockAcquireEpochMs(),
+    reapLiveOwnerAfterStale,
+  };
   try {
     writeFileSync(ownerStampPath(lockDir), JSON.stringify(owner), "utf-8");
   } catch {
@@ -3002,7 +4918,12 @@ function readOwnerStamp(lockDir: string): LockOwner | null {
     const raw = readFileSync(ownerStampPath(lockDir), "utf-8");
     const parsed: unknown = JSON.parse(raw);
     if (isPlainObject(parsed) && typeof parsed.pid === "number" && typeof parsed.startedAtMs === "number") {
-      return { pid: parsed.pid, startedAtMs: parsed.startedAtMs };
+      return {
+        pid: parsed.pid,
+        startedAtMs: parsed.startedAtMs,
+        // Older stamps have no field and retain the historical over-age reaping.
+        reapLiveOwnerAfterStale: parsed.reapLiveOwnerAfterStale !== false,
+      };
     }
   } catch {
     // no stamp / unreadable
@@ -3098,7 +5019,11 @@ function stampMatches(dir: string, judged: LockOwner | null): boolean {
     return lockAcquireEpochMs() - mtime > unstampedGraceMs();
   }
   if (now === null) return false;
-  return now.pid === judged.pid && now.startedAtMs === judged.startedAtMs;
+  return (
+    now.pid === judged.pid &&
+    now.startedAtMs === judged.startedAtMs &&
+    now.reapLiveOwnerAfterStale === judged.reapLiveOwnerAfterStale
+  );
 }
 
 // Reclaim a lock iff it is provably dead (owner gone) OR stale (over-age). A
@@ -3157,6 +5082,7 @@ function reapStaleLock(lockDir: string): boolean {
     if (lockAcquireEpochMs() - mtime <= unstampedGraceMs()) return false;
     // else: an old unstamped dir → genuine leak, fall through to steal.
   } else if (ownerAlive(owner)) {
+    if (!owner.reapLiveOwnerAfterStale) return false;
     // Live owner: only reclaim if its stamp is over-age (a wedged-but-running
     // holder). A fresh, live holder is never robbed.
     if (lockAcquireEpochMs() - owner.startedAtMs <= lockStaleMs()) return false;
@@ -3199,12 +5125,13 @@ export function acquireAuditLock(
   retryMs = 100,
   intent?: string,
   space?: string,
+  reapLiveOwnerAfterStale = true,
 ): boolean {
   const lockDir = auditLockDir(projectDir, intent, space);
   for (let i = 0; i <= maxRetries; i++) {
     try {
       mkdirSync(lockDir);
-      writeOwnerStamp(lockDir);
+      writeOwnerStamp(lockDir, reapLiveOwnerAfterStale);
       return true;
     } catch {
       // EEXIST: someone holds it. Before sleeping, try to reap a dead/stale
@@ -3213,7 +5140,7 @@ export function acquireAuditLock(
       if (reapStaleLock(lockDir)) {
         try {
           mkdirSync(lockDir);
-          writeOwnerStamp(lockDir);
+          writeOwnerStamp(lockDir, reapLiveOwnerAfterStale);
           return true;
         } catch {
           // another waiter beat us to the freed dir — fall through to sleep
@@ -3242,6 +5169,20 @@ export function releaseAuditLock(projectDir: string, intent?: string, space?: st
   }
 }
 
+/** True only while `ownerPid` is the live process stamped into this lock.
+ *  Used by synchronous child tools whose parent deliberately keeps the
+ *  workspace lock held across the child's work. */
+export function auditLockOwnedByProcess(
+  projectDir: string,
+  ownerPid: number,
+  intent?: string,
+  space?: string,
+): boolean {
+  if (!Number.isInteger(ownerPid) || ownerPid <= 0) return false;
+  const owner = readOwnerStamp(auditLockDir(projectDir, intent, space));
+  return owner?.pid === ownerPid && ownerAlive(owner);
+}
+
 // Tracks per-identity exit handlers that release the audit lock if a caller
 // process.exit()s while still holding it. Bun's process.exit skips `finally`
 // blocks, so a tool that wraps locked work in try/finally and then calls
@@ -3262,21 +5203,35 @@ const AUDIT_LOCK_EXIT_HANDLERS = new Map<string, () => void>();
 const AUDIT_LOCK_DEPTH = new Map<string, number>();
 
 // writeFileAtomic — non-corrupting variant of writeFileSync. Writes to a
-// sibling `<path>.tmp` then POSIX-renames into place atomically. Readers
+// writer-unique sibling temp then POSIX-renames into place atomically. Readers
 // of <path> see either the previous version or the new one — never a
 // half-written file. Pair with withAuditLock when concurrent writers
 // must serialise (rename alone defeats half-writes but not lost updates).
 //
 // Sibling temp keeps the rename on the same filesystem so it's a true
-// atomic rename (cross-fs renames degrade to copy-then-unlink). Cleans
-// up the temp file on write failure.
+// atomic rename (cross-fs renames degrade to copy-then-unlink). A unique,
+// exclusively-created temp prevents concurrent unlocked writers from
+// truncating or renaming each other's in-flight data. Cleans up only the temp
+// owned by this invocation on write/rename failure.
 export function writeFileAtomic(path: string, data: string): void {
-  const tmp = `${path}.tmp`;
+  const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  let fd: number | undefined;
+  let ownsTmp = false;
   try {
-    writeFileSync(tmp, data, "utf-8");
+    fd = openSync(tmp, "wx");
+    ownsTmp = true;
+    writeFileSync(fd, data, "utf-8");
+    closeSync(fd);
+    fd = undefined;
     renameSync(tmp, path);
+    ownsTmp = false;
   } catch (err) {
-    try { unlinkSync(tmp); } catch { /* tmp may already be gone */ }
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch { /* preserve the original error */ }
+    }
+    if (ownsTmp) {
+      try { unlinkSync(tmp); } catch { /* temp may already be gone */ }
+    }
     throw err;
   }
 }
@@ -3301,11 +5256,30 @@ export function withAuditLock<T>(
   fn: () => T extends Promise<unknown> ? never : T,
   intent?: string,
   space?: string,
+  // Acquire budget (default ~5s). A caller that legitimately waits behind a
+  // long-lived holder (select-plugins behind a full plugin compose: compile +
+  // runner regeneration) passes a larger budget; dead holders are reaped
+  // immediately regardless, so a big budget only ever waits on live work.
+  maxRetries = 50,
+  retryMs = 100,
+  // Long external operations such as repository clones can exceed the generic
+  // ten-minute stale threshold while still making progress. Those callers opt
+  // out of live-owner reaping; dead owners remain immediately reclaimable.
+  reapLiveOwnerAfterStale = true,
 ): T extends Promise<unknown> ? never : T {
   const key = auditLockIdentity(projectDir, intent, space);
   const currentDepth = AUDIT_LOCK_DEPTH.get(key) ?? 0;
   if (currentDepth === 0) {
-    if (!acquireAuditLock(projectDir, 50, 100, intent, space)) {
+    if (
+      !acquireAuditLock(
+        projectDir,
+        maxRetries,
+        retryMs,
+        intent,
+        space,
+        reapLiveOwnerAfterStale,
+      )
+    ) {
       throw new Error(`Failed to acquire audit lock for ${key} after retries`);
     }
     // Safety net: if the body calls process.exit (Bun skips `finally` in that
@@ -3383,14 +5357,19 @@ export function detectLeakedLocks(projectDir: string, clear = false): LeakedLock
       }
     } else if (!ownerAlive(owner)) {
       reason = "dead-owner";
-    } else if (lockAcquireEpochMs() - owner.startedAtMs > lockStaleMs()) {
+    } else if (
+      owner.reapLiveOwnerAfterStale &&
+      lockAcquireEpochMs() - owner.startedAtMs > lockStaleMs()
+    ) {
       reason = "over-age";
     }
     if (reason === null) return; // a live, fresh, stamped lock is legitimately held
-    leaks.push({ bucket: bucketLabel, lockDir, ownerPid: owner?.pid ?? null, reason });
-    if (clear) {
-      try { rmSync(lockDir, { recursive: true, force: true }); } catch { /* already gone */ }
+    if (clear && !reapStaleLock(lockDir)) {
+      // Ownership changed after classification, or another reaper already won.
+      // Never remove a fresh replacement lock by pathname.
+      return;
     }
+    leaks.push({ bucket: bucketLabel, lockDir, ownerPid: owner?.pid ?? null, reason });
   };
   // Workspace sentinel bucket.
   probe(WORKSPACE_LOCK_SENTINEL);
@@ -3482,10 +5461,9 @@ export function findAllEvents(
 // stage's latest MAIN-WORKFLOW STAGE_STARTED row ("" when none). Rows from a
 // `--single` stage-runner carry `Workflow: single-stage:<slug>` and never move
 // the floor. Every (re-)entry into a stage lands a fresh STAGE_STARTED naming
-// the slug (advance and jump both emit it), so the floor identifies the
-// current attempt. Shared by the emitter (aidlc-swarm.ts stamps it into each
-// SWARM_UNIT_CONVERGED row) and every consumer, so both sides compute the
-// attempt identity with one function.
+// the slug (advance and jump both emit it). Retained as the secondary
+// timestamp-order guard for attempt-scoped readers; exact identity comes from
+// latestMainWorkflowStageRunFloor below.
 export function latestMainWorkflowStageStarted(
   audit: string,
   slug: string,
@@ -3502,6 +5480,141 @@ export function latestMainWorkflowStageStarted(
   return since;
 }
 
+// Exact identity for the current main-workflow attempt of one stage. The token
+// names the latest relevant boundary plus its matching-event ordinal, so two
+// boundaries emitted in the same second still receive different floors.
+//
+// Unit-major Construction can run a later stage before that stage's own
+// STAGE_STARTED row exists. For that walk, a stage attempt begins at the latest
+// workflow birth, jump, or stage rejection and deliberately ignores
+// STAGE_STARTED. This matches the reviewer-receipt floor: the later stage start
+// must not invalidate work legitimately completed earlier in the same
+// unit-major block.
+//
+// The no-boundary sentinel keeps fixture/recovery flows deterministic while
+// unstamped legacy rows still fail closed.
+export function latestMainWorkflowStageRunFloor(
+  audit: string,
+  slug: string,
+  unitMajor = false,
+): string {
+  let floor = "unstarted#0";
+  const ordinals = new Map<string, number>();
+  const relevant = new Set([
+    "WORKFLOW_STARTED",
+    "STAGE_STARTED",
+    "STAGE_JUMPED",
+    "GATE_REJECTED",
+  ]);
+  const events = audit
+    .replace(/\r\n/g, "\n")
+    .split(/\n---\n/)
+    .map((block, pos) => ({
+      block,
+      event: auditBlockField(block, "Event"),
+      pos,
+      timestamp: auditBlockField(block, "Timestamp") ?? "",
+    }))
+    .filter(
+      (row): row is { block: string; event: string; pos: number; timestamp: string } =>
+        row.event !== null && relevant.has(row.event) && row.timestamp !== "",
+    )
+    .sort((a, b) =>
+      a.timestamp !== b.timestamp
+        ? a.timestamp < b.timestamp
+          ? -1
+          : 1
+        : a.pos - b.pos,
+    );
+
+  for (const row of events) {
+    const stage = auditBlockField(row.block, "Stage");
+    let matches = false;
+    if (row.event === "WORKFLOW_STARTED" || row.event === "STAGE_JUMPED") {
+      matches = true;
+    } else if (row.event === "GATE_REJECTED") {
+      matches = stage === slug;
+    } else if (row.event === "STAGE_STARTED" && !unitMajor) {
+      matches =
+        stage === slug &&
+        !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:");
+    }
+    if (!matches) continue;
+    const ordinal = (ordinals.get(row.event) ?? 0) + 1;
+    ordinals.set(row.event, ordinal);
+    floor = `${row.event}:${row.timestamp}#${ordinal}`;
+  }
+  return floor;
+}
+
+// Shard-aware attempt identity for live project readers. Same-shard timestamp
+// ties retain append order. If the latest relevant boundary is tied across
+// different shards, execution order is unknowable: mint a deterministic
+// ambiguity floor from the complete tied set. Existing receipts cannot match
+// it, so the boundary fails closed; receipts emitted after the ambiguity use
+// the same stable token until another boundary arrives.
+export function latestMainWorkflowStageRunFloorForProject(
+  projectDir: string,
+  slug: string,
+  unitMajor = false,
+): string {
+  const relevant = new Set([
+    "WORKFLOW_STARTED",
+    "STAGE_STARTED",
+    "STAGE_JUMPED",
+    "GATE_REJECTED",
+  ]);
+  const rows = readAuditShardEvents(projectDir)
+    .filter((row) => {
+      if (!relevant.has(row.event)) return false;
+      const stage = auditBlockField(row.block, "Stage");
+      if (row.event === "WORKFLOW_STARTED" || row.event === "STAGE_JUMPED") {
+        return true;
+      }
+      if (row.event === "GATE_REJECTED") return stage === slug;
+      return (
+        !unitMajor &&
+        stage === slug &&
+        !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:")
+      );
+    })
+    .sort((a, b) => {
+      if (a.timestamp !== b.timestamp) {
+        return a.timestamp < b.timestamp ? -1 : 1;
+      }
+      if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+      return a.pos - b.pos;
+    });
+  if (rows.length === 0) return "unstarted#0";
+
+  const latestTimestamp = rows[rows.length - 1].timestamp;
+  const tied = rows.filter((row) => row.timestamp === latestTimestamp);
+  if (new Set(tied.map((row) => row.shard)).size > 1) {
+    const identity = tied
+      .map((row) =>
+        [
+          basename(row.shard),
+          row.pos,
+          row.event,
+          auditBlockField(row.block, "Stage") ?? "",
+        ].join(":"),
+      )
+      .sort()
+      .join("|");
+    const digest = createHash("sha256").update(identity).digest("hex").slice(0, 12);
+    return `AMBIGUOUS:${latestTimestamp}#${digest}`;
+  }
+
+  const ordinals = new Map<string, number>();
+  let floor = "unstarted#0";
+  for (const row of rows) {
+    const ordinal = (ordinals.get(row.event) ?? 0) + 1;
+    ordinals.set(row.event, ordinal);
+    floor = `${row.event}:${row.timestamp}#${ordinal}`;
+  }
+  return floor;
+}
+
 // The set of units the CURRENT attempt of `slug` has genuinely converged and
 // merged, from the `SWARM_UNIT_CONVERGED` rows `aidlc-swarm.ts finalize`
 // writes. A row counts only when its `Stage` names this slug AND its
@@ -3509,7 +5622,7 @@ export function latestMainWorkflowStageStarted(
 // a row minted by a late finalize retry against a PRIOR attempt's preserved
 // worktree carries the prior floor and is rejected regardless of its emission
 // timestamp, and another swarm stage's rows fail the Stage match even when
-// the floor degrades to "" (no STAGE_STARTED yet). Rows without the two
+// the floor is the no-boundary sentinel. Rows without the two
 // fields (pre-2.5.0 audit logs) fail closed: the affected units re-fan on the
 // next swarm pass, which finalize's re-verify makes safe. The timestamp check
 // stays as belt-and-braces.
@@ -3519,16 +5632,273 @@ export function swarmConvergedUnits(
 ): Set<string> {
   const audit = readAllAuditShards(projectDir);
   if (!audit) return new Set();
-  const floor = latestMainWorkflowStageStarted(audit, slug);
+  const startedAt = latestMainWorkflowStageStarted(audit, slug);
+  const floor = latestMainWorkflowStageRunFloorForProject(projectDir, slug);
   const converged = new Set<string>();
   for (const { timestamp, block } of findAllEvents(audit, "SWARM_UNIT_CONVERGED")) {
     if (auditBlockField(block, "Stage") !== slug) continue;
     if ((auditBlockField(block, "Run floor") ?? "") !== floor) continue;
-    if (floor && timestamp < floor) continue;
+    if (startedAt && timestamp < startedAt) continue;
     const unit = auditBlockField(block, "Unit name");
     if (unit) converged.add(unit);
   }
   return converged;
+}
+
+// The set of units the CURRENT attempt of an INLINE per-unit stage has
+// completion receipts for, from the UNIT_COMPLETED rows `aidlc-state.ts unit
+// complete` writes — the interactive-path twin of swarmConvergedUnits, with
+// the same attempt-floor discipline: a row counts only when its Stage names
+// this slug AND its exact Run floor equals the current main-workflow attempt.
+// The floor includes a boundary-event ordinal, so same-second re-entry still
+// invalidates every receipt from the prior attempt. Unit-major uses its
+// workflow/jump/rejection boundary so a later STAGE_STARTED does not erase
+// receipts legitimately emitted earlier in that block.
+// Serial receipts are the transition: artifacts are evidence the writer
+// checked at emit time. Wave receipts additionally bind that transition to
+// the final artifact fingerprint so a later write reopens the entry for
+// review, memory fan-in, and completion. A paused or partially-written unit
+// has artifacts but no receipt, so it stays uncovered.
+type UnitLifecycleRow = {
+  ts: string;
+  pos: number;
+  shard: string;
+  shardIndex: number;
+  event: string;
+  block: string;
+  unit: string;
+};
+
+function currentUnitLifecycleRows(
+  projectDir: string,
+  audit: string,
+  slug: string,
+  unitMajor: boolean,
+): UnitLifecycleRow[] {
+  const startedAt = latestMainWorkflowStageStarted(audit, slug);
+  const floor = latestMainWorkflowStageRunFloorForProject(
+    projectDir,
+    slug,
+    unitMajor,
+  );
+  const unitEvents = new Set([
+    "UNIT_STARTED",
+    "UNIT_PAUSED",
+    "UNIT_RESUMED",
+    "UNIT_COMPLETED",
+  ]);
+  const rows: UnitLifecycleRow[] = [];
+  for (const row of readAuditShardEvents(projectDir)) {
+    if (!unitEvents.has(row.event)) continue;
+    if (auditBlockField(row.block, "Stage") !== slug) continue;
+    if (auditBlockField(row.block, "Run floor") !== floor) continue;
+    if (!unitMajor && startedAt && row.timestamp < startedAt) continue;
+    const unit = auditBlockField(row.block, "Unit");
+    if (!unit) continue;
+    rows.push({
+      ts: row.timestamp,
+      pos: row.pos,
+      shard: row.shard,
+      shardIndex: row.shardIndex,
+      event: row.event,
+      block: row.block,
+      unit,
+    });
+  }
+  rows.sort((a, b) => {
+    if (a.ts !== b.ts) return a.ts < b.ts ? -1 : 1;
+    if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+    return a.pos - b.pos;
+  });
+
+  const reduced: UnitLifecycleRow[] = [];
+  for (let start = 0; start < rows.length;) {
+    let end = start + 1;
+    while (end < rows.length && rows[end].ts === rows[start].ts) end++;
+    const byUnit = new Map<string, UnitLifecycleRow[]>();
+    for (const row of rows.slice(start, end)) {
+      const unitRows = byUnit.get(row.unit) ?? [];
+      unitRows.push(row);
+      byUnit.set(row.unit, unitRows);
+    }
+    for (const unitRows of byUnit.values()) {
+      const latestByShard = new Map<string, UnitLifecycleRow>();
+      for (const row of unitRows) latestByShard.set(row.shard, row);
+      const candidates = [...latestByShard.values()];
+      if (candidates.length === 1) {
+        reduced.push(candidates[0]);
+        continue;
+      }
+      // Cross-shard rows in one second are causally unordered. Preserve the
+      // safest possible checkpoint: a possible pause blocks all progress; a
+      // possible start/resume keeps the unit unsettled; only unanimous terminal
+      // candidates settle it.
+      const rank = (event: string): number =>
+        event === "UNIT_PAUSED"
+          ? 2
+          : event === "UNIT_COMPLETED"
+            ? 0
+            : 1;
+      candidates.sort((a, b) => {
+        const rankDiff = rank(a.event) - rank(b.event);
+        if (rankDiff !== 0) return rankDiff;
+        if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+        return a.pos - b.pos;
+      });
+      reduced.push(candidates[candidates.length - 1]);
+    }
+    start = end;
+  }
+  reduced.sort((a, b) => {
+    if (a.ts !== b.ts) return a.ts < b.ts ? -1 : 1;
+    if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+    return a.pos - b.pos;
+  });
+  return reduced;
+}
+
+function unitMajorLifecycleMode(projectDir: string): boolean {
+  try {
+    return (
+      getField(readStateFile(projectDir), "Construction Iteration")?.trim() ===
+      "unit-major"
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function unitCompletedReceipts(
+  projectDir: string,
+  slug: string,
+): Set<string> {
+  const audit = readAllAuditShards(projectDir);
+  if (!audit) return new Set();
+  const unitMajor = unitMajorLifecycleMode(projectDir);
+  const done = new Set<string>();
+  const stage = resolveStage(slug);
+  for (const row of currentUnitLifecycleRows(projectDir, audit, slug, unitMajor)) {
+    if (row.event !== "UNIT_COMPLETED") {
+      done.delete(row.unit);
+      continue;
+    }
+    if (auditBlockField(row.block, "Mode") !== "wave") {
+      done.add(row.unit);
+      continue;
+    }
+    const recorded = auditBlockField(row.block, "Artifact Fingerprint");
+    const current =
+      stage === undefined
+        ? null
+        : reviewArtifactFingerprint(projectDir, stage, row.unit, {
+            requireRequiredArtifacts: true,
+          });
+    if (
+      recorded !== null &&
+      /^sha256:[0-9a-f]{64}$/.test(recorded) &&
+      current === recorded
+    ) {
+      done.add(row.unit);
+    } else {
+      done.delete(row.unit);
+    }
+  }
+  return done;
+}
+
+export type UnitLifecycleMode = "none" | "serial" | "wave" | "mixed";
+
+export function currentUnitLifecycleMode(
+  projectDir: string,
+  slug: string,
+): UnitLifecycleMode {
+  const audit = readAllAuditShards(projectDir);
+  if (!audit) return "none";
+  const rows = currentUnitLifecycleRows(
+    projectDir,
+    audit,
+    slug,
+    unitMajorLifecycleMode(projectDir),
+  );
+  let sawSerial = false;
+  let sawWave = false;
+  for (const row of rows) {
+    if (auditBlockField(row.block, "Mode") === "wave") sawWave = true;
+    else sawSerial = true;
+  }
+  if (sawSerial && sawWave) return "mixed";
+  if (sawWave) return "wave";
+  if (sawSerial) return "serial";
+  return "none";
+}
+
+// Receipt mode is sticky across attempts. Once a stage has emitted any
+// lifecycle row, a later attempt with no current receipts must remain
+// unsettled rather than silently falling back to artifact-only coverage.
+export function unitLifecycleReceiptsInUse(
+  projectDir: string,
+  slug: string,
+): boolean {
+  const audit = readAllAuditShards(projectDir);
+  if (!audit) return false;
+  const unitEvents = new Set([
+    "UNIT_STARTED",
+    "UNIT_PAUSED",
+    "UNIT_RESUMED",
+    "UNIT_COMPLETED",
+  ]);
+  for (const block of audit.replace(/\r\n/g, "\n").split(/\n---\n/)) {
+    const event = auditBlockField(block, "Event");
+    if (
+      event &&
+      unitEvents.has(event) &&
+      auditBlockField(block, "Stage") === slug
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// The active unit-lifecycle checkpoint for a stage: the LATEST UNIT_STARTED /
+// UNIT_PAUSED / UNIT_RESUMED / UNIT_COMPLETED checkpoint per unit (current
+// attempt only, same floor as unitCompletedReceipts), reduced to the unit whose
+// latest checkpoint is a non-terminal state. Same-shard ties retain append
+// order; unordered same-second cross-shard ties conservatively preserve pause,
+// then any other non-terminal state, before completion. Returns the paused unit
+// with its recorded
+// Reason / Next Action (for the resume path and the paused-first routing), or
+// the in-flight unit (started/resumed, not yet completed), or null when no
+// unit is mid-lifecycle. At most one unit can be non-terminal on the inline
+// path (the engine emits one unit at a time); if a corrupted ledger carries
+// several, the LATEST row wins — deterministic, and `unit start` refuses to
+// open a second active unit anyway.
+export function activeUnitCheckpoint(
+  projectDir: string,
+  slug: string,
+): { unit: string; state: "in-progress" | "paused"; reason: string | null; nextAction: string | null } | null {
+  const audit = readAllAuditShards(projectDir);
+  if (!audit) return null;
+  const unitMajor = unitMajorLifecycleMode(projectDir);
+  const rows = currentUnitLifecycleRows(projectDir, audit, slug, unitMajor);
+  const latest = new Map<string, { event: string; block: string }>();
+  for (const row of rows) {
+    latest.set(row.unit, { event: row.event, block: row.block });
+  }
+  // Most recently touched unit whose FINAL row is non-terminal wins (walk the
+  // chronological rows backwards; a unit completed by a later row is skipped).
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const { unit } = rows[i];
+    const final = latest.get(unit);
+    if (!final || final.event === "UNIT_COMPLETED") continue;
+    return {
+      unit,
+      state: final.event === "UNIT_PAUSED" ? "paused" : "in-progress",
+      reason: auditBlockField(final.block, "Reason"),
+      nextAction: auditBlockField(final.block, "Next Action"),
+    };
+  }
+  return null;
 }
 
 // Latest STAGE_STARTED slug in an audit buffer, or null if none. findAllEvents
@@ -3536,7 +5906,7 @@ export function swarmConvergedUnits(
 // the last STAGE_STARTED block is the most recent transition. The slug lives in
 // the block's `**Stage**:` field (appendAuditEntry writes the fields verbatim).
 // Payload-free derivation of "what stage are we on" — used by the Kiro IDE
-// sync-statusline path, where the hook receives no task payload and must read
+// sync-workflow-state path, where the hook receives no task payload and must read
 // the current stage from the audit tail instead.
 //
 // EXCLUDES synthetic `--single` stage-runner rows (Workflow: single-stage:<slug>)
@@ -3577,6 +5947,17 @@ function stageGraphPath(): string {
 // installed tool, which a prose agent cannot derive itself).
 export function scopeGridPath(): string {
   return process.env.AIDLC_SCOPE_GRID ?? join(resolveDataDir(), "scope-grid.json");
+}
+
+// The SHIPPED framework-default model-rates table read by aidlc-usage.ts:
+// `tools/data/model-rates.json`, beside the compiled stage-graph. This is the
+// default layer only - the AIDLC_MODEL_RATES override is read separately by
+// aidlc-usage.ts loadRates and layered ON TOP, so an install can both edit the
+// shipped file AND point AIDLC_MODEL_RATES at another. Absent in a dev checkout
+// (authored core/ carries no path resolution failure - the caller falls back to
+// the hardcoded DEFAULT_RATES).
+export function modelRatesPath(): string {
+  return join(resolveDataDir(), "model-rates.json");
 }
 
 // scope-mapping.json is retired. It survives ONLY as a test
@@ -3635,12 +6016,11 @@ export function loadStageGraphAll(): StageEntry[] {
   return parsed;
 }
 
-// Per-scope prose metadata read from each .claude/scopes/*.md frontmatter:
-// name/depth/keywords/description (+ optional testStrategy). Core scopes use
+// Per-scope metadata read from each .claude/scopes/*.md frontmatter: identity,
+// defaults, routing metadata, and the optional review cap. Core scopes use
 // aidlc-<name>.md; plugin scopes use <plugin>-<name>.md, with the frontmatter
-// name matching the filename stem.
-// This is the depth/keywords/description half of a ScopeDefinition; the
-// EXECUTE/SKIP `.stages` half comes from the compiled grid. Cached.
+// name matching the filename stem. The EXECUTE/SKIP `.stages` half of a
+// ScopeDefinition comes from the compiled grid. Cached.
 interface ScopeMetadata {
   name: string;
   plugin?: string;
@@ -3650,6 +6030,16 @@ interface ScopeMetadata {
   testStrategy?: string;
   runner?: boolean;
   skeleton: boolean;
+  /** Ceiling on how heavyweight stage reviews run under this scope:
+   *  "adversarial" (no cap - stages run as declared), "advisory" (adversarial
+   *  stages degrade to a single advisory pass), or "none" (no reviewer
+   *  dispatch at all). Absent = adversarial (no cap). Resolution lives in
+   *  resolveReviewClass. */
+  reviewCap?: "adversarial" | "advisory" | "none";
+  /** When true, this scope is the enabled plugin's freeform/default fallback
+   *  (plugin-only installs where the core `feature`/`poc` defaults are
+   *  deselected). At most one enabled scope should set this. */
+  freeformDefault?: boolean;
 }
 
 let _scopeMetadata: Record<string, ScopeMetadata> | null = null;
@@ -3743,27 +6133,95 @@ export function loadScopeMetadataAll(): Record<string, ScopeMetadata> {
       }
       meta.skeleton = skeleton === "on";
     }
+    if (scalarField(fm, "freeform_default") === "true") meta.freeformDefault = true;
+    const reviewCap = scalarField(fm, "review_cap");
+    if (reviewCap) {
+      if (
+        reviewCap !== "adversarial" &&
+        reviewCap !== "advisory" &&
+        reviewCap !== "none"
+      ) {
+        throw new Error(
+          `Scope file ${filePath} has invalid review_cap value "${reviewCap}". Expected "adversarial", "advisory", or "none".`
+        );
+      }
+      meta.reviewCap = reviewCap;
+    }
     out[name] = meta;
   }
   _scopeMetadataAll = out;
   return out;
 }
 
+// --- Review-class resolution (stage-protocol §12a) ---
+//
+// Three inputs, one effective class, resolved LOW-WINS along the same
+// precedence idea as the tier cap (aidlc-tiers.ts): the stage declares its
+// default, the scope may cap it, and a per-run override (state field
+// `Review Override`, written by `aidlc-utility config-change --review`)
+// beats both. Ordering: none < advisory < adversarial. A stage with no
+// reviewer is always "none" - no cap or override can conjure a reviewer.
+export const REVIEW_CLASSES = ["none", "advisory", "adversarial"] as const;
+export type ReviewClass = (typeof REVIEW_CLASSES)[number];
+
+const REVIEW_RANK: Record<ReviewClass, number> = {
+  none: 0,
+  advisory: 1,
+  adversarial: 2,
+};
+
+function asReviewClass(v: string | null | undefined): ReviewClass | null {
+  return v === "none" || v === "advisory" || v === "adversarial" ? v : null;
+}
+
+/** The effective review class for one stage run. `stageClass` is the compiled
+ *  node's review_class (undefined when the stage declares no reviewer -
+ *  resolves to "none"). `scope` names the active scope (its review_cap is
+ *  read from scope metadata; unknown scope or absent cap = no cap).
+ *  `stateContent` supplies the per-run `Review Override` field when present.
+ *  An override or cap can only LOWER the stage's declared class, never raise
+ *  it: min() everywhere, so `--review adversarial` on an advisory stage keeps
+ *  advisory, and neither can revive a reviewer the stage never declared. */
+export function resolveReviewClass(
+  stageClass: string | undefined,
+  scope: string,
+  stateContent?: string | null
+): ReviewClass {
+  const declared = asReviewClass(stageClass);
+  if (declared === null) return "none"; // no reviewer on the stage
+  let effective: ReviewClass = declared;
+  const cap = loadScopeMetadata()[scope]?.reviewCap;
+  if (cap && REVIEW_RANK[cap] < REVIEW_RANK[effective]) effective = cap;
+  const override = asReviewClass(
+    stateContent ? getField(stateContent, "Review Override") : null
+  );
+  if (override && REVIEW_RANK[override] < REVIEW_RANK[effective]) {
+    effective = override;
+  }
+  return effective;
+}
+
 export function loadScopeMetadata(): Record<string, ScopeMetadata> {
   if (_scopeMetadata !== null) return _scopeMetadata;
   const all = loadScopeMetadataAll();
   const selected = pluginsEnabled();
-  if (selected === null) {
-    _scopeMetadata = all;
-    return all;
-  }
-  const out: Record<string, ScopeMetadata> = {};
+  const enabled: Record<string, ScopeMetadata> = {};
   for (const [name, meta] of Object.entries(all)) {
     const owner = meta.plugin ?? "aidlc";
-    if (selected.has(owner)) out[name] = meta;
+    if (selected === null || selected.has(owner)) enabled[name] = meta;
   }
-  _scopeMetadata = out;
-  return out;
+  const nominated = Object.values(enabled)
+    .filter((meta) => meta.freeformDefault === true)
+    .map((meta) => meta.name)
+    .sort();
+  if (nominated.length > 1) {
+    throw new Error(
+      `Multiple enabled scopes declare freeform_default: true (${nominated.join(", ")}). ` +
+        "At most one enabled scope may nominate the freeform default."
+    );
+  }
+  _scopeMetadata = enabled;
+  return enabled;
 }
 
 // loadScopeMapping reconstructs the legacy `Record<scope, ScopeDefinition>`
@@ -3866,6 +6324,20 @@ export function selectionAwareDefaultScope(preferred = "feature"): DefaultScopeR
   const scopes = [...validScopes()];
   if (scopes.includes(preferred)) return { scope: preferred };
 
+  // An explicit nomination wins whenever `preferred` is not enabled, regardless
+  // of plugin bucketing: a scope with frontmatter `freeform_default: true` is
+  // the install's declared lean default (e.g. a plugin's lightweight scope over
+  // its heavier full-lifecycle scope). Checked before the sole-plugin heuristic
+  // below so it also holds in mixed installs.
+  const meta = loadScopeMetadata();
+  const nominatedGlobal = scopes.find((s) => meta[s]?.freeformDefault === true);
+  if (nominatedGlobal) {
+    return {
+      scope: nominatedGlobal,
+      note: `scope "${preferred}" is not an enabled scope; using "${nominatedGlobal}" (nominated freeform default)`,
+    };
+  }
+
   const mapping = loadScopeMapping();
   const scopesByPlugin = new Map<string, string[]>();
   for (const scope of scopes) {
@@ -3897,6 +6369,18 @@ export function selectionAwareDefaultScope(preferred = "feature"): DefaultScopeR
           ? `No default scope is available: scope "${preferred}" is disabled or absent while core scopes are enabled. Pass --scope explicitly.`
           : `No default scope is available: core scope "${preferred}" is disabled or absent and multiple plugin scope owners are enabled (${pluginOwners.join(", ")}). Pass --scope explicitly.`,
   };
+}
+
+/**
+ * Thin string-returning wrapper over {@link selectionAwareDefaultScope} for
+ * callers that just need the resolved scope name. `preferred` is the caller's
+ * core-era literal ("feature" for freeform inference, "poc" for intent birth).
+ * When `preferred` is enabled it wins (stock behaviour preserved); otherwise
+ * the nominated freeform default (or the sole enabled plugin's first scope) is
+ * returned, falling back to `preferred` when nothing can be chosen.
+ */
+export function resolveDefaultScope(preferred: string): string {
+  return selectionAwareDefaultScope(preferred).scope;
 }
 
 // Agent metadata derived from `.claude/agents/*.md` frontmatter. Adding a
@@ -4402,8 +6886,10 @@ export function emitStageFrontmatter(obj: Record<string, unknown>): string {
     "lead_agent",
     "support_agents",
     "mode",
+    "summary_confirmation",
     "reviewer",
     "reviewer_max_iterations",
+    "review_class",
     "for_each",
     "workspace_requires",
     "produces",
@@ -4970,18 +7456,24 @@ export function escapeRegex(str: string): string {
 export function parseArgs(args: string[]): {
   positional: string[];
   flags: Record<string, string>;
+  bareFlags: Set<string>;
+  blankFlags: Set<string>;
 } {
   const positional: string[] = [];
   const flags: Record<string, string> = {};
+  const bareFlags = new Set<string>();
+  const blankFlags = new Set<string>();
   let i = 0;
   while (i < args.length) {
     if (args[i].startsWith("--")) {
       const key = args[i].slice(2);
       if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
         flags[key] = args[i + 1];
+        if (args[i + 1].trim().length === 0) blankFlags.add(key);
         i += 2;
       } else {
         flags[key] = "true";
+        bareFlags.add(key);
         i++;
       }
     } else {
@@ -4989,7 +7481,7 @@ export function parseArgs(args: string[]): {
       i++;
     }
   }
-  return { positional, flags };
+  return { positional, flags, bareFlags, blankFlags };
 }
 
 // --- Repeated field collection for --field key=value ---
@@ -5269,10 +7761,8 @@ function parseUnitsBlock(block: string): UnitDependencyEdge[] {
   if (current) edges.push(current);
 
   for (const e of edges) {
-    // Reject empty AND whitespace-only names — a quoted `"   "` survives
-    // unquoteScalar with literal spaces and would otherwise become a
-    // meaningless valid unit (and dependency target).
-    if (!e.name.trim()) throw new Error("unit with empty name");
+    const nameError = validateUnitName(e.name);
+    if (nameError) throw new Error(nameError);
   }
   return edges;
 }
@@ -5417,12 +7907,16 @@ export function resolveBoltDag(projectDir: string): BoltDagResolution {
         batches.every(
           (batch) =>
             Array.isArray(batch) &&
-            batch.every((unit) => typeof unit === "string" && unit.length > 0),
+            batch.every(
+              (unit) =>
+                typeof unit === "string" &&
+                validateUnitName(unit) === null,
+            ),
         )
       ) {
         const typedBatches = batches as string[][];
         const units = typedBatches.flat();
-        if (units.length > 0) {
+        if (units.length > 0 && new Set(units).size === units.length) {
           const unitKinds = new Map<string, string>();
           if (Array.isArray(boltDag?.units)) {
             for (const unit of boltDag.units) {

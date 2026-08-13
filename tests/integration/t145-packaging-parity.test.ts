@@ -160,6 +160,7 @@ describe("t145 packager contract regressions", () => {
         join(generated, "skills", "aidlc-init", "SKILL.md"),
         "utf-8",
       );
+      expect(descriptor.name).toBe("foo");
       expect(descriptor.harnessDir).toBe(".foo");
       expect(graph).toContain('"path": ".foo/sensors/');
       expect(graph).not.toContain('"path": ".claude/sensors/');

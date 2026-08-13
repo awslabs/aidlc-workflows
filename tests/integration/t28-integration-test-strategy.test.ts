@@ -47,7 +47,7 @@
 //   - TEST_STRATEGY_CHANGED audit event:  appendAuditEvent (utility.ts:2406), written as
 //                              `**Event**: TEST_STRATEGY_CHANGED` (aidlc-audit.ts:258), parsed by
 //                              readAuditEvents (sdk-drive.ts)
-//   - P4 layout note:          config-change does NOT migrate the flat seed (only intent-birth
+//   - P4 layout note:          config-change does NOT migrate the flat seed (only intent-create
 //                              migrates, aidlc-utility.ts:2022). The withState seed stays at the
 //                              flat aidlc-docs/ layout, so assertStateField (r.stateFile) /
 //                              assertAuditEvent (r.auditEvents) resolve it via sdk-drive's
@@ -132,7 +132,7 @@ describe("t28 /aidlc --test-strategy / --depth config-change (sdk)", () => {
         // reads the parsed `**Event**:` lines off the audit (P4: per-clone shards
         // under the resolved record's audit/, via sdk-drive's readAuditEvents —
         // flat fallback here since config-change does NOT migrate, only
-        // intent-birth does) and fails loudly if the audit log was never written.
+        // intent-create does) and fails loudly if the audit log was never written.
         assertAuditEvent(r, STRATEGY_EVENT);
       } finally {
         cleanupTestProject(proj);

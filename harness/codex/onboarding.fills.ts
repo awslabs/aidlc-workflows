@@ -18,26 +18,26 @@ const fills: OnboardingFills = {
 This project uses AI-DLC (AI-Driven Development Life Cycle) under the OpenAI
 Codex CLI harness (minimum version 0.145.0). Invoke the orchestrator skill with
 \`$aidlc\` (or \`/skills\` → aidlc) followed by a scope or project description.
-The deterministic engine, state machine, audit log, and referee are
-byte-identical to every other harness distribution; only the shell differs. Run
+The ordered steps, the approval gates, the written record, and the checks behind
+them are identical to every other AI-DLC install; only the CLI around them differs. Run
 \`$aidlc --status\` for progress, \`$aidlc --help\` for usage, \`$aidlc intent\`
 to list intents, \`$aidlc --doctor\` to validate setup, and
 \`$aidlc --stage <slug>\` / \`--phase <name>\` / \`--depth <level>\` /
-\`--test-strategy <level>\` for the usual overrides. Run \`$aidlc compose
-"<task>"\` to have the adaptive composer propose a tailored EXECUTE/SKIP plan
+\`--test-strategy <level>\` / \`--review <class>\` for the usual overrides. Run \`$aidlc compose
+"<task>"\` to get a plan tailored to that task
 (up front, from a scan report via \`--report <path>\`, or mid-workflow to
 re-shape the pending stages - every proposal stops at an approve/edit/reject
 gate).`,
 
     prereq_bullets: `- **Codex CLI ≥ 0.145.0**: earlier releases defer compact-source SessionStart after a mid-turn auto-compaction, so one model continuation can run without the restored workflow mission. Releases before 0.139.0 also lack reliable subagent role attribution and hyphenated agent-TOML resolution. \`$aidlc --doctor\` enforces the pin. Check with \`codex --version\`.
 - **bun**: Required for CLI tools and hook scripts (state management, audit logging, jump orchestration). Install via \`curl -fsSL https://bun.sh/install | bash\`. On Windows: \`npm install -g bun\` or \`powershell -c "irm bun.sh/install.ps1 | iex"\`. \`bun\` must be on your PATH for the non-interactive shells the harness spawns — these source \`~/.zshenv\` (zsh) or \`~/.bashrc\` (bash), NOT \`~/.zshrc\`.
-- **Model provider**: The shipped \`.codex/config.toml\` defaults to **Amazon Bedrock** — the session (and judgment-tier agents, which inherit it) on \`openai.gpt-5.5\`, balanced/templated agents pinned to \`openai.gpt-5.4\` (the tier projection). Set your AWS profile/region under \`[model_providers.amazon-bedrock.aws]\` (shipped defaults \`profile = "default"\`, \`region = "us-east-1"\`); you need Bedrock model access and AWS credentials on the default SDK credential chain. For OpenAI auth instead, comment out \`model_provider\` and the \`[model_providers]\` block. Note: \`web_search\` is unavailable on Bedrock, so the market-research stage degrades gracefully.
+- **Model provider**: The shipped \`.codex/config.toml\` defaults to **Amazon Bedrock** — the session (and judgment-tier agents, which inherit it) on \`openai.gpt-5.5\`, balanced/templated agents pinned to \`openai.gpt-5.6-terra\` (the tier projection). Set your AWS profile/region under \`[model_providers.amazon-bedrock.aws]\` (shipped defaults \`profile = "default"\`, \`region = "us-east-1"\`); you need Bedrock model access and AWS credentials on the default SDK credential chain. For OpenAI auth instead, comment out \`model_provider\` and the \`[model_providers]\` block. Note: \`web_search\` is unavailable on Bedrock, so the market-research stage degrades gracefully.
 - **MCP servers (optional)**: Codex reads MCP server definitions from \`[mcp_servers.<name>]\` tables in \`config.toml\` (project \`.codex/config.toml\` or \`~/.codex/config.toml\`). The shipped config declares none — add the servers you need there. Credentials flow through your environment; a server you have no credentials for is simply unavailable and never blocks a workflow.`,
 
     prereq_bullets_tail: `- **Permissions**: \`.codex/rules/default.rules\` (Starlark prefix rules) pre-allows the deterministic core's exact command prefixes — \`bun .codex/tools/\`, \`bun .codex/hooks/\`, and \`git worktree\`/\`commit\`/\`add\` — so workflows run without per-call prompts. The sandbox is \`workspace-write\`; commands outside the allowlist prompt.
 - **Personal overrides**: Settings in \`~/.codex/config.toml\` merge over the project \`.codex/config.toml\`. Put machine-specific overrides (model, AWS profile/region, environment variables) there to avoid changing the shared project config.`,
 
-    agents_note: `On Codex all 14 agent personas are transposed into \`.codex/agents/\` TOMLs (the conductor reads the persona \`.md\` bodies as prose); workers for the four dispatched stages (2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent), reviewer passes, and composer requests run through Codex subagent roles.`,
+    agents_note: `On Codex all 14 expert roles are transposed into \`.codex/agents/\` TOMLs (the \`/aidlc\` session reads the role \`.md\` bodies as prose); the four delegated stages (2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent), reviewer passes, and composer requests run through Codex subagent roles.`,
 
     structure_extra: "",
 

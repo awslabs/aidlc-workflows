@@ -12,10 +12,11 @@ import { isPlainObject, UNIT_KINDS } from "./aidlc-lib.ts";
 
 export interface StageFrontmatter {
   slug: string;
-  // number — authored display order, `<phase-prefix>.<index>` (e.g. "2.7", "4.50").
-  // Optional at the schema layer (shape-checked when present). Display/ordering
-  // only; slug is identity. A plugin authors its own numbers without renumbering
-  // core (plugin mechanism — see docs/reference/18-plugin-mechanism.md §2).
+  // number — authored ordering hint, `<phase-prefix>.<index>` (e.g. "2.7", "4.50").
+  // Optional at the schema layer (shape-checked when present). Slug is identity;
+  // compiled number values are assigned by the engine (an authored value only
+  // breaks ties among a plugin's independent new stages — its absolute value
+  // never lands in the graph; see docs/reference/18-plugin-mechanism.md §2).
   number?: string;
   // name — authored human-readable display name. Optional; shape-checked (string)
   // when present.
@@ -79,6 +80,14 @@ export interface StageFrontmatter {
   // reviewer_max_iterations — review-cycle cap before escalating to the human.
   // Defaults to 2 when reviewer is present.
   reviewer_max_iterations?: number;
+  // review_class — "adversarial" (refute + fix loop) or "advisory" (single
+  // pass, findings to the human gate). Defaults to "adversarial" when a
+  // reviewer is present. Requires a reviewer.
+  review_class?: "adversarial" | "advisory";
+  // summary_confirmation — deterministic pre-generation checkpoint policy.
+  // `required` means every run must create the questions file and record the
+  // human's consolidated-summary choice; `if-present` is for conditional Q&A.
+  summary_confirmation?: "required" | "if-present";
   // when — structured activation predicate (plugin mechanism, Layer 4). A
   // single-key map; the one predicate is `producer-in-plan: <artifact-slug>`.
   // Accepted for shape here; the compile-time grid evaluation is separate.
@@ -164,7 +173,7 @@ const REQUIRED_FIELDS = [
   "outputs",
 ] as const;
 
-const OPTIONAL_FIELDS = ["number", "name", "plugin", "for_each", "workspace_requires", "optional_produces", "produces_kinds", "sensors", "scopes", "reviewer", "reviewer_max_iterations", "when", "required_sections"] as const;
+const OPTIONAL_FIELDS = ["number", "name", "plugin", "for_each", "workspace_requires", "optional_produces", "produces_kinds", "sensors", "scopes", "reviewer", "reviewer_max_iterations", "review_class", "summary_confirmation", "when", "required_sections"] as const;
 
 const KNOWN_FIELDS = new Set<string>([...REQUIRED_FIELDS, ...OPTIONAL_FIELDS]);
 
@@ -175,8 +184,9 @@ const KNOWN_FIELDS = new Set<string>([...REQUIRED_FIELDS, ...OPTIONAL_FIELDS]);
 const SLUG_RE = /^[a-z][a-z0-9-]*$/;
 
 // Stage display number: `<int>.<int>` (e.g. "0.1", "2.7", "4.50"). Shape only —
-// numericStageOrder (aidlc-graph.ts) parses it; a plugin authors numbers in its
-// own range. Phase-prefix/phase agreement is a separate compile cross-check.
+// numericStageOrder (aidlc-graph.ts) parses it; an authored value is an
+// ordering hint (only its index segment is read, as a tiebreak), the engine
+// assigns all compiled values.
 const NUMBER_RE = /^\d+\.\d+$/;
 
 // Lowercase-kebab artifact names — see docs/reference/16-artifact-vocabulary.md
@@ -312,6 +322,16 @@ export function validateStageFrontmatter(
   // literal; a non-integer literal stays a string and is rejected here as a
   // type error rather than silently coercing to NaN at compile.
   checkPositiveInteger(o, "reviewer_max_iterations", errors);
+  if (
+    "summary_confirmation" in o &&
+    o.summary_confirmation !== undefined &&
+    o.summary_confirmation !== "required" &&
+    o.summary_confirmation !== "if-present"
+  ) {
+    errors.push(
+      `summary_confirmation must be one of required, if-present, got ${describe(o.summary_confirmation)}`,
+    );
+  }
 
   // Coupling — a cap with no reviewer is silently dropped at compile
   // (aidlc-graph.ts guards the whole reviewer block on `reviewer` being
@@ -324,6 +344,21 @@ export function validateStageFrontmatter(
     !("reviewer" in o && o.reviewer !== undefined)
   ) {
     errors.push("reviewer_max_iterations requires a reviewer");
+  }
+
+  // review_class — optional. When present, must be "adversarial" or
+  // "advisory" and requires a reviewer (same coupling rationale as the cap:
+  // the compiler guards the whole reviewer block on `reviewer`). "none" is
+  // deliberately NOT a stage value — a stage that wants no review deletes its
+  // `reviewer:` line; "none" exists only on the scope cap and the run
+  // override, which can silence a declared reviewer without editing stages.
+  if ("review_class" in o && o.review_class !== undefined) {
+    if (o.review_class !== "adversarial" && o.review_class !== "advisory") {
+      errors.push('review_class must be "adversarial" or "advisory"');
+    }
+    if (!("reviewer" in o && o.reviewer !== undefined)) {
+      errors.push("review_class requires a reviewer");
+    }
   }
 
   // required_sections — optional list of non-empty section names (plugin

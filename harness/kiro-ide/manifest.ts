@@ -6,6 +6,8 @@
 //     registration on IDE >=1.0.1xx, plus legacy .kiro.hook files for pre-1.0
 //     IDE builds (coexistence: no double-firing on any generation tested)
 //   - The aidlc.json agent config omits the `hooks` field (dead weight in IDE)
+//   - Ships an always-included IDE steering file whose live file references
+//     preload the active-space memory tree for the conductor and delegates
 //   - Injects a `tools:` frontmatter grant into the delegation-target agent
 //     .md files (frontmatterAdditions below) - the IDE resolves a delegated
 //     subagent's tools from the agent .md frontmatter, not from the agent-v1
@@ -45,6 +47,7 @@ const manifest: HarnessManifest = {
   harnessFiles: [
     { src: "skills/aidlc/SKILL.md", dst: "skills/aidlc/SKILL.md" },
     { src: "skills/aidlc/question-rendering.md", dst: "skills/aidlc/question-rendering.md" },
+    { src: "steering/aidlc-active-memory.md", dst: "steering/aidlc-active-memory.md" },
     { src: "agents/aidlc.json", dst: "agents/aidlc.json" },
     { src: "agents/aidlc-architect-agent.json", dst: "agents/aidlc-architect-agent.json" },
     { src: "agents/aidlc-developer-agent.json", dst: "agents/aidlc-developer-agent.json" },
@@ -63,31 +66,31 @@ const manifest: HarnessManifest = {
     { src: "agents/aidlc-pipeline-deploy-agent.json", dst: "agents/aidlc-pipeline-deploy-agent.json" },
     { src: "agents/aidlc-operations-agent.json", dst: "agents/aidlc-operations-agent.json" },
     { src: "hooks/aidlc-kiro-adapter.ts", dst: "hooks/aidlc-kiro-adapter.ts" },
-    { src: "hooks/aidlc-audit-logger.json", dst: "hooks/aidlc-audit-logger.json" },
-    { src: "hooks/aidlc-mint.json", dst: "hooks/aidlc-mint.json" },
-    { src: "hooks/aidlc-block.json", dst: "hooks/aidlc-block.json" },
+    { src: "hooks/aidlc-write-audit-log.json", dst: "hooks/aidlc-write-audit-log.json" },
+    { src: "hooks/aidlc-record-human-turn.json", dst: "hooks/aidlc-record-human-turn.json" },
+    { src: "hooks/aidlc-enforce-approval-gate.json", dst: "hooks/aidlc-enforce-approval-gate.json" },
     { src: "hooks/aidlc-log-subagent.json", dst: "hooks/aidlc-log-subagent.json" },
-    { src: "hooks/aidlc-runtime-compile.json", dst: "hooks/aidlc-runtime-compile.json" },
+    { src: "hooks/aidlc-rebuild-stage-graph.json", dst: "hooks/aidlc-rebuild-stage-graph.json" },
     // No v2 session-end registration: the IDE's Stop trigger fires at the end
     // of every assistant turn (not at conversation close), so a v2 registration
     // would append a spurious SESSION_ENDED between prompts. session-end stays
     // legacy-only (below) until the IDE exposes a genuine session-end event.
     { src: "hooks/aidlc-session-start.json", dst: "hooks/aidlc-session-start.json" },
-    { src: "hooks/aidlc-stop.json", dst: "hooks/aidlc-stop.json" },
-    { src: "hooks/aidlc-sync-statusline.json", dst: "hooks/aidlc-sync-statusline.json" },
+    { src: "hooks/aidlc-continue-workflow.json", dst: "hooks/aidlc-continue-workflow.json" },
+    { src: "hooks/aidlc-sync-workflow-state.json", dst: "hooks/aidlc-sync-workflow-state.json" },
     // Legacy .kiro.hook files (pre-1.0 IDE format): retained for coexistence
     // with IDE builds <1.0. On 1.x+ these are inert (struck-through, never fire);
     // on pre-1.0 they are the only mechanism that executes. Safe to ship both:
     // no double-firing observed on any IDE generation tested.
-    { src: "hooks/aidlc-audit-logger.kiro.hook", dst: "hooks/aidlc-audit-logger.kiro.hook" },
-    { src: "hooks/aidlc-mint.kiro.hook", dst: "hooks/aidlc-mint.kiro.hook" },
-    { src: "hooks/aidlc-block.kiro.hook", dst: "hooks/aidlc-block.kiro.hook" },
+    { src: "hooks/aidlc-write-audit-log.kiro.hook", dst: "hooks/aidlc-write-audit-log.kiro.hook" },
+    { src: "hooks/aidlc-record-human-turn.kiro.hook", dst: "hooks/aidlc-record-human-turn.kiro.hook" },
+    { src: "hooks/aidlc-enforce-approval-gate.kiro.hook", dst: "hooks/aidlc-enforce-approval-gate.kiro.hook" },
     { src: "hooks/aidlc-log-subagent.kiro.hook", dst: "hooks/aidlc-log-subagent.kiro.hook" },
-    { src: "hooks/aidlc-runtime-compile.kiro.hook", dst: "hooks/aidlc-runtime-compile.kiro.hook" },
+    { src: "hooks/aidlc-rebuild-stage-graph.kiro.hook", dst: "hooks/aidlc-rebuild-stage-graph.kiro.hook" },
     { src: "hooks/aidlc-session-end.kiro.hook", dst: "hooks/aidlc-session-end.kiro.hook" },
     { src: "hooks/aidlc-session-start.kiro.hook", dst: "hooks/aidlc-session-start.kiro.hook" },
-    { src: "hooks/aidlc-stop.kiro.hook", dst: "hooks/aidlc-stop.kiro.hook" },
-    { src: "hooks/aidlc-sync-statusline.kiro.hook", dst: "hooks/aidlc-sync-statusline.kiro.hook" },
+    { src: "hooks/aidlc-continue-workflow.kiro.hook", dst: "hooks/aidlc-continue-workflow.kiro.hook" },
+    { src: "hooks/aidlc-sync-workflow-state.kiro.hook", dst: "hooks/aidlc-sync-workflow-state.kiro.hook" },
     { src: "settings/cli.json", dst: "settings/cli.json" },
     // Project-root .gitignore (beside .kiro/, not inside it) — same workspace-layout
     // committed-vs-ignored split as the Kiro CLI tree: per-user cursors + machine-local

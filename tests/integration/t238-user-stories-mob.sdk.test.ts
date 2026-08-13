@@ -45,12 +45,16 @@ const SUPPORT_AGENTS = [
   "aidlc-developer-agent",
   "aidlc-quality-agent",
 ] as const;
-const RULE_PATHS = [
-  "aidlc/spaces/default/memory/org.md",
-  "aidlc/spaces/default/memory/team.md",
-  "aidlc/spaces/default/memory/project.md",
-  "aidlc/spaces/default/memory/phases/inception.md",
+// One distinctive token per substantive shipped rule file. A support brief
+// must carry the content marker; a path alone is the rejected legacy contract.
+// team.md/project.md ship as comment-only placeholders and are absent.
+const RULE_MARKERS = [
+  { marker: "first-class" },
+  { marker: "Given/When/Then" },
 ] as const;
+const LIVE_KNOWLEDGE_REL =
+  "aidlc/spaces/default/knowledge/aidlc-product-agent/issue-495-live.md";
+const LIVE_KNOWLEDGE_MARKER = "ISSUE_495_LIVE_KNOWLEDGE_DELIVERY_EVIDENCE";
 
 const APPROVE_ALL = {
   kind: "byHeader" as const,
@@ -294,6 +298,17 @@ function inputMentions(result: CapturedToolResult, value: string): boolean {
   return JSON.stringify(result.input).includes(value);
 }
 
+function readIndex(
+  results: CapturedToolResult[],
+  value: string,
+): number {
+  return results.findIndex(
+    (result) =>
+      result.toolName === "Read" &&
+      inputMentions(result, value),
+  );
+}
+
 function shellCommand(result: CapturedToolResult): string | undefined {
   if (result.toolName !== "Bash" && result.toolName !== "Shell") return undefined;
   return typeof result.input.command === "string"
@@ -301,15 +316,84 @@ function shellCommand(result: CapturedToolResult): string | undefined {
     : undefined;
 }
 
+function seedUserStoriesProject(projectDir: string): void {
+  writeFileSync(seededStateFile(projectDir), userStoriesState(projectDir));
+  seedRequirements(projectDir);
+  seedRuntimeGraph(projectDir);
+}
+
+function seedLiveKnowledge(projectDir: string): void {
+  const knowledgeDir = join(
+    projectDir,
+    "aidlc",
+    "spaces",
+    "default",
+    "knowledge",
+    "aidlc-product-agent",
+  );
+  mkdirSync(knowledgeDir, { recursive: true });
+  writeFileSync(
+    join(knowledgeDir, "issue-495-live.md"),
+    `# Issue 495 Live Knowledge\n\n${LIVE_KNOWLEDGE_MARKER}\n`,
+    "utf-8",
+  );
+}
+
 describe("t238 user-stories mob topology (Claude SDK live)", () => {
+  test(
+    "readable project knowledge is opened before mob stage work",
+    async () => {
+      const projectDir = setupIntegrationProject({ withAudit: true });
+      try {
+        seedUserStoriesProject(projectDir);
+        seedLiveKnowledge(projectDir);
+
+        const result = await driveAidlc("/aidlc", {
+          projectDir,
+          timeoutMs: DRIVE_TIMEOUT_MS,
+          stopAfterToolResult: {
+            toolName: "Read",
+            resultIncludes: LIVE_KNOWLEDGE_MARKER,
+          },
+        });
+
+        expect(result.timedOut).toBe(false);
+        expect(result.stoppedAfterToolResult).toBe(true);
+        const leadPersonaPath = ".claude/agents/aidlc-product-agent.md";
+        const leadReadIndex = readIndex(result.toolResults, leadPersonaPath);
+        const projectKnowledgeReadIndex = readIndex(
+          result.toolResults,
+          LIVE_KNOWLEDGE_REL,
+        );
+        expect(leadReadIndex, "the inline mob lead persona was not read").toBeGreaterThanOrEqual(0);
+        expect(
+          projectKnowledgeReadIndex,
+          "the inline mob lead's project knowledge was not read",
+        ).toBeGreaterThan(
+          leadReadIndex,
+        );
+        expect(
+          result.toolResults.some(
+            (toolResult) =>
+              toolResult.toolName === "Read" &&
+              inputMentions(toolResult, LIVE_KNOWLEDGE_REL) &&
+              toolResult.resultText.includes(LIVE_KNOWLEDGE_MARKER),
+          ),
+          "the inline mob lead's readable project knowledge was not read",
+        ).toBe(true);
+      } finally {
+        cleanupTestProject(projectDir);
+      }
+    },
+    TEST_TIMEOUT_MS,
+  );
+
   test(
     "three mutually blind supports write evidence, the lead integrates, and approval then succeeds",
     async () => {
       const projectDir = setupIntegrationProject({ withAudit: true });
       try {
-        writeFileSync(seededStateFile(projectDir), userStoriesState(projectDir));
-        seedRequirements(projectDir);
-        seedRuntimeGraph(projectDir);
+        seedUserStoriesProject(projectDir);
 
         // Deterministic control on this exact live fixture: approval is refused
         // before the mob writes its evidence, and the refusal commits no gate.
@@ -414,20 +498,28 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
             `.claude/agents/${support}.md`,
           );
         }
-        expect(
-          result.toolResults.some(
-            (toolResult) =>
-              toolResult.toolName === "Read" &&
-              inputMentions(
-                toolResult,
-                ".claude/agents/aidlc-product-agent.md",
-              ),
-          ),
-          "the inline mob lead persona was not read",
-        ).toBe(true);
+        // inline_context_paths is only the manifest. The conductor contract
+        // requires it to read each inline persona before any stage/consume read.
+        const leadPersonaPath = ".claude/agents/aidlc-product-agent.md";
+        const leadReadIndex = readIndex(result.toolResults, leadPersonaPath);
+        const stageReadIndex = readIndex(
+          result.toolResults,
+          ".claude/aidlc-common/stages/inception/user-stories.md",
+        );
+        const consumeReadIndex = readIndex(result.toolResults, "requirements.md");
+        expect(leadReadIndex, "the conductor did not read the inline mob lead persona")
+          .toBeGreaterThanOrEqual(0);
+        expect(stageReadIndex, "stage_file read preceded the lead persona read").toBeGreaterThan(
+          leadReadIndex,
+        );
+        expect(consumeReadIndex, "consume read preceded the lead persona read").toBeGreaterThan(
+          leadReadIndex,
+        );
 
         // Round 1 dispatched every declared support. Each brief names the
-        // shared draft/input and exact rule paths, plus only that participant's
+        // shared draft/input, carries the active-space rules delivered by the
+        // preceding load-steering sequence (content pasted into the brief;
+        // path-only briefs are not accepted), plus only that participant's
         // contribution filename, never a sibling's contribution.
         const roundOne = new Map<string, CapturedToolResult>();
         for (const agent of SUPPORT_AGENTS) {
@@ -442,8 +534,14 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
           expect(prompt).toContain("personas.md");
           expect(prompt).toContain("requirements.md");
           expect(prompt).toContain(`${agent}.md`);
-          for (const rulePath of RULE_PATHS) {
-            expect(prompt).toContain(rulePath);
+          // Rule steering reached the brief as content: each distinctive
+          // marker must survive the transfer. A path alone is the legacy
+          // contract and does not satisfy this assertion.
+          for (const { marker } of RULE_MARKERS) {
+            expect(
+              prompt.includes(marker),
+              `brief for ${agent} does not carry the "${marker}" rule content`,
+            ).toBe(true);
           }
           for (const sibling of SUPPORT_AGENTS) {
             if (sibling === agent) continue;

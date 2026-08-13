@@ -6,6 +6,7 @@ condition: Execute when NFR performance targets need validation under load
 lead_agent: aidlc-quality-agent
 support_agents: []
 mode: inline
+summary_confirmation: required
 produces:
   - load-test-plan
   - load-test-results
@@ -75,7 +76,7 @@ Create load test plan, performance test results (latency, throughput, error rate
 
 Hand completion to `stage-protocol.md` via
 `bun .kiro/tools/aidlc-orchestrate.ts report --stage performance-validation --result <outcome>`.
-The engine owns all lifecycle transitions and advancement.
+That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
 ### Step 7: Present Completion & Request Approval
 

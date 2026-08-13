@@ -5,8 +5,7 @@ description: >
   Start an AI-DLC workflow — run the whole Initialization phase (mint the
   intent, detect the workspace, build state) in one step, without typing a
   stage. The engine normally auto-births the first intent; this is opt-in
-  packaging over that move. Pass `--scope <name>` to seed the initial scope
-  (defaults to poc), or a freeform description of what to build.
+  packaging over that move. Pass `--scope <name>` to seed the initial scope, or a freeform description of what to build.
 argument-hint: "[--scope <name>] [description]"
 user-invocable: true
 ---
@@ -27,7 +26,7 @@ no standalone meaning.
    `$ARGUMENTS`: forward any recognized flags
    (`--scope <name>`/`--depth <level>`/`--test-strategy <level>`)
    as-is, and pass any freeform description text via `--arguments "<text>"`
-   (`intent-birth` reads the description from the `--arguments` flag, NOT a
+   (`intent-create` reads the description from the `--arguments` flag, NOT a
    positional — forwarding it bare would silently drop it). ALSO derive a short
    **`--label`**: a 2-3 word kebab-case essence of what's being built
    (`"I would like to build a simple calculator application"` → `--label
@@ -37,9 +36,12 @@ no standalone meaning.
    tool then falls back to the scope token):
 
    ```bash
-   bun .claude/tools/aidlc-utility.ts intent-birth --scope <name> --arguments "<description>" --label "<2-3 word essence>"
+   bun .claude/tools/aidlc-utility.ts intent-create --arguments "<description>" --label "<2-3 word essence>"
    ```
 
-   `--scope` seeds the initial scope (defaults to `poc`); omit `--arguments`
-   and `--label` when the user gave no description. Print the tool's output and
-   stop. This does not advance a stage; run `/aidlc` afterwards to continue.
+   Pass `--scope <name>` only if the user named one; otherwise omit it and the
+   engine picks the install's default scope. If the user gave neither a scope nor
+   a description, do not run a bare `intent-create`: ask what they want to build
+   or which scope to use. When only a scope was supplied, omit `--arguments` and
+   `--label`. Print the tool's output and stop. This does not advance a stage;
+   run `/aidlc` afterwards to continue.

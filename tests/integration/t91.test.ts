@@ -1,15 +1,15 @@
-// covers: hook:aidlc-runtime-compile
+// covers: hook:aidlc-rebuild-stage-graph
 //
 // Mechanism = none. Port of tests/integration/t91-runtime-compile-hook.sh (TAP
 // plan 13). The unit under test is the PostToolUse Bash hook
-// dist/claude/.claude/hooks/aidlc-runtime-compile.ts. A hook is mechanism=none
+// dist/claude/.claude/hooks/aidlc-rebuild-stage-graph.ts. A hook is mechanism=none
 // — it has no CLI arg surface; it is driven by feeding Claude Code's
 // PostToolUse JSON on stdin. So every .sh case is preserved here by SPAWNING
 // the hook via node:child_process spawnSync with the JSON piped through
 // `input:`, exactly as the .sh did
 //   `echo '<json>' | CLAUDE_PROJECT_DIR=<p> bun "$proj/.claude/hooks/...ts"`.
 //
-// HOOK CONTRACT (aidlc-runtime-compile.ts):
+// HOOK CONTRACT (aidlc-rebuild-stage-graph.ts):
 //   1. TTY guard / empty-or-malformed stdin -> process.exit(0), no work.
 //   2. Command filter: direct transition tools
 //      (`aidlc-(state|jump|bolt|utility).ts`) OR `aidlc-orchestrate.ts report`
@@ -127,8 +127,8 @@ function makeProject(): string {
     join(proj, ".claude", "tools", "data", "stage-graph.json"),
   );
   copyFileSync(
-    join(SRC_HOOKS, "aidlc-runtime-compile.ts"),
-    join(proj, ".claude", "hooks", "aidlc-runtime-compile.ts"),
+    join(SRC_HOOKS, "aidlc-rebuild-stage-graph.ts"),
+    join(proj, ".claude", "hooks", "aidlc-rebuild-stage-graph.ts"),
   );
   // P9: write the minimal state into the default record so the active-intent
   // cursor resolves → the hook reads the record's audit shards (readAllAuditShards)
@@ -142,7 +142,7 @@ function makeProject(): string {
 }
 
 const hookPath = (proj: string): string =>
-  join(proj, ".claude", "hooks", "aidlc-runtime-compile.ts");
+  join(proj, ".claude", "hooks", "aidlc-rebuild-stage-graph.ts");
 // The hook reads the audit via the per-clone shard GLOB; writing the AUDIT_*
 // fixtures into one shard under the record's audit/ DIR is what the hook merges.
 const auditPath = (proj: string): string =>
@@ -150,7 +150,7 @@ const auditPath = (proj: string): string =>
 const graphPath = (proj: string): string =>
   join(seededRecordDir(proj), "runtime-graph.json");
 const heartbeatPath = (proj: string): string =>
-  join(seededRecordDir(proj), ".aidlc-hooks-health", "runtime-compile.last");
+  join(seededRecordDir(proj), ".aidlc-hooks-health", "rebuild-stage-graph.last");
 
 interface HookResult {
   status: number;
@@ -330,7 +330,7 @@ const AUDIT_NO_TRANSITION = `## Workflow Start
 // (The AUDIT_GATE_APPROVED_TESTRUN fixture and its Test-Run-propagation case
 // were dropped per #369 when the test-run mechanism was removed.)
 
-describe("t91 aidlc-runtime-compile hook (migrated from t91-runtime-compile-hook.sh, plan 13)", () => {
+describe("t91 aidlc-rebuild-stage-graph hook (migrated from t91-runtime-compile-hook.sh, plan 13)", () => {
   // --- Case 1: filter pass — GATE_APPROVED in last 3 -> dispatch -----------
   test("1: GATE_APPROVED in last-3 -> compile dispatched (runtime-graph.json written)", () => {
     const p = makeProject();

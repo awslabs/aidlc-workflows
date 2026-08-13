@@ -92,6 +92,8 @@ const harnessNames = readdirSync(harnessRoot)
 const harnessLabels: Record<string, string> = {
   claude: "Claude Code",
   codex: "Codex CLI",
+  copilot: "GitHub Copilot",
+  cursor: "Cursor",
   kiro: "Kiro CLI",
   "kiro-ide": "Kiro IDE",
   opencode: "opencode",
@@ -125,7 +127,7 @@ const engineCommands = [...engineMain.matchAll(/case "([^"]+)":/g)].map((match) 
 
 describe("documentation parity derives current behavior from authored implementation", () => {
   test("event count and user-guide taxonomy match VALID_EVENT_TYPES", () => {
-    expect(eventTypes.length).toBe(74);
+    expect(eventTypes.length).toBe(82);
 
     const guide = read("docs", "guide", "10-state-and-audit.md");
     const guideTaxonomy = sliceBetween(
@@ -168,7 +170,15 @@ describe("documentation parity derives current behavior from authored implementa
   });
 
   test("documented harness roster matches every implementation manifest", () => {
-    expect(harnessNames).toEqual(["claude", "codex", "kiro", "kiro-ide", "opencode"]);
+    expect(harnessNames).toEqual([
+      "claude",
+      "codex",
+      "copilot",
+      "cursor",
+      "kiro",
+      "kiro-ide",
+      "opencode",
+    ]);
     expect(Object.keys(harnessLabels).sort()).toEqual(harnessNames);
 
     const readmeRoster = sliceBetween(
@@ -246,18 +256,24 @@ describe("documentation parity derives current behavior from authored implementa
 
     expect(ideCell("Agent personas")).toContain("`tools:` grants");
     expect(ideCell("Agent personas")).not.toContain("agent configs");
-    expect(ideCell("Standing rules")).toContain("resources glob");
+    expect(ideCell("Standing rules")).toContain("always-included steering");
     expect(ideCell("Standing rules")).not.toContain("`rules_in_context`");
     expect(ideCell("Permissions / config")).toContain("`tools:` frontmatter");
     expect(ideCell("Permissions / config")).not.toContain("settings/cli.json");
 
-    const ideAgent = JSON.parse(
-      read("harness", "kiro-ide", "agents", "aidlc.json"),
-    ) as { resources?: string[] };
-    expect(ideAgent.resources).toContain("file://aidlc/spaces/default/memory/**/*.md");
+    const steering = read(
+      "harness",
+      "kiro-ide",
+      "steering",
+      "aidlc-active-memory.md",
+    );
+    expect(steering).toMatch(/^---\ninclusion: always\n---/);
+    expect(steering).toContain(
+      "#[[file:aidlc/spaces/default/memory/org.md]]",
+    );
     const includesSource = read("core", "tools", "aidlc-includes.ts");
     expect(includesSource).toContain('if (harness === ".kiro")');
-    expect(includesSource).toContain("repointKiroAgentResources");
+    expect(includesSource).toContain("repointKiroSteeringReferences");
   });
 
   test("documented agent roster matches agent files and reviewer frontmatter", () => {
@@ -363,7 +379,7 @@ describe("documentation parity derives current behavior from authored implementa
   });
 
   test("engine docs match the subcommands in aidlc-orchestrate main", () => {
-    expect(engineCommands).toEqual(["next", "report", "park"]);
+    expect(engineCommands).toEqual(["next", "continue", "report", "park"]);
     const expected =
       `exactly ${numberWord(engineCommands.length)} subcommands: ${codeList(engineCommands)}`;
 
@@ -394,7 +410,7 @@ describe("documentation parity derives current behavior from authored implementa
 
     const cliGuide = read("docs", "guide", "12-cli-commands.md");
     for (const verb of workspaceVerbs) expect(cliGuide).toContain(`/aidlc ${verb}`);
-    const directOnlyVerbs = ["codekb-path", "select-plugins"];
+    const directOnlyVerbs = ["codekb-path", "codekb-scope-diff", "select-plugins"];
     for (const verb of directOnlyVerbs) {
       expect(workspaceVerbs).not.toContain(verb);
       expect(cliGuide).toContain("direct utility invocation");

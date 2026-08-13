@@ -107,7 +107,7 @@ const LOG_TS = join(
 
 const SLUG = "requirements-analysis";
 
-// P4: intent-birth writes state into the born intent's per-intent record dir
+// P4: intent-create writes state into the born intent's per-intent record dir
 // (aidlc/spaces/<space>/intents/<slug>-<id8>/), not the flat aidlc-docs/. After
 // the init in beforeAll the active-intent cursor points at the born record, so
 // every later gate-start/reject/revise/approve (which default-resolve the active
@@ -243,7 +243,7 @@ beforeAll(() => {
     BUN,
     [
       UTIL_TS,
-      "intent-birth",
+      "intent-create",
       "--scope",
       "bugfix",
       "--project-dir",
@@ -311,6 +311,7 @@ describe("t136 revision-loop — aidlc-state gate/reject/revise/approve cumulati
     expect(state(proj, "revise", SLUG).status).toBe(0); // S1
     // requirements-analysis declares a reviewer; record a fresh terminal review
     // (after the revise) so the §12a gate precondition passes.
+    spawnSync(BUN, [LOG_TS, "review", "--stage", SLUG, "--reviewer", "aidlc-product-lead-agent", "--iteration", "1", "--project-dir", proj], { encoding: "utf-8" });
     spawnSync(BUN, [LOG_TS, "review", "--stage", SLUG, "--reviewer", "aidlc-product-lead-agent", "--iteration", "1", "--verdict", "READY", "--project-dir", proj], { encoding: "utf-8" });
     expect(state(proj, "approve", SLUG, "--user-input", "accept as-is").status).toBe(0); // S1
     expect(checkboxGlyph(proj, SLUG)).toBe("x");

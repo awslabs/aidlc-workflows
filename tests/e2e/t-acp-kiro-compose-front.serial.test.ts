@@ -17,7 +17,7 @@
 //           allows the turn-end).
 //   turn 2: "1" (Approve). The conductor re-dispatches the composer to write
 //           the two scope files (INSIDE the composer agent - the sandbox
-//           grant), then continues into intent-birth - stop at the birth
+//           grant), then continues into intent-create - stop at the birth
 //           tool title.
 //
 // Disk assertions (the same P2 contract as t192/SDK + t-tui):
@@ -106,12 +106,12 @@ describe("t-acp-kiro compose front journey (live Kiro ACP)", () => {
           prompt:
             "1 (Approve the composed plan as-is - write the scope files and start the workflow)",
           timeoutMs: TURN_MS,
-          stopAfterToolTitle: /aidlc-utility\.ts intent-birth/,
+          stopAfterToolTitle: /aidlc-utility\.ts intent-create/,
           keepAlive: true,
         });
         expect([...r1.toolCallIssues, ...r2.toolCallIssues]).toEqual([]);
         const birthOut = r2.toolCalls
-          .filter((t) => t.title.includes("intent-birth"))
+          .filter((t) => t.title.includes("intent-create"))
           .map((t) => t.output.join(""))
           .join("");
         expect(birthOut).toContain("State initialized:");

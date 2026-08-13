@@ -86,11 +86,11 @@
 //     `init --scope <scope>`) rather than relaying the old circular no-state
 //     error; the trio's cases:
 //       (1) `next bugfix` — bare KNOWN-SCOPE positional, NOT freeform: kind ===
-//           "print" AND message names `intent-birth --scope bugfix` (the engine
+//           "print" AND message names `intent-create --scope bugfix` (the engine
 //           recognises bugfix as the scope, finding 2, and emits the SAME
 //           workflow-birth print `next --scope bugfix` emits; pre-finding-2 it
 //           mis-read the literal scope as prose and emitted an `ask` defaulting
-//           to "feature"). P4: the named birth move is `intent-birth`, not the
+//           to "feature"). P4: the named birth move is `intent-create`, not the
 //           retired `init`. One test() bundles both observables.
 //       (2) `next add dark mode toggle` — genuine freeform (<=5-word) intent,
 //           NOT a scope name: kind === "ask" (the control proving the finding-2
@@ -132,11 +132,13 @@ import { join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
+  createOrchestrationTestProject,
   createTestProject,
   FIXTURES_DIR,
   removeWorkspaceRecord,
   REPO_ROOT,
   resetAidlcEnv,
+  runOrchestrateNext,
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
@@ -207,7 +209,7 @@ interface EmitResult {
 // Returns the parsed directive (the .sh piped stdout+stderr 2>&1 through
 // json_field; here we JSON.parse the engine's single emitted directive).
 function emitScopeStage(scope: string, stage: string): EmitResult {
-  const proj = createTestProject();
+  const proj = createOrchestrationTestProject();
   tempDirs.push(proj);
   seedStateFile(proj, join(FIXTURES_DIR, "state-initialization-done.md"));
   const statePath = seededStateFile(proj);
@@ -234,13 +236,14 @@ function emitScopeStage(scope: string, stage: string): EmitResult {
       `${pre}${slug}${dash}${stages[slug] === "EXECUTE" ? "EXECUTE" : "SKIP"}`,
   );
   writeFileSync(statePath, swapped, "utf-8");
-  const res = spawnSync(
-    BUN,
-    [TOOL, "next", "--stage", stage, "--project-dir", proj],
-    { encoding: "utf-8", env: cleanEnv() },
-  );
-  const raw = `${res.stdout ?? ""}${res.stderr ?? ""}`;
-  return { status: res.status ?? -1, directive: parseDirective(res.stdout ?? ""), raw };
+  const res = runOrchestrateNext(TOOL, proj, ["--stage", stage], {
+    env: cleanEnv(),
+  });
+  return {
+    status: res.status,
+    directive: parseDirective(res.stdout),
+    raw: res.out,
+  };
 }
 
 interface FingerprintLoopResult {
@@ -260,7 +263,7 @@ interface FingerprintLoopResult {
 //   (3) bare `next` then reads the pivoted state and emits the run-stage for the
 //       fingerprint — the exact stage|phase|gate of the frozen golden.
 function emitScopeFingerprintLoop(scope: string, fp: string): FingerprintLoopResult {
-  const proj = createTestProject();
+  const proj = createOrchestrationTestProject();
   tempDirs.push(proj);
   seedStateFile(proj, join(FIXTURES_DIR, "state-initialization-done.md"));
   const statePath = seededStateFile(proj);
@@ -273,11 +276,9 @@ function emitScopeFingerprintLoop(scope: string, fp: string): FingerprintLoopRes
   md = md.replace(/^- \*\*Current Stage\*\*:.*$/m, "- **Current Stage**: state-init");
   writeFileSync(statePath, md, "utf-8");
   // STEP 1: the print naming the execute delegate.
-  const step1 = spawnSync(
-    BUN,
-    [TOOL, "next", "--stage", fp, "--project-dir", proj],
-    { encoding: "utf-8", env: cleanEnv() },
-  );
+  const step1 = runOrchestrateNext(TOOL, proj, ["--stage", fp], {
+    env: cleanEnv(),
+  });
   // STEP 2: commit the jump the print named (mutating state).
   spawnSync(
     BUN,
@@ -285,15 +286,14 @@ function emitScopeFingerprintLoop(scope: string, fp: string): FingerprintLoopRes
     { encoding: "utf-8", env: cleanEnv() },
   );
   // STEP 3: re-run `next` over the pivoted state — the landed run-stage.
-  const step3 = spawnSync(BUN, [TOOL, "next", "--project-dir", proj], {
-    encoding: "utf-8",
+  const step3 = runOrchestrateNext(TOOL, proj, [], {
     env: cleanEnv(),
   });
   return {
-    print: parseDirective(step1.stdout ?? ""),
-    printRaw: `${step1.stdout ?? ""}${step1.stderr ?? ""}`,
-    runStage: parseDirective(step3.stdout ?? ""),
-    runStageRaw: `${step3.stdout ?? ""}${step3.stderr ?? ""}`,
+    print: parseDirective(step1.stdout),
+    printRaw: step1.out,
+    runStage: parseDirective(step3.stdout),
+    runStageRaw: step3.out,
   };
 }
 
@@ -301,15 +301,17 @@ function emitScopeFingerprintLoop(scope: string, fp: string): FingerprintLoopRes
 // gate-axis anchor (t118:186-193), where the happy path runs the in-flight
 // init stage straight from state.
 function emitNext(fixtureFile: string): EmitResult {
-  const proj = createTestProject();
+  const proj = createOrchestrationTestProject();
   tempDirs.push(proj);
   seedStateFile(proj, join(FIXTURES_DIR, fixtureFile));
-  const res = spawnSync(BUN, [TOOL, "next", "--project-dir", proj], {
-    encoding: "utf-8",
+  const res = runOrchestrateNext(TOOL, proj, [], {
     env: cleanEnv(),
   });
-  const raw = `${res.stdout ?? ""}${res.stderr ?? ""}`;
-  return { status: res.status ?? -1, directive: parseDirective(res.stdout ?? ""), raw };
+  return {
+    status: res.status,
+    directive: parseDirective(res.stdout),
+    raw: res.out,
+  };
 }
 
 // emitNextNoState (t118.sh:289-315): spawn `next [...args]` against a FRESH
@@ -492,12 +494,12 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
     // pre-hardening engine relayed a circular no-state error here that told the
     // user to do exactly what they had just done). Pre-finding-2 this mis-read
     // the scope as prose and emitted an `ask` defaulting to "feature".
-    test("no-state bare known-scope 'bugfix' -> birth print naming intent-birth (recognised as scope, not freeform) [finding 2]", () => {
+    test("no-state bare known-scope 'bugfix' -> birth print naming intent-create (recognised as scope, not freeform) [finding 2]", () => {
       const r = emitNextNoState("bugfix");
       expect(r.directive.kind).toBe("print");
-      // The print names the intent-birth move for the EXPLICITLY NAMED scope
+      // The print names the intent-create move for the EXPLICITLY NAMED scope
       // (P4: --init retired; the engine NAMES the deterministic birth handler).
-      expect(r.directive.message ?? "").toContain("intent-birth --scope bugfix");
+      expect(r.directive.message ?? "").toContain("intent-create --scope bugfix");
       // Run-then-continue shape: the conductor births, then re-enters the loop.
       expect(r.directive.message ?? "").toContain("re-run `next` to continue");
       // STRONGER: a regression that mis-read bugfix as freeform would emit an
@@ -515,7 +517,7 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
       );
       expect(r.directive.kind).toBe("print");
       expect(r.directive.message ?? "").toContain(
-        "intent-birth --scope bugfix",
+        "intent-create --scope bugfix",
       );
       expect(r.directive.message ?? "").toContain(
         '--arguments "Fix duplicate todo persistence"',
@@ -573,8 +575,8 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
         "mvp",
       );
       expect(r.directive.kind).toBe("print");
-      expect(r.directive.message ?? "").toContain("intent-birth --scope mvp");
-      expect(r.directive.message ?? "").not.toContain("intent-birth --scope bugfix");
+      expect(r.directive.message ?? "").toContain("intent-create --scope mvp");
+      expect(r.directive.message ?? "").not.toContain("intent-create --scope bugfix");
       expect(r.directive.message ?? "").toContain(
         '--arguments "bugfix Fix duplicate todo"',
       );
@@ -594,7 +596,7 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
         "billing",
       );
       expect(r.directive.kind).toBe("print");
-      expect(r.directive.message ?? "").toContain("intent-birth --scope feature");
+      expect(r.directive.message ?? "").toContain("intent-create --scope feature");
       expect(r.directive.message ?? "").toContain(
         '--arguments "feature flags for billing"',
       );

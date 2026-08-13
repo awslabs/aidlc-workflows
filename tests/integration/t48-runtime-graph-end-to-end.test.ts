@@ -174,7 +174,7 @@ beforeAll(() => {
   // Init the bugfix scope — fastest scope, smallest stage list (.sh:40-42).
   const init = run(
     UTIL,
-    ["intent-birth", "--scope", "bugfix", "--project-dir", proj],
+    ["intent-create", "--scope", "bugfix", "--project-dir", proj],
     { AIDLC_WORKFLOW_INTENT: "runtime-graph e2e" },
   );
   initOk = init.status === 0;
@@ -216,7 +216,7 @@ beforeAll(() => {
   if (gate.status !== 0 || !gate.out.includes('"kind":"print"')) {
     throw new Error(`gate report failed: ${gate.out}`);
   }
-  run(LOG, [
+  const reviewArgs = [
     "review",
     "--stage",
     firstStage,
@@ -224,10 +224,14 @@ beforeAll(() => {
     "aidlc-product-lead-agent",
     "--iteration",
     "1",
-    "--verdict",
-    "READY",
     "--project-dir",
     proj,
+  ];
+  run(LOG, reviewArgs);
+  run(LOG, [
+    ...reviewArgs,
+    "--verdict",
+    "READY",
   ]);
   const approval = run(
     ORCHESTRATE,

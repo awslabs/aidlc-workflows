@@ -37,19 +37,21 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
   resetAidlcEnv,
+  runOrchestrateNext,
+  seedAidlcMemory,
   seededStateFile,
 } from "../harness/fixtures.ts";
 
 resetAidlcEnv();
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 
 // The checkbox-row separator the state format uses (parseCheckboxes /
@@ -104,7 +106,15 @@ interface Directive {
   stage?: string;
   next_stage?: string | null;
   gate?: unknown;
+  message?: string;
+  reason?: string;
   [k: string]: unknown;
+}
+
+interface StateOptions {
+  skipped?: string[];
+  planSkipped?: string[];
+  currentMarker?: "-" | " " | "?" | "R";
 }
 
 /**
@@ -116,19 +126,20 @@ interface Directive {
  */
 function stateFile(
   current: string,
-  opts: { skipped?: string[] } = {},
+  opts: StateOptions = {},
 ): string {
   const skipped = new Set(opts.skipped ?? []);
+  const planSkipped = new Set(opts.planSkipped ?? []);
   const currentIdx = ALL_SLUGS.indexOf(current);
   const row = (slug: string, i: number): string => {
     const marker = slug === current
-      ? "-"
+      ? (opts.currentMarker ?? "-")
       : skipped.has(slug)
         ? "S"
         : i < currentIdx
           ? "x"
           : " ";
-    const action = skipped.has(slug) ? "SKIP" : "EXECUTE";
+    const action = skipped.has(slug) || planSkipped.has(slug) ? "SKIP" : "EXECUTE";
     return `- [${marker}] ${slug} ${SEP} ${action}`;
   };
   const rows = ALL_SLUGS.map(row).join("\n");
@@ -162,29 +173,49 @@ ${rows}
 /** Seed a fresh project pivoted to `current`. Returns the proj dir. */
 function seedProject(
   current: string,
-  opts: { skipped?: string[] } = {},
+  opts: StateOptions = {},
 ): string {
   const proj = createTestProject();
   tempDirs.push(proj);
+  seedAidlcMemory(proj);
   writeFileSync(seededStateFile(proj), stateFile(current, opts));
   return proj;
 }
 
 /** Run `aidlc-orchestrate.ts next` and parse the emitted directive. */
 function runNext(proj: string): Directive {
-  const r = spawnSync(BUN, [ORCH, "next", "--project-dir", proj], {
+  const env = { ...process.env };
+  delete env.AWS_AIDLC_DEFAULT_SCOPE;
+  const r = runOrchestrateNext(ORCH, proj, [], { env });
+  if (r.directive === null) {
+    throw new Error(
+      `runNext did not emit parseable JSON. status=${r.status}\n${r.stdout}\n${r.stderr}`,
+    );
+  }
+  return r.directive as Directive;
+}
+
+/** Route an active stage through the report-owned skip recovery. */
+function reportSkipped(proj: string, stage: string): Directive {
+  const r = spawnSync(BUN, [
+    ORCH,
+    "report",
+    "--stage",
+    stage,
+    "--result",
+    "skipped",
+    "--reason",
+    "stage is SKIP in the approved workflow plan",
+    "--project-dir",
+    proj,
+  ], {
     encoding: "utf-8",
-    env: (() => {
-      const e = { ...process.env };
-      delete e.AWS_AIDLC_DEFAULT_SCOPE;
-      return e;
-    })(),
   });
   try {
     return JSON.parse((r.stdout ?? "").trim()) as Directive;
   } catch {
     throw new Error(
-      `runNext did not emit parseable JSON. status=${r.status}\n${r.stdout}\n${r.stderr}`,
+      `reportSkipped did not emit parseable JSON. status=${r.status}\n${r.stdout}\n${r.stderr}`,
     );
   }
 }
@@ -232,5 +263,50 @@ describe("t202 gate next-stage name (issue: approval option always said Code Gen
     const d = runNext(proj);
     expect(d.stage).toBe("nfr-requirements");
     expect(d.next_stage).toBe("NFR Design");
+  }, 30000);
+
+  // 5: stale state must not turn a plan-SKIP row into a run-stage. Use
+  // code-generation because its graph applicability is ALWAYS: the approved
+  // plan axis still wins, report accepts the engine-named recovery, and routing
+  // walks over the following plan-SKIP row to the next EXECUTE stage.
+  test("5: an active plan-SKIP cursor self-recovers without executing an ALWAYS stage", () => {
+    const proj = seedProject("code-generation", {
+      planSkipped: ["code-generation", "build-and-test"],
+    });
+
+    const recovery = runNext(proj);
+    expect(recovery.kind).toBe("print");
+    expect(recovery.stage).toBeUndefined();
+    expect(recovery.message).toContain("Do not run this stage");
+    expect(recovery.message).toContain(
+      "report --stage code-generation --result skipped",
+    );
+
+    const report = reportSkipped(proj, "code-generation");
+    expect(report.kind).toBe("done");
+    expect(report.reason).toContain('Committed skip for "code-generation"');
+
+    const state = readFileSync(seededStateFile(proj), "utf-8");
+    expect(state).toContain(`- [S] code-generation ${SEP} SKIP`);
+    expect(state).toContain(`- [ ] build-and-test ${SEP} SKIP`);
+    expect(state).toContain("- **Current Stage**: ci-pipeline");
+
+    const resumed = runNext(proj);
+    expect(resumed.kind).toBe("run-stage");
+    expect(resumed.stage).toBe("ci-pipeline");
+  }, 30000);
+
+  test("6: a malformed pending plan-SKIP cursor fails closed instead of emitting run-stage", () => {
+    const proj = seedProject("code-generation", {
+      planSkipped: ["code-generation"],
+      currentMarker: " ",
+    });
+    const before = readFileSync(seededStateFile(proj), "utf-8");
+
+    const d = runNext(proj);
+    expect(d.kind).toBe("error");
+    expect(d.stage).toBeUndefined();
+    expect(d.message).toContain("Refusing to emit run-stage");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
   }, 30000);
 });

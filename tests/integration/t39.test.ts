@@ -76,7 +76,7 @@ afterAll(() => {
   for (const d of tempDirs) cleanupTestProject(d);
 });
 
-// P4: intent-birth (the back-compat target of `init`) writes state into the
+// P4: intent-create (the back-compat target of `init`) writes state into the
 // born intent's per-intent record dir (aidlc/spaces/<space>/intents/<slug>-<id8>/),
 // not the flat aidlc-docs/, and audit into per-clone shards under
 // <record>/audit/<host>-<pid>.md. Resolve the record dir from the active-space +
@@ -131,7 +131,7 @@ interface InitResult {
 function runInit(scope: string, p: string): InitResult {
   const res = spawnSync(
     BUN,
-    [UTIL, "intent-birth", "--scope", scope, "--project-dir", p],
+    [UTIL, "intent-create", "--scope", scope, "--project-dir", p],
     {
       encoding: "utf-8",
       env: { ...process.env, AIDLC_WORKFLOW_INTENT: "phase sequence test" },

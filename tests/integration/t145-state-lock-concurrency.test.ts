@@ -130,11 +130,14 @@ function stateSync(args: string[], p: string): { status: number; stdout: string;
 /** Record a terminal READY review so a reviewer-bearing stage passes the §12a
  *  gate precondition (these tests target the state lock, not the reviewer gate). */
 function logReview(slug: string, reviewer: string, p: string): void {
-  Bun.spawnSync({
-    cmd: [BUN, LOG_TOOL, "review", "--stage", slug, "--reviewer", reviewer, "--iteration", "1", "--verdict", "READY", "--project-dir", p],
-    stdout: "pipe",
-    stderr: "pipe",
-  });
+  const args = [BUN, LOG_TOOL, "review", "--stage", slug, "--reviewer", reviewer, "--iteration", "1", "--project-dir", p];
+  for (const suffix of [[], ["--verdict", "READY"]]) {
+    Bun.spawnSync({
+      cmd: [...args, ...suffix],
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+  }
 }
 
 /**
@@ -166,7 +169,7 @@ describe("t145 C2b state-lock lost-update safety (mechanism cli — parallel spa
     // running INCEPTION workflow at requirements-analysis with code-generation
     // next — the shape the gate handlers expect).
     const init = Bun.spawnSync({
-      cmd: [BUN, UTIL_TOOL, "intent-birth", "--scope", "bugfix", "--project-dir", proj],
+      cmd: [BUN, UTIL_TOOL, "intent-create", "--scope", "bugfix", "--project-dir", proj],
       stdout: "ignore",
       stderr: "ignore",
     });

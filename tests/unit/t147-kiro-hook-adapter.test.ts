@@ -1,7 +1,7 @@
 // t147-kiro-hook-adapter: the Kiro stdin shim normalizes live-captured
 // payloads into the core hooks' contract.
 //
-// covers: file:hooks/aidlc-stop.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-sync-statusline.ts, file:hooks/aidlc-log-subagent.ts
+// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-sync-workflow-state.ts, file:hooks/aidlc-log-subagent.ts, hook:aidlc-plan-approval-guard
 //
 // WHAT. Each case pipes a fixture from tests/fixtures/kiro-hook-payloads/
 // (field-verbatim captures off kiro-cli 2.6.1 — findings.md §0.2) into
@@ -12,9 +12,9 @@
 //                   silent exit 0 when no workflow state exists.
 //   session-start → plain-text context (NOT the {"additionalContext"} JSON
 //                   wrapper — the shim unwraps it for Kiro's stdout channel).
-//   state-sync    → todo_list create with "[slug]" suffix dispatches
+//   sync-workflow-state    → todo_list create with "[slug]" suffix dispatches
 //                   set-status (state file's Current Stage updates).
-//   audit/sensors + runtime-compile + log-subagent → fail-open exit 0 on
+//   audit/sensors + rebuild-stage-graph + log-subagent → fail-open exit 0 on
 //   both fixture input and malformed stdin (advisory contract G5).
 //
 // WHY SUBPROCESS. The adapter IS a subprocess shim — in-process unit testing
@@ -23,6 +23,7 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  appendFileSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -34,7 +35,12 @@ import {
 import { hostname, tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { birthIntent } from "../../core/tools/aidlc-lib.ts";
+import {
+  createIntent,
+  readIntentRegistry,
+  writeSessionIntentHandoff,
+  writeSessionIntentUuid,
+} from "../../core/tools/aidlc-lib.ts";
 import {
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
@@ -124,14 +130,34 @@ function readAudit(dir: string): string {
     .join("\n");
 }
 
+function appendInteractionEvent(
+  dir: string,
+  event: "DECISION_RECORDED" | "QUESTION_ANSWERED" | "STAGE_STARTED",
+  stage: string,
+): void {
+  appendFileSync(
+    join(seededAuditDir(dir), pinnedShardName()),
+    `\n## ${event}\n` +
+      `**Timestamp**: ${new Date().toISOString()}\n` +
+      `**Event**: ${event}\n` +
+      `**Stage**: ${stage}\n\n---\n`,
+    "utf-8",
+  );
+}
+
 function runAdapter(
   projectDir: string,
   target: string,
   payload: unknown,
+  extraArgs: string[] = [],
 ): { stdout: string; stderr: string; code: number } {
   const r = spawnSync(
     "bun",
-    [join(projectDir, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), target],
+    [
+      join(projectDir, ".kiro", "hooks", "aidlc-kiro-adapter.ts"),
+      target,
+      ...extraArgs,
+    ],
     {
       cwd: projectDir,
       input: typeof payload === "string" ? payload : JSON.stringify(payload),
@@ -147,11 +173,44 @@ function runAdapter(
   };
 }
 
+function runDispatchCore(
+  projectDir: string,
+  payload: unknown,
+): { stdout: string; stderr: string; code: number } {
+  const r = spawnSync(
+    "bun",
+    [join(projectDir, ".kiro", "hooks", "aidlc-deliver-stage-rules.ts")],
+    {
+      cwd: projectDir,
+      input: JSON.stringify(payload),
+      encoding: "utf-8",
+      env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir },
+      timeout: 30_000,
+    },
+  );
+  return {
+    stdout: r.stdout ?? "",
+    stderr: r.stderr ?? "",
+    code: r.status ?? -1,
+  };
+}
+
+function seedUnapprovedCodeGeneration(dir: string, unit: string): void {
+  const state = readFileSync(seededStateFile(dir), "utf-8").replace(
+    /(- \*\*Current Stage\*\*:\s*)[^\n]+/,
+    `$1code-generation`,
+  );
+  writeFileSync(seededStateFile(dir), state, "utf-8");
+  mkdirSync(join(seededRecordDir(dir), "construction", unit, "code-generation"), {
+    recursive: true,
+  });
+}
+
 describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
   test("1: stop blocks with a reason while the workflow has pending work", () => {
     const dir = scratchProject(true);
     try {
-      const r = runAdapter(dir, "stop", FIXTURES.stop);
+      const r = runAdapter(dir, "continue-workflow", FIXTURES.stop);
       expect(r.code).toBe(0);
       const out = JSON.parse(r.stdout) as { decision?: string; reason?: string };
       expect(out.decision).toBe("block");
@@ -161,12 +220,79 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
+  test("1a: stop forwards session identity and allows an exact post-create handoff", () => {
+    const dir = scratchProject(true);
+    try {
+      const original = readIntentRegistry(dir)[0];
+      const created = createIntent(dir, "new-work", "default", "bugfix");
+      const sessionId = "kiro-handoff-session";
+      writeSessionIntentUuid(dir, sessionId, original.uuid);
+      writeSessionIntentHandoff(dir, sessionId, original.uuid, created.uuid);
+
+      const r = runAdapter(dir, "continue-workflow", {
+        ...FIXTURES.stop as Record<string, unknown>,
+        session_id: sessionId,
+      });
+      expect(r.code).toBe(0);
+      expect(r.stdout.trim()).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("1b: plan-approval guard blocks an unapproved developer stage", () => {
+    const dir = scratchProject(true);
+    try {
+      seedUnapprovedCodeGeneration(dir, "todo-core");
+      const r = runAdapter(dir, "plan-approval-guard", {
+        hook_event_name: "preToolUse",
+        cwd: dir,
+        tool_name: "subagent",
+        tool_input: {
+          task: "AIDLC-UNIT: todo-core\nImplement todo-core",
+          stages: [
+            {
+              name: "implement_todo_core",
+              role: "aidlc-developer-agent",
+              prompt_template: "AIDLC-UNIT: todo-core\nImplement todo-core",
+            },
+          ],
+        },
+      });
+      expect(r.code).toBe(2);
+      expect(r.stderr).toContain("plan-approval guard");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("2: stop is silent (no block) when no workflow state exists", () => {
     const dir = scratchProject(false);
     try {
-      const r = runAdapter(dir, "stop", FIXTURES.stop);
+      const r = runAdapter(dir, "continue-workflow", FIXTURES.stop);
       expect(r.code).toBe(0);
       expect(r.stdout.trim()).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("2a: stop stays silent for an open logged question and blocks after its answer", () => {
+    const dir = scratchProject(true);
+    try {
+      appendInteractionEvent(dir, "STAGE_STARTED", "requirements-analysis");
+      appendInteractionEvent(dir, "DECISION_RECORDED", "requirements-analysis");
+
+      const waiting = runAdapter(dir, "continue-workflow", FIXTURES.stop);
+      expect(waiting.code).toBe(0);
+      expect(waiting.stdout.trim()).toBe("");
+
+      appendInteractionEvent(dir, "QUESTION_ANSWERED", "requirements-analysis");
+      const resolved = runAdapter(dir, "continue-workflow", FIXTURES.stop);
+      expect(resolved.code).toBe(0);
+      expect(
+        (JSON.parse(resolved.stdout) as { decision?: string }).decision,
+      ).toBe("block");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -188,7 +314,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     const dir = scratchProject(true);
     try {
       const before = readFileSync(seededStateFile(dir), "utf-8");
-      const r = runAdapter(dir, "state-sync", FIXTURES.postToolUse_todo_create);
+      const r = runAdapter(dir, "sync-workflow-state", FIXTURES.postToolUse_todo_create);
       expect(r.code).toBe(0);
       const after = readFileSync(seededStateFile(dir), "utf-8");
       // The fixture's [intent-capture] slug dispatches set-status; assert the
@@ -204,7 +330,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
   test("5: todo_list complete (no [slug] create) is a clean no-op", () => {
     const dir = scratchProject(true);
     try {
-      const r = runAdapter(dir, "state-sync", FIXTURES.postToolUse_todo_complete);
+      const r = runAdapter(dir, "sync-workflow-state", FIXTURES.postToolUse_todo_complete);
       expect(r.code).toBe(0);
       expect(r.stdout.trim()).toBe("");
     } finally {
@@ -234,6 +360,199 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
+  test("5b: subagent dispatch warns on incomplete rules (proceeds) and accepts exact rules", () => {
+    const dir = scratchProject(true);
+    try {
+      cpSync(
+        join(REPO_ROOT, "dist", "kiro", "aidlc"),
+        join(dir, "aidlc"),
+        { recursive: true },
+      );
+      const basePrompt =
+        "Run .kiro/aidlc-common/stages/inception/user-stories.md.";
+      const payload = (promptTemplate: string) => ({
+        cwd: dir,
+        tool_name: "subagent",
+        tool_input: {
+          mode: "blocking",
+          task: "Draft the user stories contribution.",
+          stages: [
+            {
+              name: "product",
+              role: "aidlc-product-agent",
+              prompt_template: promptTemplate,
+            },
+          ],
+        },
+      });
+
+      // Incomplete brief: advisory warning, dispatch PROCEEDS (exit 0). A
+      // block-with-retry contract deadlocked live (byte-exact paste never
+      // converges); Kiro agents preload the memory tree natively, so the
+      // brief bundle is redundant defense there, not the delivery channel.
+      const incomplete = runAdapter(
+        dir,
+        "deliver-stage-rules",
+        payload(basePrompt),
+      );
+      expect(incomplete.code, incomplete.stderr).toBe(0);
+      expect(incomplete.stderr).toContain(
+        "did not carry the active-stage rule bundle verbatim",
+      );
+      expect(incomplete.stderr).toContain("The dispatch proceeded");
+
+      const proposed = runDispatchCore(dir, payload(basePrompt));
+      expect(proposed.code, proposed.stderr).toBe(0);
+      const rewrite = JSON.parse(proposed.stdout) as {
+        hookSpecificOutput?: {
+          updatedInput?: {
+            stages?: Array<{ prompt_template?: string }>;
+          };
+        };
+      };
+      const exactPrompt =
+        rewrite.hookSpecificOutput?.updatedInput?.stages?.[0]?.prompt_template ??
+        "";
+      expect(exactPrompt).toContain("AIDLC_DISPATCH_RULES_BEGIN");
+      const complete = runAdapter(
+        dir,
+        "deliver-stage-rules",
+        payload(exactPrompt),
+      );
+      expect(complete.code, complete.stderr).toBe(0);
+      expect(complete.stdout).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("5c: oversized valid rules use Kiro preload while unloadable rules still block", () => {
+    const oversizedDir = scratchProject(true);
+    try {
+      cpSync(
+        join(REPO_ROOT, "dist", "kiro", "aidlc"),
+        join(oversizedDir, "aidlc"),
+        { recursive: true },
+      );
+      writeFileSync(
+        join(
+          oversizedDir,
+          "aidlc",
+          "spaces",
+          "default",
+          "memory",
+          "org.md",
+        ),
+        `# Organization\n\n${"x".repeat(600_000)}\n`,
+        "utf-8",
+      );
+      const oversized = runAdapter(oversizedDir, "deliver-stage-rules", {
+        cwd: oversizedDir,
+        tool_name: "subagent",
+        tool_input: {
+          stages: [{
+            role: "aidlc-product-agent",
+            prompt_template:
+              "Run .kiro/aidlc-common/stages/inception/user-stories.md.",
+          }],
+        },
+      });
+      expect(oversized.code, oversized.stderr).toBe(0);
+      expect(oversized.stdout).toBe("");
+      expect(oversized.stderr).toContain("exceeds the safe");
+      expect(oversized.stderr).toContain("active-memory preload fallback");
+    } finally {
+      rmSync(oversizedDir, { recursive: true, force: true });
+    }
+
+    const missingDir = scratchProject(true);
+    try {
+      cpSync(
+        join(REPO_ROOT, "dist", "kiro", "aidlc"),
+        join(missingDir, "aidlc"),
+        { recursive: true },
+      );
+      rmSync(
+        join(
+          missingDir,
+          "aidlc",
+          "spaces",
+          "default",
+          "memory",
+          "org.md",
+        ),
+      );
+      const missing = runAdapter(missingDir, "deliver-stage-rules", {
+        cwd: missingDir,
+        tool_name: "subagent",
+        tool_input: {
+          stages: [{
+            role: "aidlc-product-agent",
+            prompt_template:
+              "Run .kiro/aidlc-common/stages/inception/user-stories.md.",
+          }],
+        },
+      });
+      expect(missing.code).toBe(2);
+      expect(missing.stderr).toContain("Cannot load required stage rule");
+    } finally {
+      rmSync(missingDir, { recursive: true, force: true });
+    }
+  });
+
+  test("5d: every Kiro worker registers an identity-scoped lifecycle guard", () => {
+    const agentDir = join(KIRO_TREE, "agents");
+    const workerFiles = require("node:fs")
+      .readdirSync(agentDir)
+      .filter((name: string) => /^aidlc-.+-agent\.json$/.test(name))
+      .sort() as string[];
+    expect(workerFiles).toHaveLength(14);
+
+    for (const name of workerFiles) {
+      const config = JSON.parse(
+        readFileSync(join(agentDir, name), "utf-8"),
+      ) as {
+        name: string;
+        hooks?: {
+          preToolUse?: Array<{
+            matcher?: string;
+            command?: string;
+            timeout_ms?: number;
+          }>;
+        };
+      };
+      expect(config.hooks?.preToolUse ?? [], name).toContainEqual({
+        matcher: "execute_bash",
+        command:
+          `bun .kiro/hooks/aidlc-kiro-adapter.ts state-transition-guard ${config.name}`,
+        timeout_ms: 15000,
+      });
+    }
+  });
+
+  test("5e: a Kiro worker identity cannot invoke orchestrator lifecycle", () => {
+    const dir = scratchProject(false);
+    try {
+      const r = runAdapter(
+        dir,
+        "state-transition-guard",
+        {
+          cwd: dir,
+          tool_name: "execute_bash",
+          tool_input: {
+            command:
+              "bun .kiro/tools/aidlc-orchestrate.ts next --resume",
+          },
+        },
+        ["aidlc-design-agent"],
+      );
+      expect(r.code).toBe(2);
+      expect(r.stderr).toContain("workflow lifecycle and routing are conductor-owned");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("6: log-subagent emits SUBAGENT_COMPLETED to the audit", () => {
     const dir = scratchProject(true);
     try {
@@ -257,11 +576,41 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
-  test("8: runtime-compile target accepts the alias shell payload and exits 0", () => {
+  test("8: rebuild-stage-graph target accepts the alias shell payload and exits 0", () => {
     const dir = scratchProject(true);
     try {
-      const r = runAdapter(dir, "runtime-compile", FIXTURES.postToolUse_shell);
+      const r = runAdapter(dir, "rebuild-stage-graph", FIXTURES.postToolUse_shell);
       expect(r.code).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("8b: post-shell intent creation binds the exact invoking session", () => {
+    const dir = scratchProject(true);
+    try {
+      const created = createIntent(dir, "kiro-posttool-create", "default");
+      const sid = "kiro-birth-session";
+      const r = runAdapter(dir, "rebuild-stage-graph", {
+        hook_event_name: "postToolUse",
+        cwd: dir,
+        session_id: sid,
+        tool_name: "shell",
+        tool_input: {
+          command: "bun .kiro/tools/aidlc-utility.ts intent-create --scope poc",
+        },
+        tool_response: {
+          items: [
+            {
+              Text: `Intent created: ${created.dirName} (space: default)\n`,
+            },
+          ],
+        },
+      });
+      expect(r.code).toBe(0);
+      expect(
+        readFileSync(join(dir, "aidlc", ".aidlc-sessions", sid), "utf-8").trim(),
+      ).toBe(created.uuid);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -276,7 +625,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     // the forwarded session_id the core hook's `if (sessionId)` block is inert.
     const dir = scratchProject(true);
     try {
-      const born = birthIntent(dir, "kiro-stamp", "default");
+      const born = createIntent(dir, "kiro-stamp", "default");
       const sid = "kiro-session-abc123";
       const r = runAdapter(dir, "session-start", { ...(FIXTURES.agentSpawn as object), session_id: sid });
       expect(r.code).toBe(0);
@@ -299,7 +648,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     const dir = scratchProject(true);
     try {
       const sid = "kiro-session-drift";
-      const a = birthIntent(dir, "intent-a", "default");
+      const a = createIntent(dir, "intent-a", "default");
       // First fire stamps the session to A (the live cursor at this point).
       const first = runAdapter(dir, "session-start", {
         ...(FIXTURES.agentSpawn as object),
@@ -310,7 +659,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       const stampPath = join(dir, "aidlc", ".aidlc-sessions", sid);
       expect(readFileSync(stampPath, "utf-8").trim()).toBe(a.uuid);
       // Move the live cursor to B — a genuine drift A→B.
-      birthIntent(dir, "intent-b", "default");
+      createIntent(dir, "intent-b", "default");
       // Fire again with a resume-shaped payload. Because Kiro coerces to
       // startup, the core hook takes the STARTED path (re-stamps to B), never
       // the RESUMED offer path.
@@ -330,12 +679,13 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     const dir = scratchProject(true);
     try {
       for (const target of [
-        "stop",
+        "continue-workflow",
         "session-start",
-        "state-sync",
+        "sync-workflow-state",
         "audit-and-sensors",
-        "runtime-compile",
+        "rebuild-stage-graph",
         "log-subagent",
+        "deliver-stage-rules",
       ]) {
         const r = runAdapter(dir, target, "{not json");
         expect(`${target}:${r.code}`).toBe(`${target}:0`);
@@ -347,10 +697,10 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
 
   // --- Stop-hook run-mode cap on Kiro (issue #365/#367 cross-harness coverage) ---
   //
-  // Kiro's stop adapter (case "stop", aidlc-kiro-adapter.ts:303-314) synthesizes
+  // Kiro's stop adapter (case "continue-workflow", aidlc-kiro-adapter.ts:303-314) synthesizes
   // {hook_event_name:"Stop", stop_hook_active:false} with NO transcript_path. So
   // the core hook's conversational carve-out (tier 3) is structurally inert on
-  // Kiro: the RUN-MODE-AWARE no-progress cap (blockCap, aidlc-stop.ts:122-137) is
+  // Kiro: the RUN-MODE-AWARE no-progress cap (blockCap, aidlc-continue-workflow.ts:122-137) is
   // the ONLY release path for a chatting / pausing human. These two tests pin
   // that contract deterministically:
   //   - interactive (no autonomy field) -> cap 2: a 2nd identical no-progress
@@ -358,7 +708,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
   //   - autonomous Construction -> cap 8: still blocks on call 3 (an unattended
   //     run keeps the loop alive; only a real hang ever hits 8).
   // The per-project guard counter persists under the active record's
-  // .aidlc-stop-hook/block-count.json (stopHookDir, aidlc-lib.ts:1620), so the
+  // .aidlc-continue-workflow-hook/block-count.json (stopHookDir, aidlc-lib.ts:1620), so the
   // SAME scratch project is reused across the repeated calls - consecutive
   // no-progress blocks at one unchanging signature, which is exactly what the
   // counter measures.
@@ -368,13 +718,13 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
    *  test runner's environment (a leaked override would mask the contract). The
    *  adapter itself never sets the var (verified: aidlc-kiro-adapter.ts builds
    *  {hook_event_name,stop_hook_active} only), and the core hook reads it from
-   *  the inherited process env (aidlc-stop.ts:123). */
+   *  the inherited process env (aidlc-continue-workflow.ts:123). */
   function runStopNoCapEnv(projectDir: string): { stdout: string; code: number } {
     const env = { ...process.env, CLAUDE_PROJECT_DIR: projectDir };
     delete (env as Record<string, string | undefined>).CLAUDE_CODE_STOP_HOOK_BLOCK_CAP;
     const r = spawnSync(
       "bun",
-      [join(projectDir, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), "stop"],
+      [join(projectDir, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), "continue-workflow"],
       {
         cwd: projectDir,
         // The kiro adapter ignores stdin for the stop target (it synthesizes the

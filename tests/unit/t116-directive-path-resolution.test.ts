@@ -140,6 +140,7 @@ interface RunStageDirective {
   consumes: string[];
   consumes_absent?: Array<{ path: string; expected: boolean }>;
   produces: string[];
+  continue_token?: string;
 }
 
 /**
@@ -159,6 +160,9 @@ function emitForWithProject(
 ): { directive: RunStageDirective; projectDir: string } {
   const proj = createTestProject();
   tempDirs.push(proj);
+  // Required rules are no longer best-effort paths. Seed the shipped memory
+  // tree so this path-resolution vehicle reaches run-stage.
+  cpSync(AIDLC_MEMORY_SRC, join(proj, "aidlc"), { recursive: true });
   seedStateFile(proj, join(FIXTURES_DIR, fixture));
   seedArtifacts?.(proj);
   const state = seededStateFile(proj);
@@ -174,21 +178,31 @@ function emitForWithProject(
     new RegExp(`^- \\[.\\] ${slug} — EXECUTE`, "m"),
     `- [-] ${slug} — EXECUTE`,
   );
-  const res = spawnSync(BUN, [ORCH, "next", "--project-dir", proj], {
+  const env = (() => {
+    const e = { ...process.env };
+    delete e.AWS_AIDLC_DEFAULT_SCOPE;
+    return e;
+  })();
+  let res = spawnSync(BUN, [ORCH, "next", "--project-dir", proj], {
     encoding: "utf-8",
-    env: (() => {
-      const e = { ...process.env };
-      delete e.AWS_AIDLC_DEFAULT_SCOPE;
-      return e;
-    })(),
+    env,
   });
-  const out = `${res.stdout ?? ""}${res.stderr ?? ""}`;
   let dir: RunStageDirective;
-  try {
-    dir = JSON.parse((res.stdout ?? "").trim());
-  } catch {
-    throw new Error(
-      `emitFor(${fixture}, ${slug}) did not emit parseable JSON. status=${res.status}\n${out}`,
+  for (;;) {
+    const out = `${res.stdout ?? ""}${res.stderr ?? ""}`;
+    try {
+      dir = JSON.parse((res.stdout ?? "").trim());
+    } catch {
+      throw new Error(
+        `emitFor(${fixture}, ${slug}) did not emit parseable JSON. status=${res.status}\n${out}`,
+      );
+    }
+    if (dir.kind !== "load-steering") break;
+    expect(dir.continue_token).toBeString();
+    res = spawnSync(
+      BUN,
+      [ORCH, "continue", dir.continue_token ?? "", "--project-dir", proj],
+      { encoding: "utf-8", env },
     );
   }
   // Sanity: the vehicle must land a run-stage for the target (else the path
@@ -508,8 +522,6 @@ describe("t116 inline context roster", () => {
     ]);
     expect(directive.rules_in_context).toEqual([
       `aidlc/spaces/${DEFAULT_SPACE}/memory/org.md`,
-      `aidlc/spaces/${DEFAULT_SPACE}/memory/team.md`,
-      `aidlc/spaces/${DEFAULT_SPACE}/memory/project.md`,
       `aidlc/spaces/${DEFAULT_SPACE}/memory/phases/inception.md`,
     ]);
     for (const path of directive.rules_in_context) {

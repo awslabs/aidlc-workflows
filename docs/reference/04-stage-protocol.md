@@ -83,7 +83,7 @@ with a fresh timestamp.
 | 4 | Never summarize user input -- pass exact option labels to the owning log or report tool; for automated stages use `N/A -- [reason]` |
 | 5 | One audit entry per interaction -- the log/state tools enforce single-event emission; never merge multiple events into one call |
 | 6 | At stage end, call `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"` (gated stages) or `report --stage <slug> --result completed` (Initialization). The engine flips `[?]`/`[-]` to `[x]`, emits `GATE_APPROVED` when gated, and emits `STAGE_COMPLETED` atomically through the state tool |
-| 7 | Mark previous stage task `completed` and current stage task `in_progress` with `activeForm` BEFORE work begins (the `sync-statusline` hook handles state syncing) |
+| 7 | Mark previous stage task `completed` and current stage task `in_progress` with `activeForm` BEFORE work begins (the `sync-workflow-state` hook handles state syncing) |
 | 8 | Use ONLY event types from `knowledge/aidlc-shared/audit-format.md` -- the state and log tools enforce this; never write directly to the `audit/` shards |
 | 9 | Do NOT hand-write lifecycle events or invoke lifecycle verbs on `aidlc-state.ts`. Report outcomes through `aidlc-orchestrate.ts`; the engine's internal state call emits the atomic audit rows |
 
@@ -284,10 +284,12 @@ and ambiguity detection.
 ### Tri-Mode System
 
 **Step 1: Create the questions file** in the appropriate `<record>/`
-directory using `[Answer]:` tag format with options A-E. Every question must
-end with `X. Other (please specify)` -- no exceptions. All `[Answer]:` tags
-start blank. Multi-select questions add "(select all that apply)" to the
-question text; answer format: `[Answer]: A, B, E`.
+directory using `[Answer]:` tag format with options A-E. Every ordinary
+question must end with `X. Other (please specify)`. The dedicated Consolidated
+Summary Confirmation is the sole exception: its **Looks correct / Request
+changes** options are unlettered. All `[Answer]:` tags start blank.
+Multi-select questions add "(select all that apply)" to the question text;
+answer format: `[Answer]: A, B, E`.
 
 **Step 2: Present mode choice:**
 
@@ -322,14 +324,21 @@ Log the mode choice to the `audit/` shards. Users can switch modes mid-stage.
   **Looks correct** and **Request changes** options. Do not ask for confirmation
   as bare prose. Before presenting it, append or reset a dedicated
   **Consolidated Summary Confirmation** entry in the stage questions file with
-  both options and a blank `[Answer]:`; fill it only from the human's response.
-  A request for changes resets that confirmation to blank before re-prompting.
+  both options and a blank `[Answer]:`. Record the prompt with
+  `aidlc-log.ts decision --checkpoint summary-confirmation --questions-file
+  <path>`, stop for the human, write the exact choice, then record it with the
+  matching `aidlc-log.ts answer` command. The receipt binds the human turn to
+  the exact questions-file digest. On **Request changes**, ask **"What should
+  change?"** and stop again before editing any answer; after feedback and
+  revision, reset the confirmation to blank before re-prompting.
 
 #### Edit File (Self-Guided Mode)
 
 - Tell user: "Edit the file at `[file path]`. When done, send **done** or
   **ready** and I'll continue."
 - WAIT for completion signal. Do not read file or proceed until signaled.
+- Present the consolidated summary and use the same persisted, receipt-backed
+  confirmation as Guide Me. Self-guided editing does not waive confirmation.
 
 #### Chat (Freeform Mode)
 
@@ -555,20 +564,23 @@ dynamic per workflow position.
 
 ### Inline Stages and Inline Mob Leads
 
-1. Read **every** file in `directive.inline_context_paths` before doing stage
-   work. The engine expands exact persona and existing knowledge-file paths:
-   lead + supports for `inline`, and the lead only for `mob` because mob
-   supports are dispatched. Agent names alone are not loaded context.
-2. Preserve the directive's path order, which follows the 6-step knowledge
-   order. Do not omit support-agent entries on `inline` or the lead entries on
-   `mob`.
-3. Apply every loaded perspective during execution.
+1. Apply the ordered `load-steering` sequence before `run-stage`. It delivers
+   every substantive active-space rule as content and re-runs on every stage.
+2. Read every `inline_context_paths` entry: lead + supports for `inline`, and
+   the lead only for `mob` because mob supports are dispatched. Persona and
+   knowledge remain path-loaded. Show any `context_warnings` verbatim and
+   continue with the readable roster. Agent names alone are not loaded context.
+3. Apply every loaded perspective during execution. Do not omit support-agent
+   perspectives on `inline` or the lead's on `mob`.
 
 ### Subagent Stages
 
-1. Dispatch the named harness agent; its config loads the persona and knowledge.
-2. Pass exact rule paths, relevant prior-artifact paths, and task instructions
-   rather than copied persona or knowledge prose.
+1. Dispatch the named harness agent; its config loads the persona and
+   knowledge (reviewer checklists are absorbed into the reviewer agents'
+   bodies at build time).
+2. Paste the accumulated `load-steering` rule bundle verbatim into the brief;
+   pass relevant prior-artifact paths and task instructions rather than copied
+   persona or knowledge prose.
 3. Select the agent named by the stage metadata.
 
 ### Multi-Agent Stages (Ensemble Topologies)
@@ -927,24 +939,51 @@ learnings → gate.
 
 *(Protocol Section 12a)*
 
+The directive's `review_class` field selects the contract, resolved by the
+engine from three inputs (low-wins): the stage's declared class, the active
+scope's `review_cap`, and any per-run `--review` override. A `none` resolution
+omits the reviewer block entirely and the stage runs reviewless.
+
 1. **Invoke.** Delegate to the agent named in `directive.reviewer`, passing the
    stage definition path, the Q&A file, the produced artifact paths, and any
    validation tools from frontmatter — never the builder's `memory.md` or plan, so
    the reviewer forms independent judgment.
-2. **Review.** The review runs under the adversarial review contract: the
-   reviewer tries to refute the artifact rather than confirm it, grounding
+2. **Review.** An `adversarial` review runs under the adversarial review contract:
+   the reviewer tries to refute the artifact rather than confirm it, grounding
    findings in machine-checkable evidence where it exists (READY is the verdict
-   it fails to reach, not the default). The reviewer reads the definition, Q&A,
-   and artifacts, runs any listed validation tools, and appends a `## Review`
-   section to the primary artifact with a **READY** or **NOT-READY** verdict.
-3. **Verdict.** READY → proceed to the learnings ritual then the gate. NOT-READY
-   with iterations remaining below `reviewer_max_iterations` (default 2) → the lead
-   agent re-runs to address the findings and the reviewer re-checks. NOT-READY with
-   iterations exhausted → proceed to the gate with the unresolved findings noted.
+   it fails to reach, not the default). An `advisory` review keeps the
+   evidence-grounding rule but is a single decision-support pass: findings are
+   ranked by severity for the human at the gate, with no repair loop behind
+   them. Either way the reviewer reads the definition, Q&A, and artifacts, runs
+   any listed validation tools, and appends a `## Review` section to the primary
+   artifact with a **READY** or **NOT-READY** verdict.
+3. **Verdict.** On `advisory`, both verdicts are terminal: the workflow proceeds
+   to the learnings ritual and the gate, where the findings are quoted verbatim
+   for the human to triage (`reviewer_max_iterations` is 1, engine-enforced).
+   On `adversarial`: READY → proceed to the learnings ritual then the gate.
+   NOT-READY with iterations remaining below `reviewer_max_iterations` (default
+   2) → the lead agent re-runs to address the findings and the reviewer
+   re-checks. NOT-READY with iterations exhausted → proceed to the gate with the
+   unresolved findings noted.
+   The recorded receipt is terminal whenever no further review pass follows it:
+   any later write to a `produces[]` artifact invalidates it and the engine
+   refuses the gate, so fixes happen inside the iteration loop, never after the
+   terminal receipt. Suggestions riding on a verdict are quoted at the gate for
+   the human, not applied.
 
-The reviewer never blocks — the human always has final say at the gate — and does
-not fire for stages without a `reviewer` field. See the `reviewer` /
-`reviewer_max_iterations` frontmatter fields in [Stage Definition](15-stage-definition.md).
+The iteration budget is engine-enforced: `aidlc-log.ts review` refuses a
+`REVIEW_REQUESTED` whose `--iteration` exceeds the stage's effective budget, so
+a conductor that loses count cannot run unbounded review passes. The reviewer
+never blocks — the human always has final say at the gate — and does not fire
+for stages without a `reviewer` field. See the `reviewer` /
+`reviewer_max_iterations` / `review_class` frontmatter fields in
+[Stage Definition](15-stage-definition.md).
+
+If reviewer dispatch fails, times out, or the session ends after
+`REVIEW_REQUESTED` but before a verdict, rerun the same request command with
+`--retry-pending` before dispatching again. The logger accepts this recovery
+only for the same unmatched request, records `Retry: pending-request`, and does
+not consume another iteration. A completed request cannot be retried.
 
 ---
 

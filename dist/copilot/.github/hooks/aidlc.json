@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "hooks": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "bash": "bun .aidlc/hooks/aidlc-copilot-adapter.ts session-start",
+        "powershell": "bun .aidlc/hooks/aidlc-copilot-adapter.ts session-start",
+        "timeoutSec": 30
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "type": "command",
+        "bash": "bun .aidlc/hooks/aidlc-copilot-adapter.ts record-human-turn",
+        "powershell": "bun .aidlc/hooks/aidlc-copilot-adapter.ts record-human-turn",
+        "timeoutSec": 30
+      }
+    ],
+    "PreToolUse": [
+      {
+        "type": "command",
+        "bash": "bun .aidlc/hooks/aidlc-copilot-adapter.ts guard-tool-call",
+        "powershell": "bun .aidlc/hooks/aidlc-copilot-adapter.ts guard-tool-call",
+        "timeoutSec": 30
+      }
+    ],
+    "PostToolUse": [
+      {
+        "type": "command",
+        "bash": "bun .aidlc/hooks/aidlc-copilot-adapter.ts post-tool",
+        "powershell": "bun .aidlc/hooks/aidlc-copilot-adapter.ts post-tool",
+        "timeoutSec": 30
+      }
+    ],
+    "PreCompact": [
+      {
+        "type": "command",
+        "bash": "bun .aidlc/hooks/aidlc-copilot-adapter.ts validate-state",
+        "powershell": "bun .aidlc/hooks/aidlc-copilot-adapter.ts validate-state",
+        "timeoutSec": 30
+      }
+    ],
+    "SubagentStart": [
+      {
+        "type": "command",
+        "bash": "bun .aidlc/hooks/aidlc-copilot-adapter.ts subagent-start",
+        "powershell": "bun .aidlc/hooks/aidlc-copilot-adapter.ts subagent-start",
+        "timeoutSec": 30
+      }
+    ],
+    "SubagentStop": [
+      {
+        "type": "command",
+        "bash": "bun .aidlc/hooks/aidlc-copilot-adapter.ts log-subagent",
+        "powershell": "bun .aidlc/hooks/aidlc-copilot-adapter.ts log-subagent",
+        "timeoutSec": 30
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "bash": "bun .aidlc/hooks/aidlc-copilot-adapter.ts continue-workflow",
+        "powershell": "bun .aidlc/hooks/aidlc-copilot-adapter.ts continue-workflow",
+        "timeoutSec": 60
+      }
+    ]
+  }
+}

@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  birthIntent,
+  createIntent,
   classifyTerminalCommand,
   parseWorkspaceCommand,
   RESERVED_RECORD_NAME_LIST,
@@ -132,7 +132,7 @@ describe("parseWorkspaceCommand", () => {
     });
   });
 
-  test("ports the spike parser cases for intent list, explicit switch, and birth rest", () => {
+  test("ports the spike parser cases for intent list, explicit switch, and create rest", () => {
     expect(parseWorkspaceCommand(["intent", "260711-simple-calc"])).toEqual({
       kind: "switch",
       noun: "intent",
@@ -162,8 +162,8 @@ describe("parseWorkspaceCommand", () => {
       verb: "switch",
       message: "Usage: aidlc intent switch <name>",
     });
-    expect(parseWorkspaceCommand(["intent", "birth", "--scope", "poc", "--label", "x"])).toEqual({
-      kind: "birth",
+    expect(parseWorkspaceCommand(["intent", "create", "--scope", "poc", "--label", "x"])).toEqual({
+      kind: "create-intent",
       noun: "intent",
       rest: ["--scope", "poc", "--label", "x"],
     });
@@ -220,11 +220,11 @@ describe("parseWorkspaceCommand", () => {
       "help",
       "list",
       "switch",
-      "birth",
       "create",
       "archive",
       "rename",
       "show",
+      "birth",
     ]);
     for (const name of RESERVED_RECORD_NAME_LIST) {
       expect(RESERVED_RECORD_NAMES.has(name)).toBe(true);
@@ -247,7 +247,6 @@ describe("classifier and next parser parity", () => {
       { args: ["intent", "list"], invocation: "intent" },
       { args: ["intent", "list", "--json"], invocation: "intent --json" },
       { args: ["intent", "switch", "list"], invocation: "intent switch list" },
-      { args: ["intent", "birth", "--scope", "poc", "--label", "x"], invocation: "intent-birth --scope poc --label x" },
       { args: ["space", "foo", "--status"], invocation: "space foo" },
     ];
     for (const row of rows) {
@@ -263,6 +262,20 @@ describe("classifier and next parser parity", () => {
       } finally {
         cleanup(projectDir);
       }
+    }
+  });
+
+  test("intent create stays on the session-aware workflow path", () => {
+    const args = ["intent", "create", "--scope", "poc", "--label", "x"];
+    expect(classifyTerminalCommand(args)).toBeNull();
+
+    const projectDir = scratchProject();
+    try {
+      const d = directive(projectDir, args);
+      expect(d.kind).toBe("print");
+      expect(d.message).toContain("aidlc-utility.ts intent-create --scope poc --label x");
+    } finally {
+      cleanup(projectDir);
     }
   });
 
@@ -323,7 +336,7 @@ describe("utility handlers and reservation chokepoints", () => {
   test("intent and space handlers accept explicit list, switch, create, and JSON forms", () => {
     const projectDir = scratchProject();
     try {
-      birthIntent(projectDir, "alpha-work", "default", "feature");
+      createIntent(projectDir, "alpha-work", "default", "feature");
 
       const intents = runUtility(projectDir, ["intent", "list", "--json"]);
       expect(intents.status).toBe(0);
@@ -377,11 +390,11 @@ describe("utility handlers and reservation chokepoints", () => {
     }
   });
 
-  test("birthIntent and space-create refuse every reserved record name", () => {
+  test("createIntent and space-create refuse every reserved record name", () => {
     for (const name of RESERVED_RECORD_NAME_LIST) {
       const projectDir = scratchProject();
       try {
-        expect(() => birthIntent(projectDir, name, "default", "feature"), name).toThrow("reserved name");
+        expect(() => createIntent(projectDir, name, "default", "feature"), name).toThrow("reserved name");
         const r = runUtility(projectDir, ["space-create", name]);
         expect(r.status, name).not.toBe(0);
         if (name === "help") {
@@ -452,8 +465,8 @@ describe("Kiro quoted argv tokenizer", () => {
           command: "aidlc-utility.ts space switch 'My Space'",
         },
         {
-          args: ["intent", "birth", "--scope", "poc", "--label", "My Work"],
-          command: "aidlc-utility.ts intent-birth --scope poc --label 'My Work'",
+          args: ["intent", "create", "--scope", "poc", "--label", "My Work"],
+          command: "aidlc-utility.ts intent-create --scope poc --label 'My Work'",
         },
       ];
       for (const item of cases) {

@@ -18,8 +18,9 @@
 //       (§5.1), yet SHIPPED as part of the shell (the dist .gitignore ignores
 //       it for the END USER; our repo commits it once via git add -f).
 //   (4) the per-harness NATIVE INCLUDE that points the CLI at the method tree
-//       (Claude @-stub, Kiro resources glob, Codex AGENTS.md/AIDLC_RULES_DIR) —
-//       P5 authored these; SEED proves a FRESH COPY resolves through them.
+//       (Claude @-stub, Kiro CLI resources, Kiro IDE steering, Codex
+//       AGENTS.md/AIDLC_RULES_DIR, OpenCode instructions) — P5 authored these;
+//       SEED proves a FRESH COPY resolves through them.
 //
 // Plus the re-rooted .gitignore — now a PER-HARNESS artifact (net-new for
 // Kiro/Codex, which shipped none): the committed-vs-ignored split re-rooted
@@ -132,9 +133,31 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
         expect(agent.resources, harness.name).toContain(
           "file://aidlc/spaces/default/memory/**/*.md",
         );
+      } else if (harness.capabilities.memoryInclude === "kiro-steering") {
+        const steering = readFileSync(
+          join(harness.engineRoot, "steering", "aidlc-active-memory.md"),
+          "utf-8",
+        );
+        expect(steering).toMatch(/^---\ninclusion: always\n---/);
+        expect(steering).toContain(
+          "#[[file:aidlc/spaces/default/memory/org.md]]",
+        );
       } else if (harness.capabilities.memoryInclude === "codex-env") {
         const config = readFileSync(join(harness.engineRoot, "config.toml"), "utf-8");
         expect(config).toContain('AIDLC_RULES_DIR = "aidlc/spaces/default/memory"');
+        expect(existsSync(harness.onboardingDist)).toBe(true);
+      } else if (harness.capabilities.memoryInclude === "copilot-agents-md") {
+        // Copilot: the project-root AGENTS.md's @-import lines are the
+        // native include (both Copilot surfaces expand @-imports).
+        const agentsMd = readFileSync(harness.onboardingDist, "utf-8");
+        expect(agentsMd, harness.name).toContain("@aidlc/spaces/default/memory/org.md");
+      } else if (harness.capabilities.memoryInclude === "cursor-rule") {
+        // Cursor: the alwaysApply rule lists the method files as plain paths
+        // (no @-import expansion on Cursor); the sessionStart hook injects the
+        // live workflow context. AGENTS.md is the auto-read rules file.
+        const rule = readFileSync(join(harness.engineRoot, "rules", "aidlc.mdc"), "utf-8");
+        expect(rule).toContain("alwaysApply: true");
+        expect(rule).toContain("aidlc/spaces/default/memory/org.md");
         expect(existsSync(harness.onboardingDist)).toBe(true);
       } else {
         // opencode: the instructions glob in the project-root opencode.json is
@@ -220,12 +243,18 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
       const lines = gi.split("\n").map((l) => l.trim());
       // The two session cursors (re-rooted under aidlc/).
       expect(lines, `${h}: ignores aidlc/active-space`).toContain("aidlc/active-space");
+      expect(lines, `${h}: ignores active-space create staging`).toContain(
+        "aidlc/.aidlc-active-space-*.tmp",
+      );
       expect(lines, `${h}: ignores active-intent`).toContain(
         "aidlc/spaces/*/intents/active-intent",
       );
       // Machine-local runtime / derived.
       expect(lines, `${h}: ignores per-intent runtime-graph.json`).toContain(
         "aidlc/spaces/*/intents/*/runtime-graph.json",
+      );
+      expect(lines, `${h}: ignores pre-intent .aidlc-*`).toContain(
+        "aidlc/spaces/*/intents/.aidlc-*",
       );
       expect(lines, `${h}: ignores per-intent .aidlc-*`).toContain(
         "aidlc/spaces/*/intents/*/.aidlc-*",

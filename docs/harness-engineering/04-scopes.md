@@ -1,8 +1,8 @@
 # Scopes
 
-A scope is the dial that decides *which* of the framework's 32 stages run for a given kind of work, and which sit out. A bugfix doesn't need market research or a deployment pipeline; a regulated enterprise feature needs all of it. Rather than asking the user to hand-pick stages every time, AI-DLC ships nine named scopes — each one a curated EXECUTE/SKIP verdict over the full stage set, paired with a default depth and test strategy. Pick the scope and the rest cascades.
+A scope is the dial that decides *which* of the framework's 32 stages run for a given kind of work, and which sit out. A bugfix doesn't need market research or a deployment pipeline; a regulated enterprise feature needs all of it. Rather than asking the user to hand-pick stages every time, AI-DLC ships nine named scopes — each one a curated EXECUTE/SKIP verdict over the full stage set, paired with workflow defaults such as depth, test strategy, and an optional review ceiling. Pick the scope and the rest cascades.
 
-For a harness engineer, a scope is pure data, authored the same way every other primitive is — as a file. It is two halves: one `core/scopes/aidlc-<name>.md` file (its identity — name, depth, keywords, description) plus a per-stage membership tag (each stage's frontmatter `scopes:` list naming the scopes it runs under). Adding or tuning a scope requires no TypeScript. This chapter walks the workflow: what a scope is made of, how to add a team scope, how to tune an existing one, and what the tooling checks for you versus what it leaves to you.
+For a harness engineer, a scope is pure data, authored the same way every other primitive is — as a file. It is two halves: one `core/scopes/aidlc-<name>.md` file (its identity, routing metadata, and workflow defaults) plus a per-stage membership tag (each stage's frontmatter `scopes:` list naming the scopes it runs under). Adding or tuning a scope requires no TypeScript. This chapter walks the workflow: what a scope is made of, how to add a team scope, how to tune an existing one, and what the tooling checks for you versus what it leaves to you.
 
 For the full nine-scope catalog with use cases and the routing table users read, see [Scopes, Depth, and Test Strategy](../guide/05-scopes-and-depth.md) in the User Guide. This chapter is the authoring side of that same data.
 
@@ -28,19 +28,36 @@ skeleton: on
 Prose intent: why these stages, why skip those.
 ```
 
-The frontmatter fields divide into one required field and three optional knobs:
+The scope frontmatter fields are:
 
 | Field | Required | What it does |
 |-------|----------|--------------|
 | `name` | Yes | The scope name. Core files use `aidlc-<name>.md`; plugin scope files use a stem equal to `name`. |
 | `depth` | Yes | The default detail level — `Minimal`, `Standard`, or `Comprehensive`. |
 | `testStrategy` | No | Overrides test volume independent of depth. Defaults to matching `depth`. |
+| `review_cap` | No | Maximum review class under this scope: `adversarial`, `advisory`, or `none`. Absence means no scope-level lowering. A cap can lower but never raise a stage's `review_class`; autonomous swarm reviews retain the stage's declared class. |
 | `keywords` | No | Natural-language triggers for `/aidlc <freeform text>` auto-detection. Empty list opts out. |
 | `description` | No | The one-liner rendered in `/aidlc --help`. (The compiled scope-table in SKILL.md shows only Scope / Depth / TestStrategy / EXECUTE / Total, leaving the description out.) |
 | `skeleton` | No | `on` opts the scope into the walking-skeleton ceremony when practices are scope-dependent; `off` or absence opts out. |
+| `runner` | No | `true` includes the scope in the default generated scope-runner set. |
+| `freeform_default` | No | `true` nominates this scope as the selection-aware fallback when the preferred core default (`feature` or `poc`) is not enabled. |
 
 The loader rejects duplicate scope `name` values across files and names both
 files in the error.
+
+### Freeform default
+
+`freeform_default: true` lets an install nominate the scope used when an
+internal default such as `feature` or `poc` is unavailable after plugin
+selection. The nomination is checked before the sole-enabled-plugin fallback,
+so a plugin with several scopes can choose its lean default instead of accepting
+the alphabetically first scope.
+
+At most one **enabled** scope may declare `freeform_default: true`. Graph
+compilation fails and names every claimant when the selected core/plugin set
+contains more than one. Claims on disabled plugins do not conflict until those
+plugins are enabled together. The field does not repair explicit typos:
+an unknown `AWS_AIDLC_DEFAULT_SCOPE` value still fails validation.
 
 ### Walking-skeleton default
 
@@ -73,7 +90,7 @@ The exhaustive field-by-field contract — including how `keywords` are word-bou
 
 A scope and a stage point at each other from opposite ends, and it helps to hold both directions in view.
 
-A **stage** declares its own identity — its phase, its lead agent, the artifacts it consumes and produces, and now the scopes it runs under (its `scopes:` list). A **scope** declares its identity in its own `.md` file — name, depth, keywords, description — with no per-stage membership inside it; membership lives on the stages. The binding between them is the scope name. When you add a new stage (see [Adding a Stage](02-adding-a-stage.md)), you put the scope membership *on that stage* — its `scopes:` list names every scope that should run it. A stage that names no scope is `SKIP` everywhere. The transpose at compile turns those per-stage lists into the grid, so membership is authored once, on the stage, rather than re-declared in nine separate scope blocks.
+A **stage** declares its own identity — its phase, its lead agent, the artifacts it consumes and produces, and now the scopes it runs under (its `scopes:` list). A **scope** declares its identity, routing metadata, and workflow defaults in its own `.md` file, with no per-stage membership inside it; membership lives on the stages. The binding between them is the scope name. When you add a new stage (see [Adding a Stage](02-adding-a-stage.md)), you put the scope membership *on that stage* — its `scopes:` list names every scope that should run it. A stage that names no scope is `SKIP` everywhere. The transpose at compile turns those per-stage lists into the grid, so membership is authored once, on the stage, rather than re-declared in nine separate scope blocks.
 
 That separation is the same data-versus-code line the rest of this guide rests on (see [Harness Engineer Guide](00-overview.md)). The scope file is data about *identity*; the stage's `scopes:` list is data about *membership*; the compiled grid is the transpose of the two.
 
@@ -85,7 +102,7 @@ Suppose your team wants a `hotfix` scope — leaner than `bugfix`, for the urgen
 
 ### Steps
 
-1. **Drop `core/scopes/aidlc-hotfix.md`.** Copy `aidlc-bugfix.md` (the closest existing scope) and edit the frontmatter: set `name: hotfix`, pick `depth`, add `keywords` if you want freeform auto-detection (`[hotfix, urgent]`), a `description` for the help text, `skeleton: on|off` for the scope-dependent Construction ceremony default, and `testStrategy` only if it should diverge from `depth`. Write a short prose body explaining the intent.
+1. **Drop `core/scopes/aidlc-hotfix.md`.** Copy `aidlc-bugfix.md` (the closest existing scope) and edit the frontmatter: set `name: hotfix`, pick `depth`, add `keywords` if you want freeform auto-detection (`[hotfix, urgent]`), a `description` for the help text, `skeleton: on|off` for the scope-dependent Construction ceremony default, `freeform_default: true` only if this is the selected install's unique fallback nomination, `testStrategy` only if it should diverge from `depth`, and `review_cap` only if the scope should lower stage reviews. Write a short prose body explaining the intent.
 
 2. **Tag the stages that should run under `hotfix`.** In each stage you want `EXECUTE` (under `core/aidlc-common/stages/<phase>/`), add `hotfix` to its frontmatter `scopes:` list. A stage you don't tag is `SKIP` for the scope. The 3 initialization stages must include it (they always run).
 
@@ -97,7 +114,7 @@ Suppose your team wants a `hotfix` scope — leaner than `bugfix`, for the urgen
 
 6. **Update the scope-aware docs and add a routing test.** Several docs enumerate scopes by hand — the User Guide's scope reference and routing table, the customization chapter's valid-values list, and the orchestrator reference's scope-to-stage mapping. Update them in the same change. If your scope skips stages in a pattern no existing scope uses, add a workflow test modeled on the existing per-scope tests.
 
-7. **(Optional) Generate a typeable runner.** A scope is fully usable via `/aidlc --scope <name>` the moment its file lands — no runner needed. If you want a one-word command (`/aidlc-hotfix`), add `runner: true` to the scope frontmatter and run `bun .claude/tools/aidlc-runner-gen.ts scopes`; `bun .claude/tools/aidlc-runner-gen.ts scopes --all` emits `skills/aidlc-<scope>/SKILL.md` for every scope file regardless of that flag. Each runner is a ~6-line shell that drives `aidlc-orchestrate next --scope <name>` to `done` with the scope baked in; the runner packages an already-runnable scope, and the scope file is its definition. It carries no `hooks:` block: the deterministic spine (audit, sensors, runtime-compile, state validation) is registered project-wide in `settings.json`, so every runner inherits it for free. Re-run the generator (or `scopes --check`) whenever you add or rename a scope file.
+7. **(Optional) Generate a typeable runner.** A scope is fully usable via `/aidlc --scope <name>` the moment its file lands — no runner needed. If you want a one-word command (`/aidlc-hotfix`), add `runner: true` to the scope frontmatter and run `bun .claude/tools/aidlc-runner-gen.ts scopes`; `bun .claude/tools/aidlc-runner-gen.ts scopes --all` emits `skills/aidlc-<scope>/SKILL.md` for every scope file regardless of that flag. Each runner is a thin shell that drives `aidlc-orchestrate next --scope <name>` to `done` with the scope baked in, plus a "Starting unrelated new work?" section carrying the same recognize, offer (`AskUserQuestion`, never auto-create), and `next --new-intent --scope <name>` guidance the `/aidlc` orchestrator has. The runner packages an already-runnable scope, and the scope file is its definition. It carries no `hooks:` block: the deterministic spine (audit, sensors, rebuild-stage-graph, state validation) is registered project-wide in `settings.json`, so every runner inherits it for free. Re-run the generator (or `scopes --check`) whenever you add or rename a scope file.
 
 ### What validates automatically
 
@@ -122,7 +139,7 @@ This implementation derives the valid-scope list from `.claude/scopes/*.md` pres
 Tuning is a smaller edit, but it lands on the stage, not the scope. Two changes come up often:
 
 - **Flip a stage in or out.** Add or remove the scope name from a stage's `scopes:` list. This is how you'd, say, add `mvp` to `observability-setup`'s `scopes:` because your team always wires monitoring even for a first cut. One tag, then recompile (`compile` + scope-table) and run `--doctor`.
-- **Change a default depth or test strategy.** Adjust `depth`, or add/remove `testStrategy`, in the scope's `core/scopes/aidlc-<name>.md` frontmatter to recalibrate what a scope produces. Because each scope carries its own defaults, this change cascades to every workflow that selects the scope — no per-run flags needed. A user can still override on any given run with `--depth` or `--test-strategy`, but the scope's value is the team-wide baseline.
+- **Change a default depth, test strategy, or review ceiling.** Adjust `depth`, add/remove `testStrategy`, or add/remove `review_cap` in the scope's `core/scopes/aidlc-<name>.md` frontmatter. The first two recalibrate artifact and test volume; `review_cap` lowers stage review classes to `adversarial`, `advisory`, or `none` without ever raising them. Because each scope carries its own defaults, the change applies to every workflow that selects the scope. Per-run `--depth`, `--test-strategy`, and `--review` can lower the corresponding behavior further.
 
 Either way, the recompile-and-doctor pair from step 3 above applies. The edit is small; the verification is the same.
 

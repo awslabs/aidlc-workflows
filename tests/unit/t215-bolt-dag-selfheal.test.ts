@@ -18,6 +18,8 @@ import {
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
   resetAidlcEnv,
+  runOrchestrateNext,
+  seedAidlcMemory,
   seedBoltDag,
   seededRecordDir,
   seededStateFile,
@@ -27,10 +29,12 @@ resetAidlcEnv();
 
 const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
+const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
+const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const RP = `aidlc/spaces/${DEFAULT_SPACE}/intents/${DEFAULT_RECORD_DIR}`;
 const SEP = "\u2014";
 const HEAL_NOTE =
-  "aidlc-orchestrate: runtime-graph.json bolt_dag is missing or stale; recomputed 2 unit batch(es) from unit-of-work-dependency.md (check the runtime-compile hook)";
+  "aidlc-orchestrate: runtime-graph.json bolt_dag is missing or stale; recomputed 2 unit batch(es) from unit-of-work-dependency.md (check the rebuild-stage-graph hook)";
 const FD_PRODUCES = [
   "business-logic-model",
   "business-rules",
@@ -51,6 +55,10 @@ interface Directive {
   gate?: unknown;
   inputs?: string[];
   produces?: string[];
+  wave?: {
+    batch_index: number;
+    entries: Array<{ unit: string; unit_kind: string | null }>;
+  };
   message?: string;
   [k: string]: unknown;
 }
@@ -142,6 +150,7 @@ ${row(" ", "build-and-test")}
 function seedProject(current: string): string {
   const proj = createTestProject();
   tempDirs.push(proj);
+  seedAidlcMemory(proj);
   writeFileSync(seededStateFile(proj), constructionState(current));
   return proj;
 }
@@ -149,6 +158,7 @@ function seedProject(current: string): string {
 function seedInceptionProject(current: string): string {
   const proj = createTestProject();
   tempDirs.push(proj);
+  seedAidlcMemory(proj);
   writeFileSync(seededStateFile(proj), inceptionState(current));
   return proj;
 }
@@ -240,12 +250,71 @@ function setAutonomous(proj: string): void {
   writeFileSync(statePath, state);
 }
 
+function logReview(
+  proj: string,
+  unit: string,
+  verdict: "READY" | "NOT-READY" = "READY",
+  iteration = 1,
+): void {
+  const args = [
+    LOG,
+    "review",
+    "--stage",
+    "functional-design",
+    "--reviewer",
+    "aidlc-architecture-reviewer-agent",
+    "--unit",
+    unit,
+    "--iteration",
+    String(iteration),
+  ];
+  for (const suffix of [[], ["--verdict", verdict]]) {
+    const result = spawnSync(
+      BUN,
+      [...args, ...suffix, "--project-dir", proj],
+      { encoding: "utf-8" },
+    );
+    if ((result.status ?? -1) !== 0) {
+      throw new Error(`review log failed: ${result.stdout}${result.stderr}`);
+    }
+  }
+}
+
+function completeWave(proj: string, unit: string): void {
+  const result = spawnSync(
+    BUN,
+    [
+      STATE,
+      "unit",
+      "complete",
+      "--wave",
+      "--stage",
+      "functional-design",
+      "--unit",
+      unit,
+      "--project-dir",
+      proj,
+    ],
+    {
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+      },
+    },
+  );
+  if ((result.status ?? -1) !== 0) {
+    throw new Error(`wave completion failed: ${result.stdout}${result.stderr}`);
+  }
+}
+
 function runOrch(proj: string, args: string[]): RunResult {
   const r = spawnSync(BUN, [ORCH, ...args, "--project-dir", proj], {
     encoding: "utf-8",
     env: (() => {
       const e = { ...process.env };
       delete e.AWS_AIDLC_DEFAULT_SCOPE;
+      e.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD = "1";
       return e;
     })(),
   });
@@ -266,7 +335,21 @@ function runOrch(proj: string, args: string[]): RunResult {
 }
 
 function runNext(proj: string): RunResult {
-  return runOrch(proj, ["next"]);
+  const env = { ...process.env };
+  delete env.AWS_AIDLC_DEFAULT_SCOPE;
+  env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD = "1";
+  const r = runOrchestrateNext(ORCH, proj, [], { env });
+  if (r.directive === null) {
+    throw new Error(
+      `aidlc-orchestrate did not emit parseable JSON. status=${r.status}\nstdout:\n${r.stdout}\nstderr:\n${r.stderr}`,
+    );
+  }
+  return {
+    directive: r.directive as Directive,
+    stdout: r.stdout,
+    stderr: r.stderr,
+    status: r.status,
+  };
 }
 
 function runReport(proj: string): RunResult {
@@ -361,9 +444,21 @@ describe("t215 bolt dag self-heal", () => {
     seedBoltDag(proj, ["alpha"]);
     seedAlphaBetaDependency(proj);
     coverUnit(proj, "alpha", "functional-design", FD_PRODUCES);
+    logReview(proj, "alpha");
+    const alphaCompletion = runNext(proj);
+    expect(alphaCompletion.directive.wave?.entries[0]).toMatchObject({
+      unit: "alpha",
+      completion_required: true,
+      review_state: "READY",
+    });
+    completeWave(proj, "alpha");
     const r = runNext(proj);
     expect(r.directive.kind).toBe("run-stage");
     expect(r.directive.unit).toBe("beta");
+    expect(r.directive.wave?.batch_index).toBe(1);
+    expect(r.directive.wave?.entries.map((entry) => entry.unit)).toEqual([
+      "beta",
+    ]);
     expect(r.stderr).toContain(HEAL_NOTE);
     logCapturedStderr(r.stderr);
   }, 30000);
@@ -408,6 +503,8 @@ describe("t215 bolt dag self-heal", () => {
     const proj = seedProject("functional-design");
     seedAlphaBetaDependency(proj);
     coverUnit(proj, "alpha", "functional-design", FD_PRODUCES);
+    logReview(proj, "alpha");
+    completeWave(proj, "alpha");
 
     const betaRun = runNext(proj);
     expect(betaRun.directive.kind).toBe("run-stage");
@@ -417,6 +514,13 @@ describe("t215 bolt dag self-heal", () => {
     logCapturedStderr(betaRun.stderr);
 
     coverUnit(proj, "beta", "functional-design", FD_PRODUCES);
+    const reviewRun = runNext(proj);
+    expect(reviewRun.directive.kind).toBe("run-stage");
+    expect(reviewRun.directive.unit).toBe("beta");
+    expect(reviewRun.directive.gate).toBe(false);
+
+    logReview(proj, "beta");
+    completeWave(proj, "beta");
     const settle = runNext(proj);
     expect(settle.directive.kind).toBe("run-stage");
     expect(settle.directive.unit).toBe("beta");

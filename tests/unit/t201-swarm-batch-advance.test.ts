@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, function:swarmConvergedUnits, function:latestMainWorkflowStageStarted
+// covers: subcommand:aidlc-orchestrate:next, function:swarmConvergedUnits, function:latestMainWorkflowStageStarted, function:latestMainWorkflowStageRunFloor, function:latestMainWorkflowStageRunFloorForProject
 //
 // CLI-contract test for the autonomous Construction swarm batch advance.
 // mechanism = cli.
@@ -45,14 +45,17 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
   resetAidlcEnv,
+  runOrchestrateNext,
+  seedAidlcMemory,
   seedBoltDagBatches,
+  seededAuditDir,
   seededAuditShard,
   seededStateFile,
 } from "../harness/fixtures.ts";
@@ -75,6 +78,7 @@ interface Directive {
   units?: unknown;
   gate?: unknown;
   reviewer?: string;
+  review_class?: string;
   reviewer_max_iterations?: number;
   message?: string;
   [k: string]: unknown;
@@ -157,15 +161,19 @@ function fixtureTs(atSecond: number): string {
  * the attempt-identity stamp (`Stage` + `Run floor`) the consumers require to
  * match before counting a row. `atSecond` offsets the (monotonically-
  * increasing) timestamps so a caller can place rows before or after a seeded
- * STAGE_STARTED floor; `runFloorSecond` is the floor the emitting finalize saw
- * (undefined = "" — no STAGE_STARTED at emission, matching a consumer-side
- * empty floor).
+ * STAGE_STARTED floor; `runFloorSecond` is the boundary the emitting finalize
+ * saw (undefined = the exact no-boundary sentinel).
  */
 function seedConverged(
   proj: string,
   units: string[],
   atSecond = 0,
-  opts: { stage?: string; runFloorSecond?: number; omitStamp?: boolean } = {},
+  opts: {
+    stage?: string;
+    runFloorSecond?: number;
+    runFloorOrdinal?: number;
+    omitStamp?: boolean;
+  } = {},
 ): void {
   let body = "";
   units.forEach((unit, i) => {
@@ -178,7 +186,9 @@ function seedConverged(
         ["Stage", opts.stage ?? "code-generation"],
         [
           "Run floor",
-          opts.runFloorSecond === undefined ? "" : fixtureTs(opts.runFloorSecond),
+          opts.runFloorSecond === undefined
+            ? "unstarted#0"
+            : `STAGE_STARTED:${fixtureTs(opts.runFloorSecond)}#${opts.runFloorOrdinal ?? 1}`,
         ],
       );
     }
@@ -218,27 +228,25 @@ function seedStageStarted(
 function seedProject(): string {
   const proj = createTestProject();
   tempDirs.push(proj);
+  seedAidlcMemory(proj);
   writeFileSync(seededStateFile(proj), constructionState());
   return proj;
 }
 
 /** Run `aidlc-orchestrate.ts next` and parse the emitted directive. */
-function runNext(proj: string): Directive {
-  const r = spawnSync(BUN, [ORCH, "next", "--project-dir", proj], {
-    encoding: "utf-8",
-    env: (() => {
-      const e = { ...process.env };
-      delete e.AWS_AIDLC_DEFAULT_SCOPE;
-      return e;
-    })(),
-  });
-  try {
-    return JSON.parse((r.stdout ?? "").trim()) as Directive;
-  } catch {
+function runNext(
+  proj: string,
+  extraEnv: Record<string, string> = {},
+): Directive {
+  const env = { ...process.env, ...extraEnv };
+  delete env.AWS_AIDLC_DEFAULT_SCOPE;
+  const r = runOrchestrateNext(ORCH, proj, [], { env });
+  if (r.directive === null) {
     throw new Error(
       `runNext did not emit parseable JSON. status=${r.status}\n${r.stdout}\n${r.stderr}`,
     );
   }
+  return r.directive as Directive;
 }
 
 function runReport(proj: string): Directive {
@@ -262,7 +270,7 @@ function runReport(proj: string): Directive {
 }
 
 function logReviewReady(proj: string, unit: string): void {
-  const r = spawnSync(BUN, [
+  const args = [
     LOG,
     "review",
     "--stage",
@@ -273,13 +281,14 @@ function logReviewReady(proj: string, unit: string): void {
     unit,
     "--iteration",
     "1",
-    "--verdict",
-    "READY",
     "--project-dir",
     proj,
-  ], { encoding: "utf-8" });
-  if ((r.status ?? -1) !== 0) {
-    throw new Error(`review log failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
+  ];
+  for (const suffix of [[], ["--verdict", "READY"]]) {
+    const r = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
+    if ((r.status ?? -1) !== 0) {
+      throw new Error(`review log failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
+    }
   }
 }
 
@@ -294,6 +303,24 @@ describe("t201 autonomous swarm advances through every Bolt batch (issue headlin
     expect(d.stage).toBe("code-generation");
     expect(d.reviewer).toBe("aidlc-architecture-reviewer-agent");
     expect(d.reviewer_max_iterations).toBe(2);
+  }, 30000);
+
+  test("1b: an advisory swarm directive exposes the single-pass cap", () => {
+    const proj = seedProject();
+    seedBoltDagBatches(proj, [["auth"]]);
+    const source = join(AIDLC_SRC, "tools", "data", "stage-graph.json");
+    const graph = JSON.parse(readFileSync(source, "utf-8")) as Array<Record<string, unknown>>;
+    const codeGeneration = graph.find((stage) => stage.slug === "code-generation");
+    if (!codeGeneration) throw new Error("code-generation missing from test stage graph");
+    codeGeneration.review_class = "advisory";
+    codeGeneration.reviewer_max_iterations = 2;
+    const graphPath = join(proj, "advisory-stage-graph.json");
+    writeFileSync(graphPath, `${JSON.stringify(graph, null, 2)}\n`);
+
+    const d = runNext(proj, { AIDLC_STAGE_GRAPH: graphPath });
+    expect(d.kind).toBe("invoke-swarm");
+    expect(d.review_class).toBe("advisory");
+    expect(d.reviewer_max_iterations).toBe(1);
   }, 30000);
 
   // 2: batch 1 complete, batch 2 incomplete -> invoke-swarm emits batch 2 ONLY.
@@ -356,8 +383,8 @@ describe("t201 converged-set freshness floor (stage re-run replay guard)", () =>
   // The audit is append-only and per-intent, and the stage can re-run within
   // the same intent (backward/redo jump resets checkboxes but never deletes
   // ledger rows, and the autonomy grant survives the jump). The converged set
-  // is therefore FLOORED at the stage's latest main-workflow STAGE_STARTED:
-  // rows older than the floor belong to a prior run and are not coverage.
+  // is therefore bound to the stage's exact main-workflow attempt token:
+  // rows carrying an older token belong to a prior run and are not coverage.
 
   // 5: the replay scenario itself. Every unit converged in a prior run, then
   // the stage re-entered (a fresh STAGE_STARTED lands after those rows). The
@@ -412,9 +439,9 @@ describe("t201 converged-set freshness floor (stage re-run replay guard)", () =>
     expect(d.gate).toBe(true);
   }, 30000);
 
-  // 9: no qualifying STAGE_STARTED at all -> the floor degrades to "count all
-  // rows" (never to "exclude all"), preserving cases 1-4's fixture shape.
-  test("9: with no STAGE_STARTED row the converged set counts every row", () => {
+  // 9: no qualifying STAGE_STARTED at all -> the exact sentinel binds rows to
+  // that fixture/recovery attempt.
+  test("9: with no STAGE_STARTED row the converged set accepts the exact sentinel", () => {
     const proj = seedProject();
     seedBoltDagBatches(proj, [["auth"], ["api"]]);
     seedConverged(proj, ["auth", "api"]);
@@ -429,7 +456,7 @@ describe("t201 converged-row attempt identity (Stage + Run floor stamp)", () => 
   // CURRENT timestamp (a late `finalize` retry against a prior attempt's
   // preserved worktree) or another swarm stage's rows when the floor degrades
   // to "". Each row therefore carries the emitting attempt's identity - Stage
-  // + Run floor - and the consumers count a row only when BOTH match.
+  // + Run floor - and the consumers count a row only when BOTH match exactly.
 
   // 10: the late-retry replay. The stage re-entered (fresh floor at second
   // 10); a finalize retry against the attempt-1 worktree then lands rows with
@@ -445,8 +472,70 @@ describe("t201 converged-row attempt identity (Stage + Run floor stamp)", () => 
     expect(d.units).toEqual(["auth"]);
   }, 30000);
 
-  // 11: rows naming ANOTHER stage never count, even when this stage has no
-  // STAGE_STARTED yet (the ""-floor degrade that used to fail open).
+  test("10b: a same-second row carrying the prior attempt ordinal is rejected", () => {
+    const proj = seedProject();
+    seedBoltDagBatches(proj, [["auth"], ["api"]]);
+    seedStageStarted(proj, "code-generation", 0);
+    seedStageStarted(proj, "code-generation", 0);
+    seedConverged(proj, ["auth", "api"], 0, {
+      runFloorSecond: 0,
+      runFloorOrdinal: 1,
+    });
+    const d = runNext(proj);
+    expect(d.kind).toBe("invoke-swarm");
+    expect(d.units).toEqual(["auth"]);
+  }, 30000);
+
+  test("10c: cross-shard same-second boundaries do not revive stale convergence", () => {
+    const proj = seedProject();
+    seedBoltDagBatches(proj, [["auth"], ["api"]]);
+    const ts = fixtureTs(0);
+    mkdirSync(seededAuditDir(proj), { recursive: true });
+    writeFileSync(
+      join(seededAuditDir(proj), "zzzz-old.md"),
+      [
+        "# AI-DLC Audit Log\n",
+        auditBlock(
+          "Stage Start",
+          ts,
+          "STAGE_STARTED",
+          [["Stage", "code-generation"]],
+        ),
+        ...["auth", "api"].map((unit) =>
+          auditBlock(
+            "Swarm Unit Converged",
+            ts,
+            "SWARM_UNIT_CONVERGED",
+            [
+              ["Batch number", "1"],
+              ["Unit name", unit],
+              ["Stage", "code-generation"],
+              ["Run floor", `STAGE_STARTED:${ts}#1`],
+            ],
+          ),
+        ),
+      ].join(""),
+    );
+    writeFileSync(
+      join(seededAuditDir(proj), "aaaa-new.md"),
+      [
+        "# AI-DLC Audit Log\n",
+        auditBlock(
+          "Gate Rejected",
+          ts,
+          "GATE_REJECTED",
+          [["Stage", "code-generation"]],
+        ),
+      ].join(""),
+    );
+
+    const d = runNext(proj);
+    expect(d.kind).toBe("invoke-swarm");
+    expect(d.units).toEqual(["auth"]);
+  }, 30000);
+
+  // 11: rows naming ANOTHER stage never count, even when this stage uses the
+  // no-boundary sentinel.
   test("11: another stage's converged rows are rejected by the Stage stamp", () => {
     const proj = seedProject();
     seedBoltDagBatches(proj, [["auth"], ["api"]]);

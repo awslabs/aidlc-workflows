@@ -1,4 +1,4 @@
-// covers: hook:aidlc-audit-logger, function:appendAuditEntry, function:acquireAuditLock, function:releaseAuditLock
+// covers: hook:aidlc-write-audit-log, function:appendAuditEntry, function:acquireAuditLock, function:releaseAuditLock
 //
 // t33 — audit-logger lock contention under parallel writes. Migrated from
 // tests/integration/t33-hook-concurrency.sh (TAP plan 8). Mechanism: cli.
@@ -15,7 +15,7 @@
 // PostToolUse(Write|Edit) drives it from settings.json.
 //
 // SOURCE UNDER TEST:
-//   dist/claude/.claude/hooks/aidlc-audit-logger.ts — PostToolUse(Write|Edit).
+//   dist/claude/.claude/hooks/aidlc-write-audit-log.ts — PostToolUse(Write|Edit).
 //     - resolves projectDir from CLAUDE_PROJECT_DIR (resolveProjectDirFromHook,
 //       aidlc-lib.ts:116).
 //     - reads PostToolUse JSON on stdin; only logs writes whose file_path
@@ -40,7 +40,7 @@
 //     (INITIAL_ENTRIES = 1, verified against the fixture). The hook self-gates
 //     on audit.md existing, so seeding it is the precondition for the emit.
 //   - The hook is spawned at the SHIPPED source path (AIDLC_SRC/hooks/...),
-//     exactly like the .sh's `$AIDLC_SRC/hooks/aidlc-audit-logger.ts`; no
+//     exactly like the .sh's `$AIDLC_SRC/hooks/aidlc-write-audit-log.ts`; no
 //     copied skeleton is needed because audit-logger imports appendAuditEntry
 //     directly (no re-spawn of a project-local tool).
 //   - cleanupTestProject() rm -rf's the temp project; the lock dir lives under
@@ -81,7 +81,7 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath; // the bun running this test
-const HOOK = join(AIDLC_SRC, "hooks", "aidlc-audit-logger.ts");
+const HOOK = join(AIDLC_SRC, "hooks", "aidlc-write-audit-log.ts");
 
 // P9 per-intent layout: the audit trail is a DIR of per-clone shards. We PIN one
 // clone-id on disk so all five parallel processes resolve the SAME shard — that

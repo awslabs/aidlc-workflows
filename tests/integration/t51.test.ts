@@ -102,7 +102,7 @@ function readAudit(p: string): string {
 
 /** init --scope bugfix (mirrors the .sh bootstrap, L78-79). */
 function runInit(proj: string): void {
-  const res = spawnSync(BUN, [UTIL, "intent-birth", "--scope", "bugfix", "--project-dir", proj], {
+  const res = spawnSync(BUN, [UTIL, "intent-create", "--scope", "bugfix", "--project-dir", proj], {
     encoding: "utf-8",
     env: { ...process.env, AIDLC_WORKFLOW_INTENT: "bugfix parity test" },
   });
@@ -134,6 +134,7 @@ function walkStage(proj: string, slug: string): void {
     "code-generation": "aidlc-architecture-reviewer-agent",
   };
   if (reviewerFor[slug]) {
+    spawnSync(BUN, [LOG, "review", "--stage", slug, "--reviewer", reviewerFor[slug], "--iteration", "1", "--project-dir", proj], { encoding: "utf-8" });
     spawnSync(BUN, [LOG, "review", "--stage", slug, "--reviewer", reviewerFor[slug], "--iteration", "1", "--verdict", "READY", "--project-dir", proj], { encoding: "utf-8" });
   }
   const ap = spawnSync(BUN, [STATE, "approve", slug, "--user-input", "approve", "--project-dir", proj], {

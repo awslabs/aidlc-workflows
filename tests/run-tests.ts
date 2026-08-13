@@ -27,6 +27,18 @@ const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, "..");
 const BUN = process.execPath;
 
+// Platform null device, used for the system config after the protected
+// safe.directory entries have been copied into the suite's isolated config.
+const NULL_DEVICE = process.platform === "win32" ? "NUL" : "/dev/null";
+const LIVE_MODEL_GATES = [
+  "AIDLC_TUI_LIVE",
+  "AIDLC_KIRO_ACP_LIVE",
+  "AIDLC_KIRO_TUI_LIVE",
+  "AIDLC_CODEX_EXEC_LIVE",
+  "AIDLC_KIRO_IDE_LIVE",
+  "AIDLC_OPENCODE_RUN_LIVE",
+] as const;
+
 type Level = "smoke" | "unit" | "integration" | "e2e";
 type Status = "PASS" | "FAIL" | "SKIP";
 
@@ -40,6 +52,9 @@ interface ParsedArgs {
   filter: string;
   parallel: number;
   fullProfile: boolean;
+  // Force every live-model gate closed so deterministic tests in integration
+  // and e2e still run. Also via AIDLC_NO_LLM=1.
+  noLlm: boolean;
 }
 
 interface ResultRow {
@@ -68,6 +83,8 @@ PROFILE FLAGS (shortcuts -- map to test pyramid layers):
 
 OUTPUT MODIFIERS (combinable with any tier/profile):
   --verbose       Write per-test logs to tests/logs/
+  --no-llm        Force all live-model gates closed while deterministic
+                  integration/e2e tests still run. Also via AIDLC_NO_LLM=1.
   --debug         Implies --verbose; streams per-test output and writes SDK/TUI
                   driver traces to tests/logs/
   --filter PAT    Only run tests whose filename matches extended regex PAT
@@ -106,6 +123,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     filter: "",
     parallel: 1,
     fullProfile: false,
+    noLlm: process.env.AIDLC_NO_LLM === "1",
   };
   let levelSelected = false;
 
@@ -145,6 +163,9 @@ function parseArgs(argv: string[]): ParsedArgs {
         break;
       case "--verbose":
         out.verbose = true;
+        break;
+      case "--no-llm":
+        out.noLlm = true;
         break;
       case "--debug":
         out.debug = true;
@@ -239,8 +260,16 @@ if (existsSync(projectSettings)) {
 let logDir = "";
 let cleanupLogDir = false;
 if (args.verbose) {
-  logDir = join(SCRIPT_DIR, "logs", utcStamp());
-  mkdirSync(logDir, { recursive: true });
+  // The stamp has 1-second resolution, so two concurrent runners (e.g. a
+  // sliced gate next to a smoke run whose t05 spawns child runners) can land
+  // on the same second. Sharing a dir is not benign: both write and MUTUALLY
+  // DELETE _results/*.meta, and one runner's cleanup can rip the dir out from
+  // under the other mid-run. The pid suffix makes the dir per-process; the
+  // non-recursive mkdir below turns any residual collision into a loud error
+  // instead of a silent share.
+  logDir = join(SCRIPT_DIR, "logs", `${utcStamp()}-p${process.pid}`);
+  mkdirSync(join(SCRIPT_DIR, "logs"), { recursive: true });
+  mkdirSync(logDir);
   process.env.AIDLC_TEST_VERBOSE = "true";
   process.env.AIDLC_TEST_LOG_DIR = logDir;
   process.stdout.write(`Verbose mode: logging to ${logDir}\n`);
@@ -251,6 +280,10 @@ if (args.verbose) {
 
 const resultsDir = join(logDir, "_results");
 mkdirSync(resultsDir, { recursive: true });
+
+if (args.noLlm) {
+  for (const gate of LIVE_MODEL_GATES) process.env[gate] = "0";
+}
 
 if (args.debug) {
   process.env.AIDLC_TEST_DEBUG = "true";
@@ -271,7 +304,15 @@ if (args.fullProfile && args.debug) {
 }
 
 let claudeGateOpen = true;
-if (needsLlm && !commandExists("claude")) {
+if (needsLlm && args.noLlm) {
+  // --no-llm (or AIDLC_NO_LLM=1) closes the derived Claude gate and every
+  // independent live-model opt-in, even when CLIs and inherited live variables
+  // are present. Deterministic tests in those tiers still run.
+  process.stdout.write(
+    "--no-llm: forcing all live-model gates closed; deterministic tests still run\n",
+  );
+  claudeGateOpen = false;
+} else if (needsLlm && !commandExists("claude")) {
   process.stdout.write("WARNING: claude CLI not found -- live integration/e2e tests may fail or skip\n");
   claudeGateOpen = false;
 }
@@ -409,6 +450,87 @@ function displayLogDirPath(path: string): string {
   return rel.startsWith("..") ? path : rel.replace(/\\/g, "/");
 }
 
+function protectedGitConfigValues(scope: "--system" | "--global", key: string): string[] {
+  const result = spawnSync("git", ["config", "--null", scope, "--get-all", key], {
+    // Preserve gitdir-conditional protected includes for this checkout.
+    cwd: REPO_ROOT,
+    env: process.env,
+    encoding: "utf8",
+  });
+  if (result.status === 1) return [];
+  if (result.status !== 0) {
+    process.stderr.write(
+      `WARNING: could not read git ${scope.slice(2)} ${key}: ${result.stderr ?? ""}`,
+    );
+    return [];
+  }
+  const values = (result.stdout ?? "").split("\0");
+  if (values.at(-1) === "") values.pop();
+  return values;
+}
+
+function commandGitConfigValues(key: string): string[] {
+  const result = spawnSync("git", ["config", "--null", "--show-scope", "--get-all", key], {
+    cwd: tmpdir(),
+    env: {
+      ...process.env,
+      GIT_CONFIG_GLOBAL: NULL_DEVICE,
+      GIT_CONFIG_SYSTEM: NULL_DEVICE,
+    },
+    encoding: "utf8",
+  });
+  if (result.status === 1) return [];
+  if (result.status !== 0) {
+    process.stderr.write(
+      `WARNING: could not read git command ${key}: ${result.stderr ?? ""}`,
+    );
+    return [];
+  }
+
+  const fields = (result.stdout ?? "").split("\0");
+  if (fields.at(-1) === "") fields.pop();
+  const values: string[] = [];
+  for (let i = 0; i + 1 < fields.length; i += 2) {
+    if (fields[i] === "command") values.push(fields[i + 1]);
+  }
+  return values;
+}
+
+function createIsolatedGitConfig(): string {
+  if (!commandExists("git")) return NULL_DEVICE;
+
+  const configPath = join(logDir, `.gitconfig-aidlc-tests-${process.pid}`);
+  writeFileSync(configPath, "", { encoding: "utf8", mode: 0o600 });
+  const entries: Array<[string, string]> = [
+    ["commit.gpgsign", "false"],
+    ["tag.gpgsign", "false"],
+  ];
+  for (const safeDirectory of [
+    ...protectedGitConfigValues("--system", "safe.directory"),
+    ...protectedGitConfigValues("--global", "safe.directory"),
+    ...commandGitConfigValues("safe.directory"),
+  ]) {
+    entries.push(["safe.directory", safeDirectory]);
+  }
+
+  for (const [key, value] of entries) {
+    const result = spawnSync("git", ["config", "--file", configPath, "--add", key, value], {
+      cwd: tmpdir(),
+      env: process.env,
+      encoding: "utf8",
+    });
+    if (result.status !== 0) {
+      process.stderr.write(
+        `ERROR: could not create isolated git config (${key}): ${result.stderr ?? ""}`,
+      );
+      process.exit(2);
+    }
+  }
+  return configPath;
+}
+
+const isolatedGitConfig = createIsolatedGitConfig();
+
 async function runSpawnCapture(
   cmd: string,
   cmdArgs: string[],
@@ -495,18 +617,50 @@ async function runBunTestFile(file: string, parallelMode = false): Promise<void>
   // (t188-human-presence-gate) clears this var in its own tool spawns to
   // exercise real enforcement.
   //
+  // Disable the consolidated-summary receipt guard for synthetic transition
+  // fixtures. Focused summary-confirmation tests clear this variable and create
+  // the real prompt, human-turn, answer, digest, and artifact-write evidence.
+  //
   // Disable the approve-time gate-revision backstop for the suite by default,
   // for the same reason: many approve tests drive a revision-shaped ledger
   // against bare fixtures and must not have their Revision Count / audit trail
   // reconciled out from under them. The dedicated test (t205-gate-revision-
   // backstop) clears this var in its own tool spawns to exercise the backfill.
+  //
+  // Allow direct CLI appends of authority-bearing audit events (HUMAN_TURN,
+  // GATE_*, REVIEW_*, ...) for the suite by default: fixtures simulate the
+  // owning emitters (the mint hook, aidlc-log review) through the public CLI
+  // (t188/t205 recordHumanTurn, t115 appendAudit). The dedicated ownership
+  // test clears this var in its own tool spawns to exercise the refusal.
+  //
+  // Isolate git for the whole suite. The generated global config carries forward
+  // protected safe.directory entries needed by mounted/foreign-owned CI
+  // workspaces, but excludes developer settings and explicitly disables commit
+  // and tag signing. Fixtures pass their own identity per commit.
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     AIDLC_TEST_NAME: base,
     AIDLC_SKIP_ARTIFACT_GUARD: "1",
     AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
+    AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
     AIDLC_SKIP_REVISION_BACKSTOP: "1",
+    AIDLC_ALLOW_DIRECT_AUDIT_EVENTS: "1",
   };
+  // Command-scope config outranks the isolated global file. Preserve its safety
+  // entries above, then remove all command-scope injection before spawning tests.
+  for (const key of Object.keys(env)) {
+    const upper = key.toUpperCase();
+    if (
+      upper === "GIT_CONFIG" ||
+      upper === "GIT_CONFIG_COUNT" ||
+      upper === "GIT_CONFIG_PARAMETERS" ||
+      /^GIT_CONFIG_(KEY|VALUE)_[0-9]+$/.test(upper)
+    ) {
+      delete env[key];
+    }
+  }
+  env.GIT_CONFIG_GLOBAL = isolatedGitConfig;
+  env.GIT_CONFIG_SYSTEM = NULL_DEVICE;
   process.stdout.write(`\n=== START ${base} ===\n`);
 
   const junitXml = tmpFile("aidlc-run-tests-junit");
@@ -855,10 +1009,12 @@ async function main(): Promise<number> {
 
 try {
   const rc = await main();
+  if (isolatedGitConfig !== NULL_DEVICE) rmSync(isolatedGitConfig, { force: true });
   if (cleanupLogDir) rmSync(logDir, { recursive: true, force: true });
   process.exit(rc);
 } catch (err) {
   appendFileSync(2, `${err instanceof Error ? err.stack ?? err.message : String(err)}\n`);
+  if (isolatedGitConfig !== NULL_DEVICE) rmSync(isolatedGitConfig, { force: true });
   if (cleanupLogDir) rmSync(logDir, { recursive: true, force: true });
   process.exit(1);
 }

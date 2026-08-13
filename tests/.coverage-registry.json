@@ -20,23 +20,23 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 477,
+    "total": 547,
     "enumeratedByClass": {
-      "function": 246,
-      "audit": 74,
+      "function": 301,
+      "audit": 82,
       "scope": 9,
       "stage": 32,
-      "hook": 13,
-      "subcommand": 96,
+      "hook": 17,
+      "subcommand": 99,
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 101,
-      "audit": 33,
+      "function": 143,
+      "audit": 40,
       "scope": 9,
       "stage": 9,
-      "hook": 13,
-      "subcommand": 83,
+      "hook": 17,
+      "subcommand": 87,
       "render-surface": 7
     }
   },
@@ -271,6 +271,18 @@
     },
     {
       "unitClass": "audit",
+      "unitId": "PLAN_APPROVAL_BLOCKED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t265-plan-approval-guard.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
       "unitId": "PLUGIN_SELECTION_CHANGED",
       "minMechanism": "none",
       "coveredBy": [
@@ -342,6 +354,13 @@
     },
     {
       "unitClass": "audit",
+      "unitId": "REVIEW_CLASS_CHANGED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
       "unitId": "REVIEW_COMPLETED",
       "minMechanism": "none",
       "coveredBy": [
@@ -351,6 +370,18 @@
         },
         {
           "file": "tests/unit/t115.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "REVIEW_FREEZE_BLOCKED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t264-review-freeze-hook.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -570,6 +601,18 @@
     },
     {
       "unitClass": "audit",
+      "unitId": "SUMMARY_CONFIRMATION_RECORDED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t188-human-presence-gate.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
       "unitId": "SWARM_BATON_RETURNED",
       "minMechanism": "none",
       "coveredBy": [
@@ -664,6 +707,54 @@
         {
           "file": "tests/integration/t28-integration-test-strategy.test.ts",
           "mechanism": "sdk"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "UNIT_COMPLETED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "UNIT_PAUSED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "UNIT_RESUMED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "UNIT_STARTED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -883,6 +974,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:activeUnitCheckpoint",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:agentsDir",
       "minMechanism": "none",
       "coveredBy": [],
@@ -992,6 +1095,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:auditLockOwnedByProcess",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:auditShardDir",
       "minMechanism": "none",
       "coveredBy": [
@@ -1039,18 +1149,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:birthIntent",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/integration/t165-intent-birth-p4.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:BOLT_SLUG_MAX_LENGTH",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1062,6 +1160,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:boltSlugForUnit",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/e2e/t134-swarm-referee.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -1110,6 +1220,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:checkSummaryConfirmationEvidence",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t188-human-presence-gate.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:classifyRuntimeCompileCommand",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1131,6 +1253,37 @@
         {
           "file": "tests/unit/t229-workspace-parser.test.ts",
           "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:clearActiveDirectiveMarker",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t127-single-stage-invariant.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:clearSessionIntentHandoff",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:clearSessionIntentUuid",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t167-session-intent-helpers.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -1168,6 +1321,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t182-codekb-placement.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:codekbScopeFingerprint",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t248-codekb-scope-diff.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -1225,6 +1390,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:computeArs",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t258-ars-subcommand.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:consumersOf",
       "minMechanism": "none",
       "coveredBy": [
@@ -1244,7 +1421,30 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:createIntent",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t165-intent-create-p4.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t167-session-intent-helpers.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:CURRENT_SESSION_FILE",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:currentUnitLifecycleMode",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -1283,7 +1483,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/integration/t165-intent-birth-p4.test.ts",
+          "file": "tests/integration/t165-intent-create-p4.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -1350,6 +1550,30 @@
         },
         {
           "file": "tests/unit/t64.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:engineTouchMarkerPath",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t259-turn-markers.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:ensureActiveSpaceCursor",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t160-workspace-record-resolution.test.ts",
           "mechanism": "none"
         }
       ],
@@ -1501,6 +1725,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:freshReviewReceipts",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t264-review-freeze-hook.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:frontmatterBlock",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1562,6 +1798,30 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:hasPendingDecision",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t121-stop-hook-enforce.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:hasUnsafeSingleLineCharacter",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t261-audit-authority-floor.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:holdsAuditLock",
       "minMechanism": "none",
       "coveredBy": [
@@ -1605,6 +1865,10 @@
         {
           "file": "tests/unit/t188-human-presence-gate.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t261-audit-authority-floor.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1629,6 +1893,18 @@
         {
           "file": "tests/unit/t188-human-presence-gate.test.ts",
           "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:humanTurnMarkerPath",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t259-turn-markers.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -1694,6 +1970,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:isAutonomousSwarmStage",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t271-review-iteration-ceiling.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:isClaudeCodeHookInput",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1719,6 +2007,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isNonAnswer",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t261-audit-authority-floor.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -1757,6 +2057,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:isRegularFile",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:isValidRepoName",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1783,6 +2095,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:KNOWN_CODEKB_STAGES",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:KNOWN_HARNESS_DIRS",
       "minMechanism": "none",
       "coveredBy": [
@@ -1799,6 +2118,38 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:latestMainWorkflowStageRunFloor",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t201-swarm-batch-advance.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:latestMainWorkflowStageRunFloorForProject",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t201-swarm-batch-advance.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -1839,7 +2190,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/integration/t165-intent-birth-p4.test.ts",
+          "file": "tests/integration/t165-intent-create-p4.test.ts",
           "mechanism": "cli"
         },
         {
@@ -1855,7 +2206,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/integration/t165-intent-birth-p4.test.ts",
+          "file": "tests/integration/t165-intent-create-p4.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -1876,6 +2227,18 @@
         },
         {
           "file": "tests/unit/t61.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:loadArsPriors",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t258-ars-subcommand.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -1952,6 +2315,10 @@
         {
           "file": "tests/unit/t225-scope-name-decoupling.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t257-default-scope-resolver.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -1995,6 +2362,30 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:markEngineTouch",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t259-turn-markers.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:markHumanTurn",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t259-turn-markers.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -2061,7 +2452,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/integration/t165-intent-birth-p4.test.ts",
+          "file": "tests/integration/t165-intent-create-p4.test.ts",
           "mechanism": "cli"
         },
         {
@@ -2071,6 +2462,18 @@
         {
           "file": "tests/unit/t160-workspace-record-resolution.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:modelRatesPath",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t267-usage.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -2095,6 +2498,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:nearestStockScopes",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t277-validate-grid-nearest-stock.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -2197,10 +2612,34 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:parsePluginCommand",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t178-classify-terminal-command.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:parseRefsList",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:parseReScope",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t248-codekb-scope-diff.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -2323,12 +2762,52 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:producesArtifactFile",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t205-gate-revision-backstop.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t264-review-freeze-hook.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:producesArtifactUnit",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t264-review-freeze-hook.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:READ_ONLY_FLAGS",
       "minMechanism": "none",
       "coveredBy": [
         {
           "file": "tests/unit/t178-classify-terminal-command.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readActiveDirectiveMarker",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t94-sensor-fire-hook.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -2347,6 +2826,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:readAuditShardEvents",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:readCurrentSessionId",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2355,6 +2846,13 @@
     {
       "unitClass": "function",
       "unitId": "function:readIntentRegistry",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readSessionIntentHandoff",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -2414,6 +2912,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:refreshActiveDirectiveMarker",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t121-stop-hook-enforce.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -2554,7 +3064,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/integration/t165-intent-birth-p4.test.ts",
+          "file": "tests/integration/t165-intent-create-p4.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -2581,6 +3091,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:resolveDefaultScope",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t257-default-scope-resolver.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:resolvePlanForScope",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2601,6 +3123,13 @@
     {
       "unitClass": "function",
       "unitId": "function:resolveProjectDirFromHook",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:resolveReviewClass",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -2645,6 +3174,29 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:REVIEW_CLASSES",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:reviewArtifactFingerprint",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t115.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t236-ensemble-evidence-gate.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:REVIEWER_DISPATCH_TTL_MS",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2664,6 +3216,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t144-harness-seam.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:runnerFrontmatterAdditions",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t275-cursor-packaging.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -2709,6 +3273,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:scopePathCovered",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t248-codekb-scope-diff.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:scopesDir",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2742,10 +3318,29 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:SESSION_INTENT_HANDOFF_TTL_MS",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:SESSIONS_DIR",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:sessionsDir",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t267-usage.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -2831,7 +3426,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/integration/t165-intent-birth-p4.test.ts",
+          "file": "tests/integration/t165-intent-create-p4.test.ts",
           "mechanism": "cli"
         },
         {
@@ -2930,6 +3525,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:STOP_HOOK_PROBE_ENV",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:stopHookDir",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2946,6 +3548,25 @@
         },
         {
           "file": "tests/unit/t124-scope-transpose.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:SUMMARY_CONFIRMATION_CHECKPOINT",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:summaryConfirmationGuardDisabled",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t188-human-presence-gate.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -2970,6 +3591,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t155-template-override.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:terminalReviewVerdict",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t135-invoke-swarm.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -3008,10 +3641,48 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:turnMarkersShowConversational",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t259-turn-markers.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:UNIT_KINDS",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:UNIT_NAME_MAX_LENGTH",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:UNIT_NAME_REGEX",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:unitCompletedReceipts",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -3022,11 +3693,23 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:unitLifecycleReceiptsInUse",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:updateIntentStatus",
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/integration/t165-intent-birth-p4.test.ts",
+          "file": "tests/integration/t165-intent-create-p4.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -3082,6 +3765,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:validateUnitName",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -3196,6 +3886,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:writeActiveDirectiveMarker",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t272-unit-major-code-gen.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:writeCurrentSessionId",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3204,6 +3906,18 @@
     {
       "unitClass": "function",
       "unitId": "function:writeFileAtomic",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t270-metrics-transport.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:writeSessionIntentHandoff",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -3229,27 +3943,59 @@
     },
     {
       "unitClass": "hook",
-      "unitId": "aidlc-audit-logger",
+      "unitId": "aidlc-continue-workflow",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t121-stop-hook-enforce.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/integration/t131-hooks-settings-fire.test.ts",
           "mechanism": "cli"
         },
         {
-          "file": "tests/integration/t33-hook-concurrency.test.ts",
+          "file": "tests/integration/t187-park-conversational.sdk.test.ts",
+          "mechanism": "sdk"
+        },
+        {
+          "file": "tests/integration/t195-stop-hook-compose-carveout.test.ts",
           "mechanism": "cli"
         },
         {
-          "file": "tests/unit/t07-hook-audit-logger.test.ts",
+          "file": "tests/unit/t226-detector-corpus.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t228-hook-run-exports.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "hook",
+      "unitId": "aidlc-deliver-stage-rules",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t228-hook-run-exports.test.ts",
           "mechanism": "cli"
         },
         {
-          "file": "tests/unit/t13-hook-input-robustness.test.ts",
+          "file": "tests/unit/t248-steering-content-delivery.test.ts",
           "mechanism": "cli"
-        },
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "hook",
+      "unitId": "aidlc-fold-usage",
+      "minMechanism": "none",
+      "coveredBy": [
         {
-          "file": "tests/unit/t170-audit-logger-per-intent.test.ts",
+          "file": "tests/unit/t267-usage.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -3271,29 +4017,33 @@
         {
           "file": "tests/unit/t13-hook-input-robustness.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t276-cursor-adapter.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
     },
     {
       "unitClass": "hook",
-      "unitId": "aidlc-mint-presence",
+      "unitId": "aidlc-plan-approval-guard",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/unit/t147-kiro-hook-adapter.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t149-codex-hook-adapter.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t228-hook-run-exports.test.ts",
           "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "hook",
-      "unitId": "aidlc-reviewer-scope",
-      "minMechanism": "none",
-      "coveredBy": [
+        },
         {
-          "file": "tests/unit/t221-reviewer-scope-hook.test.ts",
+          "file": "tests/unit/t265-plan-approval-guard.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -3301,7 +4051,7 @@
     },
     {
       "unitClass": "hook",
-      "unitId": "aidlc-runtime-compile",
+      "unitId": "aidlc-rebuild-stage-graph",
       "minMechanism": "none",
       "coveredBy": [
         {
@@ -3329,7 +4079,59 @@
     },
     {
       "unitClass": "hook",
-      "unitId": "aidlc-sensor-fire",
+      "unitId": "aidlc-record-human-turn",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t228-hook-run-exports.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t276-cursor-adapter.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "hook",
+      "unitId": "aidlc-review-freeze",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t228-hook-run-exports.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t230-dispatcher-routes.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t238-build-binaries.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t264-review-freeze-hook.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "hook",
+      "unitId": "aidlc-reviewer-scope",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t221-reviewer-scope-hook.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "hook",
+      "unitId": "aidlc-run-sensors",
       "minMechanism": "none",
       "coveredBy": [
         {
@@ -3449,43 +4251,7 @@
     },
     {
       "unitClass": "hook",
-      "unitId": "aidlc-stop",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/e2e/t122-stop-hook-e2e.test.ts",
-          "mechanism": "sdk"
-        },
-        {
-          "file": "tests/integration/t121-stop-hook-enforce.test.ts",
-          "mechanism": "cli"
-        },
-        {
-          "file": "tests/integration/t131-hooks-settings-fire.test.ts",
-          "mechanism": "cli"
-        },
-        {
-          "file": "tests/integration/t187-park-conversational.sdk.test.ts",
-          "mechanism": "sdk"
-        },
-        {
-          "file": "tests/integration/t195-stop-hook-compose-carveout.test.ts",
-          "mechanism": "cli"
-        },
-        {
-          "file": "tests/unit/t226-detector-corpus.test.ts",
-          "mechanism": "none"
-        },
-        {
-          "file": "tests/unit/t228-hook-run-exports.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "hook",
-      "unitId": "aidlc-sync-statusline",
+      "unitId": "aidlc-sync-workflow-state",
       "minMechanism": "none",
       "coveredBy": [
         {
@@ -3518,6 +4284,34 @@
         },
         {
           "file": "tests/unit/t230-dispatcher-routes.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "hook",
+      "unitId": "aidlc-write-audit-log",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t131-hooks-settings-fire.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t33-hook-concurrency.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t07-hook-audit-logger.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t13-hook-input-robustness.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t170-audit-logger-per-intent.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -4080,8 +4874,13 @@
       "unitClass": "subcommand",
       "unitId": "aidlc-audit append",
       "minMechanism": "cli",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t127-single-stage-invariant.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "subcommand",
@@ -4260,6 +5059,10 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
+          "file": "tests/unit/t261-audit-authority-floor.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t33.test.ts",
           "mechanism": "cli"
         }
@@ -4289,6 +5092,18 @@
         },
         {
           "file": "tests/unit/t77-bolt-worktree-flags.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-graph ars",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t258-ars-subcommand.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -4741,6 +5556,10 @@
         {
           "file": "tests/unit/t205-gate-revision-backstop.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t263-reviewer-terminal-ordering.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -5015,6 +5834,18 @@
     },
     {
       "unitClass": "subcommand",
+      "unitId": "aidlc-state unit",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
       "unitId": "aidlc-state unpark",
       "minMechanism": "cli",
       "coveredBy": [
@@ -5032,6 +5863,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t182-codekb-placement.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-utility codekb-scope-diff",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t248-codekb-scope-diff.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -5271,7 +6114,7 @@
           "mechanism": "sdk"
         },
         {
-          "file": "tests/integration/t165-intent-birth-p4.test.ts",
+          "file": "tests/integration/t165-intent-create-p4.test.ts",
           "mechanism": "cli"
         },
         {
@@ -5283,7 +6126,7 @@
     },
     {
       "unitClass": "subcommand",
-      "unitId": "aidlc-utility intent-birth",
+      "unitId": "aidlc-utility intent-create",
       "minMechanism": "cli",
       "coveredBy": [
         {
@@ -5299,7 +6142,7 @@
           "mechanism": "sdk"
         },
         {
-          "file": "tests/integration/t165-intent-birth-p4.test.ts",
+          "file": "tests/integration/t165-intent-create-p4.test.ts",
           "mechanism": "cli"
         },
         {
@@ -5487,7 +6330,7 @@
           "mechanism": "sdk"
         },
         {
-          "file": "tests/integration/t165-intent-birth-p4.test.ts",
+          "file": "tests/integration/t165-intent-create-p4.test.ts",
           "mechanism": "cli"
         },
         {
@@ -5515,7 +6358,7 @@
           "mechanism": "sdk"
         },
         {
-          "file": "tests/integration/t165-intent-birth-p4.test.ts",
+          "file": "tests/integration/t165-intent-create-p4.test.ts",
           "mechanism": "cli"
         },
         {

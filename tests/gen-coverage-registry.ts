@@ -650,6 +650,7 @@ export function mechanismOfTestFile(fileName: string): Mechanism {
  *  are stripped first) and collect every match (not the first):
  *    - `driveAidlc(` ............ adds `sdk` (the Agent-SDK driver)
  *    - spawns `tui-drive.ts` .... adds `tui` (the painted-terminal driver)
+ *    - `runOrchestrateNext(` .... adds `cli` (shared spawned-engine driver)
  *    - shipped-surface spawn .... adds `cli` (the literal shipped binary): `claude -p`,
  *                                 a runtime (`BUN`/`process.execPath`/`"bun"`/`"node"`)
  *                                 spawn whose argv targets an `aidlc-*.ts` tool, or a
@@ -682,8 +683,14 @@ export function mechanismsOf(fileName: string, src: string): Mechanism[] {
   // tui — spawning the painted-terminal driver by its filename (in code, not an import).
   if (/tui-drive\.ts/.test(code)) found.add("tui");
   // cli — driving a shipped binary as a subprocess (claude -p, an aidlc-*.ts tool
-  // under the bun/node runtime, or run-tests.sh under bash). See drivesCliSurface.
-  if (drivesCliSurface(code)) found.add("cli");
+  // under the bun/node runtime, run-tests.sh under bash, or the shared
+  // runOrchestrateNext spawned-engine helper). See drivesCliSurface.
+  if (
+    /\brunOrchestrateNext\s*\(/.test(code) ||
+    drivesCliSurface(code)
+  ) {
+    found.add("cli");
+  }
 
   if (found.size === 0) {
     // Inconclusive body scan → seed from the filename segment (non-breaking).
@@ -700,7 +707,10 @@ export function claudeDependenciesOf(_fileName: string, src: string): ClaudeDepe
   const code = codeView(src);
   const found = new Set<ClaudeDependency>();
   if (/\bdriveAidlc\s*\(/.test(code)) found.add("sdk");
-  if (/tui-drive\.ts/.test(code)) found.add("tui");
+  // tui-drive is a terminal substrate, not inherently a Claude dependency: the
+  // deterministic preflight targets printf/cmd and Kiro TUI tests target
+  // kiro-cli. Require the executable code to name the Claude binary as well.
+  if (/tui-drive\.ts/.test(code) && /["']claude["']/.test(code)) found.add("tui");
   if (drivesClaudePrintSurface(code)) found.add("cli-claude");
   return CLAUDE_DEPENDENCIES.filter((m) => found.has(m));
 }

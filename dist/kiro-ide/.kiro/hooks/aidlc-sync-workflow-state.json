@@ -1,0 +1,12 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "aidlc-sync-workflow-state",
+      "trigger": "PostToolUse",
+      "matcher": "execute_bash",
+      "description": "Keeps the workflow's Current Stage in aidlc-state.md in step with what has actually happened, so the status line and progress display stay accurate. DELIBERATELY matched to execute_bash, not a task/spec tool: the IDE surfaces no task payload a sync could parse, so the hook derives the stage from the audit tail (do not 'optimize' this to a task matcher). Cost: the audit tail is read on every execute_bash; the hook self-gates idempotently so re-reads are correctness-safe, and the read is bounded by audit size.",
+      "action": { "type": "command", "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts sync-workflow-state" }
+    }
+  ]
+}

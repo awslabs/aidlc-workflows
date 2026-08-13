@@ -101,8 +101,11 @@ const CANONICAL = [
   "## Open questions",
 ] as const;
 
+// The template's first visible line renders in the Write diff of EVERY stage, so
+// it is user-facing prose and is worded as such: no framework role names, no
+// ritual vocabulary. Pinned verbatim because the copy is LLM-driven.
 const OWNERSHIP_LINE =
-  "> This file is maintained by the orchestrator during stage execution. Add observations at the gate ritual, not by editing here directly.";
+  "> This file is kept up to date automatically while the stage runs. Add observations at the review step, not by editing here directly.";
 
 /** Read the shipped template's raw bytes (the exact file that ships). */
 function templateRaw(): string {
