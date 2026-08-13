@@ -151,7 +151,7 @@ the active space's shared `codekb/<repo>/` tree.
 
 ### Construction Bolt Events (4 events)
 
-Emitted only during Phase 3 (Construction). A Bolt is one execution of stages 3.1–3.5 for a Unit or small group of dependency-linked Units. See `stage-protocol.md` Glossary.
+Emitted only during Phase 3 (Construction). A Bolt is one Unit's Construction build: one worktree, one `BOLT_STARTED` / `BOLT_COMPLETED` pair. See `stage-protocol.md` Terminology. These events are emitted from `aidlc-bolt.ts` (called from the swarm / worktree path); a default gated run does not record them.
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|

@@ -31,30 +31,34 @@ completion messages, and state tracking.
 
 ## Bolt-by-Bolt Construction
 
-Construction executes **Bolt by Bolt**, driven by `bolt-plan.md` (Bolt
-sequence + walking-skeleton marker) from stage 2.9 and the dependency DAG
-from stage 2.7. A [Bolt](../../guide/glossary.md) is one pass through stages
-3.1–3.5 for a Unit or small group of dependency-linked Units. Stages 3.6
-(Build and Test) and 3.7 (CI Pipeline) run **once** at the end across all
-Bolts.
+Construction's **default walk is stage-major**: one stage runs for every
+Unit, then the next stage, with code-generation last. The opt-in
+`Construction Iteration: unit-major` walk (one Unit through every
+per-unit stage, then the next Unit) is what older docs described as the
+default. A [Bolt](../../guide/glossary.md) is one Unit's build: one
+worktree, one `BOLT_STARTED` / `BOLT_COMPLETED` pair — the same meaning
+under both walks, never a container for several Units. Those Bolt
+events are emitted on the swarm / worktree path; a default gated run
+does not record them.
+
+Runtime batches are recomputed from `unit-of-work-dependency.md` (stage
+2.7). `bolt-plan.md` from Delivery Planning (stage 2.9) is the planning
+artifact (sequence, per-Bolt DoD, walking-skeleton marker). That marker
+is advisory against the active-space `team.md` stance
+(`PRACTICES_OVERRIDE` / `bolt-plan-marker-conflict`). Stages 3.6 (Build
+and Test) and 3.7 (CI Pipeline) run **once** at the end across all Units.
 
 ```
-Bolt 1 (walking skeleton) — always gated:
-  Questions (3.1–3.4 across the Bolt's Units in QUESTION-ONLY mode)
-  → Answers gate (Bolt-level)
-  Design artifacts (3.1–3.4 in ARTIFACT-ONLY mode)
-  Code generation (3.5 per Unit via Task delegation)
-  → Walking-skeleton gate
+Default walk (stage-major):
+  First in-scope Construction stage for every Unit
+  → Walking-skeleton gate (always; first Construction gate)
   → Ladder prompt (fires once): "autonomous" or "gated"
-  → Write Construction Autonomy Mode to state
+  Then the next stage for every Unit, code-generation last
 
-Bolt 2..N — autonomy mode governs the gate:
-  (Parallel-eligible Bolts run as a batch; single batch-level gate covers
-   every Bolt in it.)
-  Questions → Answers gate (Bolt-level) → Design → Code-gen → Bolt/batch
-  gate (skipped if autonomous). Failure always halts and asks.
+Opt-in (`Construction Iteration: unit-major`):
+  Each Unit through every per-unit stage, then the next Unit
 
-After all Bolts:
+After all Units:
   3.6 Build and Test (runs once across the full codebase)
   3.7 CI Pipeline    (runs once, conditional)
 ```
@@ -63,7 +67,7 @@ Each design stage file (3.1–3.4) supports QUESTION-ONLY and ARTIFACT-ONLY
 execution modes — see the individual stage files for details. Code Generation's
 Step 3 **Plan Approval always hard-stops before generation**, including during
 Bolt execution. Only its Step 7 per-Unit completion approval gate is
-**suppressed by the engine** during normal Bolt execution; a single Bolt-level
+**suppressed by the engine** during normal Construction; a single stage-level
 (or batch-level) completion gate replaces it. The per-Unit completion gate
 remains for direct-invocation use (e.g., `/aidlc --stage code-generation`).
 
@@ -110,12 +114,13 @@ a dependent batch or the single stage gate. Waves never apply under
 primitive process the entries serially. See
 `stage-protocol.md` §3 "Per-unit batch waves" for the full contract.
 
-**Parallel batches.** When two or more Bolts share dependency-satisfaction
+**Parallel batches.** When two or more Units share dependency-satisfaction
 and don't depend on each other, the conductor dispatches their Code
 Generation stages concurrently by issuing N `Task` calls in a single
 assistant message. One batch-level gate covers them all. Audit events
 (`BOLT_STARTED`, `BOLT_COMPLETED`) carry a `Batch=N` field so siblings are
-recoverable from the log.
+recoverable from the log. Those events fire on the swarm / worktree path;
+a Bolt names one Unit, not a bundle.
 
 **Failure handling.** A Bolt failure always halts Construction regardless
 of autonomy mode. Options are retry (re-run just the failed Bolt), skip

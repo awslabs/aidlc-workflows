@@ -1110,11 +1110,11 @@ executed through Construction. Where Stage 2.7 is analytical (the dependency
 DAG), Stage 2.9 is economic: it chooses a path through the DAG weighted by
 risk, value, team capacity, and learning.
 
-Per the canonical Glossary in `stage-protocol.md`, a **Bolt** is
-"a deployable unit of work within Construction — one pass through stages
-3.1–3.5." A Bolt is one Construction pass over one or more Units of
-Work, distinct from an MMF or a sprint. (Stages 3.6 build-and-test and 3.7
-ci-pipeline run once at end across all Bolts, not per-Bolt.)
+Per the canonical Glossary in `stage-protocol.md`, a **Bolt** is one
+Unit's Construction build: one worktree, one `BOLT_STARTED` /
+`BOLT_COMPLETED` pair. Independent of walk order, and never a container
+for several Units. (Stages 3.6 build-and-test and 3.7 ci-pipeline run
+once at end across all Units, not per-Bolt.)
 
 Economic value cannot be derived from the DAG — AI agents can topologically
 sort, but they cannot decide which Bolt validates the market hypothesis

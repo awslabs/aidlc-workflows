@@ -935,10 +935,11 @@ Key terms used throughout AI-DLC documentation:
 | **Phase** | Top-level grouping: INITIALIZATION, IDEATION, INCEPTION, CONSTRUCTION, OPERATION |
 | **Stage** | A discrete step within a phase (e.g., Intent Capture, Requirements Analysis, Code Generation, Observability Setup) |
 | **Scope** | Controls which stages execute and at what depth. Nine built-in scopes, one file per scope under `.kiro/scopes/aidlc-<name>.md`: enterprise, feature, mvp, poc, bugfix, refactor, infra, security-patch, workshop. Custom scopes can be added without editing this file. |
-| **Bolt** | One execution of Construction stages 3.1–3.5 for a Unit (or small group of dependency-linked Units). Stages 3.6 (Build and Test) and 3.7 (CI Pipeline) run **once** after all Bolts complete, not per-Bolt. The first Bolt is the **walking skeleton** — the thinnest end-to-end slice that proves the architecture. |
-| **Walking skeleton** | The first Bolt in Construction — smallest end-to-end slice that exercises every integration point. Always gated and interactive so humans can confirm the shape before the rest of Construction runs. |
+| **Bolt** | One Unit's Construction build: one worktree, one `BOLT_STARTED` / `BOLT_COMPLETED` pair. Independent of how many stages have run, and never a container for several Units. Same meaning under both walks. Stages 3.6 (Build and Test) and 3.7 (CI Pipeline) run **once** after all Units complete, not per-Bolt. |
+| **Walking skeleton** | The first gate in Construction — the gate on the first in-scope Construction EXECUTE stage. Always gated and interactive so humans can confirm the shape before the rest of Construction runs. Not "the first Bolt". |
 | **Ladder prompt** | The single prompt that fires after the walking-skeleton gate asking the user to choose between "continue autonomously" and "gate every Bolt". The choice is recorded in state (`Construction Autonomy Mode`) and governs the rest of Construction. |
-| **Parallel batch** | A group of Bolts whose dependencies are satisfied and that don't depend on each other, run concurrently in a single orchestrator turn. |
+| **Parallel batch** | A group of Units whose dependencies are satisfied and that don't depend on each other, run concurrently in a single orchestrator turn. |
+| **Walk order** | Separate from Bolt. Default = stage-major (a stage runs for every Unit, then the next stage). Opt-in = `Construction Iteration: unit-major` (a Unit runs through every per-unit stage, then the next Unit). |
 | **Unit of Work** | An independently implementable package of features; the iteration unit for CONSTRUCTION stages |
 | **Service** | A deployable process or container (e.g., API server, worker, frontend app) |
 | **Module** | A code-level organizational boundary within a service (e.g., package, namespace) |

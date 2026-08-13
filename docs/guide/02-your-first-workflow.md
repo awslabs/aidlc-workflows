@@ -162,13 +162,13 @@ Remaining Inception stages (Requirements Analysis through Delivery Planning) run
 
 ## Construction Phase
 
-Construction builds the solution **Bolt by Bolt**. A [Bolt](glossary.md) is one pass through stages 3.1–3.5 for a Unit (or small group of dependency-linked Units). Each Bolt ships a reviewable slice; the 2.9 plan decides the sequence and marks the first Bolt as the **walking skeleton** — the smallest end-to-end slice that proves the architecture.
+Construction builds the solution in reviewable slices. A [Bolt](glossary.md) is one Unit's build: one worktree, one `BOLT_STARTED` / `BOLT_COMPLETED` pair, never a container for several Units. The **default walk is stage-major** (one stage for every Unit, then the next stage). The 2.9 plan sequences Units; the **walking skeleton** is the first Construction gate (the first in-scope Construction stage), not "the first Bolt".
 
 ```
 ─── Construction: Bolt 1 — notification-core (walking skeleton) ───────────
 ```
 
-The walking skeleton is **always gated** — you review its design artifacts and generated code before any other Bolt runs. Immediately after approval, the **ladder prompt** fires exactly once:
+The walking skeleton is **always gated** — you review that first Construction stage before the rest of Construction runs. Immediately after approval, the **ladder prompt** fires exactly once:
 
 ```
 The walking skeleton shipped. How should the remaining Bolts run?
@@ -176,9 +176,9 @@ The walking skeleton shipped. How should the remaining Bolts run?
   ▸ Gate every Bolt
 ```
 
-Your answer is recorded in `aidlc-state.md` as `Construction Autonomy Mode` and governs every remaining Bolt in this workflow (session resume respects it). Stage 3.5 (Code Generation) runs as a subagent for each Unit inside the Bolt; the per-Unit gate in that stage file is suppressed — a single Bolt-level (or batch-level) gate replaces it.
+Your answer is recorded in `aidlc-state.md` as `Construction Autonomy Mode` and governs the rest of Construction in this workflow (session resume respects it). Stage 3.5 (Code Generation) runs as a subagent for each Unit; the per-Unit completion gate in that stage file is suppressed — a single stage-level (or batch-level) gate replaces it.
 
-Bolts whose dependencies are satisfied and that don't depend on each other run in a **parallel batch** — the orchestrator issues multiple `Task` calls in a single turn. A failure always halts and asks for retry / skip / abort, even when you've chosen autonomous mode.
+Units whose dependencies are satisfied and that don't depend on each other run in a **parallel batch** — the orchestrator issues multiple `Task` calls in a single turn. A failure always halts and asks for retry / skip / abort, even when you've chosen autonomous mode.
 
 After all Bolts complete, stages 3.6 (Build and Test) and 3.7 (CI Pipeline) run once across the whole solution.
 
