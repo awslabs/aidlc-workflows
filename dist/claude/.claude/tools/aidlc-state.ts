@@ -17,6 +17,7 @@ import {
   emitError,
   errorMessage,
   extractMarkdownSection,
+  fabricatedDecisionMarker,
   filterProducesByKind,
   findStageBySlug,
   findAllEvents,
@@ -2555,6 +2556,23 @@ function handleApprove(args: string[]): void {
         "real choice; a dismissal is not consent.",
     );
   }
+  // Nor is the conductor's OWN decision an approval. The presence guard below
+  // proves a human is in the session; it cannot prove this choice is theirs, so
+  // a self-attributed approval ("CONDUCTOR DEFAULT, session unattended") would
+  // commit a gate no human resolved and leave a GATE_APPROVED row indistinguishable
+  // from a real one. Autonomous Construction is exempt (it owns the decision).
+  const approvalAuthorship =
+    isAutonomousMode(content) || humanPresenceGuardDisabled()
+      ? null
+      : fabricatedDecisionMarker(approvalInput);
+  if (approvalAuthorship) {
+    error(
+      `Refusing to approve "${slug}": --user-input attributes this choice to the conductor, not ` +
+        `a human ("${approvalAuthorship}"). An approval is the human's to make. End the turn and ` +
+        "let them answer; if a completion precondition is blocking you, surface that blocker at " +
+        "the gate instead of recording a decision on their behalf.",
+    );
+  }
 
   // Artifact guard (issue #366): a stage cannot be approved without evidence of
   // work on disk. Runs BEFORE any mutation so a refusal (error() -> exit) leaves
@@ -2793,6 +2811,27 @@ function handleReject(args: string[]): void {
     error(
       `Refusing to reject "${slug}": a real human has not acted at this gate since it opened. ` +
         "Requesting changes requires a typed human turn before it can commit.",
+    );
+  }
+
+  // Authorship floor (issue 742). The presence check above proves a human is in
+  // the session, not that this rejection is theirs — so a conductor blocked by
+  // the review-budget/receipt ordering can satisfy it while writing its own
+  // change request, because GATE_REJECTED is the only event that restores an
+  // advisory review budget. That reopen is the single most attractive forgery in
+  // the protocol and the one seen in the field, so refuse the self-attributed
+  // rejection here rather than laundering it into the trail as the human's.
+  // Autonomous Construction is exempt (the conductor owns the decision there).
+  const rejectionAuthorship =
+    isAutonomousMode(content) || humanPresenceGuardDisabled()
+      ? null
+      : fabricatedDecisionMarker(feedback);
+  if (rejectionAuthorship) {
+    error(
+      `Refusing to reject "${slug}": --feedback attributes this rejection to the conductor, not a ` +
+        `human ("${rejectionAuthorship}"). Requesting changes is the human's decision. If you need ` +
+        "another review pass because a produces[] artifact changed after the reviewer's receipt, " +
+        "say so at the gate and let the human choose - do not record their rejection for them.",
     );
   }
 

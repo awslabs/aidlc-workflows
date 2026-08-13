@@ -17,6 +17,7 @@ import {
   emitError,
   errorMessage,
   extractMarkdownSection,
+  fabricatedDecisionMarker,
   freshReviewReceipts,
   getField,
   holdsAuditLock,
@@ -413,6 +414,26 @@ function handleAnswer(args: string[]): void {
       : null;
     const workflow =
       flags.single === "true" ? `single-stage:${flags.stage}` : undefined;
+
+    // Authorship floor (issue 742): the same interview answer the conductor
+    // wrote for itself. isNonAnswer above rejects a DISMISSED widget; this
+    // rejects a self-attributed one ("A. Nothing to add - CONDUCTOR DEFAULT,
+    // session unattended"), which the presence check below cannot catch because
+    // a human is in the session, just not at this question. Autonomous
+    // Construction is exempt, and the summary checkpoint above is already
+    // constrained to two exact strings.
+    const answerAuthorship =
+      isAutonomousMode(content) || humanPresenceGuardDisabled()
+        ? null
+        : fabricatedDecisionMarker(flags.details);
+    if (answerAuthorship) {
+      error(
+        `Refusing to record this answer for "${flags.stage}": --details attributes it to the ` +
+          `conductor, not a human ("${answerAuthorship}"). A stage question is the human's to ` +
+          "answer. Re-present it and wait for their reply; recording your own default here would " +
+          "carry it downstream as a human decision.",
+      );
+    }
 
     if (summaryCheckpoint) {
       const pending = pendingSummaryDecision(

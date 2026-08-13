@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.13] - 2026-08-17
+
+Authority-bearing commands now reject a narrow set of explicit statements that attribute the current approval, rejection, or interview answer to the conductor/model rather than the human. This is a defense-in-depth tripwire for self-labelled automation observed in issue #742; it does not prove human authorship and deliberately fails open for unlabelled or unrecognized wording. **Upgrade:** refresh `dist/<harness>/` in your project.
+
+* `approve --user-input`, `reject --feedback`, and `aidlc-log answer --details` reject recognized high-confidence self-attribution phrases without emitting the authority receipt or mutating workflow state.
+* The tripwire is scoped by decision kind and avoids generic phrases about Human Resources, response time, conductor services, unattended systems, quoted examples, or code being changed by an agent.
+* Autonomous exemption applies only to Construction-stage decisions while Construction Autonomy Mode is active; Ideation, Inception, and Operation remain guarded even if that field is present.
+* `HUMAN_TURN` remains presence/freshness evidence only. Audit and reference documentation explicitly state that caller-supplied decision prose is not an authenticated human transcript.
+
 ## [2.6.12] - 2026-08-17
 
 GitHub Copilot now preserves the latest delivered AI-DLC directive across Stop and rejects replay through an atomic Copilot-owned engine cursor rather than relying on hook admission. The shared engine records both `load-steering` and `run-stage` routing metadata, while `sessionless:` and non-Copilot continuation remain stateless in this release. **Upgrade:** refresh `dist/copilot/` and start a fresh Copilot conversation for an in-flight workflow so pre-upgrade transport markers cannot be reused.
@@ -21,7 +30,6 @@ Review receipt invalidation is now recoverable without weakening normal review b
 * Per-Unit waves expose `recovery-required` with the exact next ordinal and `escalation-required` after recovery is spent, while mixed stale/never-reviewed completion refusals now give both groups an actionable remedy.
 * Retry and recovery-spent refusals no longer contradict each other. Interactive attempts, including autonomous inline waves after recovery is spent, reset only after a human Request Changes decision; autonomous Bolt Units halt before `finalize` and use a human-approved restart instead of waiting for an unreachable post-merge gate.
 * Intact receipts retain their existing advisory normal-flow and adversarial iteration budgets; ordinary over-budget requests are still refused.
-
 ## [2.6.8] - 2026-08-15
 
 The reviewer work loop gets a hard backstop: both review-only agents (`aidlc-architecture-reviewer-agent`, `aidlc-product-lead-agent`) now carry a 60-turn cap - authored once as `maxTurns: 60` in the persona frontmatter, enforced natively on every harness with a lever (Claude Code `maxTurns`, opencode `steps`) and mirrored as a harness-neutral `## Turn Budget` persona section everywhere - and the stage protocol closes the previously undefined branch where a reviewer that dies before writing its verdict (turn cap, crash, context exhaustion) left the conductor reading a stale, partial, or missing `## Review`. A review now counts only when it parses: exactly one current `## Review` section with exactly one canonical READY/NOT-READY verdict. Anything else is an incomplete attempt that retries the same review once with `--retry-pending` (consuming no review iteration - an advisory budget is one pass) and then records a terminal `NOT-READY` receipt with the finding "review did not complete within its turn budget", so the gate is never presented on - or deadlocked by - a silently missing verdict. Before every reviewer dispatch the conductor now deletes any existing `## Review` section (review history lives in the audit ledger), closing the revision-path gap where a stale pre-revision READY could be misread as covering revised work. The GitHub Copilot orchestrator also catches up to the review-class engine. **Upgrade:** re-copy your `dist/<harness>/` tree into the project (the reviewer agent files, `aidlc-common/protocols/stage-protocol.md`, and every orchestrator SKILL.md changed).

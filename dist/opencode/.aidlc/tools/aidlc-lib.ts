@@ -3608,6 +3608,63 @@ export function isNonAnswer(text: string | undefined | null): boolean {
   return t.length === 0 || NON_ANSWER_RE.test(t);
 }
 
+// A conductor-authored decision is not a human decision, even when the
+// conductor says so out loud. isNonAnswer above catches a harness handing back
+// a DISMISSED widget; this catches the opposite failure — the conductor writing
+// the human's decision itself and labelling it as its own work.
+//
+// Observed in the field (issue 742): when a stage deadlocks, GATE_REJECTED is
+// the only event that resets an advisory review budget, so an unattended
+// conductor records one and states in --feedback that it is not a human
+// rejection ("AGENT-INITIATED, NOT A HUMAN REJECTION. ... This reopen exists
+// solely to obtain a review budget"). The same sessions self-approved gates and
+// answered their own interview questions as "CONDUCTOR DEFAULT, session
+// unattended". humanActedSinceGate cannot see any of it: that predicate proves
+// a HUMAN_TURN exists (PRESENCE), while the decision text is the conductor's
+// (INTENT) — and in a live session presence is continuous, so it is satisfied
+// for a decision the human never made.
+//
+// The vocabulary matches only SELF-REFERENTIAL PROVENANCE claims — assertions
+// about who authored this very decision — never assertions about the work. A
+// human rejecting with "revert the agent-initiated retry in scheduler.ts" is
+// talking about code and must pass, which is why bare "agent-initiated" is not
+// a marker and the authorship alternatives all require a decision noun. Unlike
+// NON_ANSWER_RE these are SUBSTRING matches, because the disclaimer rides
+// inside a paragraph of otherwise-substantive prose.
+//
+// Honest labelling stays legal where the conductor holds the authority: every
+// call site skips this floor in autonomous Construction (isAutonomousMode),
+// where deciding without a human is the design rather than a forgery.
+const FABRICATED_DECISION_RE = new RegExp(
+  [
+    // denies human authorship of this very decision
+    "not (?:a|the) human(?:'s)? (?:rejection|approval|decision|answer|choice|response|confirmation)",
+    "never confirmed by (?:a|the) human",
+    // claims agent/conductor authorship of this very decision
+    "(?:agent|conductor|ai)[-\\s]?initiated\\s+(?:correction|rejection|reject|approval|decision|answer|choice|change request)",
+    // "CONDUCTOR DEFAULT," / "conductor defaults never confirmed" — the
+    // provenance-LABEL sense, which closes its clause. The attributive sense
+    // ("the conductor default timeout is too low") is a human talking about a
+    // setting and must pass, so require punctuation, end-of-text, or a
+    // provenance continuation rather than a noun.
+    "conductor(?:'s)?[-\\s]defaults?(?=\\s*(?:[,.;:!?)\\]—-]|$)|\\s+(?:never|session|taking|so|because))",
+    "conductor[-\\s]recorded",
+    "(?:recorded|authored|written|supplied|entered|selected|chosen) by the conductor",
+    // asserts no human was present to decide
+    "(?:session|run) (?:is |was )?unattended",
+    "unattended (?:session|run)",
+  ].join("|"),
+  "i",
+);
+
+// Returns the offending phrase (so the refusal can quote what tripped it) or
+// null when the text carries no self-attribution.
+export function fabricatedDecisionMarker(
+  text: string | undefined | null,
+): string | null {
+  return (text ?? "").match(FABRICATED_DECISION_RE)?.[0] ?? null;
+}
+
 // True when any stage sits at [?] (awaiting-approval) in the state file: the
 // "a gate is actually OPEN" predicate for the per-harness preToolUse floors.
 // Without it a floor would keep refusing tool calls AFTER a legitimate approval

@@ -1,4 +1,4 @@
-// covers: cli:aidlc-audit(append-protected,append-batch-protected,append-raw-event-line,reserved-field-keys), subcommand:aidlc-bolt:set-autonomy, function:humanActedSinceGate, function:hasUnsafeSingleLineCharacter, function:isNonAnswer
+// covers: cli:aidlc-audit(append-protected,append-batch-protected,append-raw-event-line,reserved-field-keys), subcommand:aidlc-bolt:set-autonomy, function:humanActedSinceGate, function:hasUnsafeSingleLineCharacter, function:isNonAnswer, function:fabricatedDecisionMarker
 //
 // t261 — the authority floor on the audit surface (issue 681, claims 3/4/7/8).
 // Four related guarantees, each with a REFUSE case and an ALLOW case so the
@@ -25,6 +25,16 @@
 //      status=completed with answer "Cancelled"), `approve --user-input` and
 //      `reject --feedback` refuse it at the gate. Substantive answers that
 //      merely CONTAIN a cancellation word pass.
+//   5. A conductor-AUTHORED decision is not a human decision either (issue
+//      742). humanActedSinceGate proves PRESENCE, not INTENT, so a deadlocked
+//      conductor can satisfy it while writing the human's decision itself —
+//      observed in the field as GATE_REJECTED rows carrying "AGENT-INITIATED,
+//      NOT A HUMAN REJECTION" (the only event that resets an advisory review
+//      budget), plus self-approvals and self-answers as "CONDUCTOR DEFAULT,
+//      session unattended". All three call sites refuse the self-attributed
+//      text, leave no partial receipt, and do not consume the human's turn;
+//      substantive prose that merely discusses agent-initiated code or a
+//      conductor default setting passes; autonomous Construction is exempt.
 //
 // CRITICAL test-harness note: run-tests.ts sets AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1
 // and AIDLC_ALLOW_DIRECT_AUDIT_EVENTS=1 for the whole suite. This test DELETES
@@ -459,5 +469,152 @@ describe("t261 cancellation boilerplate is not a decision", () => {
     const ok = guarded(STATE, ["approve", "feasibility", "--user-input", "Approve"], proj, direct);
     expect(ok.rc).toBe(0);
     expect(readAllAuditShards(proj)).toContain("GATE_APPROVED");
+  });
+});
+
+describe("t261 a conductor-authored decision is not a human decision", () => {
+  const DIRECT = {
+    AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+    AIDLC_SKIP_ARTIFACT_GUARD: "1",
+  };
+
+  function ideationProject(): string {
+    const p = createTestProject();
+    seedStateFile(p, join(FIXTURES, "state-mid-ideation.md"));
+    return p;
+  }
+
+  function openGate(p: string): void {
+    expect(guarded(STATE, ["gate-start", "feasibility"], p, DIRECT).rc).toBe(0);
+    mintHumanTurn(p);
+  }
+
+  // Verbatim from the field reports on issue 742: an unattended conductor
+  // reopening a deadlocked gate, self-approving, and answering its own
+  // question — each SAYING it is not the human's decision.
+  const FABRICATED = [
+    "AGENT-INITIATED, NOT A HUMAN REJECTION. The human approved at 08:50; completion is blocked by a circular guard dependency and this reopen exists solely to obtain a review budget.",
+    "NOT a human rejection. Recorded by the conductor to reopen the revision cycle honestly: the produces[] artifacts were revised after the reviewer's receipt.",
+    "NOT a human rejection. Conductor-recorded to reopen the cycle so the corrected document can get a genuine third review.",
+    "B. Request Changes - CONDUCTOR DEFAULT, session unattended, taking the conductor's own stated recommendation.",
+  ];
+
+  test.each(FABRICATED)("reject --feedback refuses self-attributed prose (%#)", (feedback) => {
+    proj = ideationProject();
+    openGate(proj);
+    const r = guarded(STATE, ["reject", "feasibility", "--feedback", feedback], proj, DIRECT);
+    expect(r.rc).not.toBe(0);
+    expect(r.out).toContain("attributes this rejection to the conductor");
+    // the forged rejection must leave NO trace: no receipt, no revision spin
+    const shards = readAllAuditShards(proj);
+    expect(shards).not.toContain("GATE_REJECTED");
+    expect(shards).not.toContain("STAGE_REVISING");
+  });
+
+  test("approve --user-input refuses a self-attributed approval", () => {
+    proj = ideationProject();
+    openGate(proj);
+    const r = guarded(
+      STATE,
+      [
+        "approve",
+        "feasibility",
+        "--user-input",
+        "Approve - CONDUCTOR DEFAULT, session unattended. Reviewer returned READY on the third pass.",
+      ],
+      proj,
+      DIRECT,
+    );
+    expect(r.rc).not.toBe(0);
+    expect(r.out).toContain("attributes this choice to the conductor");
+    expect(readAllAuditShards(proj)).not.toContain("GATE_APPROVED");
+  });
+
+  test("answer --details refuses a self-attributed interview answer", () => {
+    proj = ideationProject();
+    mintHumanTurn(proj);
+    const r = guarded(
+      LOG,
+      [
+        "answer",
+        "--stage",
+        "feasibility",
+        "--details",
+        "A. Nothing to add - CONDUCTOR DEFAULT, session unattended. Grounds: candidate 1 is already a standing rule.",
+      ],
+      proj,
+    );
+    expect(r.rc).not.toBe(0);
+    expect(r.out).toContain("attributes it to the conductor");
+    expect(readAllAuditShards(proj)).not.toContain("QUESTION_ANSWERED");
+  });
+
+  // The floor keys on SELF-REFERENTIAL PROVENANCE, not on vocabulary. A human
+  // whose change request happens to discuss agent-initiated code, a conductor
+  // default setting, or an unattended job must not be blocked — over-blocking a
+  // real human at a gate is the one regression worse than the forgery.
+  const SUBSTANTIVE = [
+    "revert the agent-initiated retry in scheduler.ts, it double-charges on timeout",
+    "The conductor default timeout of 30s is too low - make it configurable",
+    "the unattended batch job should retry three times before paging",
+    "Split P-2 into two personas and add the supervising-N-tasks situation",
+  ];
+
+  test.each(SUBSTANTIVE)("reject --feedback accepts substantive human prose (%#)", (feedback) => {
+    proj = ideationProject();
+    openGate(proj);
+    const r = guarded(STATE, ["reject", "feasibility", "--feedback", feedback], proj, DIRECT);
+    expect(r.rc).toBe(0);
+    expect(readAllAuditShards(proj)).toContain("GATE_REJECTED");
+  });
+
+  test("a refusal does not consume the turn: the human's own choice still commits", () => {
+    proj = ideationProject();
+    openGate(proj);
+    const forged = guarded(
+      STATE,
+      ["approve", "feasibility", "--user-input", "Approve - CONDUCTOR DEFAULT, session unattended."],
+      proj,
+      DIRECT,
+    );
+    expect(forged.rc).not.toBe(0);
+    const real = guarded(STATE, ["approve", "feasibility", "--user-input", "Approve"], proj, DIRECT);
+    expect(real.rc).toBe(0);
+    expect(readAllAuditShards(proj)).toContain("GATE_APPROVED");
+  });
+
+  test("autonomous Construction is exempt: there the conductor owns the decision", () => {
+    proj = createTestProject();
+    seedStateFile(proj, join(FIXTURES, "state-mid-ideation.md"));
+    const statePath = seededStateFile(proj);
+    writeFileSync(
+      statePath,
+      `${readFileSync(statePath, "utf-8")}\n- **Construction Autonomy Mode**: autonomous\n`,
+      "utf-8",
+    );
+    expect(guarded(STATE, ["gate-start", "feasibility"], proj, DIRECT).rc).toBe(0);
+    // Honest self-labelling must not be punished where deciding without a human
+    // IS the design - otherwise the floor would push autonomous runs toward
+    // UNLABELLED decisions, which is strictly worse for the audit trail.
+    const r = guarded(
+      STATE,
+      ["reject", "feasibility", "--feedback", "NOT a human rejection. Conductor-recorded."],
+      proj,
+      DIRECT,
+    );
+    expect(r.rc).toBe(0);
+    expect(readAllAuditShards(proj)).toContain("GATE_REJECTED");
+  });
+
+  test("the floor rides the same off-switch as the other authority guards", () => {
+    proj = ideationProject();
+    expect(guarded(STATE, ["gate-start", "feasibility"], proj, DIRECT).rc).toBe(0);
+    const r = guarded(
+      STATE,
+      ["reject", "feasibility", "--feedback", "NOT a human rejection. Conductor-recorded."],
+      proj,
+      { ...DIRECT, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" },
+    );
+    expect(r.rc).toBe(0);
   });
 });
