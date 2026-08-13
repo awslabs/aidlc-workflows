@@ -380,7 +380,6 @@ describe("t55 — test-suite metadata drift (migrated from t55-test-suite-drift.
 
     // --- Stale path strings across the three roots ---
     const PATH_PATTERNS = [
-      "aidlc-knowledge/",
       ".claude/practices/",
       "rules/aidlc/",
       "practices/team.md",
@@ -431,11 +430,11 @@ describe("t55 — test-suite metadata drift (migrated from t55-test-suite-drift.
         join(REPO_ROOT, "tests"),
         join(REPO_ROOT, "docs"),
       ],
-      (line: string) => PATH_PATTERNS.some((p) => line.includes(p)),
+      (line: string) => PATH_PATTERNS.some((p) => line.includes(p)) || STALE_KNOWLEDGE_DIR_RE.test(line),
     ).filter((h: string) => !pathHitCarvedOut(h));
     if (pathHits.length > 0) {
       pathDrift.push(
-        "stale path strings (aidlc-knowledge/, .claude/practices/, rules/aidlc/, practices/{team,org,project}.md, aidlc-docs/.sensors/, aidlc-{team,project}-learnings.md):",
+        "stale path strings (<any-root>/aidlc-knowledge/ not preceded by skills/, .claude/practices/, rules/aidlc/, practices/{team,org,project}.md, aidlc-docs/.sensors/, aidlc-{team,project}-learnings.md):",
       );
       pathDrift.push(...pathHits);
     }
@@ -592,6 +591,31 @@ function legacyRootCarvedOut(hit: string): boolean {
  */
 const CLOSED_FRAMING_RE =
   /one core,?\s+three\s+harnesses|three\s+(?:cli\s+)?harnesses|three\s+harness\s+distributions?|generated\s+three\s+ways|(?:add|adding)\s+a\s+fourth/i;
+
+/**
+ * The retired KNOWLEDGE DIRECTORY `<any-root>/aidlc-knowledge/`, renamed to
+ * `knowledge/` in milestone 2.
+ *
+ * This was a plain `"aidlc-knowledge/"` substring in PATH_PATTERNS until
+ * 2026-08-08, when the DocumentKB SKILL landed at `skills/aidlc-knowledge/` and
+ * made the bare token ambiguous — it flagged every legitimate reference to the
+ * new skill. Two fixes were rejected before this one:
+ *
+ *   per-file carve-out   the six S1-14 doc files that reference the skill would
+ *                        each need their own STEM carve, so the carve-out list,
+ *                        not the pattern, becomes the maintained artefact.
+ *   prefix allowlist     enumerating `.claude/`, `.kiro/`, `.codex/`,
+ *                        `{{HARNESS_DIR}}/` MISSED four real spellings, measured:
+ *                        `.agents/` (codex's actual skill root), `.aidlc/`
+ *                        (opencode's), the workspace-relative `aidlc/`, and the
+ *                        bare relative `aidlc-knowledge/shared/`. An allowlist of
+ *                        prefixes fails open on the prefix nobody thought of.
+ *
+ * So the discriminator is the ONE thing that actually separates the two path
+ * shapes: the retired directory is never preceded by `skills/`, and the skill
+ * always is. That holds for every root, including roots not invented yet.
+ */
+const STALE_KNOWLEDGE_DIR_RE = /(?<!skills\/)\baidlc-knowledge\//;
 
 /**
  * Check-8 carve-outs. Two permanent allowlist entries:

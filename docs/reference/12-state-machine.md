@@ -6,7 +6,7 @@ Three nested state machines drive AI-DLC: **workflow**, **phase**, and **stage**
 
 > **North-star invariant:** TypeScript owns deterministic bookkeeping; the LLM owns judgment. Every audit emission originates in a tool or hook, keeping LLM prose out of the emit path. If you're reading an MD file and see `aidlc-audit.ts append <EVENT>` as a prose instruction, that is a bug.
 >
-> **Audit-first atomicity:** tools emit their audit entries *before* mutating state. If audit emission fails, the tool throws before touching state — so `audit.md` and the state file never disagree. The ["Audit-first atomicity" section](#audit-first-atomicity) near the end of this chapter spells out the failure modes.
+> **Audit-first atomicity:** tools emit their audit entries *before* mutating state. If audit emission fails, the tool throws before touching state — so `audit.md` and the state file never disagree. The ["Audit-first atomicity" section](#audit-first-atomicity) near the end of this chapter spells out the failure modes, plus the two exceptions: audit-of-intent (`WORKTREE_*`, `AUDIT_*`, `MERGE_DISPATCH_INVOKED`) and the audit-**last** DocumentKB catalog events, whose artifact is derived and rebuildable.
 
 ---
 
@@ -227,7 +227,7 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 
 ## Audit event taxonomy
 
-**82 events**, grouped below into 18 categories (the canonical `audit-format.md` registry splits the same 82 into 21 - the grouping is presentational, the event set is the invariant). Every event has exactly one tool or hook emitter, except for events pre-registered for an upcoming release whose Emitter cell reads `Reserved (v0.4.0 PR N)`, `Reserved (v0.5.0 PR N)`, or `Reserved (v0.6.0 PR N)` - these are skipped by the drift test's forward check until the consumer PR ships the emitter. The drift test `tests/integration/t48-audit-event-emitters.test.ts` enforces forward/reverse/tertiary/pairing/MD-MD consistency between this chapter's tables and the code.
+**85 events**, grouped below into 19 categories (the canonical `audit-format.md` registry splits the same 85 into 22 - the grouping is presentational, the event set is the invariant). Every event has exactly one tool or hook emitter, except for events pre-registered for an upcoming release whose Emitter cell reads `Reserved (v0.4.0 PR N)`, `Reserved (v0.5.0 PR N)`, or `Reserved (v0.6.0 PR N)` - these are skipped by the drift test's forward check until the consumer PR ships the emitter. The drift test `tests/integration/t48-audit-event-emitters.test.ts` enforces forward/reverse/tertiary/pairing/MD-MD consistency between this chapter's tables and the code.
 
 ### Workflow lifecycle
 
@@ -336,6 +336,37 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 | `WORKSPACE_SCANNED` | `tools/aidlc-utility.ts` | Brownfield workspace detection complete |
 | `WORKSPACE_INITIALISED` | `tools/aidlc-utility.ts` | State file materialized |
 
+### Documents
+
+The DocumentKB is space-level, so all three land in one space-level shard even for
+an intent-scoped document — the intent UUID is a field on the event, not the shard
+selector.
+
+That shard is **`spaces/<space>/intents/audit/`**, not `spaces/<space>/audit/`. The
+`intents/` segment is inherited from `intentsDir()`, which is where every shard in a
+space lives; the space-level shard is a sibling of the per-intent record dirs rather
+than a directory one level up. An earlier version of this line documented the
+shorter path, which does not exist on disk — measured by onboarding a document and
+finding the written shard.
+
+Standard audit readers enumerate both the resolved intent's shards and this
+space-level shard. Document events therefore remain visible to `--doctor --export`
+after an intent starts, while intent-scoped lifecycle events retain their existing
+record directory and authority boundaries.
+
+Pre-registered for v2.5.55; all three ship with `tools/aidlc-knowledge.ts` (DocumentKB S1 — `onboard`/`sync`/`associate`). t48 forward check skips rows whose Emitter cell still reads `Reserved`; the consumer commit replaces these cells with the real path in the same commit it ships the emit call.
+
+| Event | Emitter | Notes |
+|---|---|---|
+| `DOCUMENT_INDEXED` | `tools/aidlc-knowledge.ts` | From `onboard` and from `sync`'s fresh-document branch: a customer document entered the DocumentKB for the first time **Audit-last** (see "Audit-last for derived catalogs"): emitted only after every catalog write succeeds. |
+| `DOCUMENT_UPDATED` | `tools/aidlc-knowledge.ts` | From `associate`, `dissociate`, `rebind`, `onboard`'s edited-row branch, and `sync`'s moved/changed/retried branches: a new revision, re-extraction, move, or intent-association change. A no-op emits nothing — an event per call would inflate the ledger with non-changes **Audit-last** (see "Audit-last for derived catalogs"): emitted only after every catalog write succeeds. |
+| `DOCUMENT_REMOVED` | `tools/aidlc-knowledge.ts` | From `sync`: the original is gone, so the row is tombstoned and extracted content deleted. The `metadata.json` tombstone is kept, so a later index rebuild does not resurrect the row as absent **Audit-last** (see "Audit-last for derived catalogs"): emitted only after every catalog write succeeds. |
+
+All three land in the **space-level** audit shard even when the document is scoped to
+an intent: a document outlives any intent, and its scope can move later, so filing
+its provenance under whichever intent happened to be active would split one
+document's history across shards and make it unreconstructible.
+
 ### Error and recovery
 
 | Event | Emitter | Trigger |
@@ -419,7 +450,7 @@ Every event in the taxonomy is either backed by a real emitter or marked `Reserv
 
 ## Audit-first atomicity
 
-State-mutating commands emit their audit entries **before** mutating the state file. Two consequences:
+State-mutating commands emit their audit entries **before** mutating the state file — with two documented exceptions: the audit-of-intent group below (audit first, side-effect second, for outcomes that cannot be checked before emission) and the DocumentKB catalog events (audit **last** — see "Audit-last for derived catalogs"). Two consequences:
 
 1. If audit emission fails (lock timeout, disk error, invalid event type), the tool throws before touching state. The state stays at its previous value; audit.md stays clean.
 2. If state writing fails *after* audit emission, the audit has an "intent" entry but the state didn't move. The drift is visible and diagnosable; `--doctor` surfaces it.
@@ -427,6 +458,17 @@ State-mutating commands emit their audit entries **before** mutating the state f
 The case `test("65: approve is audit-first ...")` in `tests/unit/t17.test.ts` proves this for `approve`: chmod'ing audit.md to read-only forces an audit failure and asserts the state file stays at `[?]` (not `[x]`). The same invariant holds for `gate-start`, `reject`, `revise`, `skip`, `advance`, `complete-workflow`, `reuse-artifact`, `aidlc-bolt.ts set-autonomy`, and `aidlc-state.ts fork` / `aidlc-state.ts merge` (the v0.4.0 milestone 9 state fork/merge subcommands — see `tests/unit/t76.test.ts` for the equivalent chmod-the-lock-dir Part A and chmod-the-target-after-emit Part B proofs).
 
 State fork/merge are deliberately NOT in the audit-of-intent exception below: re-reading and re-writing a state file is idempotent (unlike `git worktree add`, which leaves the worktree present after a kill-9 between emit and git), so the strict invariant applies cleanly. A failed state write after a successful audit emit becomes a phantom `STATE_FORKED` row that doctor (v0.4.0 milestone 15) reconciles against the worktree's record-dir `aidlc-state.md` existence.
+
+### Audit-last for derived catalogs (`DOCUMENT_INDEXED`, `DOCUMENT_UPDATED`, `DOCUMENT_REMOVED`)
+
+The DocumentKB events invert the ordering: `aidlc-knowledge.ts` collects them during a commit and emits them **only after** `index.json`, every `metadata.json`, and every `content.md` write has succeeded. This is the one place in the framework where audit follows state, and it is a deliberate consequence of the catalog being **derived**.
+
+Workflow state is authoritative — nothing can rebuild `aidlc-state.md`, so an audit row recorded ahead of a failed write leaves a phantom entry that `--doctor` can reconcile against the state file, and that diagnosable drift is the better trade. The DocumentKB catalog is the opposite: it is reconstructible from disk, because `sync` rebuilds a lost `index.json` from the surviving per-document `metadata.json` records, tombstones included. So the two failure modes are not symmetric here:
+
+- **Audit before state** (rejected): a `DOCUMENT_UPDATED` row asserting a revision the catalog never took. Every later reader of the ledger — `--doctor`, an export, an agent citing provenance — is misled by a change that did not happen, and no rebuild removes the false row.
+- **Audit after state** (chosen): a committed catalog change with no ledger row. The catalog itself is still internally consistent and self-describing; the missing row is a gap in history, not a false claim, and re-running `sync` re-derives the true state.
+
+A missing entry understates what happened; a phantom entry asserts something untrue. For a derived artifact that can be rebuilt, understating is the safer failure. The same reasoning does not extend to any authoritative state file, which is why this exception is scoped to these three events and not generalised.
 
 ### Audit-of-intent semantics (`WORKTREE_*`, `AUDIT_*`, and merge-dispatch `MERGE_DISPATCH_INVOKED`)
 

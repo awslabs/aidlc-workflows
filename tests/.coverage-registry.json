@@ -20,23 +20,23 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 548,
+    "total": 571,
     "enumeratedByClass": {
-      "function": 302,
-      "audit": 82,
+      "function": 314,
+      "audit": 85,
       "scope": 9,
       "stage": 32,
       "hook": 17,
-      "subcommand": 99,
+      "subcommand": 107,
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 144,
-      "audit": 40,
+      "function": 151,
+      "audit": 43,
       "scope": 9,
       "stage": 9,
       "hook": 17,
-      "subcommand": 87,
+      "subcommand": 95,
       "render-surface": 7
     }
   },
@@ -122,6 +122,46 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "DOCUMENT_INDEXED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t291-knowledge-transaction.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "DOCUMENT_REMOVED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t284-knowledge-sync-rebind.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "DOCUMENT_UPDATED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t283-knowledge-intents.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t284-knowledge-sync-rebind.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "audit",
@@ -1061,6 +1101,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:assertNoSymlinkInChainOrThrow",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t286-read-write-boundary.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:auditBlockField",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1531,6 +1583,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:documentExtractors",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t279-document-extractors-seam.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:emitError",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1590,6 +1654,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:ensureDirSync",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -2055,6 +2126,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:isPidAlive",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:isPlainObject",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2089,6 +2167,13 @@
     {
       "unitClass": "function",
       "unitId": "function:keywordCollisions",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:KNOWLEDGE_VERBS",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -2588,6 +2673,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:parseKnowledgeCommand",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t178-classify-terminal-command.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:parseMemoryEntries",
       "minMechanism": "none",
       "coveredBy": [
@@ -2864,6 +2961,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:readRegularFileNoFollowOrThrow",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t286-read-write-boundary.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:readSessionIntentHandoff",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3005,6 +3114,20 @@
     {
       "unitClass": "function",
       "unitId": "function:removeSlug",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:removeTreeSync",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:renameIntoPlace",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -3450,6 +3573,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:SPACE_NAME_REGEX",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t286-read-write-boundary.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:SPACE_VERBS",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3807,6 +3942,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:validSpaceFlag",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t286-read-write-boundary.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:withAuditLock",
       "minMechanism": "none",
       "coveredBy": [
@@ -3904,6 +4051,18 @@
         {
           "file": "tests/unit/t272-unit-major-code-gen.test.ts",
           "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:writeBufferAtomic",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t286-read-write-boundary.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -5289,6 +5448,130 @@
         },
         {
           "file": "tests/unit/t19.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-knowledge associate",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t285-knowledge-skill.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t293-knowledge-journey.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-knowledge dissociate",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t285-knowledge-skill.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t293-knowledge-journey.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-knowledge help",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t285-knowledge-skill.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-knowledge list",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t292-knowledge-list-show.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t293-knowledge-journey.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-knowledge onboard",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t291-knowledge-transaction.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t293-knowledge-journey.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-knowledge rebind",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t285-knowledge-skill.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t293-knowledge-journey.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-knowledge show",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t285-knowledge-skill.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t293-knowledge-journey.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-knowledge sync",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t285-knowledge-skill.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t293-knowledge-journey.test.ts",
           "mechanism": "cli"
         }
       ],

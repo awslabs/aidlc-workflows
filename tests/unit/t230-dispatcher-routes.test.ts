@@ -556,6 +556,7 @@ describe("t230 dispatcher route completeness", () => {
       "aidlc-bolt.ts",
       "aidlc-graph.ts",
       "aidlc-jump.ts",
+      "aidlc-knowledge.ts",
       "aidlc-learnings.ts",
       "aidlc-log.ts",
       "aidlc-orchestrate.ts",

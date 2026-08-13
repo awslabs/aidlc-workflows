@@ -13,7 +13,7 @@ commands a stage or conductor invokes directly.
 
 All event names follow `SUBJECT_PAST_VERB` — every event answers "what happened?"
 
-## Event Registry (82 events, 21 categories)
+## Event Registry (85 events, 22 categories)
 
 ### Workflow Lifecycle (4 events)
 
@@ -135,6 +135,23 @@ the active space's shared `codekb/<repo>/` tree.
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
 | `PLAN_APPROVAL_BLOCKED` | A code-generation developer-agent dispatch was refused because a targeted unit lacked a non-empty, explicitly approved `code-generation-plan.md` (stage Steps 2-3 must precede Step 4) | Timestamp, Tool, Target, Stage, Unit | `hooks/aidlc-plan-approval-guard.ts` (PreToolUse) |
+
+### Documents (3 events)
+
+The DocumentKB is a **space-level** store, so all three events land in the space-level audit shard (`spaces/<space>/audit/`) even for an intent-scoped document — the intent UUID is recorded as a field rather than selecting the shard. This keeps one document's history in one place across an `associate`/`dissociate` scope change. Deleting `documentkb/` is recoverable from `documents/` plus these events.
+
+| Event | When | Required Fields | Emitter |
+|-------|------|-----------------|---------|
+| `DOCUMENT_INDEXED` | A customer document was indexed into the DocumentKB for the first time (from `onboard`, and from `sync`'s fresh-document branch) | Timestamp, Space, Document, Source, Digest, optional Intent | `tools/aidlc-knowledge.ts` |
+| `DOCUMENT_UPDATED` | An indexed document's record changed — a new revision, a re-extraction, a move, or an intent association change (from `associate`, `dissociate`, `rebind`, and `sync`) | Timestamp, Space, Document, Change, optional Intent | `tools/aidlc-knowledge.ts` |
+| `DOCUMENT_REMOVED` | The original is gone; the row became a metadata-only tombstone and extracted content was deleted (from `sync`) | Timestamp, Space, Document, Last Path, Last Digest | `tools/aidlc-knowledge.ts` |
+
+All three are written to the **space-level** shard (`intents/audit/`), not an intent's,
+even when the document carries `related_intent_ids`. A document outlives any single
+intent and `associate`/`dissociate` can move its scope, so filing its provenance under
+the active intent would split one document's history across shards. An
+`associate`/`dissociate` that changes nothing emits **no** event: a per-call event
+would fill the ledger with non-changes and break reconstruction-from-the-ledger.
 
 ### Utility Events (1 event)
 

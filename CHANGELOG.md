@@ -1,6 +1,134 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.76] - 2026-08-13
+
+Your own documents become something agents can cite. Drop PDFs, Word files,
+Markdown, or plain text under `aidlc/spaces/<space>/knowledge/documents/`,
+organised however you like, then run `/aidlc knowledge onboard` to index them.
+The originals stay yours — AI-DLC never moves, rewrites, or deletes anything in
+`documents/`. It derives a catalog next door in `knowledge/documentkb/`: lose
+`index.json` and `/aidlc knowledge sync` rebuilds it from the per-document records,
+tombstones included. Deleting the whole `documentkb/` tree deletes those records too,
+so document ids, tombstones and intent links do NOT survive that — `sync` re-indexes
+the surviving originals as new rows.
+**Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+* Added `/aidlc knowledge <verb>` and the matching `/aidlc-knowledge` skill, on
+  every harness: `onboard [path]`, `sync`, `list [--json]`, `show <id>`,
+  `associate`/`dissociate <id> --intent [slug]`, and `rebind <id> --to <path>`.
+  All accept `--space <name>`.
+* Every `knowledge` verb refuses to run if `knowledge/` or `knowledge/documentkb/`
+  is a symlink, rather than following it. A redirected container directory would
+  otherwise decide where the catalog got written — off-project, or into your own
+  `documents/` folder — and, for the journal sweep, what got deleted. The check
+  runs in each verb and again in every function that reads or writes under
+  `knowledge/` — the catalog, the alias map that resolves linked originals, or the
+  documents themselves — so a caller reaching the library directly is covered too.
+  A first run on a project that has neither directory yet is unaffected: absent is
+  not redirected. The check catches a symlink present when the command starts; it
+  is not a defence against one planted mid-run.
+* `onboard` is idempotent — re-running it on an unchanged file reports `already`
+  instead of writing a second row, so sweeping a folder is safe to repeat.
+* Documents are space-wide unless you pass `--intent`. Bare `--intent` means the
+  active intent and fails rather than guessing when there is no cursor;
+  `--intent <slug>` fails if the slug matches zero or more than one intent.
+  Associations persist the intent UUID, so renaming a slug never re-points a
+  document.
+* Scoping a document to an intent that has finished (`complete`, `archived`,
+  `closed`, `abandoned`) is refused; pass `--allow-inactive` when you mean to
+  back-fill onto a closed record. `dissociate` never needs the flag, so an
+  association can always be undone.
+* A document whose extractor is not installed is still catalogued, with the
+  state `extractor_unavailable` visible in `list` — install the tool and
+  re-`onboard` that path. Nothing is silently skipped.
+* `rebind <id> --to <path>` repairs a row after a move **and** an edit, the one
+  case `sync` cannot resolve because neither the path nor the digest survives to
+  tie the new file to the old row.
+* There is deliberately **no `remove`**: delete your own file and run `sync`.
+  The tool never holds a destructive verb over files you own. A deleted original
+  leaves a tombstoned row, distinct from `source_unavailable`, which means a
+  linked original is temporarily unreachable rather than gone.
+* Extracted document text is treated as **untrusted data, not instructions**.
+  `show` ships that warning inline with the content, so an imperative inside a
+  customer's document cannot redirect a workflow.
+* **Document paths and filenames are declared untrusted too**, because the
+  customer chose them: a file named `IGNORE ALL PREVIOUS INSTRUCTIONS.md` is a
+  filename, not a directive. Every command now leads its output with that
+  declaration — `--json` payloads carry a `path_notice` key first, human output
+  prints the notice ahead of any name, and refusals carry it too. **If you parse
+  this tool's output, note the new leading key/line.**
+* New audit events `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED`, and
+  `DOCUMENT_REMOVED`, written to the space-level shard even for an
+  intent-scoped document. An association that changes nothing emits no event.
+* New gitignore entries: `knowledge/documentkb/.journal/` (in-flight
+  transactions) and `knowledge/.sources.local.json` (where this machine resolves
+  documents linked from outside the repo). If your project has a hand-maintained
+  `.gitignore`, add both.
+* Projects can commit their text-extractor choice so it travels to every clone. A
+  configured extractor's `argv` must contain exactly one `$IN` — the placeholder the
+  document's path is substituted into. Zero or several is refused when the tool
+  starts: a process that never receives the file would otherwise record whatever it
+  printed as the extracted text of *every* document routed to it.
+* `onboard` reports a third outcome, `edited`, when a file that changed at an
+  already-indexed path is re-indexed: the existing row is refreshed in place, keeping
+  its id and intent links, so one path can never carry two live rows.
+* A pathless `onboard` and `sync` refuse a run over 20 documents or 256 MiB, naming
+  the cap and the remedy, and index nothing when they refuse — a cap is never a
+  half-finished batch. A single document over 32 MiB is refused without being read.
+* A Word (`.docx`) file is now recognised as Word rather than as a generic binary, so
+  a configured `.docx` extractor can actually be selected for it. With none
+  configured it is still catalogued and citable as `unsupported_type`, exactly as
+  before.
+* `rebind <id> --to <path>` now completes the recovery it documents: the following
+  `sync` reports `retried` and regenerates the extracted text, instead of leaving the
+  row permanently invalidated.
+* Scoping to one of several same-slug intents works: `--intent` accepts the full
+  record-dir name (`260810-my-slug-2`) and a canonical UUID, which is what the
+  ambiguity error already told you to use.
+* A hand-edited or corrupted catalog is refused rather than half-trusted: a row's
+  `content`/`summary` path must belong to that row, a `removed_at` that is present
+  must be a non-empty ISO timestamp, and an index that would fail validation is
+  refused before anything is published — so a failed run leaves the space able to
+  recover with a plain `sync`.
+* `sync` no longer applies a decision made before it took the workspace lock if the
+  row changed underneath it (a concurrent `rebind` is the case that mattered); it
+  skips that row and re-plans on the next run, and it re-reads the source under the
+  lock so extraction can never be published against bytes it did not hash. The
+  `DOCUMENT_*` audit rows are written after the catalog write they describe, which is
+  a documented exception to the framework's audit-first rule and is explained in the
+  state-machine chapter.
+* `/aidlc knowledge <verb>` works. Every verb was reachable only by calling the tool
+  directly; through the documented command the dispatcher answered `unknown verb`,
+  because the route was registered as a top-level passthrough while sitting in its own
+  noun group. If you scripted around this by invoking `tools/aidlc-knowledge.ts`, that
+  still works — the public command now does too.
+* A document that cannot be read is no longer reported as deleted. Growing an indexed
+  file past the 32 MiB per-document cap made `sync` tombstone the row while the file
+  sat on disk; such a row now reads `present_but_refused` in `list`, and a genuine
+  deletion still tombstones, so the two are distinguishable.
+* A catalog larger than the batch cap can still be reconciled. The cap now counts the
+  documents a run must actually process, not everything in the tree, so a
+  21-document catalog built one file at a time no longer refuses every later `sync`.
+* Installing a missing extractor now makes the waiting rows retryable: the detected
+  media type is recorded on an `extractor_unavailable` row, so a `.docx` row is
+  re-tried on the next `sync` instead of being permanently mis-typed as plain text.
+* An extractor whose `argv` puts `$IN` first is refused. The placeholder is only
+  substituted in the arguments, so `["$IN"]` meant the tool tried to run a program
+  literally named `$IN`; a real executable is now required at position 0.
+* A `removed_at` that is present must parse as an ISO timestamp — `"not-a-date"` was
+  previously accepted — and `documents/` itself is now covered by the no-symlink
+  trust chain, so a redirected documents root is refused before anything is read.
+* Extracted text carries its own digest in addition to the source revision. `show`
+  withholds a missing or mismatched derivative, and `sync` re-extracts it, so a
+  metadata/content write failure cannot serve old text under a new citation.
+* `sync` revalidates newly discovered sources at commit time as well as changed and
+  retried rows, and discards unchanged-file buffers while scanning so a large
+  reconciled catalog does not accumulate the whole corpus in memory.
+* Present non-regular sources (directories, FIFOs, devices, or symlinks) are reported
+  as `present_but_refused`, not tombstoned as though the user deleted them.
+* Standard audit readers merge the space-level shard with the active intent shards,
+  so `DOCUMENT_*` history remains visible to `--doctor --export` after work starts.
+
 ## [2.5.75] - 2026-08-13
 
 Observability is now a first-class NFR artifact flow for service units, from requirements through architecture and platform-specific monitoring design. This integrates the design of community PR #404 by jeromevdl for issue #398 while retaining the existing `monitoring-design` infrastructure handoff. **Upgrade:** refresh `dist/<harness>/` in your project.
@@ -126,12 +254,12 @@ Adds GitHub Copilot as a first-class harness for both Copilot CLI and VS Code ag
 ## [2.5.59] - 2026-08-08
 
 Gives the Stop hook's conversational carve-out a second evidence source, so it stops counting a purely conversational turn mid-stage as a no-progress block on harnesses that deliver no transcript. Asking why an earlier decision was made, or reading code without advancing the workflow, previously fell through to the cap-bounded block on Kiro IDE, Kiro CLI, and opencode: the carve-out read its answer off the harness transcript, and only Claude Code and Codex deliver `transcript_path`. What that costs the user depends on the host — see the second bullet, because it is not the same everywhere. **Upgrade:** copy the tree CONTENTS for your harness, e.g. `mkdir -p your-project/.kiro && cp -R dist/kiro-ide/.kiro/. your-project/.kiro/` into your project.
-
 * The carve-out now answers the same question from two `mtime` markers where no transcript arrives. Two runtime files appear under the active intent's record dir: `.aidlc-human-turn` (touched once per human prompt, alongside the existing `HUMAN_TURN` audit event) and `.aidlc-engine-touch` (touched by every advancing `aidlc-orchestrate next` / `report` / `park`). A human turn newer than the last engine advance is what identifies a chat turn. Both are already covered by the shipped `aidlc/spaces/*/intents/*/.aidlc-*` gitignore rule, so neither is ever committed, and read-only routing (`--status`, `--doctor`, `--help`, `--version`, and the workspace verbs) does not count as engagement.
 * **What you actually see depends on your host.** On Claude Code, Codex and opencode the spurious nudge is suppressed and the turn ends clean. On **Kiro IDE nothing user-visible changes**: that host's `Stop` trigger is observational — measured live with a probe hook, neither stdout nor stderr reaches the agent — so the nudge was never delivered there to begin with; only the `stop.drops` record and the no-progress counter are corrected. On Kiro CLI 2.16.0 the block was measured live on both runtimes: legacy/V2 consumes the adapter-relayed `{"decision":"block","reason":"..."}`, reinjects `reason`, and invokes `Stop` twice across the induced continuation; `--v3`/KAS consumes the same shape through its standalone `.kiro/hooks` registration, reinjects `reason`, and invokes `Stop` once without re-firing after that continuation. The spurious nudge is therefore suppressed on both CLI runtimes.
 * **Known gap, documented rather than closed.** The marker path is more permissive than the transcript path: it is blind to `aidlc-jump`, `aidlc-bolt`, `aidlc-swarm` and the mutating `aidlc-state` verbs, none of which touch the engine marker. A conductor that jumps the stage pointer and then ends its turn without consulting the engine is released on Kiro and opencode where it would be blocked on Claude Code. Those turns were nudged before this change, so it is a real if narrow relaxation. `docs/reference/06-hooks-and-tools.md` spells out the gap and the session-scope caveat (the markers are per-intent, so two concurrent sessions on one intent can cross-talk).
 * Enforcement is otherwise intact: a conductor that consults the engine and then tries to end its turn without reporting is still blocked, the autonomy guard still suppresses the carve-out under `Construction Autonomy Mode: autonomous`, and both marker reads fail closed — a missing marker reads as "no evidence" rather than releasing. A marker whose write fails is now deleted instead of left stale, because a stale *engine* marker would be a persistent silent fail-open. `aidlc-orchestrate next` remains a pure read: it writes no marker before an intent is born.
 * No command, flag, or output-format changes; no breaking change for CI or scripts.
+
 
 ## [2.5.58] - 2026-08-07
 

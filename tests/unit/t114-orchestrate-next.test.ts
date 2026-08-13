@@ -351,6 +351,64 @@ describe("t114 plugin terminal routing", () => {
   });
 });
 
+describe("t114 knowledge (DocumentKB) terminal routing", () => {
+  // The engine parser and the classifier are separate code paths whose comments
+  // require byte-for-byte agreement. These cases assert the ENGINE half: a
+  // knowledge verb must emit a terminal print directive naming
+  // aidlc-knowledge.ts, never a workflow directive and never an intent-birth ask.
+  test("every verb routes to aidlc-knowledge.ts and never enters the workflow funnel", () => {
+    for (const verb of ["onboard", "sync", "list", "show", "associate", "dissociate", "rebind"]) {
+      proj = createOrchestrationTestProject();
+      seedStateFile(proj, MID_IDEATION);
+      const out = runNext(proj, ["knowledge", verb]).out;
+      expect(out, verb).toContain('"kind":"print"');
+      expect(out, verb).toContain(`aidlc-knowledge.ts ${verb}`);
+      expect(out, verb).not.toContain('"kind":"run-stage"');
+      expect(out, verb).not.toContain('"kind":"ask"');
+    }
+  });
+
+  test("a mid-workflow knowledge command does not advance the workflow", () => {
+    // The regression this guards: a terminal noun that reaches the funnel while
+    // a workflow is active reads as intent prose and can advance a stage.
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, ["knowledge", "list", "--json"]).out;
+    expect(out).toContain("aidlc-knowledge.ts list --json");
+    expect(out).not.toContain('"kind":"run-stage"');
+  });
+
+  test("arguments survive the round trip, including a path with a space", () => {
+    proj = createOrchestrationTestProject();
+    expect(runNext(proj, ["knowledge", "onboard", "docs/policy.pdf"]).out)
+      .toContain("aidlc-knowledge.ts onboard docs/policy.pdf");
+    // shellArg quoting must keep a spaced path as ONE argument.
+    const spaced = runNext(proj, ["knowledge", "onboard", "my docs/policy.pdf"]).out;
+    expect(spaced).toContain("aidlc-knowledge.ts onboard");
+    expect(spaced).toMatch(/'my docs\/policy\.pdf'|"my docs\/policy\.pdf"/);
+  });
+
+  test("knowledge help routes terminally", () => {
+    proj = createOrchestrationTestProject();
+    const out = runNext(proj, ["knowledge", "help"]).out;
+    expect(out).toContain('"kind":"print"');
+    expect(out).toContain("aidlc-knowledge.ts help");
+    expect(out).not.toContain('"kind":"ask"');
+  });
+
+  test("missing and unknown knowledge verbs are deterministic errors", () => {
+    proj = createOrchestrationTestProject();
+    const missing = runNext(proj, ["knowledge"]).out;
+    const unknown = runNext(proj, ["knowledge", "remove"]).out;
+    expect(missing).toContain('"kind":"error"');
+    expect(missing).toContain("missing verb for noun 'knowledge'");
+    expect(unknown).toContain('"kind":"error"');
+    expect(unknown).toContain("unknown verb 'remove' for noun 'knowledge'");
+    // Not an ask: `knowledge remove` must not offer to birth an intent.
+    expect(`${missing}${unknown}`).not.toContain('"kind":"ask"');
+  });
+});
+
 // ===========================================================================
 // With-state jump commits via an `execute` print directive (.sh test 12)
 // ===========================================================================

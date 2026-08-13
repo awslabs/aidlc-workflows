@@ -310,6 +310,9 @@ Utilities:
   plugin select [names]  Show or set the enabled plugin list
   plugin list       List installed plugins and enabled state (--json for structured output)
   plugin sync       Compose installed plugins into the current install
+  knowledge onboard [path]  Index customer documents into the space DocumentKB
+  knowledge list    The DocumentKB catalog (--json for structured output)
+  knowledge show <id>  One document's record, plus its extracted text
   --doctor          Run health check on hooks, settings, and directory structure
   --doctor --export Write a redacted diagnostic report (timeline + findings, no work product); --output <dir> to relocate
   --stage <id>      Jump to a specific stage (by slug or number, e.g., code-generation or 3.5)

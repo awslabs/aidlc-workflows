@@ -94,6 +94,13 @@ const VALID_EVENT_TYPES = new Set([
   // developer-agent dispatch was refused because no unit had an approved
   // code-generation plan on disk (stage Steps 2-3 must precede Step 4).
   "PLAN_APPROVAL_BLOCKED",
+  // DocumentKB (emitters wired by aidlc-knowledge.ts onboard/sync/associate).
+  // The customer-document store is a SPACE-level object, so all three land in
+  // the space-level audit shard even when the document is intent-scoped -- a
+  // scope change must never split one document's history across two shards.
+  "DOCUMENT_INDEXED",
+  "DOCUMENT_UPDATED",
+  "DOCUMENT_REMOVED",
   // Health/system
   "HEALTH_CHECKED",
   "SCOPE_DETECTED",
@@ -204,6 +211,9 @@ const EVENT_HEADINGS: Record<string, string> = {
   REVIEWER_SCOPE_BLOCKED: "Reviewer Scope Blocked",
   REVIEW_FREEZE_BLOCKED: "Review Freeze Blocked",
   PLAN_APPROVAL_BLOCKED: "Plan Approval Blocked",
+  DOCUMENT_INDEXED: "Document Indexed",
+  DOCUMENT_UPDATED: "Document Updated",
+  DOCUMENT_REMOVED: "Document Removed",
   HEALTH_CHECKED: "Health Check",
   SCOPE_DETECTED: "Scope Detection",
   SCOPE_CHANGED: "Scope Change",
@@ -478,6 +488,41 @@ export function appendAuditEntryUnlocked(
 
   tapAuditMetric(eventType, fields, projectDir);
 
+  return { appended: true, event: eventType, timestamp: ts };
+}
+
+// Append to an EXPLICIT shard path, bypassing (intent, space) resolution.
+//
+// Every other append derives its shard from `auditFilePath`, and that resolution
+// has a sharp edge: `intent === undefined` does NOT mean "no intent" -- it means
+// "resolve one from the cursor" (auditFilePath -> recordDir -> activeIntent,
+// which falls back to the active-intent pointer, then to a lone intent). The
+// space-level shard is only reached when a space has NO intents at all, so a
+// caller cannot ASK for it.
+//
+// DocumentKB needs to: a document outlives any intent, and its scope can change
+// later, so filing its provenance under whichever intent happened to be active
+// would split one document's history across shards. It composes the space shard
+// itself and passes it here.
+//
+// Deliberately does NOT lock -- the caller holds the lock across a wider
+// transaction, and the locking variant would deadlock on itself. Validation,
+// rendering, and the metric tap are identical to every other append, so a row
+// written this way is indistinguishable from one written the usual way.
+export function appendAuditEntryAtPathUnlocked(
+  eventType: string,
+  fields: Record<string, string>,
+  projectDir: string,
+  shardPath: string,
+): { appended: true; event: string; timestamp: string } {
+  const entry = { eventType, fields };
+  validateAuditEntry(entry);
+  const ts = isoTimestamp();
+  const dir = dirname(shardPath);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  if (!existsSync(shardPath)) appendFileSync(shardPath, "# AI-DLC Audit Log\n", "utf-8");
+  appendFileSync(shardPath, renderAuditBlock(entry, ts), "utf-8");
+  tapAuditMetric(eventType, fields, projectDir);
   return { appended: true, event: eventType, timestamp: ts };
 }
 
