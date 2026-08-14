@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 551,
+    "total": 564,
     "enumeratedByClass": {
-      "function": 304,
+      "function": 317,
       "audit": 82,
       "scope": 9,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 145,
+      "function": 156,
       "audit": 40,
       "scope": 9,
       "stage": 11,
@@ -913,7 +913,7 @@
         },
         {
           "file": "tests/unit/t161-per-intent-lock-reaper.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -928,6 +928,13 @@
     {
       "unitClass": "function",
       "unitId": "function:ACTIVE_SPACE_POINTER",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:ActiveDirectiveLockContendedError",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -979,6 +986,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:advanceCopilotContinuation",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t283-copilot-engine-cursor.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -1093,7 +1112,7 @@
         },
         {
           "file": "tests/unit/t161-per-intent-lock-reaper.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1237,6 +1256,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t188-human-presence-gate.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:claimCopilotCommand",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t249-copilot-adapter.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -1426,11 +1457,42 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:consumeCopilotConversation",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t249-copilot-adapter.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:consumersOf",
       "minMechanism": "none",
       "coveredBy": [
         {
           "file": "tests/integration/t66.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:copilotDirectiveCommitRequired",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:copilotStopEvidence",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t249-copilot-adapter.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -1866,7 +1928,7 @@
         },
         {
           "file": "tests/unit/t161-per-intent-lock-reaper.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1953,6 +2015,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:inspectCopilotContinuation",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t283-copilot-engine-cursor.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:INTENT_VERBS",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1990,6 +2064,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:invalidateActiveDirectiveContext",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t249-copilot-adapter.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -2397,6 +2483,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:markActiveDirectiveResumeWaiting",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t249-copilot-adapter.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -2913,6 +3011,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:recordCopilotHumanSequence",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t249-copilot-adapter.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:recordDir",
       "minMechanism": "none",
       "coveredBy": [
@@ -3013,7 +3123,7 @@
         },
         {
           "file": "tests/unit/t161-per-intent-lock-reaper.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -3450,6 +3560,30 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:settleCopilotCommand",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t249-copilot-adapter.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:settleCopilotIntentBoundary",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t249-copilot-adapter.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:SLUG_TAG_REGEX",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3740,6 +3874,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:updateCopilotStopCount",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t249-copilot-adapter.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:updateIntentStatus",
       "minMechanism": "none",
       "coveredBy": [
@@ -3843,7 +3989,7 @@
         },
         {
           "file": "tests/unit/t161-per-intent-lock-reaper.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"

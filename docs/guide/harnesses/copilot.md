@@ -103,19 +103,40 @@ git checkout v2
   `runTerminalCommand`, `createFile`, `editFiles`, and `readFile`,
   but the IDE side has not yet been verified live — treat IDE enforcement
   as best-effort until it has.
-- **Stop preserves the current Copilot directive.** Successful orchestration
-  results record bounded project, intent, session, workflow-state, directive,
-  and continuation metadata. A later Stop reuses that delivered steering part
-  or `run-stage` directive through the shared human-wait and recursion
-  safeguards instead of probing a fresh `next` and restarting steering. A
-  consumed continuation token is denied in the same workflow context. Missing,
-  compacted, malformed, or state-drifted evidence asks for a fresh `next`
-  rather than replaying the prior token.
+- **Command tracking is exact and best-effort.** AI-DLC tracks simple direct
+  orchestrator, source-dispatcher, and real compiled `next`, `continue`,
+  `report`, and `park` commands. One trailing `2>&1` is supported. Inspection
+  commands are not classified from `aidlc` substrings, ambiguous wrappers run
+  unchanged and untracked, and direct-looking compounds are refused. An
+  explicit `--project-dir` outside the current physical project is refused
+  before current-project coordination is written.
+- **The engine owns continuation replay.** For an exact-context,
+  non-sessionless marker in a current installation whose authored
+  `tools/data/harness.json` names `copilot`, `continue` validates the native
+  token first, builds the successor, then atomically compares the full token
+  digest and publishes the successor before stdout. Concurrent uses have one
+  winner. Missing, malformed, v1, stale, and `sessionless:` markers retain the
+  existing stateless behavior. Replacing Copilot with another harness also
+  restores that harness's stateless behavior even if an old Copilot marker is
+  still present.
+- **Stop preserves the current delivered Copilot directive.** An exact host
+  `tool_use_id`, or the adapter ID carried through rewritten engine input and
+  returned by PostToolUse, can settle delivery for session-scoped Stop and
+  Resume behavior. If exact correlation is unavailable, execution is allowed
+  untracked and Post does not guess. A fresh simple `next` restores tracked
+  delivery; correlation loss does not create a permanent deny. Once a claim is
+  attempted, project, state, or session ownership rejection is an explicit deny:
+  another session cannot execute the owner's current token as untracked work.
 - **Resume and conversation waits are session-scoped.** Stop allows a pending
   Resume question or a genuine conversational response to end cleanly. A
   foreign Copilot session cannot answer or advance that wait with bare `next`;
   explicit `next --resume` reissues the choice. Prompt text and rules content
   are not persisted in the coordination marker.
+- **Host evidence is intentionally bounded.** Rewriting and carried-ID echo
+  were live-verified on Copilot CLI 1.0.79 on macOS in noninteractive mode.
+  VS Code's `tool_use_id`, `updatedInput`, and `tool_response` path is covered
+  from its documented Preview contract but is not live-verified here. Copilot
+  cloud agent is outside this release's supported AI-DLC surface.
 - **Hook wiring is matcher-free by design**: VS Code parses but IGNORES hook
   matchers, so every adapter target self-filters on `tool_name` instead — a
   matcher would silently broaden on the IDE.

@@ -85,7 +85,7 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   mkdirSync,
   mkdtempSync,
@@ -111,9 +111,7 @@ const BUN = process.execPath; // the bun running this test (mirrors t104)
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const HOOK_TS = join(
   REPO_ROOT,
-  "dist",
-  "claude",
-  ".claude",
+  "core",
   "hooks",
   "aidlc-continue-workflow.ts",
 );
@@ -2209,4 +2207,26 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     const persisted = JSON.parse(readFileSync(join(seededRecordDir(bounded), ".aidlc-active-directive.json"), "utf-8")) as { stop_count?: number };
     expect(persisted.stop_count).toBe(2);
   }, 30000);
+
+  test("(j) active-directive contention is fail-open and never reported as foreign ownership", () => {
+    const proj = makeProject();
+    seedActive(proj);
+    seedCopilotDirective(proj);
+    const markerPath = join(seededRecordDir(proj), ".aidlc-active-directive.json");
+    const before = readFileSync(markerPath, "utf-8");
+    const lockDir = join(seededRecordDir(proj), ".aidlc-active-directive.lock");
+    const token = randomUUID();
+    mkdirSync(join(lockDir, token), { recursive: true });
+    writeFileSync(join(lockDir, "owner.json"), JSON.stringify({
+      pid: process.pid,
+      startedAtMs: Math.floor(performance.timeOrigin + performance.now()),
+      reapLiveOwnerAfterStale: true,
+      token,
+    }));
+    const stopped = runCopilotStop(proj);
+    expect(stopped.rc).toBe(0);
+    expect(stopped.out).toBe("");
+    expect(readFileSync(markerPath, "utf-8")).toBe(before);
+    expect(statSync(lockDir).isDirectory()).toBe(true);
+  }, 10000);
 });

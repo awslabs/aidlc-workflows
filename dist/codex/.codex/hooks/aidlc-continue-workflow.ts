@@ -108,6 +108,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  ActiveDirectiveLockContendedError,
   activeIntentUuid,
   auditFilePath,
   clearSessionIntentHandoff,
@@ -1124,6 +1125,10 @@ if (transcriptPath && transcriptFormat === "claude") {
 // unparseable) fails open — allow the stop.
 const copilotSession = process.env.AIDLC_COPILOT_SESSION_ID === sessionId ? sessionId : "";
 const copilotEvidence = copilotSession ? copilotStopEvidence(projectDir, stateContent, copilotSession) : null;
+if (copilotEvidence?.status === "contended") {
+  recordHookDrop(projectDir, HOOK_NAME, "active-directive lock contended while reading Copilot Stop evidence; allowing stop");
+  return allowStop();
+}
 if (copilotEvidence?.status === "foreign" || copilotEvidence?.status === "resume") return allowStop();
 const retainedDirective = copilotEvidence?.status === "directive" ? copilotEvidence.directive : undefined;
 const directive: EngineDirective | null = copilotEvidence
@@ -1272,17 +1277,24 @@ if (isConversationalStop(projectDir, stateContent, transcriptPath, transcriptFor
 // present-gate / ask / print / error). Decide whether to block, honouring the
 // recursion bounds. When the bounds say release, LET GO — a stuck loop must
 // never trap the session.
-const markerCount = copilotSession && copilotEvidence &&
-    (copilotEvidence.status === "directive" || copilotEvidence.status === "recovery")
-  ? updateCopilotStopCount(
-      projectDir,
-      stateContent,
-      copilotSession,
-      [kind, activeStage ?? "", activeUnit ?? "", directive.part ?? "", directive.parts ?? "", copilotEvidence.tokenSha256, copilotEvidence.stateSha256, copilotEvidence.resumeStatus, copilotEvidence.resumeAction, copilotEvidence.ownerSession, copilotEvidence.ownerEpoch].join("|"),
-      stopHookActive,
-      blockCap(stateContent),
-    )
-  : null;
+let markerCount: { shouldBlock: boolean; count: number } | null = null;
+if (copilotSession && copilotEvidence &&
+    (copilotEvidence.status === "directive" || copilotEvidence.status === "recovery")) {
+  try {
+    markerCount = updateCopilotStopCount(
+        projectDir,
+        stateContent,
+        copilotSession,
+        [kind, activeStage ?? "", activeUnit ?? "", directive.part ?? "", directive.parts ?? "", copilotEvidence.tokenSha256, copilotEvidence.stateSha256, copilotEvidence.resumeStatus, copilotEvidence.resumeAction, copilotEvidence.ownerSession, copilotEvidence.ownerEpoch].join("|"),
+        stopHookActive,
+        blockCap(stateContent),
+      );
+  } catch (error) {
+    if (!(error instanceof ActiveDirectiveLockContendedError)) throw error;
+    recordHookDrop(projectDir, HOOK_NAME, "active-directive lock contended while updating Copilot Stop count; allowing stop");
+    return allowStop();
+  }
+}
 const shouldBlock = copilotSession
   ? markerCount?.shouldBlock ?? false
   : decideBlock(projectDir, stateContent, stopHookActive);

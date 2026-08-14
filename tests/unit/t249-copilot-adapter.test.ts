@@ -82,7 +82,7 @@ afterAll(() => {
     rmSync(ledgerPath(projectDir), { force: true });
     rmSync(`${ledgerPath(projectDir)}.lock`, { recursive: true, force: true });
   }
-});
+}, 30000);
 
 function pinnedShardName(): string {
   const host =
@@ -117,10 +117,22 @@ function seedShell(dir: string): void {
   );
 }
 
+function overlayAuthoredCopilotSources(dir: string): void {
+  for (const [source, target] of [
+    [join(REPO_ROOT, "core", "tools", "aidlc-lib.ts"), join(dir, ".aidlc", "tools", "aidlc-lib.ts")],
+    [join(REPO_ROOT, "core", "tools", "aidlc-orchestrate.ts"), join(dir, ".aidlc", "tools", "aidlc-orchestrate.ts")],
+    [join(REPO_ROOT, "core", "tools", "aidlc-utility.ts"), join(dir, ".aidlc", "tools", "aidlc-utility.ts")],
+    [join(REPO_ROOT, "core", "hooks", "aidlc-continue-workflow.ts"), join(dir, ".aidlc", "hooks", "aidlc-continue-workflow.ts")],
+    [join(REPO_ROOT, "core", "hooks", "aidlc-validate-state.ts"), join(dir, ".aidlc", "hooks", "aidlc-validate-state.ts")],
+    [join(REPO_ROOT, "harness", "copilot", "hooks", "aidlc-copilot-adapter.ts"), join(dir, ".aidlc", "hooks", "aidlc-copilot-adapter.ts")],
+  ]) cpSync(source, target);
+}
+
 function scratchProject(withState: boolean): string {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "t249-")));
   scratchProjects.add(dir);
   cpSync(COPILOT_TREE, join(dir, ".aidlc"), { recursive: true });
+  overlayAuthoredCopilotSources(dir);
   seedShell(dir);
   if (withState) {
     writeFileSync(
@@ -202,6 +214,7 @@ function runAdapter(
         ...process.env,
         AIDLC_PROJECT_DIR: undefined,
         CLAUDE_PROJECT_DIR: undefined,
+        AIDLC_COMPILED_EXECUTABLE: COMPILED_BINARY ?? undefined,
       } as NodeJS.ProcessEnv,
       timeout: 30_000,
     },
@@ -237,7 +250,7 @@ function commandSpec(dir: string, form: CommandForm, args: string[]) {
   };
   if (!COMPILED_BINARY) throw new Error("compiled coverage requires: bun scripts/build-binaries.ts");
   return {
-    text: `aidlc ${args.map((arg) => JSON.stringify(arg)).join(" ")}`,
+    text: `${JSON.stringify(COMPILED_BINARY)} ${args.map((arg) => JSON.stringify(arg)).join(" ")}`,
     executable: COMPILED_BINARY,
     argv: args,
   };
@@ -259,13 +272,18 @@ function commandPayload(dir: string, session: string, command: string, attempt?:
   };
 }
 
+function rewrittenCommand(pre: { stdout: string }): string {
+  return (JSON.parse(pre.stdout) as { modifiedArgs?: { command?: string } }).modifiedArgs?.command ?? "";
+}
+
 function runLifecycle(dir: string, session: string, form: CommandForm, args: string[], attempt: string) {
   const spec = commandSpec(dir, form, args);
   const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, session, spec.text, attempt));
-  expect(pre.stdout, `${form}: ${spec.text}`).toBe("");
-  const executed = spawnSync(spec.executable, spec.argv, { cwd: dir, encoding: "utf-8", timeout: 30_000 });
+  const rewritten = rewrittenCommand(pre);
+  expect(rewritten, `${form}: ${spec.text}`).toContain(`--aidlc-attempt-id ${attempt}`);
+  const executed = spawnSync("/bin/sh", ["-c", rewritten], { cwd: dir, encoding: "utf-8", timeout: 30_000 });
   expect(executed.status, executed.stderr).toBe(0);
-  const post = runAdapter(dir, "post-tool", commandPayload(dir, session, spec.text, attempt, true, executed.stdout));
+  const post = runAdapter(dir, "post-tool", commandPayload(dir, session, rewritten, attempt, true, executed.stdout));
   return { directive: JSON.parse(executed.stdout.trim()) as Record<string, unknown>, post, spec };
 }
 
@@ -287,10 +305,10 @@ function noIdClaim(dir: string, session: string, spec: ReturnType<typeof command
 function executeNoId(
   dir: string,
   session: string,
-  spec: ReturnType<typeof commandSpec>,
+  _spec: ReturnType<typeof commandSpec>,
   claim: ReturnType<typeof noIdClaim>,
 ) {
-  const executed = spawnSync(spec.executable, [...spec.argv, "--aidlc-attempt-id", claim.attemptId], {
+  const executed = spawnSync("/bin/sh", ["-c", claim.updated], {
     cwd: dir, encoding: "utf-8", timeout: 30_000,
   });
   expect(executed.status, executed.stderr).toBe(0);
@@ -889,7 +907,9 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         }).hookSpecificOutput?.permissionDecision,
         command,
       ).toBe("deny");
-      expect(blocked.stdout, command).toContain("conductor-owned");
+      expect(blocked.stdout, command).toContain(
+        command.includes("--project-dir /tmp") ? "different physical project" : "conductor-owned",
+      );
     }
 
     for (const command of [
@@ -931,7 +951,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       conductorOutput.hookSpecificOutput?.updatedInput?.command,
     );
     expect(conductorOutput.modifiedArgs?.command).toContain("--aidlc-attempt-id");
-  });
+  }, 30000);
 
   test("20: parallel Copilot workers remain lifecycle-blocked when exact attribution is ambiguous", () => {
     const dir = scratchProject(true);
@@ -1041,13 +1061,18 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(routed.directive.kind).toBe("run-stage");
     for (const form of ["direct", "source"] as const) {
       const spec = commandSpec(dir, form, ["continue", token1]);
-      expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, spec.text, `reuse-${form}`)).stdout)
-        .toContain('"permissionDecision":"deny"');
+      const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, session, spec.text, `reuse-${form}`));
+      const rewritten = rewrittenCommand(pre);
+      const replay = spawnSync("/bin/sh", ["-c", rewritten], { cwd: dir, encoding: "utf-8" });
+      expect(replay.status, replay.stderr).toBe(0);
+      expect(JSON.parse(replay.stdout)).toMatchObject({ kind: "error" });
+      expect(replay.stdout).toContain("no longer current");
+      runAdapter(dir, "post-tool", commandPayload(dir, session, rewritten, `reuse-${form}`, true, replay.stdout));
     }
     const active = marker(dir);
     expect(active.kind).toBe("run-stage");
     expect(active.delivery).toBe("delivered");
-    expect((active.active_attempt as Record<string, unknown>).status).toBe("settled");
+    expect((active.active_attempt as Record<string, unknown>).status).toBe("failed");
     expect(JSON.stringify(active)).not.toContain("rules_content");
     expect(JSON.stringify(active)).not.toContain("text_result_for_llm");
     const stopped = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
@@ -1116,7 +1141,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(marker(repeated).owner_epoch).toBe(sameEpoch);
     expect(runAdapter(repeated, "continue-workflow", { ...FIXTURES.stop, cwd: repeated, session_id: "same-owner", stop_hook_active: true }).stdout).toBe("");
     expect(marker(repeated).stop_count).toBe(2);
-  }, 30000);
+  }, 60000);
 
   test.skipIf(COMPILED_BINARY === null)("21b: real compiled dispatcher normalizes next/continue and --resume shorthand", () => {
     const dir = orchestrationProject();
@@ -1131,28 +1156,390 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(["load-steering", "run-stage"]).toContain(String(continued.directive.kind));
   }, 30000);
 
+  test("21c: exact claim ownership failures deny while pre-claim correlation absence stays untracked", () => {
+    const foreignSession = orchestrationProject();
+    const owner = "claim-owner";
+    const first = runLifecycle(foreignSession, owner, "direct", ["next"], "claim-owner-next");
+    const token = String(first.directive.continue_token);
+    const spec = commandSpec(foreignSession, "source", ["continue", token]);
+    const before = readFileSync(join(seededRecordDir(foreignSession), ".aidlc-active-directive.json"), "utf-8");
+    const deniedForeign = runAdapter(foreignSession, "guard-tool-call", commandPayload(
+      foreignSession, "different-session", spec.text, "foreign-session-attempt",
+    ));
+    expect(deniedForeign.code).toBe(0);
+    expect(deniedForeign.stdout).toContain('"permissionDecision":"deny"');
+    expect(deniedForeign.stdout).toContain("another Copilot session");
+    expect(readFileSync(join(seededRecordDir(foreignSession), ".aidlc-active-directive.json"), "utf-8")).toBe(before);
+
+    const noCorrelation = commandPayload(foreignSession, "", spec.text);
+    delete (noCorrelation as { session_id?: string }).session_id;
+    const untracked = runAdapter(foreignSession, "guard-tool-call", noCorrelation);
+    expect(untracked.code).toBe(0);
+    expect(untracked.stdout).toBe("");
+    expect(readFileSync(join(seededRecordDir(foreignSession), ".aidlc-active-directive.json"), "utf-8")).toBe(before);
+
+    const stateDrift = orchestrationProject();
+    const stateOwner = "state-owner";
+    const stateFirst = runLifecycle(stateDrift, stateOwner, "direct", ["next"], "state-owner-next");
+    appendFileSync(seededStateFile(stateDrift), "\n<!-- claim drift -->\n");
+    const deniedState = runAdapter(stateDrift, "guard-tool-call", commandPayload(
+      stateDrift,
+      stateOwner,
+      commandSpec(stateDrift, "direct", ["continue", String(stateFirst.directive.continue_token)]).text,
+      "state-drift-attempt",
+    ));
+    expect(deniedState.stdout).toContain('"permissionDecision":"deny"');
+    expect(deniedState.stdout).toContain("workflow state changed");
+
+    const projectDrift = orchestrationProject();
+    const projectOwner = "project-owner";
+    const projectFirst = runLifecycle(projectDrift, projectOwner, "direct", ["next"], "project-owner-next");
+    rewriteMarker(projectDrift, (value) => { value.project_sha256 = "0".repeat(64); });
+    const deniedProject = runAdapter(projectDrift, "guard-tool-call", commandPayload(
+      projectDrift,
+      projectOwner,
+      commandSpec(projectDrift, "direct", ["continue", String(projectFirst.directive.continue_token)]).text,
+      "project-drift-attempt",
+    ));
+    expect(deniedProject.stdout).toContain('"permissionDecision":"deny"');
+    expect(deniedProject.stdout).toContain("could not match");
+  }, 30000);
+
+  test("21d: stale tracked fresh-next execution cannot replace a newer owner's cursor in either order", () => {
+    for (const order of ["stale-before-owner", "stale-after-owner"] as const) {
+      const dir = orchestrationProject();
+      const spec = commandSpec(dir, "direct", ["next"]);
+      const attemptA = `${order}-attempt-a`;
+      const attemptB = `${order}-attempt-b`;
+      const commandA = rewrittenCommand(runAdapter(
+        dir, "guard-tool-call", commandPayload(dir, "session-a", spec.text, attemptA),
+      ));
+      const claimedA = marker(dir);
+      expect(claimedA).toMatchObject({
+        owner_session: "session-a",
+        active_attempt: {
+          id: attemptA,
+          status: "pending",
+          claim_revision: claimedA.revision,
+          command_sha256: createHash("sha256").update(JSON.stringify(["next"])).digest("hex"),
+        },
+      });
+      const commandB = rewrittenCommand(runAdapter(
+        dir, "guard-tool-call", commandPayload(dir, "session-b", spec.text, attemptB),
+      ));
+      const claimedB = marker(dir);
+      const claimedBBytes = readFileSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"), "utf-8");
+      const claimedBRevision = Number(claimedB.revision);
+      expect(claimedB).toMatchObject({
+        owner_session: "session-b",
+        owner_epoch: Number(claimedA.owner_epoch) + 1,
+        delivery: "superseded",
+        active_attempt: {
+          id: attemptB,
+          session_id: "session-b",
+          status: "pending",
+          owner_epoch: Number(claimedA.owner_epoch) + 1,
+          context_epoch: claimedB.context_epoch,
+          claim_revision: claimedB.revision,
+        },
+      });
+
+      const executeStaleA = (expectedBytes: string): void => {
+        for (let duplicate = 0; duplicate < 2; duplicate++) {
+          const delayed = spawnSync("/bin/sh", ["-c", commandA], { cwd: dir, encoding: "utf-8" });
+          expect(delayed.status, delayed.stderr).toBe(0);
+          expect(JSON.parse(delayed.stdout)).toMatchObject({ kind: "error" });
+          expect(delayed.stdout).toContain("stale or superseded");
+          expect(readFileSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"), "utf-8")).toBe(expectedBytes);
+        }
+      };
+      if (order === "stale-before-owner") executeStaleA(claimedBBytes);
+
+      const executedB = spawnSync("/bin/sh", ["-c", commandB], { cwd: dir, encoding: "utf-8" });
+      expect(executedB.status, executedB.stderr).toBe(0);
+      const directiveB = JSON.parse(executedB.stdout) as Record<string, unknown>;
+      expect(directiveB.kind).toBe("load-steering");
+      const tokenB = String(directiveB.continue_token);
+      const issuedB = marker(dir);
+      expect(issuedB).toMatchObject({
+        revision: claimedBRevision + 1,
+        owner_session: "session-b",
+        delivery: "issued",
+        continue_token_sha256: createHash("sha256").update(tokenB).digest("hex"),
+        active_attempt: {
+          id: attemptB,
+          status: "pending",
+          result_revision: claimedBRevision + 1,
+        },
+      });
+      runAdapter(dir, "post-tool", commandPayload(dir, "session-b", commandB, attemptB, true, executedB.stdout));
+      const deliveredB = marker(dir);
+      const deliveredBBytes = readFileSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"), "utf-8");
+      expect(deliveredB).toMatchObject({
+        revision: claimedBRevision + 2,
+        owner_session: "session-b",
+        delivery: "delivered",
+        continue_token_sha256: createHash("sha256").update(tokenB).digest("hex"),
+        active_attempt: { id: attemptB, status: "settled" },
+      });
+      if (order === "stale-after-owner") executeStaleA(deliveredBBytes);
+
+      const continueSpec = commandSpec(dir, "source", ["continue", tokenB]);
+      const continueAttempt = `${order}-continue-b`;
+      const continueCommand = rewrittenCommand(runAdapter(
+        dir,
+        "guard-tool-call",
+        commandPayload(dir, "session-b", continueSpec.text, continueAttempt),
+      ));
+      const continueClaim = marker(dir);
+      const continueClaimRevision = Number(continueClaim.revision);
+      expect(continueClaim).toMatchObject({
+        revision: Number(deliveredB.revision) + 1,
+        delivery: "delivered",
+        active_attempt: {
+          id: continueAttempt,
+          command_kind: "continue",
+          status: "pending",
+          claim_revision: continueClaim.revision,
+        },
+      });
+      const continued = spawnSync("/bin/sh", ["-c", continueCommand], { cwd: dir, encoding: "utf-8" });
+      expect(continued.status, continued.stderr).toBe(0);
+      const continuedDirective = JSON.parse(continued.stdout) as Record<string, unknown>;
+      expect(["load-steering", "run-stage"]).toContain(String(continuedDirective.kind));
+      const continuedIssued = marker(dir);
+      expect(continuedIssued).toMatchObject({
+        revision: continueClaimRevision + 1,
+        delivery: "issued",
+        active_attempt: {
+          id: continueAttempt,
+          status: "pending",
+          result_revision: continueClaimRevision + 1,
+        },
+      });
+      runAdapter(dir, "post-tool", commandPayload(
+        dir, "session-b", continueCommand, continueAttempt, true, continued.stdout,
+      ));
+      expect(marker(dir)).toMatchObject({
+        revision: continueClaimRevision + 2,
+        delivery: "delivered",
+        active_attempt: { id: continueAttempt, status: "settled" },
+      });
+    }
+  }, 60000);
+
+  test("21e: untracked fresh next fails a stale pending candidate and stays undelivered", () => {
+    const dir = orchestrationProject();
+    const spec = commandSpec(dir, "direct", ["next"]);
+    rewrittenCommand(runAdapter(
+      dir, "guard-tool-call", commandPayload(dir, "tracked-owner", spec.text, "pending-tracked-next"),
+    ));
+    const pendingRevision = Number(marker(dir).revision);
+    const untracked = spawnSync("/bin/sh", ["-c", spec.text], { cwd: dir, encoding: "utf-8" });
+    expect(untracked.status, untracked.stderr).toBe(0);
+    const directive = JSON.parse(untracked.stdout) as Record<string, unknown>;
+    expect(directive.kind).toBe("load-steering");
+    const token = String(directive.continue_token);
+    const issued = marker(dir);
+    expect(issued).toMatchObject({
+      revision: pendingRevision + 1,
+      owner_session: "tracked-owner",
+      delivery: "issued",
+      continue_token_sha256: createHash("sha256").update(token).digest("hex"),
+      active_attempt: {
+        id: "pending-tracked-next",
+        status: "failed",
+      },
+    });
+    expect((issued.active_attempt as Record<string, unknown>).result_sha256).toBeUndefined();
+    expect((issued.active_attempt as Record<string, unknown>).result_revision).toBeUndefined();
+    const issuedBytes = readFileSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"), "utf-8");
+    runAdapter(dir, "post-tool", commandPayload(dir, "tracked-owner", spec.text, undefined, true, untracked.stdout));
+    expect(readFileSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"), "utf-8")).toBe(issuedBytes);
+    expect(marker(dir).delivery).toBe("issued");
+  }, 30000);
+
+  test("21f: conflicting host-correlated duplicate continue is denied without replacing the first candidate", () => {
+    for (const firstAttempt of ["host-attempt-a", "host-attempt-b"] as const) {
+      const secondAttempt = firstAttempt === "host-attempt-a" ? "host-attempt-b" : "host-attempt-a";
+      const dir = orchestrationProject();
+      const session = `host-duplicate-${firstAttempt}`;
+      const seeded = runLifecycle(dir, session, "direct", ["next"], `${firstAttempt}-seed`);
+      const token = String(seeded.directive.continue_token);
+      const direct = commandSpec(dir, "direct", ["continue", token]);
+      const source = commandSpec(dir, "source", ["continue", token]);
+      const firstSpec = firstAttempt === "host-attempt-a" ? direct : source;
+      const secondSpec = firstAttempt === "host-attempt-a" ? source : direct;
+      const firstCommand = rewrittenCommand(runAdapter(
+        dir, "guard-tool-call", commandPayload(dir, session, firstSpec.text, firstAttempt),
+      ));
+      const survivingBytes = readFileSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"), "utf-8");
+      const duplicate = runAdapter(
+        dir, "guard-tool-call", commandPayload(dir, session, secondSpec.text, secondAttempt),
+      );
+      expect(duplicate.code).toBe(0);
+      expect(duplicate.stdout).toContain('"permissionDecision":"deny"');
+      expect(duplicate.stdout).toContain("already pending");
+      expect(readFileSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"), "utf-8")).toBe(survivingBytes);
+      expect(marker(dir)).toMatchObject({
+        active_attempt: { id: firstAttempt, command_kind: "continue", status: "pending" },
+      });
+      const winner = spawnSync("/bin/sh", ["-c", firstCommand], { cwd: dir, encoding: "utf-8" });
+      expect(winner.status, winner.stderr).toBe(0);
+      runAdapter(dir, "post-tool", commandPayload(dir, session, firstCommand, firstAttempt, true, winner.stdout));
+      const deliveredBytes = readFileSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"), "utf-8");
+      runAdapter(dir, "post-tool", commandPayload(
+        dir, session, secondSpec.text, secondAttempt, true, '{"kind":"error","message":"duplicate"}',
+      ));
+      expect(readFileSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"), "utf-8")).toBe(deliveredBytes);
+      expect(marker(dir)).toMatchObject({ delivery: "delivered", active_attempt: { id: firstAttempt, status: "settled" } });
+    }
+  }, 60000);
+
+  test("21g: reusable duplicate continue has one engine winner and one deliverable result in both operation orders", () => {
+    const scenarios = [
+      { pre: ["direct", "source"] as const, engine: "first", post: "winner-first" },
+      { pre: ["source", "direct"] as const, engine: "second", post: "loser-first" },
+    ] as const;
+    for (const scenario of scenarios) {
+      const dir = orchestrationProject();
+      const session = `reused-${scenario.engine}`;
+      const seeded = runLifecycle(dir, session, "direct", ["next"], `seed-${scenario.engine}`);
+      const token = String(seeded.directive.continue_token);
+      const first = noIdClaim(dir, session, commandSpec(dir, scenario.pre[0], ["continue", token]));
+      const firstClaimRevision = Number(marker(dir).revision);
+      const second = noIdClaim(dir, session, commandSpec(dir, scenario.pre[1], ["continue", token]), "vscode");
+      expect(second.attemptId).toBe(first.attemptId);
+      const shared = marker(dir);
+      const claimedRevision = Number(shared.revision);
+      expect(shared).toMatchObject({
+        revision: firstClaimRevision + 1,
+        active_attempt: {
+          id: first.attemptId,
+          command_kind: "continue",
+          status: "pending",
+          shared_attempt: true,
+          claim_revision: shared.revision,
+        },
+      });
+      const sharedBytes = readFileSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"), "utf-8");
+      const third = noIdClaim(dir, session, commandSpec(dir, scenario.pre[0], ["continue", token]));
+      expect(third.attemptId).toBe(first.attemptId);
+      expect(readFileSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"), "utf-8")).toBe(sharedBytes);
+
+      const firstRun = () => spawnSync("/bin/sh", ["-c", first.updated], { cwd: dir, encoding: "utf-8" });
+      const secondRun = () => spawnSync("/bin/sh", ["-c", second.updated], { cwd: dir, encoding: "utf-8" });
+      const runs = scenario.engine === "first" ? [firstRun(), secondRun()] : [secondRun(), firstRun()];
+      for (const run of runs) expect(run.status, run.stderr).toBe(0);
+      const winner = runs.find((run) => (JSON.parse(run.stdout) as { kind: string }).kind !== "error");
+      const loser = runs.find((run) => (JSON.parse(run.stdout) as { kind: string }).kind === "error");
+      expect([winner, loser].filter(Boolean)).toHaveLength(2);
+      expect(runs.filter((run) => (JSON.parse(run.stdout) as { kind: string }).kind !== "error")).toHaveLength(1);
+      expect(runs.filter((run) => (JSON.parse(run.stdout) as { kind: string }).kind === "error")).toHaveLength(1);
+      expect(loser?.stdout).toContain("no longer current");
+      const winnerDirective = JSON.parse(winner?.stdout ?? "{}") as Record<string, unknown>;
+      const resultSha256 = createHash("sha256").update((winner?.stdout ?? "").trim()).digest("hex");
+      const issued = marker(dir);
+      expect(issued).toMatchObject({
+        revision: claimedRevision + 1,
+        delivery: "issued",
+        active_attempt: {
+          id: first.attemptId,
+          status: "pending",
+          result_sha256: resultSha256,
+          result_revision: claimedRevision + 1,
+        },
+      });
+      if (winnerDirective.kind === "load-steering") {
+        expect(issued.continue_token_sha256).toBe(
+          createHash("sha256").update(String(winnerDirective.continue_token)).digest("hex"),
+        );
+      } else {
+        expect(issued.continue_token_sha256).toBeUndefined();
+      }
+      const winnerCommand = scenario.engine === "first" ? first.updated : second.updated;
+      const loserCommand = scenario.engine === "first" ? second.updated : first.updated;
+      const postWinner = () => runAdapter(
+        dir, "post-tool", commandPayload(dir, session, winnerCommand, undefined, true, winner?.stdout),
+      );
+      const postLoser = () => runAdapter(
+        dir, "post-tool", commandPayload(dir, session, loserCommand, undefined, true, loser?.stdout),
+      );
+      if (scenario.post === "winner-first") {
+        postWinner();
+        postLoser();
+      } else {
+        postLoser();
+        expect(marker(dir)).toMatchObject({ delivery: "issued", active_attempt: { status: "pending" } });
+        postWinner();
+      }
+      const deliveredRevision = claimedRevision + 2;
+      expect(marker(dir)).toMatchObject({
+        revision: deliveredRevision,
+        delivery: "delivered",
+        active_attempt: { id: first.attemptId, status: "settled", result_sha256: resultSha256 },
+      });
+      postWinner();
+      postLoser();
+      expect(marker(dir).revision).toBe(deliveredRevision);
+      const retainedKind = marker(dir).kind;
+      const retainedToken = marker(dir).continue_token_sha256;
+      const stopped = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
+      expect((JSON.parse(stopped.stdout) as { decision?: string }).decision).toBe("block");
+      const retained = marker(dir);
+      expect(retained).toMatchObject({
+        kind: retainedKind,
+        delivery: "delivered",
+        active_attempt: { id: first.attemptId, status: "settled" },
+      });
+      expect(retained.continue_token_sha256).toBe(retainedToken);
+    }
+  }, 60000);
+
+  test("21h: failed duplicate Post cannot cancel the candidate that later wins", () => {
+    const dir = orchestrationProject();
+    const session = "duplicate-failure-owner";
+    const seeded = runLifecycle(dir, session, "direct", ["next"], "duplicate-failure-seed");
+    const token = String(seeded.directive.continue_token);
+    const first = noIdClaim(dir, session, commandSpec(dir, "direct", ["continue", token]));
+    const second = noIdClaim(dir, session, commandSpec(dir, "source", ["continue", token]));
+    expect(second.attemptId).toBe(first.attemptId);
+    const pendingBytes = readFileSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"), "utf-8");
+    const failed = spawnSync("/definitely/missing-aidlc-engine", [], { cwd: dir, encoding: "utf-8" });
+    expect(failed.status).not.toBe(0);
+    runAdapter(dir, "post-tool", commandPayload(dir, session, second.updated, undefined, true));
+    expect(readFileSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"), "utf-8")).toBe(pendingBytes);
+    const winner = spawnSync("/bin/sh", ["-c", first.updated], { cwd: dir, encoding: "utf-8" });
+    expect(winner.status, winner.stderr).toBe(0);
+    runAdapter(dir, "post-tool", commandPayload(dir, session, first.updated, undefined, true, winner.stdout));
+    expect(marker(dir)).toMatchObject({
+      delivery: "delivered",
+      active_attempt: { id: first.attemptId, status: "settled" },
+    });
+  }, 30000);
+
   test("22: Post settles only its active attempt across duplicate, reorder, compaction, and malformed result", () => {
     const dir = orchestrationProject();
     const session = "bounded-attempt-owner";
     const first = commandSpec(dir, "direct", ["next"]);
-    expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, first.text, "attempt-a")).stdout).toBe("");
-    const firstRun = spawnSync(first.executable, first.argv, { cwd: dir, encoding: "utf-8" });
+    const firstCommand = rewrittenCommand(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, first.text, "attempt-a")));
+    const firstRun = spawnSync("/bin/sh", ["-c", firstCommand], { cwd: dir, encoding: "utf-8" });
     const second = commandSpec(dir, "source", ["next"]);
-    expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, second.text, "attempt-b")).stdout).toBe("");
-    const secondRun = spawnSync(second.executable, second.argv, { cwd: dir, encoding: "utf-8" });
-    runAdapter(dir, "post-tool", commandPayload(dir, session, first.text, "attempt-a", true, firstRun.stdout));
+    const secondCommand = rewrittenCommand(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, second.text, "attempt-b")));
+    const secondRun = spawnSync("/bin/sh", ["-c", secondCommand], { cwd: dir, encoding: "utf-8" });
+    runAdapter(dir, "post-tool", commandPayload(dir, session, firstCommand, "attempt-a", true, firstRun.stdout));
     expect((marker(dir).active_attempt as Record<string, unknown>).id).toBe("attempt-b");
-    runAdapter(dir, "post-tool", commandPayload(dir, session, second.text, "attempt-b", true, secondRun.stdout));
+    runAdapter(dir, "post-tool", commandPayload(dir, session, secondCommand, "attempt-b", true, secondRun.stdout));
     const settled = marker(dir);
     const revision = Number(settled.revision);
-    runAdapter(dir, "post-tool", commandPayload(dir, session, second.text, "attempt-b", true, secondRun.stdout));
+    runAdapter(dir, "post-tool", commandPayload(dir, session, secondCommand, "attempt-b", true, secondRun.stdout));
     expect(marker(dir).revision).toBe(revision);
     runAdapter(dir, "validate-state", { cwd: dir, session_id: session });
     expect(marker(dir)).toMatchObject({ context_epoch: 1, delivery: "superseded", needs_rehydrate: true });
 
     const third = commandSpec(dir, "direct", ["next"]);
-    expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, third.text, "attempt-c")).stdout).toBe("");
-    const thirdRun = spawnSync(third.executable, third.argv, { cwd: dir, encoding: "utf-8" });
+    const thirdCommand = rewrittenCommand(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, third.text, "attempt-c")));
+    const thirdRun = spawnSync("/bin/sh", ["-c", thirdCommand], { cwd: dir, encoding: "utf-8" });
     const beforeCompact = Number(marker(dir).context_epoch);
     expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, "copied-id-foreign", third.text, "attempt-c")).stdout)
       .toContain('"permissionDecision":"deny"');
@@ -1162,19 +1549,19 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(marker(dir).context_epoch).toBe(beforeCompact + 1);
     expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, third.text, "attempt-c")).stdout)
       .toContain('"permissionDecision":"deny"');
-    runAdapter(dir, "post-tool", commandPayload(dir, session, third.text, "attempt-c", true, thirdRun.stdout));
+    runAdapter(dir, "post-tool", commandPayload(dir, session, thirdCommand, "attempt-c", true, thirdRun.stdout));
     expect(marker(dir)).toMatchObject({ delivery: "superseded", needs_rehydrate: true });
 
     const recovery = commandSpec(dir, "direct", ["next"]);
-    expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, recovery.text, "attempt-d")).stdout).toBe("");
-    runAdapter(dir, "post-tool", commandPayload(dir, session, recovery.text, "attempt-d", true));
+    const recoveryD = rewrittenCommand(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, recovery.text, "attempt-d")));
+    runAdapter(dir, "post-tool", commandPayload(dir, session, recoveryD, "attempt-d", true));
     expect(marker(dir)).toMatchObject({ delivery: "superseded", needs_rehydrate: true });
-    expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, recovery.text, "attempt-e")).stdout).toBe("");
-    expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, recovery.text, "attempt-f")).stdout).toBe("");
+    rewrittenCommand(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, recovery.text, "attempt-e")));
+    const recoveryF = rewrittenCommand(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, recovery.text, "attempt-f")));
     runAdapter(dir, "post-tool", commandPayload(
       dir,
       session,
-      recovery.text,
+      recoveryF,
       "attempt-f",
       true,
       '{"kind":"run-stage","stage":"requirements-analysis"}\n{"kind":"done"}',
@@ -1203,8 +1590,12 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
 
     const compacted = noIdClaim(dir, session, spec);
     runAdapter(dir, "validate-state", { cwd: dir, session_id: session });
-    const compactedRun = spawnSync(spec.executable, [...spec.argv, "--aidlc-attempt-id", compacted.attemptId], { cwd: dir, encoding: "utf-8" });
+    const compactedBytes = readFileSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"), "utf-8");
+    const compactedRun = spawnSync("/bin/sh", ["-c", compacted.updated], { cwd: dir, encoding: "utf-8" });
+    expect(JSON.parse(compactedRun.stdout)).toMatchObject({ kind: "error" });
+    expect(compactedRun.stdout).toContain("stale or superseded");
     runAdapter(dir, "post-tool", commandPayload(dir, session, compacted.updated, undefined, true, compactedRun.stdout));
+    expect(readFileSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"), "utf-8")).toBe(compactedBytes);
     expect(marker(dir)).toMatchObject({ delivery: "superseded", active_attempt: { id: compacted.attemptId, status: "pending" } });
 
     const recovered = noIdClaim(dir, session, spec);
@@ -1226,14 +1617,27 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         const session = `${dialect}-${shape}-owner`;
         const spec = commandSpec(dir, "direct", ["next"]);
         const claim = noIdClaim(dir, session, spec, dialect);
+        const claimedBytes = readFileSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"), "utf-8");
         const command = shape === "missing" ? spec.text : `${spec.text} --aidlc-attempt-id ${wrongAttempt}`;
         const argv = shape === "missing" ? spec.argv : [...spec.argv, "--aidlc-attempt-id", wrongAttempt];
         const executed = spawnSync(spec.executable, argv, { cwd: dir, encoding: "utf-8" });
         expect(executed.status, executed.stderr).toBe(0);
         runAdapter(dir, "post-tool", commandPayload(dir, session, command, undefined, true, executed.stdout));
-        expect(marker(dir)).toMatchObject({ active_attempt: { id: claim.attemptId, status: "pending" } });
+        if (shape === "missing") {
+          expect(JSON.parse(executed.stdout)).toMatchObject({ kind: "load-steering" });
+          expect(marker(dir)).toMatchObject({
+            delivery: "issued",
+            active_attempt: { id: claim.attemptId, status: "failed" },
+          });
+        } else {
+          expect(JSON.parse(executed.stdout)).toMatchObject({ kind: "error" });
+          expect(executed.stdout).toContain("stale or superseded");
+          expect(readFileSync(join(seededRecordDir(dir), ".aidlc-active-directive.json"), "utf-8")).toBe(claimedBytes);
+          expect(marker(dir)).toMatchObject({ active_attempt: { id: claim.attemptId, status: "pending" } });
+        }
         const stopped = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
         expect((JSON.parse(stopped.stdout) as { decision?: string }).decision).toBe("block");
+        expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, spec.text)).stdout).not.toContain('"permissionDecision":"deny"');
       }
     }
   }, 30000);
@@ -1242,11 +1646,11 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const dir = orchestrationProject();
     const session = "vscode-result-owner";
     const spec = commandSpec(dir, "source", ["next"]);
-    expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, spec.text, "vscode-attempt")).stdout).toBe("");
-    const executed = spawnSync(spec.executable, spec.argv, { cwd: dir, encoding: "utf-8" });
+    const rewritten = rewrittenCommand(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, spec.text, "vscode-attempt")));
+    const executed = spawnSync("/bin/sh", ["-c", rewritten], { cwd: dir, encoding: "utf-8" });
     runAdapter(dir, "post-tool", {
       hook_event_name: "PostToolUse", session_id: session, tool_use_id: "vscode-attempt", cwd: dir,
-      toolName: "runTerminalCommand", toolInput: { command: spec.text }, tool_response: executed.stdout,
+      toolName: "runTerminalCommand", toolInput: { command: rewritten }, tool_response: executed.stdout,
     });
     expect(marker(dir)).toMatchObject({ kind: "load-steering", delivery: "delivered" });
   }, 30000);
@@ -1259,22 +1663,23 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     symlinkSync("aidlc.ts", dispatcherAlias);
     symlinkSync("aidlc-orchestrate.ts", directAlias);
     const nextCommand = "bun .aidlc/tools/aidlc-alias.ts next";
-    expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, nextCommand, "alias-next")).stdout).toBe("");
-    const next = spawnSync(process.execPath, [dispatcherAlias, "next"], { cwd: dir, encoding: "utf-8" });
+    const rewrittenNext = rewrittenCommand(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, nextCommand, "alias-next")));
+    const next = spawnSync("/bin/sh", ["-c", rewrittenNext], { cwd: dir, encoding: "utf-8" });
     expect(next.status, next.stderr).toBe(0);
-    runAdapter(dir, "post-tool", commandPayload(dir, session, nextCommand, "alias-next", true, next.stdout));
+    runAdapter(dir, "post-tool", commandPayload(dir, session, rewrittenNext, "alias-next", true, next.stdout));
     const nextDirective = JSON.parse(next.stdout) as { kind?: string; continue_token?: string };
     expect(nextDirective.kind).toBe("load-steering");
     const token = String(nextDirective.continue_token);
     const continueCommand = `bun .aidlc/tools/orchestrate-alias.ts continue ${JSON.stringify(token)}`;
-    expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, continueCommand, "alias-continue")).stdout).toBe("");
-    const continued = spawnSync(process.execPath, [directAlias, "continue", token], { cwd: dir, encoding: "utf-8" });
+    const rewrittenContinue = rewrittenCommand(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, continueCommand, "alias-continue")));
+    const continued = spawnSync("/bin/sh", ["-c", rewrittenContinue], { cwd: dir, encoding: "utf-8" });
     expect(continued.status, continued.stderr).toBe(0);
-    runAdapter(dir, "post-tool", commandPayload(dir, session, continueCommand, "alias-continue", true, continued.stdout));
-    expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, continueCommand, "alias-replay")).stdout)
-      .toContain('"permissionDecision":"deny"');
+    runAdapter(dir, "post-tool", commandPayload(dir, session, rewrittenContinue, "alias-continue", true, continued.stdout));
+    const replay = rewrittenCommand(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, continueCommand, "alias-replay")));
+    const replayed = spawnSync("/bin/sh", ["-c", replay], { cwd: dir, encoding: "utf-8" });
+    expect(replayed.stdout).toContain("no longer current");
     expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, "bun .aidlc/tools/aidlc.ts-missing next", "lookalike")).stdout)
-      .toContain('"permissionDecision":"deny"');
+      .toBe("");
   }, 30000);
 
   test("23: Resume waiting, transfer, selection, retry, and all four action boundaries are session-scoped", () => {
@@ -1361,7 +1766,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     runLifecycle(dir, "resume-original", "direct", ["next", "--resume"], "transfer-original");
     runLifecycle(dir, "resume-new-owner", "source", ["--resume"], "transfer-new");
     expect(marker(dir)).toMatchObject({ owner_session: "resume-new-owner", resume: { status: "waiting", issuing_session: "resume-new-owner" } });
-  }, 60000);
+  }, 120000);
 
   test("23a: selected Resume permits only its exact production skipped-report recovery", () => {
     const dir = orchestrationProject();
@@ -1408,10 +1813,10 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     runAdapter(retry, "validate-state", { cwd: retry, session_id: owner });
     expect(marker(retry)).toMatchObject({ delivery: "superseded", resume: { status: "waiting" } });
     const answer = commandSpec(retry, "source", ["report", "--result", "resumed", "--user-input", "1"]);
-    expect(runAdapter(retry, "guard-tool-call", commandPayload(retry, owner, answer.text, "answer-malformed")).stdout).toBe("");
-    const answered = spawnSync(answer.executable, answer.argv, { cwd: retry, encoding: "utf-8" });
+    const answerCommand = rewrittenCommand(runAdapter(retry, "guard-tool-call", commandPayload(retry, owner, answer.text, "answer-malformed")));
+    const answered = spawnSync("/bin/sh", ["-c", answerCommand], { cwd: retry, encoding: "utf-8" });
     runAdapter(retry, "post-tool", commandPayload(
-      retry, owner, answer.text, "answer-malformed", true,
+      retry, owner, answerCommand, "answer-malformed", true,
       `${answered.stdout.trim()}\n{"kind":"done"}`,
     ));
     expect(marker(retry)).toMatchObject({ delivery: "superseded", resume: { status: "waiting" } });
@@ -1419,9 +1824,9 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(marker(retry).resume).toMatchObject({ status: "selected", action: "resume" });
 
     const followup = commandSpec(retry, "direct", ["next"]);
-    expect(runAdapter(retry, "guard-tool-call", commandPayload(retry, owner, followup.text, "followup-missing")).stdout).toBe("");
-    spawnSync(followup.executable, followup.argv, { cwd: retry, encoding: "utf-8" });
-    runAdapter(retry, "post-tool", commandPayload(retry, owner, followup.text, "followup-missing", true));
+    const followupCommand = rewrittenCommand(runAdapter(retry, "guard-tool-call", commandPayload(retry, owner, followup.text, "followup-missing")));
+    spawnSync("/bin/sh", ["-c", followupCommand], { cwd: retry, encoding: "utf-8" });
+    runAdapter(retry, "post-tool", commandPayload(retry, owner, followupCommand, "followup-missing", true));
     expect(marker(retry).resume).toMatchObject({ status: "selected", action: "resume" });
     runLifecycle(retry, owner, "direct", ["next"], "followup-retry");
     expect(marker(retry).resume).toMatchObject({ status: "superseded", action: "resume" });
@@ -1443,7 +1848,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const staleOwner = "stale-answer-owner";
     runLifecycle(stale, staleOwner, "direct", ["next", "--resume"], "stale-ask");
     const staleAnswer = commandSpec(stale, "direct", ["report", "--result", "resumed", "--user-input", "1"]);
-    expect(runAdapter(stale, "guard-tool-call", commandPayload(stale, staleOwner, staleAnswer.text, "stale-answer")).stdout).toBe("");
+    const staleCommand = rewrittenCommand(runAdapter(stale, "guard-tool-call", commandPayload(stale, staleOwner, staleAnswer.text, "stale-answer")));
     const jump = join(stale, ".aidlc", "tools", "aidlc-jump.ts");
     const drifted = runRawLifecycle(
       stale, staleOwner,
@@ -1451,8 +1856,8 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       process.execPath, [jump, "execute", "--target", "requirements-analysis", "--direction", "redo", "--scope", "feature"], "stale-drift",
     );
     expect(drifted.status, drifted.stderr).toBe(0);
-    const late = spawnSync(staleAnswer.executable, staleAnswer.argv, { cwd: stale, encoding: "utf-8" });
-    runAdapter(stale, "post-tool", commandPayload(stale, staleOwner, staleAnswer.text, "stale-answer", true, late.stdout));
+    const late = spawnSync("/bin/sh", ["-c", staleCommand], { cwd: stale, encoding: "utf-8" });
+    runAdapter(stale, "post-tool", commandPayload(stale, staleOwner, staleCommand, "stale-answer", true, late.stdout));
     expect(marker(stale).resume).toMatchObject({ status: "superseded" });
     expect(runAdapter(stale, "guard-tool-call", commandPayload(stale, staleOwner, staleAnswer.text, "stale-retry")).stdout)
       .toContain('"permissionDecision":"deny"');
@@ -1509,18 +1914,90 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(marker(activeRecovery).stop_count).toBe(2);
   }, 60000);
 
-  test("25: recognized wrappers are denied while unrelated commands and non-Copilot controls remain unchanged", () => {
+  test("24b: a no-tool human prompt is consume-once conversational without prior valid v2 coordination", () => {
+    for (const shape of ["missing", "malformed", "v1"] as const) {
+      const dir = orchestrationProject();
+      const session = `human-${shape}`;
+      const path = join(seededRecordDir(dir), ".aidlc-active-directive.json");
+      if (shape === "malformed") writeFileSync(path, "{bad-json\n");
+      if (shape === "v1") {
+        const state = readFileSync(seededStateFile(dir), "utf-8");
+        writeFileSync(path, `${JSON.stringify({
+          version: 1,
+          stage: "requirements-analysis",
+          state_sha256: createHash("sha256").update(state).digest("hex"),
+        })}\n`);
+      }
+      const human = runAdapter(dir, "record-human-turn", {
+        ...FIXTURES.userPromptSubmit,
+        cwd: dir,
+        session_id: session,
+        prompt: "private conversational prompt must not enter coordination",
+      });
+      expect(human.code, shape).toBe(0);
+      const coordinated = marker(dir);
+      expect(coordinated, shape).toMatchObject({
+        version: 2,
+        owner_session: session,
+        human_sequence: 1,
+      });
+      expect(JSON.stringify(coordinated)).not.toContain("private conversational prompt");
+      const first = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
+      expect(first.code, shape).toBe(0);
+      expect(first.stdout, shape).toBe("");
+      const second = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
+      expect((JSON.parse(second.stdout) as { decision?: string }).decision, shape).toBe("block");
+    }
+  }, 30000);
+
+  test("25: execution-shaped classification allows inspection, wrappers, and one terminal redirect", () => {
     const dir = orchestrationProject();
     for (const command of [
       'bash -lc "bun .aidlc/tools/aidlc-orchestrate.ts next"',
+      "env AIDLC_TEST=1 bun .aidlc/tools/aidlc.ts next",
+      "AIDLC_TEST=1 aidlc next",
+      "cat .aidlc/tools/aidlc.ts | head -50",
+      "printf aidlc | wc -c",
+      'echo "aidlc next"',
+      "echo unrelated",
+      "git status",
+    ]) {
+      const allowed = runAdapter(dir, "guard-tool-call", commandPayload(dir, "wrapper-owner", command, command));
+      expect(allowed.code, command).toBe(0);
+      expect(allowed.stdout, command).toBe("");
+    }
+    const crashed = spawnSync(
+      process.execPath,
+      [join(dir, ".aidlc", "hooks", "missing-copilot-adapter.ts"), "guard-tool-call"],
+      {
+        cwd: dir,
+        input: JSON.stringify(commandPayload(dir, "wrapper-owner", "cat .aidlc/tools/aidlc.ts | head -50")),
+        encoding: "utf-8",
+      },
+    );
+    expect(crashed.stdout).toBe("");
+    expect(crashed.status).not.toBe(0);
+    for (const command of [
       "bun .aidlc/tools/aidlc.ts next && echo compound",
       "aidlc next > /tmp/result",
+      "aidlc next 2>&1 | tee /tmp/result",
     ]) {
       expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, "wrapper-owner", command, command)).stdout, command).toContain('"permissionDecision":"deny"');
     }
-    for (const command of ['echo "aidlc next"', "echo unrelated", "git status"]) {
-      expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, "wrapper-owner", command, command)).stdout, command).toBe("");
-    }
+    const redirected = commandPayload(
+      dir,
+      "redirect-owner",
+      "bun .aidlc/tools/aidlc-orchestrate.ts next 2>&1",
+      "redirect-attempt",
+    );
+    const pre = runAdapter(dir, "guard-tool-call", redirected);
+    const rewritten = (JSON.parse(pre.stdout) as { modifiedArgs?: { command?: string } }).modifiedArgs?.command ?? "";
+    expect(rewritten).toEndWith("--aidlc-attempt-id redirect-attempt 2>&1");
+    const executed = spawnSync("/bin/sh", ["-c", rewritten], { cwd: dir, encoding: "utf-8" });
+    expect(executed.status, executed.stderr).toBe(0);
+    runAdapter(dir, "post-tool", commandPayload(dir, "redirect-owner", rewritten, "redirect-attempt", true, executed.stdout));
+    expect(marker(dir)).toMatchObject({ delivery: "delivered", active_attempt: { id: "redirect-attempt" } });
+
     const directCore = spawnSync(process.execPath, [join(dir, ".aidlc", "hooks", "aidlc-continue-workflow.ts")], {
       cwd: dir,
       input: JSON.stringify({ session_id: "plain-non-copilot", stop_hook_active: false }),
@@ -1528,5 +2005,51 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       env: { ...process.env, AIDLC_PROJECT_DIR: dir, CLAUDE_PROJECT_DIR: dir, AIDLC_COPILOT_SESSION_ID: undefined } as NodeJS.ProcessEnv,
     });
     expect((JSON.parse(directCore.stdout) as { decision?: string }).decision).toBe("block");
+  }, 30000);
+
+  test("26: direct and source foreign projects are denied before claim or Post can mutate either marker", () => {
+    const current = orchestrationProject();
+    const foreign = orchestrationProject();
+    const session = "foreign-project-owner";
+    runLifecycle(current, session, "direct", ["next"], "local-next");
+    runLifecycle(foreign, "foreign-project-session", "source", ["next"], "foreign-next");
+    const currentMarkerPath = join(seededRecordDir(current), ".aidlc-active-directive.json");
+    const foreignMarkerPath = join(seededRecordDir(foreign), ".aidlc-active-directive.json");
+    const currentBefore = readFileSync(currentMarkerPath, "utf-8");
+    const foreignBefore = readFileSync(foreignMarkerPath, "utf-8");
+    for (const form of ["direct", "source"] as const) {
+      const spec = commandSpec(current, form, ["next", "--project-dir", foreign]);
+      const denied = runAdapter(current, "guard-tool-call", commandPayload(current, session, spec.text, `foreign-${form}`));
+      expect(denied.code, form).toBe(0);
+      expect(denied.stdout, form).toContain('"permissionDecision":"deny"');
+      expect(denied.stdout, form).toContain("different physical project");
+      expect(readFileSync(currentMarkerPath, "utf-8"), `${form} current Pre`).toBe(currentBefore);
+      expect(readFileSync(foreignMarkerPath, "utf-8"), `${form} foreign Pre`).toBe(foreignBefore);
+      runAdapter(current, "post-tool", commandPayload(current, session, spec.text, `foreign-${form}`, true, '{"kind":"done"}'));
+      runAdapter(foreign, "post-tool", commandPayload(foreign, session, spec.text, `foreign-${form}`, true, '{"kind":"done"}'));
+      expect(readFileSync(currentMarkerPath, "utf-8"), `${form} current Post`).toBe(currentBefore);
+      expect(readFileSync(foreignMarkerPath, "utf-8"), `${form} foreign Post`).toBe(foreignBefore);
+    }
+  }, 30000);
+
+  test.skipIf(COMPILED_BINARY === null)("26b: the real compiled foreign-project branch cannot claim or settle either marker", () => {
+    const current = orchestrationProject();
+    const foreign = orchestrationProject();
+    const session = "compiled-foreign-owner";
+    runLifecycle(current, session, "direct", ["next"], "compiled-local-next");
+    runLifecycle(foreign, "compiled-foreign-session", "source", ["next"], "compiled-foreign-next");
+    const currentMarkerPath = join(seededRecordDir(current), ".aidlc-active-directive.json");
+    const foreignMarkerPath = join(seededRecordDir(foreign), ".aidlc-active-directive.json");
+    const currentBefore = readFileSync(currentMarkerPath, "utf-8");
+    const foreignBefore = readFileSync(foreignMarkerPath, "utf-8");
+    const spec = commandSpec(current, "compiled", ["next", "--project-dir", foreign]);
+    const denied = runAdapter(current, "guard-tool-call", commandPayload(current, session, spec.text, "compiled-foreign"));
+    expect(denied.code).toBe(0);
+    expect(denied.stdout).toContain('"permissionDecision":"deny"');
+    expect(denied.stdout).toContain("different physical project");
+    runAdapter(current, "post-tool", commandPayload(current, session, spec.text, "compiled-foreign", true, '{"kind":"done"}'));
+    runAdapter(foreign, "post-tool", commandPayload(foreign, session, spec.text, "compiled-foreign", true, '{"kind":"done"}'));
+    expect(readFileSync(currentMarkerPath, "utf-8")).toBe(currentBefore);
+    expect(readFileSync(foreignMarkerPath, "utf-8")).toBe(foreignBefore);
   }, 30000);
 });

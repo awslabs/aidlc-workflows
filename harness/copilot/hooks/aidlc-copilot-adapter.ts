@@ -277,8 +277,8 @@ export async function run(
   }
 
   type ParsedOrchestration =
-    | { status: "unrelated" | "unsupported" }
-    | { status: "recognized"; claim: CopilotCommandClaim };
+    | { status: "unrelated" | "unsupported" | "foreign" }
+    | { status: "recognized"; claim: CopilotCommandClaim; rewrite: (attemptId: string) => string };
 
   function shellWords(command: string): string[] | null {
     const words: string[] = [];
@@ -303,6 +303,56 @@ export async function run(
     return words;
   }
 
+  function executionPrefix(command: string): string[] {
+    let quote: "'" | '"' | null = null;
+    let escaped = false;
+    for (let i = 0; i < command.length; i++) {
+      const ch = command[i];
+      if (escaped) { escaped = false; continue; }
+      if (ch === "\\" && quote !== "'") { escaped = true; continue; }
+      if (quote) {
+        if (ch === quote) quote = null;
+        continue;
+      }
+      if (ch === "'" || ch === '"') { quote = ch; continue; }
+      if (";&|<>`\n".includes(ch) || (ch === "$" && command[i + 1] === "(")) {
+        return shellWords(command.slice(0, i)) ?? [];
+      }
+    }
+    return shellWords(command) ?? [];
+  }
+
+  function simpleCommand(command: string): { words: string[]; body: string; redirect: string } | null {
+    let quote: "'" | '"' | null = null;
+    let escaped = false;
+    let redirectStart = -1;
+    for (let i = 0; i < command.length; i++) {
+      const ch = command[i];
+      if (escaped) { escaped = false; continue; }
+      if (ch === "\\" && quote !== "'") { escaped = true; continue; }
+      if (quote) {
+        if (ch === quote) quote = null;
+        else if (ch === "`" || (quote === '"' && ch === "$" && command[i + 1] === "(")) return null;
+        continue;
+      }
+      if (ch === "'" || ch === '"') { quote = ch; continue; }
+      if (ch === "2" && (i === 0 || /\s/.test(command[i - 1])) && command.slice(i, i + 4) === "2>&1" &&
+        command.slice(i + 4).trim().length === 0) {
+        redirectStart = i;
+        break;
+      }
+      if (";&|<>`\n".includes(ch) || (ch === "$" && command[i + 1] === "(")) return null;
+    }
+    if (escaped || quote) return null;
+    const body = command.slice(0, redirectStart < 0 ? command.length : redirectStart).trimEnd();
+    const words = shellWords(body);
+    return words ? { words, body, redirect: redirectStart < 0 ? "" : command.slice(redirectStart) } : null;
+  }
+
+  function safeAttemptId(value: unknown): string | undefined {
+    return typeof value === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(value) ? value : undefined;
+  }
+
   function resumeAction(args: string[]): CopilotCommandClaim["resumeAction"] {
     const index = args.lastIndexOf("--user-input");
     const raw = index >= 0 ? (args[index + 1] ?? "").trim().toLowerCase() : "";
@@ -319,9 +369,36 @@ export async function run(
   function orchestrationCommand(): ParsedOrchestration {
     const command = nativeToolInput?.command;
     if (typeof command !== "string" || command.length === 0 || Buffer.byteLength(command) > 64 * 1024) return { status: "unrelated" };
-    const mentions = /(?:aidlc-orchestrate\.ts|aidlc\.ts|(?:^|\s)aidlc(?:\s|$))/.test(command);
-    const words = shellWords(command);
-    if (!words) return { status: mentions ? "unsupported" : "unrelated" };
+    const prefix = executionPrefix(command);
+    let prefixCursor = 0;
+    const prefixFirst = prefix[prefixCursor++] ?? "";
+    let directPrefix = false;
+    if (prefixFirst === "bun" || prefixFirst === process.execPath) {
+      if (prefix[prefixCursor] === "run") prefixCursor++;
+      const script = prefix[prefixCursor] ?? "";
+      const directPath = join(projectDir, ".aidlc", "tools", "aidlc-orchestrate.ts");
+      const dispatcherPath = join(projectDir, ".aidlc", "tools", "aidlc.ts");
+      try {
+        const resolved = realpathSync(resolve(projectDir, script));
+        directPrefix = resolved === realpathSync(directPath) || resolved === realpathSync(dispatcherPath);
+      } catch {
+        if (resolve(projectDir, script) === resolve(directPath) || resolve(projectDir, script) === resolve(dispatcherPath)) {
+          return { status: "unsupported" };
+        }
+      }
+    } else if (prefixFirst === "aidlc") {
+      directPrefix = true;
+    } else {
+      const configured = process.env.AIDLC_COMPILED_EXECUTABLE;
+      if (configured) {
+        try { directPrefix = realpathSync(resolve(prefixFirst)) === realpathSync(resolve(configured)); }
+        catch { directPrefix = resolve(prefixFirst) === resolve(configured) && prefixFirst.length > 0; }
+      }
+    }
+    if (!directPrefix) return { status: "unrelated" };
+    const parsed = simpleCommand(command);
+    if (!parsed) return { status: "unsupported" };
+    const words = parsed.words;
     let cursor = 0;
     let args: string[];
     const first = words[cursor++] ?? "";
@@ -330,32 +407,33 @@ export async function run(
       const script = words[cursor++] ?? "";
       let resolved = "", direct = "", dispatcher = "";
       try { resolved = realpathSync(resolve(projectDir, script)); direct = realpathSync(join(projectDir, ".aidlc", "tools", "aidlc-orchestrate.ts")); dispatcher = realpathSync(join(projectDir, ".aidlc", "tools", "aidlc.ts")); }
-      catch { return { status: mentions ? "unsupported" : "unrelated" }; }
-      if (resolved !== direct && resolved !== dispatcher) return { status: mentions ? "unsupported" : "unrelated" };
+      catch { return { status: "unsupported" }; }
+      if (resolved !== direct && resolved !== dispatcher) return { status: "unrelated" };
       args = words.slice(cursor);
     } else {
       const configured = process.env.AIDLC_COMPILED_EXECUTABLE;
-      const compiled = first === "aidlc" || (configured && resolve(first) === resolve(configured));
-      if (!compiled) {
-        const wrapper = /^(?:ba|z|da)?sh$|^(?:env|command|source|eval|nice|nohup|time|exec|if)$/;
-        return { status: mentions && (wrapper.test(first) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(first)) ? "unsupported" : "unrelated" };
+      let compiled = first === "aidlc";
+      if (!compiled && configured) {
+        try { compiled = realpathSync(resolve(first)) === realpathSync(resolve(configured)); }
+        catch { compiled = false; }
       }
+      if (!compiled) return { status: "unrelated" };
       args = words.slice(cursor);
     }
     if (args[0] === "--resume") args = ["next", "--resume", ...args.slice(1)];
     const normalized: string[] = [];
-    let attemptId = copilot.tool_use_id ?? copilot.toolUseId ?? copilot.tool_call_id ?? copilot.toolCallId;
+    let attemptId = safeAttemptId(copilot.tool_use_id);
     for (let i = 0; i < args.length; i++) {
       if (args[i] === ATTEMPT_FLAG) {
         const carried = args[++i];
-        if (!carried || !/^[0-9a-f-]{36}$/.test(carried) || (attemptId && attemptId !== carried)) return { status: "unsupported" };
+        if (target === "guard-tool-call" || !safeAttemptId(carried) || (attemptId && attemptId !== carried)) return { status: "unsupported" };
         attemptId = carried;
         continue;
       }
       if (args[i] !== "--project-dir") { normalized.push(args[i]); continue; }
       const routed = args[++i];
       if (!routed) return { status: "unsupported" };
-      try { if (realpathSync(resolve(projectDir, routed)) !== realpathSync(projectDir)) return { status: "unsupported" }; }
+      try { if (realpathSync(resolve(projectDir, routed)) !== realpathSync(projectDir)) return { status: "foreign" }; }
       catch { return { status: "unsupported" }; }
     }
     const commandKind = normalized[0];
@@ -369,6 +447,7 @@ export async function run(
     const skipRecovery = reportResult === "skipped" && subArgs.length === 6 && subArgs[0] === "--stage" && subArgs[2] === "--result" && subArgs[4] === "--reason" && flagValue("--reason") === "stage is SKIP in the approved workflow plan";
     return {
       status: "recognized",
+      rewrite: (selectedAttemptId) => `${parsed.body} ${ATTEMPT_FLAG} ${selectedAttemptId}${parsed.redirect ? ` ${parsed.redirect}` : ""}`,
       claim: {
         sessionId,
         ...(attemptId ? { attemptId } : {}),
@@ -401,10 +480,10 @@ export async function run(
       text = fields.text_result_for_llm ?? fields.textResultForLlm ?? fields.text ?? fields.content ?? fields.output ?? fields.value;
     }
     if (typeof text !== "string" || Buffer.byteLength(text) > 128 * 1024) return null;
-    const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-    if (lines.length > 2 || lines.slice(1).some((line) => !/^<shellId:\s*[^>]*completed with exit code 0>$/.test(line))) return null;
+    const lines = text.split(/\r?\n/).filter((line) => line.trim().length > 0);
+    if (lines.length > 2 || lines.slice(1).some((line) => !/^<shellId:\s*[^>]*completed with exit code 0>$/.test(line.trim()))) return null;
     try {
-      const value = JSON.parse(lines[0] ?? "") as Record<string, unknown>;
+      const value = JSON.parse(lines[0]?.trim() ?? "") as Record<string, unknown>;
       const kinds = new Set(["load-steering", "run-stage", "ask", "print", "error", "done", "parked", "dispatch-subagent", "invoke-swarm", "present-gate"]);
       if (!kinds.has(String(value.kind))) return null;
       const directive: CopilotDirectiveMetadata = {
@@ -414,6 +493,7 @@ export async function run(
         ...(Number.isInteger(value.part) ? { part: value.part as number } : {}),
         ...(Number.isInteger(value.parts) ? { parts: value.parts as number } : {}),
         ...(typeof value.continue_token === "string" && Buffer.byteLength(value.continue_token) <= 16 * 1024 ? { continueToken: value.continue_token } : {}),
+        resultSha256: createHash("sha256").update(lines[0] ?? "", "utf-8").digest("hex"),
       };
       if (directive.kind === "load-steering" && (!directive.stage || !directive.part || !directive.parts || directive.part > directive.parts || !directive.continueToken)) return null;
       if (directive.kind === "run-stage" && !directive.stage) return null;
@@ -789,13 +869,21 @@ export async function run(
     case "record-human-turn": {
       // UserPromptSubmit: record HUMAN_TURN (human-presence gate). Same
       // self-gate as the core record-human-turn hook: no workflow state, no scaffolding.
+      let stateContent: string;
       try {
-        if (existsSync(stateFilePath(projectDir))) {
-          appendAuditEntry("HUMAN_TURN", {}, projectDir);
-          if (sessionId) recordCopilotHumanSequence(projectDir, readFileSync(stateFilePath(projectDir), "utf-8"), sessionId);
-        }
+        if (!existsSync(stateFilePath(projectDir))) return 0;
+        stateContent = readFileSync(stateFilePath(projectDir), "utf-8");
+      } catch {
+        return 0;
+      }
+      try {
+        appendAuditEntry("HUMAN_TURN", {}, projectDir);
       } catch {
         // best-effort presence record — advisory
+      }
+      if (sessionId) {
+        try { recordCopilotHumanSequence(projectDir, stateContent, sessionId); }
+        catch { /* bounded coordination remains best effort */ }
       }
       return 0;
     }
@@ -858,6 +946,11 @@ export async function run(
       // Shell calls run the state-transition guard first, then reviewer-scope.
       // Either block converts to the deny JSON (difference #4).
       if (toolName === "Bash") {
+        const command = orchestrationCommand();
+        if (command.status === "foreign") {
+          process.stdout.write(denyJson("This AI-DLC command targets a different physical project. Run it from that project's own Copilot session."));
+          return 0;
+        }
         const guard = runCoreWithStderr(
           "aidlc-state-transition-guard.ts",
           withAgentType(canonicalInput, delegatedAgentType()),
@@ -882,33 +975,33 @@ export async function run(
           process.stdout.write(denyJson(freeze.stderr));
           return 0;
         }
-        const command = orchestrationCommand();
         if (command.status === "unsupported") {
-          process.stdout.write(denyJson("Use one simple direct, source-dispatcher, or compiled AI-DLC command without shell wrappers, chaining, redirection, or substitution."));
+          process.stdout.write(denyJson("Use one simple direct, source-dispatcher, or compiled AI-DLC command without chaining, substitution, or redirection other than one terminal `2>&1`."));
           return 0;
         }
         if (command.status === "recognized") {
-          if (!sessionId) {
-            process.stdout.write(denyJson(recoveryReason));
-            return 0;
-          }
+          if (!sessionId) return 0;
           let claimed: ReturnType<typeof claimCopilotCommand>;
           try { claimed = claimCopilotCommand(projectDir, currentState(), command.claim); }
           catch { process.stdout.write(denyJson(recoveryReason)); return 0; }
           if (!claimed.allowed) {
             const reason = claimed.reason === "resume"
               ? "A Resume choice is waiting or selected. The owner must report the human's choice; a foreign session may explicitly reissue it with `next --resume`. Bare `next` is denied."
-              : recoveryReason;
+              : claimed.reason === "foreign"
+                ? "This continuation belongs to another Copilot session. Run a fresh `next` in this session to take ownership; do not execute the owner's current token."
+                : claimed.reason === "duplicate"
+                  ? "An equivalent `continue` is already pending for this cursor. Retry after that invocation settles; this duplicate did not replace it."
+                : claimed.reason === "state"
+                  ? "The workflow state changed before this command could be claimed. Run a fresh `next`; do not reuse the previous continuation token."
+                  : recoveryReason;
             process.stdout.write(denyJson(reason));
             return 0;
           }
-          if (!command.claim.attemptId) {
-            const modifiedArgs = { ...(nativeToolInput ?? {}), command: `${nativeToolInput?.command} ${ATTEMPT_FLAG} ${claimed.attemptId}` };
-            process.stdout.write(`${JSON.stringify({ modifiedArgs, hookSpecificOutput: {
-              hookEventName: "PreToolUse",
-              updatedInput: modifiedArgs,
-            } })}\n`);
-          }
+          const modifiedArgs = { ...(nativeToolInput ?? {}), command: command.rewrite(claimed.attemptId) };
+          process.stdout.write(`${JSON.stringify({ modifiedArgs, hookSpecificOutput: {
+            hookEventName: "PreToolUse",
+            updatedInput: modifiedArgs,
+          } })}\n`);
         }
         return 0;
       }
