@@ -22,15 +22,52 @@
 // relative to the last engine advance?" comparison that works on harnesses
 // delivering no transcript. Both are written from this one seam so they can never
 // disagree about when a human spoke. See the marker family in aidlc-lib.ts.
+//
+// UNATTENDED DRIVING (AIDLC_UNATTENDED=1). The mint is a presence ASSERTION, and
+// this hook has no evidence for it: UserPromptSubmit carries no signal about who
+// submitted, and the hook reads no stdin. That is sound while every prompt comes
+// from a person, but an unattended driver (an overnight runner resuming the
+// workflow on a schedule, CI, a cron) submits prompts too — so it mints a fresh,
+// spendable HUMAN_TURN on every cycle and "walking away" stops meaning "no new
+// human turn". Measured: 10 runner-submitted prompts, zero humans, and
+// humanActedSinceGate() answered true.
+//
+// So a driver that knows it is not a person says so, and the mint is skipped.
+// This is the same doctrine the engine already applies elsewhere — an unattended
+// autonomous Construction run "has no human at the gate", which is why
+// aidlc-utility refuses scope changes and plan re-shapes and aidlc-state refuses
+// park under it. This closes the one path where an unattended turn still
+// manufactured a human.
+//
+// Fail direction: the flag can only ever WITHHOLD authority. If it leaks into an
+// interactive shell the human's approvals get refused until it is unset —
+// annoying, and safe. The inverse mistake (a runner minting presence) is the one
+// that cannot be undone, because the ledger is append-only.
+//
+// The MARKER is deliberately still written. It is not an authority signal, and
+// suppressing it would change the Stop hook's conversational carve-out, which is
+// a separate behaviour with its own tests. Reviewers who want the marker
+// suppressed too should say so — it is a one-line follow-on, not a silent choice.
 import { existsSync } from "node:fs";
 import { markHumanTurn, resolveProjectDirFromHook, stateFilePath } from "../tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
+
+/**
+ * True when the caller has declared this prompt is NOT a person's, so the
+ * presence token must not be minted. Set by an unattended driver for the whole
+ * child process.
+ */
+export function unattendedPromptSubmit(): boolean {
+  return process.env.AIDLC_UNATTENDED === "1";
+}
 
 export async function run(_input: string): Promise<number> {
 try {
   const projectDir = resolveProjectDirFromHook(import.meta.url);
   if (existsSync(stateFilePath(projectDir))) {
-    appendAuditEntry("HUMAN_TURN", {}, projectDir);
+    if (!unattendedPromptSubmit()) {
+      appendAuditEntry("HUMAN_TURN", {}, projectDir);
+    }
     markHumanTurn(projectDir);
   }
 } catch {

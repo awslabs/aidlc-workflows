@@ -67,6 +67,7 @@ const BUN = process.execPath;
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
+const MINT_HOOK = join(AIDLC_SRC, "hooks", "aidlc-record-human-turn.ts");
 const MID_IDEATION = "state-mid-ideation.md"; // Current Stage: feasibility
 
 // Drive a state subcommand with the PRESENCE guard ENABLED (clear the suite's
@@ -316,6 +317,62 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     const r = guarded(proj, ["approve", "build-and-test", "--user-input", "Approve"]);
     expect(r.rc, r.out).toBe(0);
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
+  });
+
+  // --- Scenario D2: unattended driving must not mint presence ----------------
+  //
+  // The mint hook has no evidence about WHO submitted a prompt: UserPromptSubmit
+  // carries no such signal and the hook reads no stdin. That is sound while every
+  // prompt comes from a person, but an unattended driver (an overnight runner
+  // resuming on a schedule, CI, cron) submits prompts too — so before
+  // AIDLC_UNATTENDED existed it minted a fresh, spendable HUMAN_TURN every cycle
+  // and "walking away" stopped meaning "no new human turn". Measured on a live
+  // detached run: 10 runner-submitted prompts, zero humans, humanActedSinceGate()
+  // true.
+  //
+  // Spawned as a PROCESS (not the exported run()) because the env read is the
+  // contract under test, and the flag is set by a parent for the whole child.
+  describe("unattended prompt submit (AIDLC_UNATTENDED)", () => {
+    function fireMintHook(p: string, unattended: boolean): number {
+      const env = { ...process.env };
+      // The hook derives the project from its OWN path (it ships inside the
+      // project), so point the dist copy at the fixture explicitly — the same
+      // override a dispatcher uses.
+      env.AIDLC_PROJECT_DIR = p;
+      if (unattended) env.AIDLC_UNATTENDED = "1";
+      else delete env.AIDLC_UNATTENDED;
+      const r = spawnSync(BUN, [MINT_HOOK], { encoding: "utf-8", env, input: "{}" });
+      return r.status ?? -1;
+    }
+
+    test("an unattended prompt mints NO HUMAN_TURN; an attended one still does", () => {
+      const before = eventCount(proj, "HUMAN_TURN");
+
+      // Unattended: exits clean (a mint decision must never fail a turn) and
+      // leaves the ledger's presence count untouched.
+      expect(fireMintHook(proj, true)).toBe(0);
+      expect(eventCount(proj, "HUMAN_TURN")).toBe(before);
+
+      // The flag is the ONLY difference — the same hook, same project, still
+      // mints for a person. This is what keeps the test from passing for the
+      // wrong reason (a hook that never mints at all).
+      expect(fireMintHook(proj, false)).toBe(0);
+      expect(eventCount(proj, "HUMAN_TURN")).toBe(before + 1);
+    });
+
+    test("a gate REFUSES on a turn minted only by an unattended prompt", () => {
+      const slug = field(proj, "Current Stage");
+      guarded(proj, ["checkbox", `${slug}=in-progress`]);
+      // The unattended driver submits its prompt...
+      expect(fireMintHook(proj, true)).toBe(0);
+      guarded(proj, ["gate-start", slug]);
+      // ...and the gate still has no human to point at.
+      const r = guarded(proj, ["approve", slug, "--user-input", "ok"]);
+      expect(r.rc).not.toBe(0);
+      expect(r.out).toContain("Refusing to approve");
+      expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
+      expect(field(proj, "Current Stage")).toBe(slug);
+    });
   });
 
   // --- Scenario E: STALE human turn ------------------------------------------
