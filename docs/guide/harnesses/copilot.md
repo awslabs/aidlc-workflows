@@ -103,6 +103,19 @@ git checkout v2
   `runTerminalCommand`, `createFile`, `editFiles`, and `readFile`,
   but the IDE side has not yet been verified live — treat IDE enforcement
   as best-effort until it has.
+- **Stop preserves the current Copilot directive.** Successful orchestration
+  results record bounded project, intent, session, workflow-state, directive,
+  and continuation metadata. A later Stop reuses that delivered steering part
+  or `run-stage` directive through the shared human-wait and recursion
+  safeguards instead of probing a fresh `next` and restarting steering. A
+  consumed continuation token is denied in the same workflow context. Missing,
+  compacted, malformed, or state-drifted evidence asks for a fresh `next`
+  rather than replaying the prior token.
+- **Resume and conversation waits are session-scoped.** Stop allows a pending
+  Resume question or a genuine conversational response to end cleanly. A
+  foreign Copilot session cannot answer or advance that wait with bare `next`;
+  explicit `next --resume` reissues the choice. Prompt text and rules content
+  are not persisted in the coordination marker.
 - **Hook wiring is matcher-free by design**: VS Code parses but IGNORES hook
   matchers, so every adapter target self-filters on `tool_name` instead — a
   matcher would silently broaden on the IDE.

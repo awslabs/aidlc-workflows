@@ -2334,12 +2334,56 @@ export function stateFilePath(projectDir: string, intent?: string, space?: strin
 // can attribute diagnostics to the directive the conductor is actually running.
 const ACTIVE_DIRECTIVE_MARKER = ".aidlc-active-directive.json";
 
-export interface ActiveDirectiveMarker {
-  version: 1;
-  stage: string;
-  unit?: string;
-  state_sha256: string;
+export type ActiveDirectiveKind =
+  | "load-steering" | "run-stage" | "ask" | "print" | "error"
+  | "done" | "parked" | "dispatch-subagent" | "invoke-swarm" | "present-gate";
+export type ResumeAction = "resume" | "redo" | "jump" | "start-fresh";
+
+interface ActiveDirectiveAttempt {
+  id?: string; command_kind: "next" | "continue" | "report" | "park";
+  command_sha256: string; issued_state_sha256: string; session_id: string;
+  owner_epoch: number; context_epoch: number; status: "pending" | "settled" | "failed";
+  resume_request?: boolean; resume_action?: ResumeAction;
+  resume_gate_revision?: number;
 }
+
+interface ActiveDirectiveResume {
+  status: "waiting" | "selected" | "superseded"; issuing_stage: string; issuing_state_sha256: string;
+  issuing_session: string; issuing_intent_uuid: string | null; action?: ResumeAction;
+}
+
+export interface ActiveDirectiveMarker {
+  version: 1 | 2; stage: string; unit?: string; state_sha256: string;
+  revision?: number; project_sha256?: string; intent_uuid?: string | null; state_present?: boolean;
+  owner_session?: string; owner_epoch?: number; context_epoch?: number; kind?: ActiveDirectiveKind;
+  part?: number; parts?: number; continue_token?: string; continue_token_sha256?: string;
+  delivery?: "issued" | "delivered" | "consumed" | "superseded"; needs_rehydrate?: boolean;
+  active_attempt?: ActiveDirectiveAttempt; resume?: ActiveDirectiveResume;
+  event_sequence?: number; human_sequence?: number; engine_sequence?: number; conversation_sequence?: number;
+  stop_fingerprint?: string; stop_count?: number;
+}
+
+export interface CopilotDirectiveMetadata {
+  kind: ActiveDirectiveKind; stage?: string; unit?: string;
+  part?: number; parts?: number; continueToken?: string;
+}
+
+export interface CopilotCommandClaim {
+  sessionId: string; attemptId?: string; commandKind: "next" | "continue" | "report" | "park";
+  commandSha256: string; continueToken?: string; resumeRequest?: boolean; resumeAction?: ResumeAction;
+  jumpRequest?: boolean; startFreshRequest?: boolean; plainNext?: boolean; skipRecovery?: boolean; reportStage?: string;
+}
+
+export type CopilotClaimResult = { allowed: true; attemptId: string } |
+  { allowed: false; reason: "continue" | "resume" | "recovery" };
+
+export type CopilotStopEvidence =
+  | { status: "foreign" | "resume" }
+  | { status: "directive" | "recovery"; directive?: CopilotDirectiveMetadata;
+      stateSha256: string; tokenSha256: string; resumeStatus: string; resumeAction: string; ownerSession: string; ownerEpoch: number };
+
+const ACTIVE_DIRECTIVE_MAX_BYTES = 64 * 1024;
+const ACTIVE_DIRECTIVE_TRANSACTION = ".transaction";
 
 function activeDirectiveMarkerPath(
   projectDir: string,
@@ -2353,9 +2397,160 @@ function stateContentSha256(stateContent: string): string {
   return createHash("sha256").update(stateContent, "utf-8").digest("hex");
 }
 
+function activeDirectiveContext(projectDir: string, stateContent: string | null) {
+  return {
+    projectSha256: createHash("sha256").update(realpathSync(projectDir), "utf-8").digest("hex"),
+    intentUuid: activeIntentUuid(projectDir),
+    statePresent: stateContent !== null,
+    stateSha256: stateContentSha256(stateContent ?? ""),
+  };
+}
+
+function parseActiveDirectiveMarker(parsed: unknown): ActiveDirectiveMarker | null {
+  if (!isPlainObject(parsed)) return null;
+  const stage = typeof parsed.stage === "string" ? parsed.stage.trim() : "";
+  const unit = typeof parsed.unit === "string" ? parsed.unit.trim() : undefined;
+  const stateSha256 = typeof parsed.state_sha256 === "string" ? parsed.state_sha256 : "";
+  if (!/^[a-z][a-z0-9-]*$/.test(stage) || ("unit" in parsed && !unit) || !/^[0-9a-f]{64}$/.test(stateSha256)) return null;
+  if (parsed.version === 1) return { version: 1, stage, ...(unit ? { unit } : {}), state_sha256: stateSha256 };
+  const integer = (value: unknown): value is number => Number.isInteger(value) && (value as number) >= 0;
+  const attempt = isPlainObject(parsed.active_attempt) ? parsed.active_attempt : null;
+  const resume = isPlainObject(parsed.resume) ? parsed.resume : null;
+  const kinds: ActiveDirectiveKind[] = ["load-steering", "run-stage", "ask", "print", "error", "done", "parked", "dispatch-subagent", "invoke-swarm", "present-gate"];
+  if (
+    parsed.version !== 2 || !/^[0-9a-f]{64}$/.test(String(parsed.project_sha256 ?? "")) ||
+    (parsed.intent_uuid !== null && typeof parsed.intent_uuid !== "string") || typeof parsed.state_present !== "boolean" ||
+    typeof parsed.owner_session !== "string" || parsed.owner_session.length === 0 ||
+    !integer(parsed.revision) || !integer(parsed.owner_epoch) || !integer(parsed.context_epoch) ||
+    !integer(parsed.event_sequence) || !integer(parsed.human_sequence) || !integer(parsed.engine_sequence) ||
+    !integer(parsed.conversation_sequence) || !integer(parsed.stop_count) ||
+    !kinds.includes(parsed.kind as ActiveDirectiveKind) ||
+    !["issued", "delivered", "consumed", "superseded"].includes(String(parsed.delivery)) ||
+    typeof parsed.needs_rehydrate !== "boolean" || !attempt || ("id" in attempt && typeof attempt.id !== "string") ||
+    !["next", "continue", "report", "park"].includes(String(attempt.command_kind)) ||
+    !/^[0-9a-f]{64}$/.test(String(attempt.command_sha256 ?? "")) ||
+    !/^[0-9a-f]{64}$/.test(String(attempt.issued_state_sha256 ?? "")) || typeof attempt.session_id !== "string" ||
+    !integer(attempt.owner_epoch) || !integer(attempt.context_epoch) || !["pending", "settled", "failed"].includes(String(attempt.status)) ||
+    ("resume_gate_revision" in attempt && !integer(attempt.resume_gate_revision)) ||
+    (resume !== null &&
+      (!["waiting", "selected", "superseded"].includes(String(resume.status)) ||
+        typeof resume.issuing_stage !== "string" || !/^[0-9a-f]{64}$/.test(String(resume.issuing_state_sha256 ?? "")) ||
+        typeof resume.issuing_session !== "string" ||
+        (resume.issuing_intent_uuid !== null && typeof resume.issuing_intent_uuid !== "string")))
+  ) return null;
+  if (parsed.continue_token !== undefined) {
+    if (typeof parsed.continue_token !== "string" || Buffer.byteLength(parsed.continue_token, "utf-8") > 16 * 1024) return null;
+    if (stateContentSha256(parsed.continue_token) !== parsed.continue_token_sha256) return null;
+  }
+  if (parsed.kind === "load-steering" &&
+    (!Number.isInteger(parsed.part) || !Number.isInteger(parsed.parts) || (parsed.part as number) < 1 ||
+      (parsed.part as number) > (parsed.parts as number) || parsed.continue_token === undefined)) return null;
+  return { ...(parsed as unknown as ActiveDirectiveMarker), stage, ...(unit ? { unit } : {}) };
+}
+
+function readActiveDirectiveMarkerRaw(path: string): ActiveDirectiveMarker | null {
+  try {
+    if (statSync(path).size > ACTIVE_DIRECTIVE_MAX_BYTES) return null;
+    return parseActiveDirectiveMarker(JSON.parse(readFileSync(path, "utf-8")));
+  } catch {
+    return null;
+  }
+}
+
+function transactActiveDirective<T>(
+  projectDir: string,
+  update: (marker: ActiveDirectiveMarker | null) => { marker: ActiveDirectiveMarker | null; result: T; preserve?: boolean },
+  intent?: string,
+  space?: string,
+): T | null {
+  const path = activeDirectiveMarkerPath(projectDir, intent, space);
+  const transaction = `${path}${ACTIVE_DIRECTIVE_TRANSACTION}`;
+  mkdirSync(dirname(path), { recursive: true });
+  let held = false;
+  let hadMarker = false;
+  try {
+    for (let attempt = 0; attempt < 100 && !held; attempt++) {
+      try {
+        renameSync(path, transaction);
+        held = true;
+        hadMarker = true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") return null;
+        try {
+          const fd = openSync(transaction, "wx", 0o600);
+          closeSync(fd);
+          held = true;
+        } catch (createError) {
+          if ((createError as NodeJS.ErrnoException).code !== "EEXIST") return null;
+          Bun.sleepSync(2);
+        }
+      }
+    }
+    if (!held) return null;
+    const current = hadMarker ? readActiveDirectiveMarkerRaw(transaction) : null;
+    const next = update(current);
+    if (next.preserve && hadMarker) {
+      renameSync(transaction, path);
+    } else if (next.marker === null) {
+      rmSync(transaction, { force: true });
+    } else {
+      const serialized = `${JSON.stringify(next.marker, null, 2)}\n`;
+      if (Buffer.byteLength(serialized, "utf-8") > ACTIVE_DIRECTIVE_MAX_BYTES) return null;
+      writeFileSync(transaction, serialized, { encoding: "utf-8", mode: 0o600 });
+      renameSync(transaction, path);
+    }
+    held = false;
+    return next.result;
+  } finally {
+    if (held) {
+      if (hadMarker && existsSync(transaction) && !existsSync(path)) {
+        try { renameSync(transaction, path); } catch { /* fresh-next recovery handles it */ }
+      } else if (!hadMarker) rmSync(transaction, { force: true });
+    }
+  }
+}
+
+function freshActiveDirectiveMarker(
+  projectDir: string,
+  stateContent: string | null,
+  stage: string,
+): ActiveDirectiveMarker {
+  const context = activeDirectiveContext(projectDir, stateContent);
+  const owner = `sessionless:${context.projectSha256.slice(0, 16)}`;
+  return {
+    version: 2, revision: 0, project_sha256: context.projectSha256,
+    intent_uuid: context.intentUuid, state_present: context.statePresent, state_sha256: context.stateSha256,
+    owner_session: owner, owner_epoch: 0, context_epoch: 0, kind: "error", stage,
+    delivery: "superseded", needs_rehydrate: true,
+    active_attempt: {
+      id: "sessionless", command_kind: "next", command_sha256: context.stateSha256,
+      issued_state_sha256: context.stateSha256, session_id: owner,
+      owner_epoch: 0, context_epoch: 0, status: "settled",
+    },
+    event_sequence: 0, human_sequence: 0, engine_sequence: 0, conversation_sequence: 0, stop_count: 0,
+  };
+}
+
+function invalidateActiveDirectiveDelivery(marker: ActiveDirectiveMarker): ActiveDirectiveMarker {
+  return { ...marker, revision: (marker.revision ?? 0) + 1, delivery: "superseded", needs_rehydrate: true };
+}
+
+function crossActiveDirectiveBoundary(
+  marker: ActiveDirectiveMarker, stateSha256: string, intentUuid: string | null, statePresent: boolean,
+): ActiveDirectiveMarker {
+  const stateChanged = marker.state_sha256 !== stateSha256;
+  const intentChanged = marker.intent_uuid !== intentUuid;
+  const supersedeResume = (marker.resume?.status === "waiting" || marker.resume?.status === "selected") &&
+    (stateChanged || intentChanged);
+  return { ...invalidateActiveDirectiveDelivery(marker), state_sha256: stateSha256,
+    intent_uuid: intentUuid, state_present: statePresent,
+    ...(supersedeResume && marker.resume ? { resume: { ...marker.resume, status: "superseded" } } : {}),
+  };
+}
+
 export function writeActiveDirectiveMarker(
   projectDir: string,
-  marker: Omit<ActiveDirectiveMarker, "version">,
+  marker: Omit<CopilotDirectiveMetadata, "continueToken" | "stage"> & { stage: string; continue_token?: string; state_sha256: string },
 ): void {
   if (!/^[a-z][a-z0-9-]*$/.test(marker.stage)) {
     throw new Error(`Invalid active-directive stage: ${marker.stage}`);
@@ -2366,13 +2561,42 @@ export function writeActiveDirectiveMarker(
   if (!/^[0-9a-f]{64}$/.test(marker.state_sha256)) {
     throw new Error("Invalid active-directive state digest");
   }
-  const path = activeDirectiveMarkerPath(projectDir);
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileAtomic(path, `${JSON.stringify({ version: 1, ...marker }, null, 2)}\n`);
+  const stateContent = existsSync(stateFilePath(projectDir)) ? readFileSync(stateFilePath(projectDir), "utf-8") : null;
+  const written = transactActiveDirective(projectDir, (current) => {
+    const context = activeDirectiveContext(projectDir, stateContent);
+    if (current?.version === 2 && !current.owner_session?.startsWith("sessionless:") &&
+      (current.active_attempt?.status !== "pending" || current.active_attempt.context_epoch !== current.context_epoch || !["next", "continue"].includes(current.active_attempt?.command_kind ?? ""))) {
+      return { marker: current, result: true, preserve: true };
+    }
+    const base = current?.version === 2 && current.project_sha256 === context.projectSha256 && current.intent_uuid === context.intentUuid
+      ? current
+      : freshActiveDirectiveMarker(projectDir, stateContent, marker.stage);
+    const token = marker.continue_token;
+    const next: ActiveDirectiveMarker = {
+      ...base,
+      revision: (base.revision ?? 0) + 1,
+      state_present: context.statePresent,
+      state_sha256: marker.state_sha256,
+      kind: marker.kind,
+      stage: marker.stage,
+      ...(marker.unit ? { unit: marker.unit } : { unit: undefined }),
+      ...(marker.part ? { part: marker.part } : { part: undefined }),
+      ...(marker.parts ? { parts: marker.parts } : { parts: undefined }),
+      ...(token ? { continue_token: token, continue_token_sha256: stateContentSha256(token) } : { continue_token: undefined, continue_token_sha256: undefined }),
+      delivery: "issued",
+      needs_rehydrate: false,
+    };
+    return { marker: next, result: true };
+  });
+  if (!written) throw new Error("Could not update active-directive marker");
 }
 
 export function clearActiveDirectiveMarker(projectDir: string): void {
-  rmSync(activeDirectiveMarkerPath(projectDir), { force: true });
+  if (!transactActiveDirective(projectDir, (marker) =>
+    marker?.version === 2 && !marker.owner_session?.startsWith("sessionless:") && marker.active_attempt?.status === "pending"
+      ? { marker, result: true, preserve: true } : { marker: null, result: true })) {
+    throw new Error("Could not clear active-directive marker");
+  }
 }
 
 export function refreshActiveDirectiveMarker(
@@ -2381,14 +2605,21 @@ export function refreshActiveDirectiveMarker(
   previousStateContent: string,
   nextStateContent: string,
 ): boolean {
-  const marker = readActiveDirectiveMarker(projectDir, previousStateContent);
-  if (!marker || marker.stage !== stage) return false;
-  writeActiveDirectiveMarker(projectDir, {
-    stage: marker.stage,
-    ...(marker.unit ? { unit: marker.unit } : {}),
-    state_sha256: stateContentSha256(nextStateContent),
+  const updated = transactActiveDirective(projectDir, (marker) => {
+    if (!marker || marker.stage !== stage || marker.state_sha256 !== stateContentSha256(previousStateContent)) {
+      return { marker, result: false, preserve: true };
+    }
+    if (marker.version === 1) {
+      return { marker: { ...marker, state_sha256: stateContentSha256(nextStateContent) }, result: true };
+    }
+    return {
+      marker: {
+        ...crossActiveDirectiveBoundary(marker, stateContentSha256(nextStateContent), marker.intent_uuid ?? null, true),
+      },
+      result: true,
+    };
   });
-  return true;
+  return updated ?? false;
 }
 
 export function readActiveDirectiveMarker(
@@ -2396,32 +2627,423 @@ export function readActiveDirectiveMarker(
   stateContent: string,
 ): ActiveDirectiveMarker | null {
   try {
-    const parsed: unknown = JSON.parse(
-      readFileSync(activeDirectiveMarkerPath(projectDir), "utf-8"),
-    );
-    if (!isPlainObject(parsed)) return null;
-    const stage = typeof parsed.stage === "string" ? parsed.stage.trim() : "";
-    const unit = typeof parsed.unit === "string" ? parsed.unit.trim() : undefined;
-    const stateSha256 =
-      typeof parsed.state_sha256 === "string" ? parsed.state_sha256 : "";
-    if (
-      parsed.version !== 1 ||
-      !/^[a-z][a-z0-9-]*$/.test(stage) ||
-      ("unit" in parsed && !unit) ||
-      !/^[0-9a-f]{64}$/.test(stateSha256) ||
-      stateSha256 !== stateContentSha256(stateContent)
-    ) {
-      return null;
-    }
-    return {
-      version: 1,
-      stage,
-      ...(unit ? { unit } : {}),
-      state_sha256: stateSha256,
-    };
+    const marker = readActiveDirectiveMarkerRaw(activeDirectiveMarkerPath(projectDir));
+    return marker?.state_sha256 === stateContentSha256(stateContent) ? marker : null;
   } catch {
     return null;
   }
+}
+
+export function markActiveDirectiveResumeWaiting(
+  projectDir: string,
+  stateContent: string,
+  stage: string,
+): boolean {
+  const context = activeDirectiveContext(projectDir, stateContent);
+  return transactActiveDirective(projectDir, (current) => {
+    if (current?.version === 2 && !current.owner_session?.startsWith("sessionless:") &&
+      (current.active_attempt?.status !== "pending" || current.active_attempt?.resume_request !== true)) {
+      return { marker: current, result: false, preserve: true };
+    }
+    const marker = current?.version === 2 ? current : freshActiveDirectiveMarker(projectDir, stateContent, stage);
+    const session = marker.active_attempt?.session_id ?? marker.owner_session ?? "sessionless";
+    return {
+      marker: {
+        ...marker,
+        revision: (marker.revision ?? 0) + 1,
+        kind: "ask",
+        stage,
+        unit: undefined,
+        part: undefined,
+        parts: undefined,
+        continue_token: undefined,
+        continue_token_sha256: undefined,
+        state_sha256: context.stateSha256,
+        state_present: true,
+        delivery: "issued",
+        needs_rehydrate: false,
+        resume: {
+          status: "waiting",
+          issuing_stage: stage,
+          issuing_state_sha256: context.stateSha256,
+          issuing_session: session,
+          issuing_intent_uuid: context.intentUuid,
+        },
+      },
+      result: true,
+    };
+  }) ?? false;
+}
+
+export function invalidateActiveDirectiveContext(
+  projectDir: string,
+  stateContent: string,
+  sessionId: string,
+): boolean {
+  if (!sessionId) return false;
+  const context = activeDirectiveContext(projectDir, stateContent);
+  return transactActiveDirective(projectDir, (marker) => {
+    if (
+      marker?.version !== 2 || marker.owner_session !== sessionId ||
+      marker.project_sha256 !== context.projectSha256 || marker.intent_uuid !== context.intentUuid ||
+      marker.state_sha256 !== context.stateSha256
+    ) return { marker, result: false, preserve: true };
+    return {
+      marker: {
+        ...invalidateActiveDirectiveDelivery(marker),
+        context_epoch: (marker.context_epoch ?? 0) + 1,
+      },
+      result: true,
+    };
+  }) ?? false;
+}
+
+export function recordCopilotHumanSequence(
+  projectDir: string,
+  stateContent: string,
+  sessionId: string,
+): boolean {
+  const context = activeDirectiveContext(projectDir, stateContent);
+  return transactActiveDirective(projectDir, (marker) => {
+    if (
+      marker?.version !== 2 || marker.owner_session !== sessionId ||
+      marker.project_sha256 !== context.projectSha256 || marker.intent_uuid !== context.intentUuid ||
+      marker.state_sha256 !== context.stateSha256
+    ) return { marker, result: false, preserve: true };
+    const sequence = (marker.event_sequence ?? 0) + 1;
+    return {
+      marker: { ...marker, revision: (marker.revision ?? 0) + 1, event_sequence: sequence, human_sequence: sequence },
+      result: true,
+    };
+  }) ?? false;
+}
+
+export function claimCopilotCommand(
+  projectDir: string,
+  stateContent: string | null,
+  input: CopilotCommandClaim,
+): CopilotClaimResult {
+  if (!input.sessionId || Buffer.byteLength(input.sessionId) > 512 ||
+    (input.attemptId !== undefined && Buffer.byteLength(input.attemptId) > 512) ||
+    (input.continueToken !== undefined && Buffer.byteLength(input.continueToken) > 16 * 1024) ||
+    !/^[0-9a-f]{64}$/.test(input.commandSha256)) return { allowed: false, reason: "recovery" };
+  const context = activeDirectiveContext(projectDir, stateContent);
+  const boundIntent = readSessionIntentUuid(projectDir, input.sessionId);
+  if (boundIntent && boundIntent !== context.intentUuid) supersedeCopilotResumeForIntent(projectDir, input.sessionId, boundIntent);
+  return transactActiveDirective<CopilotClaimResult>(projectDir, (current) => {
+    let marker = current?.version === 2 && current.project_sha256 === context.projectSha256 && current.intent_uuid === context.intentUuid
+      ? current
+      : null;
+    if (marker && (marker.state_sha256 !== context.stateSha256 || marker.state_present !== context.statePresent)) {
+      marker = crossActiveDirectiveBoundary(marker, context.stateSha256, context.intentUuid, context.statePresent);
+    }
+    const currentStage = stateContent ? (getField(stateContent, "Current Stage")?.trim() || "coordination") : "coordination";
+    const liveResume = marker?.resume?.status === "waiting" || marker?.resume?.status === "selected";
+    const waitingExact = marker?.resume?.status === "waiting" && marker.owner_session === input.sessionId &&
+      marker.resume.issuing_session === input.sessionId && marker.resume.issuing_stage === currentStage &&
+      marker.resume.issuing_state_sha256 === context.stateSha256 && marker.resume.issuing_intent_uuid === context.intentUuid;
+    const selectedSkip = marker?.resume?.status === "selected" && marker.resume.action === "resume" && input.skipRecovery === true &&
+      marker.owner_session === input.sessionId && marker.resume.issuing_session === input.sessionId && marker.resume.issuing_stage === currentStage && input.reportStage === currentStage && marker.resume.issuing_state_sha256 === context.stateSha256 && marker.resume.issuing_intent_uuid === context.intentUuid && marker.kind === "print" && marker.active_attempt?.status === "settled" && marker.active_attempt.command_kind === "next";
+    if (input.resumeAction && !waitingExact) {
+      return { marker, result: { allowed: false, reason: "resume" }, preserve: marker === current };
+    }
+    const pending = marker?.active_attempt;
+    if (marker && pending?.status === "pending" && input.attemptId && input.attemptId === pending.id) {
+      const reusable = pending.command_sha256 === input.commandSha256 && pending.session_id === input.sessionId &&
+        marker.owner_session === input.sessionId && pending.owner_epoch === marker.owner_epoch &&
+        pending.context_epoch === marker.context_epoch && pending.issued_state_sha256 === context.stateSha256 && marker.project_sha256 === context.projectSha256 && marker.intent_uuid === context.intentUuid;
+      return { marker, result: reusable ? { allowed: true, attemptId: input.attemptId } : { allowed: false, reason: "recovery" }, preserve: true };
+    }
+    if (input.commandKind === "next") {
+      if (liveResume && !input.resumeRequest) {
+        const action = marker?.resume?.action;
+        const actionFollowup = marker?.owner_session === input.sessionId && marker.resume?.status === "selected" &&
+          (action === "resume" && input.plainNext === true ||
+            action === "jump" && input.jumpRequest === true ||
+            action === "start-fresh" && input.startFreshRequest === true);
+        if (!actionFollowup) return { marker, result: { allowed: false, reason: "resume" }, preserve: marker === current };
+      }
+      marker ??= freshActiveDirectiveMarker(projectDir, stateContent, currentStage);
+    } else {
+      if (!marker || marker.owner_session !== input.sessionId) {
+        return { marker: current, result: { allowed: false, reason: "recovery" }, preserve: true };
+      }
+      if (marker.active_attempt?.status === "pending") {
+        return { marker, result: { allowed: false, reason: "recovery" }, preserve: true };
+      }
+      if (liveResume && !(input.commandKind === "report" && (waitingExact && input.resumeAction || selectedSkip)))
+        return { marker, result: { allowed: false, reason: "resume" }, preserve: true };
+      if (input.commandKind === "continue") {
+        const token = input.continueToken ?? "";
+        if (
+          liveResume || marker.kind !== "load-steering" || marker.delivery !== "delivered" || marker.needs_rehydrate ||
+          marker.continue_token !== token || marker.continue_token_sha256 !== stateContentSha256(token)
+        ) return { marker, result: { allowed: false, reason: "continue" }, preserve: true };
+      }
+    }
+    const takeover = input.commandKind === "next" && marker.owner_session !== input.sessionId;
+    const ownerEpoch = takeover ? (marker.owner_epoch ?? 0) + 1 : (marker.owner_epoch ?? 0);
+    const sequence = (marker.event_sequence ?? 0) + 1;
+    const nextRevision = (marker.revision ?? 0) + 1;
+    const attemptId = input.attemptId ?? randomUUID();
+    const attempt: ActiveDirectiveAttempt = {
+      id: attemptId,
+      command_kind: input.commandKind,
+      command_sha256: input.commandSha256,
+      issued_state_sha256: context.stateSha256,
+      session_id: input.sessionId,
+      owner_epoch: ownerEpoch,
+      context_epoch: marker.context_epoch ?? 0,
+      status: "pending",
+      ...(input.resumeRequest ? { resume_request: true } : {}),
+      ...(input.resumeAction ? { resume_action: input.resumeAction } : {}),
+      ...(waitingExact ? { resume_gate_revision: nextRevision } : {}),
+    };
+    return {
+      marker: {
+        ...marker,
+        revision: nextRevision,
+        project_sha256: context.projectSha256,
+        intent_uuid: context.intentUuid,
+        state_present: context.statePresent,
+        state_sha256: context.stateSha256,
+        owner_session: input.sessionId,
+        owner_epoch: ownerEpoch,
+        delivery: input.commandKind === "continue" ? "consumed" : "issued",
+        needs_rehydrate: true,
+        active_attempt: attempt,
+        event_sequence: sequence,
+        engine_sequence: sequence,
+        ...(takeover ? { stop_fingerprint: undefined, stop_count: 0 } : {}),
+        ...(input.resumeRequest && marker.resume
+          ? { resume: { ...marker.resume, status: "superseded" as const } }
+          : {}),
+      },
+      result: { allowed: true, attemptId },
+    };
+  }) ?? { allowed: false, reason: "recovery" };
+}
+
+export function settleCopilotCommand(
+  projectDir: string,
+  stateContent: string | null,
+  input: CopilotCommandClaim,
+  directive: CopilotDirectiveMetadata | null,
+): "settled" | "duplicate" | "stale" {
+  const context = activeDirectiveContext(projectDir, stateContent);
+  return transactActiveDirective(projectDir, (marker) => {
+    if (marker?.version !== 2) return { marker, result: "stale" as const, preserve: true };
+    const attempt = marker.active_attempt;
+    if (!attempt) return { marker, result: "stale" as const, preserve: true };
+    const exact = attempt.session_id === input.sessionId && attempt.command_kind === input.commandKind &&
+      attempt.command_sha256 === input.commandSha256 && attempt.owner_epoch === marker.owner_epoch &&
+      attempt.context_epoch === marker.context_epoch && attempt.id === input.attemptId;
+    if (!exact) return { marker, result: "stale" as const, preserve: true };
+    if (attempt.status === "settled") return { marker, result: "duplicate" as const, preserve: true };
+    if (attempt.status !== "pending") return { marker, result: "stale" as const, preserve: true };
+    const stateChanged = attempt.issued_state_sha256 !== context.stateSha256 || marker.intent_uuid !== context.intentUuid;
+    const base = stateChanged
+      ? crossActiveDirectiveBoundary(marker, context.stateSha256, context.intentUuid, context.statePresent)
+      : marker;
+    if (!directive) {
+      return {
+        marker: {
+          ...(stateChanged ? base : invalidateActiveDirectiveDelivery(base)),
+          active_attempt: { ...attempt, status: "failed" },
+        },
+        result: "settled" as const,
+      };
+    }
+    const retainedKind = ["load-steering", "run-stage", "ask", "done", "parked"].includes(directive.kind);
+    const canDeliver = (input.commandKind === "next" || input.commandKind === "continue") && !stateChanged && retainedKind ||
+      input.commandKind === "park" || input.commandKind === "report" && (directive.kind === "done" || directive.kind === "parked");
+    let resume = base.resume;
+    const canSelectResume = input.commandKind === "report" && attempt.resume_action !== undefined &&
+      marker.resume?.status === "waiting" && attempt.resume_gate_revision === marker.revision &&
+      marker.resume.issuing_session === input.sessionId && marker.resume.issuing_state_sha256 === context.stateSha256 &&
+      marker.resume.issuing_intent_uuid === context.intentUuid &&
+      marker.resume.issuing_stage === (stateContent ? getField(stateContent, "Current Stage")?.trim() : marker.stage);
+    if (input.commandKind === "report" && attempt.resume_action && (!canSelectResume || directive.kind === "error")) {
+      return { marker: { ...invalidateActiveDirectiveDelivery(base), active_attempt: { ...attempt, status: "failed" } }, result: "settled" as const };
+    }
+    if (input.resumeRequest && directive.kind === "ask") {
+      resume = {
+        status: "waiting",
+        issuing_stage: directive.stage ?? marker.stage,
+        issuing_state_sha256: context.stateSha256,
+        issuing_session: input.sessionId,
+        issuing_intent_uuid: context.intentUuid,
+      };
+    } else if (canSelectResume) {
+      resume = {
+        status: "selected",
+        action: attempt.resume_action,
+        issuing_stage: marker.resume?.issuing_stage ?? marker.stage,
+        issuing_state_sha256: marker.resume?.issuing_state_sha256 ?? attempt.issued_state_sha256,
+        issuing_session: input.sessionId,
+        issuing_intent_uuid: marker.resume?.issuing_intent_uuid ?? context.intentUuid,
+      };
+    } else if (resume?.status === "selected") {
+      const closesResume = resume.action === "resume" && input.commandKind === "next";
+      if (closesResume && (directive.kind === "load-steering" || directive.kind === "run-stage")) {
+        resume = { ...resume, status: "superseded" };
+      }
+    }
+    const token = directive.continueToken;
+    const unit = directive.kind === "load-steering" ? (directive.unit ?? marker.unit) : directive.unit;
+    const next: ActiveDirectiveMarker = {
+      ...base,
+      revision: (base.revision ?? 0) + 1,
+      intent_uuid: context.intentUuid,
+      state_present: context.statePresent,
+      state_sha256: context.stateSha256,
+      kind: directive.kind,
+      stage: directive.stage ?? marker.stage,
+      ...(unit ? { unit } : { unit: undefined }),
+      ...(directive.part ? { part: directive.part } : { part: undefined }),
+      ...(directive.parts ? { parts: directive.parts } : { parts: undefined }),
+      ...(token ? { continue_token: token, continue_token_sha256: stateContentSha256(token) } : { continue_token: undefined, continue_token_sha256: undefined }),
+      delivery: canDeliver ? "delivered" : "superseded",
+      needs_rehydrate: !canDeliver,
+      active_attempt: { ...attempt, status: "settled" },
+      ...(resume ? { resume } : {}),
+    };
+    return { marker: next, result: "settled" as const };
+  }) ?? "stale";
+}
+
+export function copilotStopEvidence(
+  projectDir: string,
+  stateContent: string,
+  sessionId: string,
+): CopilotStopEvidence {
+  const context = activeDirectiveContext(projectDir, stateContent);
+  const boundIntent = readSessionIntentUuid(projectDir, sessionId);
+  if (boundIntent && boundIntent !== context.intentUuid) supersedeCopilotResumeForIntent(projectDir, sessionId, boundIntent);
+  return transactActiveDirective<CopilotStopEvidence>(projectDir, (current) => {
+    let marker = current;
+    if (marker?.version !== 2) {
+      const stage = getField(stateContent, "Current Stage")?.trim() || "coordination";
+      const fresh = freshActiveDirectiveMarker(projectDir, stateContent, stage);
+      marker = {
+        ...fresh,
+        revision: 1,
+        owner_session: sessionId,
+        owner_epoch: 1,
+        active_attempt: { ...fresh.active_attempt!, id: undefined, session_id: sessionId, owner_epoch: 1 },
+      };
+    }
+    if (marker.owner_session !== sessionId) return { marker, result: { status: "foreign" }, preserve: true };
+    if (marker.project_sha256 !== context.projectSha256 || marker.intent_uuid !== context.intentUuid || marker.state_sha256 !== context.stateSha256) {
+      marker = crossActiveDirectiveBoundary(marker, context.stateSha256, context.intentUuid, true);
+    }
+    if (marker.resume?.issuing_session && marker.resume.issuing_session !== sessionId) {
+      marker = {
+        ...invalidateActiveDirectiveDelivery(marker),
+        resume: { ...marker.resume, status: "superseded" },
+      };
+    }
+    if (marker.resume?.status === "waiting" || marker.resume?.status === "selected") {
+      return { marker, result: { status: "resume" }, preserve: true };
+    }
+    const status = marker.delivery === "delivered" && !marker.needs_rehydrate && marker.kind
+      ? "directive" as const
+      : "recovery" as const;
+    return {
+      marker,
+      result: {
+        status,
+        ...(status === "directive" ? { directive: {
+          kind: marker.kind,
+          stage: marker.stage,
+          ...(marker.unit ? { unit: marker.unit } : {}),
+          ...(marker.part ? { part: marker.part } : {}),
+          ...(marker.parts ? { parts: marker.parts } : {}),
+          ...(marker.continue_token ? { continueToken: marker.continue_token } : {}),
+        } as CopilotDirectiveMetadata } : {}),
+        stateSha256: marker.state_sha256,
+        tokenSha256: marker.continue_token_sha256 ?? "",
+        resumeStatus: marker.resume?.status ?? "none",
+        resumeAction: marker.resume?.action ?? "none",
+        ownerSession: marker.owner_session ?? sessionId,
+        ownerEpoch: marker.owner_epoch ?? 0,
+      },
+      preserve: marker === current,
+    };
+  }) ?? { status: "foreign" };
+}
+
+export function consumeCopilotConversation(
+  projectDir: string,
+  stateContent: string,
+  sessionId: string,
+): boolean {
+  const context = activeDirectiveContext(projectDir, stateContent);
+  return transactActiveDirective(projectDir, (marker) => {
+    if (
+      marker?.version !== 2 || marker.owner_session !== sessionId || marker.state_sha256 !== context.stateSha256 ||
+      (marker.human_sequence ?? 0) <= (marker.engine_sequence ?? 0) ||
+      (marker.human_sequence ?? 0) <= (marker.conversation_sequence ?? 0)
+    ) return { marker, result: false, preserve: true };
+    return {
+      marker: {
+        ...marker,
+        revision: (marker.revision ?? 0) + 1,
+        conversation_sequence: marker.human_sequence ?? 0,
+      },
+      result: true,
+    };
+  }) ?? false;
+}
+
+function supersedeCopilotResumeForIntent(
+  projectDir: string, sessionId: string, intentUuid: string, action?: ResumeAction,
+): boolean {
+  const prior = findIntentByUuid(projectDir, intentUuid);
+  if (!prior) return false;
+  return transactActiveDirective(projectDir, (marker) => {
+    if (marker?.version !== 2 || marker.owner_session !== sessionId ||
+      (marker.resume?.status !== "selected" && marker.resume?.status !== "waiting") ||
+      (action && marker.resume.action !== action) || marker.resume.issuing_intent_uuid !== intentUuid)
+      return { marker, result: false, preserve: true };
+    return {
+      marker: {
+        ...invalidateActiveDirectiveDelivery(marker),
+        resume: { ...marker.resume, status: "superseded" },
+      },
+      result: true,
+    };
+  }, prior.dirName, prior.space) ?? false;
+}
+
+export function settleCopilotIntentBoundary(projectDir: string, sessionId: string): boolean {
+  const handoff = readSessionIntentHandoff(projectDir, sessionId);
+  return !!handoff && activeIntentUuid(projectDir) === handoff.toIntentUuid &&
+    supersedeCopilotResumeForIntent(projectDir, sessionId, handoff.fromIntentUuid, "start-fresh");
+}
+
+export function updateCopilotStopCount(
+  projectDir: string,
+  stateContent: string,
+  sessionId: string,
+  fingerprint: string,
+  seedAtTwo: boolean,
+  cap: number,
+): { shouldBlock: boolean; count: number } | null {
+  const context = activeDirectiveContext(projectDir, stateContent);
+  return transactActiveDirective(projectDir, (marker) => {
+    if (marker?.version !== 2 || marker.owner_session !== sessionId || marker.project_sha256 !== context.projectSha256 ||
+      marker.intent_uuid !== context.intentUuid || marker.state_sha256 !== context.stateSha256) {
+      return { marker, result: null, preserve: true };
+    }
+    const count = marker.stop_fingerprint === fingerprint
+      ? (marker.stop_count ?? 0) + 1
+      : marker.stop_fingerprint === undefined && seedAtTwo ? 2 : 1;
+    return {
+      marker: { ...marker, revision: (marker.revision ?? 0) + 1, stop_fingerprint: fingerprint, stop_count: count },
+      result: { shouldBlock: count < cap, count },
+    };
+  });
 }
 
 // Per-clone audit SHARD path: `…/intents/<slug>-<id8>/audit/<host>-<clone>.md`.

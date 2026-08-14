@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.12] - 2026-08-17
+
+GitHub Copilot now preserves the latest delivered AI-DLC directive across Stop, rejects reuse of a consumed continuation token in the same workflow context, and waits cleanly for Resume and conversational human turns instead of restarting steering. Copilot's session-scoped Stop progress guard measures workflow and directive progress rather than audit activity. **Upgrade:** refresh `dist/copilot/` and start a fresh Copilot conversation for an in-flight workflow so pre-upgrade transport markers cannot be reused.
+
+* Copilot PostToolUse records bounded routing metadata for successful `next`, `continue`, `report`, and `park` results. Stop reuses the current delivered `load-steering` or `run-stage` directive through the existing human-wait, autonomy, and recursion safeguards instead of probing a fresh `next` and restarting part 1.
+* Continuation delivery is scoped to the canonical project, active intent, Copilot session, workflow-state digest, owner/context epoch, full token digest, and exact command attempt. Duplicate or stale callbacks cannot settle newer work, while missing, corrupt, compacted, or drifted evidence returns one fresh-`next` recovery path.
+* Resume questions remain pending until a matching human answer. Selected Resume work stays parked across intermediate turns, foreign bare `next` is denied, and workflow or intent drift supersedes stale choices rather than applying them later.
+* Copilot conversational evidence and Stop streaks are session-scoped. Progress fingerprints include directive kind, stage, Unit, part count, full token hash, state digest, and Resume status; audit-only rows no longer reset the bounded release.
+
 ## [2.6.9] - 2026-08-17
 
 Review receipt invalidation is now recoverable without weakening normal review budgets. When a terminal receipt is voided by a later write to a declared artifact, the review logger permits one deterministic recovery pass at the next ordinal and reports stale, retry, and recovery-spent states directly instead of sending the conductor through the circular guidance seen in #755 and #742. **Upgrade:** refresh `dist/<harness>/` in your project.

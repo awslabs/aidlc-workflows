@@ -66,9 +66,18 @@ import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
-import { stateFilePath } from "../tools/aidlc-lib.ts";
+import {
+  claimCopilotCommand,
+  type CopilotCommandClaim,
+  type CopilotDirectiveMetadata,
+  recordCopilotHumanSequence,
+  settleCopilotCommand,
+  settleCopilotIntentBoundary,
+  stateFilePath,
+} from "../tools/aidlc-lib.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
+const ATTEMPT_FLAG = "--aidlc-attempt-id";
 
 interface CopilotHookInput {
   hook_event_name?: string;
@@ -81,8 +90,8 @@ interface CopilotHookInput {
   toolName?: string;
   tool_input?: Record<string, unknown>;
   toolInput?: Record<string, unknown>;
-  tool_result?: unknown;
-  toolResult?: unknown;
+  tool_result?: unknown; toolResult?: unknown; tool_response?: unknown; toolResponse?: unknown;
+  tool_use_id?: string; toolUseId?: string; tool_call_id?: string; toolCallId?: string;
   agent_name?: string;
   agentName?: string;
   agent_type?: string;
@@ -113,16 +122,17 @@ export async function run(
   const projectDir = isAbsolute(projectDirRaw)
     ? projectDirRaw
     : resolve(process.cwd(), projectDirRaw);
+  const sessionId = copilot.session_id ?? copilot.sessionId ?? "";
   const projectEnv = {
     ...process.env,
     AIDLC_PROJECT_DIR: projectDir,
     CLAUDE_PROJECT_DIR: projectDir,
+    ...(sessionId ? { AIDLC_COPILOT_SESSION_ID: sessionId } : {}),
   };
 
   // Tolerant field reads: PascalCase-registered events arrive snake_case on
   // both surfaces EXCEPT SubagentStart, which the CLI delivers camelCase
   // (live-verified quirk #3 above).
-  const sessionId = copilot.session_id ?? copilot.sessionId ?? "";
   const subagentName =
     copilot.agent_type ?? copilot.agent_name ?? copilot.agentName ?? "";
   const explicitSubagentId = copilot.agent_id ?? copilot.agentId ?? "";
@@ -189,6 +199,13 @@ export async function run(
       const parsed = JSON.parse(input) as Record<string, unknown>;
       parsed.tool_name = toolName;
       if (nativeToolInput) parsed.tool_input = nativeToolInput;
+      const result = copilot.tool_result ?? copilot.toolResult;
+      if (result && typeof result === "object" && !Array.isArray(result)) {
+        const fields = result as Record<string, unknown>;
+        parsed.tool_response = fields.text_result_for_llm ?? fields.textResultForLlm;
+      } else if (copilot.tool_response ?? copilot.toolResponse) {
+        parsed.tool_response = copilot.tool_response ?? copilot.toolResponse;
+      }
       return JSON.stringify(parsed);
     } catch {
       return input;
@@ -258,6 +275,158 @@ export async function run(
       },
     })}\n`;
   }
+
+  type ParsedOrchestration =
+    | { status: "unrelated" | "unsupported" }
+    | { status: "recognized"; claim: CopilotCommandClaim };
+
+  function shellWords(command: string): string[] | null {
+    const words: string[] = [];
+    let word = "";
+    let quote: "'" | '"' | null = null;
+    let escaped = false;
+    for (let i = 0; i < command.length; i++) {
+      const ch = command[i];
+      if (escaped) { word += ch; escaped = false; continue; }
+      if (ch === "\\" && quote !== "'") { escaped = true; continue; }
+      if (quote) {
+        if (ch === quote) quote = null;
+        else if (ch === "`" || (quote === '"' && ch === "$" && command[i + 1] === "(")) return null;
+        else word += ch;
+      } else if (ch === "'" || ch === '"') quote = ch;
+      else if (";&|<>`\n".includes(ch) || (ch === "$" && command[i + 1] === "(")) return null;
+      else if (/\s/.test(ch)) { if (word) { words.push(word); word = ""; } }
+      else word += ch;
+    }
+    if (escaped || quote) return null;
+    if (word) words.push(word);
+    return words;
+  }
+
+  function resumeAction(args: string[]): CopilotCommandClaim["resumeAction"] {
+    const index = args.lastIndexOf("--user-input");
+    const raw = index >= 0 ? (args[index + 1] ?? "").trim().toLowerCase() : "";
+    const choices = { "1": "resume", "2": "redo", "3": "jump", "4": "start-fresh" } as const;
+    const choice = choices[raw as keyof typeof choices];
+    if (choice) return choice;
+    if (raw.includes("redo")) return "redo";
+    if (raw.includes("jump")) return "jump";
+    if (raw.includes("fresh") || raw.includes("start over")) return "start-fresh";
+    if (raw.includes("resume") || raw.includes("checkpoint") || raw.includes("continue")) return "resume";
+    return undefined;
+  }
+
+  function orchestrationCommand(): ParsedOrchestration {
+    const command = nativeToolInput?.command;
+    if (typeof command !== "string" || command.length === 0 || Buffer.byteLength(command) > 64 * 1024) return { status: "unrelated" };
+    const mentions = /(?:aidlc-orchestrate\.ts|aidlc\.ts|(?:^|\s)aidlc(?:\s|$))/.test(command);
+    const words = shellWords(command);
+    if (!words) return { status: mentions ? "unsupported" : "unrelated" };
+    let cursor = 0;
+    let args: string[];
+    const first = words[cursor++] ?? "";
+    if (first === "bun" || first === process.execPath) {
+      if (words[cursor] === "run") cursor++;
+      const script = words[cursor++] ?? "";
+      let resolved = "", direct = "", dispatcher = "";
+      try { resolved = realpathSync(resolve(projectDir, script)); direct = realpathSync(join(projectDir, ".aidlc", "tools", "aidlc-orchestrate.ts")); dispatcher = realpathSync(join(projectDir, ".aidlc", "tools", "aidlc.ts")); }
+      catch { return { status: mentions ? "unsupported" : "unrelated" }; }
+      if (resolved !== direct && resolved !== dispatcher) return { status: mentions ? "unsupported" : "unrelated" };
+      args = words.slice(cursor);
+    } else {
+      const configured = process.env.AIDLC_COMPILED_EXECUTABLE;
+      const compiled = first === "aidlc" || (configured && resolve(first) === resolve(configured));
+      if (!compiled) {
+        const wrapper = /^(?:ba|z|da)?sh$|^(?:env|command|source|eval|nice|nohup|time|exec|if)$/;
+        return { status: mentions && (wrapper.test(first) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(first)) ? "unsupported" : "unrelated" };
+      }
+      args = words.slice(cursor);
+    }
+    if (args[0] === "--resume") args = ["next", "--resume", ...args.slice(1)];
+    const normalized: string[] = [];
+    let attemptId = copilot.tool_use_id ?? copilot.toolUseId ?? copilot.tool_call_id ?? copilot.toolCallId;
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === ATTEMPT_FLAG) {
+        const carried = args[++i];
+        if (!carried || !/^[0-9a-f-]{36}$/.test(carried) || (attemptId && attemptId !== carried)) return { status: "unsupported" };
+        attemptId = carried;
+        continue;
+      }
+      if (args[i] !== "--project-dir") { normalized.push(args[i]); continue; }
+      const routed = args[++i];
+      if (!routed) return { status: "unsupported" };
+      try { if (realpathSync(resolve(projectDir, routed)) !== realpathSync(projectDir)) return { status: "unsupported" }; }
+      catch { return { status: "unsupported" }; }
+    }
+    const commandKind = normalized[0];
+    if (!(["next", "continue", "report", "park"] as string[]).includes(commandKind)) return { status: "unrelated" };
+    const subArgs = normalized.slice(1);
+    if ((commandKind === "continue" && subArgs.length !== 1) || (commandKind === "park" && subArgs.length !== 0)) return { status: "unsupported" };
+    const digest = createHash("sha256").update(JSON.stringify([commandKind, ...subArgs])).digest("hex");
+    const flagValue = (name: string): string => subArgs[subArgs.lastIndexOf(name) + 1] ?? "";
+    const reportResult = flagValue("--result");
+    const resumedReport = ["resume", "resumed"].includes(reportResult);
+    const skipRecovery = reportResult === "skipped" && subArgs.length === 6 && subArgs[0] === "--stage" && subArgs[2] === "--result" && subArgs[4] === "--reason" && flagValue("--reason") === "stage is SKIP in the approved workflow plan";
+    return {
+      status: "recognized",
+      claim: {
+        sessionId,
+        ...(attemptId ? { attemptId } : {}),
+        commandKind: commandKind as CopilotCommandClaim["commandKind"],
+        commandSha256: digest,
+        ...(commandKind === "continue" ? { continueToken: subArgs[0] } : {}),
+        ...(commandKind === "next" && subArgs.includes("--resume") ? { resumeRequest: true } : {}),
+        ...(commandKind === "next" && (subArgs.includes("--stage") || subArgs.includes("--phase")) ? { jumpRequest: true } : {}),
+        ...(commandKind === "next" && subArgs.includes("--new-intent") ? { startFreshRequest: true } : {}),
+        ...(commandKind === "next" && subArgs.length === 0 ? { plainNext: true } : {}),
+        ...(commandKind === "report" && resumedReport ? { resumeAction: resumeAction(subArgs) } : {}),
+        ...(commandKind === "report" && skipRecovery ? { skipRecovery: true, reportStage: flagValue("--stage") } : {}),
+      },
+    };
+  }
+
+  function capturedDirective(): CopilotDirectiveMetadata | null {
+    const result = copilot.tool_result ?? copilot.toolResult;
+    const response = copilot.tool_response ?? copilot.toolResponse;
+    let text: unknown;
+    if (result && typeof result === "object" && !Array.isArray(result)) {
+      const fields = result as Record<string, unknown>;
+      if ((fields.result_type ?? fields.resultType) !== "success") return null;
+      text = fields.text_result_for_llm ?? fields.textResultForLlm;
+    } else if (typeof response === "string") {
+      text = response;
+    } else if (response && typeof response === "object" && !Array.isArray(response)) {
+      const fields = response as Record<string, unknown>;
+      if (fields.success === false || fields.tool_success === false) return null;
+      text = fields.text_result_for_llm ?? fields.textResultForLlm ?? fields.text ?? fields.content ?? fields.output ?? fields.value;
+    }
+    if (typeof text !== "string" || Buffer.byteLength(text) > 128 * 1024) return null;
+    const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    if (lines.length > 2 || lines.slice(1).some((line) => !/^<shellId:\s*[^>]*completed with exit code 0>$/.test(line))) return null;
+    try {
+      const value = JSON.parse(lines[0] ?? "") as Record<string, unknown>;
+      const kinds = new Set(["load-steering", "run-stage", "ask", "print", "error", "done", "parked", "dispatch-subagent", "invoke-swarm", "present-gate"]);
+      if (!kinds.has(String(value.kind))) return null;
+      const directive: CopilotDirectiveMetadata = {
+        kind: value.kind as CopilotDirectiveMetadata["kind"],
+        ...(typeof value.stage === "string" && /^[a-z][a-z0-9-]*$/.test(value.stage) ? { stage: value.stage } : {}),
+        ...(typeof value.unit === "string" && Buffer.byteLength(value.unit) <= 4 * 1024 ? { unit: value.unit } : {}),
+        ...(Number.isInteger(value.part) ? { part: value.part as number } : {}),
+        ...(Number.isInteger(value.parts) ? { parts: value.parts as number } : {}),
+        ...(typeof value.continue_token === "string" && Buffer.byteLength(value.continue_token) <= 16 * 1024 ? { continueToken: value.continue_token } : {}),
+      };
+      if (directive.kind === "load-steering" && (!directive.stage || !directive.part || !directive.parts || directive.part > directive.parts || !directive.continueToken)) return null;
+      if (directive.kind === "run-stage" && !directive.stage) return null;
+      return directive;
+    } catch { return null; }
+  }
+
+  function currentState(): string | null {
+    const path = stateFilePath(projectDir);
+    return existsSync(path) ? readFileSync(path, "utf-8") : null;
+  }
+
+  const recoveryReason = "AI-DLC could not match this Copilot command to current coordination evidence. Run a fresh `bun .aidlc/tools/aidlc-orchestrate.ts next`; do not reuse an earlier continuation token.";
 
   // Re-key Copilot file-tool inputs (`path`/`file_path`/`filePath`, plus VS
   // Code's `files` lists) to the core hooks' `file_path` contract.
@@ -623,6 +792,7 @@ export async function run(
       try {
         if (existsSync(stateFilePath(projectDir))) {
           appendAuditEntry("HUMAN_TURN", {}, projectDir);
+          if (sessionId) recordCopilotHumanSequence(projectDir, readFileSync(stateFilePath(projectDir), "utf-8"), sessionId);
         }
       } catch {
         // best-effort presence record — advisory
@@ -711,6 +881,34 @@ export async function run(
         if (freeze.code === 2) {
           process.stdout.write(denyJson(freeze.stderr));
           return 0;
+        }
+        const command = orchestrationCommand();
+        if (command.status === "unsupported") {
+          process.stdout.write(denyJson("Use one simple direct, source-dispatcher, or compiled AI-DLC command without shell wrappers, chaining, redirection, or substitution."));
+          return 0;
+        }
+        if (command.status === "recognized") {
+          if (!sessionId) {
+            process.stdout.write(denyJson(recoveryReason));
+            return 0;
+          }
+          let claimed: ReturnType<typeof claimCopilotCommand>;
+          try { claimed = claimCopilotCommand(projectDir, currentState(), command.claim); }
+          catch { process.stdout.write(denyJson(recoveryReason)); return 0; }
+          if (!claimed.allowed) {
+            const reason = claimed.reason === "resume"
+              ? "A Resume choice is waiting or selected. The owner must report the human's choice; a foreign session may explicitly reissue it with `next --resume`. Bare `next` is denied."
+              : recoveryReason;
+            process.stdout.write(denyJson(reason));
+            return 0;
+          }
+          if (!command.claim.attemptId) {
+            const modifiedArgs = { ...(nativeToolInput ?? {}), command: `${nativeToolInput?.command} ${ATTEMPT_FLAG} ${claimed.attemptId}` };
+            process.stdout.write(`${JSON.stringify({ modifiedArgs, hookSpecificOutput: {
+              hookEventName: "PreToolUse",
+              updatedInput: modifiedArgs,
+            } })}\n`);
+          }
         }
         return 0;
       }
@@ -818,6 +1016,17 @@ export async function run(
         // The shell tool with tool_input.command — the core hook's exact
         // contract (canonicalized name for the IDE's run_in_terminal).
         runCore("aidlc-rebuild-stage-graph.ts", canonicalInput);
+        const command = orchestrationCommand();
+        if (command.status === "recognized" && sessionId) {
+          try {
+            settleCopilotCommand(projectDir, currentState(), command.claim, capturedDirective());
+          } catch {
+            // A fresh next is the bounded recovery for an unsettled result.
+          }
+        }
+        if (sessionId) {
+          try { settleCopilotIntentBoundary(projectDir, sessionId); } catch { /* bounded marker evidence */ }
+        }
       }
       return 0;
     }
@@ -901,7 +1110,15 @@ export async function run(
     case "continue-workflow": {
       // Emit both host dialects: CLI reads the top-level Claude fields; VS Code
       // reads the same decision under hookSpecificOutput.
-      const r = runCore("aidlc-continue-workflow.ts", input);
+      let forwarded = input;
+      try {
+        const payload = JSON.parse(input) as Record<string, unknown>;
+        delete payload.transcript_path;
+        delete payload.transcriptPath;
+        if (sessionId) payload.session_id = sessionId;
+        forwarded = JSON.stringify(payload);
+      } catch { /* malformed Stop remains core-owned */ }
+      const r = runCore("aidlc-continue-workflow.ts", forwarded);
       if (r.stdout) {
         try {
           const parsed = JSON.parse(r.stdout) as Record<string, unknown>;

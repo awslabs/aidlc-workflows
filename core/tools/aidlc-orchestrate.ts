@@ -132,6 +132,7 @@ import {
   readAllAuditShards,
   recordHookDrop,
   markEngineTouch,
+  markActiveDirectiveResumeWaiting,
   relativeCodekbDir,
   relativeRecordDir,
   relativeSpaceRecordPrefix,
@@ -247,25 +248,30 @@ function emit(directive: Directive): void {
     );
     process.exit(1);
   }
-  // Persist only the final run-stage, after steering delivery and validation.
-  // PostToolUse hooks receive only the written path, so this per-intent marker
-  // is their source for the stage currently being executed. The state digest
-  // makes an old marker inert as soon as a report or other transition mutates
-  // the durable workflow cursor.
-  if (transported.kind === "run-stage" && route) {
+  // Persist bounded routing metadata after validation. Copilot PostToolUse
+  // confirms delivery; no rule text or full directive output enters the marker.
+  if ((transported.kind === "load-steering" || transported.kind === "run-stage") && route) {
     try {
       const markerStateHash =
         route.stateHash ??
         (
-          transported.single === true &&
+          directive.kind === "run-stage" && directive.single === true &&
             existsSync(stateFilePath(route.codekbCtx.projectDir))
             ? sha256(readFileSync(stateFilePath(route.codekbCtx.projectDir), "utf-8"))
             : null
         );
       if (markerStateHash) {
         writeActiveDirectiveMarker(route.codekbCtx.projectDir, {
+          kind: transported.kind,
           stage: transported.stage,
-          ...(transported.unit ? { unit: transported.unit } : {}),
+          ...(directive.kind === "run-stage" && directive.unit ? { unit: directive.unit } : {}),
+          ...(transported.kind === "load-steering"
+            ? {
+                part: transported.part,
+                parts: transported.parts,
+                continue_token: transported.continue_token,
+              }
+            : {}),
           state_sha256: markerStateHash,
         });
       }
@@ -2885,6 +2891,13 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   if (flags.resume && stateContent) {
     const currentSlug = getField(stateContent, "Current Stage") ?? "";
     const where = currentSlug.length > 0 ? ` (currently at "${currentSlug}")` : "";
+    if (currentSlug) {
+      try {
+        markActiveDirectiveResumeWaiting(pd, stateContent, currentSlug);
+      } catch (e) {
+        recordHookDrop(pd, "active-directive", errorMessage(e));
+      }
+    }
     emit(askDirective(
       `An existing workflow was found${where}. How would you like to proceed? ` +
         "Resume from last checkpoint, redo the current stage, jump to a stage, or start fresh.",
@@ -5074,12 +5087,9 @@ function handleSingleReport(
     ));
     return;
   }
+  try { clearActiveDirectiveMarker(pd); }
+  catch (e) { recordHookDrop(pd, "active-directive", errorMessage(e)); }
 
-  try {
-    clearActiveDirectiveMarker(pd);
-  } catch (e) {
-    recordHookDrop(pd, "active-directive", errorMessage(e));
-  }
   emit({
     kind: "done",
     reason:
@@ -5777,6 +5787,8 @@ export function main(argv: string[]): void {
   for (let i = 0; i < rawArgs.length; i++) {
     if (rawArgs[i] === "--project-dir" && i + 1 < rawArgs.length) {
       projectDir = rawArgs[i + 1];
+      i++;
+    } else if (rawArgs[i] === "--aidlc-attempt-id" && i + 1 < rawArgs.length) {
       i++;
     } else {
       filteredArgs.push(rawArgs[i]);
