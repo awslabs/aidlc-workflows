@@ -331,6 +331,33 @@ describe("appendAuditEntryUnlocked — escaping and append-not-overwrite", () =>
     expect(content).toContain(expectedBlock);
   });
 
+  test("a caller-supplied Timestamp field never renders a second **Timestamp** line", () => {
+    const proj = freshProject();
+    // `Timestamp` is accepted by validateAuditEntry on purpose (the public
+    // `append` CLI may pass it), so the render layer is what has to drop it.
+    // Regression for issue #715: park/unpark/practices-override all passed it,
+    // producing two **Timestamp**: lines in one block.
+    const result = appendAuditEntryUnlocked(
+      "WORKFLOW_PARKED",
+      { Stage: "1.1-intent", Timestamp: "2020-01-01T00:00:00Z" },
+      proj,
+    );
+    const content = readAudit(proj);
+
+    // One block → exactly one **Timestamp** and one **Event**, so a whole-file
+    // reader zipping the two markers stays 1:1.
+    expect(content.split("**Timestamp**:").length - 1).toBe(1);
+    expect(content.split("**Event**:").length - 1).toBe(1);
+
+    // The surviving line is the emitter's, and the caller's value is gone
+    // entirely — not merely ordered second.
+    expect(content).toContain(`**Timestamp**: ${result.timestamp}\n`);
+    expect(content).not.toContain("2020-01-01T00:00:00Z");
+
+    // Dropping a reserved key does not disturb the fields around it.
+    expect(content).toContain("**Stage**: 1.1-intent\n");
+  });
+
   test("rejects an invalid event type the same way as the locked variant", () => {
     const proj = freshProject();
     expect(() =>

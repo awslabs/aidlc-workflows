@@ -808,7 +808,6 @@ function handlePark(_args: string[]): void {
     const timestamp = isoTimestamp();
     emitAudit(pd, "WORKFLOW_PARKED", {
       Stage: currentSlug,
-      Timestamp: timestamp,
     });
     content = setOrInsertField(content, "## Runtime State", "Parked", timestamp);
     content = setOrInsertField(content, "## Runtime State", "Parked At Stage", currentSlug);
@@ -831,7 +830,7 @@ function handleUnpark(_args: string[]): void {
     content = removeField(content, "Parked At Stage");
     if (wasParked) {
       const ts = isoTimestamp();
-      emitAudit(pd, "WORKFLOW_UNPARKED", { Timestamp: ts });
+      emitAudit(pd, "WORKFLOW_UNPARKED", {});
       content = setField(content, "Last Updated", ts);
     }
     writeStateFile(pd, content);
@@ -3429,7 +3428,6 @@ function handlePracticesPromote(args: string[]): void {
     try {
       emitAudit(pd, "PRACTICES_OVERRIDE", {
         Reason: reason,
-        Timestamp: isoTimestamp(),
       });
     } catch {
       // If audit emission itself fails, surface the original reason.

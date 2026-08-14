@@ -21,7 +21,7 @@ All event names follow `SUBJECT_PAST_VERB` — every event answers "what happene
 |-------|------|-----------------|---------|
 | ✓ `WORKFLOW_STARTED` | Scope determined, workflow begins | Timestamp, Scope, Request | `tools/aidlc-utility.ts intent-create` |
 | ✓ `WORKFLOW_COMPLETED` | All in-scope stages done | Timestamp, Scope, Details | `tools/aidlc-state.ts complete-workflow` |
-| ✓ `WORKFLOW_PARKED` | Workflow parked mid-flow for a later session (no stage advanced) | Stage, Timestamp | `tools/aidlc-state.ts park` |
+| ✓ `WORKFLOW_PARKED` | Workflow parked mid-flow for a later session (no stage advanced) | Timestamp, Stage | `tools/aidlc-state.ts park` |
 | ✓ `WORKFLOW_UNPARKED` | Park marker cleared on explicit `--resume` re-entry | Timestamp | `tools/aidlc-state.ts unpark` |
 
 ### Phase Lifecycle (4 events)

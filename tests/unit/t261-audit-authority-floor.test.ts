@@ -235,8 +235,9 @@ describe("t261 public audit CLI refuses authority-bearing receipts", () => {
     expect(batch.rc).not.toBe(0);
     expect(batch.out).toContain("Invalid audit field key");
 
-    // Timestamp is a documented field on park/unpark rows — it must not refuse,
-    // and it cannot spoof (the emitter's own **Timestamp**: line is first).
+    // Timestamp is accepted by the public `append` CLI — it must not refuse,
+    // and it cannot spoof: renderAuditBlock drops it, so the emitter's own
+    // **Timestamp**: line is the only one in the block (issue #715).
     const ts = guarded(
       AUDIT,
       ["append", "ERROR_LOGGED", "--field", "Timestamp=2020-01-01T00:00:00Z"],
