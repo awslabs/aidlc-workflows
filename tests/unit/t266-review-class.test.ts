@@ -330,12 +330,12 @@ describe("t266 review class", () => {
 
   // --- 4. prose (core + every dist skill) -----------------------------------
   const ADVISORY_TERMINAL =
-    "On `advisory` both verdicts are terminal";
+    "On an `advisory` review, both verdicts are terminal here.";
 
-  test("stage-protocol §12a carries the class branch (core + dist)", () => {
+  test("reviewer protocol module carries the class branch (core + dist)", () => {
     for (const rel of [
-      "core/aidlc-common/protocols/stage-protocol.md",
-      "dist/claude/.claude/aidlc-common/protocols/stage-protocol.md",
+      "core/aidlc-common/protocols/stage-protocol-reviewer.md",
+      "dist/claude/.claude/aidlc-common/protocols/stage-protocol-reviewer.md",
     ]) {
       const src = read(rel);
       expect(src).toContain("`review_class` field");
@@ -345,7 +345,7 @@ describe("t266 review class", () => {
     }
   });
 
-  test("every harness SKILL.md carries the advisory single-pass contract", () => {
+  test("every harness SKILL.md points to the reviewer protocol module", () => {
     const skills = [
       "harness/claude/skills/aidlc/SKILL.md",
       "harness/kiro/skills/aidlc/SKILL.md",
@@ -358,9 +358,12 @@ describe("t266 review class", () => {
     ];
     for (const rel of skills) {
       const src = read(rel);
-      expect(src).toContain("directive.review_class");
-      expect(src).toContain(ADVISORY_TERMINAL);
+      expect(src).toContain("stage-protocol-reviewer.md");
+      expect(src).toContain("directive.protocol_modules");
     }
+    expect(
+      read("core/aidlc-common/protocols/stage-protocol-reviewer.md"),
+    ).toContain(ADVISORY_TERMINAL);
   });
 
   test("reviewer personas carry the advisory-dispatch stance (core + dist)", () => {

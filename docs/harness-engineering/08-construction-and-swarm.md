@@ -238,7 +238,7 @@ driver seam contract is in
 
 One judgment never moves with the driver: a failure **always halts and
 re-engages the human**, regardless of autonomy mode, per
-`aidlc-common/protocols/stage-protocol.md:125` ("Halt-and-ask on failure"). When
+`aidlc-common/protocols/stage-protocol-construction.md` ("Halt-and-ask on failure"). When
 the referee's `finalize` returns its exit-2 envelope, the conductor takes the
 baton back to a human. Hands-off mode removes the happy-path gates while keeping
 the failure halt loud.

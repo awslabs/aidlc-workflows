@@ -59,7 +59,7 @@ const BARE_INIT = /(^|[^-\w])--init\b/;
 // The workspace-anchor conductor vocabulary every shipped SKILL must define.
 const REQUIRED_TOKENS = [
   "intent-create", // run-then-continue birth verb (replaced `init`)
-  "--repo", // multi-repo swarm prepare flag
+  "stage-protocol-swarm.md", // conditional swarm transport + --repo contract
   "offer a second intent", // P4-completion new-work conductor prose
   "intent and space verbs", // frontmatter utilities tail
 ];
@@ -98,10 +98,8 @@ const ENSEMBLE_TOKENS = [
   "blocking context-load precondition",
   "A mob MUST explicitly read its lead persona path first",
   "path's presence in `inline_context_paths` is not evidence",
-  "`subagent` (hub-and-spoke:",
-  "`pipeline` (chain:",
-  "`mob` (mesh",
-  "ensemble's completion evidence",
+  "stage-protocol-ensemble.md",
+  "directive.protocol_modules",
   '--result skipped --reason "<specific reason>"',
 ];
 
@@ -313,18 +311,21 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
-  test("autonomous review logging uses the main harness tool with a worktree target", () => {
-    const offenders: string[] = [];
-    for (const rel of skills) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
-      if (!body.includes('--project-dir "<worktree>"')) {
-        offenders.push(`${rel}  missing worktree project target`);
-      }
-      if (/bun "<worktree>\/\.[^/]+\/tools\/aidlc-log\.ts"/.test(body)) {
-        offenders.push(`${rel}  resolves the logger inside the worktree`);
-      }
-    }
-    expect(offenders).toEqual([]);
+  test("conditional swarm module keeps autonomous review logging on the main tool", () => {
+    const body = readFileSync(
+      join(
+        REPO_ROOT,
+        "core",
+        "aidlc-common",
+        "protocols",
+        "stage-protocol-swarm.md",
+      ),
+      "utf-8",
+    );
+    expect(body).toContain('--project-dir "<worktree>"');
+    expect(body).not.toMatch(
+      /bun "<worktree>\/\.[^/]+\/tools\/aidlc-log\.ts"/,
+    );
   });
 
   test("every harness Stage Graph table matches the canonical generated table", () => {

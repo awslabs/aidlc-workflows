@@ -5638,7 +5638,7 @@ export function turnMarkersShowConversational(
 }
 
 // `<root>/.aidlc-reviewer-dispatch.json` — the per-unit reviewer dispatch
-// record. The conductor writes it at stage-protocol 12a step 1 (per-unit
+// record. The conductor writes it at stage-protocol-reviewer.md §12a step 1 (per-unit
 // stages only) before invoking the reviewer sub-agent, and deletes it at step
 // 3 the moment the verdict is read. The reviewer-scope PreToolUse hook reads
 // it back to learn WHICH unit is under review and which contract paths are
@@ -8049,7 +8049,7 @@ export function loadScopeMetadataAll(): Record<string, ScopeMetadata> {
   return out;
 }
 
-// --- Review-class resolution (stage-protocol §12a) ---
+// --- Review-class resolution (stage-protocol-reviewer §12a) ---
 //
 // Three inputs, one effective class, resolved LOW-WINS along the same
 // precedence idea as the tier cap (aidlc-tiers.ts): the stage declares its

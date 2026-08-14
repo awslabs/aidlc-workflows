@@ -104,7 +104,7 @@ answer with exit 2 + a reason on stderr (the tool call must be refused when
 the adapter relays that exit code). If the new harness cannot hard-block a
 tool call from its pre-tool seam, leave the reviewer-scope and review-freeze
 registrations out and document the gap rather than wiring dead hooks - the
-prose bounds in stage-protocol §12a still govern there. When the harness's
+prose bounds in stage-protocol-reviewer.md §12a still govern there. When the harness's
 payloads carry no subagent identity, scope reviewer-scope registration to the
 reviewer agents themselves where the harness supports per-agent hooks (the
 Kiro CLI pattern: the adapter then asserts `scoped_registration` instead of

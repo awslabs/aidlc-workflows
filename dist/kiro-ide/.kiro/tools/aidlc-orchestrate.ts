@@ -92,6 +92,7 @@ import {
   type LoadSteeringDirective,
   type ParkedDirective,
   type PrintDirective,
+  type ProtocolModule,
   type RunStageDirective,
   type RunStageWave,
   type RunStageWaveEntry,
@@ -2046,6 +2047,24 @@ function buildRunStageDirective(
         reviewClass === "advisory" ? 1 : node.reviewer_max_iterations ?? 2;
     }
   }
+  const protocolModules: ProtocolModule[] = [];
+  if (directive.reviewer && directive.review_class) {
+    protocolModules.push("reviewer");
+  }
+  if (
+    node.mode === "subagent" ||
+    node.mode === "pipeline" ||
+    node.mode === "mob" ||
+    (node.support_agents?.length ?? 0) > 0
+  ) {
+    protocolModules.push("ensemble");
+  }
+  if (node.phase === "construction") {
+    protocolModules.push("construction");
+  }
+  if (protocolModules.length > 0) {
+    directive.protocol_modules = protocolModules;
+  }
   // Decision D-E: bake the conductor persona into the FIRST run-stage of the
   // workflow. The optional field is omitted on every later directive (the
   // persona persists in the session once delivered). A missing conductor.md is
@@ -3454,15 +3473,26 @@ function tryEmitSwarm(
             : node.reviewer_max_iterations ?? 2,
       }
     : {};
+  const protocolModules: ProtocolModule[] = [
+    ...(node.reviewer ? (["reviewer"] as const) : []),
+    "construction",
+    "swarm",
+  ];
   if (repos.length === 1) {
     emit({
       kind: "invoke-swarm",
       units: pendingUnits,
       ...reviewerFields,
+      protocol_modules: protocolModules,
       repo: repos[0],
     });
   } else {
-    emit({ kind: "invoke-swarm", units: pendingUnits, ...reviewerFields });
+    emit({
+      kind: "invoke-swarm",
+      units: pendingUnits,
+      ...reviewerFields,
+      protocol_modules: protocolModules,
+    });
   }
   return true;
 }
@@ -4963,7 +4993,7 @@ function checkEnsembleEvidence(
       `Stage "${slug}" is mode: ${node.mode} - its ensemble must convene before approval, and the ` +
       `contribution files are the evidence. Missing or malformed: ${missing.join("; ")}. ` +
       `Dispatch each support agent to write ${contributionPath} ` +
-      `(first line: **Collaborator:** <agent-slug>) per stage-protocol.md §5, then re-report. ` +
+      `(first line: **Collaborator:** <agent-slug>) per stage-protocol-ensemble.md §5, then re-report. ` +
       `Set AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1 only to recover a legitimately-run stage whose files were lost.`,
   };
 }

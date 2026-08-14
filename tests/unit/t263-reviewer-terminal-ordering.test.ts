@@ -12,11 +12,11 @@
 //
 // The fix is choreography prose + an error nudge, pinned here in every
 // authored surface that carries it:
-//   - stage-protocol.md §12a step 3 READY branch: the receipt is terminal,
+//   - stage-protocol-reviewer.md §12a step 3 READY branch: the receipt is terminal,
 //     no produces[] writes after it, READY-riding suggestions are gate input
 //     to quote, never edits to apply (they are not grounds for NOT-READY per
 //     step 2, so they are not grounds for editing past the receipt either)
-//   - all six harness SKILL.md reviewer steps: same ordering, conductor-facing
+//   - all harness SKILL.md files conditionally load that shared module
 //   - aidlc-state.ts reviewerPreconditionError: the refusal text names the
 //     terminal ordering instead of only asking for a fresh receipt (the old
 //     message re-triggered the loop: "get a fresh receipt" -> re-review ->
@@ -53,7 +53,7 @@ const CORE_PROTOCOL = join(
   "core",
   "aidlc-common",
   "protocols",
-  "stage-protocol.md",
+  "stage-protocol-reviewer.md",
 );
 const DIST_PROTOCOL = join(
   REPO_ROOT,
@@ -62,7 +62,7 @@ const DIST_PROTOCOL = join(
   ".claude",
   "aidlc-common",
   "protocols",
-  "stage-protocol.md",
+  "stage-protocol-reviewer.md",
 );
 
 const ORDERING_PIN =
@@ -76,8 +76,7 @@ const SUGGESTION_PIN =
 // the reviewer passed.
 const GATE_ORDER_PIN =
   "keep the §1 approval question's standard option order (Approve first, Request Changes second)";
-const SKILL_PIN =
-  "The terminal receipt ends artifact work";
+const SKILL_PIN = "stage-protocol-reviewer.md";
 const STALE_ERROR_PIN =
   "terminal review receipt from aidlc-product-lead-agent was invalidated";
 
@@ -98,7 +97,7 @@ function run(tool: string, args: string[], p: string, env?: Record<string, strin
 }
 
 describe("t263 reviewer terminal-receipt ordering (receipt-invalidation loop fix)", () => {
-  test("stage-protocol §12a READY branch orders the terminal receipt last", () => {
+  test("stage-protocol-reviewer.md §12a READY branch orders the terminal receipt last", () => {
     for (const path of [CORE_PROTOCOL, DIST_PROTOCOL]) {
       const src = readFileSync(path, "utf-8");
       expect(src).toContain(ORDERING_PIN);
@@ -107,8 +106,16 @@ describe("t263 reviewer terminal-receipt ordering (receipt-invalidation loop fix
     }
   });
 
-  test("every authored harness SKILL.md carries the ordering in its reviewer step", () => {
-    for (const harness of ["claude", "kiro", "kiro-ide", "codex", "opencode", "cursor", "copilot"]) {
+  test("every authored harness SKILL.md loads the ordering module", () => {
+    for (const harness of [
+      "claude",
+      "kiro",
+      "kiro-ide",
+      "codex",
+      "opencode",
+      "cursor",
+      "copilot",
+    ]) {
       const src = readFileSync(
         join(REPO_ROOT, "harness", harness, "skills", "aidlc", "SKILL.md"),
         "utf-8",
@@ -122,7 +129,12 @@ describe("t263 reviewer terminal-receipt ordering (receipt-invalidation loop fix
     tempDirs.push(p);
     seedAidlcMemory(p);
     seedStateFile(p, join(FIXTURES_DIR, "state-mid-inception.md"));
-    const env = { AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" };
+    const env = {
+      AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+      AIDLC_SKIP_ARTIFACT_GUARD: "1",
+      AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
+      AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+    };
 
     expect(run(STATE_TOOL, ["gate-start", "requirements-analysis"], p, env).status).toBe(0);
     expect(

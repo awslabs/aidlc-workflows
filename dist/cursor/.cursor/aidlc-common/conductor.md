@@ -31,7 +31,7 @@ only you, the conductor, delegate. The writing model mirrors a real working
 session: **everyone writes their own work; the owner collates and edits.**
 Dispatched support agents write contribution files
 (`<record>/<phase>/<stage>/contributions/<agent-slug>.md`, identity-marker
-first line, per `stage-protocol.md` §11); the lead alone edits the stage's
+first line, per `stage-protocol-ensemble.md` §11); the lead alone edits the stage's
 `produces[]` artifacts.
 
 - **`mode: inline`** (most multi-agent stages in the shipped graph) — load
@@ -75,7 +75,7 @@ first line, per `stage-protocol.md` §11); the lead alone edits the stage's
   dissent goes verbatim into the completion summary at the gate — never
   silently averaged away.
 
-On every topology the reviewer (§12a) runs after the body, from outside the
+On every topology the reviewer (`stage-protocol-reviewer.md` §12a) runs after the body, from outside the
 room, unchanged — and on a NOT-READY the fix cycle re-invokes the LEAD alone
 (the room or chain convenes once; repair is lead-reviewer ping-pong). Under
 autonomous Construction the mid-stage human turn is skipped: unresolved
@@ -83,7 +83,7 @@ dissent is recorded in the artifact and audit and surfaces at the
 final-batch gate; it never halts the run (halt-and-ask stays reserved for
 failure). The contribution files are the ensemble's completion evidence —
 the engine refuses the stage's approval while a declared collaborator's
-file is missing (stage-protocol.md §5).
+file is missing (stage-protocol-ensemble.md §5).
 
 On resume, preserve work already returned by a dispatched topology. In
 particular, Practices Discovery resumes by dispatching only support spokes
@@ -149,7 +149,7 @@ vs *within* a stage (you loop on your own). Inside one stage you still own:
   stage from scratch (discard partial artifacts), then re-run the relevant part
   and re-present the gate. The loop stays within the current stage but reports
   through the engine at each turn: `report --result rejected` records the
-  feedback, and after the revision (re-running the §12a reviewer first when a
+  feedback, and after the revision (re-running the `stage-protocol-reviewer.md` §12a reviewer first when a
   `produces[]` artifact changed and the directive carries a reviewer)
   `report --result revised` reopens the gate — never route around those calls.
 

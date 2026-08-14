@@ -237,6 +237,7 @@ Scope defaults and lightweight routing have been revised. **Breaking:** freeform
 * `classic` is now the freeform default, reproducing the v1-style lifecycle without Ideation while its conditional design and Operation stages self-select.
 * `classic` uses the production test floor: the former `workshop` scope's `testStrategy: Minimal` override has been removed, so test strategy inherits Standard depth.
 * The cold-start compose offer now anchors its examples with live `express` / `classic` / `feature` stage counts, making the lightweight options visible while users choose between a stock plan and a tailored one.
+* Reviewer, ensemble, Construction, and swarm machinery now lives in conditionally loaded protocol modules selected by each directive's `protocol_modules` hint, reducing the fixed protocol context loaded in every session without changing stage behavior.
 
 ## [2.6.2] - 2026-08-13
 

@@ -59,6 +59,14 @@ export type GateValue = boolean | typeof GATE_UNRESOLVED;
 // never the thing that pushes a directive over transport budget.
 export type NarrationField = string;
 
+export const VALID_PROTOCOL_MODULES = [
+  "reviewer",
+  "ensemble",
+  "construction",
+  "swarm",
+] as const;
+export type ProtocolModule = (typeof VALID_PROTOCOL_MODULES)[number];
+
 // The 10 kinds, keyed on the `kind` discriminator.
 export type DirectiveKind =
   | "load-steering"
@@ -170,7 +178,7 @@ export interface RunStageDirective {
   stage_file: string;
   // reviewer — the agent to invoke as a separate sub-agent for quality review
   // after the stage body completes. Absent (undefined) when no review step is
-  // configured for this stage. See stage-protocol.md §12a.
+  // configured for this stage. See stage-protocol-reviewer.md §12a.
   reviewer?: string;
   // reviewer_max_iterations — how many review cycles before escalating to the
   // human. Default 2 when reviewer is present. Absent when no reviewer.
@@ -183,6 +191,10 @@ export interface RunStageDirective {
   // conductor - the engine omits the whole reviewer block instead. Absent
   // when reviewer is absent.
   review_class?: "adversarial" | "advisory";
+  // protocol_modules — optional deterministic hints naming conditional
+  // protocol files the conductor reads before the stage body. The prose
+  // triggers remain the compatibility fallback when this field is absent.
+  protocol_modules?: ProtocolModule[];
   // conductor_persona — set ONLY on the first run-stage of a workflow (decision
   // D-E, SPIKE 6). The engine reads `.claude/aidlc-common/conductor.md` and bakes
   // its contents here so the conductor receives its execution-quality charter
@@ -280,6 +292,7 @@ export interface InvokeSwarmDirective {
   // is the only pre-merge verification inside a Bolt), so unlike run-stage
   // this is not a resolved value.
   review_class?: "adversarial" | "advisory";
+  protocol_modules?: ProtocolModule[];
   // repo — OPTIONAL. The sibling repo NAME this batch targets, present only when
   // the engine can resolve it deterministically: the intent records exactly one
   // repo (the lone sibling). Absent for a legacy/single-projectDir intent (no
@@ -433,6 +446,7 @@ const RUN_STAGE_FIELDS = [
   "reviewer",
   "reviewer_max_iterations",
   "review_class",
+  "protocol_modules",
   "conductor_persona",
   "next_stage",
   "unit",
@@ -454,7 +468,10 @@ const LOAD_STEERING_FIELDS = [
 // marker belongs only to the emitted run-stage kind.
 const DISPATCH_SUBAGENT_FIELDS = [
   ...RUN_STAGE_FIELDS.filter(
-    (field) => field !== "single" && field !== "wave",
+    (field) =>
+      field !== "single" &&
+      field !== "wave" &&
+      field !== "protocol_modules",
   ),
   "worker",
 ] as const;
@@ -467,6 +484,7 @@ const INVOKE_SWARM_FIELDS = [
   "reviewer",
   "reviewer_max_iterations",
   "review_class",
+  "protocol_modules",
   "repo",
 ] as const;
 const PRESENT_GATE_FIELDS = ["kind", "stage", "phase", "memory_path"] as const;
@@ -596,6 +614,7 @@ export function validateDirective(obj: unknown): ValidationResult {
       if ("review_class" in o && typeof o.reviewer !== "string") {
         errors.push(`${kind}: review_class requires reviewer`);
       }
+      checkOptionalProtocolModules(o, kind, errors);
       checkOptionalString(o, "repo", kind, errors);
       break;
     case "present-gate":
@@ -703,6 +722,9 @@ function checkRunStageShared(
   checkEnum(o, "review_class", VALID_REVIEW_CLASSES, kind, errors);
   if ("review_class" in o && typeof o.reviewer !== "string") {
     errors.push(`${kind}: review_class requires reviewer`);
+  }
+  if (kind === "run-stage") {
+    checkOptionalProtocolModules(o, kind, errors);
   }
   // unit: optional on a run-stage directive (present only on a per-unit
   // Construction directive resolved to a concrete Unit of Work). A present
@@ -850,6 +872,32 @@ function checkOptionalStringArray(
 ): void {
   if (!(field in o)) return;
   checkStringArray(o, field, kind, errors);
+}
+
+function checkOptionalProtocolModules(
+  o: Record<string, unknown>,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!("protocol_modules" in o)) return;
+  const value = o.protocol_modules;
+  if (!Array.isArray(value)) {
+    errors.push(
+      `${kind}: protocol_modules must be array, got ${describe(value)}`,
+    );
+    return;
+  }
+  for (let i = 0; i < value.length; i++) {
+    const moduleName = value[i];
+    if (
+      typeof moduleName !== "string" ||
+      !(VALID_PROTOCOL_MODULES as readonly string[]).includes(moduleName)
+    ) {
+      errors.push(
+        `${kind}: protocol_modules[${i}] must be one of ${VALID_PROTOCOL_MODULES.join(" | ")}`,
+      );
+    }
+  }
 }
 
 // checkPathTextArray - a required array of {path: string, text: string}

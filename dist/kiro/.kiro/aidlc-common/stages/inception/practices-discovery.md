@@ -119,8 +119,8 @@ Each support agent writes:
 `<record>/inception/practices-discovery/contributions/<agent-slug>.md`
 
 The first line must be `**Collaborator:** <agent-slug>`, followed by
-`## Contribution` and `## Positions` as defined by `stage-protocol.md` section
-11. Collect all three files before the interview. Their presence and identity
+`## Contribution` and `## Positions` as defined by
+`stage-protocol-ensemble.md` §11. Collect all three files before the interview. Their presence and identity
 markers are deterministic completion evidence checked by the engine.
 
 ### Step 4: Interview (Always)
