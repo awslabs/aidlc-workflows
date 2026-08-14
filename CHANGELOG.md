@@ -236,6 +236,7 @@ Scope defaults and lightweight routing have been revised. **Breaking:** freeform
 * NEW `express` scope and `/aidlc-express` runner: Minimal depth, reviewers disabled through `review_cap: none`, and a 10-stage requirements-to-deploy grid with a conditional deploy tail.
 * `classic` is now the freeform default, reproducing the v1-style lifecycle without Ideation while its conditional design and Operation stages self-select.
 * `classic` uses the production test floor: the former `workshop` scope's `testStrategy: Minimal` override has been removed, so test strategy inherits Standard depth.
+* The cold-start compose offer now anchors its examples with live `express` / `classic` / `feature` stage counts, making the lightweight options visible while users choose between a stock plan and a tailored one.
 
 ## [2.6.2] - 2026-08-13
 

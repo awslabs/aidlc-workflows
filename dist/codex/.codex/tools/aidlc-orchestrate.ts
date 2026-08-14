@@ -3071,12 +3071,12 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     // Anchor the compose offer with the counts for the three named scopes so the
     // user calibrates the order-of-magnitude difference before deciding. Fall
     // back to bare names if any scope does not resolve.
-    const bf = scopeCostSummary("bugfix");
-    const poc = scopeCostSummary("poc");
+    const express = scopeCostSummary("express");
+    const classic = scopeCostSummary("classic");
     const feat = scopeCostSummary("feature");
     const fallbackExamples = [...validScopes()].slice(0, 3).join(", ") || "an explicit scope";
-    const examples = bf && poc && feat
-      ? `bugfix = ${bf.execute} of ${bf.total} stages, poc = ${poc.execute}, feature = all ${feat.execute}`
+    const examples = express && classic && feat
+      ? `express = ${express.execute} of ${express.total} stages, classic = ${classic.execute}, feature = all ${feat.execute}`
       : fallbackExamples;
     emit(askDirective(
       `None of the ready-made plans is an obvious fit for: "${flags.intent}". ` +
