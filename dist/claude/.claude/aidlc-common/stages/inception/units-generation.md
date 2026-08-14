@@ -94,7 +94,7 @@ Present the decomposition plan to the user as a structured question:
 
 ### Step 6: Execute Plan — Generate Unit Artifacts
 
-Based on the approved plan, generate 3 artifacts in `<record>/inception/units-generation/`:
+Based on the approved plan, generate 4 artifacts in `<record>/inception/units-generation/` (the three Unit artifacts below plus `traceability.json`, whose contents are specified in Step 7):
 
 **unit-of-work.md:**
 - Unit definitions (name, description, boundaries)

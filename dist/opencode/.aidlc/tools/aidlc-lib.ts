@@ -8003,3 +8003,83 @@ export function filterProducesByKind(
     return kinds === undefined || kinds.includes(unitKind);
   });
 }
+
+// -----------------------------------------------------------------------------
+// State-schema-version classification (shared by runtime + doctor)
+// -----------------------------------------------------------------------------
+// The persisted `aidlc-state.md` carries a `- **State Version**: N` line naming
+// the state-graph schema the workflow was born under. v8 renamed the Inception
+// `application-design` stage to `domain-design` and inserted `contract-design`,
+// so a pre-v8 state file's stage rows no longer match the compiled graph. An
+// incompatible state must be refused up front by BOTH runtime commands
+// (aidlc-orchestrate.ts `next`/`report`) and by `aidlc --doctor`, and both
+// callers must classify the state identically — otherwise the doctor and the
+// runtime disagree on whether a state is "malformed" vs "future" vs "past".
+// classifyStateVersion() is the single source of truth for that classification,
+// so a new schema bump only touches CURRENT_STATE_VERSION in this file.
+
+/** The current state-graph schema version. Bump when the graph adds/renames/removes rows. */
+export const CURRENT_STATE_VERSION = "8";
+
+export type StateVersionClassification =
+  | { kind: "ok" }
+  | { kind: "unparseable"; message: string }
+  | { kind: "past"; version: string; message: string }
+  | { kind: "future"; version: string; message: string };
+
+/**
+ * Classify a state-file's `State Version` field.
+ *
+ * `unparseable` covers: missing field, empty value, non-numeric token, or
+ * trailing content after the numeric token (e.g. `State Version: 8 garbage`).
+ * `past`/`future` cover explicit numeric versions on either side of the current
+ * one. `ok` is the current version with no trailing content.
+ *
+ * The parser uses horizontal whitespace only (`[ \t]*`) to avoid a `\s*` regex
+ * that would span the newline after an empty value and capture the leading `-`
+ * of the next state bullet as a bogus version. The tail is anchored to the end
+ * of the line, so trailing content on the value line is rejected — a schema
+ * token must be a bare integer on its own line.
+ */
+export function classifyStateVersion(stateContent: string): StateVersionClassification {
+  const unparseableMessage =
+    "Incompatible workflow state: the State Version field is missing, empty, " +
+    "or unparseable in aidlc-state.md, so this state cannot be matched to the " +
+    `current v${CURRENT_STATE_VERSION} stage graph and cannot be advanced safely. ` +
+    "Archive your workspace ('mv aidlc aidlc.archive') and start a fresh " +
+    "workflow (describe what to build), or finish this workflow on the prior " +
+    "shell. Run `/aidlc --doctor` for the full diagnosis.";
+  // Anchor the tail with `[ \t]*$`: the schema token is a bare integer with
+  // no trailing content on the line, so `State Version: 8 garbage` fails to
+  // match and falls into the unparseable branch.
+  const versionMatch = stateContent.match(/^- \*\*State Version\*\*:[ \t]*(\S+)[ \t]*$/m);
+  if (versionMatch === null) return { kind: "unparseable", message: unparseableMessage };
+  const v = versionMatch[1];
+  if (!/^\d+$/.test(v)) return { kind: "unparseable", message: unparseableMessage };
+  if (v === CURRENT_STATE_VERSION) return { kind: "ok" };
+  if (Number(v) > Number(CURRENT_STATE_VERSION)) {
+    return {
+      kind: "future",
+      version: v,
+      message:
+        `Incompatible workflow state: State Version ${v} is newer than the ` +
+        `current v${CURRENT_STATE_VERSION} stage graph this build understands, so ` +
+        "it cannot be advanced safely. Upgrade the framework to a build that ships " +
+        `state schema v${v} (or newer), or finish this workflow on the shell that ` +
+        "produced it. Run `/aidlc --doctor` for the full diagnosis.",
+    };
+  }
+  return {
+    kind: "past",
+    version: v,
+    message:
+      `Incompatible workflow state: State Version ${v} predates the current ` +
+      `v${CURRENT_STATE_VERSION} stage graph. v8 renamed the Inception ` +
+      "`application-design` stage to `domain-design` and inserted " +
+      "`contract-design`, so this state's stage rows no longer match the graph " +
+      "and cannot be advanced safely. Archive your workspace " +
+      `('mv aidlc aidlc.v${v}-archive') and start a fresh workflow (describe what ` +
+      "to build), or finish this workflow on the prior shell. Run `/aidlc --doctor` " +
+      "for the full diagnosis.",
+  };
+}

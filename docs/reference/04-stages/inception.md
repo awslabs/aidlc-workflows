@@ -860,6 +860,7 @@ The artifacts written to `<record>/inception/domain-design/`:
 |-----------------------------------|-----------------------------------------------------------|
 | `components.md`                   | Fenced `yaml` component catalogue (source of truth): each component's `behaviour`, `responsibilities`, `depends_on`/`dependents`, `external_dependencies`, and owned `entities` (with `identifier`, attributes, and cross-component `references`). Followed by the derived human view: mermaid Component Diagram, Component Summary, Entity Ownership, External Dependencies, and Rationale tables |
 | `decisions.md`                    | The ADR log — architecture decision records capturing key design decisions and their rationale |
+| `traceability.json`               | Coverage table mapping each upstream `USx.y` (or fallback `FR`) to the component or entity in `components.md` that realizes it; validated by the `traceability` sensor |
 
 Additionally, a questions file is created as input:
 
@@ -982,7 +983,7 @@ actual unit artifacts.
 **PART 2: Generation**
 
 6. **Execute Plan -- Generate Unit Artifacts** -- Based on the approved plan,
-   generate the 3 output artifacts (see Outputs below).
+   generate the 4 output artifacts (see Outputs below).
 
 7. **Prepare Completion** -- Verify the unit artifacts and record the unit
    list for Construction. Do not edit state; report the gate outcome through
@@ -995,13 +996,14 @@ actual unit artifacts.
 
 ### Outputs
 
-All 3 artifacts written to `<record>/inception/units-generation/`:
+All 4 artifacts written to `<record>/inception/units-generation/`:
 
 | File                            | Contents                                                    |
 |---------------------------------|-------------------------------------------------------------|
 | `unit-of-work.md`               | Unit definitions (name, description, boundaries), responsibilities, deployment model per Unit (standalone/shared/embedded), relative complexity estimate (S/M/L/XL), unit kind (`service`/`spec`/`ui`/`packaging`/`library`, drives which construction design artifacts apply), implementation notes and constraints |
 | `unit-of-work-dependency.md`    | Dependency DAG between Units (directed edges, cycle-free), integration points (APIs/shared data/events), parallel development opportunities (sets of Units with no dependency between them). Topology only, economic path-choice (recommended order, critical path) is 2.9's job. The fenced `yaml` edge block mirrors the DAG and may tag each unit with an optional `kind:` (see [Runtime graph](../13-runtime-graph.md) `bolt_dag.units[].kind`) |
 | `unit-of-work-story-map.md`     | Each user story mapped to implementing Unit(s), cross-cutting stories spanning multiple Units, story implementation order within each Unit, coverage verification (every story assigned, every Unit has stories) |
+| `traceability.json`             | Coverage table deriving the Unit set from the generated Unit artifacts and verifying every story maps to its declared target Unit; validated by the `traceability` sensor |
 
 Additionally, a questions file is created as input:
 
@@ -1138,6 +1140,8 @@ All Inception phase artifacts:
 - Domain design from Stage 2.6
   (`<record>/inception/domain-design/`)
 - Units from Stage 2.7 (`<record>/inception/units-generation/`)
+- Contract summary from Stage 2.8, if produced
+  (`<record>/inception/contract-design/contract-summary.md`)
 - Team formation from Stage 1.5
   (`<record>/ideation/team-formation/`), if exists
 
@@ -1149,7 +1153,8 @@ All Inception phase artifacts:
    order validation.
 
 2. **Load Prior Context** -- Read all Inception phase artifacts: requirements,
-   user stories, domain design, units, and team formation (if exists).
+   user stories, domain design, units, the contract summary (if produced), and
+   team formation (if exists).
 
 3. **Generate Clarifying Questions** -- Create
    `<record>/inception/delivery-planning/delivery-planning-questions.md`
@@ -1278,17 +1283,20 @@ Construction and Operation:
 4. **Refined Mockups** (2.5) -- Mid-to-high fidelity mockups, interaction
    specifications, design system mapping, accessibility checklist. (When
    applicable.)
-5. **Domain Design** (2.6) -- Component definitions, method signatures,
-   service definitions, dependency matrix, architecture decision records.
+5. **Domain Design** (2.6) -- The consolidated `components.md` catalogue
+   (each component's behaviour, responsibilities, dependencies, external
+   dependencies, and owned entities) plus the `decisions.md` ADR log.
    (When applicable.)
 6. **Units of Work** (2.7) -- Unit definitions with boundaries and complexity
    estimates, unit dependency matrix with build order, story-to-unit mapping.
    (When applicable.) This is the artifact that drives the Construction
    phased construction flow.
-7. **Delivery Plan** (2.9) -- Bolt plan, build order, dependency matrix, team
+7. **Contract Summary** (2.8) -- The pinned inter-unit and public/external API
+   contracts (`contract-summary.md`). (When there is a contract to pin.)
+8. **Delivery Plan** (2.9) -- Bolt plan, build order, dependency matrix, team
    allocation. This is the execution plan that governs Construction and
    Operation.
-8. **Phase Boundary Verification** (2.9) -- Inception-to-Construction
+9. **Phase Boundary Verification** (2.9) -- Inception-to-Construction
    traceability check written to
    `<record>/verification/phase-check-inception.md`.
 

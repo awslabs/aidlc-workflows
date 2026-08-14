@@ -1,7 +1,7 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
-## [2.6.2] - 2026-08-13
+## [2.6.3] - 2026-08-14
 
 Bolt, walking-skeleton, and parallel-batch **definition** wording now matches the default stage-major Construction walk and the swarm-only Bolt events. A Bolt is one Unit's worktree, not a pass through stages 3.1–3.5 and not a bundle of Units. Construction Bolt-gate procedure and 2.9 planning questions are unchanged. No engine or walk-order change. **Upgrade:** re-copy your `dist/<harness>/` shell (or rerun the Cursor installer) so shipped `stage-protocol.md` Terminology matches. No command or flag changes.
 
@@ -9,6 +9,15 @@ Bolt, walking-skeleton, and parallel-batch **definition** wording now matches th
 * Parallel-batch and `bolt-plan.md` wording now attributes runtime batches to `unit-of-work-dependency.md` (stage 2.7); the bolt-plan walking-skeleton marker stays advisory against `team.md`.
 * Same definition copies aligned in the user guide, delivery-planning, delivery-agent knowledge, audit-format, code-generation completion-gate note, and the Inception stage reference. Construction Bolt-gate procedure, 2.9 bundling questions, and Construction flow diagrams are unchanged.
 * No command or flag changes.
+
+## [2.6.2] - 2026-08-13
+
+Follow-up fixes to the 2.6.1 design-output restructure (review items from #711). No artifact or stage-graph changes — this is a correctness/consistency patch. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* Business-rule ID format is now consistently `BRx.y` (e.g. `BR1.1`) — the format the `traceability` sensor recognizes. Functional Design (`functional-design.md`), the product-agent functional-design guide, and the org-level stable-ID guidance no longer instruct the sensor-incompatible `BR-NNN` form.
+* Runtime state-version guard hardened and aligned with `/aidlc --doctor`: `next` and `report` now refuse a state whose State Version is **missing, empty, malformed, or a present-but-empty (zero-byte) file**, and report a future/unknown numeric version as incompatible rather than as pre-v8. Previously a missing/empty/zero-byte version could slip through and advance an incompatible state.
+* Domain Design traceability targets are constrained to the components/entities defined in `components.md` (its source of truth); method/API-level targets are pinned later in Contract Design and Functional Design.
+* Inception reference documentation (`docs/reference/04-stages/inception.md`) corrected: Contract Design (2.8) section added, `contract-summary.md` listed in Delivery Planning inputs, `traceability.json` listed in Domain Design and Units Generation outputs, and Units Generation's output count corrected to four.
 
 ## [2.6.1] - 2026-08-13
 
