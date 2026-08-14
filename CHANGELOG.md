@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.5] - 2026-08-14
+
+The conductor no longer parks a workflow because context *feels* heavy. The orchestrator skill licensed parking "when you are running low on context mid-loop" — an unmeasurable trigger, since the conductor has no access to its own token count and was guessing from conversation length. In the field this fired at 37% of a 1M window used, with 63% free, forcing an `/aidlc --resume` handshake every one or two stages; the framework's own statusline paints that same reading green (yellow at 50%, red at 75%). **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* Parking for context now requires a usage figure the harness actually surfaced, at or above 80%. Without such a figure the conductor keeps running stages instead of parking.
+* The user-initiated park is unchanged — `park` still exists and is still the correct exit when you want to stop and continue later, and it remains mandatory over fabricating a `done`.
+* Applies to all seven harness orchestrator skills (claude, codex, copilot, cursor, kiro, kiro-ide, opencode).
+
 ## [2.6.2] - 2026-08-13
 
 Follow-up fixes to the 2.6.1 design-output restructure (review items from #711). No artifact or stage-graph changes — this is a correctness/consistency patch. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
