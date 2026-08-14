@@ -278,10 +278,12 @@ artifacts (never the builder's `memory.md` or plan — it forms independent
 judgment), then appends a `## Review` section with a verdict: **READY** or
 **NOT-READY**. How the verdict is handled depends on the stage's review class:
 
-- **Advisory** (the human-gated ideation/inception prose stages): one review
-  pass, whatever the verdict. The findings are quoted verbatim at the approval
-  gate, ranked by severity, as decision support — you triage them, and a
-  Request Changes at the gate is how a finding becomes a revision.
+- **Advisory** (the human-gated ideation/inception prose stages): one normal-flow
+  review pass, whatever the verdict. The findings are quoted verbatim at the
+  approval gate, ranked by severity, as decision support — you triage them, and a
+  Request Changes at the gate is how a finding becomes a revision. If a later
+  output write invalidates the terminal receipt, one bounded recovery request
+  runs at the next ordinal.
 - **Adversarial** (the Construction design/build stages): on NOT-READY the
   builder re-runs to address the findings and the reviewer re-checks, looping
   up to `reviewer_max_iterations` times (default 2, engine-enforced). If

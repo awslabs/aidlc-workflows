@@ -1756,7 +1756,7 @@ function verifySummaryConfirmationPrecondition(
 // The row must match BOTH Stage AND Reviewer (a row naming the wrong reviewer —
 // a typo, or the conductor self-certifying — must not satisfy it). On per-unit
 // stages (for_each: unit-of-work) one review per stage is not enough: the
-// reviewer fires once PER UNIT, so EVERY unit must carry its own terminal review.
+// Review accounting is per Unit, so EVERY unit must carry its own terminal review.
 //
 function verifyReviewerPrecondition(
   pd: string,
@@ -1811,7 +1811,16 @@ function verifyReviewerPrecondition(
   const reviewedUnits = new Set(receipts.unitVerdicts.keys());
 
   if (!perUnit) {
-    if (!sawStageReview) reviewerPreconditionError(stage.slug, reviewer);
+    if (!sawStageReview) {
+      if (receipts.stageStale) {
+        staleReviewPreconditionError(
+          stage.slug,
+          reviewer,
+          receipts.stageStaleProgress?.recoverySpent === true,
+        );
+      }
+      reviewerPreconditionError(stage.slug, reviewer);
+    }
     return;
   }
 
@@ -1844,14 +1853,81 @@ function verifyReviewerPrecondition(
 
   const missing = reviewUnits.filter((u) => !reviewedUnits.has(u));
   if (missing.length > 0) {
+    const stale = missing.filter((unit) => receipts.unitStale.has(unit));
+    const neverReviewed = missing.filter((unit) => !receipts.unitStale.has(unit));
+    const recoveryAvailable = stale.filter(
+      (unit) => receipts.unitStaleProgress.get(unit)?.recoverySpent !== true,
+    );
+    const recoverySpent = stale.filter(
+      (unit) => receipts.unitStaleProgress.get(unit)?.recoverySpent === true,
+    );
+    const guidance: string[] = [];
+    if (recoveryAvailable.length > 0) {
+      guidance.push(
+        `For invalidated units with recovery available (${recoveryAvailable.join(", ")}), ` +
+          `run \`aidlc-log.ts review --stage ${stage.slug} --unit <unit> --reviewer ` +
+          `${reviewer} --iteration <next ordinal>\`, then record the verdict with ` +
+          `the same command plus \`--verdict <READY|NOT-READY>\` and stop editing ` +
+          `produces[] artifacts.`,
+      );
+    }
+    if (recoverySpent.length > 0) {
+      guidance.push(
+        autonomousSwarm
+          ? `For autonomous units whose recovery was already spent (${recoverySpent.join(", ")}), ` +
+            `do not put them in --claimed or finalize/merge them. Halt and ask the ` +
+            `human whether to restart each Bolt; on approval abort/discard the old ` +
+            `Bolt and rerun the current swarm prepare step so a fresh BOLT_STARTED ` +
+            `boundary resets review accounting.`
+          : `For units whose recovery was already spent (${recoverySpent.join(", ")}), ` +
+            `present the situation to the human at the approval gate. Only a human ` +
+            `Request Changes decision resets the review attempt; do not record it ` +
+            `on the human's behalf.`,
+      );
+    }
+    if (neverReviewed.length > 0) {
+      guidance.push(
+        `For never-reviewed units (${neverReviewed.join(", ")}), run the normal ` +
+          `\`aidlc-log.ts review --stage ${stage.slug} --unit <unit> --reviewer ` +
+          `${reviewer} --iteration <next ordinal>\` request and record its verdict.`,
+      );
+    }
     error(
       `Refusing to complete "${stage.slug}": it declares a reviewer (${reviewer}) but ` +
         `${missing.length} of ${reviewUnits.length} applicable units have no fresh recorded ` +
-        `review (${missing.join(", ")}). The reviewer fires once per unit; record ` +
-        `each with \`aidlc-log.ts review --stage ${stage.slug} --unit <unit> --reviewer ` +
-        `${reviewer} --verdict <READY|NOT-READY>\` before approving.`
+        `review (${missing.join(", ")}). Invalidated receipts: ` +
+        `${stale.length > 0 ? stale.join(", ") : "none"}. Never reviewed: ` +
+        `${neverReviewed.length > 0 ? neverReviewed.join(", ") : "none"}. ` +
+        guidance.join(" ")
     );
   }
+}
+
+function staleReviewPreconditionError(
+  slug: string,
+  reviewer: string,
+  recoverySpent: boolean,
+): never {
+  if (recoverySpent) {
+    error(
+      `Refusing to complete "${slug}": its stale-receipt recovery review from ` +
+        `${reviewer} was invalidated by another later write to a declared ` +
+        `produces[] artifact. Present the situation to the human at the approval ` +
+        `gate. Only a human Request Changes decision resets the review attempt; ` +
+        `do not record it on the human's behalf.`
+    );
+  }
+  error(
+    `Refusing to complete "${slug}": its terminal review receipt from ${reviewer} ` +
+      `was invalidated by a later write to a declared produces[] artifact. Run ` +
+      `one recovery review pass with \`aidlc-log.ts review --stage ${slug} ` +
+      `--reviewer ${reviewer} --iteration <next ordinal>\`, then record the verdict ` +
+      `with the same command plus \`--verdict <READY|NOT-READY>\`. After that ` +
+      `receipt, stop editing produces[] artifacts. If the recovery pass was already ` +
+      `spent, present the situation to the human at the approval gate; a human ` +
+      `Request Changes decision resets the review attempt. Do not record a rejection ` +
+      `on the human's behalf.`
+  );
 }
 
 function reviewerPreconditionError(slug: string, reviewer: string): never {

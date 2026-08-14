@@ -45,7 +45,10 @@ interface WaveEntry {
   completion_required: boolean;
   review_state:
     | "outstanding"
+    | "retry-required"
     | "repair-required"
+    | "recovery-required"
+    | "escalation-required"
     | "READY"
     | "NOT-READY"
     | "not-required";
@@ -523,10 +526,13 @@ describe("t278 engine-emitted wave contract", () => {
       unit: "alpha",
       build_required: false,
       completion_required: true,
-      review_state: "outstanding",
+      review_state: "recovery-required",
+      review_iteration: 2,
     });
 
-    review(proj, "alpha", "READY", 2);
+    const recoveryIteration = reopened.wave?.entries[0].review_iteration;
+    expect(recoveryIteration).toBe(2);
+    review(proj, "alpha", "READY", recoveryIteration ?? 0);
     expect(next(proj).directive.wave?.entries[0]).toMatchObject({
       unit: "alpha",
       completion_required: true,
@@ -534,6 +540,47 @@ describe("t278 engine-emitted wave contract", () => {
     });
     completeWave(proj, "alpha");
     expect(next(proj).directive.gate).toBe(true);
+  }, 30000);
+
+  test("a second stale wave receipt escalates instead of re-emitting recovery", () => {
+    const proj = project();
+    seedBoltDag(proj, ["alpha"]);
+    cover(proj, "alpha", "functional-design", REQUIRED_FD);
+    review(proj, "alpha");
+
+    writeFileSync(
+      join(
+        seededRecordDir(proj),
+        "construction",
+        "alpha",
+        "functional-design",
+        "functional-spec.md",
+      ),
+      "# changed before recovery\n",
+    );
+    const recovery = next(proj).directive.wave?.entries[0];
+    expect(recovery).toMatchObject({
+      unit: "alpha",
+      review_state: "recovery-required",
+      review_iteration: 2,
+    });
+    review(proj, "alpha", "READY", recovery?.review_iteration ?? 0);
+
+    writeFileSync(
+      join(
+        seededRecordDir(proj),
+        "construction",
+        "alpha",
+        "functional-design",
+        "functional-spec.md",
+      ),
+      "# changed after recovery\n",
+    );
+    expect(next(proj).directive.wave?.entries[0]).toMatchObject({
+      unit: "alpha",
+      review_state: "escalation-required",
+      review_iteration: 3,
+    });
   }, 30000);
 
   test("fully settled siblings are omitted from a repeated same-batch wave", () => {
@@ -670,6 +717,8 @@ function expectWaveProse(body: string): void {
   expect(body).toContain("entry.unit_memory_path");
   expect(body).toContain("retry-required");
   expect(body).toContain("repair-required");
+  expect(body).toContain("recovery-required");
+  expect(body).toContain("escalation-required");
   expect(body).toContain("`--retry-pending`");
   expect(body).toContain("emits `UNIT_COMPLETED`");
   expect(body).toContain("Code Generation and unit-major iteration never carry a wave");
@@ -722,6 +771,8 @@ describe("t278 wave protocol parity", () => {
     expect(core).toContain("`unit_memory_path`");
     expect(core).toContain('"retry-required"');
     expect(core).toContain('"repair-required"');
+    expect(core).toContain('"recovery-required"');
+    expect(core).toContain('"escalation-required"');
     expect(core).toContain("unit complete --wave");
     expect(core).toContain("UNIT_COMPLETED");
     expect(core).toContain("accumulated steering bundle");

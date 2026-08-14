@@ -403,8 +403,10 @@ never silently ignored.
 
 `review_class` selects the review contract: `adversarial` (the refute-and-repair
 loop above — the default when a `reviewer` is declared without a class) or
-`advisory` (one pass whose findings are quoted verbatim at the human approval
-gate, no repair loop; the effective iteration budget is 1). The shipped split:
+`advisory` (one normal-flow pass whose findings are quoted verbatim at the human
+approval gate, no repair loop; the effective iteration budget is 1). A later
+write that invalidates its terminal receipt permits one bounded recovery request
+at the next ordinal. The shipped split:
 the 7 human-gated ideation/inception prose stages declare `advisory`; the 5
 Construction design/build stages default `adversarial`. `none` is deliberately
 not a stage value — a stage that wants no review deletes its `reviewer:` line;

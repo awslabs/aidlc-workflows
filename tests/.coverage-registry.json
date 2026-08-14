@@ -1762,6 +1762,10 @@
         {
           "file": "tests/unit/t264-review-freeze-hook.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t291-review-receipt-recovery.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -5402,6 +5406,10 @@
         {
           "file": "tests/unit/t115.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t291-review-receipt-recovery.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -5607,6 +5615,10 @@
         },
         {
           "file": "tests/unit/t263-reviewer-terminal-ordering.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t291-review-receipt-recovery.test.ts",
           "mechanism": "cli"
         }
       ],

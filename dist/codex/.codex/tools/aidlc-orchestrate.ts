@@ -3716,14 +3716,21 @@ function activePerUnitWave(
       }
       const terminalVerdict = reviewProgress?.unitVerdicts.get(unit);
       const pendingReview = reviewProgress?.unitPending.get(unit);
+      const staleReview = reviewProgress?.unitStaleProgress.get(unit);
       const reviewState: RunStageWaveEntry["review_state"] = reviewClass === "none"
         ? "not-required"
-        : terminalVerdict ?? pendingReview?.state ?? "outstanding";
+        : terminalVerdict ??
+          pendingReview?.state ??
+          (staleReview
+            ? staleReview.recoverySpent
+              ? "escalation-required"
+              : "recovery-required"
+            : "outstanding");
       const reviewIteration = reviewClass === "none"
         ? null
         : terminalVerdict
           ? (reviewProgress?.unitIterations.get(unit) ?? null)
-          : (pendingReview?.iteration ?? 1);
+          : (pendingReview?.iteration ?? staleReview?.nextIteration ?? 1);
       const buildRequired = !covered;
       // Wave entries always settle through an explicit `unit complete --wave`
       // receipt. This is the parallel counterpart to the serial start/complete
@@ -3735,7 +3742,9 @@ function activePerUnitWave(
         completionRequired ||
         reviewState === "outstanding" ||
         reviewState === "retry-required" ||
-        reviewState === "repair-required"
+        reviewState === "repair-required" ||
+        reviewState === "recovery-required" ||
+        reviewState === "escalation-required"
       ) {
         entries.push(
           waveEntry(
