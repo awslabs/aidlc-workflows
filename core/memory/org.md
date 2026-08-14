@@ -54,11 +54,11 @@ When no posture has been affirmed, our default per scope is:
 - **Methodology**: test-after
 - **Ordering**: implement each applicable testable layer, then write and run
   that layer's tests.
-- `mvp`, `enterprise`, `feature`, `infra` add an 80% line-coverage floor and
-  CI execution before merge.
+- `mvp`, `enterprise`, `feature`, `infra`, `classic` add an 80% line-coverage
+  floor and CI execution before merge.
 - `bugfix`, `security-patch` add a targeted regression for the specific
   bug/vulnerability and require the existing suite to remain green.
-- `poc`, `refactor`, `workshop` add no extra new-test floor and require the
+- `poc`, `refactor`, `express` add no extra new-test floor and require the
   existing suite to remain green.
 
 The active `Test Strategy` still applies in every scope and determines test

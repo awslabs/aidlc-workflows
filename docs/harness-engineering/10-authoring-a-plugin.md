@@ -270,7 +270,7 @@ projection remains deferred (doc 18 §8 Status).
   filename prefix, and the filename stem must equal frontmatter `name` (for
   example, `scopes/test-pro-validation.md` has `name: test-pro-validation`).
   Set `freeform_default: true` to nominate a plugin scope as the fallback when
-  the core `feature`/`poc` default is disabled; at most one enabled scope across
+  the core `classic`/`poc` default is disabled; at most one enabled scope across
   the selected core/plugin set may claim it, and graph compilation rejects an
   ambiguous set. Membership for plugin-authored stages is their `scopes:`
   frontmatter list; a contribution's `adds.scopes` (§3) adds YOUR scope to an

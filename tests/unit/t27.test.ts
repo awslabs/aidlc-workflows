@@ -349,6 +349,8 @@ describe("t27 aidlc-utility help (migrated from t27-tool-utility.sh, plan 81)", 
       "refactor",
       "infra",
       "security-patch",
+      "classic",
+      "express",
     ]) {
       expect(r.stdout).toContain(scope);
     }
@@ -358,10 +360,10 @@ describe("t27 aidlc-utility help (migrated from t27-tool-utility.sh, plan 81)", 
     expect(util(["help"]).stdout).toContain("--depth");
   });
 
-  test("46-47: help contains --test-strategy and workshop scope", () => {
+  test("46-47: help contains --test-strategy and classic scope", () => {
     const r = util(["help"]);
     expect(r.stdout).toContain("--test-strategy");
-    expect(r.stdout).toContain("workshop");
+    expect(r.stdout).toContain("classic");
   });
 });
 
@@ -535,10 +537,10 @@ describe("t27 aidlc-utility doctor", () => {
     expect(r.stdout).toContain("AWS_AIDLC_DEFAULT_SCOPE (unset");
   });
 
-  test("60: doctor reports AWS_AIDLC_DEFAULT_SCOPE=workshop as valid", () => {
+  test("60: doctor reports AWS_AIDLC_DEFAULT_SCOPE=classic as valid", () => {
     const p = bareProj();
-    const r = util(["doctor"], p, { AWS_AIDLC_DEFAULT_SCOPE: "workshop" });
-    expect(r.stdout).toContain("AWS_AIDLC_DEFAULT_SCOPE=workshop (valid)");
+    const r = util(["doctor"], p, { AWS_AIDLC_DEFAULT_SCOPE: "classic" });
+    expect(r.stdout).toContain("AWS_AIDLC_DEFAULT_SCOPE=classic (valid)");
   });
 
   test("61: doctor reports AWS_AIDLC_DEFAULT_SCOPE=bogus as invalid", () => {
@@ -917,9 +919,9 @@ describe("t27 aidlc-utility resolve-env-scope", () => {
   });
 
   test("63: resolve-env-scope with valid env prints scope= line and exits 0", () => {
-    const r = util(["resolve-env-scope"], undefined, { AWS_AIDLC_DEFAULT_SCOPE: "workshop" });
+    const r = util(["resolve-env-scope"], undefined, { AWS_AIDLC_DEFAULT_SCOPE: "classic" });
     expect(r.status).toBe(0);
-    expect(r.out).toContain("scope=workshop");
+    expect(r.out).toContain("scope=classic");
   });
 
   test("64: resolve-env-scope with invalid env exits 1 with canonical error", () => {

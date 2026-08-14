@@ -49,7 +49,7 @@
 //   .sh:41  "--help"            -> "lists --help utility"
 //   .sh:47  "All 33 stages"     -> "enterprise/feature shows 'All 33 stages'"
 //   .sh:48  "7 of 33 stages"    -> "bugfix shows compiled '7 of 33 stages'"
-//   .sh:49  "(default)"         -> "feature row shows '(default)' marker"
+//   .sh:49  "(default)"         -> "classic row shows '(default)' marker"
 //   .sh:52  "--force"           -> "lists --force flag"
 //   .sh:55  "--stage"           -> "lists --stage utility"
 //   .sh:56  "--phase"           -> "lists --phase utility"
@@ -59,15 +59,15 @@
 //   S1: res.status === 0 — the .sh discarded `$?` (it captured stdout with
 //       `2>/dev/null` and never checked the exit code); we pin a clean exit on
 //       the subcommand dispatch.
-//   S2: "workshop" scope present — the .sh HEADER comment claims "all 9 scope
-//       names appear" but only directly asserted 8; workshop is the 9th
+//   S2: "classic" scope present — the .sh HEADER comment claims all scope
+//       names appear" but only directly asserted 8; classic and express complete the set
 //       (visible in the live output, compiled from scope-mapping.json). Closing
 //       the gap between the .sh's stated intent and its asserts.
-//   S3: workshop's "minimal test strategy" surfaces — the .sh header (line 8)
-//       says it tests "(d) workshop's minimal test strategy surfaces" but never
+//   S3 retired: no shipped scope overrides testStrategy — the .sh header (line 8)
+//       specified a retired workshop override but never
 //       wrote that assert; renderHelpText appends ", <ts> test strategy" only
-//       when def.testStrategy is set (aidlc-utility.ts:151-153), and workshop is
-//       the only scope with one. This is the documented-but-missing fourth check.
+//       when def.testStrategy is set (aidlc-utility.ts:151-153). No shipped
+//       scope currently carries an override.
 //   S4: "--test-strategy" + "--version" utility flags present — documented in
 //       HELP_TEXT_TAIL (aidlc-utility.ts:123-124) but unasserted by the .sh.
 
@@ -112,8 +112,7 @@ describe("t31 aidlc-utility help — CLI contract (migrated from t31-help-text-c
   });
 
   // --- All scope names appear (compiled from scope-mapping.json). ---
-  // The .sh directly asserted 8 of these; "workshop" (S2) closes the gap with
-  // the .sh header's "all 9 scope names" claim.
+  // Keep the compiled help surface pinned to every shipped scope.
   const SCOPES = [
     "enterprise",
     "feature",
@@ -123,7 +122,8 @@ describe("t31 aidlc-utility help — CLI contract (migrated from t31-help-text-c
     "refactor",
     "infra",
     "security-patch",
-    "workshop", // S2: 9th scope, header-claimed but unasserted in the .sh
+    "classic",
+    "express",
   ] as const;
 
   for (const scope of SCOPES) {
@@ -178,14 +178,10 @@ describe("t31 aidlc-utility help — CLI contract (migrated from t31-help-text-c
     expect(HELP.stdout).toContain("7 of 33 stages");
   });
 
-  test("feature row shows '(default)' marker", () => {
-    // defaultMarker fires only for name === "feature" (aidlc-utility.ts:155).
-    expect(HELP.stdout).toContain("(default)");
-  });
-
-  // --- STRONGER S3: workshop's "minimal test strategy" surfaces (the .sh
-  // header line 8 names this as check (d) but never wrote the assert). ---
-  test("S3: workshop row surfaces 'minimal test strategy'", () => {
-    expect(HELP.stdout).toContain("minimal test strategy");
+  test("classic row shows '(default)' marker", () => {
+    const classicLine = HELP.stdout
+      .split("\n")
+      .find((line) => line.trimStart().startsWith("classic"));
+    expect(classicLine).toContain("(default)");
   });
 });

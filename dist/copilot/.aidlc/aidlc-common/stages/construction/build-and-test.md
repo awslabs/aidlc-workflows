@@ -36,7 +36,8 @@ scopes:
   - bugfix
   - refactor
   - security-patch
-  - workshop
+  - classic
+  - express
 inputs: ALL code generation outputs across all units
 outputs: build-instructions.md, integration-test-instructions.md, performance-test-instructions.md, security-test-instructions.md, build-and-test-summary.md, test-results.md, cross-unit-traceability.md (under this stage's record dir, engine-resolved)
 ---

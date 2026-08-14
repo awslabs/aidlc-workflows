@@ -12,7 +12,7 @@
 //     NO prior state, the read-only engine now refuses to mutate and renders the
 //     no-state guidance. The shipped settings env default is not enough by
 //     itself to start a workflow; the state file remains absent.
-//   - Case override (explicit flag wins over env): same shipped `workshop`
+//   - Case override (explicit flag wins over env): same shipped `classic`
 //     default, but `/aidlc --scope feature` overrides it -> Scope=feature on disk.
 //     .sh assertion ported: state `- **Scope**: feature`.
 //   - Case known-scope positional: `/aidlc feature` bootstraps Scope=feature
@@ -53,7 +53,7 @@
 //   its own process. This is MORE faithful to the production surface than the
 //   shell export the .sh used (the .sh even needed `--strip-env-scope` to stop
 //   the shipped settings.json default from shadowing its shell export — line
-//   49-53). Cases A/override use the shipped `workshop` default unedited; the
+//   49-53). Cases A/override use the shipped `classic` default unedited; the
 //   error case rewrites the env block to `bogus` (the TUI equivalent of the .sh's
 //   strip-env-scope + shell export). If a future harness wants shell-env
 //   forwarding for the TUI, tui-drive would need a `--env K=V` / tmux setenv
@@ -222,7 +222,7 @@ const SKIP_REASON = skipReason();
 // Set AWS_AIDLC_DEFAULT_SCOPE in the project's shipped settings.json env block —
 // the production env-scope channel Claude Code injects into its own process (the
 // FINDING above explains why this, not a shell export). The shipped block already
-// pins `workshop`; pass `null` to leave it as shipped (Case A / override), or a
+// pins `classic`; pass `null` to leave it as shipped (Case A / override), or a
 // scope string to overwrite it (the error case rewrites it to `bogus`).
 function setSettingsEnvScope(projectDir: string, value: string): void {
   const settingsPath = join(projectDir, ".claude", "settings.json");
@@ -274,7 +274,7 @@ describe("t-tui-t29 env-scope (AWS_AIDLC_DEFAULT_SCOPE seeds new-workflow scope 
       const session = `aidlc_tui_t29_envdef_${process.pid}`;
       const proj = setupTuiProject({ noAidlcDocs: true });
       try {
-        // Leave the shipped `workshop` env default in place. It must not by
+        // Leave the shipped `classic` env default in place. It must not by
         // itself create a workflow for an otherwise empty slash command.
         launchReady(session, proj);
 
@@ -312,7 +312,7 @@ describe("t-tui-t29 env-scope (AWS_AIDLC_DEFAULT_SCOPE seeds new-workflow scope 
   // asserts the same deterministic Scope=feature state write. (Contrast the
   // bare freeform `/aidlc feature` — covered in the SEPARATE disambiguation-gate
   // case below — which does NOT contain `--scope`, so step 0 synthesizes
-  // `--scope workshop` from env and the orchestrator renders a feature-vs-workshop
+  // `--scope classic` from env and the orchestrator renders a feature-vs-classic
   // gate. The .sh used the bare form and only "passed" because it auto-approved
   // that gate; the explicit flag is the honest deterministic scope contract.)
   test.skipIf(SKIP_REASON !== null)(
@@ -321,7 +321,7 @@ describe("t-tui-t29 env-scope (AWS_AIDLC_DEFAULT_SCOPE seeds new-workflow scope 
       const session = `aidlc_tui_t29_override_${process.pid}`;
       const proj = setupTuiProject({ noAidlcDocs: true });
       try {
-        // Shipped `workshop` env default stays; the explicit --scope flag must win.
+        // Shipped `classic` env default stays; the explicit --scope flag must win.
         launchReady(session, proj);
 
         drive(["send", "--session", session, "--keys", "/aidlc --scope feature", "--literal", "--no-enter"]);
@@ -346,7 +346,7 @@ describe("t-tui-t29 env-scope (AWS_AIDLC_DEFAULT_SCOPE seeds new-workflow scope 
         const stateMd = readFileSync(stateFilePathFor(proj), "utf8");
         expect(stateMd).toMatch(/^- \*\*Scope\*\*: feature$/m);
         // Stronger than the .sh: prove the env default did NOT win.
-        expect(stateMd).not.toMatch(/^- \*\*Scope\*\*: workshop$/m);
+        expect(stateMd).not.toMatch(/^- \*\*Scope\*\*: classic$/m);
 
         const auditMd = readAllAuditShards(proj);
         expect(auditMd).toContain("WORKSPACE_INITIALISED");
@@ -372,7 +372,7 @@ describe("t-tui-t29 env-scope (AWS_AIDLC_DEFAULT_SCOPE seeds new-workflow scope 
       const session = `aidlc_tui_t29_disambig_${process.pid}`;
       const proj = setupTuiProject({ noAidlcDocs: true });
       try {
-        // Shipped `workshop` env default stays; the known scope positional wins.
+        // Shipped `classic` env default stays; the known scope positional wins.
         launchReady(session, proj);
 
         drive(["send", "--session", session, "--keys", "/aidlc feature", "--literal", "--no-enter"]);
@@ -388,7 +388,7 @@ describe("t-tui-t29 env-scope (AWS_AIDLC_DEFAULT_SCOPE seeds new-workflow scope 
 
         const stateMd = readFileSync(stateFilePathFor(proj), "utf8");
         expect(stateMd).toMatch(/^- \*\*Scope\*\*: feature$/m);
-        expect(stateMd).not.toMatch(/^- \*\*Scope\*\*: workshop$/m);
+        expect(stateMd).not.toMatch(/^- \*\*Scope\*\*: classic$/m);
       } finally {
         drive(["kill", "--session", session]);
         cleanupTuiProject(proj);

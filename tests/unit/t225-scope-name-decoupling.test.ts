@@ -37,7 +37,8 @@ const CORE_SCOPE_NAMES = [
   "mvp",
   "feature",
   "poc",
-  "workshop",
+  "classic",
+  "express",
   "infra",
   "bugfix",
   "security-patch",
@@ -45,12 +46,12 @@ const CORE_SCOPE_NAMES = [
 ] as const;
 
 const SKELETON_ON_CORE_SCOPES = [
+  "classic",
   "enterprise",
   "feature",
   "infra",
   "mvp",
   "poc",
-  "workshop",
 ];
 
 const tempDirs: string[] = [];

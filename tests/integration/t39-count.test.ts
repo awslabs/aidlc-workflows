@@ -36,9 +36,9 @@
 //       -> Test 8: both isExecute("security-patch", <slug>) === true (the .sh
 //       collapsed both into one `ok`; kept as one test() with two expects to
 //       match the single .sh assertion, observing both fields).
-//   - .sh Test 9  workshop in 20..28         -> Test 9: 20 <= execCount("workshop") <= 28.
+//   - .sh Test 9  classic == 26         -> Test 9: execCount("classic") === 26.
 //
-// 9 .sh asserts -> 9 expect()-bearing test() cases. STRONGER additions noted
+// 10 scope cases -> 9 expect()-bearing test() cases. STRONGER additions noted
 // inline (S1: ScopeDefinition shape guard; S2: every stage value is EXECUTE or
 // SKIP, the .sh's distinct-value invariant left implicit; S3: scope-key set).
 //
@@ -77,21 +77,22 @@ function isExecute(scope: string, slug: string): boolean {
 
 describe("t39 scope EXECUTE-count validation — loadScopeMapping (migrated from t39-scope-stage-count-validation.sh, plan 9)", () => {
   // S1 (STRONGER, not in the .sh): the loader returns a usable map keyed by the
-  // nine canonical scopes, each carrying a `stages` record. The .sh assumed
+  // ten canonical scopes, each carrying a `stages` record. The .sh assumed
   // this shape implicitly by indexing m[scope].stages; pin it once up front so
   // a missing/renamed scope fails loudly here rather than as a TypeError mid-case.
-  test("0a: loadScopeMapping returns the nine canonical scopes (S3)", () => {
+  test("0a: loadScopeMapping returns the ten canonical scopes (S3)", () => {
     expect(Object.keys(MAPPING).sort()).toEqual(
       [
         "bugfix",
+        "classic",
         "enterprise",
+        "express",
         "feature",
         "infra",
         "mvp",
         "poc",
         "refactor",
         "security-patch",
-        "workshop",
       ].sort(),
     );
   });
@@ -163,10 +164,14 @@ describe("t39 scope EXECUTE-count validation — loadScopeMapping (migrated from
     expect(isExecute("security-patch", "deployment-execution")).toBe(true);
   });
 
-  // 9. Workshop: range 20-28 (skips ideation only).
-  test("9: workshop executes 20-28 stages", () => {
-    const n = execCount("workshop");
-    expect(n).toBeGreaterThanOrEqual(20);
-    expect(n).toBeLessThanOrEqual(28);
+  // 9. Classic: skips ideation only.
+  test("9: classic executes exactly 26 stages", () => {
+    const n = execCount("classic");
+    expect(n).toBe(26);
+  });
+
+  // 10. Express: the fixed lightweight grid.
+  test("10: express executes exactly 10 stages", () => {
+    expect(execCount("express")).toBe(10);
   });
 });

@@ -32,7 +32,8 @@ scopes:
   - feature
   - infra
   - security-patch
-  - workshop
+  - classic
+  - express
 inputs: CI pipeline config from ci-pipeline stage, infrastructure design from infrastructure-design stage
 outputs: cd-config.md, deployment-strategy.md, rollback-runbook.md, deployment-pipeline-questions.md (under this stage's record dir, engine-resolved)
 ---

@@ -23,7 +23,8 @@
         "refactor",
         "infra",
         "security-patch",
-        "workshop"
+        "classic",
+        "express"
       ],
       "inputs": "none (first stage after session start)",
       "outputs": "the per-intent record tree (one dir per in-scope phase + verification dir) and the space-level knowledge/ dir",
@@ -68,7 +69,8 @@
         "refactor",
         "infra",
         "security-patch",
-        "workshop"
+        "classic",
+        "express"
       ],
       "inputs": "none (scans filesystem)",
       "outputs": "workspace classification (greenfield/brownfield), technology stack detection",
@@ -113,7 +115,8 @@
         "refactor",
         "infra",
         "security-patch",
-        "workshop"
+        "classic",
+        "express"
       ],
       "inputs": "workspace classification from workspace-detection, scope from orchestrator",
       "outputs": "<record>/aidlc-state.md (full populated version, engine-resolved)",
@@ -733,7 +736,8 @@
         "bugfix",
         "refactor",
         "security-patch",
-        "workshop"
+        "classic",
+        "express"
       ],
       "inputs": "<record>/aidlc-state.md",
       "outputs": "aidlc/spaces/<active-space>/codekb/<repo>/ (9 artifacts: business-overview.md, architecture.md, code-structure.md, api-documentation.md, component-inventory.md, technology-stack.md, dependencies.md, code-quality-assessment.md, reverse-engineering-timestamp.md)",
@@ -833,7 +837,7 @@
         "feature",
         "mvp",
         "infra",
-        "workshop"
+        "classic"
       ],
       "summary_confirmation": "required",
       "inputs": "<record>/aidlc-state.md + (brownfield) reverse-engineering evidence",
@@ -929,7 +933,8 @@
         "refactor",
         "infra",
         "security-patch",
-        "workshop"
+        "classic",
+        "express"
       ],
       "reviewer": "aidlc-product-lead-agent",
       "reviewer_max_iterations": 2,
@@ -1020,7 +1025,7 @@
         "enterprise",
         "feature",
         "mvp",
-        "workshop"
+        "classic"
       ],
       "reviewer": "aidlc-product-lead-agent",
       "reviewer_max_iterations": 2,
@@ -1116,7 +1121,7 @@
         "enterprise",
         "feature",
         "mvp",
-        "workshop"
+        "classic"
       ],
       "reviewer": "aidlc-product-lead-agent",
       "reviewer_max_iterations": 2,
@@ -1210,7 +1215,7 @@
         "enterprise",
         "feature",
         "mvp",
-        "workshop"
+        "classic"
       ],
       "reviewer": "aidlc-architecture-reviewer-agent",
       "reviewer_max_iterations": 2,
@@ -1302,7 +1307,7 @@
         "enterprise",
         "feature",
         "mvp",
-        "workshop"
+        "classic"
       ],
       "reviewer": "aidlc-architecture-reviewer-agent",
       "reviewer_max_iterations": 2,
@@ -1390,7 +1395,7 @@
         "enterprise",
         "feature",
         "mvp",
-        "workshop"
+        "classic"
       ],
       "reviewer": "aidlc-architecture-reviewer-agent",
       "reviewer_max_iterations": 2,
@@ -1497,7 +1502,7 @@
         "enterprise",
         "feature",
         "mvp",
-        "workshop"
+        "classic"
       ],
       "summary_confirmation": "required",
       "inputs": "All Inception artifacts (requirements, stories, mockups, architecture, units)",
@@ -1619,7 +1624,7 @@
         "feature",
         "mvp",
         "refactor",
-        "workshop"
+        "classic"
       ],
       "reviewer": "aidlc-architecture-reviewer-agent",
       "reviewer_max_iterations": 2,
@@ -1752,7 +1757,7 @@
         "mvp",
         "infra",
         "security-patch",
-        "workshop"
+        "classic"
       ],
       "reviewer": "aidlc-architecture-reviewer-agent",
       "reviewer_max_iterations": 2,
@@ -1898,7 +1903,7 @@
         "feature",
         "mvp",
         "infra",
-        "workshop"
+        "classic"
       ],
       "reviewer": "aidlc-architecture-reviewer-agent",
       "reviewer_max_iterations": 2,
@@ -2050,7 +2055,7 @@
         "feature",
         "mvp",
         "infra",
-        "workshop"
+        "classic"
       ],
       "reviewer": "aidlc-architecture-reviewer-agent",
       "reviewer_max_iterations": 2,
@@ -2181,7 +2186,8 @@
         "bugfix",
         "refactor",
         "security-patch",
-        "workshop"
+        "classic",
+        "express"
       ],
       "reviewer": "aidlc-architecture-reviewer-agent",
       "reviewer_max_iterations": 2,
@@ -2280,7 +2286,8 @@
         "bugfix",
         "refactor",
         "security-patch",
-        "workshop"
+        "classic",
+        "express"
       ],
       "inputs": "ALL code generation outputs across all units",
       "outputs": "build-instructions.md, integration-test-instructions.md, performance-test-instructions.md, security-test-instructions.md, build-and-test-summary.md, test-results.md, cross-unit-traceability.md (under this stage's record dir, engine-resolved)",
@@ -2363,7 +2370,7 @@
         "feature",
         "mvp",
         "infra",
-        "workshop"
+        "classic"
       ],
       "summary_confirmation": "required",
       "inputs": "Code generation output from code-generation stage, build/test results from build-and-test stage",
@@ -2456,7 +2463,8 @@
         "feature",
         "infra",
         "security-patch",
-        "workshop"
+        "classic",
+        "express"
       ],
       "summary_confirmation": "required",
       "inputs": "CI pipeline config from ci-pipeline stage, infrastructure design from infrastructure-design stage",
@@ -2532,7 +2540,7 @@
         "enterprise",
         "feature",
         "infra",
-        "workshop"
+        "classic"
       ],
       "summary_confirmation": "required",
       "inputs": "Infrastructure design from infrastructure-design stage, CD pipeline config from deployment-pipeline stage",
@@ -2617,7 +2625,8 @@
         "feature",
         "infra",
         "security-patch",
-        "workshop"
+        "classic",
+        "express"
       ],
       "summary_confirmation": "required",
       "inputs": "CD pipeline config from deployment-pipeline stage, provisioned environments from environment-provisioning stage, built artifacts from Construction",
@@ -2707,7 +2716,8 @@
         "enterprise",
         "feature",
         "infra",
-        "workshop"
+        "classic",
+        "express"
       ],
       "summary_confirmation": "required",
       "inputs": "NFR design from nfr-design stage, infrastructure design from infrastructure-design stage, deployed application",
@@ -2791,7 +2801,7 @@
       "scopes": [
         "enterprise",
         "feature",
-        "workshop"
+        "classic"
       ],
       "summary_confirmation": "required",
       "inputs": "Observability setup from observability-setup stage, NFR design from nfr-design stage, infrastructure design from infrastructure-design stage",
@@ -2877,7 +2887,7 @@
       "scopes": [
         "enterprise",
         "feature",
-        "workshop"
+        "classic"
       ],
       "summary_confirmation": "required",
       "inputs": "NFR requirements from nfr-requirements stage, NFR design from nfr-design stage, deployed application, observability data from observability-setup stage",
@@ -2971,7 +2981,7 @@
       "scopes": [
         "enterprise",
         "feature",
-        "workshop"
+        "classic"
       ],
       "summary_confirmation": "required",
       "inputs": "All Operation phase artifacts, production monitoring data",
@@ -3055,6 +3065,51 @@
       "runner": true,
       "skeleton": false
     },
+    "classic": {
+      "depth": "Standard",
+      "stages": {
+        "workspace-scaffold": "EXECUTE",
+        "workspace-detection": "EXECUTE",
+        "state-init": "EXECUTE",
+        "intent-capture": "SKIP",
+        "market-research": "SKIP",
+        "feasibility": "SKIP",
+        "scope-definition": "SKIP",
+        "team-formation": "SKIP",
+        "rough-mockups": "SKIP",
+        "approval-handoff": "SKIP",
+        "reverse-engineering": "EXECUTE",
+        "practices-discovery": "EXECUTE",
+        "requirements-analysis": "EXECUTE",
+        "user-stories": "EXECUTE",
+        "refined-mockups": "EXECUTE",
+        "domain-design": "EXECUTE",
+        "units-generation": "EXECUTE",
+        "contract-design": "EXECUTE",
+        "delivery-planning": "EXECUTE",
+        "functional-design": "EXECUTE",
+        "nfr-requirements": "EXECUTE",
+        "nfr-design": "EXECUTE",
+        "infrastructure-design": "EXECUTE",
+        "code-generation": "EXECUTE",
+        "build-and-test": "EXECUTE",
+        "ci-pipeline": "EXECUTE",
+        "deployment-pipeline": "EXECUTE",
+        "environment-provisioning": "EXECUTE",
+        "deployment-execution": "EXECUTE",
+        "observability-setup": "EXECUTE",
+        "incident-response": "EXECUTE",
+        "performance-validation": "EXECUTE",
+        "feedback-optimization": "EXECUTE"
+      },
+      "keywords": [
+        "workshop",
+        "lab",
+        "training"
+      ],
+      "description": "The default: full lifecycle without ideation ceremony",
+      "skeleton": true
+    },
     "enterprise": {
       "depth": "Comprehensive",
       "stages": {
@@ -3096,6 +3151,51 @@
       "description": "Regulated enterprise feature, full audit trail",
       "skeleton": true
     },
+    "express": {
+      "depth": "Minimal",
+      "stages": {
+        "workspace-scaffold": "EXECUTE",
+        "workspace-detection": "EXECUTE",
+        "state-init": "EXECUTE",
+        "intent-capture": "SKIP",
+        "market-research": "SKIP",
+        "feasibility": "SKIP",
+        "scope-definition": "SKIP",
+        "team-formation": "SKIP",
+        "rough-mockups": "SKIP",
+        "approval-handoff": "SKIP",
+        "reverse-engineering": "EXECUTE",
+        "practices-discovery": "SKIP",
+        "requirements-analysis": "EXECUTE",
+        "user-stories": "SKIP",
+        "refined-mockups": "SKIP",
+        "domain-design": "SKIP",
+        "units-generation": "SKIP",
+        "contract-design": "SKIP",
+        "delivery-planning": "SKIP",
+        "functional-design": "SKIP",
+        "nfr-requirements": "SKIP",
+        "nfr-design": "SKIP",
+        "infrastructure-design": "SKIP",
+        "code-generation": "EXECUTE",
+        "build-and-test": "EXECUTE",
+        "ci-pipeline": "SKIP",
+        "deployment-pipeline": "EXECUTE",
+        "environment-provisioning": "SKIP",
+        "deployment-execution": "EXECUTE",
+        "observability-setup": "EXECUTE",
+        "incident-response": "SKIP",
+        "performance-validation": "SKIP",
+        "feedback-optimization": "SKIP"
+      },
+      "keywords": [
+        "express",
+        "lightweight"
+      ],
+      "description": "Lightest run: requirements to deploy, no design pass, no reviewers",
+      "runner": true,
+      "skeleton": false
+    },
     "feature": {
       "depth": "Standard",
       "stages": {
@@ -3134,7 +3234,7 @@
         "feedback-optimization": "EXECUTE"
       },
       "keywords": [],
-      "description": "Default for new features, practical depth",
+      "description": "Full lifecycle for new features, practical depth",
       "runner": true,
       "skeleton": true
     },
@@ -3365,52 +3465,6 @@
       "description": "CVE response",
       "runner": true,
       "skeleton": false
-    },
-    "workshop": {
-      "depth": "Standard",
-      "stages": {
-        "workspace-scaffold": "EXECUTE",
-        "workspace-detection": "EXECUTE",
-        "state-init": "EXECUTE",
-        "intent-capture": "SKIP",
-        "market-research": "SKIP",
-        "feasibility": "SKIP",
-        "scope-definition": "SKIP",
-        "team-formation": "SKIP",
-        "rough-mockups": "SKIP",
-        "approval-handoff": "SKIP",
-        "reverse-engineering": "EXECUTE",
-        "practices-discovery": "EXECUTE",
-        "requirements-analysis": "EXECUTE",
-        "user-stories": "EXECUTE",
-        "refined-mockups": "EXECUTE",
-        "domain-design": "EXECUTE",
-        "units-generation": "EXECUTE",
-        "contract-design": "EXECUTE",
-        "delivery-planning": "EXECUTE",
-        "functional-design": "EXECUTE",
-        "nfr-requirements": "EXECUTE",
-        "nfr-design": "EXECUTE",
-        "infrastructure-design": "EXECUTE",
-        "code-generation": "EXECUTE",
-        "build-and-test": "EXECUTE",
-        "ci-pipeline": "EXECUTE",
-        "deployment-pipeline": "EXECUTE",
-        "environment-provisioning": "EXECUTE",
-        "deployment-execution": "EXECUTE",
-        "observability-setup": "EXECUTE",
-        "incident-response": "EXECUTE",
-        "performance-validation": "EXECUTE",
-        "feedback-optimization": "EXECUTE"
-      },
-      "keywords": [
-        "workshop",
-        "lab",
-        "training"
-      ],
-      "description": "Facilitated group session with mandatory gates",
-      "testStrategy": "Minimal",
-      "skeleton": true
     }
   },
   "artifacts": [

@@ -29,7 +29,7 @@ scopes:
   - feature
   - mvp
   - test-pro-validation
-  - workshop
+  - classic
 inputs: All per-unit build/test outputs and the regression suite from build-and-test
 outputs: test-pro-integration-test-plan.md, test-pro-integration-test-results.md, test-pro-cross-unit-contract-matrix.md (under this stage's record dir, engine-resolved)
 ---

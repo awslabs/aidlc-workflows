@@ -301,6 +301,7 @@ describe("t222 plugin ownership and runner naming", () => {
     const defaultRunners = readdirSync(defaultOut).sort();
     expect(defaultRunners).toEqual([
       "aidlc-bugfix",
+      "aidlc-express",
       "aidlc-feature",
       "aidlc-mvp",
       "aidlc-security-patch",

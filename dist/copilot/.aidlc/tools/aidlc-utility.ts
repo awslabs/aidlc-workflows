@@ -2705,7 +2705,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
     });
   }
 
-  // Scope validation — run validateScope over all 9 scopes, tally errors
+  // Scope validation — run validateScope over all 10 scopes, tally errors
   // and advisories. Repo-level setup check, not workflow-state.
   try {
     const scopes = [...validScopes()];
@@ -5842,7 +5842,7 @@ function handleDetectScope(
   // --input requirement differs by mode:
   //   --scope mode: --input is required (audit event needs original text).
   //   --from-text mode: --input may be empty string — inferScopeFromText
-  //     returns `feature` as the documented default. Missing --input
+  //     returns `classic` as the documented default. Missing --input
   //     entirely is still an error; an empty string is fine.
   const input = flags.input;
   if (input === undefined) {

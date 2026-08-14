@@ -194,8 +194,8 @@ function loadStateFileIfPresent(projectDir: string): string | null {
 // AWS_AIDLC_DEFAULT_SCOPE env var supplies one. Mirrors the prose
 // orchestrator's freeform-fallback default (SKILL.md detect-scope fallback).
 // selectionAwareDefaultScope() maps this to the sole enabled plugin's
-// nominated default on a plugin-only install where "feature" is deselected.
-const DEFAULT_SCOPE = "feature";
+// nominated default on a plugin-only install where "classic" is deselected.
+const DEFAULT_SCOPE = "classic";
 
 // READ_ONLY_FLAGS (--status/--help/--doctor/--version) and the shared workspace
 // parser (space/space-create/intent) are the terminal-command sources of truth
@@ -1345,7 +1345,7 @@ function resolveBoltBatches(projectDir: string): BoltBatchesResolution {
 // Construction EXECUTE stage in scope (the start of Bolt 1). This is derived,
 // not hardcoded: firstInScopeStageOfPhase("construction", scope) walks the
 // scope's EXECUTE-only sub-DAG and returns its first construction stage (e.g.
-// functional-design for feature/enterprise/mvp/refactor/workshop, code-generation
+// functional-design for feature/enterprise/mvp/refactor/classic, code-generation
 // for poc/bugfix/security-patch, nfr-requirements for infra). A scope-mapping
 // edit that moves the first construction stage moves the skeleton gate with it,
 // no code change. Non-construction stages are never the skeleton gate.
@@ -3036,9 +3036,9 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // never calls AskUserQuestion itself. A bare KNOWN-SCOPE positional was
   // already handled by Branch 7b above, so only genuine prose reaches here.
   //
-  // Adaptive routing (replaces the old static feature-default confirm, which
-  // interpolated the precedence-ladder scope and silently defaulted rich prose
-  // to `feature`): keyword inference (inferScopeFromText, a pure read; the
+  // Adaptive routing (replaces the old static default confirm, which
+  // interpolated the precedence-ladder scope and silently defaulted rich prose):
+  // keyword inference (inferScopeFromText, a pure read; the
   // audit-emitting detect-scope verb remains the conductor's recording move)
   // now drives the ask.
   //   - CLEAR KEYWORD HIT (source "keyword": matched a scope's keywords and
@@ -3046,7 +3046,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   //     MATCHED scope, with "name another scope" and "compose" as outs.
   //   - NO HIT / RICH PROSE (source "freeform": no keyword matched, or the
   //     description is long enough that the match is likely incidental): the
-  //     COMPOSE OFFER, never a silent feature default. The conductor renders
+  //     COMPOSE OFFER, never a silent default. The conductor renders
   //     it; on "compose" it re-runs `next compose "<text>"` to reach the
   //     Branch 4c dispatch.
   if (

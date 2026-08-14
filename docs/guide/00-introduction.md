@@ -49,7 +49,7 @@ To reshape *how* AI-DLC behaves — add a stage or an agent, define a scope, aut
 | Phases | 5 (Initialization, Ideation, Inception, Construction, Operation) |
 | Stages | 33 |
 | Agents | 14 total: 11 domain experts, 2 reviewers, and the composer |
-| Scopes | 9 (enterprise through workshop) + auto-detect |
+| Scopes | 10 (enterprise through express) + auto-detect |
 | Depth levels | 3 (Minimal, Standard, Comprehensive) |
 | Test strategy levels | 3 (Minimal, Standard, Comprehensive) |
 | Audit event types | 85 |
@@ -76,6 +76,6 @@ To reshape *how* AI-DLC behaves — add a stage or an agent, define a scope, aut
 | [Troubleshooting](15-troubleshooting.md) | Symptom-based problem solving |
 | [Worked Examples](16-worked-examples.md) | Full bugfix and feature walkthroughs |
 | [Skills and Runner Commands](17-skills.md) | The `/aidlc-*` stage- and scope-runner commands and the author-your-own-runner path |
-| [Workshop Mode](workshop-mode.md) | Multi-developer manual recipe for the workshop scope (claim semantics via git push) |
+| [Workshop Mode](workshop-mode.md) | Multi-developer manual recipe for the classic scope (claim semantics via git push) |
 | [Running on other harnesses](harnesses/README.md) | Install and run on Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode, or GitHub Copilot, and what differs per harness |
 | [Glossary](glossary.md) | All terminology defined |

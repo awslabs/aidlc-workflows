@@ -4,7 +4,7 @@
 
 AI-DLC is a methodology, and this implementation ships it working out of the box
 on the harness you use — Claude Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode, or GitHub Copilot: 14 agents
-(11 domain experts, 2 reviewers, and the composer), 33 stages, 9 scopes, a set
+(11 domain experts, 2 reviewers, and the composer), 33 stages, 10 scopes, a set
 of rules and sensors. This guide is for the person who
 wants to **reshape** that methodology — change which stages run, add an agent for
 a domain the framework doesn't cover, tighten a scope, teach the framework a

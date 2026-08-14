@@ -37,7 +37,8 @@ scopes:
   - enterprise
   - feature
   - infra
-  - workshop
+  - classic
+  - express
 inputs: NFR design from nfr-design stage, infrastructure design from infrastructure-design stage, deployed application
 outputs: dashboards.md, alarms.md, slo-config.md, log-queries.md, tracing-config.md, anomaly-config.md, observability-setup-questions.md (under this stage's record dir, engine-resolved)
 ---

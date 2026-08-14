@@ -20,7 +20,8 @@ scopes:
   - refactor
   - infra
   - security-patch
-  - workshop
+  - classic
+  - express
 inputs: workspace classification from workspace-detection, scope from orchestrator
 outputs: <record>/aidlc-state.md (full populated version, engine-resolved)
 ---

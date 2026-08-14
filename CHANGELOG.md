@@ -229,6 +229,14 @@ The reviewer work loop gets a hard backstop: both review-only agents (`aidlc-arc
 * Stage protocol §12a step 1 now deletes any pre-existing `## Review` section before every dispatch (first entry, NOT-READY re-invoke, and post-rejection re-review alike): "no current section" means "incomplete review" on every path, no stale pre-revision READY survives a revision, and no superseded reviewer prose accumulates in artifacts or leaks into the claim-sources scan.
 * GitHub Copilot reviewer step brought up to the review-class contract (`directive.review_class` branch, advisory single-pass terminality, terminal-receipt freeze wording, `--retry-pending` recovery), and the §12a dispatch-record roster now names Copilot among the reviewer-scope-enforcing harnesses.
 
+## [2.6.7] - 2026-08-14
+
+Scope defaults and lightweight routing have been revised. **Breaking:** freeform fallback now uses `classic`, not `feature`, and the former `workshop` scope has been renamed to `classic`, so `--scope workshop` now errors; use `--scope classic`. To retain the old full 33-stage default behavior, run `/aidlc --scope feature`. Organizations can override the project default with `AWS_AIDLC_DEFAULT_SCOPE`. **Upgrade:** refresh your `dist/<harness>/` shell and update scripts, CI, or saved configuration that name `workshop`.
+
+* NEW `express` scope and `/aidlc-express` runner: Minimal depth, reviewers disabled through `review_cap: none`, and a 10-stage requirements-to-deploy grid with a conditional deploy tail.
+* `classic` is now the freeform default, reproducing the v1-style lifecycle without Ideation while its conditional design and Operation stages self-select.
+* `classic` uses the production test floor: the former `workshop` scope's `testStrategy: Minimal` override has been removed, so test strategy inherits Standard depth.
+
 ## [2.6.2] - 2026-08-13
 
 Follow-up fixes to the 2.6.1 design-output restructure (review items from #711). No artifact or stage-graph changes — this is a correctness/consistency patch. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.

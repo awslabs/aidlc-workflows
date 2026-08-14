@@ -70,7 +70,8 @@ Stage 2.2, and the User Stories mob at Stage 2.4.
 | refactor         | 2.1 (always -- understand current code), 2.3 (minimal)         |
 | infra            | 2.2, 2.3 (infra requirements)                                  |
 | security-patch   | 2.1 (find vulnerability context), 2.3 (minimal)                 |
-| workshop         | 2.1--2.9                                                       |
+| classic          | 2.1--2.9                                                       |
+| express          | 2.1 (if brownfield), 2.3                                      |
 
 ---
 
@@ -1264,7 +1265,7 @@ Changes**. The user can override stage inclusion/exclusion at this gate.
   dependencies defined in the component catalogue (`components.md`) and the
   unit-of-work-dependency artifact.
 - Team allocation draws from the Team Formation artifacts (Stage 1.5) if
-  they exist; when 1.5 is SKIP (mvp, workshop), all Bolts are executed by
+  they exist; when 1.5 is SKIP (mvp, classic), all Bolts are executed by
   aidlc-developer-agent (AI).
 
 ---

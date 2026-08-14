@@ -1,4 +1,4 @@
-// covers: scope:bugfix, scope:feature, scope:mvp, scope:security-patch, scope:infra, scope:refactor
+// covers: scope:bugfix, scope:express, scope:feature, scope:mvp, scope:security-patch, scope:infra, scope:refactor
 //
 // CLI-contract port of tests/integration/t130-scope-runners.sh (TAP plan 12),
 // mechanism = cli. The .sh carried NO `# covers:` header (it predates the
@@ -16,8 +16,8 @@
 // identical assertion shape (run-stage + first-EXECUTE stage + baked persona)
 // over the same real `aidlc-orchestrate next --scope <s>` drive, so it covers
 // the scope at the same cli strength, not by a weaker mention. enterprise/poc/
-// workshop are covered by their own tui scope run-throughs; bugfix/feature/mvp/
-// security-patch/infra/refactor are the cli-routed set this corpus owns.
+// classic is covered by its own tui scope run-through; bugfix/express/feature/
+// mvp/security-patch/infra/refactor are the cli-routed set this corpus owns.
 //
 // WHAT THE .sh PROVED (t130-scope-runners.sh:1-12 prose + the loop at :42-70):
 //   For each first-batch scope the runner's shell makes the SAME first move —
@@ -92,6 +92,7 @@ resetAidlcEnv();
 // against the shipped engine before authoring (see the SOURCE UNDER TEST note).
 const CASES: ReadonlyArray<{ scope: string; wantStage: string }> = [
   { scope: "bugfix", wantStage: "requirements-analysis" },
+  { scope: "express", wantStage: "requirements-analysis" },
   { scope: "feature", wantStage: "intent-capture" },
   { scope: "mvp", wantStage: "intent-capture" },
   // security-patch's first EXECUTE is reverse-engineering, but that brownfield

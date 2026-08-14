@@ -111,7 +111,7 @@ function handleResolve(args: string[]): void {
   const content = readStateFile(pd);
 
   // Determine scope
-  const scope = flags.scope || getField(content, "Scope") || "feature";
+  const scope = flags.scope || getField(content, "Scope") || "classic";
   const scopeMapping = loadScopeMapping()[scope];
   if (!scopeMapping) error(`Unknown scope: ${scope}`);
   // The live plan's per-stage suffix overrides (a recomposed plan) - every
@@ -235,7 +235,7 @@ function handleExecute(args: string[]): void {
     error(`Invalid direction: ${flags.direction}. Valid: forward, backward, redo`);
   }
 
-  const scope = flags.scope || getField(content, "Scope") || "feature";
+  const scope = flags.scope || getField(content, "Scope") || "classic";
   const scopeMapping = loadScopeMapping()[scope];
   if (!scopeMapping) error(`Unknown scope: ${scope}`);
   // The live plan's suffix overrides - execute resolves the same EFFECTIVE

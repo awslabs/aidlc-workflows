@@ -197,6 +197,8 @@ describe("t34 stage-protocol.md structure + cross-references (migrated from t34-
     "refactor",
     "infra",
     "security-patch",
+    "classic",
+    "express",
   ] as const;
   for (const scope of SCOPES) {
     test(`§2: depth/progress tables list scope "${scope}"`, () => {

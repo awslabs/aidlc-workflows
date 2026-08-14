@@ -170,12 +170,13 @@ describe("t266 review class", () => {
     }
   });
 
-  test("scope caps: bugfix, poc, workshop declare review_cap advisory", () => {
-    for (const scope of ["bugfix", "poc", "workshop"]) {
+  test("scope caps: bugfix, poc, classic are advisory; express is none", () => {
+    for (const scope of ["bugfix", "poc", "classic"]) {
       expect(read(`core/scopes/aidlc-${scope}.md`)).toContain(
         "review_cap: advisory"
       );
     }
+    expect(read("core/scopes/aidlc-express.md")).toContain("review_cap: none");
   });
 
   // --- 3. resolution --------------------------------------------------------
@@ -188,8 +189,9 @@ describe("t266 review class", () => {
     // Uncapped scope keeps the declaration.
     expect(resolveReviewClass("adversarial", "feature")).toBe("adversarial");
     expect(resolveReviewClass("advisory", "feature")).toBe("advisory");
-    // Capped scope lowers adversarial to advisory (bugfix/poc/workshop).
+    // Capped scope lowers adversarial to advisory (bugfix/poc/classic).
     expect(resolveReviewClass("adversarial", "bugfix")).toBe("advisory");
+    expect(resolveReviewClass("adversarial", "express")).toBe("none");
     // Override lowers further...
     expect(
       resolveReviewClass("adversarial", "feature", "- **Review Override**: none\n")

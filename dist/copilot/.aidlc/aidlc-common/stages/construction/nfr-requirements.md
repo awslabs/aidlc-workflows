@@ -53,7 +53,7 @@ scopes:
   - mvp
   - infra
   - security-patch
-  - workshop
+  - classic
 inputs: functional design artifacts, requirements.md, RE artifacts
 outputs: "performance-requirements.md, security-requirements.md, scalability-requirements.md, reliability-requirements.md, observability-requirements.md, tech-stack-decisions.md, traceability.json (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)"
 ---

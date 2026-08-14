@@ -145,9 +145,9 @@ describe("t191 composed-scope write contract + keyword hygiene", () => {
     authorComposedScope(proj, "aaa-composed", {}); // alphabetically FIRST if it had keywords
     // Keyword text that matches stock bugfix must still infer bugfix.
     expect(inferIn(proj, "fix bug")).toBe("bugfix");
-    // And rich prose still falls to the feature default (inference unchanged).
+    // And rich prose falls to the classic default.
     expect(inferIn(proj, "a long description of a brand new system to build")).toBe(
-      "feature",
+      "classic",
     );
   });
 
