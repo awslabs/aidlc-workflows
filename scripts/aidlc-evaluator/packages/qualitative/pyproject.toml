@@ -10,7 +10,7 @@ dependencies = [
 
 [project.optional-dependencies]
 llm = [
-    "boto3>=1.35.0",
+    "boto3>=1.43.69",
 ]
 dev = [
     "pytest>=8.0.0",
