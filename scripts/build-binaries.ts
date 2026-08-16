@@ -84,6 +84,7 @@ const RUNTIME_DISTRIBUTIONS = [
   "cursor",
   "kiro",
   "kiro-ide",
+  "kiro-unified",
   "copilot",
   "opencode",
 ] as const;
@@ -1588,12 +1589,20 @@ function buildTarget(target: TargetConfig): TargetResult {
     result.gates.push(harnessRuntimeGate(actual.artifact, "cursor", ".cursor"));
     result.gates.push(harnessRuntimeGate(actual.artifact, "kiro", ".kiro"));
     result.gates.push(harnessRuntimeGate(actual.artifact, "kiro-ide", ".kiro"));
+    result.gates.push(harnessRuntimeGate(actual.artifact, "kiro-unified", ".kiro"));
     result.gates.push(harnessRuntimeGate(actual.artifact, "copilot", ".aidlc"));
     result.gates.push(harnessRuntimeGate(actual.artifact, "opencode", ".aidlc"));
+    // The .kiro doctor arm accepts either conductor form, so the same label
+    // proves the probe on the JSON tree and on the Markdown-only one.
     result.gates.push(harnessProbeGate(
       actual.artifact,
       "kiro",
-      "agents/aidlc.json present (hook + permission wiring)",
+      "agents/aidlc.{json,md} present (hook + permission wiring)",
+    ));
+    result.gates.push(harnessProbeGate(
+      actual.artifact,
+      "kiro-unified",
+      "agents/aidlc.{json,md} present (hook + permission wiring)",
     ));
     result.gates.push(harnessProbeGate(
       actual.artifact,

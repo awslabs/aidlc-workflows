@@ -1396,11 +1396,16 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
   // permissions live there) plus settings/cli.json (activation). Codex CLI:
   // config.toml + hooks.json (the hook wiring) + rules/default.rules (permissions).
   if (harness === ".kiro") {
-    const agentPath = join(projectDir, harness, "agents", "aidlc.json");
+    // The conductor agent config carries the hook + permission wiring. The
+    // unified agent harness (Kiro IDE 1.x, Kiro CLI v3) reads the Markdown form
+    // (agents/aidlc.md) and ships no agent-v1 JSON; the older Kiro CLI reads
+    // agents/aidlc.json. Either satisfies the wiring requirement.
+    const jsonAgentPath = join(projectDir, harness, "agents", "aidlc.json");
+    const mdAgentPath = join(projectDir, harness, "agents", "aidlc.md");
     results.push({
-      pass: existsSync(agentPath),
-      label: "agents/aidlc.json present (hook + permission wiring)",
-      fix: "copy from `dist/kiro/.kiro/agents/aidlc.json`",
+      pass: existsSync(jsonAgentPath) || existsSync(mdAgentPath),
+      label: "agents/aidlc.{json,md} present (hook + permission wiring)",
+      fix: "copy from `dist/kiro-unified/.kiro/agents/aidlc.md` (unified harness) or `dist/kiro/.kiro/agents/aidlc.json` (Kiro CLI 2.x)",
     });
     const cliSettingsPath = join(projectDir, harness, "settings", "cli.json");
     results.push({

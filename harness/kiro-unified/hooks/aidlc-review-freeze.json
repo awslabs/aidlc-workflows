@@ -1,0 +1,12 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "aidlc-review-freeze",
+      "trigger": "PreToolUse",
+      "matcher": "fs_write|str_replace|fs_append|execute_bash",
+      "description": "Freezes artifact writes once a reviewer receipt is terminal, so a late edit cannot reopen a closed review loop.",
+      "action": { "type": "command", "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts review-freeze" }
+    }
+  ]
+}

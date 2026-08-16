@@ -1,6 +1,16 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.3] - 2026-08-16
+
+Adds `dist/kiro-unified/` — a Kiro distribution aligned to the **unified agent harness**, the runtime Kiro IDE 1.x and Kiro CLI v3 (`kiro-cli --v3`) share. Both surfaces resolve an agent from its Markdown definition (persona body, `tools:`, `resources:` and `permissions:` in one file) and execute the standalone `.kiro/hooks/aidlc-*.json` manifests, so this tree carries no agent-v1 JSON and no legacy `.kiro.hook` files. The existing `dist/kiro-ide/` and `dist/kiro/` trees are unchanged and remain the install for older IDE builds and for Kiro CLI 2.x respectively; `README.md` § Pick your harness now says which runtime takes which tree. No stage, artifact, or state-schema change. **Upgrade:** nothing to do unless you run Kiro IDE 1.x or `kiro-cli --v3` and want the aligned shell — installing it is a fresh `cp` of `dist/kiro-unified/` into the project, not a layer over an existing `.kiro/` from another Kiro tree.
+
+* NEW distribution `dist/kiro-unified/`: the 14 delegation-target agents ship as `.md` only, the conductor as `agents/aidlc.md` (the workspace agent-selector entry), with 12 registered hook manifests — the 8 the IDE tree registers plus `review-freeze`, `plan-approval-guard`, `state-transition-guard` and `verb-intercept`, whose PreToolUse exit-2 refusal both surfaces honour.
+* `/aidlc --doctor` accepts either conductor form on a `.kiro` tree: the check reads `agents/aidlc.{json,md} present (hook + permission wiring)` and passes on whichever the installed tree ships. Previously it required `agents/aidlc.json` and reported a failure on a Markdown-only Kiro tree.
+* `frontmatterAdditions` in a harness manifest accepts a nested block, not only single-line keys — an indented line continues the block its preceding top-level key opened. That is what lets a harness declare a structured native field (Kiro's `permissions:` rules and `resources:` list) as manifest data instead of forking the core agent files. Top-level keys are still name-checked and still fail the build on a collision with a key `core/` declares.
+* `loadAgents()` skips `agents/aidlc.md`. A conductor entry is not a stage lead/support agent: it declares `name` only, so it would fail the persona frontmatter contract, and it must stay out of the roster that backs stage `lead_agent` validation. A no-op for every tree that ships no `agents/aidlc.md`.
+* New chapter [AI-DLC on the Kiro unified agent harness](docs/guide/harnesses/kiro-unified.md) — prerequisites (including the `--v3` opt-in), install, which Kiro tree to pick, and what differs, including which hooks ship unregistered and why.
+
 ## [2.6.2] - 2026-08-13
 
 Follow-up fixes to the 2.6.1 design-output restructure (review items from #711). No artifact or stage-graph changes — this is a correctness/consistency patch. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.

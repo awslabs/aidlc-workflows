@@ -1,0 +1,12 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "aidlc-plan-approval-guard",
+      "trigger": "PreToolUse",
+      "matcher": "^(subagent|invoke_sub_agent|subagent_.+)$",
+      "description": "Blocks a code-generation dispatch whose unit has no approved plan (reads the AIDLC-UNIT target marker in the dispatch prompt).",
+      "action": { "type": "command", "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts plan-approval-guard" }
+    }
+  ]
+}

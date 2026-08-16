@@ -11,7 +11,7 @@ A native implementation of the **AI-DLC methodology** (AI-Driven Development Lif
 
 The methodology lives once, in a harness-neutral `core/`; each harness adds a thin surface that decides how it shows up on that harness. So you edit the methodology in one place, and every harness distribution is generated from it — no harness gets special treatment. (See [Repository layout](#repository-layout) for how the pieces fit together.)
 
-![version](https://img.shields.io/badge/version-2.6.2-blue)
+![version](https://img.shields.io/badge/version-2.6.3-blue)
 ![license](https://img.shields.io/badge/license-MIT--0-green)
 ![Kiro IDE](https://img.shields.io/badge/harness-Kiro%20IDE-orange)
 ![Kiro CLI](https://img.shields.io/badge/harness-Kiro%20CLI-orange)
@@ -57,6 +57,7 @@ Ad-hoc AI coding works until the project gets real. Then context drifts between 
 | --- | --- | --- | --- |
 | **Kiro IDE** | `dist/kiro-ide/.kiro/` + `dist/kiro-ide/aidlc/` → `<project>/` (+ `dist/kiro-ide/AGENTS.md`) | `/aidlc` | [Quick Start](#quick-start) below + [Running AI-DLC on Kiro IDE](docs/guide/harnesses/kiro-ide.md). |
 | **Kiro CLI** (≥ 2.6) | `dist/kiro/.kiro/` + `dist/kiro/aidlc/` → `<project>/` (+ `dist/kiro/AGENTS.md`) | `/aidlc` | [Quick Start](#quick-start) below + [Running AI-DLC on Kiro CLI](docs/guide/harnesses/kiro-cli.md). |
+| **Kiro unified agent harness** (IDE ≥ 1.0 or CLI `--v3`) | `dist/kiro-unified/.kiro/` + `dist/kiro-unified/aidlc/` → `<project>/` (+ `dist/kiro-unified/AGENTS.md`) | `/aidlc` | [Quick Start](#quick-start) below + [AI-DLC on the Kiro unified agent harness](docs/guide/harnesses/kiro-unified.md). |
 | **Claude Code** | `dist/claude/.claude/` + `dist/claude/aidlc/` → `<project>/` | `/aidlc` | [Quick Start](#quick-start) below + [Getting Started](docs/guide/01-getting-started.md). |
 | **Codex CLI** (≥ 0.145.0) | `dist/codex/` → `<project>/` (`.codex/` + `.agents/` + `aidlc/` + `AGENTS.md`) | `$aidlc` (or `/skills` → aidlc) | [Quick Start](#quick-start) below + [AI-DLC on Codex CLI](docs/guide/harnesses/codex-cli.md). |
 | **Cursor** | `bun dist/cursor/install.ts <project>` | `/aidlc` | [Quick Start](#quick-start) below + [AI-DLC on Cursor](docs/guide/harnesses/cursor.md). |
@@ -64,6 +65,8 @@ Ad-hoc AI coding works until the project gets real. Then context drifts between 
 | **GitHub Copilot** (CLI ≥ 1.0.74 / VS Code ≥ 1.130) | `dist/copilot/` → `<project>/` (`.aidlc/` + `aidlc/` + `AGENTS.md`; MERGE `.github/`) | `/aidlc` | [Quick Start](#quick-start) below + [AI-DLC on GitHub Copilot](docs/guide/harnesses/copilot.md). |
 
 The deterministic engine — state machine, audit log, and the referee that coordinates parallel agents — is byte-identical across every harness; only the shell differs. Each section in the [Quick Start](#quick-start) installs one harness end to end, and its guide above goes deeper on prerequisites and differences.
+
+Three of those rows install into `.kiro/`, so pick by the runtime you actually launch: **`kiro-unified`** targets the unified agent harness only — Kiro IDE 1.x and Kiro CLI `--v3`, which resolve agents, tool grants and permissions from the same Markdown definitions; **`kiro-ide`** additionally carries the compatibility surfaces for pre-1.0 IDE builds (legacy `.kiro.hook` files, agent-v1 JSON); **`kiro`** targets Kiro CLI 2.x, whose engine reads the agent-v1 JSON sandbox rather than a `permissions:` block.
 
 > [!NOTE]
 > AI-DLC on Kiro (IDE or CLI) works best with **Claude Opus 4.8**, which requires a **paid Kiro plan**. On weaker models the conductor may skip optional stage steps (reviewer pass, learnings ritual) or rush approval gates.
@@ -136,6 +139,29 @@ cp dist/kiro-ide/AGENTS.md your-project/AGENTS.md   # merge if you already have 
 The `aidlc/` shell ships the pre-built `aidlc/spaces/default/memory/` method tree the engine reads; `/aidlc --doctor` fails its "workspace shell ready" check without it.
 
 Open `your-project/` in Kiro IDE. The `/aidlc` command loads the shipped conductor skill (the bundled `.kiro/settings/cli.json` is a Kiro CLI-only compatibility surface — the IDE ignores it and does not select a default agent from it). The install registers the framework hooks in both formats: `.kiro/hooks/aidlc-*.json` (v2 schema for IDE >= 1.0) and `.kiro/hooks/aidlc-*.kiro.hook` (legacy format for pre-1.0 IDEs). In the chat panel, run `/aidlc --doctor` to verify, then `/aidlc <description>` to start.
+
+> [!NOTE]
+> AI-DLC on Kiro works best with **Claude Opus 4.8**, which requires a **paid Kiro plan**. On weaker models the conductor may skip optional stage steps (reviewer pass, learnings ritual) or rush approval gates.
+
+</details>
+
+<details>
+<summary><b>Kiro unified agent harness (IDE 1.x or CLI --v3)</b></summary>
+
+**1. Install Kiro IDE ≥ 1.0, or Kiro CLI ≥ 2.6**, and sign in. On the CLI, the unified agent harness is an explicit opt-in: `kiro-cli --v3`.
+
+**2. Set up your project**
+
+```bash
+mkdir -p your-project/.kiro your-project/aidlc
+cp -R dist/kiro-unified/.kiro/. your-project/.kiro/
+cp -R dist/kiro-unified/aidlc/. your-project/aidlc/     # the workspace shell — a sibling of .kiro/, not inside it
+cp dist/kiro-unified/AGENTS.md your-project/AGENTS.md   # merge if you already have one
+```
+
+The `aidlc/` shell ships the pre-built `aidlc/spaces/default/memory/` method tree the engine reads; `/aidlc --doctor` fails its "workspace shell ready" check without it.
+
+Both surfaces read the same tree. In the **IDE**, open `your-project/`; the conductor is the selector entry loaded from `.kiro/agents/aidlc.md`, and the twelve `.kiro/hooks/aidlc-*.json` manifests appear in the Agent Hooks panel. In the **CLI**, run `kiro-cli --v3 --agent aidlc` from the project (the bundled `.kiro/settings/cli.json` names it as the default agent, but Kiro reads CLI settings from the global scope only, so a workspace copy does not take effect). Then run `/aidlc --doctor` to verify, and `/aidlc <description>` to start.
 
 > [!NOTE]
 > AI-DLC on Kiro works best with **Claude Opus 4.8**, which requires a **paid Kiro plan**. On weaker models the conductor may skip optional stage steps (reviewer pass, learnings ritual) or rush approval gates.

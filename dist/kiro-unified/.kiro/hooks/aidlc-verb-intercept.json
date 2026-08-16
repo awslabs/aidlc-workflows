@@ -1,0 +1,14 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "aidlc-verb-intercept",
+      "trigger": "UserPromptSubmit",
+      "description": "Runs a read-only or navigation `/aidlc` command itself and hands the assistant the verbatim output, so asking for status or switching intents cannot advance the workflow by accident. Registered with no matcher: the seam also keeps the per-turn clock the engine's roll-forward guard compares against, so it must fire on every prompt, not only on the terminal ones.",
+      "action": {
+        "type": "command",
+        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts verb-intercept"
+      }
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+{
+  "name": "kiro-unified",
+  "harnessDir": ".kiro",
+  "rulesSubdir": "steering"
+}

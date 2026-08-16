@@ -114,8 +114,8 @@ Everything a harness engineer authors lives in **`core/`** — the hand-authored
 harness-neutral source of truth (stages under `core/aidlc-common/stages/`,
 agents under `core/agents/`, scopes, rules, sensors, knowledge, tools, hooks).
 The per-harness `dist/<harness>/` trees you actually run (`dist/claude/.claude/`,
-`dist/kiro/.kiro/`, `dist/kiro-ide/.kiro/`, `dist/codex/`, `dist/cursor/`,
-`dist/opencode/`, and `dist/copilot/`) are **generated**
+`dist/kiro/.kiro/`, `dist/kiro-ide/.kiro/`, `dist/kiro-unified/.kiro/`,
+`dist/codex/`, `dist/cursor/`, `dist/opencode/`, and `dist/copilot/`) are **generated**
 from `core/` plus a thin `harness/<name>/` surface, and they are
 **drift-guarded** — a hand-edit there is rejected by CI. The loop is always:
 

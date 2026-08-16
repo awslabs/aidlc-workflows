@@ -300,7 +300,21 @@ function applyFrontmatterAdditions(
     );
   }
   const fm = m[1];
-  for (const line of lines) {
+  for (const [i, line] of lines.entries()) {
+    // An indented line continues the block its preceding top-level key opened:
+    // a harness-native field may be a nested mapping or sequence, not just a
+    // scalar (Kiro's `permissions:` rules and `resources:` list are both). Only
+    // top-level keys are name-checked and collision-checked; a block that opens
+    // with a continuation line has no key to attribute it to and is an error.
+    if (/^\s/.test(line)) {
+      if (i === 0) {
+        throw new Error(
+          `frontmatterAdditions: ${file} opens with the indented line "${line}" - ` +
+            `a block must start at a top-level YAML key.`,
+        );
+      }
+      continue;
+    }
     const key = line.split(":")[0]?.trim();
     if (!key || !/^[A-Za-z_][\w-]*$/.test(key)) {
       throw new Error(

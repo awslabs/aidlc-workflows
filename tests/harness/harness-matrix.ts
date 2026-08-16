@@ -160,6 +160,29 @@ const HARNESS_CAPABILITIES = {
     ideAgentTools: false,
     reviewerScopeRegistration: "kiro-agent-json",
   },
+  // The unified agent harness (Kiro IDE 1.x + Kiro CLI v3): Markdown agents
+  // only, so no agent-v1 JSON, and the .md tool grants both surfaces read.
+  // reviewer-scope stays "unsupported" — the body ships unregistered because an
+  // agent-scope hook fires for the active agent, not a delegated one.
+  "kiro-unified": {
+    harnessDir: ".kiro",
+    onboarding: {
+      mode: "manifest",
+      fills: "onboarding.fills.ts",
+      dist: "AGENTS.md",
+    },
+    rootFiles: [".gitignore", "AGENTS.md"],
+    skillsRoot: ".kiro/skills",
+    plugin: {
+      kind: "kiro",
+      manifestDir: ".kiro-plugin",
+      wiringFile: "hooks/aidlc-plugin-compose.kiro.hook",
+    },
+    memoryInclude: "kiro-steering",
+    kiroAgentJson: false,
+    ideAgentTools: true,
+    reviewerScopeRegistration: "unsupported",
+  },
   opencode: {
     harnessDir: ".aidlc",
     onboarding: {

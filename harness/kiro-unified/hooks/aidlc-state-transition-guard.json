@@ -1,0 +1,12 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "aidlc-state-transition-guard",
+      "trigger": "PreToolUse",
+      "matcher": "execute_bash",
+      "description": "Refuses a hand-run `aidlc-state.ts <verb>`: stage status is changed by the workflow tools so the state file, the audit log, and the compiled stage graph stay in agreement. Registered GLOBALLY with no persona argument — stock Kiro CLI reaches this verb only through agent-scope `hooks` carrying the persona slug, and agent-scope hooks were measured (2026-08-16, CLI --v3 and IDE 1.0.309) to fire for the active agent only, never for a delegated one, so the persona-scoped form cannot work on either supported surface. The global form recovers the direct-mutation refusal for every agent; the delegated-lifecycle refusal stays dormant because it returns 0 on an empty agent_type.",
+      "action": { "type": "command", "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts state-transition-guard" }
+    }
+  ]
+}

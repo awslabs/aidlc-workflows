@@ -6420,7 +6420,15 @@ export function loadAgents(): AgentMetadata[] {
     const dir = agentsDir();
     const slugToFile = new Map<string, string>();
     const agents: AgentMetadata[] = [];
-    const files = readdirSync(dir).filter((f) => f.endsWith(".md")).sort();
+    // agents/aidlc.md, where a harness ships one, is the conductor MAIN - the
+    // entry that harness's agent selector loads - not a stage lead/support
+    // agent: it declares `name` only, so parseAgentFrontmatter would throw on
+    // the missing `display_name`, and it must stay out of the domain-agent
+    // roster that backs knownAgents for stage `lead_agent` validation. Exclude
+    // it by name; a no-op in every tree that ships no agents/aidlc.md.
+    const files = readdirSync(dir)
+      .filter((f) => f.endsWith(".md") && f !== "aidlc.md")
+      .sort();
     for (const f of files) {
       const filePath = join(dir, f);
       const agent = parseAgentFrontmatter(filePath);

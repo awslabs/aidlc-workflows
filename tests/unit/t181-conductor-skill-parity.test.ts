@@ -151,6 +151,7 @@ const FRESH_SESSION_TOKENS: Record<string, string[]> = {
   codex: ["restart Codex CLI", "`$aidlc`"],
   kiro: ["restart Kiro CLI", "`/aidlc`"],
   "kiro-ide": ["new Kiro IDE chat", "`/aidlc`"],
+  "kiro-unified": ["new Kiro CLI session", "new Kiro IDE chat", "`/aidlc`"],
   opencode: ["restart OpenCode", "`/aidlc`"],
   copilot: ["new Copilot CLI session", "new VS Code agent chat", "`/aidlc`"],
   cursor: ["new Cursor chat", "`/aidlc`"],
