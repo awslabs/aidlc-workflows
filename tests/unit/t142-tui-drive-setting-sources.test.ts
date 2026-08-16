@@ -295,6 +295,28 @@ describe("Kiro numbered-prose answer classification", () => {
     expect(state.approvalsAnswered).toBe(1);
   });
 
+  test("answers a re-issued summary confirmation after a stage reset", () => {
+    // Observed live on kiro-cli --v3: a review-freeze refusal made the conductor
+    // redo the summary write, and the re-issued checkpoint carries no "before
+    // I ..." clause. Keying on the question sentence answers the new one while a
+    // repaint of either stays a no-op.
+    const state = createKiroNumberedProseAnswerState();
+    expect(
+      nextKiroNumberedProseAnswer(
+        "Does it all look correct before I finalize?\n1. Looks correct\n2. Request changes",
+        state,
+      ),
+    ).toBe("Looks correct");
+    const reissued =
+      "The stage was reset for bookkeeping and your answers are unchanged.\n" +
+      "Does this all still look correct?\n" +
+      "1. Looks correct - proceed to the reviewer and approval gate\n" +
+      "2. Request changes - revise before finalizing";
+    expect(nextKiroNumberedProseAnswer(reissued, state)).toBe("Looks correct");
+    expect(nextKiroNumberedProseAnswer(reissued, state)).toBeNull();
+    expect(state.confirmedSummaries.size).toBe(2);
+  });
+
   test("declines surfaced candidates without skipping the free-text channel", () => {
     const state = createKiroNumberedProseAnswerState();
     expect(

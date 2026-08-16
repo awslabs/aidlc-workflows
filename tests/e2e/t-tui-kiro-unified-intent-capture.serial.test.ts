@@ -36,7 +36,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import { join } from "node:path";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -142,6 +142,7 @@ describe("t-tui-kiro-unified-intent-capture (kiro-cli --v3 on the shipped dist/k
     `kiro-unified: intent-capture journey commits its artifacts and its hook manifests fire${SKIP_REASON ? ` — SKIP: ${SKIP_REASON}` : ""}`,
     async () => {
       const session = `aidlc_tui_kiro_unified_ic_${process.pid}`;
+      let keepSandbox = false;
       const sandbox = setupTuiProject({
         harness: "kiro-unified",
         withState: "state-initialization-done.md",
@@ -209,8 +210,12 @@ describe("t-tui-kiro-unified-intent-capture (kiro-cli --v3 on the shipped dist/k
           const screen = drive(["capture", "--session", session]).stdout;
           const answer = nextKiroNumberedProseAnswer(screen, answerState);
           if (answer === null) {
+            // The WHOLE capture, not its tail: the prompt sits above the input
+            // box, so a tail slice shows only the footer and statusbar. A run
+            // here costs ~18 minutes of live turns — the failure has to be
+            // diagnosable from one run.
             throw new Error(
-              `kiro-cli --v3 stopped at an unrecognized intent-capture prompt:\n${screen.slice(-4000)}`,
+              `kiro-cli --v3 stopped at an unrecognized intent-capture prompt:\n${screen}`,
             );
           }
           send(session, answer, true);
@@ -285,9 +290,25 @@ describe("t-tui-kiro-unified-intent-capture (kiro-cli --v3 on the shipped dist/k
         //    gate resolution, so an approved stage above implies it fired — assert
         //    the event directly rather than inferring it.
         expect(auditMd).toContain("HUMAN_TURN");
+      } catch (err) {
+        // Keep the evidence. A live journey costs real credits and ~18 minutes,
+        // so a failed run must leave the sandbox and the final frame behind
+        // instead of deleting the only copy of what went wrong.
+        keepSandbox = true;
+        try {
+          writeFileSync(
+            join(sandbox, "final-screen.txt"),
+            drive(["capture", "--session", session]).stdout,
+            "utf8",
+          );
+        } catch {
+          /* best-effort dump */
+        }
+        console.error(`[t-tui-kiro-unified] sandbox retained for post-mortem: ${sandbox}`);
+        throw err;
       } finally {
         drive(["kill", "--session", session]);
-        cleanupTuiProject(sandbox);
+        if (!keepSandbox) cleanupTuiProject(sandbox);
       }
     },
     TEST_TIMEOUT_MS,

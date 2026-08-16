@@ -182,15 +182,25 @@ export function nextKiroNumberedProseAnswer(
   // Consolidated-summary confirmation: one PER checkpoint-bearing stage, so a
   // multi-stage journey presents several (e.g. reverse-engineering "before I
   // finalize", then requirements-analysis "before I generate the requirements
-  // artifact"). Key on the newest prompt's distinct "before I ..." tail - the
-  // retained viewport still shows earlier answered prompts, so a bare boolean
-  // (the pre-fix shape) answered only the first and stranded every later one.
+  // artifact"). The retained viewport still shows earlier answered prompts, so a
+  // bare boolean answered only the first and stranded every later one — key on
+  // the NEWEST question sentence instead, which makes a repaint of the same
+  // prompt a no-op while a genuinely new one still gets a response.
+  //
+  // Keying on the whole sentence rather than only a "before I ..." tail matters:
+  // a stage that is RESET mid-flight re-issues the checkpoint in a different
+  // shape ("The stage was reset for bookkeeping and your answers are
+  // unchanged... Does this all still look correct?"), which carries no "before
+  // I" clause. Observed live on kiro-cli --v3 after a review-freeze refusal made
+  // the conductor redo the summary write. Under the old shape that
+  // re-confirmation matched nothing once one summary had been answered, and the
+  // journey stalled at an idle prompt.
   if (/Looks correct[\s\S]*Request changes/i.test(screen)) {
-    const summaryPrompts = [
-      ...screen.matchAll(/look correct before I ([^?]{1,120})\?/gi),
+    const summaryQuestions = [
+      ...screen.matchAll(/([^\n?]{0,200}looks? correct[^\n?]{0,80})\?/gi),
     ];
-    if (summaryPrompts.length > 0) {
-      const key = summaryPrompts
+    if (summaryQuestions.length > 0) {
+      const key = summaryQuestions
         .at(-1)![1]
         .replace(/\s+/g, " ")
         .trim()
@@ -200,8 +210,8 @@ export function nextKiroNumberedProseAnswer(
         return "Looks correct";
       }
     } else if (state.confirmedSummaries.size === 0) {
-      // Prompt without the "before I ..." sentence (looser conductor
-      // phrasing): answer it once, as the pre-fix recognizer did.
+      // Menu without any question sentence on screen (the sentence scrolled out
+      // of the viewport): answer it once, as the pre-fix recognizer did.
       state.confirmedSummaries.add("");
       return "Looks correct";
     }
