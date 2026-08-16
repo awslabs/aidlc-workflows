@@ -1,7 +1,7 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
-## [2.6.3] - 2026-08-16
+## [2.6.9] - 2026-08-16
 
 Adds `dist/kiro-unified/` — a Kiro distribution aligned to the **unified agent harness**, the runtime Kiro IDE 1.x and Kiro CLI v3 (`kiro-cli --v3`) share. Both surfaces resolve an agent from its Markdown definition (persona body, `tools:`, `resources:` and `permissions:` in one file) and execute the standalone `.kiro/hooks/aidlc-*.json` manifests, so this tree carries no agent-v1 JSON and no legacy `.kiro.hook` files. The existing `dist/kiro-ide/` and `dist/kiro/` trees are unchanged and remain the install for older IDE builds and for Kiro CLI 2.x respectively; `README.md` § Pick your harness now says which runtime takes which tree. No stage, artifact, or state-schema change. **Upgrade:** nothing to do unless you run Kiro IDE 1.x or `kiro-cli --v3` and want the aligned shell — installing it is a fresh `cp` of `dist/kiro-unified/` into the project, not a layer over an existing `.kiro/` from another Kiro tree.
 
