@@ -60,6 +60,11 @@ export const KIRO_SRC = join(REPO_ROOT, "dist", "kiro", ".kiro");
 // the IDE actually reads (the human-presence mint + block); dist/kiro/.kiro/hooks
 // has none. Seed this tree for IDE-shaped tests.
 export const KIRO_IDE_SRC = join(REPO_ROOT, "dist", "kiro-ide", ".kiro");
+// The unified-agent-harness distributable: Markdown agents only (the conductor
+// at agents/aidlc.md), twelve standalone hook manifests, and `permissions:` in
+// the agent files. Seed this tree for the surfaces that share that runtime —
+// Kiro IDE 1.x and `kiro-cli --v3`.
+export const KIRO_UNIFIED_SRC = join(REPO_ROOT, "dist", "kiro-unified", ".kiro");
 const FIXTURES_DIR = join(REPO_ROOT, "tests", "fixtures");
 // The per-harness memory shell (aidlc/spaces/default/memory) ships beside the
 // engine tree; copy it so the resolver finds the rule layers, mirroring
@@ -67,6 +72,7 @@ const FIXTURES_DIR = join(REPO_ROOT, "tests", "fixtures");
 const CLAUDE_MEMORY_SRC = join(REPO_ROOT, "dist", "claude", "aidlc");
 const KIRO_MEMORY_SRC = join(REPO_ROOT, "dist", "kiro", "aidlc");
 const KIRO_IDE_MEMORY_SRC = join(REPO_ROOT, "dist", "kiro-ide", "aidlc");
+const KIRO_UNIFIED_MEMORY_SRC = join(REPO_ROOT, "dist", "kiro-unified", "aidlc");
 
 export function markdownH2Section(body: string, heading: string): string {
   const lines = body.split(/\r?\n/);
@@ -281,9 +287,12 @@ export interface TuiProjectOptions {
    *  Kiro install shape — workspace default agent + steering ride along);
    *  "kiro-ide" copies dist/kiro-ide/.kiro → <proj>/.kiro plus
    *  dist/kiro-ide/AGENTS.md → <proj>/AGENTS.md (the IDE install shape, which
-   *  carries the v2 hook JSON files the IDE reads - the human-presence mint + block).
+   *  carries the v2 hook JSON files the IDE reads - the human-presence mint + block);
+   *  "kiro-unified" copies dist/kiro-unified/.kiro → <proj>/.kiro plus its
+   *  AGENTS.md (the unified-agent-harness install shape: Markdown agents only,
+   *  twelve standalone hook manifests, `permissions:` in the agent files).
    *  Everything else (state, audit, stubs) is harness-neutral. */
-  harness?: "claude" | "kiro" | "kiro-ide";
+  harness?: "claude" | "kiro" | "kiro-ide" | "kiro-unified";
   /** Seed aidlc-docs/aidlc-state.md from tests/fixtures/<withState> (a filename like
    *  "state-mid-ideation.md"). Omit for a fresh project. */
   withState?: string;
@@ -377,6 +386,16 @@ export function setupTuiProject(opts: TuiProjectOptions = {}): string {
     cpSync(KIRO_IDE_SRC, join(proj, ".kiro"), { recursive: true });
     cpSync(join(KIRO_IDE_SRC, "..", "AGENTS.md"), join(proj, "AGENTS.md"));
     if (existsSync(KIRO_IDE_MEMORY_SRC)) cpSync(KIRO_IDE_MEMORY_SRC, join(proj, "aidlc"), { recursive: true });
+  } else if (opts.harness === "kiro-unified") {
+    // The unified-agent-harness install shape — same .kiro + AGENTS.md + aidlc/
+    // layout as the other two Kiro trees, but from dist/kiro-unified/: the
+    // conductor is agents/aidlc.md (no agent-v1 JSON), and all twelve hook
+    // registrations are standalone hooks/aidlc-*.json manifests.
+    cpSync(KIRO_UNIFIED_SRC, join(proj, ".kiro"), { recursive: true });
+    cpSync(join(KIRO_UNIFIED_SRC, "..", "AGENTS.md"), join(proj, "AGENTS.md"));
+    if (existsSync(KIRO_UNIFIED_MEMORY_SRC)) {
+      cpSync(KIRO_UNIFIED_MEMORY_SRC, join(proj, "aidlc"), { recursive: true });
+    }
   } else {
     cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
     if (existsSync(CLAUDE_MEMORY_SRC)) cpSync(CLAUDE_MEMORY_SRC, join(proj, "aidlc"), { recursive: true });

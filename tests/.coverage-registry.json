@@ -4700,6 +4700,10 @@
           "mechanism": "tui"
         },
         {
+          "file": "tests/e2e/t-tui-kiro-unified-intent-capture.serial.test.ts",
+          "mechanism": "tui"
+        },
+        {
           "file": "tests/e2e/t-tui-t73-intent-capture.serial.test.ts",
           "mechanism": "tui"
         }
