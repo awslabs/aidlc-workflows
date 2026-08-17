@@ -5859,6 +5859,33 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
     writePrepared(prepareEmission(errorDirective(message)));
   } catch (error) {
     if (!(error instanceof ActiveDirectiveLockContendedError)) throw error;
+    if (cursor.authority === "stateless" && !cursor.copilotInstalled) {
+      try {
+        const latest = inspectCopilotContinuation(
+          pd,
+          loadStateFileIfPresent(pd),
+          token,
+        );
+        if (
+          latest.authority === "stateless" &&
+          !latest.copilotInstalled &&
+          latest.target.markerPath === cursor.target.markerPath &&
+          latest.target.intentUuid === cursor.target.intentUuid &&
+          latest.stateSha256 === cursor.stateSha256 &&
+          latest.statePresent === cursor.statePresent
+        ) {
+          recordHookDrop(
+            pd,
+            "active-directive",
+            "stateless continuation marker publication contended; delivered without updating the marker",
+          );
+          writePrepared(prepared);
+          return;
+        }
+      } catch {
+        // Keep the coordination-busy refusal when authority cannot be rechecked.
+      }
+    }
     writePrepared(prepareEmission(errorDirective(
       "Continuation coordination is busy. This call did not commit a cursor change. Retry the current token; if it is reported superseded, run a fresh `next`.",
     )));

@@ -291,7 +291,10 @@ export async function run(
       if (ch === "\\" && quote !== "'") { escaped = true; continue; }
       if (quote) {
         if (ch === quote) quote = null;
-        else if (ch === "`" || (quote === '"' && ch === "$" && command[i + 1] === "(")) return null;
+        else if (
+          (quote === '"' && ch === "`") ||
+          (quote === '"' && ch === "$" && command[i + 1] === "(")
+        ) return null;
         else word += ch;
       } else if (ch === "'" || ch === '"') quote = ch;
       else if (";&|<>`\n".includes(ch) || (ch === "$" && command[i + 1] === "(")) return null;
@@ -322,17 +325,27 @@ export async function run(
     return shellWords(command) ?? [];
   }
 
-  function simpleCommand(command: string): { words: string[]; body: string; redirect: string } | null {
+  function simpleCommand(command: string): {
+    words: string[];
+    body: string;
+    redirect: string;
+    expansionActive: boolean;
+  } | null {
     let quote: "'" | '"' | null = null;
     let escaped = false;
     let redirectStart = -1;
+    let expansionActive = false;
     for (let i = 0; i < command.length; i++) {
       const ch = command[i];
       if (escaped) { escaped = false; continue; }
       if (ch === "\\" && quote !== "'") { escaped = true; continue; }
       if (quote) {
         if (ch === quote) quote = null;
-        else if (ch === "`" || (quote === '"' && ch === "$" && command[i + 1] === "(")) return null;
+        else if (
+          (quote === '"' && ch === "`") ||
+          (quote === '"' && ch === "$" && command[i + 1] === "(")
+        ) return null;
+        else if (quote === '"' && ch === "$") expansionActive = true;
         continue;
       }
       if (ch === "'" || ch === '"') { quote = ch; continue; }
@@ -342,11 +355,31 @@ export async function run(
         break;
       }
       if (";&|<>`\n".includes(ch) || (ch === "$" && command[i + 1] === "(")) return null;
+      if (
+        ch === "$" ||
+        "*?[".includes(ch) ||
+        (ch === "~" && (i === 0 || /\s/.test(command[i - 1])))
+      ) {
+        expansionActive = true;
+      }
+      if (ch === "{") {
+        const end = command.indexOf("}", i + 1);
+        if (end > i && /,|\.\./.test(command.slice(i + 1, end))) {
+          expansionActive = true;
+        }
+      }
     }
     if (escaped || quote) return null;
     const body = command.slice(0, redirectStart < 0 ? command.length : redirectStart).trimEnd();
     const words = shellWords(body);
-    return words ? { words, body, redirect: redirectStart < 0 ? "" : command.slice(redirectStart) } : null;
+    return words
+      ? {
+          words,
+          body,
+          redirect: redirectStart < 0 ? "" : command.slice(redirectStart),
+          expansionActive,
+        }
+      : null;
   }
 
   function safeAttemptId(value: unknown): string | undefined {
@@ -398,6 +431,7 @@ export async function run(
     if (!directPrefix) return { status: "unrelated" };
     const parsed = simpleCommand(command);
     if (!parsed) return { status: "unsupported" };
+    if (parsed.expansionActive) return { status: "unrelated" };
     const words = parsed.words;
     let cursor = 0;
     let args: string[];
@@ -983,7 +1017,14 @@ export async function run(
           if (!sessionId) return 0;
           let claimed: ReturnType<typeof claimCopilotCommand>;
           try { claimed = claimCopilotCommand(projectDir, currentState(), command.claim); }
-          catch { process.stdout.write(denyJson(recoveryReason)); return 0; }
+          catch (error) {
+            const reason = error instanceof Error &&
+                error.name === "ActiveDirectiveLockContendedError"
+              ? "AI-DLC coordination is busy and no claim was committed. Retry this exact command and the same continuation token, when present."
+              : recoveryReason;
+            process.stdout.write(denyJson(reason));
+            return 0;
+          }
           if (!claimed.allowed) {
             const reason = claimed.reason === "resume"
               ? "A Resume choice is waiting or selected. The owner must report the human's choice; a foreign session may explicitly reissue it with `next --resume`. Bare `next` is denied."

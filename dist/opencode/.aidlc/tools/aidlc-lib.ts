@@ -2504,11 +2504,24 @@ function parseActiveDirectiveMarker(parsed: unknown): ActiveDirectiveMarker | nu
 }
 
 function readActiveDirectiveMarkerRaw(path: string): ActiveDirectiveMarker | null {
+  return readActiveDirectiveMarkerSnapshot(path).marker;
+}
+
+function readActiveDirectiveMarkerSnapshot(path: string): {
+  marker: ActiveDirectiveMarker | null;
+  bytesSha256: string | null;
+} {
   try {
-    if (statSync(path).size > ACTIVE_DIRECTIVE_MAX_BYTES) return null;
-    return parseActiveDirectiveMarker(JSON.parse(readFileSync(path, "utf-8")));
+    const bytes = readFileSync(path);
+    if (bytes.byteLength > ACTIVE_DIRECTIVE_MAX_BYTES) {
+      return { marker: null, bytesSha256: null };
+    }
+    return {
+      marker: parseActiveDirectiveMarker(JSON.parse(bytes.toString("utf-8"))),
+      bytesSha256: createHash("sha256").update(bytes).digest("hex"),
+    };
   } catch {
-    return null;
+    return { marker: null, bytesSha256: null };
   }
 }
 
@@ -2748,14 +2761,12 @@ export function readActiveDirectiveMarker(
 }
 
 export interface CopilotContinuationSnapshot {
-  target: ActiveDirectiveTarget; authority: "stateless" | "current" | "superseded"; stateSha256: string; statePresent: boolean; markerBytesSha256: string | null;
-}
-
-function markerBytesSha256(path: string): string | null {
-  try {
-    const bytes = readFileSync(path);
-    return bytes.byteLength > ACTIVE_DIRECTIVE_MAX_BYTES ? null : createHash("sha256").update(bytes).digest("hex");
-  } catch { return null; }
+  target: ActiveDirectiveTarget;
+  authority: "stateless" | "current" | "superseded";
+  stateSha256: string;
+  statePresent: boolean;
+  markerBytesSha256: string | null;
+  copilotInstalled: boolean;
 }
 
 function exactCopilotMarker(
@@ -2796,8 +2807,10 @@ export function inspectCopilotContinuation(
 ): CopilotContinuationSnapshot {
   const target = resolveActiveDirectiveTarget(projectDir);
   const context = activeDirectiveContext(target, stateContent);
-  const marker = readActiveDirectiveMarkerRaw(target.markerPath);
-  const exact = exactCopilotMarker(marker, target, context);
+  const markerSnapshot = readActiveDirectiveMarkerSnapshot(target.markerPath);
+  const marker = markerSnapshot.marker;
+  const copilotInstalled = installedHarnessName(target) === "copilot";
+  const exact = copilotInstalled && exactCopilotMarker(marker, target, context);
   const current = exact && marker.kind === "load-steering" &&
     marker.continue_token_sha256 === stateContentSha256(presentedToken);
   return {
@@ -2805,7 +2818,8 @@ export function inspectCopilotContinuation(
     authority: !exact ? "stateless" : current ? "current" : "superseded",
     stateSha256: context.stateSha256,
     statePresent: context.statePresent,
-    markerBytesSha256: markerBytesSha256(target.markerPath),
+    markerBytesSha256: markerSnapshot.bytesSha256,
+    copilotInstalled,
   };
 }
 
@@ -2835,7 +2849,7 @@ export function advanceCopilotContinuation(
       return { marker: current, result: "superseded" as const, preserve: true };
     }
     if (snapshot.authority === "stateless") {
-      if (markerBytesSha256(target.markerPath) !== snapshot.markerBytesSha256 && exactCopilotMarker(current, target, context)) {
+      if (readActiveDirectiveMarkerSnapshot(target.markerPath).bytesSha256 !== snapshot.markerBytesSha256 && exactCopilotMarker(current, target, context)) {
         return { marker: current, result: "drift" as const, preserve: true };
       }
       const base = current?.version === 2 && current.project_sha256 === context.projectSha256 && current.intent_uuid === context.intentUuid

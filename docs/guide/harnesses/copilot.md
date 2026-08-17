@@ -106,8 +106,10 @@ git checkout v2
 - **Command tracking is exact and best-effort.** AI-DLC tracks simple direct
   orchestrator, source-dispatcher, and real compiled `next`, `continue`,
   `report`, and `park` commands. One trailing `2>&1` is supported. Inspection
-  commands are not classified from `aidlc` substrings, ambiguous wrappers run
-  unchanged and untracked, and direct-looking compounds are refused. An
+  commands are not classified from `aidlc` substrings; ambiguous wrappers and
+  commands whose arguments contain active shell expansion (`$VAR`, globs,
+  brace expansion, or a leading `~`) run unchanged and untracked, because the hook cannot hash the
+  argv the shell will eventually produce. Direct-looking compounds are refused. An
   explicit `--project-dir` outside the current physical project is refused
   before current-project coordination is written.
 - **The engine owns continuation replay.** For an exact-context,
@@ -118,7 +120,11 @@ git checkout v2
   winner. Missing, malformed, v1, stale, and `sessionless:` markers retain the
   existing stateless behavior. Replacing Copilot with another harness also
   restores that harness's stateless behavior even if an old Copilot marker is
-  still present.
+  still present. On a stable non-Copilot installation, a contended marker
+  publication cannot deny a revalidated stateless continuation: the engine
+  returns the prepared directive and records the dropped best-effort marker
+  update instead. Replacing an installed harness while one of its commands is
+  executing is not a supported upgrade path.
 - **Stop preserves the current delivered Copilot directive.** An exact host
   `tool_use_id`, or the adapter ID carried through rewritten engine input and
   returned by PostToolUse, can settle delivery for session-scoped Stop and

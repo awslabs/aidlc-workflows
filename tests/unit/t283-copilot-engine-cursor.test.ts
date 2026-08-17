@@ -117,10 +117,25 @@ describe("t283 Copilot-owned engine continuation cursor", () => {
     makeCopilotOwned(proj);
     const token = first.continue_token ?? "";
     installHarness(proj, "opencode");
+    const before = readFileSync(markerPath(proj), "utf-8");
+    const lockDir = join(seededRecordDir(proj), ".aidlc-active-directive.lock");
+    const lockToken = randomUUID();
+    mkdirSync(join(lockDir, lockToken), { recursive: true });
+    writeFileSync(
+      join(lockDir, "owner.json"),
+      JSON.stringify({
+        pid: process.pid,
+        startedAtMs: Math.floor(performance.timeOrigin + performance.now()),
+        reapLiveOwnerAfterStale: true,
+        token: lockToken,
+      }),
+    );
     const once = invoke(proj, "continue", token).directive;
     const twice = invoke(proj, "continue", token).directive;
     expect(once.kind).not.toBe("error");
     expect(twice).toEqual(once);
+    expect(readFileSync(markerPath(proj), "utf-8")).toBe(before);
+    expect(existsSync(lockDir)).toBe(true);
   }, 30000);
 
   test("fresh Copilot next emits no work directive when cursor reset publication contends", () => {
@@ -160,6 +175,25 @@ describe("t283 Copilot-owned engine continuation cursor", () => {
       expect(continued.kind, shape).not.toBe("error");
     }
   }, 30000);
+
+  test("a Copilot sessionless marker keeps the existing stateless replay behavior", () => {
+    const proj = project();
+    const first = invoke(proj, "next").directive;
+    expect(first.kind).toBe("load-steering");
+    expect(String(marker(proj).owner_session)).toStartWith("sessionless:");
+    const once = invoke(
+      proj,
+      "continue",
+      first.continue_token ?? "",
+    ).directive;
+    const twice = invoke(
+      proj,
+      "continue",
+      first.continue_token ?? "",
+    ).directive;
+    expect(once.kind).not.toBe("error");
+    expect(twice).toEqual(once);
+  }, 10000);
 
   test("a real dead lock owner is reclaimed while the canonical marker stays readable", async () => {
     const proj = project();

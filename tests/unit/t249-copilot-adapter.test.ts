@@ -1961,6 +1961,10 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       'echo "aidlc next"',
       "echo unrelated",
       "git status",
+      'aidlc next --scope "$SCOPE"',
+      "aidlc next src/*.ts",
+      "aidlc next ~/scope",
+      "aidlc next src/{a,b}.ts",
     ]) {
       const allowed = runAdapter(dir, "guard-tool-call", commandPayload(dir, "wrapper-owner", command, command));
       expect(allowed.code, command).toBe(0);
@@ -1998,6 +2002,24 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     runAdapter(dir, "post-tool", commandPayload(dir, "redirect-owner", rewritten, "redirect-attempt", true, executed.stdout));
     expect(marker(dir)).toMatchObject({ delivery: "delivered", active_attempt: { id: "redirect-attempt" } });
 
+    for (const [command, attempt] of [
+      ["aidlc next --scope '`literal`'", "literal-backtick-attempt"],
+      ["aidlc next --scope 'src/{a,b}.ts'", "literal-brace-attempt"],
+      ["aidlc next --scope src/\\{a,b\\}.ts", "escaped-brace-attempt"],
+    ]) {
+      const literal = runAdapter(
+        dir,
+        "guard-tool-call",
+        commandPayload(dir, "literal-owner", command, attempt),
+      );
+      expect(literal.stdout, command).not.toContain('"permissionDecision":"deny"');
+      expect(
+        (JSON.parse(literal.stdout) as { modifiedArgs?: { command?: string } })
+          .modifiedArgs?.command,
+        command,
+      ).toContain(`--aidlc-attempt-id ${attempt}`);
+    }
+
     const directCore = spawnSync(process.execPath, [join(dir, ".aidlc", "hooks", "aidlc-continue-workflow.ts")], {
       cwd: dir,
       input: JSON.stringify({ session_id: "plain-non-copilot", stop_hook_active: false }),
@@ -2006,6 +2028,35 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     });
     expect((JSON.parse(directCore.stdout) as { decision?: string }).decision).toBe("block");
   }, 30000);
+
+  test("25b: claim lock contention tells the caller to retry the exact command", () => {
+    const dir = orchestrationProject();
+    const lockDir = join(
+      seededRecordDir(dir),
+      ".aidlc-active-directive.lock",
+    );
+    const lockToken = "live-claim-owner";
+    mkdirSync(join(lockDir, lockToken), { recursive: true });
+    writeFileSync(
+      join(lockDir, "owner.json"),
+      JSON.stringify({
+        pid: process.pid,
+        startedAtMs: Math.floor(performance.timeOrigin + performance.now()),
+        reapLiveOwnerAfterStale: true,
+        token: lockToken,
+      }),
+    );
+
+    const blocked = runAdapter(
+      dir,
+      "guard-tool-call",
+      commandPayload(dir, "contention-owner", "aidlc next", "contention-attempt"),
+    );
+    expect(blocked.stdout).toContain('"permissionDecision":"deny"');
+    expect(blocked.stdout).toContain("Retry this exact command");
+    expect(blocked.stdout).not.toContain("Run a fresh");
+    expect(blocked.stdout).not.toContain("do not reuse");
+  });
 
   test("26: direct and source foreign projects are denied before claim or Post can mutate either marker", () => {
     const current = orchestrationProject();

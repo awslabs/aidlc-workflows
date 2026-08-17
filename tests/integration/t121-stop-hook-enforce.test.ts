@@ -111,7 +111,9 @@ const BUN = process.execPath; // the bun running this test (mirrors t104)
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const HOOK_TS = join(
   REPO_ROOT,
-  "core",
+  "dist",
+  "claude",
+  ".claude",
   "hooks",
   "aidlc-continue-workflow.ts",
 );
@@ -729,6 +731,7 @@ function runHook(
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
     CLAUDE_PROJECT_DIR: proj,
+    AIDLC_HARNESS_DIR: ".claude",
     MOCK_KIND: kind,
     MOCK_UNIT: unit,
     MOCK_STAGE: stage,
@@ -744,6 +747,7 @@ function runHook(
   const res = spawnSync(BUN, [HOOK_TS], {
     input: payload,
     encoding: "utf-8",
+    cwd: proj,
     env,
     timeout: 20_000,
   });
