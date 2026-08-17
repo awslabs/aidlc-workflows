@@ -957,7 +957,7 @@ omits the reviewer block entirely and the stage runs reviewless.
    the reviewer tries to refute the artifact rather than confirm it, grounding
    findings in machine-checkable evidence where it exists (READY is the verdict
    it fails to reach, not the default). An `advisory` review keeps the
-   evidence-grounding rule but is a single decision-support pass: findings are
+   evidence-grounding rule but is a single normal-flow decision-support pass: findings are
    ranked by severity for the human at the gate, with no repair loop behind
    them. Either way the reviewer reads the definition, Q&A, and artifacts, runs
    any listed validation tools, and appends exactly ONE `## Review` section to
@@ -971,7 +971,7 @@ omits the reviewer block entirely and the stage runs reviewless.
    review). Codex TOML personas, Cursor, Copilot, and Kiro CLI/IDE expose no
    per-agent cap key, so there the budget is persona prose only (the personas'
    `## Turn Budget` section plans for the worst-case cutoff on every harness).
-3. **Verdict.** On `advisory`, both verdicts are terminal: the workflow proceeds
+3. **Verdict.** On `advisory`, both verdicts are terminal in normal flow: the workflow proceeds
    to the learnings ritual and the gate, where the findings are quoted verbatim
    for the human to triage (`reviewer_max_iterations` is 1, engine-enforced).
    On `adversarial`: READY → proceed to the learnings ritual then the gate.
@@ -986,7 +986,7 @@ omits the reviewer block entirely and the stage runs reviewless.
    for it), a section without a canonical verdict line, or duplicated
    sections/verdicts is an INCOMPLETE attempt: the conductor retries the same
    unmatched request once with `--retry-pending` (no iteration consumed - an
-   advisory budget is exactly one pass, so a counted cut-off would exhaust it
+   advisory normal-flow budget is exactly one pass, so a counted cut-off would exhaust it
    without any review happening), and a second incomplete attempt records the
    terminal receipt `--verdict NOT-READY` with the finding "review did not
    complete within its turn budget" - the gate is reached with a concrete
@@ -1002,7 +1002,13 @@ omits the reviewer block entirely and the stage runs reviewless.
 
 The iteration budget is engine-enforced: `aidlc-log.ts review` refuses a
 `REVIEW_REQUESTED` whose `--iteration` exceeds the stage's effective budget, so
-a conductor that loses count cannot run unbounded review passes. The reviewer
+a conductor that loses count cannot run unbounded review passes. The only
+exception is a terminal receipt invalidated by a later `produces[]` write: the
+first request after stale evidence is exactly one marked recovery request at
+the next ordinal, even when normal adversarial budget remained. Either
+recovery verdict is terminal; a second invalidation requires human reset
+instead of another request. Autonomous Units halt before `finalize` and
+restart their Bolt attempt only after a human decision. The reviewer
 never blocks — the human always has final say at the gate — and does not fire
 for stages without a `reviewer` field. See the `reviewer` /
 `reviewer_max_iterations` / `review_class` frontmatter fields in
@@ -1015,7 +1021,8 @@ request command with `--retry-pending` before dispatching again - at most once
 per request; a second incomplete attempt records the terminal `NOT-READY`
 receipt instead. The logger accepts this recovery only for the same unmatched
 request, records `Retry: pending-request`, and does not consume another
-iteration. A completed request cannot be retried.
+iteration. A completed request cannot be retried; stale-receipt recovery is a
+distinct request at the next ordinal.
 
 ---
 

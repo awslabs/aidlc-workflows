@@ -1,7 +1,7 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
-## [2.6.9] - 2026-08-16
+## [2.6.10] - 2026-08-17
 
 Adds `dist/kiro-unified/` — a Kiro distribution aligned to the **unified agent harness**, the runtime Kiro IDE 1.x and Kiro CLI v3 (`kiro-cli --v3`) share. Both surfaces resolve an agent from its Markdown definition (persona body, `tools:`, `resources:` and `permissions:` in one file) and execute the standalone `.kiro/hooks/aidlc-*.json` manifests, so this tree carries no agent-v1 JSON and no legacy `.kiro.hook` files. The existing `dist/kiro-ide/` and `dist/kiro/` trees are unchanged and remain the install for older IDE builds and for Kiro CLI 2.x respectively; `README.md` § Pick your harness now says which runtime takes which tree. No stage, artifact, or state-schema change. **Upgrade:** nothing to do unless you run Kiro IDE 1.x or `kiro-cli --v3` and want the aligned shell — installing it is a fresh `cp` of `dist/kiro-unified/` into the project, not a layer over an existing `.kiro/` from another Kiro tree.
 
@@ -14,6 +14,16 @@ Adds `dist/kiro-unified/` — a Kiro distribution aligned to the **unified agent
 * `loadAgents()` skips `agents/aidlc.md`. A conductor entry is not a stage lead/support agent: it declares `name` only, so it would fail the persona frontmatter contract, and it must stay out of the roster that backs stage `lead_agent` validation. A no-op for every tree that ships no `agents/aidlc.md`.
 * New chapter [AI-DLC on the Kiro unified agent harness](docs/guide/harnesses/kiro-unified.md) — prerequisites (including the `--v3` opt-in), install, which Kiro tree to pick, and what differs, including which hooks ship unregistered and why.
 * The unified tree's adapter validates untrusted nested payload values before reading them — each `stages[]` member on the plan-approval target and each `operations[]` member on review-freeze. A malformed member (`stages: [null]`) previously threw, and since a non-zero PreToolUse exit blocks on this runtime, that turned bad input into a hard block on every subagent dispatch with a stack trace as the reason. Malformed members are dropped, which lands on the fail-open the core guard already commits to for malformed stdin; a well-formed developer stage beside them still refuses.
+
+## [2.6.9] - 2026-08-17
+
+Review receipt invalidation is now recoverable without weakening normal review budgets. When a terminal receipt is voided by a later write to a declared artifact, the review logger permits one deterministic recovery pass at the next ordinal and reports stale, retry, and recovery-spent states directly instead of sending the conductor through the circular guidance seen in #755 and #742. **Upgrade:** refresh `dist/<harness>/` in your project.
+
+* A terminal receipt invalidated by a later `produces[]` write gets exactly one marked recovery request at the next ordinal, including advisory stages and adversarial stages with unused normal iterations; either recovery verdict is terminal.
+* Per-Unit waves expose `recovery-required` with the exact next ordinal and `escalation-required` after recovery is spent, while mixed stale/never-reviewed completion refusals now give both groups an actionable remedy.
+* Retry and recovery-spent refusals no longer contradict each other. Interactive attempts, including autonomous inline waves after recovery is spent, reset only after a human Request Changes decision; autonomous Bolt Units halt before `finalize` and use a human-approved restart instead of waiting for an unreachable post-merge gate.
+* Intact receipts retain their existing advisory normal-flow and adversarial iteration budgets; ordinary over-budget requests are still refused.
+
 
 ## [2.6.8] - 2026-08-15
 

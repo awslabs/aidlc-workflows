@@ -543,11 +543,11 @@ reviews run for the active workflow.
 **Behavior:** Each reviewer-bearing stage declares a review class in its
 frontmatter — `adversarial` (the reviewer refutes the artifact and the lead
 fixes findings across up to `reviewer_max_iterations` passes) or `advisory`
-(one review pass; findings are quoted verbatim at the approval gate for you to
-triage). The effective class per stage is the LOWEST of the stage's
+(one normal-flow review pass; findings are quoted verbatim at the approval gate
+for you to triage). The effective class per stage is the LOWEST of the stage's
 declaration, the scope's `review_cap` (bugfix, poc, and workshop cap to
 `advisory`), and this override — so `--review advisory` turns every remaining
-adversarial loop into a single decision-support pass, `--review none` skips
+adversarial loop into a single normal-flow decision-support pass, `--review none` skips
 reviewer dispatch entirely, and `--review adversarial` clears the override
 (it cannot raise a class above the stage declaration or the scope cap).
 Autonomous swarm construction is exempt: inside a Bolt the reviewer is the
@@ -555,14 +555,16 @@ only pre-merge verification, so the declared class always applies there.
 Updates the `Review Override` field in `aidlc-state.md` and logs a
 `REVIEW_CLASS_CHANGED` audit event. It can be supplied when a workflow is
 born or alongside `--scope`; a same-as-current scope applies the review
-override as a config change instead of discarding it.
+override as a config change instead of discarding it. For either class, a later
+output write that invalidates a terminal receipt permits one bounded recovery
+request at the next ordinal.
 
 **Valid values:** `adversarial`, `advisory`, `none` (case-insensitive).
 
 **Examples:**
 
 ```
-/aidlc --review advisory              Single-pass reviews, findings at the gate
+/aidlc --review advisory              Single normal-flow pass, findings at the gate
 /aidlc --review none                  No stage reviews this run
 /aidlc --review adversarial           Clear the override (stage defaults apply)
 ```

@@ -3368,6 +3368,11 @@ export interface PendingReviewProgress {
   iteration: number;
 }
 
+export interface StaleReviewProgress {
+  nextIteration: number;
+  recoverySpent: boolean;
+}
+
 export interface FreshReviewReceipts {
   /** Verdict of the last fresh terminal receipt for the stage (any receipt,
    *  unit-scoped included), or null when none survives. For NON-per-unit
@@ -3376,10 +3381,19 @@ export interface FreshReviewReceipts {
    *  writes (only the floor resets it) - per-unit freshness lives in
    *  unitVerdicts. */
   stageVerdict: ReviewVerdict | null;
+  /** A terminal stage-level receipt existed in the current attempt but was
+   *  invalidated by a later declared-artifact write or fingerprint mismatch. */
+  stageStale: boolean;
   /** Last fresh verdict per unit. A later write to that unit's declared
    *  artifacts deletes the entry; an ambiguous matching path fails closed by
    *  clearing every unit entry. */
   unitVerdicts: Map<string, ReviewVerdict>;
+  /** Units whose terminal receipt was invalidated in the current attempt. */
+  unitStale: Set<string>;
+  /** Next request ordinal and recovery availability for a stale stage receipt. */
+  stageStaleProgress: StaleReviewProgress | null;
+  /** Next request ordinal and recovery availability for stale unit receipts. */
+  unitStaleProgress: Map<string, StaleReviewProgress>;
   stageIteration: number | null;
   unitIterations: Map<string, number>;
   stagePending: PendingReviewProgress | null;
@@ -3581,7 +3595,11 @@ export function freshReviewReceipts(
 ): FreshReviewReceipts {
   const empty: FreshReviewReceipts = {
     stageVerdict: null,
+    stageStale: false,
     unitVerdicts: new Map(),
+    unitStale: new Set(),
+    stageStaleProgress: null,
+    unitStaleProgress: new Map(),
     stageIteration: null,
     unitIterations: new Map(),
     stagePending: null,
@@ -3641,14 +3659,20 @@ export function freshReviewReceipts(
   // an ambiguous matching path fails closed by clearing every unit receipt.
   const recordedRepos = new Set(intentRepos(projectDir));
   const unitVerdicts = new Map<string, ReviewVerdict>();
+  const unitStale = new Set<string>();
+  const unitStaleProgress = new Map<string, StaleReviewProgress>();
   const unitIterations = new Map<string, number>();
+  const unitReceiptRecovery = new Map<string, boolean>();
   const unitPending = new Map<string, PendingReviewProgress>();
   const pendingRequests = new Map<
     string,
-    { unit: string | undefined; iteration: number }
+    { unit: string | undefined; iteration: number; recovery: boolean }
   >();
   let stageVerdict: ReviewVerdict | null = null;
+  let stageStale = false;
+  let stageStaleProgress: StaleReviewProgress | null = null;
   let stageIteration: number | null = null;
+  let stageReceiptRecovery = false;
   let stagePending: PendingReviewProgress | null = null;
   for (let i = floorIdx + 1; i < events.length; i++) {
     const e = events[i];
@@ -3658,14 +3682,37 @@ export function freshReviewReceipts(
       const targetUnit = producesArtifactUnit(stage, file, recordedRepos);
       if (targetUnit === undefined) continue;
       if (!perUnit) {
+        if (stageVerdict !== null) {
+          stageStale = true;
+          stageStaleProgress = {
+            nextIteration: (stageIteration ?? 0) + 1,
+            recoverySpent: stageReceiptRecovery,
+          };
+        }
         stageVerdict = null;
         stageIteration = null;
+        stageReceiptRecovery = false;
       } else if (targetUnit === null) {
+        for (const unit of unitVerdicts.keys()) {
+          unitStale.add(unit);
+          unitStaleProgress.set(unit, {
+            nextIteration: (unitIterations.get(unit) ?? 0) + 1,
+            recoverySpent: unitReceiptRecovery.get(unit) ?? false,
+          });
+        }
         unitVerdicts.clear();
         unitIterations.clear();
+        unitReceiptRecovery.clear();
       } else {
-        unitVerdicts.delete(targetUnit);
+        if (unitVerdicts.delete(targetUnit)) {
+          unitStale.add(targetUnit);
+          unitStaleProgress.set(targetUnit, {
+            nextIteration: (unitIterations.get(targetUnit) ?? 0) + 1,
+            recoverySpent: unitReceiptRecovery.get(targetUnit) ?? false,
+          });
+        }
         unitIterations.delete(targetUnit);
+        unitReceiptRecovery.delete(targetUnit);
       }
       continue;
     }
@@ -3684,12 +3731,20 @@ export function freshReviewReceipts(
     const unit = auditBlockField(e.block, "Unit") || undefined;
     const requestKey = `${unit ?? ""}\u0000${iterationField}`;
     if (e.event === "REVIEW_REQUESTED") {
-      pendingRequests.set(requestKey, { unit, iteration });
+      const previous = pendingRequests.get(requestKey);
+      pendingRequests.set(requestKey, {
+        unit,
+        iteration,
+        recovery:
+          previous?.recovery === true ||
+          auditBlockField(e.block, "Recovery") === "stale-receipt",
+      });
       continue;
     }
     const verdict = auditBlockField(e.block, "Verdict");
     if (verdict !== "READY" && verdict !== "NOT-READY") continue;
-    if (!pendingRequests.delete(requestKey)) continue;
+    const request = pendingRequests.get(requestKey);
+    if (!request || !pendingRequests.delete(requestKey)) continue;
     const recordedFingerprint = auditBlockField(e.block, "Artifact Fingerprint");
     const currentFingerprint = reviewArtifactFingerprint(
       projectDir,
@@ -3703,12 +3758,14 @@ export function freshReviewReceipts(
       currentFingerprint !== null;
     const fingerprintMatches =
       fingerprintUsable && recordedFingerprint === currentFingerprint;
-    const terminalVerdict = terminalReviewVerdict(
-      verdict,
-      iterationField,
-      reviewClass,
-      maxIterations,
-    );
+    const terminalVerdict = request.recovery
+      ? verdict
+      : terminalReviewVerdict(
+          verdict,
+          iterationField,
+          reviewClass,
+          maxIterations,
+        );
     if (terminalVerdict === null) {
       if (verdict !== "NOT-READY" || !fingerprintUsable) continue;
       const pending: PendingReviewProgress = fingerprintMatches
@@ -3724,14 +3781,38 @@ export function freshReviewReceipts(
       }
       continue;
     }
-    if (!fingerprintMatches) continue;
+    if (!fingerprintMatches) {
+      if (fingerprintUsable) {
+        if (unit) {
+          unitStale.add(unit);
+          unitStaleProgress.set(unit, {
+            nextIteration: iteration + 1,
+            recoverySpent: request.recovery,
+          });
+        } else {
+          stageStale = true;
+          stageStaleProgress = {
+            nextIteration: iteration + 1,
+            recoverySpent: request.recovery,
+          };
+        }
+      }
+      continue;
+    }
     stageVerdict = terminalVerdict;
     stageIteration = iteration;
+    stageReceiptRecovery = request.recovery;
     stagePending = null;
     if (unit) {
       unitVerdicts.set(unit, terminalVerdict);
+      unitStale.delete(unit);
+      unitStaleProgress.delete(unit);
       unitIterations.set(unit, iteration);
+      unitReceiptRecovery.set(unit, request.recovery);
       unitPending.delete(unit);
+    } else {
+      stageStale = false;
+      stageStaleProgress = null;
     }
   }
 
@@ -3752,7 +3833,11 @@ export function freshReviewReceipts(
 
   return {
     stageVerdict,
+    stageStale,
     unitVerdicts,
+    unitStale,
+    stageStaleProgress,
+    unitStaleProgress,
     stageIteration,
     unitIterations,
     stagePending,
