@@ -315,9 +315,14 @@ AIDLC_PLUGIN_ROOT="<plugin-root>" AIDLC_PROJECT_DIR="<project>" \
 # open in Kiro IDE or kiro-cli chat → /aidlc
 ```
 
-> **Kiro note.** The emitted `.kiro.hook` still depends on host support for
-> plugin-root env vars. Use `aidlc plugin sync` with `AIDLC_PLUGIN_ROOT` when the binary is available, or
-> the explicit `bun compose.ts` invocation above as the fallback.
+> **Kiro note.** On Kiro the **explicit `bun compose.ts` invocation above is the
+> mechanism** — the documented folder-drop lands the emitted compose manifest at
+> the project root, not in `.kiro/hooks/`, so it does not wire itself. The manifest
+> form differs per tree: a legacy `.kiro.hook` for `dist/kiro` and
+> `dist/kiro-ide`, a standalone `hooks/*.json` manifest for `dist/kiro-unified`,
+> whose runtime reads only that schema. Either form also depends on host support
+> for plugin-root env vars, so use `aidlc plugin sync` with `AIDLC_PLUGIN_ROOT`
+> when the binary is available.
 
 ### Trust
 

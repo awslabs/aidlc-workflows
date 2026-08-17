@@ -1421,13 +1421,20 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
       const hooksDir = join(projectDir, harness, "hooks");
       let manifests: string[] = [];
       try {
-        manifests = readdirSync(hooksDir).filter((f) => f.endsWith(".json")).sort();
+        // Count the framework's OWN manifests, not every `.json` in the dir. An
+        // unrelated `.json` a project drops next to them would otherwise carry
+        // this row green with all twelve AIDLC manifests deleted, and the second
+        // row is vacuous when there is nothing of ours to resolve. `aidlc-*` is
+        // the exact set this row's own fix string names.
+        manifests = readdirSync(hooksDir)
+          .filter((f) => f.startsWith("aidlc-") && f.endsWith(".json"))
+          .sort();
       } catch {
         // hooks/ missing entirely — the zero-manifest row states it.
       }
       results.push({
         pass: manifests.length > 0,
-        label: `Hook contract: ${manifests.length} standalone hooks/*.json manifest(s) wired (Markdown conductor)`,
+        label: `Hook contract: ${manifests.length} standalone hooks/aidlc-*.json manifest(s) wired (Markdown conductor)`,
         fix: "restore the hook manifests (copy `dist/kiro-unified/.kiro/hooks/aidlc-*.json`)",
       });
       // Scan the dispatched command ONLY, and only for a hooks/ path: a hook's

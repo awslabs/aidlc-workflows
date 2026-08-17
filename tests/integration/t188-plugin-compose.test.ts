@@ -1649,6 +1649,103 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(drops).not.toContain("aidlc-design-agent.json (agent-v1 JSON)");
   });
 
+  // Two Kiro conductor forms share the .kiro leaf, and the cases above only
+  // exercise the agent-v1 JSON one. The unified Markdown form (IDE 1.x + CLI
+  // --v3) has NO trust field at all, so validating against
+  // toolsSettings.subagent.trustedAgents there rejects every dispatch — plugin
+  // support silently inert on that tree. Both directions are pinned: a dispatch
+  // that must compose, and one that must still drop with a Markdown-shaped
+  // remediation. The fixture is the shipped JSON tree with its conductor swapped
+  // to the Markdown form, which is the mode flip the runtime detects.
+  function markdownConductor(_proj: string, harnessDir: string): void {
+    rmSync(join(harnessDir, "agents", "aidlc.json"));
+    cpSync(
+      join(REPO_ROOT, "dist", "kiro-unified", ".kiro", "agents", "aidlc.md"),
+      join(harnessDir, "agents", "aidlc.md"),
+    );
+  }
+
+  function kiroMobStage(plugin: string, slug: string): string {
+    return [
+      "---",
+      `slug: ${slug}`,
+      `plugin: ${plugin}`,
+      "phase: inception",
+      "execution: ALWAYS",
+      "condition: always",
+      "lead_agent: aidlc-product-agent",
+      "support_agents:",
+      "  - aidlc-design-agent",
+      "mode: mob",
+      "produces: []",
+      "consumes: []",
+      "requires_stage: []",
+      "inputs: x",
+      "outputs: y",
+      "---",
+      "",
+      `# Synthetic ${slug}`,
+      "",
+    ].join("\n");
+  }
+
+  test("Kiro's Markdown conductor composes a dispatch with no trust field", () => {
+    const { drops, proj } = composeSynthetic(
+      "syn-kiro-md-trust",
+      {
+        "stages/inception/syn-kiro-md-trust-mob.md": kiroMobStage(
+          "syn-kiro-md-trust",
+          "syn-kiro-md-trust-mob",
+        ),
+      },
+      ".kiro",
+      markdownConductor,
+    );
+
+    expect(existsSync(join(
+      proj,
+      ".kiro",
+      "aidlc-common",
+      "stages",
+      "inception",
+      "syn-kiro-md-trust-mob.md",
+    ))).toBe(true);
+    expect(drops).not.toContain("toolsSettings.subagent.trustedAgents");
+    expect(drops).not.toContain('agent "aidlc-design-agent"');
+  });
+
+  test("Kiro's Markdown conductor still drops a missing .md surface, and says .md", () => {
+    const { drops, proj } = composeSynthetic(
+      "syn-kiro-md-surface",
+      {
+        "stages/inception/syn-kiro-md-surface-mob.md": kiroMobStage(
+          "syn-kiro-md-surface",
+          "syn-kiro-md-surface-mob",
+        ),
+      },
+      ".kiro",
+      (p, harnessDir) => {
+        markdownConductor(p, harnessDir);
+        // Remove BOTH forms so the dispatch target genuinely has no surface.
+        rmSync(join(harnessDir, "agents", "aidlc-design-agent.md"));
+        rmSync(join(harnessDir, "agents", "aidlc-design-agent.json"));
+      },
+    );
+
+    expect(existsSync(join(
+      proj,
+      ".kiro",
+      "aidlc-common",
+      "stages",
+      "inception",
+      "syn-kiro-md-surface-mob.md",
+    ))).toBe(false);
+    expect(drops).toContain('agent "aidlc-design-agent"');
+    expect(drops).toContain("agents/aidlc-design-agent.md");
+    expect(drops).not.toContain("agent-v1 JSON");
+    expect(drops).not.toContain("toolsSettings.subagent.trustedAgents");
+  });
+
   // OpenCode dispatches from the native roster .opencode/agents/<a>.md. A
   // dispatched stage naming an agent with no native file AND no viable plugin
   // twin must drop (the native emitter would leave a dangling dispatch target);

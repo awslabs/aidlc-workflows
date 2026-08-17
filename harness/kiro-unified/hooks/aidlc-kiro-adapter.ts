@@ -577,8 +577,23 @@ if (target === "plan-approval-guard") {
   // rather than the primary path; but a guard that silently no-ops on a shape
   // the runtime might deliver is worse than a redundant branch, and the whole
   // point of this hook is that it must not be bypassable.
+  // Validate each element before reading it. `stages` is untrusted runtime
+  // input, so a non-object member (`stages: [null]`) must not throw here: this
+  // hook's non-zero exit is documented as BLOCKING, so a crash would turn a
+  // malformed payload into a hard block on every subagent dispatch, with a
+  // stack trace as the reason. Elements that are not an object with a string
+  // `role` are dropped, which lands on the same outcome the core guard already
+  // commits to for malformed stdin - it fails open (`return 0`) rather than
+  // guessing - because an empty `devStages` leaves `subagent_type` empty and the
+  // core body returns early at its `subagent_type !== "aidlc-developer-agent"`
+  // check. A malformed member never widens or narrows the guard.
   const crewStages = Array.isArray(ti.stages)
-    ? (ti.stages as Array<{ role?: string; prompt_template?: string }>)
+    ? (ti.stages as unknown[]).filter(
+        (s): s is { role: string; prompt_template?: unknown } =>
+          typeof s === "object" &&
+          s !== null &&
+          typeof (s as { role?: unknown }).role === "string",
+      )
     : [];
   const devStages = crewStages.filter(
     (s) => s.role === "aidlc-developer-agent",
@@ -589,7 +604,9 @@ if (target === "plan-approval-guard") {
   // the harness/kiro adapter does.
   const crewPrompt = [
     (ti.task as string) ?? "",
-    ...devStages.map((s) => s.prompt_template ?? ""),
+    ...devStages.map((s) =>
+      typeof s.prompt_template === "string" ? s.prompt_template : "",
+    ),
   ]
     .filter((t) => t.length > 0)
     .join("\n");
