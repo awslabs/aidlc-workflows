@@ -20,7 +20,7 @@
 // a `t-tui-*` name would wrongly SKIP this CDP/no-tmux test on every tmux-less box.
 // The `t-ide-` prefix runs it in the first/non-TUI band, the same way
 // `t-exec-codex-*` and `t-acp-kiro-*` dodge the gate. `.serial.` pins it serial
-// (run-tests.ts:596) so one Kiro.app + one debug port run alone.
+// (run-tests.ts:596) so one Kiro desktop app + one debug port run alone.
 //
 // LIVE: uses real Kiro IDE (Bedrock credits). Gated behind AIDLC_KIRO_IDE_LIVE=1,
 // which does NOT auto-default (only AIDLC_TUI_LIVE self-defaults, run-tests.ts:
@@ -30,13 +30,11 @@
 //
 // SEED-PROFILE (RESOLVED, the seed spike under the private tmp working area): a fresh
 // Kiro user-data-dir hits the "Import configuration" onboarding wall and never reaches
-// chat. The skip is ONE global-state flag (kiroAgent.onboarding.onboardingCompleted);
-// auth is machine-level (NOT in the profile), so a usable seed needs ZERO credentials.
-// We therefore GENERATE a minimal seed from constants at setup (generateKiroIdeSeed) -
-// nothing sensitive is copied or committed. AIDLC_KIRO_IDE_SEED may still point at a
-// developer-supplied user-data-dir to override; absent, the generated seed is used. The
-// only remaining gate is a signed-in Kiro.app on a macOS box (the AIDLC_KIRO_IDE_LIVE
-// gate already implies that), so this no longer needs a hand-built profile.
+// chat. The skip is ONE global-state flag (kiroAgent.onboarding.onboardingCompleted).
+// The generated seed contains ZERO credentials; a signed-in Kiro host remains required.
+// We GENERATE the minimal seed from constants at setup (generateKiroIdeSeed), so nothing
+// sensitive is copied or committed. AIDLC_KIRO_IDE_SEED may still point at a
+// developer-supplied user-data-dir to override; absent, the generated seed is used.
 //
 // SHAPE OF THE REPRO (constructed, not organic): the fault is intermittent and
 // emerges deep into a long session; a deterministic test cannot reproduce the
@@ -110,11 +108,20 @@ function skipReason(): string | null {
   if (process.env.AIDLC_KIRO_IDE_LIVE !== "1") {
     return "set AIDLC_KIRO_IDE_LIVE=1 to run the live Kiro IDE journey (uses Kiro credits)";
   }
-  if (platform() !== "darwin") {
-    return "Kiro IDE driving is macOS-only (launches /Applications/Kiro.app)";
+  if (platform() !== "darwin" && platform() !== "win32") {
+    return (
+      "Kiro IDE driving requires macOS " +
+      "(/Applications/Kiro.app/Contents/MacOS/Electron) or Windows " +
+      "(%LOCALAPPDATA%\\Programs\\Kiro\\Kiro.exe)"
+    );
   }
   if (!existsSync(KIRO_IDE_BIN)) {
-    return `Kiro.app not found at ${KIRO_IDE_BIN} (override with AIDLC_KIRO_IDE_BIN)`;
+    return (
+      `Kiro IDE binary not found at ${KIRO_IDE_BIN}; expected ` +
+      "/Applications/Kiro.app/Contents/MacOS/Electron on macOS or " +
+      "%LOCALAPPDATA%\\Programs\\Kiro\\Kiro.exe on Windows " +
+      "(override with AIDLC_KIRO_IDE_BIN)"
+    );
   }
   if (SEED_OVERRIDE && !existsSync(SEED_OVERRIDE)) {
     return `AIDLC_KIRO_IDE_SEED set but path does not exist: ${SEED_OVERRIDE}`;
@@ -313,4 +320,3 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
     TEST_TIMEOUT_MS,
   );
 });
-

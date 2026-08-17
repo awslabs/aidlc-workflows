@@ -15,8 +15,8 @@ For the full test strategy, levels, fixtures, and assertion guidelines, see [doc
 ## Prerequisites / running the suite
 
 Different levels need different substrate. The deterministic levels (smoke,
-unit, and the non-live integration files) need only `bun`; the live journeys add
-`tmux`, the `claude` CLI, and AWS/Bedrock credentials.
+unit, and the non-live integration files) need only `bun`; live journeys add
+harness-specific CLIs or apps plus their credentials.
 
 | Dependency | Needed for | Notes |
 |------------|-----------|-------|
@@ -24,12 +24,13 @@ unit, and the non-live integration files) need only `bun`; the live journeys add
 | **`tmux`** | `e2e` live TUI journeys (macOS/Linux) | The `tui-drive.ts` backend drives a real `claude` TUI through a tmux pane. Absent → the live tui tests SKIP with a reason. (On Windows the driver uses a node-pty backend instead — see the Windows runbook.) |
 | **`claude` CLI + AWS/Bedrock creds** | live `integration` + `e2e` files | The SDK/tui drivers spend real Bedrock tokens. The runner's preflight (`tests/integration/t19.test.ts`) gates the live tiers; without the substrate, live files SKIP per-file rather than fail. |
 | **`AIDLC_TUI_LIVE=1`** | the token-spending live TUI journeys | A bare `--e2e` SKIPs them; `--all --debug` sets it by default. Set `AIDLC_TUI_LIVE=0` to force the SKIP path. |
+| **Kiro IDE + `AIDLC_KIRO_IDE_LIVE=1`** | `t-ide-kiro-*` live desktop journeys (macOS/Windows) | Requires a signed-in Kiro IDE. The default binary is `/Applications/Kiro.app/Contents/MacOS/Electron` on macOS and `%LOCALAPPDATA%\Programs\Kiro\Kiro.exe` on Windows. |
 
 So a fresh contributor running `bun tests/run-tests.ts` (the default smoke + unit
-+ integration) sees deterministic green with only `bun` installed; the live tui
-journeys SKIP cleanly until `tmux` + `claude` + creds + `AIDLC_TUI_LIVE=1` are
-present, rather than failing silently. For the cross-platform invariance story
-and the Windows substrate, see the runbook below.
++ integration) sees deterministic green with only `bun` installed. Each live
+journey skips cleanly until its runtime, credentials, and explicit live-gate
+variable are present. For the cross-platform invariance story and the Windows
+substrate, see the runbook below.
 
 ## Cross-Platform
 
