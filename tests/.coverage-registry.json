@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 574,
+    "total": 577,
     "enumeratedByClass": {
-      "function": 316,
+      "function": 319,
       "audit": 85,
       "scope": 9,
       "stage": 33,
@@ -1732,6 +1732,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:FILE_CHANGED_DURING_READ",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:filterProducesByKind",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2951,6 +2958,20 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readAppendOnlyFileNoFollowOrThrow",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readAtomicReplacedFileNoFollowOrThrow",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
