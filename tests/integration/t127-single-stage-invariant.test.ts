@@ -555,9 +555,9 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
       ]).status,
     ).toBe(0);
     for (const name of [
-      "business-logic-model",
-      "business-rules",
-      "domain-entities",
+      "entities",
+      "rules",
+      "functional-spec",
     ]) {
       const artifact = join(stageDir, `${name}.md`);
       writeFileSync(artifact, `# ${name}\n`);

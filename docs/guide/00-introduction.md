@@ -24,13 +24,13 @@ This mirrors how effective human teams work: a mob of 3-5 people covers an entir
 
 At its core, AI-DLC runs a simple loop. A deterministic **engine** decides what happens next; the **conductor** (the `/aidlc` session, `SKILL.md`) carries it out, then asks the engine for the next move. Across that loop the framework:
 
-1. **Reads stage files** — 32 stage definitions across 5 phases, each specifying inputs, steps, outputs, and the lead agent
+1. **Reads stage files** — 33 stage definitions across 5 phases, each specifying inputs, steps, outputs, and the lead agent
 2. **Loads agent personas** — Activates domain-expert perspectives (architect, developer, product manager, etc.) with specialized knowledge
 3. **Manages state and audit** — Tracks progress in `aidlc-state.md` and logs every decision to the intent's `audit/` shards for traceability
 4. **Delegates across stage topologies** — For focused autonomous work and multi-agent collaboration, dispatches subagents as a hub-and-spoke, pipeline, or mob
 5. **Presents approval gates** — After each stage, you review and approve before the workflow advances
 
-The engine owns the routing (which stage is next, which scope, when to stop); the conductor owns execution quality (running the stage well, asking good questions, surfacing decisions to you). Most stages run **inline**: the conductor adopts the agent's perspective and works directly with you in conversation. Four stages use dispatched topologies: Practices Discovery and Code Generation run as `subagent` hubs, Reverse Engineering as a two-link `pipeline`, and User Stories as a `mob`. The complete topology is 28 inline / 2 subagent / 1 pipeline / 1 mob. For the full architecture, see the Developer Reference's [Engine and Skill System](../reference/17-skill-system.md).
+The engine owns the routing (which stage is next, which scope, when to stop); the conductor owns execution quality (running the stage well, asking good questions, surfacing decisions to you). Most stages run **inline**: the conductor adopts the agent's perspective and works directly with you in conversation. Four stages use dispatched topologies: Practices Discovery and Code Generation run as `subagent` hubs, Reverse Engineering as a two-link `pipeline`, and User Stories as a `mob`. The complete topology is 29 inline / 2 subagent / 1 pipeline / 1 mob. For the full architecture, see the Developer Reference's [Engine and Skill System](../reference/17-skill-system.md).
 
 ## Who This Guide Is For
 
@@ -47,7 +47,7 @@ To reshape *how* AI-DLC behaves — add a stage or an agent, define a scope, aut
 | Metric | Value |
 |--------|-------|
 | Phases | 5 (Initialization, Ideation, Inception, Construction, Operation) |
-| Stages | 32 |
+| Stages | 33 |
 | Agents | 14 total: 11 domain experts, 2 reviewers, and the composer |
 | Scopes | 9 (enterprise through workshop) + auto-detect |
 | Depth levels | 3 (Minimal, Standard, Comprehensive) |
@@ -61,7 +61,7 @@ To reshape *how* AI-DLC behaves — add a stage or an agent, define a scope, aut
 | [Getting Started](01-getting-started.md) | Prerequisites, installation, first health check |
 | [Your First Workflow](02-your-first-workflow.md) | Annotated walkthrough of a complete run |
 | [Spaces and Intents](03-spaces-and-intents.md) | The workspace layout: running many pieces of work across spaces and intents |
-| [Phases and Stages](04-phases-and-stages.md) | The 5 phases and 32 stages explained |
+| [Phases and Stages](04-phases-and-stages.md) | The 5 phases and 33 stages explained |
 | [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md) | How to choose and override scope/depth/test strategy |
 | [Agents](06-agents.md) | The 14-agent roster: 11 domain experts, 2 reviewers, and the composer |
 | [Agent deep dives](agents/README.md) | Per-agent reference pages: responsibilities, stages, knowledge |

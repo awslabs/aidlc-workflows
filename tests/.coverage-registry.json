@@ -20,21 +20,21 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 571,
+    "total": 574,
     "enumeratedByClass": {
-      "function": 314,
+      "function": 316,
       "audit": 85,
       "scope": 9,
-      "stage": 32,
+      "stage": 33,
       "hook": 17,
       "subcommand": 107,
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 151,
+      "function": 152,
       "audit": 43,
       "scope": 9,
-      "stage": 9,
+      "stage": 11,
       "hook": 17,
       "subcommand": 95,
       "render-surface": 7
@@ -1303,6 +1303,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:classifyStateVersion",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t282-state-version-doctor.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:classifyTerminalCommand",
       "minMechanism": "none",
       "coveredBy": [
@@ -1502,6 +1514,13 @@
     {
       "unitClass": "function",
       "unitId": "function:CURRENT_SESSION_FILE",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:CURRENT_STATE_VERSION",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -4876,10 +4895,15 @@
     },
     {
       "unitClass": "stage",
-      "unitId": "inception/application-design",
+      "unitId": "inception/contract-design",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t280-contract-design-wiring.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "stage",
@@ -4887,6 +4911,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "stage",
+      "unitId": "inception/domain-design",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t116-directive-path-resolution.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "stage",
@@ -6306,6 +6342,10 @@
         },
         {
           "file": "tests/unit/t27.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t282-state-version-doctor.test.ts",
           "mechanism": "cli"
         },
         {

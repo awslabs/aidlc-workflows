@@ -265,7 +265,7 @@ Assesses team availability, maps skills, identifies gaps, and produces mob compo
 ### Notes
 
 - Skip conditions: solo developer projects, small teams, poc, bugfix, refactor scopes.
-- Feeds into Stage 2.8 Delivery Planning.
+- Feeds into Stage 2.9 Delivery Planning.
 
 ---
 

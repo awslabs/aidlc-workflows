@@ -54,9 +54,9 @@ const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const BUN = process.execPath;
 
 const FD_PRODUCES = [
-  "business-logic-model",
-  "business-rules",
-  "domain-entities",
+  "entities",
+  "rules",
+  "functional-spec",
   "frontend-components",
   "traceability",
 ];
@@ -97,7 +97,7 @@ function constructionState(opts: {
 - **Project**: iteration knob default test
 - **Project Type**: Greenfield
 - **Scope**: feature
-- **State Version**: 7
+- **State Version**: 8
 - **Skeleton Stance**: on
 ${autonomyLine}## Scope Configuration
 - **Stages to Execute**: all
@@ -116,7 +116,7 @@ ${autonomyLine}## Scope Configuration
 - [ ] build-and-test — EXECUTE
 
 ### INCEPTION PHASE
-- [-] application-design — EXECUTE
+- [-] domain-design — EXECUTE
 
 ## Current Status
 - **Lifecycle Phase**: CONSTRUCTION

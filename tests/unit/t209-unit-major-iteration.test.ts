@@ -71,9 +71,9 @@ const RP = `aidlc/spaces/${DEFAULT_SPACE}/intents/${DEFAULT_RECORD_DIR}`;
 // "covered" for a stage once all of its produces exist on disk.
 const PRODUCES: Record<string, string[]> = {
   "functional-design": [
-    "business-logic-model",
-    "business-rules",
-    "domain-entities",
+    "entities",
+    "rules",
+    "functional-spec",
     "frontend-components",
     "traceability",
   ],
@@ -96,11 +96,9 @@ const PRODUCES: Record<string, string[]> = {
     "traceability",
   ],
   "infrastructure-design": [
-    "deployment-architecture",
-    "infrastructure-services",
+    "infrastructure-specification",
     "monitoring-design",
     "cicd-pipeline",
-    "shared-infrastructure",
     "traceability",
   ],
   "code-generation": [
@@ -163,7 +161,7 @@ function constructionState(opts: {
 - **Project**: unit-major iteration test
 - **Project Type**: Greenfield
 - **Scope**: feature
-- **State Version**: 7
+- **State Version**: 8
 ${stanceLine}
 ## Runtime State
 - **Revision Count**: 0
@@ -185,7 +183,7 @@ ${iterationLine}
 - [ ] build-and-test — EXECUTE
 
 ### INCEPTION PHASE
-- [-] application-design — EXECUTE
+- [-] domain-design — EXECUTE
 
 ## Current Status
 - **Lifecycle Phase**: CONSTRUCTION
@@ -498,16 +496,16 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     expect(d.unit).toBe("contract");
     expect(d.gate).toBe(false);
 
-    // A spec unit owes business rules and domain entities, but not the
+    // A spec unit owes rules and entities, but not the
     // service/ui-only functional-design artifacts. The kind comes from the
     // dependency artifact because the cached graph deliberately has no DAG.
     expect(d.produces).toContain(
-      `${RP}/construction/contract/functional-design/business-rules.md`,
+      `${RP}/construction/contract/functional-design/rules.md`,
     );
     expect(d.produces).toContain(
-      `${RP}/construction/contract/functional-design/domain-entities.md`,
+      `${RP}/construction/contract/functional-design/entities.md`,
     );
-    expect(d.produces?.some((path) => path.endsWith("/business-logic-model.md"))).toBe(false);
+    expect(d.produces?.some((path) => path.endsWith("/functional-spec.md"))).toBe(false);
     expect(d.produces?.some((path) => path.endsWith("/frontend-components.md"))).toBe(false);
 
     const warning =

@@ -60,7 +60,7 @@ const NFR_REQ_ALL = [
 // A spec unit keeps only the two unannotated ones.
 const NFR_REQ_SPEC = ["security-requirements", "tech-stack-decisions", "traceability"];
 
-const FD_PRODUCES = ["business-logic-model", "business-rules", "domain-entities", "traceability", "frontend-components"];
+const FD_PRODUCES = ["entities", "rules", "functional-spec", "traceability", "frontend-components"];
 
 const tempDirs: string[] = [];
 afterEach(() => {
@@ -84,7 +84,7 @@ function constructionState(current: string, skeletonStance = "on"): string {
 - **Project**: unit-kind pruning test
 - **Project Type**: Greenfield
 - **Scope**: feature
-- **State Version**: 7
+- **State Version**: 8
 - **Skeleton Stance**: ${skeletonStance}
 ## Scope Configuration
 - **Stages to Execute**: all
@@ -103,7 +103,7 @@ function constructionState(current: string, skeletonStance = "on"): string {
 - [ ] build-and-test — EXECUTE
 
 ### INCEPTION PHASE
-- [-] application-design — EXECUTE
+- [-] domain-design — EXECUTE
 
 ## Current Status
 - **Lifecycle Phase**: CONSTRUCTION
@@ -215,12 +215,12 @@ function logArtifactUpdated(proj: string, unit: string): void {
     "construction",
     unit,
     "functional-design",
-    "business-rules.md",
+    "rules.md",
   );
   appendAuditEntry("ARTIFACT_UPDATED", {
     Tool: "Edit",
     File: file,
-    Context: `construction > ${unit} > functional-design > business-rules.md`,
+    Context: `construction > ${unit} > functional-design > rules.md`,
   }, proj);
 }
 
@@ -471,30 +471,30 @@ describe("t208 engine unit-kind pruning", () => {
     const d = runNext(proj);
     expect(d.unit).toBe("web");
     expect(d.produces).toContain(`${RP}/construction/web/functional-design/frontend-components.md`);
-    // ui's REQUIRED set is business-logic-model only (business-rules and
-    // domain-entities are mapped [service, spec, library]).
-    expect(d.produces).toContain(`${RP}/construction/web/functional-design/business-logic-model.md`);
-    expect(d.produces?.some((p) => p.includes("/business-rules.md"))).toBe(false);
+    // ui's REQUIRED set is functional-spec only (rules and
+    // entities are mapped [service, spec, library]).
+    expect(d.produces).toContain(`${RP}/construction/web/functional-design/functional-spec.md`);
+    expect(d.produces?.some((p) => p.includes("/rules.md"))).toBe(false);
 
     const proj2 = seedProject("functional-design");
     seedBoltDag(proj2, [{ name: "api", kind: "service" }]);
     const d2 = runNext(proj2);
     expect(d2.unit).toBe("api");
     expect(d2.produces?.some((p) => p.includes("/frontend-components.md"))).toBe(false);
-    for (const name of ["business-logic-model", "business-rules", "domain-entities"]) {
-      expect(d2.produces).toContain(`${RP}/construction/api/functional-design/${artifactFilename(name)}`);
+    for (const name of ["functional-spec", "rules", "entities"]) {
+      expect(d2.produces).toContain(`${RP}/construction/api/functional-design/${name}.md`);
     }
   }, 30000);
 
   // 8b: optional stays coverage-EXEMPT even for the kind it applies to. A ui
-  // unit that wrote only its required artifacts (business-logic-model and
+  // unit that wrote only its required artifacts (functional-spec and
   // traceability) is
   // covered without frontend-components on disk - the per-unit iteration
   // advances to the next unit.
   test("8b: a ui unit is covered without its optional artifact on disk", () => {
     const proj = seedProject("functional-design");
     seedBoltDag(proj, [{ name: "web", kind: "ui" }, { name: "svc" }]);
-    coverUnit(proj, "web", "functional-design", ["business-logic-model", "traceability"]);
+    coverUnit(proj, "web", "functional-design", ["functional-spec", "traceability"]);
     logReviewReady(proj, "web");
     completeWave(proj, "web", "functional-design");
     const d = runNext(proj);

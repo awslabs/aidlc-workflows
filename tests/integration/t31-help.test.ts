@@ -21,7 +21,7 @@
 // CONTRACT CONFIRMED: help text is no longer a static constant — renderHelpText()
 // (aidlc-utility.ts:143-163) compiles the scope block live from
 // loadScopeMapping() (aidlc-lib.ts:739) over validScopes() (aidlc-lib.ts:783),
-// so stage counts ("All 32 stages" / "7 of 32 stages") are derived from the
+// so stage counts ("All 33 stages" / "7 of 33 stages") are derived from the
 // shipped scope-mapping.json EXECUTE/Total tallies, not hardcoded. This is the
 // exact regression the .sh guards (the 6 stale counts that shipped pre-milestone-10).
 //
@@ -47,8 +47,8 @@
 //   .sh:39  "--init"            -> "lists --init utility"
 //   .sh:40  "--doctor"          -> "lists --doctor utility"
 //   .sh:41  "--help"            -> "lists --help utility"
-//   .sh:47  "All 32 stages"     -> "enterprise/feature shows 'All 32 stages'"
-//   .sh:48  "7 of 32 stages"    -> "bugfix shows compiled '7 of 32 stages'"
+//   .sh:47  "All 33 stages"     -> "enterprise/feature shows 'All 33 stages'"
+//   .sh:48  "7 of 33 stages"    -> "bugfix shows compiled '7 of 33 stages'"
 //   .sh:49  "(default)"         -> "feature row shows '(default)' marker"
 //   .sh:52  "--force"           -> "lists --force flag"
 //   .sh:55  "--stage"           -> "lists --stage utility"
@@ -167,15 +167,15 @@ describe("t31 aidlc-utility help — CLI contract (migrated from t31-help-text-c
   }
 
   // --- Stage-count semantics (compiled from scope-mapping.json EXECUTE/Total). ---
-  test("enterprise/feature shows 'All 32 stages'", () => {
+  test("enterprise/feature shows 'All 33 stages'", () => {
     // execute === total -> "All <total> stages" (aidlc-utility.ts:156-157).
-    expect(HELP.stdout).toContain("All 32 stages");
+    expect(HELP.stdout).toContain("All 33 stages");
   });
 
-  test("bugfix shows compiled '7 of 32 stages' count", () => {
+  test("bugfix shows compiled '7 of 33 stages' count", () => {
     // execute !== total -> "<execute> of <total> stages"; bugfix tallies 7
-    // EXECUTE of 32 (was the stale "~8 stages" pre-milestone-10).
-    expect(HELP.stdout).toContain("7 of 32 stages");
+    // EXECUTE of 33 (was the stale "~8 stages" pre-milestone-10).
+    expect(HELP.stdout).toContain("7 of 33 stages");
   });
 
   test("feature row shows '(default)' marker", () => {

@@ -426,11 +426,11 @@ describe("t150 dist/codex packaging parity + drift guard", () => {
     const dirs = readdirSync(skillsDir).filter((d) =>
       statSync(join(skillsDir, d)).isDirectory(),
     );
-    // 40 skills: orchestrator + 29 stage runners + init + compose + 4 scope runners
+    // 41 skills: orchestrator + 30 stage runners + init + compose + 4 scope runners
     // + 3 session + aidlc-knowledge. The last one only ships here because
     // harness/codex/emit.ts names it explicitly: codex does not enumerate
     // core/skills/, so this count is what catches a skill missing from that array.
-    expect(dirs.length).toBe(40);
+    expect(dirs.length).toBe(41);
     for (const d of dirs) {
       const guard = join(skillsDir, d, "agents", "openai.yaml");
       if (d === "aidlc") {

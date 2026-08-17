@@ -78,7 +78,7 @@ function userStoriesState(projectDir: string): string {
 - **Project Type**: Greenfield
 - **Scope**: feature
 - **Start Date**: 2026-07-17T00:00:00Z
-- **State Version**: 7
+- **State Version**: 8
 - **Active Agent**: aidlc-product-agent
 - **Worktree Path**:
 - **Bolt Refs**:
@@ -135,7 +135,7 @@ function userStoriesState(projectDir: string): string {
 - [x] requirements-analysis — EXECUTE
 - [-] user-stories — EXECUTE
 - [S] refined-mockups — SKIP (live SDK fixture terminal boundary)
-- [S] application-design — SKIP (live SDK fixture terminal boundary)
+- [S] domain-design — SKIP (live SDK fixture terminal boundary)
 - [S] units-generation — SKIP (live SDK fixture terminal boundary)
 - [S] delivery-planning — SKIP (live SDK fixture terminal boundary)
 

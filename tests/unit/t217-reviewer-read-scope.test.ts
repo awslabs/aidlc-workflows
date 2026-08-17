@@ -53,8 +53,7 @@ describe("t217 reviewer read-scope bound is stated on every surface", () => {
     expect(body).toMatch(/Your scope is.*artifacts.*shared contracts/i);
     // Checklist item is rewritten to name the shared contracts, not a sibling-directory sweep.
     expect(body).toContain("components.md");
-    expect(body).toContain("component-methods.md");
-    expect(body).toContain("services.md");
+    expect(body).toContain("contract-summary.md");
     expect(body).toContain("unit-of-work.md");
     // Old bare checklist line is gone.
     expect(body).not.toMatch(/^- Cross-unit contract boundaries respected\?$/m);
@@ -71,6 +70,24 @@ describe("t217 reviewer read-scope bound is stated on every surface", () => {
       expect(labelledBody).toMatch(/must not read other units'? .*construction/i);
       // The bound is tool-agnostic on every harness surface.
       expect(labelledBody).toMatch(/grep, glob, and shell patterns/);
+    }
+  });
+
+  // PR #711 finding (apackeer, round 2): a workflow-level reviewer stage such as
+  // contract-design (no directive.unit) must ALSO receive directive.consumes, so
+  // its reviewer gets the unit DAG / components / requirements evidence — not
+  // only per-unit stages. The protocol and every harness skill must say so.
+  test("workflow-level reviewer stages also receive directive.consumes (protocol + every harness)", () => {
+    const protocol = readFileSync(join(AIDLC_SRC, PROTOCOL), "utf-8");
+    // §12a extends the pass-list to non-per-unit stages, naming contract-design.
+    expect(protocol.toLowerCase()).toContain("workflow-level");
+    expect(protocol).toMatch(/workflow-level[\s\S]*contract-design/i);
+    for (const harness of HARNESS_MATRIX) {
+      const body = readFileSync(join(harness.authoredRoot, SKILL), "utf-8");
+      const labelled = `harness ${harness.name}`;
+      // The reviewer bullet no longer restricts consumes to per-unit stages.
+      expect(body.toLowerCase(), labelled).toContain("workflow-level");
+      expect(body, labelled).toMatch(/EVERY reviewer-bearing stage/i);
     }
   });
 });

@@ -193,19 +193,19 @@ describe("t205 optional_produces frontmatter", () => {
       expect(fd?.produces).not.toContain("frontend-components");
     });
 
-    test("infrastructure-design carries optional_produces and drops it from produces", () => {
+    test("infrastructure-design produces the consolidated infrastructure-specification, no optional_produces", () => {
       const infra = loadGraph().find((s) => s.slug === "infrastructure-design");
       expect(infra).toBeDefined();
-      expect(infra?.optional_produces).toEqual(["shared-infrastructure"]);
-      expect(infra?.produces).not.toContain("shared-infrastructure");
+      expect(infra?.produces).toContain("infrastructure-specification");
+      expect(infra?.optional_produces).toBeUndefined();
     });
 
-    test("only the two annotated stages carry optional_produces", () => {
+    test("functional-design is the only stage carrying optional_produces", () => {
       const carriers = loadGraph()
         .filter((s) => s.optional_produces !== undefined)
         .map((s) => s.slug)
         .sort();
-      expect(carriers).toEqual(["functional-design", "infrastructure-design"]);
+      expect(carriers).toEqual(["functional-design"]);
     });
   });
 
@@ -217,17 +217,19 @@ describe("t205 optional_produces frontmatter", () => {
       __resetGraphCache();
     });
 
-    test("artifactsRegistry still contains both conditional names", () => {
+    test("artifactsRegistry contains the conditional frontend-components and the consolidated infrastructure-specification", () => {
       const reg = artifactsRegistry();
       expect(reg.has("frontend-components")).toBe(true);
-      expect(reg.has("shared-infrastructure")).toBe(true);
+      expect(reg.has("infrastructure-specification")).toBe(true);
+      // shared-infrastructure was folded into infrastructure-specification.
+      expect(reg.has("shared-infrastructure")).toBe(false);
     });
 
-    test("producersOf resolves the conditional artifacts to their producer stage", () => {
+    test("producersOf resolves the conditional artifact and the infra spec to their producer stage", () => {
       expect(producersOf("frontend-components").map((s) => s.slug)).toContain(
         "functional-design",
       );
-      expect(producersOf("shared-infrastructure").map((s) => s.slug)).toContain(
+      expect(producersOf("infrastructure-specification").map((s) => s.slug)).toContain(
         "infrastructure-design",
       );
     });

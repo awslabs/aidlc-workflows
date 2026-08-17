@@ -71,7 +71,7 @@ for each endpoint/contract. Write `test-pro-api-contract-instructions.md` with a
 Assemble the union of unit, functional, integration, edge, and API tests into a
 named regression suite manifest (`test-pro-regression-suite.md`). Build a
 `test-pro-requirement-traceability-matrix.md` mapping EVERY functional
-requirement (from `requirements`, `stories`, `business-rules`) to its covering
+requirement (from `requirements`, `stories`, `rules`) to its covering
 test ids, under a `## Requirement Traceability` table:
 `| requirement-id | test-ids | status |`. Any requirement with no covering test
 is a gap to flag.

@@ -1156,12 +1156,12 @@
       ]
     },
     {
-      "slug": "application-design",
+      "slug": "domain-design",
       "number": "2.6",
-      "name": "Application Design",
+      "name": "Domain Design",
       "phase": "inception",
       "execution": "CONDITIONAL",
-      "condition": "Execute when new components or services are needed, or service layer design is required. Skip when changes are modifications to existing components only.",
+      "condition": "Execute when new components or logical building blocks are needed. Skip when changes are modifications to existing components only.",
       "lead_agent": "aidlc-architect-agent",
       "support_agents": [
         "aidlc-aws-platform-agent",
@@ -1170,9 +1170,6 @@
       "mode": "inline",
       "produces": [
         "components",
-        "component-methods",
-        "services",
-        "component-dependency",
         "decisions",
         "traceability"
       ],
@@ -1220,7 +1217,7 @@
       "review_class": "advisory",
       "summary_confirmation": "required",
       "inputs": "<record>/inception/requirements-analysis/requirements.md, <record>/inception/user-stories/stories.md (if produced), RE artifacts (if brownfield)",
-      "outputs": "components.md, component-methods.md, services.md, component-dependency.md, decisions.md, traceability.json (under this stage's record dir, engine-resolved)",
+      "outputs": "components.md (fenced ```yaml component catalogue plus a human-readable mermaid diagram and summary table), decisions.md (Architecture Decision Records), and traceability.json — all under this stage's record dir, engine-resolved",
       "rules_in_context": [
         {
           "path": "aidlc/spaces/default/memory/org.md",
@@ -1263,7 +1260,7 @@
       "name": "Units Generation",
       "phase": "inception",
       "execution": "ALWAYS",
-      "condition": "Always executes when in scope. Produces the dependency DAG that Stage 2.8 Delivery Planning consumes for Bolt sequencing. In the compiled scope grid, 2.7 and 2.8 travel together — both EXECUTE or both SKIP per scope.",
+      "condition": "Always executes when in scope. Produces the dependency DAG that Stage 2.9 Delivery Planning consumes for Bolt sequencing. In the compiled scope grid, 2.7 (Units Generation) and 2.9 (Delivery Planning) travel together — both EXECUTE or both SKIP per scope.",
       "lead_agent": "aidlc-architect-agent",
       "support_agents": [
         "aidlc-delivery-agent"
@@ -1281,20 +1278,8 @@
           "required": true
         },
         {
-          "artifact": "component-methods",
-          "required": true
-        },
-        {
-          "artifact": "services",
-          "required": true
-        },
-        {
-          "artifact": "component-dependency",
-          "required": true
-        },
-        {
           "artifact": "decisions",
-          "required": true
+          "required": false
         },
         {
           "artifact": "requirements",
@@ -1306,7 +1291,7 @@
         }
       ],
       "requires_stage": [
-        "application-design"
+        "domain-design"
       ],
       "sensors": [
         "required-sections",
@@ -1323,7 +1308,7 @@
       "reviewer_max_iterations": 2,
       "review_class": "advisory",
       "summary_confirmation": "required",
-      "inputs": "<record>/inception/application-design/ (all design artifacts), <record>/inception/requirements-analysis/requirements.md, <record>/inception/user-stories/stories.md (if produced)",
+      "inputs": "<record>/inception/domain-design/components.md, <record>/inception/requirements-analysis/requirements.md, <record>/inception/user-stories/stories.md (if produced)",
       "outputs": "unit-of-work.md, unit-of-work-dependency.md, unit-of-work-story-map.md, traceability.json (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
         {
@@ -1362,8 +1347,91 @@
       ]
     },
     {
-      "slug": "delivery-planning",
+      "slug": "contract-design",
       "number": "2.8",
+      "name": "Contract Design",
+      "phase": "inception",
+      "execution": "CONDITIONAL",
+      "condition": "Execute when the system has any formal contract to pin down — an inter-unit boundary (more than one unit that must integrate) OR a unit that exposes a public/external API consumed outside the system. Skip only for a single self-contained unit with no inter-unit boundaries and no externally consumed API.",
+      "lead_agent": "aidlc-architect-agent",
+      "support_agents": [
+        "aidlc-aws-platform-agent"
+      ],
+      "mode": "inline",
+      "produces": [
+        "contract-summary"
+      ],
+      "consumes": [
+        {
+          "artifact": "unit-of-work",
+          "required": true
+        },
+        {
+          "artifact": "unit-of-work-dependency",
+          "required": true
+        },
+        {
+          "artifact": "components",
+          "required": false
+        },
+        {
+          "artifact": "requirements",
+          "required": false
+        }
+      ],
+      "requires_stage": [
+        "units-generation"
+      ],
+      "sensors": [
+        "required-sections",
+        "upstream-coverage"
+      ],
+      "scopes": [
+        "enterprise",
+        "feature",
+        "mvp",
+        "workshop"
+      ],
+      "reviewer": "aidlc-architecture-reviewer-agent",
+      "reviewer_max_iterations": 2,
+      "review_class": "advisory",
+      "summary_confirmation": "required",
+      "inputs": "<record>/inception/units-generation/unit-of-work.md, <record>/inception/units-generation/unit-of-work-dependency.md, <record>/inception/domain-design/components.md (if produced), <record>/inception/requirements-analysis/requirements.md",
+      "outputs": "contract-summary.md (under this stage's record dir, engine-resolved) — a human-readable overview of every contract (inter-unit boundaries and public/external APIs), each with a fenced spec block (OpenAPI / AsyncAPI / shared schema) inline",
+      "rules_in_context": [
+        {
+          "path": "aidlc/spaces/default/memory/org.md",
+          "scope": "org"
+        },
+        {
+          "path": "aidlc/spaces/default/memory/team.md",
+          "scope": "team"
+        },
+        {
+          "path": "aidlc/spaces/default/memory/project.md",
+          "scope": "project"
+        },
+        {
+          "path": "aidlc/spaces/default/memory/phases/inception.md",
+          "scope": "phase"
+        }
+      ],
+      "sensors_applicable": [
+        {
+          "id": "required-sections",
+          "path": ".claude/sensors/aidlc-required-sections.md",
+          "matches": "**/{aidlc-docs,intents}/**"
+        },
+        {
+          "id": "upstream-coverage",
+          "path": ".claude/sensors/aidlc-upstream-coverage.md",
+          "matches": "**/{aidlc-docs,intents}/**"
+        }
+      ]
+    },
+    {
+      "slug": "delivery-planning",
+      "number": "2.9",
       "name": "Delivery Planning",
       "phase": "inception",
       "execution": "ALWAYS",
@@ -1407,6 +1475,10 @@
         },
         {
           "artifact": "unit-of-work-story-map",
+          "required": false
+        },
+        {
+          "artifact": "contract-summary",
           "required": false
         },
         {
@@ -1475,28 +1547,28 @@
       "mode": "inline",
       "for_each": "unit-of-work",
       "produces": [
-        "business-logic-model",
-        "business-rules",
-        "domain-entities",
+        "entities",
+        "rules",
+        "functional-spec",
         "traceability"
       ],
       "optional_produces": [
         "frontend-components"
       ],
       "produces_kinds": {
-        "business-logic-model": [
+        "entities": [
+          "service",
+          "spec",
+          "library"
+        ],
+        "rules": [
+          "service",
+          "spec",
+          "library"
+        ],
+        "functional-spec": [
           "service",
           "ui",
-          "library"
-        ],
-        "business-rules": [
-          "service",
-          "spec",
-          "library"
-        ],
-        "domain-entities": [
-          "service",
-          "spec",
           "library"
         ],
         "traceability": [
@@ -1527,16 +1599,13 @@
           "required": true
         },
         {
-          "artifact": "component-methods",
-          "required": true
-        },
-        {
-          "artifact": "services",
-          "required": true
+          "artifact": "contract-summary",
+          "required": false
         }
       ],
       "requires_stage": [
-        "units-generation"
+        "units-generation",
+        "contract-design"
       ],
       "sensors": [
         "required-sections",
@@ -1556,8 +1625,8 @@
       "reviewer_max_iterations": 2,
       "review_class": "adversarial",
       "summary_confirmation": "required",
-      "inputs": "unit-of-work.md, unit-of-work-story-map.md, requirements.md, application design artifacts",
-      "outputs": "business-logic-model.md, business-rules.md, domain-entities.md, traceability.json, CONDITIONAL: frontend-components.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)",
+      "inputs": "unit-of-work.md, unit-of-work-story-map.md, requirements.md, domain-design components.md, contract-design contract-summary.md (if produced)",
+      "outputs": "entities.md, rules.md, functional-spec.md, traceability.json, CONDITIONAL: frontend-components.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all). entities.md and rules.md each carry a fenced ```yaml source-of-truth block; functional-spec.md is the source of truth for workflows and state machines and carries derived ER-diagram and rules-summary views.",
       "rules_in_context": [
         {
           "path": "aidlc/spaces/default/memory/org.md",
@@ -1645,16 +1714,20 @@
       },
       "consumes": [
         {
-          "artifact": "business-logic-model",
+          "artifact": "functional-spec",
           "required": true
         },
         {
-          "artifact": "business-rules",
+          "artifact": "rules",
           "required": true
         },
         {
           "artifact": "requirements",
           "required": true
+        },
+        {
+          "artifact": "contract-summary",
+          "required": false
         },
         {
           "artifact": "technology-stack",
@@ -1801,8 +1874,12 @@
           "required": true
         },
         {
-          "artifact": "business-logic-model",
+          "artifact": "functional-spec",
           "required": true
+        },
+        {
+          "artifact": "contract-summary",
+          "required": false
         }
       ],
       "requires_stage": [
@@ -1890,27 +1967,20 @@
       "mode": "inline",
       "for_each": "unit-of-work",
       "produces": [
-        "deployment-architecture",
-        "infrastructure-services",
+        "infrastructure-specification",
         "monitoring-design",
         "cicd-pipeline",
         "traceability"
       ],
-      "optional_produces": [
-        "shared-infrastructure"
-      ],
       "produces_kinds": {
-        "deployment-architecture": [
+        "infrastructure-specification": [
           "service",
           "ui",
           "packaging"
         ],
-        "infrastructure-services": [
-          "service",
-          "packaging"
-        ],
         "monitoring-design": [
           "service",
+          "ui",
           "packaging"
         ],
         "cicd-pipeline": [
@@ -1956,12 +2026,12 @@
           "required": true
         },
         {
-          "artifact": "services",
+          "artifact": "functional-spec",
           "required": true
         },
         {
-          "artifact": "business-logic-model",
-          "required": true
+          "artifact": "contract-summary",
+          "required": false
         }
       ],
       "requires_stage": [
@@ -1986,8 +2056,8 @@
       "reviewer_max_iterations": 2,
       "review_class": "adversarial",
       "summary_confirmation": "required",
-      "inputs": "NFR design artifacts, application design, functional design",
-      "outputs": "deployment-architecture.md, infrastructure-services.md, monitoring-design.md, cicd-pipeline.md, traceability.json, CONDITIONAL: shared-infrastructure.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)",
+      "inputs": "NFR design artifacts, domain design components.md, functional design",
+      "outputs": "infrastructure-specification.md (deployment + services + shared, tabular), monitoring-design.md (tabular), cicd-pipeline.md, traceability.json (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (a spec unit owes none)",
       "rules_in_context": [
         {
           "path": "aidlc/spaces/default/memory/org.md",
@@ -2054,15 +2124,19 @@
       ],
       "consumes": [
         {
-          "artifact": "business-logic-model",
+          "artifact": "functional-spec",
           "required": false
         },
         {
-          "artifact": "business-rules",
+          "artifact": "rules",
           "required": false
         },
         {
-          "artifact": "domain-entities",
+          "artifact": "entities",
+          "required": false
+        },
+        {
+          "artifact": "contract-summary",
           "required": false
         },
         {
@@ -2074,7 +2148,7 @@
           "required": false
         },
         {
-          "artifact": "deployment-architecture",
+          "artifact": "infrastructure-specification",
           "required": false
         },
         {
@@ -2361,7 +2435,7 @@
           "required": true
         },
         {
-          "artifact": "deployment-architecture",
+          "artifact": "infrastructure-specification",
           "required": true
         },
         {
@@ -2438,11 +2512,7 @@
       ],
       "consumes": [
         {
-          "artifact": "deployment-architecture",
-          "required": true
-        },
-        {
-          "artifact": "infrastructure-services",
+          "artifact": "infrastructure-specification",
           "required": true
         },
         {
@@ -2620,7 +2690,7 @@
           "required": true
         },
         {
-          "artifact": "infrastructure-services",
+          "artifact": "infrastructure-specification",
           "required": true
         }
       ],
@@ -2707,7 +2777,7 @@
           "required": true
         },
         {
-          "artifact": "deployment-architecture",
+          "artifact": "infrastructure-specification",
           "required": true
         }
       ],
@@ -2957,8 +3027,9 @@
         "requirements-analysis": "EXECUTE",
         "user-stories": "SKIP",
         "refined-mockups": "SKIP",
-        "application-design": "SKIP",
+        "domain-design": "SKIP",
         "units-generation": "SKIP",
+        "contract-design": "SKIP",
         "delivery-planning": "SKIP",
         "functional-design": "SKIP",
         "nfr-requirements": "SKIP",
@@ -3002,8 +3073,9 @@
         "requirements-analysis": "EXECUTE",
         "user-stories": "EXECUTE",
         "refined-mockups": "EXECUTE",
-        "application-design": "EXECUTE",
+        "domain-design": "EXECUTE",
         "units-generation": "EXECUTE",
+        "contract-design": "EXECUTE",
         "delivery-planning": "EXECUTE",
         "functional-design": "EXECUTE",
         "nfr-requirements": "EXECUTE",
@@ -3042,8 +3114,9 @@
         "requirements-analysis": "EXECUTE",
         "user-stories": "EXECUTE",
         "refined-mockups": "EXECUTE",
-        "application-design": "EXECUTE",
+        "domain-design": "EXECUTE",
         "units-generation": "EXECUTE",
+        "contract-design": "EXECUTE",
         "delivery-planning": "EXECUTE",
         "functional-design": "EXECUTE",
         "nfr-requirements": "EXECUTE",
@@ -3083,8 +3156,9 @@
         "requirements-analysis": "EXECUTE",
         "user-stories": "SKIP",
         "refined-mockups": "SKIP",
-        "application-design": "SKIP",
+        "domain-design": "SKIP",
         "units-generation": "SKIP",
+        "contract-design": "SKIP",
         "delivery-planning": "SKIP",
         "functional-design": "SKIP",
         "nfr-requirements": "EXECUTE",
@@ -3127,8 +3201,9 @@
         "requirements-analysis": "EXECUTE",
         "user-stories": "EXECUTE",
         "refined-mockups": "EXECUTE",
-        "application-design": "EXECUTE",
+        "domain-design": "EXECUTE",
         "units-generation": "EXECUTE",
+        "contract-design": "EXECUTE",
         "delivery-planning": "EXECUTE",
         "functional-design": "EXECUTE",
         "nfr-requirements": "EXECUTE",
@@ -3171,8 +3246,9 @@
         "requirements-analysis": "EXECUTE",
         "user-stories": "SKIP",
         "refined-mockups": "SKIP",
-        "application-design": "SKIP",
+        "domain-design": "SKIP",
         "units-generation": "SKIP",
+        "contract-design": "SKIP",
         "delivery-planning": "SKIP",
         "functional-design": "SKIP",
         "nfr-requirements": "SKIP",
@@ -3216,8 +3292,9 @@
         "requirements-analysis": "EXECUTE",
         "user-stories": "SKIP",
         "refined-mockups": "SKIP",
-        "application-design": "SKIP",
+        "domain-design": "SKIP",
         "units-generation": "SKIP",
+        "contract-design": "SKIP",
         "delivery-planning": "SKIP",
         "functional-design": "EXECUTE",
         "nfr-requirements": "SKIP",
@@ -3260,8 +3337,9 @@
         "requirements-analysis": "EXECUTE",
         "user-stories": "SKIP",
         "refined-mockups": "SKIP",
-        "application-design": "SKIP",
+        "domain-design": "SKIP",
         "units-generation": "SKIP",
+        "contract-design": "SKIP",
         "delivery-planning": "SKIP",
         "functional-design": "SKIP",
         "nfr-requirements": "EXECUTE",
@@ -3306,8 +3384,9 @@
         "requirements-analysis": "EXECUTE",
         "user-stories": "EXECUTE",
         "refined-mockups": "EXECUTE",
-        "application-design": "EXECUTE",
+        "domain-design": "EXECUTE",
         "units-generation": "EXECUTE",
+        "contract-design": "EXECUTE",
         "delivery-planning": "EXECUTE",
         "functional-design": "EXECUTE",
         "nfr-requirements": "EXECUTE",
@@ -3346,9 +3425,7 @@
     "build-instructions",
     "build-test-results",
     "build-vs-buy",
-    "business-logic-model",
     "business-overview",
-    "business-rules",
     "cd-config",
     "ci-config",
     "ci-pipeline-questions",
@@ -3358,11 +3435,10 @@
     "code-structure",
     "code-summary",
     "competitive-analysis",
-    "component-dependency",
     "component-inventory",
-    "component-methods",
     "components",
     "constraint-register",
+    "contract-summary",
     "cost-analysis",
     "cross-unit-traceability",
     "dashboards",
@@ -3370,15 +3446,14 @@
     "decisions",
     "delivery-planning-questions",
     "dependencies",
-    "deployment-architecture",
     "deployment-execution-questions",
     "deployment-log",
     "deployment-pipeline-questions",
     "deployment-strategy",
     "design-system-mapping",
     "discovered-rules",
-    "domain-entities",
     "drift-report",
+    "entities",
     "environment-inventory",
     "environment-provisioning-questions",
     "escalation-matrix",
@@ -3389,10 +3464,11 @@
     "feedback-loop",
     "feedback-optimization-questions",
     "frontend-components",
+    "functional-spec",
     "health-check-report",
     "incident-plan",
     "incident-response-questions",
-    "infrastructure-services",
+    "infrastructure-specification",
     "initiative-brief",
     "integration-test-instructions",
     "intent-backlog",
@@ -3429,6 +3505,7 @@
     "risk-and-sequencing-rationale",
     "rollback-runbook",
     "rough-mockups-questions",
+    "rules",
     "runbooks",
     "scalability-design",
     "scalability-requirements",
@@ -3437,8 +3514,6 @@
     "security-design",
     "security-requirements",
     "security-test-instructions",
-    "services",
-    "shared-infrastructure",
     "skill-matrix",
     "slo-config",
     "slo-report",

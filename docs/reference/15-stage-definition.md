@@ -273,16 +273,16 @@ key.
 
 A plain kebab-case string list, parallel to `produces:`. It names artifacts
 the stage **may** write per unit but is **not required** to. Absent means
-none; only the two stages that need it declare it, so the compiled
-`stage-graph.json` stays minimal.
+none; only the one stage that needs it (`functional-design`, for
+`frontend-components`) declares it, so the compiled `stage-graph.json` stays
+minimal.
 
 Why it exists: a per-unit Construction stage (`for_each: unit-of-work`) is
 COVERED for a unit only when every `produces[]` artifact exists on disk under
 that unit's record dir (the per-unit coverage check in
 `aidlc-orchestrate.ts`). Some artifacts are genuinely conditional on the unit
 - `functional-design` writes `frontend-components` only when the unit has a
-UI; `infrastructure-design` writes `shared-infrastructure` only when units
-share infrastructure. Listing those under `produces:` forced a backend-only
+UI. Listing that under `produces:` forced a backend-only
 unit to write an N/A stub just to satisfy coverage, and left the stage gate
 unreachable until it did. Moving them to `optional_produces:` exempts them:
 

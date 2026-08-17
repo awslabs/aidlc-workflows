@@ -795,7 +795,7 @@ describe("t230 dispatcher hook routing", () => {
     const cwdProject = makeProject();
     const targetProject = makeProject();
     writeMinimalState(cwdProject, "intent-capture");
-    writeMinimalState(targetProject, "application-design");
+    writeMinimalState(targetProject, "domain-design");
 
     const hook = viaDispatcher(
       ["hook", "validate-state", "--project-dir", targetProject],
@@ -824,7 +824,7 @@ describe("t230 dispatcher hook routing", () => {
       }),
     );
     expect(statusline.exitCode).toBe(0);
-    expect(statusline.stdout.toString("utf-8")).toContain("Application Design");
+    expect(statusline.stdout.toString("utf-8")).toContain("Domain Design");
     expect(statusline.stdout.toString("utf-8")).not.toContain("Intent Capture");
 
     rmSync(

@@ -207,7 +207,7 @@ Find the most recent `STAGE_STARTED` entry for your stage and confirm the **Agen
 /aidlc poc Prototype a new inventory API
 ```
 
-The aidlc-architect-agent runs during Application Design; any Tier 2 file it loaded will influence its output visibly (in our example, the generated architecture should reference API Gateway with a Lambda authorizer).
+The aidlc-architect-agent runs during Domain Design; any Tier 2 file it loaded will influence its output visibly (in our example, the generated architecture should reference API Gateway with a Lambda authorizer).
 
 ---
 

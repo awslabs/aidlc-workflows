@@ -179,10 +179,10 @@ describe("t194 recompose - flips land as suffix edits and the router honours the
 describe("t194 recompose - rejections", () => {
   test("starved SKIP rejected by the strict validator with the producer named", () => {
     const proj = bornProject();
-    const r = run(proj, "aidlc-utility.ts", ["recompose", "--skip", "application-design"]);
+    const r = run(proj, "aidlc-utility.ts", ["recompose", "--skip", "domain-design"]);
     expect(r.status).not.toBe(0);
     expect(r.out).toContain("Strict (recompose) mode");
-    expect(r.out).toContain("application-design");
+    expect(r.out).toContain("domain-design");
   });
 
   test("frozen-stage flips rejected: [x] completed and behind-cursor", () => {

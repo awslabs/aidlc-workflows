@@ -154,6 +154,7 @@ import {
   type WorkspaceCommand,
   writeActiveDirectiveMarker,
   workspaceCommandUtilityArgv,
+  classifyStateVersion,
 } from "./aidlc-lib.ts";
 import {
   type Consume,
@@ -563,6 +564,19 @@ function printDirective(message: string): PrintDirective {
 
 function errorDirective(message: string): ErrorDirective {
   return { kind: "error", message };
+}
+
+// State-schema-version guard. The classifier (aidlc-lib.ts
+// `classifyStateVersion`) is the single source of truth for parsing and
+// classifying `- **State Version**: N` lines; runtime (next/report) and doctor
+// call it the same way so they can never disagree on whether a state is
+// unparseable / past / future / ok. staleStateVersionError() is the runtime
+// adapter: it returns the classifier's message on any incompatible verdict and
+// null on `ok`, so next/report can emit the message as an errorDirective
+// before any workflow-cursor read/advance.
+function staleStateVersionError(stateContent: string): string | null {
+  const verdict = classifyStateVersion(stateContent);
+  return verdict.kind === "ok" ? null : verdict.message;
 }
 
 function shellArg(value: string): string {
@@ -2608,6 +2622,21 @@ function handleNext(args: string[], projectDir: string | undefined): void {
 
   const pd = resolveProjectDir(projectDir);
   const stateContent = loadStateFileIfPresent(pd);
+  // Runtime state-version guard (see staleStateVersionError): refuse to advance
+  // a pre-v8 state up front rather than silently routing until it hits the
+  // renamed/missing Inception rows. Fires after the workspace/plugin/compose
+  // branches above (those are version-independent) and before any branch that
+  // reads or advances the workflow cursor.
+  // `!== null` (not truthiness): a PRESENT but zero-byte aidlc-state.md returns
+  // "" and must still be refused (an empty version → missing/unparseable branch),
+  // not skipped as if the file were absent.
+  if (stateContent !== null) {
+    const stale = staleStateVersionError(stateContent);
+    if (stale) {
+      emit(errorDirective(stale));
+      return;
+    }
+  }
   // The active intent's RELATIVE record-dir prefix (aidlc/spaces/<sp>/intents/
   // <slug>-<id8>), threaded into every run-stage directive so the conductor's
   // artifact/diary paths resolve under the active intent. null → the flat legacy
@@ -5183,6 +5212,24 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   // a transition), so it always disqualifies the turn from the Stop hook's
   // conversational carve-out. See touchEngineMarker.
   touchEngineMarker(projectDir);
+
+  // Runtime state-version guard (see staleStateVersionError): `report` commits a
+  // lifecycle transition, so a pre-v8 state must be refused here too — before any
+  // report sub-branch mutates it. Covers every report path (result, skeleton
+  // stance, single) via one early check.
+  {
+    const pd = resolveProjectDir(projectDir);
+    const sc = loadStateFileIfPresent(pd);
+    // `!== null` (not truthiness): a present but zero-byte state file returns ""
+    // and must still be refused, not treated as an absent file.
+    if (sc !== null) {
+      const stale = staleStateVersionError(sc);
+      if (stale) {
+        emit(errorDirective(stale));
+        return;
+      }
+    }
+  }
 
   // Branch -1 — the --single stage-runner commit. A stage-runner reports
   // its lone stage via `report --single --stage <slug> --result <outcome>`; the

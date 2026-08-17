@@ -8,7 +8,7 @@ design, non-functional requirements and design, infrastructure design, code
 generation, build/test verification, and CI pipeline configuration.
 
 Construction is the fourth of five phases in the AI-DLC methodology. It is
-driven by the **execution plan** produced during Delivery Planning (Stage 2.8).
+driven by the **execution plan** produced during Delivery Planning (Stage 2.9).
 The plan determines which stages execute, which are skipped, and in what order
 units are built.
 
@@ -32,7 +32,7 @@ completion messages, and state tracking.
 ## Bolt-by-Bolt Construction
 
 Construction executes **Bolt by Bolt**, driven by `bolt-plan.md` (Bolt
-sequence + walking-skeleton marker) from stage 2.8 and the dependency DAG
+sequence + walking-skeleton marker) from stage 2.9 and the dependency DAG
 from stage 2.7. A [Bolt](../../guide/glossary.md) is one pass through stages
 3.1–3.5 for a Unit or small group of dependency-linked Units. Stages 3.6
 (Build and Test) and 3.7 (CI Pipeline) run **once** at the end across all
@@ -154,8 +154,8 @@ SKILL.md §CONSTRUCTION Flow for the canonical specification.
 | Lead Agent        | aidlc-architect-agent                                                                                   |
 | support_agents    | aidlc-developer-agent                                                                                   |
 | mode              | inline                                                                                            |
-| Inputs            | unit-of-work.md, unit-of-work-story-map.md, requirements.md, application design artifacts         |
-| Outputs           | `<record>/construction/{unit-name}/functional-design/` -- business-logic-model.md, business-rules.md, domain-entities.md, CONDITIONAL: frontend-components.md |
+| Inputs            | unit-of-work.md, unit-of-work-story-map.md, requirements.md, domain design artifacts         |
+| Outputs           | `<record>/construction/{unit-name}/functional-design/` -- functional-spec.md, rules.md, entities.md, CONDITIONAL: frontend-components.md |
 
 ### Purpose
 
@@ -168,7 +168,7 @@ feasibility input.
 - Unit definition from `<record>/inception/units-generation/unit-of-work.md`
 - Assigned stories from `<record>/inception/units-generation/unit-of-work-story-map.md`
 - Requirements from `<record>/inception/requirements-analysis/requirements.md`
-- Application design artifacts from `<record>/inception/application-design/`
+- Domain design artifacts from `<record>/inception/domain-design/`
 
 ### Steps
 
@@ -177,7 +177,7 @@ feasibility input.
    input. Apply aidlc-architect-agent as the primary perspective.
 
 2. **Read Unit Context** -- Read the unit definition, assigned stories,
-   requirements, and application design artifacts.
+   requirements, and domain design artifacts.
 
 3. **Create Functional Design Plan** -- Analyze the unit's scope and create a
    questions file at
@@ -205,12 +205,12 @@ feasibility input.
 
 5. **Generate Artifacts** -- Generate the following in
    `<record>/construction/{unit-name}/functional-design/`:
-   - **business-logic-model.md**: Detailed algorithms, workflows, data
+   - **functional-spec.md**: Detailed algorithms, workflows, data
      transformations, processing sequences, and decision trees for the unit's
      business logic
-   - **business-rules.md**: Decision rules, validation logic, constraints,
+   - **rules.md**: Decision rules, validation logic, constraints,
      policies, conditional behavior, and business invariants
-   - **domain-entities.md**: Entities, relationships, data structures,
+   - **entities.md**: Entities, relationships, data structures,
      attributes, lifecycle states, and entity interaction patterns
    - **frontend-components.md** (CONDITIONAL -- only if unit includes
      frontend/UI): Component hierarchy, props/state design, interaction flows,
@@ -225,9 +225,9 @@ feasibility input.
 
 | Artifact                 | Description                                                              |
 |--------------------------|--------------------------------------------------------------------------|
-| business-logic-model.md  | Algorithms, workflows, data transformations, processing sequences, decision trees |
-| business-rules.md        | Decision rules, validation logic, constraints, policies, conditional behavior |
-| domain-entities.md       | Entities, relationships, data structures, attributes, lifecycle states   |
+| functional-spec.md  | Algorithms, workflows, data transformations, processing sequences, decision trees |
+| rules.md        | Decision rules, validation logic, constraints, policies, conditional behavior |
+| entities.md       | Entities, relationships, data structures, attributes, lifecycle states   |
 | frontend-components.md   | (CONDITIONAL) Component hierarchy, props/state, interaction flows, form validation, API integration |
 
 ### Approval Gate
@@ -388,7 +388,7 @@ infrastructure and platform input.
 - NFR requirements from `<record>/construction/{unit-name}/nfr-requirements/`
 - Functional design artifacts from
   `<record>/construction/{unit-name}/functional-design/` (if they exist)
-- Application design from `<record>/inception/application-design/` for
+- Domain design from `<record>/inception/domain-design/` for
   architectural context
 
 ### Steps
@@ -398,7 +398,7 @@ infrastructure and platform input.
    platform input.
 
 2. **Read Prior Artifacts** -- Read NFR requirements, functional design
-   artifacts (if they exist), and application design for architectural context.
+   artifacts (if they exist), and domain design for architectural context.
 
 3. **Generate Design Questions** -- Create a questions file at
    `<record>/construction/{unit-name}/nfr-design/nfr-design-questions.md`
@@ -503,8 +503,8 @@ by mapping where NFR patterns apply at the component level.
 | Lead Agent        | aidlc-aws-platform-agent                                                                                |
 | support_agents    | aidlc-devsecops-agent, aidlc-compliance-agent                                                           |
 | mode              | inline                                                                                            |
-| Inputs            | NFR design artifacts, application design, functional design                                       |
-| Outputs           | `<record>/construction/{unit-name}/infrastructure-design/` -- deployment-architecture.md, infrastructure-services.md, monitoring-design.md, cicd-pipeline.md, CONDITIONAL: shared-infrastructure.md |
+| Inputs            | NFR design artifacts, domain design, functional design                                       |
+| Outputs           | `<record>/construction/{unit-name}/infrastructure-design/` -- infrastructure-specification.md (deployment + services + CONDITIONAL shared), monitoring-design.md, cicd-pipeline.md |
 
 ### Purpose
 
@@ -518,7 +518,7 @@ aidlc-compliance-agent checking data residency and regulatory constraints.
 - NFR design from `<record>/construction/{unit-name}/nfr-design/` (if exists)
 - Functional design from
   `<record>/construction/{unit-name}/functional-design/` (if exists)
-- Application design from `<record>/inception/application-design/`
+- Domain design from `<record>/inception/domain-design/`
 - NFR requirements from
   `<record>/construction/{unit-name}/nfr-requirements/` (if exists)
 
@@ -529,7 +529,7 @@ aidlc-compliance-agent checking data residency and regulatory constraints.
    (data residency, regulatory constraints) personas and knowledge for support input.
 
 2. **Read Prior Artifacts** -- Read all prior design artifacts for context:
-   NFR design, functional design, application design, NFR requirements.
+   NFR design, functional design, domain design, NFR requirements.
 
 3. **Generate Infrastructure Questions** -- Create a questions file at
    `<record>/construction/{unit-name}/infrastructure-design/infrastructure-design-questions.md`
@@ -564,22 +564,21 @@ aidlc-compliance-agent checking data residency and regulatory constraints.
      management
 
 6. **Generate Artifacts** -- Generate the following in
-   `<record>/construction/{unit-name}/infrastructure-design/`:
-   - **deployment-architecture.md**: Compute resources, networking, storage,
-     environment definitions, infrastructure-as-code approach, resource sizing
-   - **infrastructure-services.md**: Database design, caching layer, messaging
-     infrastructure, external service integrations, service discovery
-   - **monitoring-design.md**: Platform-specific tooling implementing the
-     observability-design strategy, including metrics and KPIs, log strategy,
-     tracing configuration, alert definitions, dashboard specifications, and
-     incident response
-   - **cicd-pipeline.md**: Pipeline stages, build configuration, test
+   `<record>/construction/{unit-name}/infrastructure-design/`. Keep the content
+   **tabular** (deployment, services, shared, and monitoring are tables):
+   - **infrastructure-specification.md**: the core infra design — a
+     **Deployment** table (compute, networking, storage, environments, IaC,
+     sizing), an **Infrastructure Services** table (databases, caches,
+     messaging, integrations, service discovery), and a CONDITIONAL **Shared
+     Infrastructure** table (shared resources across units + ownership/access
+     boundaries), all in one document
+   - **monitoring-design.md**: the monitoring that implements NFR Design's
+     observability-design strategy, tabular — metrics/KPIs,
+     alerts, SLIs/SLOs, plus log-aggregation and tracing configuration and
+     dashboard specifications
+   - **cicd-pipeline.md**: pipeline stages, build configuration, test
      automation integration, deployment strategy (blue-green, canary, rolling),
-     rollback procedures, secrets management in CI/CD
-   - **shared-infrastructure.md** (CONDITIONAL -- produce when multiple units
-     share infrastructure resources): Shared databases, shared caches, shared
-     message queues, shared networking, cross-unit service discovery, resource
-     ownership and access boundaries
+     rollback procedures, environment promotion, secrets management in CI/CD
 
 7. **Prepare Completion** -- Verify the unit's Infrastructure Design
    artifacts. Do not edit state; report the gate outcome through
@@ -589,26 +588,26 @@ aidlc-compliance-agent checking data residency and regulatory constraints.
 
 ### Outputs
 
-| Artifact                   | Description                                                               |
-|----------------------------|---------------------------------------------------------------------------|
-| deployment-architecture.md | Compute, networking, storage, environment definitions, IaC approach       |
-| infrastructure-services.md | Databases, caching, messaging, external integrations, service discovery   |
-| monitoring-design.md       | Metrics, logs, tracing, alerts, dashboards, SLI/SLO tracking             |
-| cicd-pipeline.md           | Pipeline stages, build config, deployment strategy, rollback procedures   |
-| shared-infrastructure.md   | (CONDITIONAL) Shared resources across units, ownership boundaries         |
+| Artifact                       | Description                                                               |
+|--------------------------------|---------------------------------------------------------------------------|
+| infrastructure-specification.md | Deployment (compute/networking/storage/environments/IaC), infrastructure services, and CONDITIONAL shared resources — tabular |
+| monitoring-design.md           | Metrics, alerts, SLIs/SLOs, logs, tracing, dashboards — tabular where possible |
+| cicd-pipeline.md               | Pipeline stages, build config, deployment strategy, rollback procedures   |
 
 ### Approval Gate
 
 Strictly 2-option: Approve / Request Changes.
 
-### Notes -- Infrastructure Design Expansion
+### Notes -- Infrastructure Design Consolidation
 
-This stage produces **5 artifact files**, expanded from the upstream reference
-which has 2-3 files. This is a deliberate deviation documented in SKILL.md
-("Deliberate Deviations from Reference"). The additions of monitoring-design.md
-and cicd-pipeline.md as dedicated artifacts improve operational visibility.
-shared-infrastructure.md is produced conditionally only when multiple units
-share infrastructure resources.
+This stage produces **3 artifact files**. Deployment, infrastructure services,
+and shared resources were consolidated into a single tabular
+`infrastructure-specification.md` (closer to the upstream reference's single
+infra doc), while `monitoring-design.md` and `cicd-pipeline.md` stay dedicated
+artifacts because downstream Operation stages consume them independently
+(observability-setup reads monitoring; deployment-pipeline reads the CI/CD
+design). Shared infrastructure is a CONDITIONAL section of the specification,
+present only when multiple units share resources.
 
 ---
 
@@ -652,7 +651,7 @@ the execution plan. Code is written to the workspace root, never to
 - NFR design from `<record>/construction/{unit-name}/nfr-design/` (if exists)
 - Infrastructure design from
   `<record>/construction/{unit-name}/infrastructure-design/` (if exists)
-- Application design from `<record>/inception/application-design/`
+- Domain design from `<record>/inception/domain-design/`
 - Unit definition from
   `<record>/inception/units-generation/unit-of-work.md`
 - Story map from
@@ -666,7 +665,7 @@ This stage has a **two-part structure**: planning followed by generation.
 
 1. **Read All Unit Artifacts** -- Read all design artifacts for the current
    unit (functional design, NFR requirements, NFR design, infrastructure
-   design, application design, unit definition, story map).
+   design, domain design, unit definition, story map).
 
 2. **Create Code Generation Plan** -- Create a detailed plan at
    `<record>/construction/{unit-name}/code-generation/code-generation-plan.md`
@@ -1111,6 +1110,7 @@ through a phased construction flow:
 - NFR Requirements: 6 files (expanded from 2 in reference)
 - NFR Design: 6 files including logical-components.md (expanded from 2 in
   reference)
-- Infrastructure Design: 5 files including monitoring-design.md and
-  cicd-pipeline.md (expanded from 2-3 in reference)
+- Infrastructure Design: 3 files — a consolidated infrastructure-specification.md
+  (deployment + services + shared) plus dedicated monitoring-design.md and
+  cicd-pipeline.md
 - Plan/question file co-location with stage artifacts

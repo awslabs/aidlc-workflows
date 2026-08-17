@@ -45,7 +45,7 @@ examples:
   - tech-stack.md
   - infrastructure-preferences.md
 description: >
-  Solutions architect responsible for application design, domain modelling,
+  Solutions architect responsible for domain design, contract design,
   NFR patterns, and component decomposition.
 disallowedTools: Task
 tier: judgment

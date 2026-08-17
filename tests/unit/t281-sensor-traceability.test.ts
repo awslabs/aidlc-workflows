@@ -141,7 +141,7 @@ describe("t281 traceability artifact contract", () => {
   test("all emitting stages declare traceability.json as a required artifact", () => {
     const emitting = [
       ["inception", "user-stories"],
-      ["inception", "application-design"],
+      ["inception", "domain-design"],
       ["inception", "units-generation"],
       ["construction", "functional-design"],
       ["construction", "nfr-requirements"],
@@ -243,11 +243,11 @@ describe("t281 upstream and target verification", () => {
     expect(out.result.pass).toBe(false);
     expect(out.result.reason).toContain("requirements.md");
 
-    const application = trace(proj, "inception/application-design/traceability.json", {
+    const domain = trace(proj, "inception/domain-design/traceability.json", {
       upstream_ids: ["FR1"],
       coverage: [{ id: "FR1", status: "OK", target: "AuthService" }],
     });
-    out = run(proj, "application-design", application);
+    out = run(proj, "domain-design", domain);
     expect(out.result.pass).toBe(false);
     expect(out.result.reason).toContain("requirements.md");
   });
@@ -316,7 +316,7 @@ describe("t281 per-Unit scope, reverse derivation, and code targets", () => {
     const proj = project();
     seedUserStories(proj);
     seedUnits(proj);
-    write(proj, "construction/u1-auth/functional-design/business-rules.md", [
+    write(proj, "construction/u1-auth/functional-design/rules.md", [
       "# Rules",
       "",
       "## Authentication",
@@ -341,7 +341,7 @@ describe("t281 per-Unit scope, reverse derivation, and code targets", () => {
     const proj = project();
     seedUserStories(proj);
     seedUnits(proj);
-    write(proj, "construction/u1-auth/functional-design/business-rules.md", [
+    write(proj, "construction/u1-auth/functional-design/rules.md", [
       "# Rules",
       "",
       "## Authentication",
@@ -357,7 +357,7 @@ describe("t281 per-Unit scope, reverse derivation, and code targets", () => {
     });
     const out = run(proj, "functional-design", file);
     expect(out.result.pass).toBe(false);
-    expect(out.result.invalid_targets).toContain("AC1.1.2: target BR9.9 is absent from business-rules.md");
+    expect(out.result.invalid_targets).toContain("AC1.1.2: target BR9.9 is absent from rules.md");
     expect(out.result.orphans).toContain("BR1.2");
   });
 
@@ -372,7 +372,7 @@ describe("t281 per-Unit scope, reverse derivation, and code targets", () => {
       "|---|---|---|",
       "| US1.2 | U2 | u2-profile |",
     ].join("\n"));
-    write(proj, "construction/u1-auth/functional-design/business-rules.md", "# Rules\n\n## Auth\n- BR1.1 Rule\n");
+    write(proj, "construction/u1-auth/functional-design/rules.md", "# Rules\n\n## Auth\n- BR1.1 Rule\n");
     const file = trace(proj, "construction/u1-auth/functional-design/traceability.json", {
       upstream_ids: ["AC1.1.1"],
       coverage: [{ id: "AC1.1.1", status: "OK", target: "BR1.1" }],

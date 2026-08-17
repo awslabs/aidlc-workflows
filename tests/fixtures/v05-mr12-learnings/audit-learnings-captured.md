@@ -60,5 +60,5 @@
 ## Stage Started
 **Timestamp**: 2026-05-28T08:06:00Z
 **Event**: STAGE_STARTED
-**Stage**: application-design
+**Stage**: domain-design
 **Agent**: aidlc-architect-agent

@@ -175,7 +175,7 @@ Application code in workspace root:
 
 ## Feature Walkthrough
 
-This example builds a notification service for a task management application. The **feature** scope runs all 32 stages at Standard depth. This walkthrough highlights key stages across all phases.
+This example builds a notification service for a task management application. The **feature** scope runs all 33 stages at Standard depth. This walkthrough highlights key stages across all phases.
 
 ### Invocation
 
@@ -191,7 +191,7 @@ This example builds a notification service for a task management application. Th
 
 The 3 Initialization stages run automatically inside `aidlc-utility intent-create`. Workspace Detection identifies: TypeScript, Node.js 20, Express, PostgreSQL, brownfield project with existing task and user services.
 
-> Progress: 3/32 overall | Scope: feature, Depth: Standard
+> Progress: 3/33 overall | Scope: feature, Depth: Standard
 
 ### Ideation Phase (stages 1.1-1.7)
 
@@ -248,9 +248,9 @@ Defines scope boundaries: in-scope (3 trigger types, user preferences, email dig
 
 Compiles the initiative brief aggregating all Ideation outputs. Phase boundary verification confirms intent-to-scope traceability.
 
-> Progress: 10/32 overall | IDEATION complete. Verification Gate passed.
+> Progress: 10/33 overall | IDEATION complete. Verification Gate passed.
 
-### Inception Phase (stages 2.1-2.8)
+### Inception Phase (stages 2.1-2.9)
 
 **Stage 2.1 — Reverse Engineering** (pipeline)
 
@@ -268,15 +268,15 @@ Produces 12 functional requirements (notification triggers, preference CRUD, ema
 
 The aidlc-product-agent first drafts the personas and stories. The aidlc-design-agent, aidlc-developer-agent, and aidlc-quality-agent then inspect that draft as mutually blind collaborators, each writing an identity-marked contribution file. The aidlc-product-agent lead integrates all three contributions into `personas.md` and `stories.md` before presenting the **Approve** / **Request Changes** gate.
 
-**Stage 2.6 — Application Design** (aidlc-architect-agent)
+**Stage 2.6 — Domain Design** (aidlc-architect-agent)
 
 The aidlc-architect-agent designs the notification service architecture:
 
-- **Components**: NotificationService, PreferenceService, EmailRenderer, DigestScheduler
-- **API contracts**: REST endpoints for preference management, internal event handlers for triggers
-- **ADRs**: Event-driven trigger pattern (vs. polling), SQS for email queue (vs. direct send)
+- **Components**: NotificationService, PreferenceService, EmailRenderer, DigestScheduler — each with behaviour, dependencies/dependents, and owned entities
+- **Entity ownership**: NotificationService owns Notification + NotificationEvent; PreferenceService owns Preference
+- **Rationale**: event-driven trigger pattern (vs. polling), SQS for email queue (vs. direct send) recorded in the Rationale section
 
-Produces `components.md`, `services.md`, `decisions.md`.
+Produces the consolidated `components.md` (fenced `yaml` catalogue + mermaid diagram, summary, ownership, and rationale tables) plus `decisions.md` (the ADR log).
 
 **Stage 2.7 — Units Generation** (aidlc-architect-agent)
 
@@ -288,15 +288,19 @@ Decomposes into 3 units of work:
 
 Produces `unit-of-work.md` with dependency map: notification-core first, then preferences and email in parallel.
 
-**Stage 2.8 — Delivery Planning** (aidlc-delivery-agent)
+**Stage 2.8 — Contract Design** (aidlc-architect-agent)
+
+Because the system splits into three integrating units, Contract Design formalises the inter-unit boundaries: the internal event contract notification-core exposes to its callers, and the preference-lookup contract notification-email consumes from notification-preferences. Produces `contract-summary.md` (one row per boundary, each with an inline spec block).
+
+**Stage 2.9 — Delivery Planning** (aidlc-delivery-agent)
 
 Bolt sequence: Bolt 1 ships notification-core (walking skeleton — proves the event-handler pipeline end-to-end). Bolt 2 ships notification-preferences and notification-email in parallel. Per-Bolt DoDs captured in `bolt-plan.md`; WSJF-style rationale in `risk-and-sequencing-rationale.md`; external SES/SQS dependencies mapped in `external-dependency-map.md`. Phase boundary verification confirms requirements-to-architecture alignment.
 
-> Progress: 18/32 overall | INCEPTION complete. Verification Gate passed.
+> Progress: 19/33 overall | INCEPTION complete. Verification Gate passed.
 
 ### Construction Phase (stages 3.1-3.7)
 
-Construction runs **Bolt by Bolt** per the 2.8 plan. The first Bolt is the walking skeleton; the ladder prompt after it decides autonomy for the rest. Bolts with shared dependencies run in parallel.
+Construction runs **Bolt by Bolt** per the 2.9 plan. The first Bolt is the walking skeleton; the ladder prompt after it decides autonomy for the rest. Bolts with shared dependencies run in parallel.
 
 **Bolt 1: notification-core** — walking skeleton (always gated)
 
@@ -321,7 +325,7 @@ You've seen the shape work, so you pick **Continue autonomously**. The conductor
 
 **Bolt 2: notification-preferences + notification-email** — parallel batch
 
-Both depend only on notification-core and don't depend on each other, so 2.8's plan schedules them in a single batch. The conductor collects questions and generates design artifacts per Bolt, then dispatches **both code-generation stages concurrently** by issuing two `Task` calls in a single turn.
+Both depend only on notification-core and don't depend on each other, so 2.9's plan schedules them in a single batch. The conductor collects questions and generates design artifacts per Bolt, then dispatches **both code-generation stages concurrently** by issuing two `Task` calls in a single turn.
 
 - **notification-preferences — 3.1 Functional Design** — Preference entity, default values, channel toggles
 - **notification-preferences — 3.5 Code Generation** — CRUD API endpoints, preference repository, validation. 2 source files, 3 test files.
@@ -353,7 +357,7 @@ Generates build instructions, runs the full test suite across all 3 Units: 47 te
 
 Configures CI pipeline with lint, build, test, and security scan stages. Quality gates: coverage >= 75%, no critical vulnerabilities.
 
-> Progress: 25/32 overall | CONSTRUCTION complete. Verification Gate passed.
+> Progress: 26/33 overall | CONSTRUCTION complete. Verification Gate passed.
 
 ### Operation Phase (stages 4.1-4.7)
 
@@ -365,13 +369,13 @@ Configures CI pipeline with lint, build, test, and security scan stages. Quality
 
 **Stage 4.7 — Feedback & Optimization** — SLO targets (99.9% in-app delivery, 99% email delivery within 30s), cost analysis, feedback loop document.
 
-> Progress: 32/32 overall | OPERATION complete. Feature workflow complete.
+> Progress: 33/33 overall | OPERATION complete. Feature workflow complete.
 
 ### Key differences from bugfix
 
 | Aspect | Bugfix | Feature |
 |--------|--------|---------|
-| Stages executed | 7 | 32 |
+| Stages executed | 7 | 33 |
 | Depth | Minimal | Standard |
 | Phases | Initialization + Inception + Construction | All 5 |
 | Units of work | 1 | 3 |

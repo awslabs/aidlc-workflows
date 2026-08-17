@@ -91,7 +91,7 @@ When resuming, load context appropriate to the current phase and stage type:
 **INCEPTION — Design stages (App Design, Refined Mockups, Units Generation):**
 - Load requirements artifacts
 - Load user stories
-- Load `<record>/inception/application-design/` (app design, component designs)
+- Load `<record>/inception/domain-design/` (component catalogue) and `<record>/inception/contract-design/` (inter-unit contracts)
 
 **INCEPTION — Delivery Planning:**
 - Load all inception artifacts (requirements, design, units)
@@ -141,7 +141,7 @@ If `aidlc-state.md` exists but cannot be parsed (missing required sections, inva
 3. Rebuild `aidlc-state.md` from artifact evidence:
    - If `aidlc/spaces/<active-space>/codekb/<repo>/` has analysis files for the intent's repositories, mark RE stages complete
    - If `<record>/inception/requirements-analysis/` has requirement docs, mark requirements stages complete
-   - If `<record>/inception/application-design/` has design docs, mark design stages complete
+   - If `<record>/inception/domain-design/` has design docs, mark design stages complete
    - If application code exists matching story designs, mark code gen stages complete
 4. Set "Current Status" to the first stage that lacks artifact evidence
 5. Tell the user: "The file tracking this workflow's progress was damaged, so I rebuilt it from the documents already on disk. Please check that the recovered progress looks right before we continue."
