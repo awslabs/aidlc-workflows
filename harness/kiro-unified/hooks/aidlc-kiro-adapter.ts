@@ -570,13 +570,39 @@ if (target === "plan-approval-guard") {
   const dispatchedAgent = tool.startsWith("subagent_")
     ? tool.slice("subagent_".length)
     : "";
+  // ALSO cover the crew shape - `{mode, task, stages:[{name, role,
+  // prompt_template}]}` - which the harness/kiro adapter reads and which carries
+  // identity in NEITHER the tool name nor `agent_type`/`name`. It was not
+  // observed on either surface in the 2026-08-14 runs, so it stays a fallback
+  // rather than the primary path; but a guard that silently no-ops on a shape
+  // the runtime might deliver is worse than a redundant branch, and the whole
+  // point of this hook is that it must not be bypassable.
+  const crewStages = Array.isArray(ti.stages)
+    ? (ti.stages as Array<{ role?: string; prompt_template?: string }>)
+    : [];
+  const devStages = crewStages.filter(
+    (s) => s.role === "aidlc-developer-agent",
+  );
+  const directPrompt = (ti.prompt as string) ?? (ti.message as string) ?? "";
+  // In the crew shape the `AIDLC-UNIT:` marker the core body reads lives in
+  // `task` and/or the developer stages' `prompt_template`, so join them the way
+  // the harness/kiro adapter does.
+  const crewPrompt = [
+    (ti.task as string) ?? "",
+    ...devStages.map((s) => s.prompt_template ?? ""),
+  ]
+    .filter((t) => t.length > 0)
+    .join("\n");
   return runGuard("aidlc-plan-approval-guard.ts", {
     hook_event_name: "PreToolUse",
     tool_name: "Task",
     tool_input: {
       subagent_type:
-        dispatchedAgent || (ti.agent_type as string) || (ti.name as string) || "",
-      prompt: (ti.prompt as string) ?? (ti.message as string) ?? "",
+        dispatchedAgent ||
+        (ti.agent_type as string) ||
+        (ti.name as string) ||
+        (devStages.length > 0 ? "aidlc-developer-agent" : ""),
+      prompt: directPrompt.length > 0 ? directPrompt : crewPrompt,
     },
     cwd: projectDir,
   });

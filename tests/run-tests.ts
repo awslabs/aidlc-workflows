@@ -37,6 +37,7 @@ const LIVE_MODEL_GATES = [
   "AIDLC_CODEX_EXEC_LIVE",
   "AIDLC_KIRO_IDE_LIVE",
   "AIDLC_OPENCODE_RUN_LIVE",
+  "AIDLC_KIRO_UNIFIED_TUI_LIVE",
 ] as const;
 
 type Level = "smoke" | "unit" | "integration" | "e2e";

@@ -195,6 +195,72 @@ describe("t-active-space-includes: Kiro agents/*.json resources glob", () => {
   });
 });
 
+describe("t-active-space-includes: Kiro Markdown agents follow the active space", () => {
+  // dist/kiro-unified ships its 15 agents as `.md` ONLY — there is no agent JSON
+  // to rewrite. Before this case the `.kiro` branch skipped every non-`.json`
+  // file, so a space switch repointed steering while all 15 delegates kept
+  // globbing the pre-switch space's memory: agents loaded the wrong rule layers
+  // and space isolation was silently broken.
+  beforeEach(() => {
+    process.env.AIDLC_HARNESS_DIR = ".kiro";
+  });
+
+  function setupMarkdownOnly(): string {
+    const root = freshRoot();
+    seedSpaces(root);
+    const agentsDst = join(root, ".kiro", "agents");
+    mkdirSync(agentsDst, { recursive: true });
+    for (const name of [
+      "aidlc.md",
+      "aidlc-developer-agent.md",
+      "aidlc-architect-agent.md",
+    ]) {
+      cpSync(
+        distSurface("kiro-unified", ".kiro", "agents", name),
+        join(agentsDst, name),
+      );
+    }
+    return root;
+  }
+
+  test("re-points the memory glob in every agent .md, conductor included", () => {
+    const root = setupMarkdownOnly();
+    const written = repointHarnessIncludes(root, "teamB");
+    expect(written.length).toBe(3);
+    expect(
+      written.every((p) => p.startsWith(".kiro/agents/") && p.endsWith(".md")),
+    ).toBe(true);
+    for (const name of [
+      "aidlc.md",
+      "aidlc-developer-agent.md",
+      "aidlc-architect-agent.md",
+    ]) {
+      const body = readFileSync(join(root, ".kiro", "agents", name), "utf-8");
+      expect(body).toContain("file://aidlc/spaces/teamB/memory/**/*.md");
+      expect(body).not.toContain("aidlc/spaces/default/memory/");
+    }
+  });
+
+  test("the non-memory resources and the persona body survive the rewrite", () => {
+    const root = setupMarkdownOnly();
+    repointHarnessIncludes(root, "teamB");
+    const body = readFileSync(
+      join(root, ".kiro", "agents", "aidlc-developer-agent.md"),
+      "utf-8",
+    );
+    // The shared-knowledge glob is a different path and must not be touched.
+    expect(body).toContain("file://.kiro/knowledge/aidlc-shared/*.md");
+    // Frontmatter delimiters and a prose body still there (not truncated).
+    expect(body.startsWith("---")).toBe(true);
+    expect(body.length).toBeGreaterThan(200);
+  });
+
+  test("re-pointing to default (already shipped) is a NO-OP", () => {
+    const root = setupMarkdownOnly();
+    expect(repointHarnessIncludes(root, "default")).toEqual([]);
+  });
+});
+
 describe("t-active-space-includes: Kiro IDE steering follows the active space", () => {
   beforeEach(() => {
     process.env.AIDLC_HARNESS_DIR = ".kiro";

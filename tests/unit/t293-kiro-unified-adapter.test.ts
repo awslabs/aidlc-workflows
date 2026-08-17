@@ -1,4 +1,4 @@
-// t291-kiro-unified-adapter: the contract the unified Kiro adapter adds on top
+// t293-kiro-unified-adapter: the contract the unified Kiro adapter adds on top
 // of the shim t218 covers for the IDE tree. Two surfaces run this tree (Kiro IDE
 // 1.x and Kiro CLI v3) and both deliver the hook context as JSON on stdin, so
 // every case here pipes a captured payload shape and asserts the observable
@@ -34,7 +34,7 @@ const TREE = join(REPO_ROOT, "dist", "kiro-unified");
 const projects: string[] = [];
 
 function freshProject(): string {
-  const dir = mkdtempSync(join(tmpdir(), "aidlc-t291-"));
+  const dir = mkdtempSync(join(tmpdir(), "aidlc-t293-"));
   cpSync(TREE, dir, { recursive: true });
   projects.push(dir);
   return dir;
@@ -81,7 +81,7 @@ afterAll(() => {
   for (const dir of projects) rmSync(dir, { recursive: true, force: true });
 });
 
-describe("t291 kiro-unified adapter — verb-intercept (UserPromptSubmit)", () => {
+describe("t293 kiro-unified adapter — verb-intercept (UserPromptSubmit)", () => {
   test("a read-only flag runs off-band and comes back with the do-not-advance instruction", () => {
     const project = freshProject();
     const run = runAdapter(project, "verb-intercept", { prompt: "/aidlc --status" });
@@ -159,7 +159,7 @@ describe("t291 kiro-unified adapter — verb-intercept (UserPromptSubmit)", () =
   });
 });
 
-describe("t291 kiro-unified adapter — payload acquisition for the PreToolUse guards", () => {
+describe("t293 kiro-unified adapter — payload acquisition for the PreToolUse guards", () => {
   test("a blocked aidlc-state.ts verb is refused with exit 2 and a stderr reason", () => {
     const project = freshProject();
     const run = runAdapter(project, "state-transition-guard", {

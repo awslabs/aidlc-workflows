@@ -53,7 +53,12 @@ const SKIP_REASON = skipReason();
 const DOCTOR_HEADER = "AI-DLC Health Check";
 const DOCTOR_BUN_LABEL = "bun installed (required for CLI tools and hooks)";
 const DOCTOR_ADAPTER_LABEL = "aidlc-kiro-adapter.ts present";
-const DOCTOR_AGENT_LABEL = "agents/aidlc.json present";
+// Kept EQUAL to the shared label in aidlc-utility.ts handleDoctor(). The label
+// grew the Markdown conductor form and the wiring suffix when dist/kiro-unified
+// landed; the old "agents/aidlc.json present" is not a substring of it, so a
+// stale copy here fails calibration 1 on the next AIDLC_KIRO_ACP_LIVE=1 run.
+// This file sits outside tier collection, so CI cannot catch the drift.
+const DOCTOR_AGENT_LABEL = "agents/aidlc.{json,md} present (hook + permission wiring)";
 
 describe("kiro-acp-drive calibration (known-answer)", () => {
   test.skipIf(SKIP_REASON !== null)(

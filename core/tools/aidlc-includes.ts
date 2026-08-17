@@ -97,6 +97,31 @@ function repointKiroAgentResources(raw: string, space: string): string | null {
   return `${JSON.stringify(json, null, 2)}\n`;
 }
 
+/** Repoint the memory glob in a Kiro agent's MARKDOWN frontmatter `resources:`
+ *  list. The unified-agent-harness tree (`dist/kiro-unified`) ships its agents
+ *  as `.md` only — there is no JSON to rewrite — and `dist/kiro`/`dist/kiro-ide`
+ *  ship a `.md` twin beside each JSON, so without this a space switch left every
+ *  Markdown delegate globbing the previous space's memory while steering pointed
+ *  at the new one.
+ *
+ *  Anchored on the FULL `file://…/**\/*.md` resource form, exactly as the JSON
+ *  rewriter is, and deliberately NOT a bare `aidlc/spaces/<x>/memory/` replace:
+ *  these persona bodies also carry prose that names the path as a documentation
+ *  placeholder (`aidlc/spaces/<active-space>/memory/{org,team,project}.md`), and
+ *  a loose pattern rewrites `<active-space>` into a concrete space — corrupting
+ *  prose and making a repoint to the already-shipped space a non-no-op. */
+function repointKiroAgentMarkdownResources(
+  raw: string,
+  space: string,
+): string | null {
+  const target = `file://${spaceMemoryRel(space)}/**/*.md`;
+  const next = raw.replace(
+    /file:\/\/aidlc\/spaces\/[^/\s]+\/memory\/\*\*\/\*\.md/g,
+    target,
+  );
+  return next === raw ? null : next;
+}
+
 /** Rewrite live memory references in Kiro IDE's always-included steering file. */
 function repointKiroSteeringReferences(raw: string, space: string): string | null {
   const target = spaceMemoryRel(space);
@@ -233,15 +258,25 @@ export function repointHarnessIncludes(projectDir: string, space?: string): stri
   }
 
   if (harness === ".kiro") {
-    // Kiro CLI compatibility surface: rewrite each agents/*.json memory glob.
+    // Agent surface: rewrite each agent's memory glob in whichever form the tree
+    // ships it. JSON is the CLI 2.x agent-v1 config; Markdown is the unified
+    // agent harness form (`dist/kiro-unified` ships ONLY `.md`, and the other two
+    // Kiro trees ship a `.md` twin beside each JSON). Skipping `.md` here left a
+    // Markdown-only tree with every delegate bound to the pre-switch space while
+    // steering below pointed at the new one — space isolation silently broken.
     const agentsDir = join(harnessRoot, "agents");
     if (existsSync(agentsDir)) {
       for (const name of readdirSync(agentsDir).sort()) {
-        if (!name.endsWith(".json")) continue;
+        const rewrite = name.endsWith(".json")
+          ? repointKiroAgentResources
+          : name.endsWith(".md")
+            ? repointKiroAgentMarkdownResources
+            : null;
+        if (rewrite === null) continue;
         const p = join(agentsDir, name);
         const raw = readSafe(p);
         if (raw === null) continue;
-        repointFile(p, join(harness, "agents", name), raw, sp, repointKiroAgentResources, written);
+        repointFile(p, join(harness, "agents", name), raw, sp, rewrite, written);
       }
     }
     // Kiro IDE binding surface: workspace steering is inherited by delegated
