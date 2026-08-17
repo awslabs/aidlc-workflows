@@ -12,6 +12,13 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  artifactFilename,
+  readAllAuditShards,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  appendAuditEntry,
+} from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import {
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
@@ -24,7 +31,6 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
-import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
@@ -45,7 +51,10 @@ interface WaveEntry {
   completion_required: boolean;
   review_state:
     | "outstanding"
+    | "retry-required"
     | "repair-required"
+    | "recovery-required"
+    | "escalation-required"
     | "READY"
     | "NOT-READY"
     | "not-required";
@@ -84,6 +93,7 @@ function constructionState(
   current: string,
   iteration: "stage-major" | "unit-major" = "stage-major",
   reviewOverride?: "advisory" | "none",
+  autonomy?: "autonomous" | "gated",
 ): string {
   return `# AI-DLC State Tracking
 
@@ -95,6 +105,7 @@ function constructionState(
 - **Skeleton Stance**: on
 - **Construction Iteration**: ${iteration}
 ${reviewOverride ? `- **Review Override**: ${reviewOverride}\n` : ""}
+${autonomy ? `- **Construction Autonomy Mode**: ${autonomy}\n` : ""}
 
 ## Scope Configuration
 - **Stages to Execute**: all
@@ -127,13 +138,14 @@ function project(
   current = "functional-design",
   iteration: "stage-major" | "unit-major" = "stage-major",
   reviewOverride?: "advisory" | "none",
+  autonomy?: "autonomous" | "gated",
 ): string {
   const proj = createTestProject();
   tempDirs.push(proj);
   seedAidlcMemory(proj);
   writeFileSync(
     seededStateFile(proj),
-    constructionState(current, iteration, reviewOverride),
+    constructionState(current, iteration, reviewOverride, autonomy),
   );
   return proj;
 }
@@ -203,6 +215,13 @@ function review(
 }
 
 function requestReview(proj: string, unit: string, iteration = 1): void {
+  const result = reviewRequestResult(proj, unit, iteration);
+  if (result.status !== 0) {
+    throw new Error(`review request failed: ${result.out}`);
+  }
+}
+
+function reviewRequestResult(proj: string, unit: string, iteration = 1) {
   const result = spawnSync(
     BUN,
     [
@@ -227,9 +246,10 @@ function requestReview(proj: string, unit: string, iteration = 1): void {
       },
     },
   );
-  if ((result.status ?? -1) !== 0) {
-    throw new Error(`review request failed: ${result.stdout}${result.stderr}`);
-  }
+  return {
+    status: result.status ?? -1,
+    out: `${result.stdout ?? ""}${result.stderr ?? ""}`,
+  };
 }
 
 function completeWave(proj: string, unit: string): void {
@@ -258,6 +278,38 @@ function completeWave(proj: string, unit: string): void {
   if ((result.status ?? -1) !== 0) {
     throw new Error(`wave completion failed: ${result.stdout}${result.stderr}`);
   }
+}
+
+function reportRejected(proj: string, feedback: string) {
+  const env = { ...process.env };
+  env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD = "1";
+  delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+  const result = spawnSync(
+    BUN,
+    [
+      ORCH,
+      "report",
+      "--stage",
+      "functional-design",
+      "--result",
+      "rejected",
+      "--user-input",
+      feedback,
+      "--project-dir",
+      proj,
+    ],
+    { encoding: "utf-8", env },
+  );
+  return {
+    status: result.status ?? -1,
+    out: `${result.stdout ?? ""}${result.stderr ?? ""}`,
+  };
+}
+
+function auditEventCount(proj: string, event: string): number {
+  return readAllAuditShards(proj)
+    .split("\n")
+    .filter((line) => line === `**Event**: ${event}`).length;
 }
 
 function writeDependencyArtifact(
@@ -523,10 +575,13 @@ describe("t278 engine-emitted wave contract", () => {
       unit: "alpha",
       build_required: false,
       completion_required: true,
-      review_state: "outstanding",
+      review_state: "recovery-required",
+      review_iteration: 2,
     });
 
-    review(proj, "alpha", "READY", 2);
+    const recoveryIteration = reopened.wave?.entries[0].review_iteration;
+    expect(recoveryIteration).toBe(2);
+    review(proj, "alpha", "READY", recoveryIteration ?? 0);
     expect(next(proj).directive.wave?.entries[0]).toMatchObject({
       unit: "alpha",
       completion_required: true,
@@ -534,6 +589,114 @@ describe("t278 engine-emitted wave contract", () => {
     });
     completeWave(proj, "alpha");
     expect(next(proj).directive.gate).toBe(true);
+  }, 30000);
+
+  test("a second stale wave receipt escalates instead of re-emitting recovery", () => {
+    const proj = project();
+    seedBoltDag(proj, ["alpha"]);
+    cover(proj, "alpha", "functional-design", REQUIRED_FD);
+    review(proj, "alpha");
+
+    writeFileSync(
+      join(
+        seededRecordDir(proj),
+        "construction",
+        "alpha",
+        "functional-design",
+        "functional-spec.md",
+      ),
+      "# changed before recovery\n",
+    );
+    const recovery = next(proj).directive.wave?.entries[0];
+    expect(recovery).toMatchObject({
+      unit: "alpha",
+      review_state: "recovery-required",
+      review_iteration: 2,
+    });
+    review(proj, "alpha", "READY", recovery?.review_iteration ?? 0);
+
+    writeFileSync(
+      join(
+        seededRecordDir(proj),
+        "construction",
+        "alpha",
+        "functional-design",
+        "functional-spec.md",
+      ),
+      "# changed after recovery\n",
+    );
+    expect(next(proj).directive.wave?.entries[0]).toMatchObject({
+      unit: "alpha",
+      review_state: "escalation-required",
+      review_iteration: 3,
+    });
+  }, 30000);
+
+  test("an autonomous inline wave cannot reset spent recovery without a human turn", () => {
+    const proj = project(
+      "functional-design",
+      "stage-major",
+      undefined,
+      "autonomous",
+    );
+    seedBoltDag(proj, ["alpha"]);
+    cover(proj, "alpha", "functional-design", REQUIRED_FD);
+    review(proj, "alpha");
+
+    const artifact = join(
+      seededRecordDir(proj),
+      "construction",
+      "alpha",
+      "functional-design",
+      "functional-spec.md",
+    );
+    writeFileSync(artifact, "# changed before recovery\n");
+    review(proj, "alpha", "READY", 2);
+    writeFileSync(artifact, "# changed after recovery\n");
+
+    expect(next(proj).directive.wave?.entries[0]).toMatchObject({
+      unit: "alpha",
+      review_state: "escalation-required",
+      review_iteration: 3,
+    });
+
+    const rejected = reportRejected(
+      proj,
+      "Request Changes: restart review after the invalidating write",
+    );
+    expect(rejected.status).toBe(0);
+    expect(rejected.out).toContain('"kind":"error"');
+    expect(rejected.out).toContain("Refusing to reject");
+    expect(rejected.out).toContain(
+      "stale-receipt recovery review was already spent",
+    );
+    expect(rejected.out).toContain("only after a real human has acted");
+    expect(next(proj).directive.wave?.entries[0]).toMatchObject({
+      unit: "alpha",
+      review_state: "escalation-required",
+      review_iteration: 3,
+    });
+
+    const stillSpent = reviewRequestResult(proj, "alpha", 1);
+    expect(stillSpent.status).not.toBe(0);
+    expect(stillSpent.out).toContain(
+      "stale-receipt recovery review pass was already spent",
+    );
+    expect(auditEventCount(proj, "GATE_REJECTED")).toBe(0);
+
+    appendAuditEntry("HUMAN_TURN", {}, proj);
+    const humanRejected = reportRejected(
+      proj,
+      "Request Changes: restart review after the invalidating write",
+    );
+    expect(humanRejected.status).toBe(0);
+    expect(humanRejected.out).not.toContain('"kind":"error"');
+    expect(auditEventCount(proj, "GATE_REJECTED")).toBe(1);
+
+    const restarted = reviewRequestResult(proj, "alpha", 1);
+    expect(restarted.status).toBe(0);
+    expect(restarted.out).toContain('"emitted":"REVIEW_REQUESTED"');
+    expect(restarted.out).not.toContain('"recovery"');
   }, 30000);
 
   test("fully settled siblings are omitted from a repeated same-batch wave", () => {
@@ -670,6 +833,8 @@ function expectWaveProse(body: string): void {
   expect(body).toContain("entry.unit_memory_path");
   expect(body).toContain("retry-required");
   expect(body).toContain("repair-required");
+  expect(body).toContain("recovery-required");
+  expect(body).toContain("escalation-required");
   expect(body).toContain("`--retry-pending`");
   expect(body).toContain("emits `UNIT_COMPLETED`");
   expect(body).toContain("Code Generation and unit-major iteration never carry a wave");
@@ -722,6 +887,8 @@ describe("t278 wave protocol parity", () => {
     expect(core).toContain("`unit_memory_path`");
     expect(core).toContain('"retry-required"');
     expect(core).toContain('"repair-required"');
+    expect(core).toContain('"recovery-required"');
+    expect(core).toContain('"escalation-required"');
     expect(core).toContain("unit complete --wave");
     expect(core).toContain("UNIT_COMPLETED");
     expect(core).toContain("accumulated steering bundle");

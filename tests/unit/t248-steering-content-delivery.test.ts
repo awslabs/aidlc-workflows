@@ -28,6 +28,7 @@ import {
 import {
   cleanupTestProject,
   REPO_ROOT,
+  seededRecordDir,
   seededStateFile,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
@@ -81,6 +82,8 @@ function invoke(
   subcommand: "next" | "continue",
   args: string[],
 ): { directive: WireDirective; bytes: number } {
+  cpSync(join(REPO_ROOT, "core", "tools", "aidlc-lib.ts"), join(proj, ".claude", "tools", "aidlc-lib.ts"));
+  cpSync(join(REPO_ROOT, "core", "tools", "aidlc-orchestrate.ts"), join(proj, ".claude", "tools", "aidlc-orchestrate.ts"));
   const res = spawnSync(
     BUN,
     [
@@ -374,6 +377,27 @@ describe("t248 deterministic steering delivery", () => {
       "utf-8",
     ).trim();
     expect(otherKey).not.toBe(encodedKey);
+  });
+
+  test("sessionless continuation remains deliberately stateless for the same token", () => {
+    const proj = setupIntegrationProject({ withState: "state-brownfield-feature.md" });
+    projects.push(proj);
+    const orgPath = join(proj, "aidlc", "spaces", "default", "memory", "org.md");
+    writeFileSync(
+      orgPath,
+      Array.from({ length: 180 }, (_, i) => `## Sessionless ${i}\n\n${"x".repeat(320)}\n\n`).join(""),
+      "utf-8",
+    );
+    const first = invoke(proj, "next", []).directive;
+    expect(first.kind).toBe("load-steering");
+    const token = first.continue_token ?? "";
+    const once = invoke(proj, "continue", [token]).directive;
+    const twice = invoke(proj, "continue", [token]).directive;
+    expect(twice).toEqual(once);
+    const marker = JSON.parse(
+      readFileSync(join(seededRecordDir(proj), ".aidlc-active-directive.json"), "utf-8"),
+    ) as { owner_session?: string };
+    expect(marker.owner_session).toStartWith("sessionless:");
   });
 
   test("the old public-path MAC cannot forge a continuation that skips chunks", () => {

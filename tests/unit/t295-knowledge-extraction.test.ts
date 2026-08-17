@@ -1,6 +1,6 @@
 // covers: function:extractDocument function:probeExtractor function:extractorArgvFor function:detectMimeType function:EXTRACT_INPUT_BYTE_CAP function:EXTRACT_TIMEOUT_MS function:EXTRACT_PROBE_TIMEOUT_MS function:EXTRACT_PAGE_CAP function:EXTRACT_OUTPUT_CHAR_CAP function:EXTRACT_BATCH_DOC_CAP function:EXTRACT_BATCH_BYTE_CAP
 //
-// t280 - DocumentKB text extraction: probe an external executable, degrade into
+// t295 - DocumentKB text extraction: probe an external executable, degrade into
 // a distinct state, and never let a document's NAME become a command.
 //
 // Mechanism: real filesystem + real spawns. The whole subject is what happens
@@ -83,7 +83,7 @@ const PDFTOTEXT = probeExtractor("pdftotext").available;
 let proj: string | undefined;
 
 function scratchProject(): string {
-  proj = mkdtempSync(join(tmpdir(), "t280-"));
+  proj = mkdtempSync(join(tmpdir(), "t295-"));
   mkdirSync(documentsDir(proj, SPACE), { recursive: true });
   return proj;
 }
@@ -101,7 +101,7 @@ afterEach(() => {
   }
 });
 
-describe("t280 the bounds are named constants, anchored to real limits", () => {
+describe("t295 the bounds are named constants, anchored to real limits", () => {
   test("every bound is exported with the value the design fixed", () => {
     // Exported so a test can assert the BOUND rather than a magic number, and so
     // a change is a visible diff rather than a silent retune.
@@ -130,7 +130,7 @@ describe("t280 the bounds are named constants, anchored to real limits", () => {
   });
 });
 
-describe("t280 probeExtractor degrades instead of throwing", () => {
+describe("t295 probeExtractor degrades instead of throwing", () => {
   test("a missing executable reports unavailable rather than raising", () => {
     // An absent extractor is a NORMAL state on a fresh machine, not an error.
     const r = probeExtractor("definitely-not-a-real-binary-xyz");
@@ -156,7 +156,7 @@ describe("t280 probeExtractor degrades instead of throwing", () => {
   });
 });
 
-describe("t280 MIME detection reads the BYTES, not the extension", () => {
+describe("t295 MIME detection reads the BYTES, not the extension", () => {
   test("a PDF is detected by magic even with a wrong extension", () => {
     // The extension is a claim; the bytes are evidence.
     const pdf = Buffer.from("%PDF-1.4\nbody\n");
@@ -213,7 +213,7 @@ function fakeDocxBytes(): Buffer {
   return Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), body.slice(4), eocd]);
 }
 
-describe("t280 Word (.docx) detection — Finding 3", () => {
+describe("t295 Word (.docx) detection — Finding 3", () => {
   test("a docx-shaped zip (both OOXML markers) is detected as the Word MIME", () => {
     const buf = fakeDocxBytes();
     expect(hasWordOoxmlSignature(buf)).toBe(true);
@@ -338,7 +338,7 @@ describe("t280 Word (.docx) detection — Finding 3", () => {
   });
 });
 
-describe("t280 each outcome is a DISTINCT state with its own remedy", () => {
+describe("t295 each outcome is a DISTINCT state with its own remedy", () => {
   test("text extracts with no external tool at all", () => {
     const p = scratchProject();
     const abs = doc(p, "a.md", "hello world\n");
@@ -467,7 +467,7 @@ describe("t280 each outcome is a DISTINCT state with its own remedy", () => {
   });
 });
 
-describe("t280 the output cap sets truncated, and content.md stays verbatim", () => {
+describe("t295 the output cap sets truncated, and content.md stays verbatim", () => {
   test("text over the cap is truncated and FLAGGED", () => {
     const p = scratchProject();
     const big = "x".repeat(EXTRACT_OUTPUT_CHAR_CAP + 500);
@@ -520,7 +520,7 @@ describe("t280 the output cap sets truncated, and content.md stays verbatim", ()
   });
 });
 
-describe("t280 NO SHELL: a document name is never a command", () => {
+describe("t295 NO SHELL: a document name is never a command", () => {
   test("shell metacharacters in a filename stay ordinary characters", () => {
     // The realistic attack: a customer document arrives with a crafted name. With
     // a shell string this executes; with an argv array it is a filename.
@@ -577,7 +577,7 @@ describe("t280 NO SHELL: a document name is never a command", () => {
   });
 });
 
-describe("t280 extraction runs OUTSIDE the audit lock", () => {
+describe("t295 extraction runs OUTSIDE the audit lock", () => {
   test("the locked region contains no spawn", () => {
     // The lock's acquire budget is ~5s. Holding it across a multi-second parse
     // would make UNRELATED commands fail to acquire rather than merely wait -- so
@@ -598,7 +598,7 @@ describe("t280 extraction runs OUTSIDE the audit lock", () => {
   });
 });
 
-describe("t280 a configured extractor overrides the default", () => {
+describe("t295 a configured extractor overrides the default", () => {
   test("extractorArgvFor returns the default PDF argv with no configuration", () => {
     const argv = extractorArgvFor("application/pdf");
     expect(argv?.[0]).toBe("pdftotext");
@@ -624,7 +624,7 @@ describe("t280 a configured extractor overrides the default", () => {
   });
 });
 
-describe("t280 Finding 4: the per-document size check runs BEFORE the read, not after", () => {
+describe("t295 Finding 4: the per-document size check runs BEFORE the read, not after", () => {
   const AIDLC_TOOLS = join(import.meta.dir, "..", "..", "dist", "claude", ".claude", "tools");
 
   test("structural: readCandidate's size gate precedes its call into readDocumentBytes", () => {
@@ -700,7 +700,7 @@ describe("t280 Finding 4: the per-document size check runs BEFORE the read, not 
     // Driven as a SUBPROCESS so this test's own RSS (bun's runtime, jest-like
     // harness, everything else already loaded) is not conflated with the
     // measurement -- the child imports only the tool and calls onboard once.
-    const driver = join(p, "__t280_rss_probe.ts");
+    const driver = join(p, "__t295_rss_probe.ts");
     writeFileSync(
       driver,
       `const before = process.memoryUsage().rss;\n` +
@@ -729,7 +729,7 @@ describe("t280 Finding 4: the per-document size check runs BEFORE the read, not 
   }, 30000);
 });
 
-describe("t280 Finding 4: EXTRACT_BATCH_DOC_CAP is enforced, not dead", () => {
+describe("t295 Finding 4: EXTRACT_BATCH_DOC_CAP is enforced, not dead", () => {
   test("onboard refuses a pathless batch over the document cap -- nothing is indexed", () => {
     const p = scratchProject();
     for (let i = 0; i < EXTRACT_BATCH_DOC_CAP + 1; i++) doc(p, `d${i}.txt`, `body ${i}\n`);
@@ -768,7 +768,7 @@ describe("t280 Finding 4: EXTRACT_BATCH_DOC_CAP is enforced, not dead", () => {
   });
 });
 
-describe("t280 Finding 4: EXTRACT_BATCH_BYTE_CAP is enforced, not dead", () => {
+describe("t295 Finding 4: EXTRACT_BATCH_BYTE_CAP is enforced, not dead", () => {
   test("onboard refuses a pathless batch whose TOTAL bytes exceed the byte cap, even under the doc cap", () => {
     // Attack on a narrower fix: a guard that only checked doc COUNT would miss
     // a batch of just a few enormous files. Uses sparse files (ftruncate) --
@@ -789,10 +789,10 @@ describe("t280 Finding 4: EXTRACT_BATCH_BYTE_CAP is enforced, not dead", () => {
   });
 });
 
-describe("t280 Finding 5(c): a DOCX with no configured extractor becomes retryable once one exists", () => {
+describe("t295 Finding 5(c): a DOCX with no configured extractor becomes retryable once one exists", () => {
   // Deterministic regardless of what is installed on the machine running this:
   // uses a SCRATCH COPY of dist/ with its OWN harness.json (same technique as
-  // t279), never the real dist. First run configures a NONEXISTENT extractor
+  // t294), never the real dist. First run configures a NONEXISTENT extractor
   // for the docx mime (forcing extractor_unavailable); second run reconfigures
   // it to `cat` (always present) and syncs, proving the row is retryable.
   const REPO = join(import.meta.dir, "..", "..");
@@ -831,7 +831,7 @@ z.close()
   });
 
   test("detectedType survives extractor_unavailable, and a later-configured extractor makes the row retryable", () => {
-    scratch = mkdtempSync(join(tmpdir(), "t280-docx-"));
+    scratch = mkdtempSync(join(tmpdir(), "t295-docx-"));
     cpSync(join(REPO, "dist"), join(scratch, "dist"), { recursive: true });
 
     setDocxExtractor(["definitely-not-a-real-extractor-binary", "$IN"]);
@@ -862,7 +862,7 @@ z.close()
   });
 
   test("unsupported_type retries after an extractor is configured", () => {
-    scratch = mkdtempSync(join(tmpdir(), "t280-docx-unsupported-"));
+    scratch = mkdtempSync(join(tmpdir(), "t295-docx-unsupported-"));
     cpSync(join(REPO, "dist"), join(scratch, "dist"), { recursive: true });
 
     const projectDir = join(scratch, "project");

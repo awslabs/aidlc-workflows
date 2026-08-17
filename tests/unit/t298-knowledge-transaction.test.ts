@@ -1,6 +1,6 @@
 // covers: subcommand:aidlc-knowledge:onboard function:spaceAuditShardPath function:journalDir function:journalTxnDir function:collectStaleJournals function:appendAuditEntryAtPathUnlocked audit:DOCUMENT_INDEXED
 //
-// t291 - the journaled transaction around `onboard`. Where t289 covers the read
+// t298 - the journaled transaction around `onboard`. Where t289 covers the read
 // boundary, this covers what happens between reading and committing: the lock,
 // the staging journal, the digest re-validation, and where the audit row lands.
 //
@@ -104,7 +104,7 @@ let proj: string | undefined;
  *  this file guards is invisible in a space with no intents, because that is the
  *  one case where the buggy call happens to return the right path. */
 function projectWithIntent(): string {
-  proj = mkdtempSync(join(tmpdir(), "t291-"));
+  proj = mkdtempSync(join(tmpdir(), "t298-"));
   const r = spawnSync(
     "bun",
     [join(AIDLC_TOOLS, "aidlc-utility.ts"), "intent-create", "--label", "probe",
@@ -216,7 +216,7 @@ afterEach(() => {
   }
 });
 
-describe("t291 the audit row lands in the SPACE shard, not the active intent's", () => {
+describe("t298 the audit row lands in the SPACE shard, not the active intent's", () => {
   test("a failed audit-last append is repaired by an idempotent onboard retry", () => {
     const p = projectWithIntent();
     const abs = doc(p, "audit-repair.md");
@@ -270,7 +270,7 @@ describe("t291 the audit row lands in the SPACE shard, not the active intent's",
   });
 
   test("DocumentKB-only audit rows do not activate the human-presence floor", () => {
-    proj = mkdtempSync(join(tmpdir(), "t291-presence-"));
+    proj = mkdtempSync(join(tmpdir(), "t298-presence-"));
     mkdirSync(documentsDir(proj, SPACE), { recursive: true });
     doc(proj, "policy.md");
     expect(humanActedSinceGate(proj)).toBe(true);
@@ -437,7 +437,7 @@ describe("t291 the audit row lands in the SPACE shard, not the active intent's",
   });
 });
 
-describe("t291 the journal: absent-or-complete, and collectable", () => {
+describe("t298 the journal: absent-or-complete, and collectable", () => {
   test("a successful commit leaves NO journal dir behind", () => {
     const p = projectWithIntent();
     doc(p, "a.md");
@@ -599,7 +599,7 @@ function isPidAliveViaKill(pid: number): boolean {
   }
 }
 
-describe("t291 the digest is re-validated INSIDE the lock", () => {
+describe("t298 the digest is re-validated INSIDE the lock", () => {
   test("a document edited between staging and commit is REFUSED, and nothing lands", () => {
     // Without the re-check inside the lock, this row is indexed with the NEW
     // digest and the OLD staged content -- silent corruption no locking elsewhere
@@ -696,7 +696,7 @@ describe("t291 the digest is re-validated INSIDE the lock", () => {
   });
 });
 
-describe("t291 concurrency: N parallel onboards lose no row", () => {
+describe("t298 concurrency: N parallel onboards lose no row", () => {
   test("twelve concurrent processes each indexing a distinct file land ALL twelve", () => {
     // In-process calls would serialise on the reentrant lock and prove nothing.
     // Separate PROCESSES contend for the real OS lock, which is the thing under
@@ -777,7 +777,7 @@ describe("t291 concurrency: N parallel onboards lose no row", () => {
   }, 60000);
 });
 
-describe("t291 an EDITED row is protected from the same race as a fresh one", () => {
+describe("t298 an EDITED row is protected from the same race as a fresh one", () => {
   test("a row tombstoned by a concurrent process, mid-edit-commit, is left tombstoned -- not resurrected in a contradictory state", () => {
     // Same race shape as "the digest is re-validated INSIDE the lock" above,
     // but on the EDIT path this story adds: pass 1 evidences identity by a LIVE
@@ -890,7 +890,7 @@ describe("t291 an EDITED row is protected from the same race as a fresh one", ()
   }, 60000);
 });
 
-describe("t291 the index is read FRESH inside the lock", () => {
+describe("t298 the index is read FRESH inside the lock", () => {
   test("a row added between the read pass and the commit is not overwritten", () => {
     // The copy from the read pass predates the lock. Writing it back is exactly
     // how a concurrent onboard loses a row -- so the commit re-reads.
@@ -949,7 +949,7 @@ describe("t291 the index is read FRESH inside the lock", () => {
   }, 60_000);
 });
 
-describe("t291 the journal is actually GITIGNORED, not just described as such", () => {
+describe("t298 the journal is actually GITIGNORED, not just described as such", () => {
   test("git check-ignore agrees the journal path is ignored, in every harness tree", () => {
     // The code comment claims ".journal/ is GITIGNORED" and the design calls that
     // load-bearing -- but a comment is not a rule. This was shipped WRONG once:
@@ -971,7 +971,7 @@ describe("t291 the journal is actually GITIGNORED, not just described as such", 
       .sort();
     expect(harnesses.length, "no harness trees found to check").toBeGreaterThan(0);
     for (const h of harnesses) {
-      const repo = mkdtempSync(join(tmpdir(), `t291-gi-${h}-`));
+      const repo = mkdtempSync(join(tmpdir(), `t298-gi-${h}-`));
       try {
         execFileSync("git", ["init", "-q"], { cwd: repo });
         const gi = join(import.meta.dir, "..", "..", "dist", h, ".gitignore");
@@ -1000,7 +1000,7 @@ describe("t291 the journal is actually GITIGNORED, not just described as such", 
   }, 30000);
 });
 
-describe("t291 I16: no lock inversion", () => {
+describe("t298 I16: no lock inversion", () => {
   test("a concurrent per-intent write and a space-level onboard BOTH complete", () => {
     // The design's own acceptance criterion, which an earlier version of this
     // file claimed without testing. Two locks taken in two orders across two
@@ -1066,12 +1066,12 @@ describe("t291 I16: no lock inversion", () => {
   });
 });
 
-describe("t291 I12: every refusal's prescribed remedy actually repairs the state", () => {
+describe("t298 I12: every refusal's prescribed remedy actually repairs the state", () => {
   test("the missing-documents/ refusal names a command that RUNS and repairs", () => {
     // Not "the message mentions mkdir" -- the message's own instruction is
     // extracted, executed verbatim, and then onboard must succeed. A remedy that
     // reads plausibly and does not work is worse than no remedy.
-    proj = mkdtempSync(join(tmpdir(), "t291-"));
+    proj = mkdtempSync(join(tmpdir(), "t298-"));
     const p = proj;
     const r = spawnSync(
       "bun",
@@ -1120,7 +1120,7 @@ describe("t291 I12: every refusal's prescribed remedy actually repairs the state
   }, 30000);
 });
 
-describe("t291 commit-time reconciliation and idempotent recovery", () => {
+describe("t298 commit-time reconciliation and idempotent recovery", () => {
   test("sync does not tombstone a source recreated while it waits for the lock", () => {
     const p = projectWithIntent();
     const source = doc(p, "recreated.md", "original\n");

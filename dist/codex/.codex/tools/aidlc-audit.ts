@@ -436,11 +436,19 @@ function refuseProtectedEvent(eventType: string): never {
 // lands as a SECOND `**Event**:` line, and the multiline regex in
 // findAllEvents matches ANY line of a block — so a smuggled `--field
 // Event=HUMAN_TURN` on a harmless event type would register as a forged event
-// in every query. `Timestamp` is deliberately NOT reserved: several owning
-// emitters pass it as a documented field (park/unpark rows), and it cannot
-// spoof — the emitter's own `**Timestamp**:` line is written first and every
-// parser takes the first match.
+// in every query. `Timestamp` is deliberately NOT reserved: the public `append`
+// CLI accepts it, and it cannot spoof — the emitter's own `**Timestamp**:` line
+// is written first and every parser takes the first match. renderAuditBlock
+// drops it instead, so it can never render a second line.
 const RESERVED_FIELD_KEYS = new Set(["Event"]);
+
+// Keys renderAuditBlock writes itself, and therefore never re-renders from
+// `fields`. `Event` is already refused by RESERVED_FIELD_KEYS before render
+// (belt-and-braces); `Timestamp` is accepted there on purpose, so this set is
+// the only thing keeping a caller-supplied value from emitting a SECOND
+// `**Timestamp**:` line — which would break any whole-file reader that zips
+// `**Timestamp**` occurrences against `**Event**` occurrences.
+const EMITTER_OWNED_FIELD_KEYS = new Set(["Timestamp", "Event"]);
 const AUDIT_FIELD_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9 ._()/-]*$/;
 
 function validateAuditEntry(entry: AuditEntryInput): void {
@@ -474,6 +482,9 @@ function renderAuditBlock(
   block += `**Timestamp**: ${timestamp}\n`;
   block += `**Event**: ${entry.eventType}\n`;
   for (const [key, value] of Object.entries(entry.fields)) {
+    // The emitter already wrote these above; re-rendering one would put a
+    // second identically-marked line in the block (issue #715).
+    if (EMITTER_OWNED_FIELD_KEYS.has(key)) continue;
     // Escape every JavaScript line terminator in values so a malicious or
     // malformed input cannot forge a second audit field or event line.
     const safeValue = String(value).replace(/\r\n?|\n|\u2028|\u2029/g, "\\n");

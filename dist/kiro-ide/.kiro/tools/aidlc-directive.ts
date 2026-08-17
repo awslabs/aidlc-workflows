@@ -93,6 +93,8 @@ export type WaveReviewState =
   | "outstanding"
   | "retry-required"
   | "repair-required"
+  | "recovery-required"
+  | "escalation-required"
   | "READY"
   | "NOT-READY"
   | "not-required";
@@ -1011,12 +1013,14 @@ function checkOptionalWave(
       item.review_state !== "outstanding" &&
       item.review_state !== "retry-required" &&
       item.review_state !== "repair-required" &&
+      item.review_state !== "recovery-required" &&
+      item.review_state !== "escalation-required" &&
       item.review_state !== "READY" &&
       item.review_state !== "NOT-READY" &&
       item.review_state !== "not-required"
     ) {
       errors.push(
-        `${prefix}.review_state must be one of outstanding | retry-required | repair-required | READY | NOT-READY | not-required, got ${JSON.stringify(item.review_state)}`,
+        `${prefix}.review_state must be one of outstanding | retry-required | repair-required | recovery-required | escalation-required | READY | NOT-READY | not-required, got ${JSON.stringify(item.review_state)}`,
       );
     }
     if (

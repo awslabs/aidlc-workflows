@@ -760,6 +760,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t270-metrics-transport.test.ts",
     "unit/t280-contract-design-wiring.test.ts",
     "unit/t282-state-version-doctor.test.ts",
+    "unit/t283-copilot-engine-cursor.test.ts",
     "unit/t240-opencode-packaging.test.ts",
     "unit/t263-reviewer-terminal-ordering.test.ts",
     "unit/t264-review-freeze-hook.test.ts",
@@ -780,24 +781,24 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     // t278 spawns real processes because concurrency cannot be faked in-process:
     // two onboards in ONE process serialise on the reentrant audit lock and prove
     // nothing about two PROCESSES contending for the OS lock.
-    "unit/t291-knowledge-transaction.test.ts",
-    // t279 runs the REAL packager (`bun scripts/package.ts`) because the seam it
+    "unit/t298-knowledge-transaction.test.ts",
+    // t294 runs the REAL packager (`bun scripts/package.ts`) because the seam it
     // tests IS the packager: a mocked writer would prove nothing about what ships
     // into the five committed harness.json files.
-    "unit/t279-document-extractors-seam.test.ts",
-    // t280's Finding-4 stat-before-read RSS probe spawns a child `bun` process
+    "unit/t294-document-extractors-seam.test.ts",
+    // t295's Finding-4 stat-before-read RSS probe spawns a child `bun` process
     // running the shipped tool once, because the property under test is the
     // CHILD process's own memory growth -- measuring in-process would conflate
     // the tool's allocations with the test runner's.
-    "unit/t280-knowledge-extraction.test.ts",
+    "unit/t295-knowledge-extraction.test.ts",
     // t292 spawns the tool once, to assert `list --all` is REJECTED. Asserting
     // that behaviourally beats grepping the source for "--all", which matched the
     // comment explaining the flag does not exist.
     "unit/t292-knowledge-list-show.test.ts",
-    // t283 births real intents through the shipped tool, because a hand-written
+    // t297 births real intents through the shipped tool, because a hand-written
     // intents.json would let the test agree with a fiction rather than with the
     // registry shape the code actually meets.
-    "unit/t283-knowledge-intents.test.ts",
+    "unit/t297-knowledge-intents.test.ts",
     // t284 spawns a fake extractor on PATH to force a version change, which is
     // the only way to observe the retry-on-unchanged-digest inversion.
     "unit/t284-knowledge-sync-rebind.test.ts",
@@ -909,6 +910,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t149-codex-hook-adapter.test.ts",
     "unit/t155-template-override.test.ts",
     "unit/t158-memory-writer-reader-seam.test.ts",
+    "unit/t161-per-intent-lock-reaper.test.ts",
     "unit/t168-statusline-orientation.test.ts",
     "unit/t169-session-resume-rebind.test.ts",
     "unit/t170-audit-logger-per-intent.test.ts",
@@ -968,6 +970,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t248-steering-content-delivery.test.ts",
     "unit/t278-per-unit-wave.test.ts",
     "unit/t290-code-gen-unit-test-instructions-coverage.test.ts",
+    "unit/t291-review-receipt-recovery.test.ts",
     "unit/t255-workspace-sync.test.ts",
     "unit/t27.test.ts",
     "unit/t29.test.ts",

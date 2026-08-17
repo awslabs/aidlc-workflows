@@ -1,6 +1,6 @@
 // covers: function:resolveLinkedSource function:readSourcesLocal function:sourcesLocalPath
 //
-// t282 - `linked` sources: referencing a corpus that lives outside the repo
+// t296 - `linked` sources: referencing a corpus that lives outside the repo
 // without committing one developer's directory layout.
 //
 // Mechanism: real filesystem. The subject is what a committed row resolves to on
@@ -58,14 +58,14 @@ let proj: string | undefined;
 let corpus: string | undefined;
 
 function scratchProject(): string {
-  proj = mkdtempSync(join(tmpdir(), "t282-"));
+  proj = mkdtempSync(join(tmpdir(), "t296-"));
   mkdirSync(documentsDir(proj, SPACE), { recursive: true });
   return proj;
 }
 
 /** An external corpus, deliberately OUTSIDE the project dir. */
 function externalCorpus(): string {
-  corpus = mkdtempSync(join(tmpdir(), "t282-corpus-"));
+  corpus = mkdtempSync(join(tmpdir(), "t296-corpus-"));
   mkdirSync(join(corpus, "security"), { recursive: true });
   writeFileSync(join(corpus, "security", "policy.pdf"), "%PDF-1.4 corp policy\n");
   return corpus;
@@ -103,7 +103,7 @@ afterEach(() => {
   corpus = undefined;
 });
 
-describe("t282 the alias map is machine-local and may be absent", () => {
+describe("t296 the alias map is machine-local and may be absent", () => {
   test("a MISSING map is null, not an error", () => {
     // The normal state for a teammate who cloned without the corpus. Erroring
     // here would make the repo unusable for them, which is the opposite of what
@@ -160,7 +160,7 @@ describe("t282 the alias map is machine-local and may be absent", () => {
   });
 });
 
-describe("t282 an unmapped alias is source_unavailable, NOT a tombstone", () => {
+describe("t296 an unmapped alias is source_unavailable, NOT a tombstone", () => {
   test("with no map at all, a linked row resolves to null", () => {
     const p = scratchProject();
     const index = readIndex(p, SPACE);
@@ -217,7 +217,7 @@ describe("t282 an unmapped alias is source_unavailable, NOT a tombstone", () => 
 
   test("a mapped root that does not EXIST is unavailable, not a crash", () => {
     const p = scratchProject();
-    writeAliasMap(p, { "corp-policies": join(tmpdir(), "t282-definitely-not-here") });
+    writeAliasMap(p, { "corp-policies": join(tmpdir(), "t296-definitely-not-here") });
     const index = readIndex(p, SPACE);
     index.documents.push(linkedRow("corp-policies", "security/policy.pdf") as never);
     writeIndex(p, SPACE, index);
@@ -226,7 +226,7 @@ describe("t282 an unmapped alias is source_unavailable, NOT a tombstone", () => 
   });
 });
 
-describe("t282 committed metadata never carries an absolute path", () => {
+describe("t296 committed metadata never carries an absolute path", () => {
   test("the schema refuses an absolute path in a linked row", () => {
     // Enforced by the shared validator, so it holds on every read path rather
     // than only where someone remembered to check.
@@ -271,19 +271,19 @@ describe("t282 committed metadata never carries an absolute path", () => {
   });
 });
 
-describe("t282 containment applies against the ALIAS ROOT", () => {
+describe("t296 containment applies against the ALIAS ROOT", () => {
   test("a committed relative path cannot climb OUT of the mapped root", () => {
     // Without this, a committed row could reach any file on a teammate's disk by
     // walking up from wherever their corpus happens to live -- so the committed
     // side stays untrusted input even though the root is local.
     const p = scratchProject();
     const c = externalCorpus();
-    writeFileSync(join(c, "..", "t282-outside-secret.txt"), "SECRET\n");
+    writeFileSync(join(c, "..", "t296-outside-secret.txt"), "SECRET\n");
     writeAliasMap(p, { "corp-policies": c });
     // Bypass the schema (which also refuses `..`) to test the RESOLVER directly:
     // both layers must hold, since either could be reached first.
     const row = {
-      ...linkedRow("corp-policies", "../t282-outside-secret.txt"),
+      ...linkedRow("corp-policies", "../t296-outside-secret.txt"),
     } as never;
     expect(() => resolveLinkedSource(p, SPACE, row)).toThrow(/escapes its anchor/);
   });
@@ -291,7 +291,7 @@ describe("t282 containment applies against the ALIAS ROOT", () => {
   test("a symlink inside the corpus that escapes it is refused", () => {
     const p = scratchProject();
     const c = externalCorpus();
-    const outside = join(tmpdir(), `t282-out-${Date.now()}.txt`);
+    const outside = join(tmpdir(), `t296-out-${Date.now()}.txt`);
     writeFileSync(outside, "SECRET\n");
     symlinkSync(outside, join(c, "escape.pdf"));
     writeAliasMap(p, { "corp-policies": c });
@@ -316,7 +316,7 @@ describe("t282 containment applies against the ALIAS ROOT", () => {
   });
 });
 
-describe("t282 an incidental symlink is never an implicit linked source", () => {
+describe("t296 an incidental symlink is never an implicit linked source", () => {
   test("an external symlink under documents/ is SKIPPED by the walk", () => {
     // Reaching outside the repo must be a deliberate, committed act -- the
     // explicit `linked` kind with an alias. A symlink that silently escapes

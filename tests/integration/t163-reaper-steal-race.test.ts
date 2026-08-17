@@ -44,21 +44,23 @@
 // cleaned between generations. Nothing is written under tests/fixtures/**.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { auditLockDir } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { auditLockDir } from "../../core/tools/aidlc-lib.ts";
 
 const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
-const LIB = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-lib.ts");
+const LIB = join(REPO_ROOT, "core", "tools", "aidlc-lib.ts");
 
 // Per-intent bucket the contenders race on (a concrete intent so auditLockDir
 // keys a per-intent dir; the sentinel would work too — the reaper logic is
@@ -301,4 +303,74 @@ describe("t163 reaper steal-race — exactly one process reclaims a stale lock (
       JSON.parse(readFileSync(join(lockDir, "owner.json"), "utf-8")).pid,
     ).toBe(process.pid);
   }, 60000);
+
+  test("real active-directive contenders serialize every successful Stop-count commit", async () => {
+    const recordName = "auth-deadbeef";
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    const recordDir = join(intents, recordName);
+    mkdirSync(recordDir, { recursive: true });
+    writeFileSync(join(proj, "aidlc", "active-space"), "default\n");
+    writeFileSync(join(intents, "active-intent"), `${recordName}\n`);
+    writeFileSync(join(intents, "intents.json"), `${JSON.stringify([{
+      uuid: "deadbeef-0000-7000-8000-000000000001",
+      slug: "auth",
+      dirName: recordName,
+      status: "in-flight",
+    }])}\n`);
+    const state = "- **Current Stage**: requirements-analysis\n";
+    const stateSha256 = createHash("sha256").update(state).digest("hex");
+    writeFileSync(join(recordDir, "aidlc-state.md"), state);
+    writeFileSync(join(recordDir, ".aidlc-active-directive.json"), `${JSON.stringify({
+      version: 2,
+      revision: 1,
+      project_sha256: createHash("sha256").update(realpathSync(proj)).digest("hex"),
+      intent_uuid: "deadbeef-0000-7000-8000-000000000001",
+      state_present: true,
+      state_sha256: stateSha256,
+      owner_session: "stop-owner",
+      owner_epoch: 1,
+      context_epoch: 0,
+      kind: "run-stage",
+      stage: "requirements-analysis",
+      delivery: "delivered",
+      needs_rehydrate: false,
+      active_attempt: {
+        id: "seed",
+        command_kind: "next",
+        command_sha256: stateSha256,
+        issued_state_sha256: stateSha256,
+        session_id: "stop-owner",
+        owner_epoch: 1,
+        context_epoch: 0,
+        status: "settled",
+      },
+      event_sequence: 1,
+      human_sequence: 0,
+      engine_sequence: 1,
+      conversation_sequence: 0,
+      stop_count: 0,
+    }, null, 2)}\n`);
+    const countDriver = join(proj, "count-driver.ts");
+    writeFileSync(countDriver, [
+      `import { updateCopilotStopCount } from ${JSON.stringify(LIB)};`,
+      `const result = updateCopilotStopCount(${JSON.stringify(proj)}, ${JSON.stringify(state)}, "stop-owner", "same", false, 100);`,
+      "process.stdout.write(JSON.stringify(result));",
+    ].join("\n"));
+    const N = 8;
+    const procs = Array.from({ length: N }, () => Bun.spawn([BUN, countDriver], {
+      cwd: proj,
+      stdout: "pipe",
+      stderr: "pipe",
+    }));
+    const [codes, outputs, errors] = await Promise.all([
+      Promise.all(procs.map((proc) => proc.exited)),
+      Promise.all(procs.map((proc) => new Response(proc.stdout).text())),
+      Promise.all(procs.map((proc) => new Response(proc.stderr).text())),
+    ]);
+    expect(codes, errors.join("\n")).toEqual(Array.from({ length: N }, () => 0));
+    expect(outputs.every((output) => JSON.parse(output).shouldBlock === true)).toBe(true);
+    const final = JSON.parse(readFileSync(join(recordDir, ".aidlc-active-directive.json"), "utf-8"));
+    expect(final.stop_count).toBe(N);
+    expect(final.revision).toBe(1 + N);
+  }, 30000);
 });

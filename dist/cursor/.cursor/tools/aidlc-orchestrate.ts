@@ -99,6 +99,8 @@ import {
 } from "./aidlc-directive.ts";
 import {
   activeSpace,
+  ActiveDirectiveLockContendedError,
+  advanceCopilotContinuation,
   activeUnitCheckpoint,
   artifactFilename,
   auditBlockField,
@@ -106,6 +108,7 @@ import {
   checkSummaryConfirmationEvidence,
   clearActiveDirectiveMarker,
   codekbRepoName,
+  copilotDirectiveCommitRequired,
   currentUnitLifecycleMode,
   errorMessage,
   filterProducesByKind,
@@ -113,6 +116,7 @@ import {
   freshReviewReceipts,
   getField,
   intentRepos,
+  inspectCopilotContinuation,
   isPerUnitStage,
   isRegularFile,
   listIntents,
@@ -134,6 +138,7 @@ import {
   readAllAuditShards,
   recordHookDrop,
   markEngineTouch,
+  markActiveDirectiveResumeWaiting,
   relativeCodekbDir,
   relativeRecordDir,
   relativeSpaceRecordPrefix,
@@ -207,11 +212,21 @@ const DEFAULT_SCOPE = "feature";
 
 // --- Directive emission ---
 
+interface PreparedEmission {
+  transported: Directive; serialized: string; resultSha256: string; projectDir?: string;
+  marker?: {
+    kind: "load-steering" | "run-stage"; stage: string; unit?: string;
+    part?: number; parts?: number; continue_token?: string; state_sha256: string;
+  };
+}
+
+let engineInvocation: { attemptId?: string; commandKind: "next" | "continue" | "report" | "park"; commandSha256: string } | null = null;
+
 // Print exactly one directive as JSON to stdout, after validating it against
 // the frozen contract. A malformed directive is a hard error (clean
 // boundaries), never a silent miss — we exit non-zero so a wiring bug surfaces
 // loudly rather than emitting a lie the conductor would act on.
-function emit(directive: Directive): void {
+function prepareEmission(directive: Directive): PreparedEmission {
   const route =
     directive.kind === "run-stage" ? runStageRoutes.get(directive) : undefined;
   const transported =
@@ -249,37 +264,90 @@ function emit(directive: Directive): void {
     );
     process.exit(1);
   }
-  // Persist only the final run-stage, after steering delivery and validation.
-  // PostToolUse hooks receive only the written path, so this per-intent marker
-  // is their source for the stage currently being executed. The state digest
-  // makes an old marker inert as soon as a report or other transition mutates
-  // the durable workflow cursor.
-  if (transported.kind === "run-stage" && route) {
-    try {
-      const markerStateHash =
-        route.stateHash ??
-        (
-          transported.single === true &&
-            existsSync(stateFilePath(route.codekbCtx.projectDir))
-            ? sha256(readFileSync(stateFilePath(route.codekbCtx.projectDir), "utf-8"))
-            : null
-        );
-      if (markerStateHash) {
-        writeActiveDirectiveMarker(route.codekbCtx.projectDir, {
-          stage: transported.stage,
-          ...(transported.unit ? { unit: transported.unit } : {}),
-          state_sha256: markerStateHash,
-        });
-      }
-    } catch (e) {
-      recordHookDrop(
-        route.codekbCtx.projectDir,
-        "active-directive",
-        errorMessage(e),
+  let marker: PreparedEmission["marker"];
+  if ((transported.kind === "load-steering" || transported.kind === "run-stage") && route) {
+    const markerStateHash =
+      route.stateHash ??
+      (
+        directive.kind === "run-stage" && directive.single === true &&
+          existsSync(stateFilePath(route.codekbCtx.projectDir))
+          ? sha256(readFileSync(stateFilePath(route.codekbCtx.projectDir), "utf-8"))
+          : null
       );
+    if (markerStateHash) {
+      marker = {
+        kind: transported.kind,
+        stage: transported.stage,
+        ...(directive.kind === "run-stage" && directive.unit ? { unit: directive.unit } : {}),
+        ...(transported.kind === "load-steering"
+          ? {
+              part: transported.part,
+              parts: transported.parts,
+              continue_token: transported.continue_token,
+            }
+          : {}),
+        state_sha256: markerStateHash,
+      };
     }
   }
-  console.log(serialized);
+  return {
+    transported,
+    serialized,
+    resultSha256: sha256(serialized),
+    ...(route ? { projectDir: route.codekbCtx.projectDir } : {}),
+    ...(marker ? { marker } : {}),
+  };
+}
+
+function writePrepared(prepared: PreparedEmission): void {
+  process.stdout.write(`${prepared.serialized}\n`);
+}
+
+function emit(directive: Directive): void {
+  const prepared = prepareEmission(directive);
+  if (prepared.marker) {
+    const projectDir = prepared.projectDir;
+    let requireCopilotCommit = !!projectDir && engineInvocation?.commandKind === "next" &&
+      copilotDirectiveCommitRequired(projectDir, prepared.marker.state_sha256);
+    try {
+      if (projectDir) {
+        const publication = writeActiveDirectiveMarker(projectDir, prepared.marker, {
+          ...(engineInvocation?.attemptId ? { attemptId: engineInvocation.attemptId } : {}),
+          ...(engineInvocation ? { commandKind: engineInvocation.commandKind } : {}),
+          ...(engineInvocation ? { commandSha256: engineInvocation.commandSha256 } : {}),
+          resultSha256: prepared.resultSha256,
+          requireCopilotCommit,
+        });
+        if (publication === "stale-attempt") {
+          recordHookDrop(projectDir, "active-directive", "tracked fresh next attempt was superseded before publication");
+          writePrepared(prepareEmission(errorDirective(
+            "This tracked `next` attempt is stale or superseded, so its prepared result was not issued. Run a fresh `next` in the current Copilot session.",
+          )));
+          return;
+        }
+        if (requireCopilotCommit && publication !== "copilot-committed") {
+          recordHookDrop(projectDir, "active-directive", "fresh Copilot next did not commit its directive");
+          writePrepared(prepareEmission(errorDirective(
+            "The fresh Copilot directive could not be published, so no work directive was issued. Retry `next`; if coordination remains busy, run `/aidlc --doctor`.",
+          )));
+          return;
+        }
+      }
+    } catch (e) {
+      if (projectDir) {
+        requireCopilotCommit ||= engineInvocation?.commandKind === "next" &&
+          copilotDirectiveCommitRequired(projectDir, prepared.marker.state_sha256);
+        recordHookDrop(projectDir, "active-directive", errorMessage(e));
+      }
+      if (requireCopilotCommit) {
+        writePrepared(prepareEmission(errorDirective(
+          "The fresh Copilot directive could not be published, so no work directive was issued. Retry `next`; if coordination remains busy, run `/aidlc --doctor`.",
+        )));
+        return;
+      }
+    }
+  }
+  writePrepared(prepared);
 }
 
 // --- Composing sibling CLI tools ---
@@ -2910,6 +2978,13 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   if (flags.resume && stateContent) {
     const currentSlug = getField(stateContent, "Current Stage") ?? "";
     const where = currentSlug.length > 0 ? ` (currently at "${currentSlug}")` : "";
+    if (currentSlug) {
+      try {
+        markActiveDirectiveResumeWaiting(pd, stateContent, currentSlug);
+      } catch (e) {
+        recordHookDrop(pd, "active-directive", errorMessage(e));
+      }
+    }
     emit(askDirective(
       `An existing workflow was found${where}. How would you like to proceed? ` +
         "Resume from last checkpoint, redo the current stage, jump to a stage, or start fresh.",
@@ -3741,14 +3816,21 @@ function activePerUnitWave(
       }
       const terminalVerdict = reviewProgress?.unitVerdicts.get(unit);
       const pendingReview = reviewProgress?.unitPending.get(unit);
+      const staleReview = reviewProgress?.unitStaleProgress.get(unit);
       const reviewState: RunStageWaveEntry["review_state"] = reviewClass === "none"
         ? "not-required"
-        : terminalVerdict ?? pendingReview?.state ?? "outstanding";
+        : terminalVerdict ??
+          pendingReview?.state ??
+          (staleReview
+            ? staleReview.recoverySpent
+              ? "escalation-required"
+              : "recovery-required"
+            : "outstanding");
       const reviewIteration = reviewClass === "none"
         ? null
         : terminalVerdict
           ? (reviewProgress?.unitIterations.get(unit) ?? null)
-          : (pendingReview?.iteration ?? 1);
+          : (pendingReview?.iteration ?? staleReview?.nextIteration ?? 1);
       const buildRequired = !covered;
       // Wave entries always settle through an explicit `unit complete --wave`
       // receipt. This is the parallel counterpart to the serial start/complete
@@ -3760,7 +3842,9 @@ function activePerUnitWave(
         completionRequired ||
         reviewState === "outstanding" ||
         reviewState === "retry-required" ||
-        reviewState === "repair-required"
+        reviewState === "repair-required" ||
+        reviewState === "recovery-required" ||
+        reviewState === "escalation-required"
       ) {
         entries.push(
           waveEntry(
@@ -5090,12 +5174,9 @@ function handleSingleReport(
     ));
     return;
   }
+  try { clearActiveDirectiveMarker(pd); }
+  catch (e) { recordHookDrop(pd, "active-directive", errorMessage(e)); }
 
-  try {
-    clearActiveDirectiveMarker(pd);
-  } catch (e) {
-    recordHookDrop(pd, "active-directive", errorMessage(e));
-  }
   emit({
     kind: "done",
     reason:
@@ -5735,6 +5816,7 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
     ));
     return;
   }
+  const cursor = inspectCopilotContinuation(pd, liveState, token);
 
   const directive = buildRunStageDirective(
     node,
@@ -5779,7 +5861,60 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
   }
 
   requestedSteeringContinuation = payload;
-  emit(directive);
+  const prepared = prepareEmission(directive);
+  if (!prepared.marker) {
+    writePrepared(prepared);
+    return;
+  }
+  try {
+    const advanced = advanceCopilotContinuation(
+      cursor,
+      token,
+      prepared.marker,
+      prepared.resultSha256,
+      engineInvocation?.attemptId,
+    );
+    if (advanced === "advanced" || advanced === "stateless") {
+      writePrepared(prepared);
+      return;
+    }
+    const message = advanced === "superseded"
+      ? "This continuation token is no longer current for this Copilot workflow. Run a fresh `next`; do not reuse an earlier token."
+      : "The active workflow context changed while this continuation was prepared. Run a fresh `next`; do not use the prepared result.";
+    writePrepared(prepareEmission(errorDirective(message)));
+  } catch (error) {
+    if (!(error instanceof ActiveDirectiveLockContendedError)) throw error;
+    if (cursor.authority === "stateless" && !cursor.copilotInstalled) {
+      try {
+        const latest = inspectCopilotContinuation(
+          pd,
+          loadStateFileIfPresent(pd),
+          token,
+        );
+        if (
+          latest.authority === "stateless" &&
+          !latest.copilotInstalled &&
+          latest.target.markerPath === cursor.target.markerPath &&
+          latest.target.intentUuid === cursor.target.intentUuid &&
+          latest.stateSha256 === cursor.stateSha256 &&
+          latest.statePresent === cursor.statePresent
+        ) {
+          recordHookDrop(
+            pd,
+            "active-directive",
+            "stateless continuation marker publication contended; delivered without updating the marker",
+          );
+          writePrepared(prepared);
+          return;
+        }
+      } catch {
+        // Keep the coordination-busy refusal when authority cannot be rechecked.
+      }
+    }
+    writePrepared(prepareEmission(errorDirective(
+      "Continuation coordination is busy. This call did not commit a cursor change. Retry the current token; if it is reported superseded, run a fresh `next`.",
+    )));
+  }
 }
 
 // --- CLI entry point ---
@@ -5789,10 +5924,19 @@ export function main(argv: string[]): void {
 
   // Extract --project-dir (mirrors aidlc-jump.ts / aidlc-state.ts).
   let projectDir: string | undefined;
+  let attemptId: string | undefined;
+  let conflictingAttemptId = false;
   const filteredArgs: string[] = [];
   for (let i = 0; i < rawArgs.length; i++) {
     if (rawArgs[i] === "--project-dir" && i + 1 < rawArgs.length) {
       projectDir = rawArgs[i + 1];
+      i++;
+    } else if (rawArgs[i] === "--aidlc-attempt-id" && i + 1 < rawArgs.length) {
+      const candidate = rawArgs[i + 1];
+      if (/^[A-Za-z0-9._:-]{1,128}$/.test(candidate)) {
+        if (attemptId !== undefined && attemptId !== candidate) conflictingAttemptId = true;
+        attemptId = candidate;
+      }
       i++;
     } else {
       filteredArgs.push(rawArgs[i]);
@@ -5801,27 +5945,38 @@ export function main(argv: string[]): void {
 
   const subcommand = filteredArgs[0];
   const subArgs = filteredArgs.slice(1);
-
-  switch (subcommand) {
-    case "next":
-      handleNext(subArgs, projectDir);
-      break;
-    case "continue":
-      handleContinue(subArgs, projectDir);
-      break;
-    case "report":
-      handleReport(subArgs, projectDir);
-      break;
-    case "park":
-      handlePark(subArgs, projectDir);
-      break;
-    default:
-      // Unknown / missing subcommand — usage to stderr, exit 1. Matches the
-      // stderr-only usage shape the sibling tools use for a bad subcommand.
-      console.error(
-        `Unknown subcommand: ${subcommand ?? "(none)"}. Valid: next, continue, report, park`,
-      );
-      process.exit(1);
+  if (engineInvocation !== null) throw new Error("Nested aidlc-orchestrate dispatch is not supported");
+  const commandKind = (["next", "continue", "report", "park"] as const).find((kind) => kind === subcommand);
+  if (commandKind) engineInvocation = {
+    commandKind,
+    commandSha256: sha256(JSON.stringify([commandKind, ...subArgs])),
+    ...(!conflictingAttemptId && attemptId ? { attemptId } : {}),
+  };
+  try {
+    switch (subcommand) {
+      case "next":
+        handleNext(subArgs, projectDir);
+        break;
+      case "continue":
+        handleContinue(subArgs, projectDir);
+        break;
+      case "report":
+        handleReport(subArgs, projectDir);
+        break;
+      case "park":
+        handlePark(subArgs, projectDir);
+        break;
+      default:
+        // Unknown / missing subcommand — usage to stderr, exit 1. Matches the
+        // stderr-only usage shape the sibling tools use for a bad subcommand.
+        console.error(
+          `Unknown subcommand: ${subcommand ?? "(none)"}. Valid: next, continue, report, park`,
+        );
+        process.exit(1);
+    }
+  } finally {
+    engineInvocation = null;
+    requestedSteeringContinuation = null;
   }
 }
 

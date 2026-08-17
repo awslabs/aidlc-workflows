@@ -1,6 +1,6 @@
 // covers: function:resolveIntentFlag function:setIntentAssociation audit:DOCUMENT_UPDATED
 //
-// t283 - intent association: scoping a document to an intent, and every way that
+// t297 - intent association: scoping a document to an intent, and every way that
 // can be ambiguous.
 //
 // Mechanism: real filesystem + real intent births (a hand-written intents.json
@@ -68,7 +68,7 @@ let proj: string | undefined;
 /** A project with N real intents, birthed through the shipped tool so the
  *  registry has the shape this code actually meets in the field. */
 function projectWithIntents(...labels: string[]): string {
-  proj = mkdtempSync(join(tmpdir(), "t283-"));
+  proj = mkdtempSync(join(tmpdir(), "t297-"));
   for (const label of labels) {
     const r = spawnSync(
       "bun",
@@ -100,7 +100,7 @@ afterEach(() => {
   }
 });
 
-describe("t283 space-wide is the default, and is spelled by OMISSION", () => {
+describe("t297 space-wide is the default, and is spelled by OMISSION", () => {
   test("no --intent means the key is ABSENT, not an empty array", () => {
     const p = projectWithIntents("auth");
     doc(p, "a.md");
@@ -125,7 +125,7 @@ describe("t283 space-wide is the default, and is spelled by OMISSION", () => {
   });
 });
 
-describe("t283 persistence is a UUID; a slug is only ever INPUT", () => {
+describe("t297 persistence is a UUID; a slug is only ever INPUT", () => {
   test("onboard --intent <slug> persists the UUID and NOT the slug", () => {
     // The failure this prevents: a persisted slug silently re-points a document's
     // scope the day someone renames an intent.
@@ -181,7 +181,7 @@ describe("t283 persistence is a UUID; a slug is only ever INPUT", () => {
 // `already`, exit 0) while leaving `related_intent_ids` untouched -- silently
 // discarding the scope the caller asked for.
 // ─────────────────────────────────────────────────────────────────────────────
-describe("t283 an unchanged re-onboard with --intent applies the scope, not just reports `already`", () => {
+describe("t297 an unchanged re-onboard with --intent applies the scope, not just reports `already`", () => {
   test("onboard WITHOUT --intent, then again WITH --intent on the unchanged file: the scope lands", () => {
     const p = projectWithIntents("auth");
     doc(p, "a.md");
@@ -230,7 +230,7 @@ describe("t283 an unchanged re-onboard with --intent applies the scope, not just
   });
 });
 
-describe("t283 every ambiguity FAILS, before anything is written", () => {
+describe("t297 every ambiguity FAILS, before anything is written", () => {
   test("an unknown slug is refused, and the message lists what IS known", () => {
     const p = projectWithIntents("auth");
     const err = (() => {
@@ -253,7 +253,7 @@ describe("t283 every ambiguity FAILS, before anything is written", () => {
   });
 
   test("--intent in a space with NO intents is refused, with both options named", () => {
-    proj = mkdtempSync(join(tmpdir(), "t283-"));
+    proj = mkdtempSync(join(tmpdir(), "t297-"));
     mkdirSync(documentsDir(proj, SPACE), { recursive: true });
     const err = (() => {
       try { resolveIntentFlag(proj!, SPACE, "auth"); return null; } catch (e) { return e as Error; }
@@ -274,7 +274,7 @@ describe("t283 every ambiguity FAILS, before anything is written", () => {
   });
 });
 
-describe("t283 associate/dissociate are idempotent and SAY which happened", () => {
+describe("t297 associate/dissociate are idempotent and SAY which happened", () => {
   test("a fresh associate reports `fresh` and adds the uuid", () => {
     const p = projectWithIntents("auth");
     doc(p, "a.md");
@@ -380,7 +380,7 @@ describe("t283 associate/dissociate are idempotent and SAY which happened", () =
   });
 });
 
-describe("t283 the event lands in the SPACE shard, with the intent as a FIELD", () => {
+describe("t297 the event lands in the SPACE shard, with the intent as a FIELD", () => {
   test("DOCUMENT_UPDATED records the intent without selecting the shard by it", () => {
     // This verb is precisely what can CHANGE a document's scope, so it is the one
     // that would split a document's history across shards if the intent selected
@@ -414,12 +414,12 @@ describe("t283 the event lands in the SPACE shard, with the intent as a FIELD", 
   });
 });
 
-describe("t283 I09: a space-wide document survives intent creation", () => {
+describe("t297 I09: a space-wide document survives intent creation", () => {
   test("indexing space-wide, then birthing an intent, leaves the row findable", () => {
     // The row this story inherited: the failure mode is a row that becomes
     // unreachable once the space gains its first intent, because something
     // re-targeted by the active-intent cursor. Count totals must not move.
-    proj = mkdtempSync(join(tmpdir(), "t283-"));
+    proj = mkdtempSync(join(tmpdir(), "t297-"));
     const p = proj;
     mkdirSync(documentsDir(p, SPACE), { recursive: true });
     doc(p, "a.md");
@@ -471,12 +471,12 @@ describe("t283 I09: a space-wide document survives intent creation", () => {
 // ran. Reproduced on a FRESH space, zero hand-editing of anything this tool
 // itself would not create in the ordinary course of a hand-authored orphan.
 // ─────────────────────────────────────────────────────────────────────────────
-describe("t283 an ORPHAN intent record (no registry row) refuses to scope a document", () => {
+describe("t297 an ORPHAN intent record (no registry row) refuses to scope a document", () => {
   /** A project with one real, hand-authored orphan record: a dir under
    *  intents/ holding aidlc-state.md, with NO row in intents.json, made the
    *  ACTIVE intent so the bare `--intent` flag resolves to it. */
   function projectWithOrphanIntent(): string {
-    proj = mkdtempSync(join(tmpdir(), "t283-orphan-"));
+    proj = mkdtempSync(join(tmpdir(), "t297-orphan-"));
     const p = proj;
     mkdirSync(documentsDir(p, SPACE), { recursive: true });
     const dirName = "orphan-ab12cd34";

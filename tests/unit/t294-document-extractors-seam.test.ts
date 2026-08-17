@@ -1,6 +1,6 @@
 // covers: function:documentExtractors function:DocumentExtractorSpec
 //
-// t279 - the `documentExtractors` configuration seam: a team commits its text
+// t294 - the `documentExtractors` configuration seam: a team commits its text
 // extractor choice so it travels to every clone.
 //
 // Mechanism: real filesystem + real `bun scripts/package.ts` runs (the seam IS
@@ -51,7 +51,7 @@ const SCRATCH_FILES = ["package.json", "bun.lock", "tsconfig.json"] as const;
 
 let scratch = "";
 beforeEach(() => {
-  scratch = mkdtempSync(join(tmpdir(), "aidlc-t279-"));
+  scratch = mkdtempSync(join(tmpdir(), "aidlc-t294-"));
   for (const d of SCRATCH_SOURCES) cpSync(join(REPO, d), join(scratch, d), { recursive: true });
   for (const f of SCRATCH_FILES) cpSync(join(REPO, f), join(scratch, f));
   // Resolution must be HERMETIC, not borrowed: the packager's emitters import
@@ -59,7 +59,7 @@ beforeEach(() => {
   // with only package.json + bun.lock resolves them via bun's GLOBAL install
   // cache — which works on a freshly-installed CI runner and silently stops
   // working on a long-lived box once that cache no longer serves the package
-  // ("Cannot find package 'smol-toml' from /tmp/aidlc-t279-..."). A symlink
+  // ("Cannot find package 'smol-toml' from /tmp/aidlc-t294-..."). A symlink
   // to the checkout's node_modules is read-only for everything this suite
   // runs (the packager writes only dist/), so it cannot violate the
   // scratch-isolation contract above.
@@ -95,7 +95,7 @@ const HARNESSES = readdirSync(join(REPO, "harness"), { withFileTypes: true })
     // how a new harness ships unchecked.
     if (!HARNESS_DATA[name]) {
       throw new Error(
-        `harness/${name} has no HARNESS_DATA entry in t279 — a new harness must ` +
+        `harness/${name} has no HARNESS_DATA entry in t294 — a new harness must ` +
           `declare where its harness.json lands so the sweep below covers it.`,
       );
     }
@@ -148,7 +148,7 @@ function guard(rel: string): string {
   return join(scratch, rel);
 }
 
-describe("t279 absent by default — no harness is perturbed", () => {
+describe("t294 absent by default — no harness is perturbed", () => {
   test("every shipped harness.json carries EXACTLY the base fields", () => {
     // The regression this prevents: a new field appearing in every committed file
     // that no team asked for, which is a diff every downstream clone inherits.
@@ -170,7 +170,7 @@ describe("t279 absent by default — no harness is perturbed", () => {
   });
 });
 
-describe("t279 the guard is REAL: a hand-added field fails --check", () => {
+describe("t294 the guard is REAL: a hand-added field fails --check", () => {
   test("hand-editing the committed harness.json breaks the drift guard", () => {
     // This is the assertion that makes "packager-owned" a measured conclusion
     // rather than a design preference. If --check tolerated a hand-added field,
@@ -198,7 +198,7 @@ describe("t279 the guard is REAL: a hand-added field fails --check", () => {
   }, 120000);
 });
 
-describe("t279 present when a manifest sets it, and it SURVIVES a repackage", () => {
+describe("t294 present when a manifest sets it, and it SURVIVES a repackage", () => {
   test("a manifest-declared extractor ships, survives a second build, and --check stays green", () => {
     // The three properties that together make this a working seam. "Survives a
     // second build" is the one the hand-edit route fails, and it is the reason a
@@ -238,7 +238,7 @@ describe("t279 present when a manifest sets it, and it SURVIVES a repackage", ()
   }, 180000);
 });
 
-describe("t279 the configured value is untrusted input: argv becomes a process", () => {
+describe("t294 the configured value is untrusted input: argv becomes a process", () => {
   /** Read a hand-written harness.json through the SHIPPED reader in a
    *  subprocess, so a module-level cache cannot leak between cases. Returns the
    *  thrown message, or "OK:<json>" when it validated. */
@@ -246,7 +246,7 @@ describe("t279 the configured value is untrusted input: argv becomes a process",
     const path = guard(HARNESS_DATA.claude);
     writeFileSync(path, json);
     // Driver lives inside scratch's dist tree, never REPO's.
-    const driver = join(scratch, "dist", "claude", ".claude", "tools", "__t279probe.ts");
+    const driver = join(scratch, "dist", "claude", ".claude", "tools", "__t294probe.ts");
     writeFileSync(
       driver,
       `const lib = await import("./aidlc-lib.ts");\n` +
@@ -386,7 +386,7 @@ describe("t279 the configured value is untrusted input: argv becomes a process",
   }, 60000);
 });
 
-describe("t279 the blast radius is narrowed", () => {
+describe("t294 the blast radius is narrowed", () => {
   test("a malformed documentExtractors leaves the RULES dir resolvable", () => {
     // The trap: shippedRulesSubdir() catches everything the reader throws and
     // STRING-MATCHES the message, rethrowing anything it does not recognise. So a
@@ -399,7 +399,7 @@ describe("t279 the blast radius is narrowed", () => {
       `{"harnessDir":".claude","rulesSubdir":"rules",` +
       `"documentExtractors":{"application/pdf":{"argv":"a shell string"}}}\n`,
     );
-    const driver = join(scratch, "dist", "claude", ".claude", "tools", "__t279blast.ts");
+    const driver = join(scratch, "dist", "claude", ".claude", "tools", "__t294blast.ts");
     writeFileSync(
       driver,
       `const lib = await import("./aidlc-lib.ts");\n` +
