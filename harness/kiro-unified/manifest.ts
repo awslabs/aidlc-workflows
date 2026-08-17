@@ -313,8 +313,11 @@ const manifest: HarnessManifest = {
 
   emit: null,
 
-  // Folder-drop + .kiro.hook, same as the other two .kiro trees. No host store.
-  plugin: { manifestDir: ".kiro-plugin", kind: "kiro" },
+  // Folder-drop, no host store, like the other two .kiro trees — but the
+  // compose trigger ships as a standalone `.json` hook manifest, not the legacy
+  // `.kiro.hook` this shell deliberately excludes and the unified runtime
+  // ignores. See docs/reference/kiro-ide-hook-payload.md.
+  plugin: { manifestDir: ".kiro-plugin", kind: "kiro-unified" },
 };
 
 export default manifest;

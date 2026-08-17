@@ -833,8 +833,16 @@ async function kiroPluginAgentPrechecks(): Promise<KiroPluginAgentPrechecks | nu
   ) {
     return null;
   }
+  // Two Kiro conductor forms share the .kiro leaf. The agent-v1 JSON form
+  // (Kiro CLI 2.x) carries the roster as agents/*.json plus an explicit
+  // toolsSettings.subagent.trustedAgents allowlist. The unified Markdown form
+  // (IDE 1.x + CLI --v3) ships agents/*.md and has no trust field at all, so
+  // demanding one there would reject every dispatch. Detect by the conductor.
+  const kiroMarkdownConductor = HARNESS_LEAF === ".kiro" &&
+    !existsSync(join(HARNESS_DIR, "agents", "aidlc.json")) &&
+    existsSync(join(HARNESS_DIR, "agents", "aidlc.md"));
   const surfaceExt = HARNESS_LEAF === ".kiro"
-    ? ".json"
+    ? (kiroMarkdownConductor ? ".md" : ".json")
     : HARNESS_LEAF === ".codex"
       ? ".toml"
       : ".md";
@@ -842,7 +850,7 @@ async function kiroPluginAgentPrechecks(): Promise<KiroPluginAgentPrechecks | nu
     ? nativeAgentsDir()
     : join(HARNESS_DIR, "agents");
   const trustedAgents = new Set<string>();
-  if (HARNESS_LEAF === ".kiro") {
+  if (HARNESS_LEAF === ".kiro" && !kiroMarkdownConductor) {
     try {
       const conductor = JSON.parse(
         readFileSync(join(HARNESS_DIR, "agents", "aidlc.json"), "utf-8"),
@@ -869,7 +877,9 @@ async function kiroPluginAgentPrechecks(): Promise<KiroPluginAgentPrechecks | nu
     if (gap.missingSurface) {
       requirements.push(
         HARNESS_LEAF === ".kiro"
-          ? `author ${HARNESS_LEAF}/agents/${gap.agent}.json (agent-v1 JSON)`
+          ? (kiroMarkdownConductor
+            ? `author ${HARNESS_LEAF}/agents/${gap.agent}.md (a Kiro Markdown agent with closed frontmatter)`
+            : `author ${HARNESS_LEAF}/agents/${gap.agent}.json (agent-v1 JSON)`)
           : HARNESS_LEAF === ".codex"
             ? `author ${HARNESS_LEAF}/agents/${gap.agent}.toml (the shipped aidlc-*-agent.toml shape)`
             : IS_COPILOT
@@ -980,7 +990,8 @@ async function kiroPluginAgentPrechecks(): Promise<KiroPluginAgentPrechecks | nu
         agent,
         missingSurface: !existsSync(join(surfaceDir, `${agent}${surfaceExt}`)) &&
           !(HARNESS_LEAF === ".aidlc" && pluginShipsViableNativeAgent(agent)),
-        missingTrust: HARNESS_LEAF === ".kiro" && !trustedAgents.has(agent),
+        missingTrust: HARNESS_LEAF === ".kiro" && !kiroMarkdownConductor &&
+          !trustedAgents.has(agent),
       };
       if (gap.missingSurface || gap.missingTrust) gaps.set(agent, gap);
     }

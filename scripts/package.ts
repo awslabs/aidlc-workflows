@@ -886,7 +886,7 @@ type PluginTarget = {
   harnessName: string;
   manifestDir: string;
   harnessLeaf: string;
-  kind: "store" | "kiro" | "cursor";
+  kind: "store" | "kiro" | "kiro-unified" | "cursor";
 };
 function pluginTargetFor(harnessName: string): PluginTarget | null {
   if (!existsSync(join(HARNESS_ROOT, harnessName, "manifest.ts"))) return null;
@@ -994,6 +994,23 @@ function buildPluginProjection(pluginName: string, harnessName: string, outDir: 
         when: { type: "promptSubmit" },
         // biome-ignore lint/suspicious/noThenProperty: required Kiro hook schema field
         then: { type: "runCommand", command },
+      }, null, 2) + "\n"
+    );
+  } else if (kind === "kiro-unified") {
+    // The unified runtime (IDE 1.x, CLI --v3) reads ONLY standalone
+    // `.kiro/hooks/*.json` manifests with PascalCase triggers; the legacy
+    // `.kiro.hook` form above is silently inert there. Same schema the harness
+    // ships its own twelve hooks in, so the projection matches the shell.
+    writeFileSync(
+      join(hooksDir, "aidlc-plugin-compose.json"),
+      JSON.stringify({
+        version: "v1",
+        hooks: [{
+          name: `aidlc-${pluginName}-compose`,
+          trigger: "UserPromptSubmit",
+          description: `Composes the ${pluginName} AIDLC plugin on first interaction.`,
+          action: { type: "command", command },
+        }],
       }, null, 2) + "\n"
     );
   } else if (kind === "cursor") {

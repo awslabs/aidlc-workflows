@@ -25,7 +25,7 @@ type HarnessCapabilities = {
   rootFiles: readonly string[];
   skillsRoot: string;
   plugin: {
-    kind: "store" | "kiro" | "cursor";
+    kind: "store" | "kiro" | "kiro-unified" | "cursor";
     manifestDir: string;
     wiringFile: string;
   };
@@ -174,9 +174,9 @@ const HARNESS_CAPABILITIES = {
     rootFiles: [".gitignore", "AGENTS.md"],
     skillsRoot: ".kiro/skills",
     plugin: {
-      kind: "kiro",
+      kind: "kiro-unified",
       manifestDir: ".kiro-plugin",
-      wiringFile: "hooks/aidlc-plugin-compose.kiro.hook",
+      wiringFile: "hooks/aidlc-plugin-compose.json",
     },
     memoryInclude: "kiro-steering",
     kiroAgentJson: false,

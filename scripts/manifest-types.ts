@@ -128,7 +128,9 @@ export type HarnessManifest = {
    * `harnessDir` (manifestDir = "<harnessDir>-plugin", kind = "store"), so a
    * NEW harness added per the one-core-many-harnesses promise automatically
    * gets a plugin projection instead of being silently skipped. A harness with
-   * no host plugin store (folder-drop + hook, like Kiro) sets kind "kiro".
+   * no host plugin store (folder-drop + hook, like Kiro) sets kind "kiro";
+   * a Kiro shell on the unified runtime (IDE 1.x + CLI --v3), which reads only
+   * the `.kiro/hooks/*.json` manifest schema, sets kind "kiro-unified".
    * Cursor sets kind "cursor" for its flat camelCase hook schema.
    */
   plugin?: {
@@ -136,6 +138,6 @@ export type HarnessManifest = {
     /** Host plugin-manifest dir name (for example ".claude-plugin" or ".cursor-plugin"). */
     manifestDir: string;
     /** Host-specific plugin hook projection shape. */
-    kind: "store" | "kiro" | "cursor";
+    kind: "store" | "kiro" | "kiro-unified" | "cursor";
   };
 };

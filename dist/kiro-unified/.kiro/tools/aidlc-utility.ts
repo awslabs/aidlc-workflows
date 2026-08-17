@@ -1407,6 +1407,61 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
       label: "agents/aidlc.{json,md} present (hook + permission wiring)",
       fix: "copy from `dist/kiro-unified/.kiro/agents/aidlc.md` (unified harness) or `dist/kiro/.kiro/agents/aidlc.json` (Kiro CLI 2.x)",
     });
+    // On the agent-v1 JSON form the row above genuinely covers hook wiring —
+    // agent-v1 embeds the hooks. The unified Markdown form does not: there the
+    // wiring IS the standalone `.kiro/hooks/*.json` manifests, so agents/aidlc.md
+    // proves the persona and the permissions and nothing about the hooks. Probe
+    // the manifests separately when that is the form on disk. Deliberately not a
+    // hardcoded name roster, for the same reason the Claude branch above
+    // enumerates from settings.json rather than a literal list: the list drifts
+    // the moment a hook is added or renamed. What is checked is that manifests
+    // are wired at all (reporting healthy with every manifest deleted was the
+    // real defect) and that each one dispatches a hook script that ships.
+    if (!existsSync(jsonAgentPath) && existsSync(mdAgentPath)) {
+      const hooksDir = join(projectDir, harness, "hooks");
+      let manifests: string[] = [];
+      try {
+        manifests = readdirSync(hooksDir).filter((f) => f.endsWith(".json")).sort();
+      } catch {
+        // hooks/ missing entirely — the zero-manifest row states it.
+      }
+      results.push({
+        pass: manifests.length > 0,
+        label: `Hook contract: ${manifests.length} standalone hooks/*.json manifest(s) wired (Markdown conductor)`,
+        fix: "restore the hook manifests (copy `dist/kiro-unified/.kiro/hooks/aidlc-*.json`)",
+      });
+      // Scan the dispatched command ONLY, and only for a hooks/ path: a hook's
+      // `description` legitimately names other scripts in prose (the
+      // state-transition guard's does), so a raw-text scan false-positives.
+      // Basename after `hooks/`, so the probe is dir-relative.
+      const unresolved: string[] = [];
+      for (const m of manifests) {
+        let parsed: { hooks?: { action?: { command?: unknown } }[] };
+        try {
+          parsed = JSON.parse(readFileSync(join(hooksDir, m), "utf-8"));
+        } catch {
+          // A manifest the runtime cannot parse is a manifest that never fires.
+          unresolved.push(`${m} (not valid JSON)`);
+          continue;
+        }
+        for (const hook of parsed.hooks ?? []) {
+          const command = hook?.action?.command;
+          if (typeof command !== "string") continue;
+          for (const match of command.matchAll(/hooks\/(aidlc-[A-Za-z0-9_-]+\.ts)/g)) {
+            if (!existsSync(join(hooksDir, match[1]))) unresolved.push(`${m} -> ${match[1]}`);
+          }
+        }
+      }
+      if (manifests.length > 0) {
+        results.push({
+          pass: unresolved.length === 0,
+          label: unresolved.length === 0
+            ? "Hook contract: every wired manifest dispatches a shipped hook script"
+            : `Hook contract: manifest dispatches a missing hook script (${unresolved.join(", ")})`,
+          fix: "restore the missing hook body from `dist/kiro-unified/.kiro/hooks/`",
+        });
+      }
+    }
     const cliSettingsPath = join(projectDir, harness, "settings", "cli.json");
     results.push({
       pass: existsSync(cliSettingsPath),
