@@ -105,7 +105,7 @@ Every row shows its state — one of these nine:
 | `no_extractable_text` | the extractor ran and produced nothing (e.g. a scanned PDF with no text layer) | the document is catalogued and citable by name; OCR is out of scope |
 | `extractor_unavailable` | the file needs an external extractor that is not installed | install it, then run `sync` — `onboard` on the same unchanged path reports `already` and does not retry extraction |
 | `extraction_failed` | the extractor ran and failed | `show <id>` for the reason; `sync` retries after the extractor's version changes |
-| `unsupported_type` | no extractor is configured for this file type (e.g. `.docx` with none set up) | catalogued and citable by name; configure an extractor — an already-indexed row re-extracts only after the file next changes (or via `rebind`) |
+| `unsupported_type` | no extractor is configured for this file type (e.g. `.docx` with none set up) | configure an extractor, then run `sync` — the unchanged row is retried |
 | `invalidated` | `rebind` repaired the row's identity; its text is stale | run `sync` — it re-extracts |
 | `source_unavailable` | a linked original is not reachable right now | not data loss — the link is broken, not the record |
 | `tombstoned` | the original was deleted, and the catalog remembers that | intentional; `sync` keeps it |
@@ -161,12 +161,13 @@ neither valid UTF-8 nor a recognised document format. A NAMED path that
 is a symlink is refused; a pathless sweep silently skips symlinks
 instead — they never become rows, and no refusal is printed for them.
 
-A pathless sweep is bounded too: more than 20 documents, or more than
-256 MiB in one run, is refused and NOTHING is indexed — so a refusal is
-never a half-finished batch. Onboard a subdirectory or one file at a
-time, or run `sync`. A single document over 32 MiB is refused without
-being read. Report which cap was hit and do not retry the same sweep
-unchanged: it will be refused identically.
+A pathless sweep is bounded too: more than 20 not-yet-indexed or visibly
+changed documents, or more than 256 MiB across that work set, is refused
+and NOTHING is indexed — already-current rows do not consume the batch
+budget. Onboard a subdirectory or one file at a time, or run `sync`. A
+single document over 32 MiB is refused without being read. Report which
+cap was hit and do not retry the same work set unchanged: it will be
+refused identically.
 
 ### Step 3: Read a document
 

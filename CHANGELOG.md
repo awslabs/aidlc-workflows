@@ -74,9 +74,10 @@ the surviving originals as new rows.
 * `onboard` reports a third outcome, `edited`, when a file that changed at an
   already-indexed path is re-indexed: the existing row is refreshed in place, keeping
   its id and intent links, so one path can never carry two live rows.
-* A pathless `onboard` and `sync` refuse a run over 20 documents or 256 MiB, naming
-  the cap and the remedy, and index nothing when they refuse — a cap is never a
-  half-finished batch. A single document over 32 MiB is refused without being read.
+* A pathless `onboard` and `sync` refuse a work set over 20 new/changed/retrying
+  documents or 256 MiB, naming the cap and the remedy; already-current catalog rows
+  do not consume the batch budget. A refusal indexes nothing. A single document over
+  32 MiB is refused without being read.
 * A Word (`.docx`) file is now recognised as Word rather than as a generic binary, so
   a configured `.docx` extractor can actually be selected for it. With none
   configured it is still catalogued and citable as `unsupported_type`, exactly as
@@ -111,9 +112,9 @@ the surviving originals as new rows.
 * A catalog larger than the batch cap can still be reconciled. The cap now counts the
   documents a run must actually process, not everything in the tree, so a
   21-document catalog built one file at a time no longer refuses every later `sync`.
-* Installing a missing extractor now makes the waiting rows retryable: the detected
-  media type is recorded on an `extractor_unavailable` row, so a `.docx` row is
-  re-tried on the next `sync` instead of being permanently mis-typed as plain text.
+* Installing a missing extractor or newly configuring one for an `unsupported_type`
+  row makes the waiting rows retryable on the next `sync`; the recorded detected
+  media type selects the newly available extractor without requiring a file edit.
 * An extractor whose `argv` puts `$IN` first is refused. The placeholder is only
   substituted in the arguments, so `["$IN"]` meant the tool tried to run a program
   literally named `$IN`; a real executable is now required at position 0.

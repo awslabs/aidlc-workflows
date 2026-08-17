@@ -5586,11 +5586,15 @@ export function removeTreeSync(path: string): void {
 // each leaf they touch, not once for the parent.
 export function assertNoSymlinkInChainOrThrow(anchorReal: string, rel: string): string {
   if (rel === "") return anchorReal;
-  if (rel.startsWith("..") || isAbsolute(rel)) {
+  if (isAbsolute(rel)) {
     throw new Error(`path escapes its anchor lexically: ${rel}`);
   }
+  const parts = rel.split(sep);
+  if (parts.some((part) => part === "..")) {
+    throw new Error(`path component ".." escapes its anchor ${anchorReal}: ${rel}`);
+  }
   let current = anchorReal;
-  for (const part of rel.split(sep)) {
+  for (const part of parts) {
     if (part.length === 0) continue;
     const child = join(current, part);
     let isSymlink = false;

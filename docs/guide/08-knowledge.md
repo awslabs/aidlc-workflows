@@ -87,6 +87,34 @@ aidlc/knowledge/                  # empty at bootstrap; create the subdirs you n
 └── ...                        # add a directory per agent only if you have content for it
 ```
 
+## Document Knowledge (DocumentKB)
+
+Team knowledge files are curated reference material. DocumentKB is the companion
+catalog for documents the team already owns: policies, contracts, PDFs, Word
+files, Markdown, and plain text.
+
+The ownership split is deliberate:
+
+| Directory | Owner | Purpose |
+|---|---|---|
+| `aidlc/spaces/<space>/knowledge/documents/` | Your team | Original documents, organised and deleted by you |
+| `aidlc/spaces/<space>/knowledge/documentkb/` | AI-DLC | Derived index, metadata, and extracted text |
+
+Use `/aidlc knowledge onboard [path]` to add one document or sweep the folder.
+Use `sync` after files are added, edited, moved, or deleted; `list` shows every
+catalog row and state, and `show <id>` returns one citable record plus current
+extracted text when available. The `/aidlc-knowledge` skill guides the same
+workflow.
+
+Recovery is intentionally limited. If only `documentkb/index.json` is lost,
+`sync` rebuilds it from the surviving per-document `metadata.json` records,
+including tombstones. Deleting the whole `documentkb/` tree also deletes those
+records, so document IDs, tombstones, and intent associations do not survive;
+surviving originals are indexed as new documents.
+
+See [CLI Commands](12-cli-commands.md) for every verb and flag, and
+[Skills and Runner Commands](17-skills.md) for the skill surface.
+
 ---
 
 ## Adding Company Standards

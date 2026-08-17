@@ -30,6 +30,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -68,6 +69,9 @@ function makeFixture(harness: string, sourceHarness = harness): string {
     mkdirSync(join(root, "dist"), { recursive: true });
     copyDir(join(REPO_ROOT, "dist", harness), join(root, "dist", harness));
   }
+  // Same hermeticity rule as t279: emitter imports (notably smol-toml) must
+  // resolve from the checkout, not from Bun's mutable global package cache.
+  symlinkSync(join(REPO_ROOT, "node_modules"), join(root, "node_modules"));
   return root;
 }
 

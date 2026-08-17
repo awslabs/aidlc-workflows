@@ -906,6 +906,47 @@ describe("t291 the index is read FRESH inside the lock", () => {
     expect(ids).toContain(firstId);
     expect(ids.length).toBe(2);
   });
+
+  test("a concurrent same-path row with different bytes is refreshed in place", () => {
+    const p = projectWithIntent();
+    const source = doc(p, "same-path.md", "v1\n");
+    const original = onboard(p, SPACE, source, NOW).indexed[0];
+    const originalIndex = readIndex(p, SPACE);
+    rmSync(indexPath(p, SPACE));
+    writeFileSync(source, "v2 staged\n");
+
+    const held = join(p, "same-path-lock-held");
+    const mutationDone = join(p, "same-path-mutation-done");
+    const holder = writeLockHolder(join(p, "same-path-holder.ts"), p, held, mutationDone);
+    const mutator = join(p, "same-path-mutator.ts");
+    writeFileSync(
+      mutator,
+      `const fs = require("node:fs");\n` +
+        `Bun.sleepSync(500);\n` +
+        `fs.writeFileSync(${JSON.stringify(indexPath(p, SPACE))}, ${JSON.stringify(
+          `${JSON.stringify(originalIndex, null, 2)}\n`,
+        )});\n` +
+        `fs.writeFileSync(${JSON.stringify(mutationDone)}, "1");\n`,
+    );
+    const script =
+      `bun ${JSON.stringify(holder)} >/dev/null 2>&1 &\n` +
+      `${waitForFile(held)}\n` +
+      `bun ${JSON.stringify(mutator)} >/dev/null 2>&1 &\n` +
+      `bun ${JSON.stringify(join(AIDLC_TOOLS, "aidlc-knowledge.ts"))} onboard ` +
+      `${JSON.stringify(source)} --project-dir ${JSON.stringify(p)} >/dev/null 2>&1\nwait\n`;
+    expect(spawnSync("bash", ["-c", script], {
+      encoding: "utf-8",
+      env: CHILD_ENV,
+      timeout: 40_000,
+    }).status).toBe(0);
+
+    const rows = readIndex(p, SPACE).documents.filter(
+      (row) => !row.removed_at && row.source.path === "documents/same-path.md",
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].id).toBe(original.id);
+    expect(rows[0].sha256).toBe(sha256Hex(readFileSync(source)));
+  }, 60_000);
 });
 
 describe("t291 the journal is actually GITIGNORED, not just described as such", () => {
@@ -1448,6 +1489,41 @@ describe("t291 commit-time reconciliation and idempotent recovery", () => {
     expect(rows[0].id).toBe(id);
     expect(rows[0].removed_at).toBeUndefined();
   }, 45_000);
+
+  test("rebuild keeps the duplicate live row whose digest matches the source", () => {
+    const p = projectWithIntent();
+    const source = doc(p, "policy.md", "current policy\n");
+    const indexed = onboard(p, SPACE, source, NOW).indexed[0];
+    const winnerDir = join(documentkbDir(p, SPACE), indexed.id);
+    const winnerMeta = JSON.parse(
+      readFileSync(join(winnerDir, "metadata.json"), "utf-8"),
+    ) as Record<string, unknown>;
+    const loserId = "019fda80-8f8d-7bfa-b56c-983cf0353fab";
+    const loserDir = join(documentkbDir(p, SPACE), loserId);
+    mkdirSync(loserDir, { recursive: true });
+    writeFileSync(
+      join(loserDir, "metadata.json"),
+      `${JSON.stringify({
+        ...winnerMeta,
+        id: loserId,
+        sha256: sha256Hex(Buffer.from("stale policy\n")),
+        bytes: Buffer.byteLength("stale policy\n"),
+        indexed_at: "2026-08-08T00:00:00Z",
+        extraction: { state: "unsupported_type", detectedType: "text/plain" },
+        content: undefined,
+        content_sha256: undefined,
+      }, null, 2)}\n`,
+    );
+    rmSync(indexPath(p, SPACE));
+
+    syncDocuments(p, SPACE, "2026-08-09T00:00:00Z");
+    const rows = readIndex(p, SPACE).documents.filter(
+      (row) => !row.removed_at && row.source.path === "documents/policy.md",
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].id).toBe(indexed.id);
+    expect(rows[0].sha256).toBe(sha256Hex(readFileSync(source)));
+  });
 
   test("a successful edited onboard event carries its source path", () => {
     const p = projectWithIntent();

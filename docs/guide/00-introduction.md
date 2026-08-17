@@ -66,7 +66,7 @@ To reshape *how* AI-DLC behaves — add a stage or an agent, define a scope, aut
 | [Agents](06-agents.md) | The 14-agent roster: 11 domain experts, 2 reviewers, and the composer |
 | [Agent deep dives](agents/README.md) | Per-agent reference pages: responsibilities, stages, knowledge |
 | [Interaction Modes](07-interaction-modes.md) | Guide Me / Edit File / Chat and approval gates |
-| [Knowledge](08-knowledge.md) | Adding company standards and conventions |
+| [Knowledge](08-knowledge.md) | Adding company standards and cataloguing team documents |
 | [Rules and the Learning Loop](09-rules-and-the-learning-loop.md) | Self-learning behavioral rules |
 | [State and Audit](10-state-and-audit.md) | How progress and decisions are tracked |
 | [Session Management](11-session-management.md) | Resume, redo, jump, recovery, and session reporting skills |

@@ -260,13 +260,13 @@ carries two live rows — the outcomes are `fresh`, `already`, and `edited`, and
 are worth reading, because "no output changed" and "nothing happened" are different
 results.
 
-**Batch limits.** A pathless `onboard` refuses a batch of more than 20 documents or
-256 MiB in total. `sync` applies the same limits only to new, changed, or retrying
-documents; an already-reconciled catalog can be larger. When a work batch exceeds a
-cap, onboard the affected files individually before syncing again. Nothing is
-indexed when a cap is hit, so the refusal is never half-finished. A single document over
-32 MiB is refused without being read at all; the message says so, because "refused"
-and "read, then refused" have very different costs on a large file.
+**Batch limits.** A pathless `onboard` and `sync` apply the 20-document/256 MiB
+limits to new, changed, or retrying work, not to already-current catalog rows. An
+already-reconciled catalog can be larger. When a work batch exceeds a cap, onboard
+the affected files individually before syncing again. Nothing is indexed when a cap
+is hit, so the refusal is never half-finished. A single document over 32 MiB is
+refused without being read at all; the message says so, because "refused" and "read,
+then refused" have very different costs on a large file.
 
 **Scoping.** Omit `--intent` and the document is space-wide — every intent can see
 it. Bare `--intent` means the active intent, and fails rather than guessing when
@@ -279,9 +279,8 @@ document). Scoping to an intent that has finished is refused unless you add
 **Text extraction** is delegated to whatever extractor the project configures. PDF
 gets a default extractor (`pdftotext`) if none is configured; a Word (`.docx`) file
 has no built-in default — with none configured it is catalogued and citable as
-`unsupported_type`, and configuring an extractor later applies to newly indexed or
-changed files (an already-indexed `unsupported_type` row re-extracts only after the
-file next changes, or via `rebind`). If a CONFIGURED extractor is not installed the
+`unsupported_type`; after configuring an extractor, run `sync` to retry unchanged
+rows of that detected type. If a CONFIGURED extractor is not installed the
 document is catalogued as `extractor_unavailable` — visible in `list`, and fixed by
 installing the tool and running `/aidlc knowledge sync`. Re-running `onboard` on the
 same unchanged path reports `already` and does NOT retry extraction — only `sync`

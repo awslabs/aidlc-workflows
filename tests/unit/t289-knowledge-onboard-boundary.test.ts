@@ -198,6 +198,15 @@ describe("t289 the walk skips symlinks, which is what makes three failures impos
     const p = scratchProject();
     expect(walkDocuments(join(p, "no-such-dir"))).toEqual([]);
   });
+
+  test("a named file whose literal name starts with two dots onboards normally", () => {
+    const p = scratchProject();
+    const abs = doc(p, "..foo", "ordinary file\n");
+    const result = onboard(p, SPACE, abs, NOW);
+    expect(result.refused).toBeUndefined();
+    expect(result.indexed).toHaveLength(1);
+    expect(result.indexed[0].path).toBe("documents/..foo");
+  });
 });
 
 describe("t289 containment is re-checked AFTER realpath", () => {
@@ -737,6 +746,41 @@ describe("t289 a batch is ALL-OR-NOTHING", () => {
     const result = onboard(p, SPACE, join(documentsDir(p, SPACE), "security"), NOW);
     expect(result.indexed.map((r) => r.path).sort())
       .toEqual(["documents/security/policy.md", "documents/security/standards.md"]);
+  });
+
+  test("21 already-indexed files are not counted as pathless onboard work", () => {
+    const p = scratchProject();
+    const indexedAt = new Date(Date.now() + 60_000).toISOString();
+    for (let i = 0; i < 21; i++) {
+      const abs = doc(p, `existing-${i}.md`, `body ${i}\n`);
+      onboard(p, SPACE, abs, indexedAt);
+    }
+    const result = onboard(p, SPACE, undefined, indexedAt);
+    expect(result.refused).toBeUndefined();
+    expect(result.indexed).toHaveLength(21);
+    expect(result.indexed.every((row) => row.status === "already")).toBe(true);
+  });
+
+  test("21 new files are refused as 21 work items and nothing is indexed", () => {
+    const p = scratchProject();
+    for (let i = 0; i < 21; i++) doc(p, `new-${i}.md`, `body ${i}\n`);
+    expect(() => onboard(p, SPACE, undefined, NOW))
+      .toThrow(/would index 21 new or changed documents/);
+    expect(existsSync(indexPath(p, SPACE))).toBe(false);
+  });
+
+  test("20 new files plus three already-indexed files stay within the work cap", () => {
+    const p = scratchProject();
+    const indexedAt = new Date(Date.now() + 60_000).toISOString();
+    for (let i = 0; i < 3; i++) {
+      const abs = doc(p, `existing-${i}.md`, `existing ${i}\n`);
+      onboard(p, SPACE, abs, indexedAt);
+    }
+    for (let i = 0; i < 20; i++) doc(p, `new-${i}.md`, `new ${i}\n`);
+    const result = onboard(p, SPACE, undefined, indexedAt);
+    expect(result.refused).toBeUndefined();
+    expect(result.indexed.filter((row) => row.status === "fresh")).toHaveLength(20);
+    expect(result.indexed.filter((row) => row.status === "already")).toHaveLength(3);
   });
 });
 
@@ -1353,6 +1397,12 @@ describe("t289 a descendant of documentkb/ is ITSELF a symlink: refused, nothing
     rmSync(join(documentkbDir(p, SPACE), id), { recursive: true, force: true });
     symlinkSync(documentsDir(p, SPACE), join(documentkbDir(p, SPACE), id));
     expect(() => documentDir(p, SPACE, id)).toThrow(/symlink/i);
+  });
+
+  test("documentDir refuses an interior parent-directory component", () => {
+    const p = scratchProject();
+    expect(() => documentDir(p, SPACE, ["safe", "..", "..", "escape"].join(sep)))
+      .toThrow(/component "\.\." escapes its anchor/);
   });
 });
 

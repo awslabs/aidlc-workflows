@@ -361,7 +361,7 @@ describe("t284 the retry INVERSION: the environment changed, not the document", 
     }) as never)).toBe(true);
   });
 
-  test("unsupported_type is never retried — nothing is configured for it", () => {
+  test("unsupported_type is not retried while no extractor is configured", () => {
     expect(shouldRetryExtraction(
       row({ state: "unsupported_type", detectedType: "image/png" }) as never,
     )).toBe(false);

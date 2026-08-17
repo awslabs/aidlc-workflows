@@ -61,6 +61,40 @@ aidlc/knowledge/                    # empty at bootstrap; team-created subdirs
 +-- [... a directory per agent the team chooses to populate]
 ```
 
+## DocumentKB Derived Catalog
+
+DocumentKB is a space-level derived catalog beneath the Tier 2 knowledge root:
+
+```
+aidlc/spaces/<space>/knowledge/
++-- documents/       # user-owned originals
++-- documentkb/      # tool-owned derived catalog
+    +-- index.json
+    +-- <document-id>/
+        +-- metadata.json
+        +-- content.md
+```
+
+`aidlc-knowledge.ts` stages catalog changes under
+`documentkb/.journal/<transaction-id>/`, then commits them while holding the
+workspace audit lock. The originals under `documents/` are never moved or
+deleted by the framework. Extracted content is revision-bound and treated as
+untrusted data.
+
+Each per-document `metadata.json` duplicates the row identity and source facts
+needed to rebuild a lost `index.json`. That is the recovery boundary: surviving
+metadata records restore IDs and tombstones; deleting the whole `documentkb/`
+tree removes the rebuild source and is not recoverable.
+
+Document provenance is emitted audit-last to the space-level shard at
+`aidlc/spaces/<space>/intents/audit/`, after the catalog write it describes.
+See [State Machine](12-state-machine.md#audit-last-for-derived-catalogs-document_indexed-document_updated-document_removed)
+for the ordering exception and recovery semantics.
+
+The schema and validation contract are owned by
+`core/tools/aidlc-documentkb-schema.ts`; the command and transaction logic are
+owned by `core/tools/aidlc-knowledge.ts`.
+
 ---
 
 ## 6-Step Knowledge Loading Order

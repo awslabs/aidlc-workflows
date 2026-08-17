@@ -27,7 +27,7 @@ If you are **using** AI-DLC to build software, start with the [User Guide](../gu
 | [Sensor System](07-sensor-system.md) | Sensor manifest schema, PULL imports, fire model, default severity |
 | [Rule System](08-rule-system.md) | Rule file layout, scope derivation, the layer-chain resolver, conflict gates |
 | [Testing](09-testing.md) | Test pyramid, tiers, stubs, fixtures, test registry |
-| [Knowledge System](10-knowledge-system.md) | Two-tier architecture, loading order, templates |
+| [Knowledge System](10-knowledge-system.md) | Two-tier architecture, DocumentKB derived catalog, loading order, templates |
 | [Contributing](11-contributing.md) | Development workflow, utility handler checklist, documentation policy |
 | [State Machine](12-state-machine.md) | Workflow / phase / stage machines, 85-event taxonomy, audit-first rules |
 | [Runtime Graph](13-runtime-graph.md) | The compiled `runtime-graph.json` artifact: data-plane mirror of the stage graph |

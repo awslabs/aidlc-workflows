@@ -3,7 +3,8 @@
 // t55 — drift guard for test-suite metadata + the framework path/version-marker
 // drift sweeps + the closed-harness-framing anti-rot guard. Migrated from
 // tests/integration/t55-test-suite-drift.sh (TAP plan 7); test 8 added by the
-// docs re-architecture (du/unit-7), so this twin now carries 8 test() cases.
+// docs re-architecture (du/unit-7), plus the DocumentKB skill existence pairing,
+// so this twin now carries 9 test() cases.
 // Mechanism: none (pure file reads/parsing over tests/, tests/README.md, and
 // docs/ — readFileSync/readdirSync only; zero spawn, zero LLM, zero tokens).
 // Born suffix-free.
@@ -94,7 +95,7 @@
 // checks 6/7. The suite now has 8 test() cases.
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
@@ -224,7 +225,7 @@ const readmeBody = readFileSync(README, "utf-8");
 const readmeRows = parseReadmeRows(readmeBody);
 const shFiles = discoverShFiles();
 
-describe("t55 — test-suite metadata drift (migrated from t55-test-suite-drift.sh, plan 7; +1 framing guard = 8)", () => {
+describe("t55 — test-suite metadata drift (migrated from t55-test-suite-drift.sh, plan 7; +2 guards = 9)", () => {
   // ───────────────────────────────────────────────────────────────────────────
   // Check 1 — header drift. Surviving `.sh` only: if a header has (N tests) and
   // the file has a literal `plan N`, they must agree. `.test.ts` carry no plan N.
@@ -456,6 +457,26 @@ describe("t55 — test-suite metadata drift (migrated from t55-test-suite-drift.
     }
 
     expect(pathDrift).toEqual([]);
+  });
+
+  test("6b: references to the DocumentKB skill require its authored source directory", () => {
+    const roots = [
+      join(REPO_ROOT, "core"),
+      join(REPO_ROOT, "harness"),
+      join(REPO_ROOT, "dist", "claude", ".claude"),
+      join(REPO_ROOT, "tests"),
+      join(REPO_ROOT, "docs"),
+    ];
+    const references = grepHits(
+      roots,
+      (line: string) => line.includes("skills/aidlc-knowledge"),
+    ).filter((hit: string) => !commonExcluded(hit));
+    if (references.length > 0) {
+      expect(
+        existsSync(join(REPO_ROOT, "core", "skills", "aidlc-knowledge")),
+        `skills/aidlc-knowledge is referenced but core/skills/aidlc-knowledge is missing:\n${references.join("\n")}`,
+      ).toBe(true);
+    }
   });
 
   // ───────────────────────────────────────────────────────────────────────────

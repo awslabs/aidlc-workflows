@@ -860,4 +860,29 @@ z.close()
     expect(change?.change, JSON.stringify(parsed)).toBe("retried");
     expect(change?.state).toBe("extracted");
   });
+
+  test("unsupported_type retries after an extractor is configured", () => {
+    scratch = mkdtempSync(join(tmpdir(), "t280-docx-unsupported-"));
+    cpSync(join(REPO, "dist"), join(scratch, "dist"), { recursive: true });
+
+    const projectDir = join(scratch, "project");
+    mkdirSync(documentsDir(projectDir, SPACE), { recursive: true });
+    makeDocx(join(documentsDir(projectDir, SPACE), "a.docx"));
+
+    const onboarded = runKnowledge(["onboard"], projectDir);
+    expect(onboarded.status, onboarded.out).toBe(0);
+    const afterOnboard = JSON.parse(
+      readFileSync(join(documentkbDir(projectDir, SPACE), "index.json"), "utf-8"),
+    );
+    expect(afterOnboard.documents[0].extraction.state).toBe("unsupported_type");
+    expect(afterOnboard.documents[0].extraction.detectedType).toBe(WORD_DOCX_MIME);
+
+    setDocxExtractor(["cat", "$IN"]);
+    const synced = runKnowledge(["sync"], projectDir);
+    expect(synced.status, synced.out).toBe(0);
+    const parsed = JSON.parse(synced.out.slice(synced.out.indexOf("{")));
+    const change = parsed.changes.find((c: { id: string }) => c.id === afterOnboard.documents[0].id);
+    expect(change?.change, JSON.stringify(parsed)).toBe("retried");
+    expect(change?.state).toBe("extracted");
+  });
 });

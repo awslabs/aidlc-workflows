@@ -1422,32 +1422,47 @@ export function onboard(
     candidates = statSync(real).isDirectory() ? walkDocuments(real) : [real];
   }
 
+  const index = readIndex(projectDir, space);
+  const liveBySource = new Map(
+    index.documents.filter((row) => !isTombstoned(row)).map((row) => [row.source.path, row]),
+  );
+
   // The BATCH caps -- distinct from EXTRACT_INPUT_BYTE_CAP's per-document
-  // bound. They gate the size of the WHOLE run before any candidate is
-  // opened: a pathless onboard over an entire tree, or a single directory
-  // argument, is refused as one unit rather than each oversized file being
-  // silently skipped one at a time while everything else proceeds. Applied
-  // to BOTH the pathless and directory-argument shapes -- any `candidates`
-  // list with more than one entry -- and NOT to a single-file `pathArg`,
-  // whose own per-document cap (in readCandidate, below) already governs it.
+  // bound -- apply to the WORK this sweep can see without opening any content.
+  // The stat-only changed test is deliberately conservative: size changes and
+  // mtimes newer than indexed_at count as work. A same-size edit with a preserved
+  // or older mtime is still caught by the digest pass below and may take the run
+  // one item over the cap; avoiding content reads before this resource gate is
+  // the more important invariant.
   if (candidates.length > 1) {
-    if (candidates.length > EXTRACT_BATCH_DOC_CAP) {
+    const work: { abs: string; bytes: number }[] = [];
+    for (const abs of candidates) {
+      try {
+        const stat = statSync(abs);
+        const sourcePath = portableSourcePath(projectDir, space, abs);
+        const existing = liveBySource.get(sourcePath);
+        const indexedAt = existing === undefined ? Number.NaN : Date.parse(existing.indexed_at);
+        if (
+          existing === undefined ||
+          stat.size !== existing.bytes ||
+          (!Number.isNaN(indexedAt) && stat.mtimeMs > indexedAt)
+        ) {
+          work.push({ abs, bytes: stat.size });
+        }
+      } catch { /* vanished mid-walk; readCandidate below will skip or refuse it */ }
+    }
+    if (work.length > EXTRACT_BATCH_DOC_CAP) {
       throw new Error(
-        `This run would index ${candidates.length} documents, over the ` +
+        `This run would index ${work.length} new or changed documents, over the ` +
           `${EXTRACT_BATCH_DOC_CAP}-document batch cap; nothing was indexed. Onboard a ` +
           `subdirectory or a single file at a time, or run \`/aidlc knowledge sync\` ` +
           `instead of a pathless onboard.`,
       );
     }
-    let batchBytes = 0;
-    for (const abs of candidates) {
-      try {
-        batchBytes += statSync(abs).size;
-      } catch { /* vanished mid-walk; readCandidate below will skip or refuse it */ }
-    }
+    const batchBytes = work.reduce((total, item) => total + item.bytes, 0);
     if (batchBytes > EXTRACT_BATCH_BYTE_CAP) {
       throw new Error(
-        `This run would read ${batchBytes} bytes across ${candidates.length} documents, over ` +
+        `This run would read ${batchBytes} bytes across ${work.length} new or changed documents, over ` +
           `the ${EXTRACT_BATCH_BYTE_CAP}-byte batch cap; nothing was indexed. Onboard a ` +
           `subdirectory or a single file at a time, or run \`/aidlc knowledge sync\` instead ` +
           `of a pathless onboard.`,
@@ -1455,7 +1470,6 @@ export function onboard(
     }
   }
 
-  const index = readIndex(projectDir, space);
   const bySource = new Map(index.documents.map((r) => [r.source.path, r]));
 
   // --- Pass 1: read and validate EVERYTHING before writing anything ---
@@ -1669,7 +1683,9 @@ export function onboard(
       const freshSources = new Map(fresh.documents.map((r) => [r.source.path, r]));
       const landed: DocumentRow[] = [];
       const edited: DocumentRow[] = [];
-      for (const { row, baseRow } of staged) {
+      const editedStageIds = new Map<string, string>();
+      for (const { row, baseRow, text } of staged) {
+        const stagedRowId = row.id;
         if (editedIds.has(row.id)) {
           // This id is EXPECTED to already exist in the fresh index -- it is
           // the row being refreshed in place, not a new one. A concurrent
@@ -1702,12 +1718,27 @@ export function onboard(
           if (isTombstoned(freshRow)) continue;
           Object.assign(freshRow, row);
           edited.push(freshRow);
+          editedStageIds.set(freshRow.id, stagedRowId);
           continue;
         }
         // A concurrent run may have indexed the same source already. That is a
         // no-op, not a conflict -- report it as `already`, like the pre-lock path.
         const existing = freshSources.get(row.source.path);
-        if (existing !== undefined && existing.sha256 === row.sha256) continue;
+        if (existing !== undefined && !isTombstoned(existing)) {
+          if (existing.sha256 === row.sha256) continue;
+          // The source path is the identity evidence, exactly as in the read-pass
+          // edited branch. A concurrent onboard may have published an older
+          // revision while this fresh row was staged; refresh that live row in
+          // place instead of minting a second identity for one path.
+          existing.sha256 = row.sha256;
+          existing.bytes = row.bytes;
+          existing.indexed_at = row.indexed_at;
+          existing.extraction = row.extraction;
+          setRowContentFields(existing, text);
+          edited.push(existing);
+          editedStageIds.set(existing.id, stagedRowId);
+          continue;
+        }
         if (freshIds.has(row.id)) {
           throw new Error(
             `document id ${row.id} appeared in index.json while this batch was staged. ` +
@@ -1790,9 +1821,10 @@ export function onboard(
       // never inherited it.
       for (const row of edited) {
         const dir = documentDir(projectDir, space, row.id);
+        const stageId = editedStageIds.get(row.id) ?? row.id;
         const stagedText = row.content === undefined
           ? undefined
-          : readRegularFileNoFollowOrThrow(join(txnDir, row.id, "content.md"), `${row.id}/content.md`);
+          : readRegularFileNoFollowOrThrow(join(txnDir, stageId, "content.md"), `${stageId}/content.md`);
         publishRowContent(dir, row, stagedText);
       }
 
@@ -1876,8 +1908,12 @@ export function onboard(
       ...committed.landed.map((r) => r.id),
       ...committed.edited.map((r) => r.id),
     ]);
+    const committedPaths = new Set([
+      ...committed.landed.map((r) => r.source.path),
+      ...committed.edited.map((r) => r.source.path),
+    ]);
     for (const { row } of staged) {
-      if (committedIds.has(row.id)) continue;
+      if (committedIds.has(row.id) || committedPaths.has(row.source.path)) continue;
       // A LIVE match only: the race handled above (a concurrent tombstone)
       // means a row at this path can exist and NOT be what this outcome
       // should report as "already" -- a tombstoned row at the same path is a
@@ -1989,7 +2025,7 @@ function isLiveTxnDir(txnDir: string): boolean {
   const stampPath = join(txnDir, TXN_WRITER_STAMP);
   let raw: string;
   try {
-    raw = readRegularFileNoFollowOrThrow(stampPath, "txn liveness stamp").toString("utf-8").trim();
+    raw = readAtomicReplacedFileNoFollowOrThrow(stampPath, "txn liveness stamp").toString("utf-8").trim();
   } catch {
     // No stamp (or unreadable): either a legacy txn dir predating this
     // mechanism, or the mkdir->stamp acquire window. Grace on AGE, not on
@@ -2945,7 +2981,7 @@ export function syncDocuments(
 export function shouldRetryExtraction(row: DocumentRow): boolean {
   const rec = row.extraction;
   if (rec.state === "invalidated") return true;
-  if (rec.state === "extractor_unavailable") {
+  if (rec.state === "extractor_unavailable" || rec.state === "unsupported_type") {
     const argv = extractorArgvFor(detectMimeFromRow(row));
     if (argv === null) return false; // still nothing configured for this type
     return probeExtractor(argv[0]).available;
@@ -3538,7 +3574,44 @@ export function rebuildIndex(projectDir: string, space: string): DocumentIndex {
     const { schema_version: _sv, content_trust: _ct, content_handling: _ch, ...row } = meta;
     documents.push(row as DocumentRow);
   }
-  return { schema_version: DOCUMENTKB_SCHEMA_VERSION, documents };
+  // A crash residue or hand repair can leave multiple live metadata records for
+  // one source path. Rebuild must restore the catalog invariant, not preserve the
+  // ambiguity. Prefer a row whose digest matches the current managed source;
+  // otherwise keep the newest indexed_at, then the lexicographically-smallest id
+  // as the deterministic final tiebreak. Loser directories remain unreferenced
+  // orphan records, matching the existing treatment of unindexed record dirs.
+  const liveByPath = new Map<string, DocumentRow[]>();
+  for (const row of documents) {
+    if (isTombstoned(row)) continue;
+    const rows = liveByPath.get(row.source.path) ?? [];
+    rows.push(row);
+    liveByPath.set(row.source.path, rows);
+  }
+  const keepIds = new Set(documents.map((row) => row.id));
+  const docsAbs = documentsDir(projectDir, space);
+  const docsReal = existsSync(docsAbs) ? realpathSync(docsAbs) : null;
+  for (const [sourcePath, rows] of liveByPath) {
+    if (rows.length < 2) continue;
+    let currentDigest: string | null = null;
+    if (docsReal !== null && rows.some((row) => row.source.kind === "managed")) {
+      try {
+        const abs = join(knowledgeDir(projectDir, space), sourcePath.split("/").join(sep));
+        currentDigest = sha256Hex(readCandidate(docsReal, abs));
+      } catch { /* absent/refused source gives no preferred digest */ }
+    }
+    rows.sort((a, b) => {
+      const aMatches = currentDigest !== null && a.sha256 === currentDigest;
+      const bMatches = currentDigest !== null && b.sha256 === currentDigest;
+      if (aMatches !== bMatches) return aMatches ? -1 : 1;
+      if (a.indexed_at !== b.indexed_at) return a.indexed_at > b.indexed_at ? -1 : 1;
+      return a.id.localeCompare(b.id);
+    });
+    for (const loser of rows.slice(1)) keepIds.delete(loser.id);
+  }
+  return {
+    schema_version: DOCUMENTKB_SCHEMA_VERSION,
+    documents: documents.filter((row) => keepIds.has(row.id)),
+  };
 }
 
 export interface RebindOutcome {

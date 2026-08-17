@@ -895,7 +895,21 @@ const AUDIT_EVENT_ALLOWLIST = new Set([
 
 // Audit block fields kept per event (structural only — no Details/Request/
 // Reason free text, which can carry paths or decisions).
-const AUDIT_FIELD_ALLOWLIST = ["Event", "Timestamp", "Stage", "Slug", "Phase"];
+// Document identity and digest fields are safe structural evidence. `Source`
+// and `Last Path` are deliberately excluded: they carry customer-chosen
+// filenames, while the diagnostic bundle is redacted by design.
+const AUDIT_FIELD_ALLOWLIST = [
+  "Event",
+  "Timestamp",
+  "Stage",
+  "Slug",
+  "Phase",
+  "Space",
+  "Document",
+  "Change",
+  "Digest",
+  "Last Digest",
+];
 
 export interface NormalizedEvidence {
   state: Record<string, string>;
