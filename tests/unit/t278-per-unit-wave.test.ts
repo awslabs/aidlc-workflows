@@ -12,6 +12,13 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  artifactFilename,
+  readAllAuditShards,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  appendAuditEntry,
+} from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import {
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
@@ -24,7 +31,6 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
-import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
@@ -87,6 +93,7 @@ function constructionState(
   current: string,
   iteration: "stage-major" | "unit-major" = "stage-major",
   reviewOverride?: "advisory" | "none",
+  autonomy?: "autonomous" | "gated",
 ): string {
   return `# AI-DLC State Tracking
 
@@ -98,6 +105,7 @@ function constructionState(
 - **Skeleton Stance**: on
 - **Construction Iteration**: ${iteration}
 ${reviewOverride ? `- **Review Override**: ${reviewOverride}\n` : ""}
+${autonomy ? `- **Construction Autonomy Mode**: ${autonomy}\n` : ""}
 
 ## Scope Configuration
 - **Stages to Execute**: all
@@ -130,13 +138,14 @@ function project(
   current = "functional-design",
   iteration: "stage-major" | "unit-major" = "stage-major",
   reviewOverride?: "advisory" | "none",
+  autonomy?: "autonomous" | "gated",
 ): string {
   const proj = createTestProject();
   tempDirs.push(proj);
   seedAidlcMemory(proj);
   writeFileSync(
     seededStateFile(proj),
-    constructionState(current, iteration, reviewOverride),
+    constructionState(current, iteration, reviewOverride, autonomy),
   );
   return proj;
 }
@@ -206,6 +215,13 @@ function review(
 }
 
 function requestReview(proj: string, unit: string, iteration = 1): void {
+  const result = reviewRequestResult(proj, unit, iteration);
+  if (result.status !== 0) {
+    throw new Error(`review request failed: ${result.out}`);
+  }
+}
+
+function reviewRequestResult(proj: string, unit: string, iteration = 1) {
   const result = spawnSync(
     BUN,
     [
@@ -230,9 +246,10 @@ function requestReview(proj: string, unit: string, iteration = 1): void {
       },
     },
   );
-  if ((result.status ?? -1) !== 0) {
-    throw new Error(`review request failed: ${result.stdout}${result.stderr}`);
-  }
+  return {
+    status: result.status ?? -1,
+    out: `${result.stdout ?? ""}${result.stderr ?? ""}`,
+  };
 }
 
 function completeWave(proj: string, unit: string): void {
@@ -261,6 +278,38 @@ function completeWave(proj: string, unit: string): void {
   if ((result.status ?? -1) !== 0) {
     throw new Error(`wave completion failed: ${result.stdout}${result.stderr}`);
   }
+}
+
+function reportRejected(proj: string, feedback: string) {
+  const env = { ...process.env };
+  env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD = "1";
+  delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+  const result = spawnSync(
+    BUN,
+    [
+      ORCH,
+      "report",
+      "--stage",
+      "functional-design",
+      "--result",
+      "rejected",
+      "--user-input",
+      feedback,
+      "--project-dir",
+      proj,
+    ],
+    { encoding: "utf-8", env },
+  );
+  return {
+    status: result.status ?? -1,
+    out: `${result.stdout ?? ""}${result.stderr ?? ""}`,
+  };
+}
+
+function auditEventCount(proj: string, event: string): number {
+  return readAllAuditShards(proj)
+    .split("\n")
+    .filter((line) => line === `**Event**: ${event}`).length;
 }
 
 function writeDependencyArtifact(
@@ -581,6 +630,73 @@ describe("t278 engine-emitted wave contract", () => {
       review_state: "escalation-required",
       review_iteration: 3,
     });
+  }, 30000);
+
+  test("an autonomous inline wave cannot reset spent recovery without a human turn", () => {
+    const proj = project(
+      "functional-design",
+      "stage-major",
+      undefined,
+      "autonomous",
+    );
+    seedBoltDag(proj, ["alpha"]);
+    cover(proj, "alpha", "functional-design", REQUIRED_FD);
+    review(proj, "alpha");
+
+    const artifact = join(
+      seededRecordDir(proj),
+      "construction",
+      "alpha",
+      "functional-design",
+      "functional-spec.md",
+    );
+    writeFileSync(artifact, "# changed before recovery\n");
+    review(proj, "alpha", "READY", 2);
+    writeFileSync(artifact, "# changed after recovery\n");
+
+    expect(next(proj).directive.wave?.entries[0]).toMatchObject({
+      unit: "alpha",
+      review_state: "escalation-required",
+      review_iteration: 3,
+    });
+
+    const rejected = reportRejected(
+      proj,
+      "Request Changes: restart review after the invalidating write",
+    );
+    expect(rejected.status).toBe(0);
+    expect(rejected.out).toContain('"kind":"error"');
+    expect(rejected.out).toContain("Refusing to reject");
+    expect(rejected.out).toContain(
+      "stale-receipt recovery review was already spent",
+    );
+    expect(rejected.out).toContain("only after a real human has acted");
+    expect(next(proj).directive.wave?.entries[0]).toMatchObject({
+      unit: "alpha",
+      review_state: "escalation-required",
+      review_iteration: 3,
+    });
+
+    const stillSpent = reviewRequestResult(proj, "alpha", 1);
+    expect(stillSpent.status).not.toBe(0);
+    expect(stillSpent.out).toContain(
+      "stale-receipt recovery review pass was already spent",
+    );
+    expect(auditEventCount(proj, "GATE_REJECTED")).toBe(0);
+
+    appendAuditEntry("HUMAN_TURN", {}, proj);
+    const humanRejected = reportRejected(
+      proj,
+      "Request Changes: restart review after the invalidating write",
+    );
+    expect(humanRejected.status).toBe(0);
+    expect(humanRejected.out).not.toContain('"kind":"error"');
+    expect(auditEventCount(proj, "GATE_REJECTED")).toBe(1);
+
+    const restarted = reviewRequestResult(proj, "alpha", 1);
+    expect(restarted.status).toBe(0);
+    expect(restarted.out).toContain('"emitted":"REVIEW_REQUESTED"');
+    expect(restarted.out).not.toContain('"recovery"');
   }, 30000);
 
   test("fully settled siblings are omitted from a repeated same-batch wave", () => {

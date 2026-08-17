@@ -7,7 +7,7 @@ Review receipt invalidation is now recoverable without weakening normal review b
 
 * A terminal receipt invalidated by a later `produces[]` write gets exactly one marked recovery request at the next ordinal, including advisory stages and adversarial stages with unused normal iterations; either recovery verdict is terminal.
 * Per-Unit waves expose `recovery-required` with the exact next ordinal and `escalation-required` after recovery is spent, while mixed stale/never-reviewed completion refusals now give both groups an actionable remedy.
-* Retry and recovery-spent refusals no longer contradict each other. Interactive attempts reset only after a human Request Changes decision; autonomous Units halt before `finalize` and use a human-approved Bolt restart instead of waiting for an unreachable post-merge gate.
+* Retry and recovery-spent refusals no longer contradict each other. Interactive attempts, including autonomous inline waves after recovery is spent, reset only after a human Request Changes decision; autonomous Bolt Units halt before `finalize` and use a human-approved restart instead of waiting for an unreachable post-merge gate.
 * Intact receipts retain their existing advisory normal-flow and adversarial iteration budgets; ordinary over-budget requests are still refused.
 
 ## [2.6.8] - 2026-08-15

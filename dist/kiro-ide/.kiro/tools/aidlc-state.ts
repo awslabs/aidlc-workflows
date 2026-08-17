@@ -1943,6 +1943,29 @@ function reviewerPreconditionError(slug: string, reviewer: string): never {
   );
 }
 
+function reviewRecoverySpentInCurrentAttempt(
+  pd: string,
+  content: string,
+  stage: NonNullable<ReturnType<typeof findStageBySlug>>,
+): boolean {
+  if (!stage.reviewer) return false;
+  const autonomousSwarm = isAutonomousSwarmStage(pd, content, stage);
+  const reviewClass = autonomousSwarm
+    ? stage.review_class ?? "adversarial"
+    : resolveReviewClass(
+        stage.review_class ?? "adversarial",
+        getField(content, "Scope") ?? "",
+        content,
+      );
+  if (reviewClass === "none") return false;
+  const receipts = freshReviewReceipts(pd, content, stage, { reviewClass });
+  if (receipts.stageStaleProgress?.recoverySpent === true) return true;
+  for (const progress of receipts.unitStaleProgress.values()) {
+    if (progress.recoverySpent) return true;
+  }
+  return false;
+}
+
 function handleAdvance(args: string[]): void {
   // Keep only the positional <completed-slug> [<next-slug>]; any flags are
   // filtered out so they are not misread as the next slug.
@@ -2751,11 +2774,22 @@ function handleReject(args: string[]): void {
   validateSlugInState(content, slug, ["awaiting-approval", "in-progress"]);
   const gateWasMissing = getSlugState(content, slug) === "in-progress";
 
+  const autonomousMode = isAutonomousMode(content);
+  const recoveryResetNeedsHuman =
+    autonomousMode && reviewRecoverySpentInCurrentAttempt(pd, content, stage);
   if (
-    !isAutonomousMode(content) &&
+    (!autonomousMode || recoveryResetNeedsHuman) &&
     !humanPresenceGuardDisabled() &&
     !humanActedSinceGate(pd)
   ) {
+    if (recoveryResetNeedsHuman) {
+      error(
+        `Refusing to reject "${slug}": the stale-receipt recovery review was already spent ` +
+          "in this stage attempt, so GATE_REJECTED may reset review accounting only after " +
+          "a real human has acted. Present the escalation to the human and wait for a typed " +
+          "Request Changes decision before retrying.",
+      );
+    }
     error(
       `Refusing to reject "${slug}": a real human has not acted at this gate since it opened. ` +
         "Requesting changes requires a typed human turn before it can commit.",
