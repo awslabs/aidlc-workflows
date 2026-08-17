@@ -17,13 +17,12 @@ import {
   emitError,
   errorMessage,
   extractMarkdownSection,
-  fabricatedDecisionMarker,
   freshReviewReceipts,
   getField,
   holdsAuditLock,
   humanActedSinceLastAnswer,
   humanPresenceGuardDisabled,
-  isAutonomousMode,
+  isAutonomousConstructionDecision,
   isAutonomousSwarmStage,
   loadStageGraphAll,
   isNonAnswer,
@@ -34,6 +33,7 @@ import {
   reviewArtifactFingerprint,
   resolveProjectDir,
   resolveReviewClass,
+  selfAttributedDecisionMarker,
   SUMMARY_CONFIRMATION_CHECKPOINT,
   stateFilePath,
   toPosix,
@@ -412,6 +412,8 @@ function handleAnswer(args: string[]): void {
     const content = existsSync(stateFilePath(pd))
       ? readFileSync(stateFilePath(pd), "utf-8")
       : null;
+    const stageNode = loadStageGraphAll().find((stage) => stage.slug === flags.stage);
+    const autonomousDecision = isAutonomousConstructionDecision(content, stageNode?.phase);
     const workflow =
       flags.single === "true" ? `single-stage:${flags.stage}` : undefined;
 
@@ -420,16 +422,19 @@ function handleAnswer(args: string[]): void {
     // rejects a self-attributed one ("A. Nothing to add - CONDUCTOR DEFAULT,
     // session unattended"), which the presence check below cannot catch because
     // a human is in the session, just not at this question. Autonomous
-    // Construction is exempt, and the summary checkpoint above is already
-    // constrained to two exact strings.
+    // Construction is exempt for ordinary answers. Summary confirmation remains
+    // a human-backed checkpoint below: its fresh-turn requirement is not waived
+    // by Construction autonomy even though its text is one of two exact strings.
     const answerAuthorship =
-      isAutonomousMode(content) || humanPresenceGuardDisabled()
+      autonomousDecision || humanPresenceGuardDisabled()
         ? null
-        : fabricatedDecisionMarker(flags.details);
+        : selfAttributedDecisionMarker(flags.details, "answer");
     if (answerAuthorship) {
       error(
-        `Refusing to record this answer for "${flags.stage}": --details attributes it to the ` +
-          `conductor, not a human ("${answerAuthorship}"). A stage question is the human's to ` +
+        `Refusing to record this answer for "${flags.stage}": decision self-attribution blocked ` +
+          `(${answerAuthorship.category}) in --details: "${answerAuthorship.phrase}". ` +
+          "This tripwire detects explicit conductor/model provenance; it does not prove authorship. " +
+          "A stage question is the human's to " +
           "answer. Re-present it and wait for their reply; recording your own default here would " +
           "carry it downstream as a human decision.",
       );
@@ -495,7 +500,7 @@ function handleAnswer(args: string[]): void {
       targetAtApprovalGate && hasPendingDecisionAtGate(pd, flags.stage);
     if (targetAtApprovalGate && !pendingDecision) {
       if (
-        !isAutonomousMode(content) &&
+        !autonomousDecision &&
         !humanPresenceGuardDisabled() &&
         !humanActedSinceLastAnswer(pd)
       ) {
@@ -513,7 +518,7 @@ function handleAnswer(args: string[]): void {
       return;
     }
 
-    if (isAutonomousMode(content)) {
+    if (autonomousDecision) {
       // autonomous Construction: no human presence required
     } else if (humanPresenceGuardDisabled()) {
       // scoped test off-switch

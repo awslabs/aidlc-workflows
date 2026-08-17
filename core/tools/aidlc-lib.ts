@@ -3608,61 +3608,125 @@ export function isNonAnswer(text: string | undefined | null): boolean {
   return t.length === 0 || NON_ANSWER_RE.test(t);
 }
 
-// A conductor-authored decision is not a human decision, even when the
-// conductor says so out loud. isNonAnswer above catches a harness handing back
-// a DISMISSED widget; this catches the opposite failure — the conductor writing
-// the human's decision itself and labelling it as its own work.
-//
-// Observed in the field (issue 742): when a stage deadlocks, GATE_REJECTED is
-// the only event that resets an advisory review budget, so an unattended
-// conductor records one and states in --feedback that it is not a human
-// rejection ("AGENT-INITIATED, NOT A HUMAN REJECTION. ... This reopen exists
-// solely to obtain a review budget"). The same sessions self-approved gates and
-// answered their own interview questions as "CONDUCTOR DEFAULT, session
-// unattended". humanActedSinceGate cannot see any of it: that predicate proves
-// a HUMAN_TURN exists (PRESENCE), while the decision text is the conductor's
-// (INTENT) — and in a live session presence is continuous, so it is satisfied
-// for a decision the human never made.
-//
-// The vocabulary matches only SELF-REFERENTIAL PROVENANCE claims — assertions
-// about who authored this very decision — never assertions about the work. A
-// human rejecting with "revert the agent-initiated retry in scheduler.ts" is
-// talking about code and must pass, which is why bare "agent-initiated" is not
-// a marker and the authorship alternatives all require a decision noun. Unlike
-// NON_ANSWER_RE these are SUBSTRING matches, because the disclaimer rides
-// inside a paragraph of otherwise-substantive prose.
-//
-// Honest labelling stays legal where the conductor holds the authority: every
-// call site skips this floor in autonomous Construction (isAutonomousMode),
-// where deciding without a human is the design rather than a forgery.
-const FABRICATED_DECISION_RE = new RegExp(
-  [
-    // denies human authorship of this very decision
-    "not (?:a|the) human(?:'s)? (?:rejection|approval|decision|answer|choice|response|confirmation)",
-    "never confirmed by (?:a|the) human",
-    // claims agent/conductor authorship of this very decision
-    "(?:agent|conductor|ai)[-\\s]?initiated\\s+(?:correction|rejection|reject|approval|decision|answer|choice|change request)",
-    // "CONDUCTOR DEFAULT," / "conductor defaults never confirmed" — the
-    // provenance-LABEL sense, which closes its clause. The attributive sense
-    // ("the conductor default timeout is too low") is a human talking about a
-    // setting and must pass, so require punctuation, end-of-text, or a
-    // provenance continuation rather than a noun.
-    "conductor(?:'s)?[-\\s]defaults?(?=\\s*(?:[,.;:!?)\\]—-]|$)|\\s+(?:never|session|taking|so|because))",
-    "conductor[-\\s]recorded",
-    "(?:recorded|authored|written|supplied|entered|selected|chosen) by the conductor",
-    // asserts no human was present to decide
-    "(?:session|run) (?:is |was )?unattended",
-    "unattended (?:session|run)",
-  ].join("|"),
-  "i",
-);
+// HUMAN_TURN proves only that a prompt-submit seam fired after the previous
+// resolution. Several harnesses do not expose trusted prompt text, so the
+// framework cannot prove that --user-input/--feedback/--details came from the
+// human. This helper enforces the narrower property that IS mechanically
+// available: reject recognized, explicit statements that attribute THIS
+// authority-bearing decision to the conductor/model. Unlabelled or unknown
+// wording deliberately fails open; this is a defense-in-depth tripwire, not an
+// authorship boundary.
+export type DecisionKind = "approval" | "rejection" | "answer";
 
-// Returns the offending phrase (so the refusal can quote what tripped it) or
-// null when the text carries no self-attribution.
-export function fabricatedDecisionMarker(
+export interface SelfAttributionMarker {
+  category: "non-human-decision" | "model-authored-decision" | "conductor-default";
+  phrase: string;
+}
+
+function maskQuotedDecisionExamples(text: string): string {
+  const mask = (value: string): string => value.replace(/[^\n]/g, " ");
+  return text
+    .replace(/(```|~~~)[\s\S]*?\1/g, mask)
+    .replace(/(^|\n)[ \t]*(?:```|~~~)[^\n]*(?:\n[\s\S]*|$)/g, mask)
+    .replace(/``[^`\n]*``|`[^`\n]*`/g, mask)
+    .replace(/^ {0,3}>[^\n]*(?:\n(?!\s*$)[^>\n][^\n]*)*/gm, mask)
+    .replace(/"[^"\n]*"|“[^”\n]*”|‘[^’\n]*’/g, mask)
+    .replace(/(^|[\s([{:])'[^'\n]+'(?=$|[\s)\]},.;:!?])/gm, mask);
+}
+
+export function selfAttributedDecisionMarker(
   text: string | undefined | null,
-): string | null {
-  return (text ?? "").match(FABRICATED_DECISION_RE)?.[0] ?? null;
+  kind: DecisionKind,
+): SelfAttributionMarker | null {
+  const original = text ?? "";
+  const candidate = maskQuotedDecisionExamples(original);
+  const actor = "(?:agent|assistant|conductor|model|ai)";
+  const noun = kind === "approval"
+    ? "(?:approval|approve|decision|choice|confirmation)"
+    : kind === "rejection"
+      ? "(?:rejection|reject|decision|choice|change[ -]request|request changes)"
+      : "(?:answer|decision|choice|confirmation)";
+  const verb = kind === "approval"
+    ? "(?:approv(?:e|ed|ing)|choos(?:e|en|ing)|select(?:ed|ing))"
+    : kind === "rejection"
+      ? "(?:reject(?:ed|ing)?|request(?:ed|ing)? changes|choos(?:e|en|ing)|select(?:ed|ing))"
+      : "(?:answer(?:ed|ing)?|respond(?:ed|ing)?|choos(?:e|en|ing)|select(?:ed|ing))";
+  const decisionTail = String.raw`(?=(?:\s*(?:[,.;:!?。！？；：，、)）]|$|\b(?:to|because|so|for)\b)|\s+[-–—]))`;
+  const categories: Array<{
+    category: SelfAttributionMarker["category"];
+    regex: RegExp;
+  }> = [
+    {
+      category: "non-human-decision",
+      regex: new RegExp(
+        String.raw`\b(?:not|isn['’]t)\s+(?:(?:a|the)\s+)?human(?:['’]s)?\s+${noun}\b${decisionTail}`,
+        "i",
+      ),
+    },
+    {
+      category: "model-authored-decision",
+      regex: new RegExp(
+        String.raw`(?:^|\n)\s*(?:[A-Z]\.\s*)?${actor}[-\s]+initiated\s+(?:(?:this|the|an?)\s+)?${noun}\b${decisionTail}`,
+        "i",
+      ),
+    },
+    {
+      category: "model-authored-decision",
+      regex: new RegExp(
+        String.raw`(?:^|\n)\s*(?:[A-Z]\.\s*)?${actor}[-\s]+(?:authored|generated|recorded|written)\s+(?:(?:this|the|an?)\s+)?${noun}\b${decisionTail}`,
+        "i",
+      ),
+    },
+    {
+      category: "model-authored-decision",
+      regex: new RegExp(
+        String.raw`\b${noun}\s+(?:was|is)\s+(?:generated|authored|written|supplied|entered|selected|chosen|made)\s+by\s+(?:(?:an?|the)\s+)?${actor}\b${decisionTail}`,
+        "i",
+      ),
+    },
+    {
+      category: "model-authored-decision",
+      regex: new RegExp(
+        String.raw`\bi\s*,?\s+(?:as\s+)?(?:the\s+)?${actor}\s*,?\s+(?:am|have)\s+${verb}\b`,
+        "i",
+      ),
+    },
+    {
+      category: "model-authored-decision",
+      regex: new RegExp(
+        String.raw`\b${actor}\s+(?:chose|selected)\s+(?:this\s+)?${noun}\b${decisionTail}`,
+        "i",
+      ),
+    },
+    ...(kind === "rejection"
+      ? [{
+          category: "model-authored-decision" as const,
+          regex: new RegExp(String.raw`\b${actor}\s+rejected\s+this\b${decisionTail}`, "i"),
+        }]
+      : []),
+    {
+      category: "conductor-default",
+      regex: /(?:^|\n)\s*(?:[A-Z]\.\s*)?(?:[^\n]{1,80}?\s[-–—:]\s*)?conductor(?:['’]s)?[ -]+default(?=(?:\s*(?:[,.?!;:。！？；：，、()[\]]|$)|\s+[-–—]))/i,
+    },
+  ];
+
+  for (const { category, regex } of categories) {
+    const match = regex.exec(candidate);
+    if (match?.index !== undefined) {
+      return {
+        category,
+        phrase: original.slice(match.index, match.index + match[0].length),
+      };
+    }
+  }
+  return null;
+}
+
+export function isAutonomousConstructionDecision(
+  stateContent: string | null,
+  stagePhase: string | null | undefined,
+): boolean {
+  return stagePhase === "construction" && isAutonomousMode(stateContent);
 }
 
 // True when any stage sits at [?] (awaiting-approval) in the state file: the

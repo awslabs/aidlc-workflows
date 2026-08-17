@@ -52,7 +52,16 @@ All event names follow `SUBJECT_PAST_VERB` — every event answers "what happene
 | `SESSION_RESUMED` | Existing Claude Code session resumed (source=resume) | Timestamp, Source | `hooks/aidlc-session-start.ts` |
 | `SESSION_COMPACTED` | Context compaction occurred | Timestamp, Current Stage, State Validity | `hooks/aidlc-validate-state.ts` (PreCompact) |
 | `SESSION_ENDED` | Claude Code session terminates | Timestamp, Reason | `hooks/aidlc-session-end.ts` |
-| `HUMAN_TURN` | A real human acted this turn: submitted a prompt or answered a question widget (the approval/interview gate requires one since the last gate resolution) | Timestamp | `hooks/aidlc-record-human-turn.ts` (UserPromptSubmit + PostToolUse AskUserQuestion) + the per-harness prompt-submit adapters |
+| `HUMAN_TURN` | A supported prompt-submit or answered-widget seam was observed (the approval/interview gate requires one since the last gate resolution) | Timestamp | `hooks/aidlc-record-human-turn.ts` (UserPromptSubmit + PostToolUse AskUserQuestion) + the per-harness prompt-submit adapters |
+
+`HUMAN_TURN` is chronological presence evidence, not authenticated decision
+content. The `--user-input`, `--feedback`, and `--details` fields recorded by
+authority-bearing tools are caller-supplied prose. A narrow defense-in-depth
+tripwire rejects recognized explicit conductor/model self-attribution, but
+unlabelled, paraphrased, localized, or otherwise unrecognized wording remains
+indistinguishable from human-authored text. `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`
+also disables that tripwire for deterministic recovery/tests. Audit shards are
+operational evidence, not a tamper-proof human-authorship boundary.
 
 ### Initialization Events (3 events — fire IN ADDITION TO `STAGE_COMPLETED`)
 

@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 564,
+    "total": 566,
     "enumeratedByClass": {
-      "function": 317,
+      "function": 319,
       "audit": 82,
       "scope": 9,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 156,
+      "function": 158,
       "audit": 40,
       "scope": 9,
       "stage": 11,
@@ -1723,18 +1723,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:fabricatedDecisionMarker",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t261-audit-authority-floor.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:filterProducesByKind",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2084,6 +2072,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t249-copilot-adapter.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isAutonomousConstructionDecision",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t261-audit-authority-floor.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -3465,6 +3465,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:selfAttributedDecisionMarker",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t261-audit-authority-floor.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
