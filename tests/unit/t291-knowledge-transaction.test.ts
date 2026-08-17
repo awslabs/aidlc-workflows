@@ -89,13 +89,22 @@ const NOW = "2026-08-07T00:00:00Z";
 const SPACE = "default";
 const CHILD_ENV = { ...process.env, AIDLC_ALLOW_DIRECT_AUDIT_EVENTS: "1" };
 
+/** Minimum time a test's lock holder keeps the lock, so the subject
+ *  demonstrably BLOCKS rather than sailing through an already-free lock. */
+const MIN_HOLD_MS = 300;
+/** Maximum time it keeps it. Every holder below is released by the mutator's
+ *  announcement, not by a clock, so this cap only ever fires when a mutator
+ *  broke -- and then the subject blows its acquire budget and the assertion
+ *  REPORTS a failure, which a holder that held forever never would. */
+const HOLD_CAP_MS = 15_000;
+
 let proj: string | undefined;
 
 /** A project WITH AN ACTIVE INTENT. The intent is not incidental: the shard bug
  *  this file guards is invisible in a space with no intents, because that is the
  *  one case where the buggy call happens to return the right path. */
 function projectWithIntent(): string {
-  proj = mkdtempSync(join(tmpdir(), "t278-"));
+  proj = mkdtempSync(join(tmpdir(), "t291-"));
   const r = spawnSync(
     "bun",
     [join(AIDLC_TOOLS, "aidlc-utility.ts"), "intent-create", "--label", "probe",
@@ -128,6 +137,61 @@ function runOnboard(p: string, args: string[] = []): { status: number; out: stri
     { encoding: "utf-8", env: CHILD_ENV },
   );
   return { status: r.status ?? -1, out: (r.stdout ?? "") + (r.stderr ?? "") };
+}
+
+/** A subprocess that takes the SPACE audit lock, announces it by writing
+ *  `heldMarker`, and then keeps holding until the mutator announces its write by
+ *  creating `mutationDoneMarker`. That is what makes "the mutation lands before
+ *  the lock is released" an ORDERING GUARANTEE instead of a timing hope: the
+ *  subject cannot reach its commit-time re-validation until the mutation is
+ *  already on disk, in every interleaving.
+ *
+ *  Written as a file rather than inlined so the shell script stays readable, and
+ *  shared by every trio below so a fix cannot land in nine of ten holders.
+ *
+ *  The hold sits far inside both lock bounds, which is why it is safe: a waiter
+ *  gets 50 x 100ms of acquire budget (`acquireAuditLock` defaults in
+ *  aidlc-lib.ts), and a LIVE holder is only stealable once it is over-age at
+ *  DEFAULT_LOCK_STALE_MS (10 minutes) -- so a hold of a second or two is never
+ *  reaped out from under the test, and never starves the subject either. */
+function writeLockHolder(
+  path: string,
+  p: string,
+  heldMarker: string,
+  mutationDoneMarker: string,
+): string {
+  writeFileSync(
+    path,
+    `const lib = await import(${JSON.stringify(join(AIDLC_TOOLS, "aidlc-lib.ts"))});\n` +
+      `const fs = require("node:fs");\n` +
+      `lib.withAuditLock(${JSON.stringify(p)}, () => {\n` +
+      `  fs.writeFileSync(${JSON.stringify(heldMarker)}, "1");\n` +
+      `  const minimumHold = Date.now() + ${MIN_HOLD_MS};\n` +
+      `  const cap = Date.now() + ${HOLD_CAP_MS};\n` +
+      `  while (Date.now() < cap) {\n` +
+      `    if (Date.now() >= minimumHold && fs.existsSync(${JSON.stringify(mutationDoneMarker)})) break;\n` +
+      // Sleep rather than spin: the subject needs the CPU to reach its staging
+      // pass inside this window, and a hot spin is what makes that slow.
+      `    Bun.sleepSync(10);\n` +
+      `  }\n` +
+      `  return 0;\n` +
+      `}, undefined, ${JSON.stringify(SPACE)});\n`,
+  );
+  return path;
+}
+
+/** The shell gate a trio must clear before launching its mutator and subject:
+ *  wait for `marker`, with a REAL deadline (200 x 50ms = 10s).
+ *
+ *  This replaces `for i in $(seq 1 100); do [ -f X ] && break; done`, which had
+ *  no sleep: 100 iterations of a `[ -f ]` builtin complete in ~3ms, while the
+ *  holder needs ~30ms of bun startup before it can even take the lock. So the
+ *  gate always fell through un-gated and every test below degraded into an
+ *  unsynchronised race -- the subject frequently won it, committed correctly,
+ *  and then failed an assertion that compared its committed row against bytes
+ *  the mutator only wrote afterwards. */
+function waitForFile(marker: string): string {
+  return `for i in $(seq 1 200); do [ -f ${JSON.stringify(marker)} ] && break; sleep 0.05; done`;
 }
 
 /** Every audit shard under the space, with its contents. */
@@ -541,10 +605,14 @@ describe("t291 the digest is re-validated INSIDE the lock", () => {
     // digest and the OLD staged content -- silent corruption no locking elsewhere
     // prevents.
     //
-    // Driven by a REAL race rather than a mock. A second process holds the audit
-    // lock for ~3s; our onboard therefore stages, then blocks waiting to acquire.
-    // While it waits, the file is rewritten. When the lock frees, the commit's
-    // digest re-check sees bytes that no longer match what it staged.
+    // Driven by a REAL race rather than a mock, but a race whose ORDER is fixed:
+    // a second process takes the audit lock and holds it until the mutator says
+    // it has written, so our onboard stages, blocks on acquire, and reaches its
+    // commit-time digest re-check only AFTER the file has been rewritten. The
+    // earlier version held for a flat 3s and hoped the mutator's own 1.5s timer
+    // landed inside the window; when the subject won that race instead it
+    // committed correctly and the assertion below compared its row against bytes
+    // written afterwards.
     //
     // Two earlier attempts failed and are worth recording: mocking `readIndex`
     // never entered the window (the guard came out UNPINNED -- removing it changed
@@ -553,31 +621,26 @@ describe("t291 the digest is re-validated INSIDE the lock", () => {
     const p = projectWithIntent();
     const abs = doc(p, "a.md", "original\n");
 
-    const holder = join(p, "holder.ts");
-    writeFileSync(
-      holder,
-      `const lib = await import(${JSON.stringify(join(AIDLC_TOOLS, "aidlc-lib.ts"))});\n` +
-        `lib.withAuditLock(${JSON.stringify(p)}, () => {\n` +
-        `  require("node:fs").writeFileSync(${JSON.stringify(join(p, "lock-held"))}, "1");\n` +
-        `  const until = Date.now() + 3000;\n` +
-        `  while (Date.now() < until) { require("node:fs").existsSync(${JSON.stringify(p)}); }\n` +
-        `  return 0;\n` +
-        `}, undefined, ${JSON.stringify(SPACE)});\n`,
-    );
+    const held = join(p, "lock-held");
+    const mutationDone = join(p, "digest-mutation-done");
+    const holder = writeLockHolder(join(p, "holder.ts"), p, held, mutationDone);
     const mutator = join(p, "mutator.ts");
     writeFileSync(
       mutator,
       `const fs = require("node:fs");\n` +
-        // Wait until our onboard is definitely staged-and-blocking, then mutate.
-        `const until = Date.now() + 1500;\n` +
-        `while (Date.now() < until) { fs.existsSync(${JSON.stringify(p)}); }\n` +
-        `fs.writeFileSync(${JSON.stringify(abs)}, "CHANGED-MID-TXN\\n");\n`,
+        // Let onboard get PAST staging before the bytes move, so the mutation
+        // lands in the window the guard exists for. Only this part is timing: the
+        // ordering that the assertions depend on is the marker below, which is
+        // what releases the lock.
+        `Bun.sleepSync(1500);\n` +
+        `fs.writeFileSync(${JSON.stringify(abs)}, "CHANGED-MID-TXN\\n");\n` +
+        `fs.writeFileSync(${JSON.stringify(mutationDone)}, "1");\n`,
     );
 
     const script =
       `bun ${JSON.stringify(holder)} >/dev/null 2>&1 &\n` +
       // Wait for the lock to actually be held before starting onboard.
-      `for i in $(seq 1 100); do [ -f ${JSON.stringify(join(p, "lock-held"))} ] && break; done\n` +
+      `${waitForFile(held)}\n` +
       `bun ${JSON.stringify(mutator)} >/dev/null 2>&1 &\n` +
       `bun ${JSON.stringify(join(AIDLC_TOOLS, "aidlc-knowledge.ts"))} onboard ` +
       `--project-dir ${JSON.stringify(p)} 2>&1\n` +
@@ -589,9 +652,13 @@ describe("t291 the digest is re-validated INSIDE the lock", () => {
     });
     const out = (r.stdout ?? "") + (r.stderr ?? "");
 
-    // Either the edit was caught (the refusal names it) or the race did not land
-    // this run. In BOTH cases the contract is the same and is what we assert: a
-    // row on disk must match the bytes on disk. A stale-content row is the bug.
+    // The mutation is now guaranteed to precede the commit, so the refusal is the
+    // expected path. Both branches stay, because ordering fixes only the half that
+    // was broken: the mutation can still land BEFORE staging finishes (a slow
+    // onboard startup under load), and then onboard legitimately stages the NEW
+    // bytes and indexes them consistently. What must hold in every case is the one
+    // contract asserted here: a row on disk matches the bytes on disk. A
+    // stale-content row is the bug.
     if (out.includes("changed while it was being staged")) {
       expect(existsSync(indexPath(p, SPACE)), "a refused txn writes no index").toBe(false);
     }
@@ -646,23 +713,48 @@ describe("t291 concurrency: N parallel onboards lose no row", () => {
     const names = Array.from({ length: 12 }, (_, i) => `f${i}`);
     for (const n of names) doc(p, `${n}.md`, `${n}\n`);
 
-    // A single shell launches all twelve with `&` and waits. That keeps the
-    // test body synchronous while the processes genuinely OVERLAP -- which is
-    // the whole point, since two onboards in ONE process would serialise on
-    // the reentrant lock and prove nothing. Verified to contend: removing
-    // withAuditLock makes this land fewer than 12 rows.
+    // A single shell launches all twelve as backgrounded SUBSHELLS and waits.
+    // That keeps the test body synchronous while the processes genuinely OVERLAP
+    // -- which is the whole point, since two onboards in ONE process would
+    // serialise on the reentrant lock and prove nothing. Verified to contend:
+    // removing withAuditLock makes this land fewer than 12 rows.
+    //
+    // Each child's streams and exit code go to FILES, one set per child. The
+    // earlier version sent every child's output to /dev/null and checked only the
+    // shell's status -- but the script ends in a bare `wait`, which exits 0 even
+    // when children failed, so the only symptom of a bad run was "11 rows, no
+    // idea why". The subshell braces matter: `cmd; echo $? &` would background
+    // the `echo` alone and serialise the twelve onboards.
     const tool = join(AIDLC_TOOLS, "aidlc-knowledge.ts");
+    const childOut = (i: number): string => join(p, `child-${i}.out`);
+    const childErr = (i: number): string => join(p, `child-${i}.err`);
+    const childCode = (i: number): string => join(p, `child-${i}.code`);
     const cmds = names
-      .map((n) => `bun ${JSON.stringify(tool)} onboard ` +
+      .map((n, i) => `( bun ${JSON.stringify(tool)} onboard ` +
         `${JSON.stringify(join(documentsDir(p, SPACE), `${n}.md`))} ` +
-        `--project-dir ${JSON.stringify(p)} >/dev/null 2>&1 &`)
+        `--project-dir ${JSON.stringify(p)} --json ` +
+        `> ${JSON.stringify(childOut(i))} 2> ${JSON.stringify(childErr(i))}; ` +
+        `echo $? > ${JSON.stringify(childCode(i))} ) &`)
       .join("\n");
     const r = spawnSync("bash", ["-c", `${cmds}\nwait\n`], {
       encoding: "utf-8",
       env: CHILD_ENV,
       timeout: 45_000,
     });
+    // Only catches a shell-level failure (including the spawn timeout, which
+    // makes status null); a child that died is caught per-child below.
     expect(r.status, `the concurrent batch failed: ${r.stderr}`).toBe(0);
+    // Per child, so a child that blew its lock-acquire budget is DISTINGUISHABLE
+    // from a genuinely lost row, and says why in the failure message.
+    for (let i = 0; i < names.length; i++) {
+      const why = existsSync(childErr(i))
+        ? readFileSync(childErr(i), "utf-8").trim() || "(empty stderr)"
+        : "(no stderr file: the child never ran)";
+      expect(existsSync(childCode(i)), `child ${i} recorded no exit code; stderr: ${why}`)
+        .toBe(true);
+      expect(readFileSync(childCode(i), "utf-8").trim(), `child ${i} failed; stderr: ${why}`)
+        .toBe("0");
+    }
     const rows = readIndex(p, SPACE).documents;
     // FULL survival, not best-effort. A lost row is the failure mode: each
     // process reads the index before the lock, so an unlocked commit writes back
@@ -701,37 +793,37 @@ describe("t291 an EDITED row is protected from the same race as a fresh one", ()
     const before = readIndex(p, SPACE).documents[0];
     writeFileSync(abs, "v2 edited\n");
 
-    const holder = join(p, "holder.ts");
-    writeFileSync(
-      holder,
-      `const lib = await import(${JSON.stringify(join(AIDLC_TOOLS, "aidlc-lib.ts"))});\n` +
-        `lib.withAuditLock(${JSON.stringify(p)}, () => {\n` +
-        `  require("node:fs").writeFileSync(${JSON.stringify(join(p, "lock-held"))}, "1");\n` +
-        `  const until = Date.now() + 3000;\n` +
-        `  while (Date.now() < until) { require("node:fs").existsSync(${JSON.stringify(p)}); }\n` +
-        `  return 0;\n` +
-        `}, undefined, ${JSON.stringify(SPACE)});\n`,
-    );
+    const held = join(p, "lock-held");
+    const mutationDone = join(p, "tombstone-mutation-done");
+    const holder = writeLockHolder(join(p, "holder.ts"), p, held, mutationDone);
     // Mutates `index.json` DIRECTLY -- not via `sync` -- so the race lands
     // DETERMINISTICALLY every run rather than depending on timing that may or
     // may not fall inside onboard's staging window. `sync` reaching the same
     // tombstone is exercised elsewhere (t284); what THIS test pins is onboard's
     // commit behaviour once a row it is about to refresh has ALREADY been
     // tombstoned by someone else -- the shape of the race, not its trigger.
+    //
+    // The tombstone is what releases the holder's lock, so "ALREADY been
+    // tombstoned" is now true by construction. It used to be true only when the
+    // mutator's 1.5s timer beat onboard's commit; when onboard won, it committed
+    // the edited digest FIRST, the mutator then tombstoned that already-updated
+    // row, and the assertion below read a tombstone carrying the edited digest --
+    // the exact contradiction it exists to catch, produced by the test itself.
     const mutator = join(p, "mutator.ts");
     writeFileSync(
       mutator,
       `const k = await import(${JSON.stringify(join(AIDLC_TOOLS, "aidlc-knowledge.ts"))});\n` +
-        `const until = Date.now() + 1500;\n` +
-        `while (Date.now() < until) { require("node:fs").existsSync(${JSON.stringify(p)}); }\n` +
+        `const fs = require("node:fs");\n` +
+        `Bun.sleepSync(1500);\n` +
         `const idx = k.readIndex(${JSON.stringify(p)}, ${JSON.stringify(SPACE)});\n` +
         `idx.documents[0].removed_at = "2026-08-09T00:00:00Z";\n` +
-        `k.writeIndex(${JSON.stringify(p)}, ${JSON.stringify(SPACE)}, idx);\n`,
+        `k.writeIndex(${JSON.stringify(p)}, ${JSON.stringify(SPACE)}, idx);\n` +
+        `fs.writeFileSync(${JSON.stringify(mutationDone)}, "1");\n`,
     );
 
     const script =
       `bun ${JSON.stringify(holder)} >/dev/null 2>&1 &\n` +
-      `for i in $(seq 1 100); do [ -f ${JSON.stringify(join(p, "lock-held"))} ] && break; done\n` +
+      `${waitForFile(held)}\n` +
       `bun ${JSON.stringify(mutator)} >/dev/null 2>&1 &\n` +
       `bun ${JSON.stringify(join(AIDLC_TOOLS, "aidlc-knowledge.ts"))} onboard ` +
       `--project-dir ${JSON.stringify(p)} 2>&1\n` +
@@ -764,32 +856,29 @@ describe("t291 an EDITED row is protected from the same race as a fresh one", ()
     writeFileSync(abs, "v2 staged edit\n");
     const rebound = doc(p, "rebound.md", "rebound identity\n");
 
-    const holder = join(p, "holder-rebind.ts");
-    writeFileSync(
-      holder,
-      `const lib = await import(${JSON.stringify(join(AIDLC_TOOLS, "aidlc-lib.ts"))});\n` +
-        `lib.withAuditLock(${JSON.stringify(p)}, () => {\n` +
-        `  require("node:fs").writeFileSync(${JSON.stringify(join(p, "rebind-lock-held"))}, "1");\n` +
-        `  const until = Date.now() + 3000; while (Date.now() < until) {}\n` +
-        `  return 0;\n` +
-        `}, undefined, ${JSON.stringify(SPACE)});\n`,
-    );
+    // The rebind must be in the index BEFORE onboard commits, or the test proves
+    // nothing: with the holder released only by the mutator's marker, the stale
+    // edited-onboard plan always meets an index that has already moved.
+    const held = join(p, "rebind-lock-held");
+    const mutationDone = join(p, "rebind-mutation-done");
+    const holder = writeLockHolder(join(p, "holder-rebind.ts"), p, held, mutationDone);
     const mutator = join(p, "mutator-rebind.ts");
     writeFileSync(
       mutator,
       `const k = await import(${JSON.stringify(join(AIDLC_TOOLS, "aidlc-knowledge.ts"))});\n` +
-        `const fs = require("node:fs"); const until = Date.now() + 1500; while (Date.now() < until) {}\n` +
+        `const fs = require("node:fs"); Bun.sleepSync(1500);\n` +
         `const idx = k.readIndex(${JSON.stringify(p)}, ${JSON.stringify(SPACE)});\n` +
         `const bytes = fs.readFileSync(${JSON.stringify(rebound)});\n` +
         `idx.documents[0].source = { kind: "managed", path: "documents/rebound.md" };\n` +
         `idx.documents[0].sha256 = k.sha256Hex(bytes); idx.documents[0].bytes = bytes.length;\n` +
         `idx.documents[0].extraction = { state: "unsupported_type", detectedType: "text/plain" };\n` +
         `delete idx.documents[0].content; delete idx.documents[0].content_sha256;\n` +
-        `k.writeIndex(${JSON.stringify(p)}, ${JSON.stringify(SPACE)}, idx);\n`,
+        `k.writeIndex(${JSON.stringify(p)}, ${JSON.stringify(SPACE)}, idx);\n` +
+        `fs.writeFileSync(${JSON.stringify(mutationDone)}, "1");\n`,
     );
     const script =
       `bun ${JSON.stringify(holder)} >/dev/null 2>&1 &\n` +
-      `for i in $(seq 1 100); do [ -f ${JSON.stringify(join(p, "rebind-lock-held"))} ] && break; done\n` +
+      `${waitForFile(held)}\n` +
       `bun ${JSON.stringify(mutator)} >/dev/null 2>&1 &\n` +
       `bun ${JSON.stringify(join(AIDLC_TOOLS, "aidlc-knowledge.ts"))} onboard ` +
       `${JSON.stringify(abs)} --project-dir ${JSON.stringify(p)} >/dev/null 2>&1\nwait\n`;
@@ -841,7 +930,7 @@ describe("t291 the journal is actually GITIGNORED, not just described as such", 
       .sort();
     expect(harnesses.length, "no harness trees found to check").toBeGreaterThan(0);
     for (const h of harnesses) {
-      const repo = mkdtempSync(join(tmpdir(), `t278-gi-${h}-`));
+      const repo = mkdtempSync(join(tmpdir(), `t291-gi-${h}-`));
       try {
         execFileSync("git", ["init", "-q"], { cwd: repo });
         const gi = join(import.meta.dir, "..", "..", "dist", h, ".gitignore");
@@ -941,7 +1030,7 @@ describe("t291 I12: every refusal's prescribed remedy actually repairs the state
     // Not "the message mentions mkdir" -- the message's own instruction is
     // extracted, executed verbatim, and then onboard must succeed. A remedy that
     // reads plausibly and does not work is worse than no remedy.
-    proj = mkdtempSync(join(tmpdir(), "t278-"));
+    proj = mkdtempSync(join(tmpdir(), "t291-"));
     const p = proj;
     const r = spawnSync(
       "bun",
@@ -996,14 +1085,18 @@ describe("t291 commit-time reconciliation and idempotent recovery", () => {
     const source = doc(p, "recreated.md", "original\n");
     const indexed = onboard(p, SPACE, source, NOW).indexed[0];
     rmSync(source);
-    const holder = join(p, "hold-removal.ts");
-    writeFileSync(holder,
-      `const l=await import(${JSON.stringify(join(AIDLC_TOOLS,"aidlc-lib.ts"))});` +
-      `l.withAuditLock(${JSON.stringify(p)},()=>{require("node:fs").writeFileSync(${JSON.stringify(join(p,"held"))},"1");const u=Date.now()+3000;while(Date.now()<u){}},undefined,${JSON.stringify(SPACE)});`);
+    // The recreation is what releases the lock, so `sync` always reaches its
+    // commit-time re-validation with the source back on disk. Timed instead of
+    // ordered, `sync` could win outright, tombstone a source that was legitimately
+    // absent when it looked, and fail the assertion below on the mutator's clock.
+    const held = join(p, "held");
+    const mutationDone = join(p, "recreate-mutation-done");
+    const holder = writeLockHolder(join(p, "hold-removal.ts"), p, held, mutationDone);
     const script =
       `bun ${JSON.stringify(holder)} >/dev/null 2>&1 & ` +
-      `for i in $(seq 1 100); do [ -f ${JSON.stringify(join(p, "held"))} ] && break; done; ` +
-      `(sleep 1; printf 'recreated\n' > ${JSON.stringify(source)}) & ` +
+      `${waitForFile(held)}; ` +
+      `(sleep 1; printf 'recreated\n' > ${JSON.stringify(source)}; ` +
+      `: > ${JSON.stringify(mutationDone)}) & ` +
       `bun ${JSON.stringify(join(AIDLC_TOOLS, "aidlc-knowledge.ts"))} sync --project-dir ${JSON.stringify(p)} >/dev/null; rc=$?; wait; exit $rc`;
     expect(spawnSync("bash", ["-c", script], { env: CHILD_ENV, timeout: 40_000 }).status).toBe(0);
     const row = readIndex(p, SPACE).documents.find((candidate) => candidate.id === indexed.id)!;
@@ -1017,14 +1110,17 @@ describe("t291 commit-time reconciliation and idempotent recovery", () => {
     const indexed = onboard(p, SPACE, source, NOW).indexed[0];
     const target = join(documentsDir(p, SPACE), "move-to.md");
     renameSync(source, target);
-    const holder = join(p, "hold-move.ts");
-    writeFileSync(holder,
-      `const l=await import(${JSON.stringify(join(AIDLC_TOOLS,"aidlc-lib.ts"))});` +
-      `l.withAuditLock(${JSON.stringify(p)},()=>{require("node:fs").writeFileSync(${JSON.stringify(join(p,"held"))},"1");const u=Date.now()+3000;while(Date.now()<u){}},undefined,${JSON.stringify(SPACE)});`);
+    // The target's rewrite releases the lock, so the planned move always meets a
+    // changed target at commit. Timed instead of ordered, `sync` could commit the
+    // move before the rewrite and leave the row at documents/move-to.md.
+    const held = join(p, "held");
+    const mutationDone = join(p, "move-mutation-done");
+    const holder = writeLockHolder(join(p, "hold-move.ts"), p, held, mutationDone);
     const script =
       `bun ${JSON.stringify(holder)} >/dev/null 2>&1 & ` +
-      `for i in $(seq 1 100); do [ -f ${JSON.stringify(join(p, "held"))} ] && break; done; ` +
-      `(sleep 1; printf 'changed\n' > ${JSON.stringify(target)}) & ` +
+      `${waitForFile(held)}; ` +
+      `(sleep 1; printf 'changed\n' > ${JSON.stringify(target)}; ` +
+      `: > ${JSON.stringify(mutationDone)}) & ` +
       `bun ${JSON.stringify(join(AIDLC_TOOLS, "aidlc-knowledge.ts"))} sync --project-dir ${JSON.stringify(p)} >/dev/null; rc=$?; wait; exit $rc`;
     expect(spawnSync("bash", ["-c", script], { env: CHILD_ENV, timeout: 40_000 }).status).toBe(0);
     const row = readIndex(p, SPACE).documents.find((candidate) => candidate.id === indexed.id)!;
@@ -1037,14 +1133,17 @@ describe("t291 commit-time reconciliation and idempotent recovery", () => {
     const source = doc(p, "old.md", "old\n");
     const id = onboard(p, SPACE, source, NOW).indexed[0].id;
     const target = doc(p, "new.md", "first\n");
-    const holder = join(p, "hold-rebind.ts");
-    writeFileSync(holder,
-      `const l=await import(${JSON.stringify(join(AIDLC_TOOLS,"aidlc-lib.ts"))});` +
-      `l.withAuditLock(${JSON.stringify(p)},()=>{require("node:fs").writeFileSync(${JSON.stringify(join(p,"held"))},"1");const u=Date.now()+3000;while(Date.now()<u){}},undefined,${JSON.stringify(SPACE)});`);
+    // The second write releases the lock, so rebind always hashes AFTER it. Timed
+    // instead of ordered, rebind could finish while the target still read "first"
+    // and record that digest -- a failure of the test, not of the re-hash.
+    const held = join(p, "held");
+    const mutationDone = join(p, "rehash-mutation-done");
+    const holder = writeLockHolder(join(p, "hold-rebind.ts"), p, held, mutationDone);
     const script =
       `bun ${JSON.stringify(holder)} >/dev/null 2>&1 & ` +
-      `for i in $(seq 1 100); do [ -f ${JSON.stringify(join(p, "held"))} ] && break; done; ` +
-      `(sleep 1; printf 'second\n' > ${JSON.stringify(target)}) & ` +
+      `${waitForFile(held)}; ` +
+      `(sleep 1; printf 'second\n' > ${JSON.stringify(target)}; ` +
+      `: > ${JSON.stringify(mutationDone)}) & ` +
       `bun ${JSON.stringify(join(AIDLC_TOOLS, "aidlc-knowledge.ts"))} rebind ${id} --to ${JSON.stringify(target)} --project-dir ${JSON.stringify(p)} >/dev/null; rc=$?; wait; exit $rc`;
     expect(spawnSync("bash", ["-c", script], { env: CHILD_ENV, timeout: 40_000 }).status).toBe(0);
     const row = readIndex(p, SPACE).documents.find((candidate) => candidate.id === id)!;
@@ -1202,21 +1301,25 @@ describe("t291 commit-time reconciliation and idempotent recovery", () => {
     const restored = readIndex(p, SPACE);
     restored.documents[0].related_intent_ids = [intentUuid(p)];
     rmSync(indexPath(p, SPACE));
-    const holder = join(p, "hold-recovery.ts");
-    writeFileSync(holder,
-      `const l=await import(${JSON.stringify(join(AIDLC_TOOLS,"aidlc-lib.ts"))});` +
-      `l.withAuditLock(${JSON.stringify(p)},()=>{require("node:fs").writeFileSync(${JSON.stringify(join(p,"held"))},"1");const u=Date.now()+3000;while(Date.now()<u){}},undefined,${JSON.stringify(SPACE)});`);
+    // The restore releases the lock, so `sync`'s recovery always runs against the
+    // restored file. Timed instead of ordered, `sync` could recover first and the
+    // restorer's write would land LAST -- the assertion would then pass on the
+    // restorer's own bytes without recovery ever having been tested.
+    const held = join(p, "held");
+    const mutationDone = join(p, "restore-mutation-done");
+    const holder = writeLockHolder(join(p, "hold-recovery.ts"), p, held, mutationDone);
     const restoredJson = `${JSON.stringify(restored, null, 2)}\n`;
     const restorer = join(p, "restore-index.ts");
     writeFileSync(
       restorer,
       `await new Promise(resolve => setTimeout(resolve, 1000));` +
         `require("node:fs").writeFileSync(${JSON.stringify(indexPath(p, SPACE))},` +
-        `${JSON.stringify(restoredJson)});`,
+        `${JSON.stringify(restoredJson)});` +
+        `require("node:fs").writeFileSync(${JSON.stringify(mutationDone)}, "1");`,
     );
     const script =
       `bun ${JSON.stringify(holder)} >/dev/null 2>&1 & ` +
-      `for i in $(seq 1 100); do [ -f ${JSON.stringify(join(p, "held"))} ] && break; done; ` +
+      `${waitForFile(held)}; ` +
       `bun ${JSON.stringify(restorer)} >/dev/null 2>&1 & ` +
       `bun ${JSON.stringify(join(AIDLC_TOOLS, "aidlc-knowledge.ts"))} sync --project-dir ${JSON.stringify(p)} >/dev/null; rc=$?; wait; exit $rc`;
     expect(spawnSync("bash", ["-c", script], { env: CHILD_ENV, timeout: 40_000 }).status).toBe(0);
@@ -1229,14 +1332,17 @@ describe("t291 commit-time reconciliation and idempotent recovery", () => {
     const indexed = onboard(p, SPACE, source, NOW).indexed[0];
     rmSync(source);
     const target = join(documentsDir(p, SPACE), "late-move-to.md");
-    const holder = join(p, "hold-late-move.ts");
-    writeFileSync(holder,
-      `const l=await import(${JSON.stringify(join(AIDLC_TOOLS,"aidlc-lib.ts"))});` +
-      `l.withAuditLock(${JSON.stringify(p)},()=>{require("node:fs").writeFileSync(${JSON.stringify(join(p,"held"))},"1");const u=Date.now()+3000;while(Date.now()<u){}},undefined,${JSON.stringify(SPACE)});`);
+    // The late move releases the lock, so the planned tombstone always meets a
+    // same-digest candidate at commit. Timed instead of ordered, `sync` could
+    // tombstone the row before the move appeared.
+    const held = join(p, "held");
+    const mutationDone = join(p, "late-move-mutation-done");
+    const holder = writeLockHolder(join(p, "hold-late-move.ts"), p, held, mutationDone);
     const script =
       `bun ${JSON.stringify(holder)} >/dev/null 2>&1 & ` +
-      `for i in $(seq 1 100); do [ -f ${JSON.stringify(join(p, "held"))} ] && break; done; ` +
-      `(sleep 1; printf 'same\n' > ${JSON.stringify(target)}) & ` +
+      `${waitForFile(held)}; ` +
+      `(sleep 1; printf 'same\n' > ${JSON.stringify(target)}; ` +
+      `: > ${JSON.stringify(mutationDone)}) & ` +
       `bun ${JSON.stringify(join(AIDLC_TOOLS, "aidlc-knowledge.ts"))} sync --project-dir ${JSON.stringify(p)} >/dev/null; rc=$?; wait; exit $rc`;
     expect(spawnSync("bash", ["-c", script], { env: CHILD_ENV, timeout: 40_000 }).status).toBe(0);
     const row = readIndex(p, SPACE).documents.find((candidate) => candidate.id === indexed.id)!;
@@ -1252,14 +1358,17 @@ describe("t291 commit-time reconciliation and idempotent recovery", () => {
     const second = join(documentsDir(p, SPACE), "candidate-two.md");
     renameSync(source, first);
     writeFileSync(second, "diff\n");
-    const holder = join(p, "hold-ambiguous.ts");
-    writeFileSync(holder,
-      `const l=await import(${JSON.stringify(join(AIDLC_TOOLS,"aidlc-lib.ts"))});` +
-      `l.withAuditLock(${JSON.stringify(p)},()=>{require("node:fs").writeFileSync(${JSON.stringify(join(p,"held"))},"1");const u=Date.now()+3000;while(Date.now()<u){}},undefined,${JSON.stringify(SPACE)});`);
+    // The second candidate's rewrite releases the lock, so the ambiguity always
+    // exists at commit. Timed instead of ordered, `sync` could commit the move to
+    // candidate-one while it was still the only match.
+    const held = join(p, "held");
+    const mutationDone = join(p, "ambiguous-mutation-done");
+    const holder = writeLockHolder(join(p, "hold-ambiguous.ts"), p, held, mutationDone);
     const script =
       `bun ${JSON.stringify(holder)} >/dev/null 2>&1 & ` +
-      `for i in $(seq 1 100); do [ -f ${JSON.stringify(join(p, "held"))} ] && break; done; ` +
-      `(sleep 1; printf 'same\n' > ${JSON.stringify(second)}) & ` +
+      `${waitForFile(held)}; ` +
+      `(sleep 1; printf 'same\n' > ${JSON.stringify(second)}; ` +
+      `: > ${JSON.stringify(mutationDone)}) & ` +
       `bun ${JSON.stringify(join(AIDLC_TOOLS, "aidlc-knowledge.ts"))} sync --project-dir ${JSON.stringify(p)} >/dev/null; rc=$?; wait; exit $rc`;
     expect(spawnSync("bash", ["-c", script], { env: CHILD_ENV, timeout: 40_000 }).status).toBe(0);
     expect(readIndex(p, SPACE).documents.find((candidate) => candidate.id === indexed.id)?.source.path)
@@ -1321,14 +1430,17 @@ describe("t291 commit-time reconciliation and idempotent recovery", () => {
     const original = doc(p, "identity.md", "same\n");
     const id = onboard(p, SPACE, original, NOW).indexed[0].id;
     doc(p, "candidate.md", "same\n");
-    const holder = join(p, "hold-fresh-topology.ts");
-    writeFileSync(holder,
-      `const l=await import(${JSON.stringify(join(AIDLC_TOOLS,"aidlc-lib.ts"))});` +
-      `l.withAuditLock(${JSON.stringify(p)},()=>{require("node:fs").writeFileSync(${JSON.stringify(join(p,"held"))},"1");const u=Date.now()+3000;while(Date.now()<u){}},undefined,${JSON.stringify(SPACE)});`);
+    // The removal releases the lock, so the topology has always changed by the time
+    // `sync` commits. Timed instead of ordered, `sync` could commit against the
+    // topology it read, with both files still present.
+    const held = join(p, "held");
+    const mutationDone = join(p, "topology-mutation-done");
+    const holder = writeLockHolder(join(p, "hold-fresh-topology.ts"), p, held, mutationDone);
     const script =
       `bun ${JSON.stringify(holder)} >/dev/null 2>&1 & ` +
-      `for i in $(seq 1 100); do [ -f ${JSON.stringify(join(p, "held"))} ] && break; done; ` +
-      `(sleep 1; rm ${JSON.stringify(original)}) & ` +
+      `${waitForFile(held)}; ` +
+      `(sleep 1; rm ${JSON.stringify(original)}; ` +
+      `: > ${JSON.stringify(mutationDone)}) & ` +
       `bun ${JSON.stringify(join(AIDLC_TOOLS, "aidlc-knowledge.ts"))} sync --project-dir ${JSON.stringify(p)} >/dev/null; rc=$?; wait; exit $rc`;
     expect(spawnSync("bash", ["-c", script], { env: CHILD_ENV, timeout: 40_000 }).status).toBe(0);
     const rows = readIndex(p, SPACE).documents;
