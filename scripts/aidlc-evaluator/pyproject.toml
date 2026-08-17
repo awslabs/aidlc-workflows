@@ -16,6 +16,9 @@ dependencies = [
     "aidlc-trend-reports",
 ]
 
+[tool.uv]
+constraint-dependencies = ["mcp>=1.28.1"]
+
 [tool.uv.workspace]
 members = [
     "packages/execution",
