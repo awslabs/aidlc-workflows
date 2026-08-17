@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { accessSync, appendFileSync, closeSync, constants as fsConstants, cpSync, existsSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, appendFileSync, closeSync, constants as fsConstants, cpSync, existsSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -2511,17 +2511,34 @@ function readActiveDirectiveMarkerSnapshot(path: string): {
   marker: ActiveDirectiveMarker | null;
   bytesSha256: string | null;
 } {
+  // Single-descriptor snapshot bounded to ACTIVE_DIRECTIVE_MAX_BYTES + 1: an
+  // oversized or corrupt marker is rejected without allocating its full size,
+  // and parse + hash always come from the same bytes. The descriptor pins one
+  // inode, so a concurrent rename-publish cannot mix two marker versions.
+  let fd: number | undefined;
   try {
-    const bytes = readFileSync(path);
-    if (bytes.byteLength > ACTIVE_DIRECTIVE_MAX_BYTES) {
+    fd = openSync(path, "r");
+    const bounded = Buffer.alloc(ACTIVE_DIRECTIVE_MAX_BYTES + 1);
+    let length = 0;
+    while (length < bounded.byteLength) {
+      const read = readSync(fd, bounded, length, bounded.byteLength - length, length);
+      if (read === 0) break;
+      length += read;
+    }
+    if (length > ACTIVE_DIRECTIVE_MAX_BYTES) {
       return { marker: null, bytesSha256: null };
     }
+    const bytes = bounded.subarray(0, length);
     return {
       marker: parseActiveDirectiveMarker(JSON.parse(bytes.toString("utf-8"))),
       bytesSha256: createHash("sha256").update(bytes).digest("hex"),
     };
   } catch {
     return { marker: null, bytesSha256: null };
+  } finally {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch { /* read-only descriptor; close is best-effort */ }
+    }
   }
 }
 

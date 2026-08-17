@@ -195,6 +195,24 @@ describe("t283 Copilot-owned engine continuation cursor", () => {
     expect(twice).toEqual(once);
   }, 10000);
 
+  test("an oversized marker is rejected as absent and cannot deny stateless continuation", () => {
+    const proj = project();
+    const first = invoke(proj, "next").directive;
+    expect(first.kind).toBe("load-steering");
+    writeFileSync(
+      markerPath(proj),
+      `{"padding":"${"x".repeat(80 * 1024)}"}\n`,
+      "utf-8",
+    );
+    const once = invoke(proj, "continue", first.continue_token ?? "").directive;
+    expect(once.kind).not.toBe("error");
+    const republished = readFileSync(markerPath(proj), "utf-8");
+    expect(Buffer.byteLength(republished, "utf-8")).toBeLessThanOrEqual(64 * 1024);
+    const value = JSON.parse(republished) as { kind?: string; owner_session?: string };
+    expect(value.kind).toBe(once.kind);
+    expect(String(value.owner_session)).toStartWith("sessionless:");
+  }, 10000);
+
   test("a real dead lock owner is reclaimed while the canonical marker stays readable", async () => {
     const proj = project();
     const first = invoke(proj, "next").directive;
