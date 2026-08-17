@@ -356,20 +356,67 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "UNIT_PAUSED",
   "UNIT_RESUMED",
   "UNIT_COMPLETED",
+  // DocumentKB provenance: the knowledge tool emits these through the library
+  // inside its catalog transaction. A CLI-forged DOCUMENT_INDEXED whose
+  // Digest+Source match a real row would make the tool's idempotent
+  // audit-repair pass treat provenance as already recorded and SUPPRESS the
+  // genuine row, so the CLI must not mint them.
+  "DOCUMENT_INDEXED",
+  "DOCUMENT_UPDATED",
+  "DOCUMENT_REMOVED",
 ]);
+// Events a WORKTREE DELTA may never carry into the main intent shard. This is
+// deliberately an explicit enumeration, not prefix families: a Bolt/swarm
+// worktree legitimately emits STAGE_*, SENSOR_*, REVIEW_REQUESTED/COMPLETED
+// (the per-unit reviewer receipts the SKILL instructs recording with
+// --project-dir <worktree>) and ARTIFACT_* rows as its work product, and the
+// referee's defence against a lying conductor is artifact re-verification at
+// finalize, not delta filtering. A prefix blacklist over those families
+// refused exactly the delta the swarm contract requires and made
+// `bolt complete --merge` deterministically unrecoverable (the delta bytes
+// never change), which broke t49/t134. What IS blocked:
+//   - human authority: the presence/gate events humanActedSinceGate and the
+//     gate flow trust; a merged forgery would satisfy a gate no human saw.
+//   - unit lifecycle receipts: routing trusts UNIT_COMPLETED (unitSettled)
+//     and the owning verb verifies artifacts before committing.
+//   - referee bookkeeping: fork/merge/swarm/bolt/worktree lifecycle rows are
+//     emitted main-side by the referee; a delta copy would double-count.
+//   - DOCUMENT_* (prefix, future-proof): DocumentKB rows live in the
+//     space-level shard by design; one in an intent delta is a forgery.
 const MERGE_PROTECTED_EVENT_TYPES = new Set([
-  ...CLI_PROTECTED_EVENT_TYPES,
+  // Human authority (GATE_RESOLUTION_EVENTS + presence + autonomy).
+  "HUMAN_TURN",
+  "GATE_APPROVED",
+  "GATE_REJECTED",
+  "QUESTION_ANSWERED",
   "SUMMARY_CONFIRMATION_RECORDED",
-  "ARTIFACT_CREATED",
-  "ARTIFACT_UPDATED",
+  "AUTONOMY_MODE_SET",
+  // Routing-trusted unit lifecycle receipts.
+  "UNIT_STARTED",
+  "UNIT_PAUSED",
+  "UNIT_RESUMED",
+  "UNIT_COMPLETED",
+  // Referee/conductor bookkeeping, emitted against main only.
+  "AUDIT_FORKED",
+  "AUDIT_MERGED",
+  "STATE_FORKED",
+  "STATE_MERGED",
+  "SWARM_STARTED",
+  "SWARM_COMPLETED",
+  "SWARM_DEGRADED",
+  "SWARM_BATON_RETURNED",
+  "SWARM_UNIT_CONVERGED",
+  "SWARM_UNIT_FAILED",
+  "BOLT_STARTED",
+  "BOLT_COMPLETED",
+  "BOLT_FAILED",
+  "WORKTREE_CREATED",
+  "WORKTREE_DISCARDED",
+  "WORKTREE_MERGED",
 ]);
 function mergeEventIsProtected(eventType: string): boolean {
   if (MERGE_PROTECTED_EVENT_TYPES.has(eventType)) return true;
-  if (eventType === "STAGE_STARTED") return false;
-  return [
-    "AUDIT_", "BOLT_", "DOCUMENT_", "GATE_", "PHASE_", "REVIEW_", "SENSOR_",
-    "STAGE_", "STATE_", "SWARM_", "UNIT_", "WORKFLOW_", "WORKTREE_",
-  ].some((prefix) => eventType.startsWith(prefix));
+  return eventType.startsWith("DOCUMENT_");
 }
 
 function directAuditEventsAllowed(): boolean {

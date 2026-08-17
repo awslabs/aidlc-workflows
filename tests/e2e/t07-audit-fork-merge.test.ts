@@ -504,6 +504,63 @@ describe("t07 Phase B — edge cases", () => {
     expect(readFileSync(auditPath(p), "utf-8")).not.toContain("**Event**: GATE_APPROVED");
   }, 30000);
 
+  test("audit-merge accepts the delta a swarm worktree legitimately produces", () => {
+    // The swarm contract REQUIRES the worktree to deliver these rows: the
+    // SKILL instructs recording the per-unit reviewer receipts with
+    // --project-dir <worktree>, sensors fire on worktree writes, and the
+    // stage engine emits stage/artifact rows there. A validator that refuses
+    // any of them makes `bolt complete --merge` deterministically
+    // unrecoverable (the delta bytes never change), which is exactly the
+    // regression t49 caught. Pinned here at the unit of the validator so the
+    // integration tier is not the only guard.
+    const p = makeFixture();
+    const slug = "legit-work";
+    createWorktree(p, slug);
+    expect(runAudit(["audit-fork", "--slug", slug, "--project-dir", p]).status).toBe(0);
+    const rows = [
+      ["Stage Completed", "STAGE_COMPLETED", "**Stage**: code-generation"],
+      ["Sensor Failed", "SENSOR_FAILED", "**Sensor**: aidlc-linter"],
+      ["Review Requested", "REVIEW_REQUESTED", "**Stage**: code-generation"],
+      ["Review Completed", "REVIEW_COMPLETED", "**Stage**: code-generation"],
+      ["Artifact Created", "ARTIFACT_CREATED", "**Artifact**: construction/pay/x.md"],
+    ] as const;
+    for (const [heading, event, field] of rows) {
+      appendFileSync(
+        wtAuditPath(p, slug),
+        `\n## ${heading}\n**Timestamp**: 2026-08-17T05:00:00Z\n` +
+          `- **Event**: ${event}\n${field}\n\n---\n`,
+      );
+    }
+
+    const merge = runAudit(["audit-merge", "--slug", slug, "--project-dir", p]);
+    expect(merge.status).toBe(0);
+    const main = readFileSync(auditPath(p), "utf-8");
+    for (const [, event] of rows) {
+      expect(main).toContain(`**Event**: ${event}`);
+    }
+  }, 30000);
+
+  test("audit-merge refuses a DOCUMENT_* row in a worktree delta (space-shard-only provenance)", () => {
+    // Exercises the PREFIX branch of mergeEventIsProtected, which no other
+    // test reaches: DocumentKB rows belong to the space-level shard, so one
+    // arriving through an intent delta is a forgery that would split a
+    // document's history across shards.
+    const p = makeFixture();
+    const slug = "doc-forgery";
+    createWorktree(p, slug);
+    expect(runAudit(["audit-fork", "--slug", slug, "--project-dir", p]).status).toBe(0);
+    appendFileSync(
+      wtAuditPath(p, slug),
+      "\n## Document Indexed\n**Timestamp**: 2026-08-17T05:00:00Z\n" +
+        "- **Event**: DOCUMENT_INDEXED\n**Space**: default\n\n---\n",
+    );
+
+    const merge = runAudit(["audit-merge", "--slug", slug, "--project-dir", p]);
+    expect(merge.status).not.toBe(0);
+    expect(merge.out).toContain("DOCUMENT_INDEXED");
+    expect(readFileSync(auditPath(p), "utf-8")).not.toContain("**Event**: DOCUMENT_INDEXED");
+  }, 30000);
+
   test("audit-merge rejects tampered fork metadata and incomplete deltas", () => {
     for (const kind of ["metadata", "truncated"] as const) {
       const p = makeFixture();
