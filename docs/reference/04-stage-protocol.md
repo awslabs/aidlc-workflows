@@ -941,10 +941,18 @@ engine from three inputs (low-wins): the stage's declared class, the active
 scope's `review_cap`, and any per-run `--review` override. A `none` resolution
 omits the reviewer block entirely and the stage runs reviewless.
 
-1. **Invoke.** Delegate to the agent named in `directive.reviewer`, passing the
-   stage definition path, the Q&A file, the produced artifact paths, and any
-   validation tools from frontmatter — never the builder's `memory.md` or plan, so
-   the reviewer forms independent judgment.
+1. **Invoke.** Before every dispatch - the first, a NOT-READY re-invoke, or a
+   re-review after a Part 0 gate-rejection revision - the conductor first
+   deletes any existing `## Review` section on the primary artifact: review
+   history lives in the audit ledger, and a leftover section (in the worst
+   case a pre-revision `READY`) is exactly what a re-review that is itself
+   cut off before writing would be misread against. With the delete rule,
+   "no current `## Review` section" means "incomplete review" uniformly on
+   every path. The conductor then delegates to the agent named in
+   `directive.reviewer`, passing the stage definition path, the Q&A file, the
+   produced artifact paths, and any validation tools from frontmatter - never
+   the builder's `memory.md` or plan, so the reviewer forms independent
+   judgment.
 2. **Review.** An `adversarial` review runs under the adversarial review contract:
    the reviewer tries to refute the artifact rather than confirm it, grounding
    findings in machine-checkable evidence where it exists (READY is the verdict
@@ -952,8 +960,17 @@ omits the reviewer block entirely and the stage runs reviewless.
    evidence-grounding rule but is a single decision-support pass: findings are
    ranked by severity for the human at the gate, with no repair loop behind
    them. Either way the reviewer reads the definition, Q&A, and artifacts, runs
-   any listed validation tools, and appends a `## Review` section to the primary
-   artifact with a **READY** or **NOT-READY** verdict.
+   any listed validation tools, and appends exactly ONE `## Review` section to
+   the primary artifact with exactly one verdict line: **READY** or
+   **NOT-READY**. The reviewers run under a hard turn budget (`maxTurns: 60`),
+   authored once in the persona frontmatter and enforced natively where the
+   harness has a lever: Claude Code reads the key verbatim (the sub-agent is
+   stopped mid-task, no final-message turn) and the opencode packager projects
+   it to the native per-agent `steps: 60` (the runner grants one final
+   text-only turn - a summary can return, but no tool call can write the
+   review). Codex TOML personas, Cursor, Copilot, and Kiro CLI/IDE expose no
+   per-agent cap key, so there the budget is persona prose only (the personas'
+   `## Turn Budget` section plans for the worst-case cutoff on every harness).
 3. **Verdict.** On `advisory`, both verdicts are terminal: the workflow proceeds
    to the learnings ritual and the gate, where the findings are quoted verbatim
    for the human to triage (`reviewer_max_iterations` is 1, engine-enforced).
@@ -962,6 +979,21 @@ omits the reviewer block entirely and the stage runs reviewless.
    2) → the lead agent re-runs to address the findings and the reviewer
    re-checks. NOT-READY with iterations exhausted → proceed to the gate with the
    unresolved findings noted.
+   A verdict only counts when it parses: exactly ONE current `## Review`
+   section with exactly one canonical verdict token. A missing section (a
+   capped or crashed reviewer is stopped without writing one - step 1 deletes
+   any prior section before every dispatch, so a leftover can never stand in
+   for it), a section without a canonical verdict line, or duplicated
+   sections/verdicts is an INCOMPLETE attempt: the conductor retries the same
+   unmatched request once with `--retry-pending` (no iteration consumed - an
+   advisory budget is exactly one pass, so a counted cut-off would exhaust it
+   without any review happening), and a second incomplete attempt records the
+   terminal receipt `--verdict NOT-READY` with the finding "review did not
+   complete within its turn budget" - the gate is reached with a concrete
+   finding, never presented on (or deadlocked by) a silently missing verdict.
+   On `adversarial` with iterations remaining the re-invoke skips the lead
+   (the artifact was never reviewed; there is nothing for the builder to act
+   on).
    The recorded receipt is terminal whenever no further review pass follows it:
    any later write to a `produces[]` artifact invalidates it and the engine
    refuses the gate, so fixes happen inside the iteration loop, never after the
@@ -976,11 +1008,14 @@ for stages without a `reviewer` field. See the `reviewer` /
 `reviewer_max_iterations` / `review_class` frontmatter fields in
 [Stage Definition](15-stage-definition.md).
 
-If reviewer dispatch fails, times out, or the session ends after
-`REVIEW_REQUESTED` but before a verdict, rerun the same request command with
-`--retry-pending` before dispatching again. The logger accepts this recovery
-only for the same unmatched request, records `Retry: pending-request`, and does
-not consume another iteration. A completed request cannot be retried.
+If reviewer dispatch fails, times out, ends the session after
+`REVIEW_REQUESTED` but before a verdict, or returns an incomplete attempt (no
+current `## Review` section, or no single canonical verdict), rerun the same
+request command with `--retry-pending` before dispatching again - at most once
+per request; a second incomplete attempt records the terminal `NOT-READY`
+receipt instead. The logger accepts this recovery only for the same unmatched
+request, records `Retry: pending-request`, and does not consume another
+iteration. A completed request cannot be retried.
 
 ---
 

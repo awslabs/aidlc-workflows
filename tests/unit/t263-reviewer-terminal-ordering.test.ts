@@ -107,7 +107,7 @@ describe("t263 reviewer terminal-receipt ordering (receipt-invalidation loop fix
   });
 
   test("every authored harness SKILL.md carries the ordering in its reviewer step", () => {
-    for (const harness of ["claude", "kiro", "kiro-ide", "codex", "opencode", "cursor"]) {
+    for (const harness of ["claude", "kiro", "kiro-ide", "codex", "opencode", "cursor", "copilot"]) {
       const src = readFileSync(
         join(REPO_ROOT, "harness", harness, "skills", "aidlc", "SKILL.md"),
         "utf-8",

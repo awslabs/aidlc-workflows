@@ -1127,7 +1127,7 @@ Everything else in this section is silent. Nothing is said about invoking, handi
 
 ### Flow
 
-1. **Invoke reviewer sub-agent.** Delegate to the reviewer agent named in `directive.reviewer`. Pass:
+1. **Invoke reviewer sub-agent.** Before dispatching - on every dispatch, not only the first - if the primary artifact already carries a `## Review` section (from a prior iteration, or predating a Part 0 revision), DELETE that section. The review history lives in the audit ledger (`REVIEW_REQUESTED` / `REVIEW_COMPLETED` rows), not in the artifact, so nothing is lost - and this is what makes step 3's missing-section check mean the same thing on every path: a fresh review that is itself cut off before writing leaves NO `## Review` section to misread, instead of leaving the prior iteration's - or the pre-revision artifact's - verdict sitting under a live heading where step 3 would read it as covering work it never saw. (The deletion is a `produces[]` write, but no freeze is ever active here: a below-cap adversarial NOT-READY receipt is nonterminal, a gate rejection lifts the freeze for the revision path, and an unverdicted attempt recorded no receipt at all.) Then delegate to the reviewer agent named in `directive.reviewer`. Pass:
    - The stage definition file path (`directive.stage_file`)
    - The Q&A file path (e.g., `<record>/<phase>/<stage>/<stage>-questions.md`)
    - All artifact file paths produced by the stage (the `produces` artifacts)
@@ -1140,7 +1140,7 @@ Everything else in this section is silent. Nothing is said about invoking, handi
 
    **Reviewer read scope.** The reviewer's scope is the current unit's artifacts plus the passed contract paths. On a per-unit stage the reviewer MUST NOT read other units' `construction/<other-unit>/` content through any tool - not by opening files, and not via grep, glob, or shell patterns that span sibling unit paths (a `construction/*/` glob is a sibling read, not a search) - except to spot-check an integration point the current unit's design explicitly names, and only the owning file, resolved via the shared contracts rather than by browsing or searching the sibling's directory. Cross-unit contract verification runs against the shared inception artifacts passed above, not against a sweep of sibling units' design prose.
 
-   **Dispatch record (per-unit stages; enforcement-capable harnesses only).** This record is required only when the current harness registers reviewer-scope PreToolUse enforcement (Claude Code, Kiro CLI, Codex CLI, opencode, and Cursor today). Immediately before invoking a per-unit reviewer (`directive.unit` present) on one of those harnesses, write `<record>/.aidlc-reviewer-dispatch.json`:
+   **Dispatch record (per-unit stages; enforcement-capable harnesses only).** This record is required only when the current harness registers reviewer-scope PreToolUse enforcement (Claude Code, Kiro CLI, Codex CLI, opencode, Cursor, and GitHub Copilot today). Immediately before invoking a per-unit reviewer (`directive.unit` present) on one of those harnesses, write `<record>/.aidlc-reviewer-dispatch.json`:
 
    ```json
    {"reviewer": "<directive.reviewer>", "stage": "<stage slug>", "unit": "<directive.unit>",
@@ -1151,11 +1151,13 @@ Everything else in this section is silent. Nothing is said about invoking, handi
 
    Immediately before every reviewer dispatch, record the request:
    `bun .claude/tools/aidlc-log.ts review --stage "<directive.stage>" --reviewer "<directive.reviewer>" --iteration <n>`; add `--unit "<directive.unit>"` on a per-unit stage and `--single` on an isolated stage run.
-   If that dispatch fails, times out, or the session ends before a verdict is
-   recorded, rerun the same request command with `--retry-pending` before
-   dispatching again. The logger accepts it only while that exact request is
-   unmatched, marks the retry in the audit, and does not consume another review
-   iteration. Never use `--retry-pending` after a verdict.
+   If that dispatch fails, times out, or ends without a recorded verdict - the
+   session died, or the reviewer returned an incomplete attempt (step 3: no
+   current `## Review` section, or no single canonical verdict) - rerun the
+   same request command with `--retry-pending` before dispatching again. The
+   logger accepts it only while that exact request is unmatched, marks the
+   retry in the audit, and does not consume another review iteration. Never
+   use `--retry-pending` after a verdict.
 
 2. **Reviewer executes.** An `adversarial` review runs under the **adversarial review contract**:
 
@@ -1170,12 +1172,16 @@ Everything else in this section is silent. Nothing is said about invoking, handi
    - Reads the artifact(s) to evaluate what WAS produced
    - Verifies cross-unit contract claims against the passed shared inception contracts, not by sweeping or searching sibling units' design directories (no cross-unit grep or glob patterns); opens another unit's file only when the current unit's design explicitly names it as an integration point, and only that file
    - Runs any validation tools listed (via shell) and includes results in findings
-   - Appends a `## Review` section to the primary artifact file with verdict: READY or NOT-READY
+   - Appends exactly ONE `## Review` section to the primary artifact file with exactly one verdict line: READY or NOT-READY (step 3 treats anything else - missing, verdict-less, or duplicated - as an incomplete review)
    - Returns a response whose FIRST line is its identity marker verbatim
      (`**Reviewer:** <reviewer-agent-name>`), so the `SUBAGENT_COMPLETED` audit
      event records which reviewer ran. The reviewer's persona owns this contract.
 
-3. **Read verdict.** After the reviewer returns, delete `<record>/.aidlc-reviewer-dispatch.json` if one was written (the enforcement window closes with the review; a leftover record would keep refusing sibling access for later, unrelated work), then read the `## Review` section from the primary artifact. Record the terminal receipt with the same `aidlc-log.ts review` command plus `--verdict <READY|NOT-READY>` (and the same `--unit` / `--single` fields).
+3. **Read verdict.** After the reviewer returns, delete `<record>/.aidlc-reviewer-dispatch.json` if one was written (the enforcement window closes with the review; a leftover record would keep refusing sibling access for later, unrelated work), then read the `## Review` section from the primary artifact and validate it. The review is complete only when the artifact carries exactly ONE current `## Review` section whose verdict is exactly one canonical token, READY or NOT-READY. Anything else is an INCOMPLETE attempt, not a verdict: no section at all (the reviewer has a hard turn cap and may have been stopped before writing it - step 1 deletes any prior section before every dispatch, so a missing section means an incomplete review on every path, first entry or revision alike), a section with no canonical verdict line (a reviewer cut off mid-write), or more than one `## Review` section or verdict line (conflicting - never guess which was meant).
+
+   **On an incomplete attempt:** no verdict exists to record, so the step-1 request is still unmatched. If the ledger does not yet mark a retry on this request, re-dispatch it exactly once - rerun the same request command with `--retry-pending` (step 1's contract: accepted only while the request is unmatched, consumes no review iteration) and return to step 1 (whose delete rule clears any partial section). If the retried attempt is ALSO incomplete, stop retrying: record the terminal receipt with `--verdict NOT-READY` and the finding "review did not complete within its turn budget", then proceed as that NOT-READY verdict directs for the effective review class - on `advisory` it is terminal (present the gate with the finding quoted as decision support); on `adversarial` with iterations remaining, skip the lead re-invoke (the artifact itself was never reviewed, so there is nothing for the builder to act on) and go directly back to step 1 with a fresh iteration and a fresh request; on `adversarial` with iterations exhausted, proceed to the gate with the finding noted. Recording the receipt is what keeps the engine's completion precondition satisfiable: the gate is never presented on a silently missing verdict, and never deadlocks on one either.
+
+   **On a complete review**, record the terminal receipt with the same `aidlc-log.ts review` command plus `--verdict <READY|NOT-READY>` (and the same `--unit` / `--single` fields).
 
    The recorded receipt is TERMINAL whenever no further review pass follows it: do not write to any `produces[]` artifact between recording it and gate approval (a later write invalidates the receipt and the engine refuses the gate). A verdict may arrive with optional suggestions riding along; do NOT apply them - quote them verbatim in the completion summary for the human to weigh at the gate. A suggestion is gate input, not a defect (step 2: it is not grounds for NOT-READY, so it is not grounds for editing past the terminal receipt either). Riding suggestions also never change the gate itself: keep the §1 approval question's standard option order (Approve first, Request Changes second) - do not present Request Changes as the recommended or first option because a suggestion exists. On harnesses with PreToolUse enforcement the review-freeze hook refuses such a write deterministically (`REVIEW_FREEZE_BLOCKED`); a recorded gate rejection lifts the freeze for the revision path.
 
@@ -1193,8 +1199,9 @@ Everything else in this section is silent. Nothing is said about invoking, handi
 
 The reviewer also re-runs on the Part 0 revision path: when a human rejection
 leads to a revision that changes a `produces[]` artifact, re-run this step
-before reporting `revised` — the stale `## Review` verdict predates the
-revised content and must be replaced. An `adversarial` review re-enters with
+before reporting `revised` - step 1's delete-before-dispatch rule removes the
+stale `## Review` verdict (it predates the revised content) so step 3 cannot
+mistake it for coverage of the revision. An `adversarial` review re-enters with
 the same lead-alone loop and iteration budget as at first entry; an
 `advisory` review re-runs as one fresh advisory pass (its findings ride the
 re-presented gate).

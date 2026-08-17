@@ -288,6 +288,18 @@ judgment), then appends a `## Review` section with a verdict: **READY** or
   findings remain after the cap, the workflow proceeds to the approval gate
   with the unresolved findings noted.
 
+The reviewers also run under a hard turn budget - `maxTurns: 60`, authored in
+the persona frontmatter, enforced natively on Claude Code and projected to
+opencode's per-agent `steps: 60`; elsewhere it ships as persona prose. If a
+review comes back without a usable verdict - no `## Review` section, or no
+single canonical READY / NOT-READY line (a capped, crashed, or cut-off
+reviewer) - the conductor re-dispatches that same review once, and a second
+incomplete attempt is recorded as NOT-READY with the finding "review did not
+complete within its turn budget", so a silent cutoff becomes a visible finding
+at the gate instead of a missing verdict. Before every dispatch the conductor
+deletes any leftover `## Review` section, so a stale pre-revision verdict can
+never be misread as covering new work.
+
 The scope can cap the class (`bugfix`, `poc`, and `workshop` cap every stage to
 advisory) and `/aidlc --review <class>` caps it per run. Either way the
 reviewer never blocks — the human always has final say.
