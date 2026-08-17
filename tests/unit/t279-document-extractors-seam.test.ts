@@ -30,7 +30,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
-import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { documentExtractors } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -54,6 +54,16 @@ beforeEach(() => {
   scratch = mkdtempSync(join(tmpdir(), "aidlc-t279-"));
   for (const d of SCRATCH_SOURCES) cpSync(join(REPO, d), join(scratch, d), { recursive: true });
   for (const f of SCRATCH_FILES) cpSync(join(REPO, f), join(scratch, f));
+  // Resolution must be HERMETIC, not borrowed: the packager's emitters import
+  // real packages (harness/codex/emit.ts imports smol-toml), and a scratch
+  // with only package.json + bun.lock resolves them via bun's GLOBAL install
+  // cache — which works on a freshly-installed CI runner and silently stops
+  // working on a long-lived box once that cache no longer serves the package
+  // ("Cannot find package 'smol-toml' from /tmp/aidlc-t279-..."). A symlink
+  // to the checkout's node_modules is read-only for everything this suite
+  // runs (the packager writes only dist/), so it cannot violate the
+  // scratch-isolation contract above.
+  symlinkSync(join(REPO, "node_modules"), join(scratch, "node_modules"));
 });
 afterEach(() => {
   // The scratch dir is disposable: on a SIGKILL mid-test, the OS temp dir is
