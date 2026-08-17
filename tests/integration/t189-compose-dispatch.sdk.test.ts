@@ -110,7 +110,7 @@ describe("t189 composer dispatch (/aidlc compose, sdk live)", () => {
           existsSync(join(intentsDir, d, "aidlc-state.md")),
         );
         expect(stateFiles).toEqual([]);
-        // No composed scope file (the 10 stock scopes only):
+        // No composed scope file (the 11 stock scopes only):
         const scopesDir = join(proj, ".claude", "scopes");
         const scopeFiles = readdirSync(scopesDir).filter(
           (f) => f.startsWith("aidlc-") && f.endsWith(".md"),

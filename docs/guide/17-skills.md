@@ -52,7 +52,7 @@ You can pass a description and flags straight through, exactly as you would to `
 /aidlc-feature --status
 ```
 
-**Five core scopes ship a runner** — the high-traffic ones marked `runner: true` in their scope files. The framework defines 10 scopes total (see [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md)); every other one — `enterprise`, `poc`, `infra`, `refactor`, `classic` — is always reachable through the orchestrator. Plugin-owned scopes can also set `runner: true`; their runner uses the bare plugin-prefixed scope name, such as `/test-pro-validation`.
+**Five core scopes ship a runner** — the high-traffic ones marked `runner: true` in their scope files. The framework defines 11 scopes total (see [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md)); every other one — `enterprise`, `poc`, `infra`, `refactor`, `classic`, `workshop` — is always reachable through the orchestrator. Plugin-owned scopes can also set `runner: true`; their runner uses the bare plugin-prefixed scope name, such as `/test-pro-validation`.
 
 ```
 /aidlc --scope enterprise
@@ -151,7 +151,7 @@ For the mechanics of writing a stage file, see [Customization](13-customization.
 ```
 # Full workflow
 /aidlc                              detect scope, run everything
-/aidlc --scope enterprise           any of the 10 scopes
+/aidlc --scope enterprise           any of the 11 scopes
 
 # Scope-runners (the 5 high-traffic doors)
 /aidlc-bugfix · /aidlc-express · /aidlc-feature · /aidlc-mvp · /aidlc-security-patch

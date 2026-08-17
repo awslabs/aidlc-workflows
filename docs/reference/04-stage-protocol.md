@@ -801,6 +801,7 @@ and problem complexity.
 | infra | Standard | Standard | ~13 | Infra-focused |
 | security-patch | Minimal | Minimal | ~10 | Security-focused |
 | classic | Standard | Standard | 26 | Default v1-style lifecycle without Ideation |
+| workshop | Standard | Minimal | 26 | Facilitated lifecycle with teaching test floor |
 | express | Minimal | Minimal | 10 | Requirements to conditional deploy, reviewers disabled |
 
 User can override depth or test strategy at any approval gate.
@@ -814,7 +815,7 @@ brief analysis, skip optional stages:
 - Functional Design: brief business rules, simple entities, skip
   `frontend-components.md`
 
-**Standard** (feature, mvp, infra, classic) -- full artifacts at moderate detail:
+**Standard** (feature, mvp, infra, classic, workshop) -- full artifacts at moderate detail:
 - Requirements: 15-30 with acceptance criteria, moderate NFRs
 - App Design: component diagrams with interactions, relationships, 2-3 ADRs
 - Functional Design: detailed business logic, comprehensive rules, entity
@@ -839,7 +840,7 @@ brief analysis, skip optional stages:
 | **AI-DLC** | AI-Driven Development Life Cycle -- the methodology this system implements |
 | **Phase** | Top-level grouping: Initialization, Ideation, Inception, Construction, Operation |
 | **Stage** | A discrete step within a phase (e.g., Intent Capture, Code Generation) |
-| **Scope** | Controls which stages execute and at what depth (enterprise, feature, mvp, poc, bugfix, refactor, infra, security-patch, classic, express) |
+| **Scope** | Controls which stages execute and at what depth (enterprise, feature, mvp, poc, bugfix, refactor, infra, security-patch, classic, workshop, express) |
 | **Depth** | Artifact detail scale: Minimal, Standard, or Comprehensive |
 | **Unit of Work** | An independently implementable package of features; the Construction iteration unit. One pass through stages 3.1-3.7. |
 | **Service** | A deployable process or container (API server, worker, frontend app) |

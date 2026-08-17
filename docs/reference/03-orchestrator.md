@@ -37,7 +37,7 @@ The conductor passes `$ARGUMENTS` to the engine's first `next` verbatim — it n
 
 ### `/aidlc [scope]` -- Explicit Scope
 
-When the argument matches one of the 10 known scopes (`enterprise`, `feature`, `mvp`, `poc`, `bugfix`, `refactor`, `infra`, `security-patch`, `classic`, `express`):
+When the argument matches one of the 11 known scopes (`enterprise`, `feature`, `mvp`, `poc`, `bugfix`, `refactor`, `infra`, `security-patch`, `classic`, `workshop`, `express`):
 
 An explicitly named scope on a fresh workspace (no intent yet — no `aidlc-state.md` under `aidlc/spaces/*/intents/*/`) **births the first intent**: the engine's `next` emits a run-then-continue `print` directive naming `aidlc-utility.ts intent-create --scope <scope>` (threading any `--depth` / `--test-strategy` / `--review` flags onto the named command); the conductor runs it and re-runs `next` to land on the first stage. Both naming shapes — the bare positional (`/aidlc bugfix`) and the explicit flag (`/aidlc --scope bugfix`) — emit the identical birth print. Describing what to build (`/aidlc "build the auth service"`) also births. A bare `/aidlc` with no explicitly named scope and no description does NOT birth (an env- or default-resolved scope is not a birth signal); it emits the no-state error directing the user to describe what to build or name a scope.
 
@@ -60,9 +60,10 @@ When the argument is freeform text (not a known scope keyword):
    - "security" / "CVE" / "vulnerability" / "patch" maps to `security-patch`
    - "proof of concept" / "prototype" / "poc" / "spike" maps to `poc`
    - "mvp" / "minimum viable" maps to `mvp`
-   - "workshop" / "lab" / "training" maps to `classic`
+   - "workshop" / "lab" / "training" maps to `workshop`
    - "express" / "lightweight" maps to `express`
-   - Anything else defaults to `classic`
+   - The underlying no-keyword resolver defaults to `classic`; the user-facing
+     cold-start path offers composition first for no-match or rich prose
 3. Disambiguation rule: if the text contains BOTH a scope keyword AND a longer project description (more than 5 words), the match is treated as incidental and the COMPOSE OFFER fires instead of a silent default.
 4. On a clear keyword match, confirms with the user, naming the ceremony from the compiled grid: `Starting a "[scope]" workflow for: "[text]" - [N] of [T] stages, [G] approval gates. Confirm to proceed, name a different scope, or say "compose" for a tailored plan.` (A per-unit clause is appended when the scope's Construction stages fan out per Unit of Work.)
 5. On no match / rich prose, offers the adaptive composer: the composer agent estimates the task's implementation entropy and proposes the minimum viable EXECUTE/SKIP grid, human-gated (see the compose surfaces below). The offer's example scope list carries counts too (`express = 10 of 33 stages, classic = 26, feature = all 33`) so the magnitude difference is visible before choosing.
@@ -280,6 +281,7 @@ Authoritative data lives in the `.claude/scopes/aidlc-<name>.md` files plus each
 | `infra` | 0.1-0.3, 2.2, 2.3 (infra requirements), 3.2, 3.3, 3.4, 3.7, 4.1, 4.2, 4.3, 4.4 | 13 / 33 | Standard | Standard |
 | `security-patch` | 0.1-0.3, 2.1 (find vulnerability context), 2.3 (minimal), 3.2, 3.5, 3.6, 4.1, 4.3 | 10 / 33 | Minimal | Minimal |
 | `classic` | 0.1-0.3, 2.1-2.9, 3.1-3.7, 4.1-4.7 (skips all ideation 1.1-1.7) | 26 / 33 | Standard | Standard |
+| `workshop` | 0.1-0.3, 2.1-2.9, 3.1-3.7, 4.1-4.7 (skips all ideation 1.1-1.7) | 26 / 33 | Standard | Minimal |
 | `express` | 0.1-0.3, 2.1 (if brownfield), 2.3, 3.5, 3.6, 4.1, 4.3, 4.4 | 10 / 33 | Minimal | Minimal |
 
 ### Detailed Scope Breakdown
@@ -293,14 +295,15 @@ Authoritative data lives in the `.claude/scopes/aidlc-<name>.md` files plus each
 - **infra** -- No Ideation. Infra-focused Requirements Analysis. NFR stages + Infrastructure Design + CI Pipeline from Construction. Deployment and Observability from Operation.
 - **security-patch** -- No Ideation. Reverse Engineering to find vulnerability context plus minimal Requirements Analysis (the auditable statement of the vulnerability and its remediation criteria). NFR Requirements, Code Generation, Build and Test. Deployment Pipeline and Deployment Execution from Operation.
 - **classic** -- The freeform default and the v1-style lifecycle: no Ideation, with all Inception, Construction, and Operation stages in the grid. Only Initialization, Requirements Analysis, Units Generation, Delivery Planning, Code Generation, and Build and Test are ALWAYS; the remaining stages self-select. Standard depth and Standard test strategy preserve the production test floor.
-- **express** -- The lightest requirements-to-deploy route: conditional Reverse Engineering, Requirements Analysis, Code Generation, Build and Test, and a conditional deploy/observability tail. It skips Units Generation, so the Unit DAG and swarm path are structurally unreachable. `review_cap: none` disables reviewers.
+- **workshop** -- The compatible facilitated-session lifecycle: the same stage grid as Classic, with the established `workshop` / `lab` / `training` keywords and a Minimal test-strategy override.
+- **express** -- The lightest requirements-to-deploy route: conditional Reverse Engineering, Requirements Analysis, one zero-Unit Code Generation iteration, Build and Test, and a conditional deploy/observability tail. It skips Units Generation, so Bolt, skeleton, ladder, per-Unit, and swarm paths are structurally unreachable. `review_cap: none` disables reviewers.
 
 ### Depth Levels
 
 | Depth | Scopes | Characteristics |
 |---|---|---|
 | Minimal | poc, bugfix, refactor, security-patch, express | Minimal artifacts, brief analysis, optional stages skipped |
-| Standard | feature, mvp, infra, classic | Full artifacts at moderate detail |
+| Standard | feature, mvp, infra, classic, workshop | Full artifacts at moderate detail |
 | Comprehensive | enterprise | Comprehensive artifacts with deep analysis, all stages execute |
 
 ---

@@ -23,6 +23,7 @@
       "infra",
       "security-patch",
       "classic",
+      "workshop",
       "express"
     ],
     "inputs": "none (first stage after session start)",
@@ -69,6 +70,7 @@
       "infra",
       "security-patch",
       "classic",
+      "workshop",
       "express"
     ],
     "inputs": "none (scans filesystem)",
@@ -115,6 +117,7 @@
       "infra",
       "security-patch",
       "classic",
+      "workshop",
       "express"
     ],
     "inputs": "workspace classification from workspace-detection, scope from orchestrator",
@@ -736,6 +739,7 @@
       "refactor",
       "security-patch",
       "classic",
+      "workshop",
       "express"
     ],
     "inputs": "<record>/aidlc-state.md",
@@ -836,7 +840,8 @@
       "feature",
       "mvp",
       "infra",
-      "classic"
+      "classic",
+      "workshop"
     ],
     "summary_confirmation": "required",
     "inputs": "<record>/aidlc-state.md + (brownfield) reverse-engineering evidence",
@@ -933,6 +938,7 @@
       "infra",
       "security-patch",
       "classic",
+      "workshop",
       "express"
     ],
     "reviewer": "aidlc-product-lead-agent",
@@ -1024,7 +1030,8 @@
       "enterprise",
       "feature",
       "mvp",
-      "classic"
+      "classic",
+      "workshop"
     ],
     "reviewer": "aidlc-product-lead-agent",
     "reviewer_max_iterations": 2,
@@ -1120,7 +1127,8 @@
       "enterprise",
       "feature",
       "mvp",
-      "classic"
+      "classic",
+      "workshop"
     ],
     "reviewer": "aidlc-product-lead-agent",
     "reviewer_max_iterations": 2,
@@ -1214,7 +1222,8 @@
       "enterprise",
       "feature",
       "mvp",
-      "classic"
+      "classic",
+      "workshop"
     ],
     "reviewer": "aidlc-architecture-reviewer-agent",
     "reviewer_max_iterations": 2,
@@ -1306,7 +1315,8 @@
       "enterprise",
       "feature",
       "mvp",
-      "classic"
+      "classic",
+      "workshop"
     ],
     "reviewer": "aidlc-architecture-reviewer-agent",
     "reviewer_max_iterations": 2,
@@ -1394,7 +1404,8 @@
       "enterprise",
       "feature",
       "mvp",
-      "classic"
+      "classic",
+      "workshop"
     ],
     "reviewer": "aidlc-architecture-reviewer-agent",
     "reviewer_max_iterations": 2,
@@ -1501,7 +1512,8 @@
       "enterprise",
       "feature",
       "mvp",
-      "classic"
+      "classic",
+      "workshop"
     ],
     "summary_confirmation": "required",
     "inputs": "All Inception artifacts (requirements, stories, mockups, architecture, units)",
@@ -1623,7 +1635,8 @@
       "feature",
       "mvp",
       "refactor",
-      "classic"
+      "classic",
+      "workshop"
     ],
     "reviewer": "aidlc-architecture-reviewer-agent",
     "reviewer_max_iterations": 2,
@@ -1756,7 +1769,8 @@
       "mvp",
       "infra",
       "security-patch",
-      "classic"
+      "classic",
+      "workshop"
     ],
     "reviewer": "aidlc-architecture-reviewer-agent",
     "reviewer_max_iterations": 2,
@@ -1902,7 +1916,8 @@
       "feature",
       "mvp",
       "infra",
-      "classic"
+      "classic",
+      "workshop"
     ],
     "reviewer": "aidlc-architecture-reviewer-agent",
     "reviewer_max_iterations": 2,
@@ -2054,7 +2069,8 @@
       "feature",
       "mvp",
       "infra",
-      "classic"
+      "classic",
+      "workshop"
     ],
     "reviewer": "aidlc-architecture-reviewer-agent",
     "reviewer_max_iterations": 2,
@@ -2186,6 +2202,7 @@
       "refactor",
       "security-patch",
       "classic",
+      "workshop",
       "express"
     ],
     "reviewer": "aidlc-architecture-reviewer-agent",
@@ -2286,6 +2303,7 @@
       "refactor",
       "security-patch",
       "classic",
+      "workshop",
       "express"
     ],
     "inputs": "ALL code generation outputs across all units",
@@ -2369,7 +2387,8 @@
       "feature",
       "mvp",
       "infra",
-      "classic"
+      "classic",
+      "workshop"
     ],
     "summary_confirmation": "required",
     "inputs": "Code generation output from code-generation stage, build/test results from build-and-test stage",
@@ -2463,6 +2482,7 @@
       "infra",
       "security-patch",
       "classic",
+      "workshop",
       "express"
     ],
     "summary_confirmation": "required",
@@ -2539,7 +2559,8 @@
       "enterprise",
       "feature",
       "infra",
-      "classic"
+      "classic",
+      "workshop"
     ],
     "summary_confirmation": "required",
     "inputs": "Infrastructure design from infrastructure-design stage, CD pipeline config from deployment-pipeline stage",
@@ -2625,6 +2646,7 @@
       "infra",
       "security-patch",
       "classic",
+      "workshop",
       "express"
     ],
     "summary_confirmation": "required",
@@ -2716,6 +2738,7 @@
       "feature",
       "infra",
       "classic",
+      "workshop",
       "express"
     ],
     "summary_confirmation": "required",
@@ -2800,7 +2823,8 @@
     "scopes": [
       "enterprise",
       "feature",
-      "classic"
+      "classic",
+      "workshop"
     ],
     "summary_confirmation": "required",
     "inputs": "Observability setup from observability-setup stage, NFR design from nfr-design stage, infrastructure design from infrastructure-design stage",
@@ -2886,7 +2910,8 @@
     "scopes": [
       "enterprise",
       "feature",
-      "classic"
+      "classic",
+      "workshop"
     ],
     "summary_confirmation": "required",
     "inputs": "NFR requirements from nfr-requirements stage, NFR design from nfr-design stage, deployed application, observability data from observability-setup stage",
@@ -2980,7 +3005,8 @@
     "scopes": [
       "enterprise",
       "feature",
-      "classic"
+      "classic",
+      "workshop"
     ],
     "summary_confirmation": "required",
     "inputs": "All Operation phase artifacts, production monitoring data",

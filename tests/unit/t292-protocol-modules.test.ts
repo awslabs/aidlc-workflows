@@ -202,7 +202,35 @@ describe("t292 conditional protocol modules", () => {
       expect(skill).toContain(
         "skip a module already loaded earlier in the session",
       );
+      expect(skill).toContain(
+        "Load every module named in `directive.protocol_modules` before acting",
+      );
+      expect(skill).toContain(
+        "When a `run-stage` carries `directive.swarm_settled === true`",
+      );
     }
+  });
+
+  test("Construction module conditions Unit, Bolt, and reviewer ceremonies", () => {
+    const construction = readFileSync(
+      join(
+        REPO_ROOT,
+        "core",
+        "aidlc-common",
+        "protocols",
+        "stage-protocol-construction.md",
+      ),
+      "utf-8",
+    );
+    expect(construction).toContain(
+      "ceremonies apply only when the engine resolved a real non-empty Unit DAG",
+    );
+    expect(construction).toContain(
+      "module applies only when `directive.reviewer` is present",
+    );
+    expect(construction).toContain(
+      "run one ordinary stage iteration with no Bolt or per-Unit ceremony",
+    );
   });
 
   test("moved headings live only in their modules, not the static protocol", () => {

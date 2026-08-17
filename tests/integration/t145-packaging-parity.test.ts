@@ -65,6 +65,11 @@ function makeFixture(harness: string, sourceHarness = harness): string {
   copyDir(join(REPO_ROOT, "scripts"), join(root, "scripts"));
   mkdirSync(join(root, "harness"), { recursive: true });
   copyDir(join(REPO_ROOT, "harness", sourceHarness), join(root, "harness", harness));
+  symlinkSync(
+    join(REPO_ROOT, "node_modules"),
+    join(root, "node_modules"),
+    process.platform === "win32" ? "junction" : "dir",
+  );
   if (harness === sourceHarness) {
     mkdirSync(join(root, "dist"), { recursive: true });
     copyDir(join(REPO_ROOT, "dist", harness), join(root, "dist", harness));

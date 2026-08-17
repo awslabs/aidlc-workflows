@@ -412,7 +412,7 @@ not a stage value — a stage that wants no review deletes its `reviewer:` line;
 `none` exists on the scope `review_cap` and the per-run `--review` override,
 which can silence a declared reviewer without editing stages. The effective
 class at runtime is the LOWEST of stage declaration, the active scope's
-`review_cap` (the shipped `bugfix`, `poc`, and `classic` scopes cap to
+`review_cap` (the shipped `bugfix`, `poc`, `classic`, and `workshop` scopes cap to
 `advisory`, while `express` caps to `none`), and the per-run override — a cap
 or override can lower a class but never raise one. Autonomous swarm reviews are exempt from caps and overrides:
 inside a Bolt the reviewer is the only pre-merge verification, so the declared

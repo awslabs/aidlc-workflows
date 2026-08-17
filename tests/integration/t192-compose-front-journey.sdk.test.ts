@@ -57,7 +57,7 @@ const STOP_AFTER_INIT = { toolName: "Bash", resultIncludes: INIT_STATE_SUMMARY }
 
 // A task built to NOT fit any stock grid: it needs deployment/observability
 // (operation stages) against an existing system but no ideation and no new
-// product surface - none of the 10 stock scopes covers that shape. The prompt
+// product surface - none of the 11 stock scopes covers that shape. The prompt
 // explicitly asks for a custom plan so a stock match is a live failure signal.
 const TASK =
   "harden the deployment pipeline and add observability for our existing service - no new features, compose a custom plan for exactly this";
@@ -72,7 +72,7 @@ const APPROVE_ALL = {
 
 const STOCK_SCOPES = new Set([
   "bugfix", "enterprise", "feature", "infra", "mvp", "poc", "refactor",
-  "security-patch", "classic", "express",
+  "security-patch", "classic", "workshop", "express",
 ]);
 
 describe("t192 front composer journey (/aidlc compose -> approve -> write -> birth, sdk live)", () => {

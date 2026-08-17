@@ -38,6 +38,7 @@ scopes:
   - feature
   - infra
   - classic
+  - workshop
   - express
 inputs: NFR design from nfr-design stage, infrastructure design from infrastructure-design stage, deployed application
 outputs: dashboards.md, alarms.md, slo-config.md, log-queries.md, tracing-config.md, anomaly-config.md, observability-setup-questions.md (under this stage's record dir, engine-resolved)
@@ -58,6 +59,14 @@ Load aidlc-operations-agent persona from `agents/aidlc-operations-agent.md` and 
 - Read NFR design (observability strategy) from `<record>/construction/nfr-design/`
 - Read infrastructure design from `<record>/construction/infrastructure-design/`
 - Read deployment execution log from `<record>/operation/deployment-execution/`
+
+`express` skips NFR Design and Infrastructure Design by design. When those
+artifacts are absent, derive the minimum observable surface from approved
+requirements, the deployed application's workspace configuration, Build and
+Test results, and the Deployment Execution evidence. Ask for any SLO, signal,
+retention, or escalation decision that cannot be observed from those sources;
+never invent a missing design artifact. If no deployed target exists, this
+CONDITIONAL stage reports skipped.
 
 ### Step 3: Generate Clarifying Questions
 

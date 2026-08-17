@@ -20,12 +20,16 @@ pass or reviewer dispatch.
 
 Requirements Analysis establishes the contract, Code Generation implements
 it, Build and Test verifies it, and the Operation tail can deploy and observe
-the result. Reviewers are disabled by `review_cap: none`.
+the result. Reviewers are disabled by `review_cap: none`. Minimal testing still
+requires requirement-driven unit tests with a happy-path floor per component.
 
 The swarm path is structurally unreachable because `express` skips Units
 Generation, so no Unit DAG can exist. Reverse Engineering remains CONDITIONAL
 to provide brownfield understanding when existing code is present. The deploy
-tail is also CONDITIONAL and self-skips when there is nothing to deploy.
+tail is also CONDITIONAL and self-skips when there is nothing to deploy. Its
+stages use the approved requirements, workspace deployment configuration, build
+results, and prior tail artifacts when full design producers are intentionally
+absent.
 
 ## Membership
 

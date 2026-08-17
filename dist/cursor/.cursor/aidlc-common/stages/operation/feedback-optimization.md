@@ -39,6 +39,7 @@ scopes:
   - enterprise
   - feature
   - classic
+  - workshop
 inputs: All Operation phase artifacts, production monitoring data
 outputs: slo-report.md, cost-analysis.md, drift-report.md, feedback-loop.md, feedback-optimization-questions.md (under this stage's record dir, engine-resolved)
 ---

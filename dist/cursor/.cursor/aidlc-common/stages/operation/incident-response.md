@@ -32,6 +32,7 @@ scopes:
   - enterprise
   - feature
   - classic
+  - workshop
 inputs: Observability setup from observability-setup stage, NFR design from nfr-design stage, infrastructure design from infrastructure-design stage
 outputs: runbooks.md, incident-plan.md, escalation-matrix.md, incident-response-questions.md (under this stage's record dir, engine-resolved)
 ---

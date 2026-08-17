@@ -4,9 +4,9 @@ Scopes control **which stages execute**. Depth controls **how much detail** each
 
 ---
 
-## The 10 Core Scopes
+## The 11 Core Scopes
 
-Core ships 10 named scopes. Each scope defines a stage set and a default depth level. Plugin installs can add more scopes, and an install can narrow which plugin scopes are visible with `bun .claude/tools/aidlc-utility.ts select-plugins <names>`. When a `plugins` selection disables core (`aidlc` omitted), the core scope files remain installed but are not valid runtime scopes until core is re-enabled; the Initialization stages still run for every enabled scope.
+Core ships 11 named scopes. Each scope defines a stage set and a default depth level. Plugin installs can add more scopes, and an install can narrow which plugin scopes are visible with `bun .claude/tools/aidlc-utility.ts select-plugins <names>`. When a `plugins` selection disables core (`aidlc` omitted), the core scope files remain installed but are not valid runtime scopes until core is re-enabled; the Initialization stages still run for every enabled scope.
 
 ### enterprise
 
@@ -80,7 +80,18 @@ Core ships 10 named scopes. Each scope defines a stage set and a default depth l
 - **Default depth:** Standard
 - **Default test strategy:** Standard
 - **Skips:** All Ideation stages (1.1-1.7)
-- **Keywords:** `workshop`, `lab`, and `training` are retained routing aliases
+- **Keywords:** None; selected explicitly or as the freeform default
+
+### workshop
+
+**Use when:** Running a facilitated workshop or training lab with the established
+full Inception-through-Operation lifecycle and a lighter teaching test floor.
+
+- **Stages:** 26 of 33
+- **Default depth:** Standard
+- **Default test strategy:** Minimal
+- **Skips:** All Ideation stages (1.1-1.7)
+- **Keywords:** `workshop`, `lab`, and `training`
 
 ### express
 
@@ -109,6 +120,7 @@ Authoritative data lives in the `.claude/scopes/aidlc-<name>.md` files (scope id
 | `infra` | 13 / 33 | Standard | Standard | Infrastructure change |
 | `security-patch` | 10 / 33 | Minimal | Minimal | CVE response |
 | `classic` | 26 / 33 | Standard | Standard | Default v1-style lifecycle without Ideation |
+| `workshop` | 26 / 33 | Standard | Minimal | Facilitated lifecycle with teaching-oriented tests |
 | `express` | 10 / 33 | Minimal | Minimal | Requirements to conditional deploy, no design or reviewers |
 | (auto-detect) | Varies | Varies | Varies | AI determines from freeform intent |
 
@@ -123,40 +135,40 @@ Scopes differ by an order of magnitude in ceremony: `poc` runs 8 stages with 5 a
 The routing table above gives the counts; this matrix shows exactly **which** stages execute under each stock scope, so you can see what you will walk through before starting a workflow. A ✓ means the stage is EXECUTE under that scope; an empty cell means SKIP. Stage numbers and names match [Phases and Stages](04-phases-and-stages.md).
 
 <!-- BEGIN scope-stage-matrix: derived from each stage's `scopes:` frontmatter via the compiled scope-grid.json — kept in sync by tests/unit/t244-scope-matrix-doc-sync.test.ts; do not hand-edit cells without re-checking that test -->
-| # | Stage | `enterprise` | `feature` | `mvp` | `poc` | `bugfix` | `refactor` | `infra` | `security-patch` | `classic` | `express` |
-|---|-------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| 0.1–0.3 | Initialization (all 3 stages) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| 1.1 | Intent Capture & Framing | ✓ | ✓ | ✓ | ✓ |  |  |  |  |  |  |
-| 1.2 | Market Research | ✓ | ✓ |  |  |  |  |  |  |  |  |
-| 1.3 | Feasibility & Constraints | ✓ | ✓ | ✓ |  |  |  |  |  |  |  |
-| 1.4 | Scope Definition | ✓ | ✓ | ✓ |  |  |  |  |  |  |  |
-| 1.5 | Team Formation | ✓ | ✓ |  |  |  |  |  |  |  |  |
-| 1.6 | Rough Mockups | ✓ | ✓ | ✓ |  |  |  |  |  |  |  |
-| 1.7 | Approval & Handoff | ✓ | ✓ |  |  |  |  |  |  |  |  |
-| 2.1 | Reverse Engineering | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  | ✓ | ✓ | ✓ |
-| 2.2 | Practices Discovery | ✓ | ✓ | ✓ |  |  |  | ✓ |  | ✓ |  |
-| 2.3 | Requirements Analysis | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| 2.4 | User Stories | ✓ | ✓ | ✓ |  |  |  |  |  | ✓ |  |
-| 2.5 | Refined Mockups | ✓ | ✓ | ✓ |  |  |  |  |  | ✓ |  |
-| 2.6 | Domain Design | ✓ | ✓ | ✓ |  |  |  |  |  | ✓ |  |
-| 2.7 | Units Generation | ✓ | ✓ | ✓ |  |  |  |  |  | ✓ |  |
-| 2.8 | Contract Design | ✓ | ✓ | ✓ |  |  |  |  |  | ✓ |  |
-| 2.9 | Delivery Planning | ✓ | ✓ | ✓ |  |  |  |  |  | ✓ |  |
-| 3.1 | Functional Design | ✓ | ✓ | ✓ |  |  | ✓ |  |  | ✓ |  |
-| 3.2 | NFR Requirements | ✓ | ✓ | ✓ |  |  |  | ✓ | ✓ | ✓ |  |
-| 3.3 | NFR Design | ✓ | ✓ | ✓ |  |  |  | ✓ |  | ✓ |  |
-| 3.4 | Infrastructure Design | ✓ | ✓ | ✓ |  |  |  | ✓ |  | ✓ |  |
-| 3.5 | Code Generation | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  | ✓ | ✓ | ✓ |
-| 3.6 | Build and Test | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  | ✓ | ✓ | ✓ |
-| 3.7 | CI Pipeline | ✓ | ✓ | ✓ |  |  |  | ✓ |  | ✓ |  |
-| 4.1 | Deployment Pipeline | ✓ | ✓ |  |  |  |  | ✓ | ✓ | ✓ | ✓ |
-| 4.2 | Environment Provisioning | ✓ | ✓ |  |  |  |  | ✓ |  | ✓ |  |
-| 4.3 | Deployment Execution | ✓ | ✓ |  |  |  |  | ✓ | ✓ | ✓ | ✓ |
-| 4.4 | Observability Setup | ✓ | ✓ |  |  |  |  | ✓ |  | ✓ | ✓ |
-| 4.5 | Incident Response | ✓ | ✓ |  |  |  |  |  |  | ✓ |  |
-| 4.6 | Performance Validation | ✓ | ✓ |  |  |  |  |  |  | ✓ |  |
-| 4.7 | Feedback & Optimization | ✓ | ✓ |  |  |  |  |  |  | ✓ |  |
-| | **Total stages** | **33** | **33** | **23** | **8** | **7** | **8** | **13** | **10** | **26** | **10** |
+| # | Stage | `enterprise` | `feature` | `mvp` | `poc` | `bugfix` | `refactor` | `infra` | `security-patch` | `classic` | `workshop` | `express` |
+|---|-------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| 0.1–0.3 | Initialization (all 3 stages) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| 1.1 | Intent Capture & Framing | ✓ | ✓ | ✓ | ✓ |  |  |  |  |  |  |  |
+| 1.2 | Market Research | ✓ | ✓ |  |  |  |  |  |  |  |  |  |
+| 1.3 | Feasibility & Constraints | ✓ | ✓ | ✓ |  |  |  |  |  |  |  |  |
+| 1.4 | Scope Definition | ✓ | ✓ | ✓ |  |  |  |  |  |  |  |  |
+| 1.5 | Team Formation | ✓ | ✓ |  |  |  |  |  |  |  |  |  |
+| 1.6 | Rough Mockups | ✓ | ✓ | ✓ |  |  |  |  |  |  |  |  |
+| 1.7 | Approval & Handoff | ✓ | ✓ |  |  |  |  |  |  |  |  |  |
+| 2.1 | Reverse Engineering | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  | ✓ | ✓ | ✓ | ✓ |
+| 2.2 | Practices Discovery | ✓ | ✓ | ✓ |  |  |  | ✓ |  | ✓ | ✓ |  |
+| 2.3 | Requirements Analysis | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| 2.4 | User Stories | ✓ | ✓ | ✓ |  |  |  |  |  | ✓ | ✓ |  |
+| 2.5 | Refined Mockups | ✓ | ✓ | ✓ |  |  |  |  |  | ✓ | ✓ |  |
+| 2.6 | Domain Design | ✓ | ✓ | ✓ |  |  |  |  |  | ✓ | ✓ |  |
+| 2.7 | Units Generation | ✓ | ✓ | ✓ |  |  |  |  |  | ✓ | ✓ |  |
+| 2.8 | Contract Design | ✓ | ✓ | ✓ |  |  |  |  |  | ✓ | ✓ |  |
+| 2.9 | Delivery Planning | ✓ | ✓ | ✓ |  |  |  |  |  | ✓ | ✓ |  |
+| 3.1 | Functional Design | ✓ | ✓ | ✓ |  |  | ✓ |  |  | ✓ | ✓ |  |
+| 3.2 | NFR Requirements | ✓ | ✓ | ✓ |  |  |  | ✓ | ✓ | ✓ | ✓ |  |
+| 3.3 | NFR Design | ✓ | ✓ | ✓ |  |  |  | ✓ |  | ✓ | ✓ |  |
+| 3.4 | Infrastructure Design | ✓ | ✓ | ✓ |  |  |  | ✓ |  | ✓ | ✓ |  |
+| 3.5 | Code Generation | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  | ✓ | ✓ | ✓ | ✓ |
+| 3.6 | Build and Test | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  | ✓ | ✓ | ✓ | ✓ |
+| 3.7 | CI Pipeline | ✓ | ✓ | ✓ |  |  |  | ✓ |  | ✓ | ✓ |  |
+| 4.1 | Deployment Pipeline | ✓ | ✓ |  |  |  |  | ✓ | ✓ | ✓ | ✓ | ✓ |
+| 4.2 | Environment Provisioning | ✓ | ✓ |  |  |  |  | ✓ |  | ✓ | ✓ |  |
+| 4.3 | Deployment Execution | ✓ | ✓ |  |  |  |  | ✓ | ✓ | ✓ | ✓ | ✓ |
+| 4.4 | Observability Setup | ✓ | ✓ |  |  |  |  | ✓ |  | ✓ | ✓ | ✓ |
+| 4.5 | Incident Response | ✓ | ✓ |  |  |  |  |  |  | ✓ | ✓ |  |
+| 4.6 | Performance Validation | ✓ | ✓ |  |  |  |  |  |  | ✓ | ✓ |  |
+| 4.7 | Feedback & Optimization | ✓ | ✓ |  |  |  |  |  |  | ✓ | ✓ |  |
+| | **Total stages** | **33** | **33** | **23** | **8** | **7** | **8** | **13** | **10** | **26** | **26** | **10** |
 <!-- END scope-stage-matrix -->
 
 A ✓ marks static scope membership — it means the stage is included in the scope's plan, not that it will unconditionally execute. CONDITIONAL stages may be skipped at runtime when their condition does not hold (for example, Reverse Engineering only runs for brownfield projects), and pending stages can be reshaped through an approved composer proposal (see [the composer](#the-adaptive-composer)). Composed (custom) scopes are not listed here — their grids live in `scope-grid.json` alongside the stock ones.
@@ -181,9 +193,9 @@ The engine analyzes your intent against keyword patterns:
 | "security", "CVE", "vulnerability", "patch" | `security-patch` |
 | "proof of concept", "prototype", "poc", "spike" | `poc` |
 | "mvp", "minimum viable" | `mvp` |
-| "workshop", "lab", "training" | `classic` |
+| "workshop", "lab", "training" | `workshop` |
 | "express", "lightweight" | `express` |
-| Everything else | `classic` when core is enabled; otherwise the sole enabled plugin's first scope when unambiguous |
+| Explicit low-context fallback | `classic` when core is enabled; otherwise the sole enabled plugin's first scope when unambiguous |
 
 **Disambiguation rule:** If your input contains both a scope keyword and a longer project description (more than 5 words), the match is treated as incidental and the compose offer fires instead (below). This prevents mismatches like "Fix the infrastructure monitoring dashboard" being routed to `infra` when a tailored plan is more appropriate.
 
@@ -200,7 +212,11 @@ Confirm to proceed, or reply with a different scope (or `compose`) to course-cor
 
 ## The Adaptive Composer
 
-When no stock scope clearly fits (rich prose, no keyword hit, or a keyword buried in a long description), `/aidlc` offers to COMPOSE a tailored plan instead of silently defaulting to `classic`. You can also force it:
+The underlying resolver's no-keyword default is `classic`, which is used by
+explicit fallback paths and low-context utility calls. In the user-facing
+cold-start flow, rich prose, no keyword hit, or a keyword buried in a long
+description enters the compose offer before a workflow is created; it does not
+silently start Classic. You can also force composition:
 
 ```
 /aidlc compose "harden the deployment pipeline and add observability"
@@ -355,9 +371,10 @@ Thorough test coverage across all test types.
 
 ### How test strategy defaults work
 
-Every core scope now inherits test strategy from its depth. `classic` therefore
-uses the production Standard test floor; `express` uses Minimal testing because
-its depth is Minimal. You can always override with `--test-strategy`.
+Most core scopes inherit test strategy from depth. `classic` therefore uses the
+production Standard test floor and `express` uses the requirement-driven Minimal
+floor. `workshop` retains its explicit Minimal override at Standard depth for
+teaching sessions. You can always override with `--test-strategy`.
 
 ### Overriding test strategy
 
@@ -381,7 +398,7 @@ You can change the test strategy at three points:
 |-------|--------------|--------|-------------|
 | Standard | Standard | Full artifacts, balanced tests | Features and the classic default |
 | Standard | Minimal | Full artifacts, Nyquist tests | Workshops, time-boxed sessions |
-| Minimal | Minimal | Lean artifacts, lean tests | Quick bugfixes, patches |
+| Minimal | Minimal | Lean artifacts, requirement-driven tests | Express, quick bugfixes, patches |
 | Comprehensive | Comprehensive | Full everything | Regulated enterprise features |
 | Comprehensive | Standard | Full artifacts, balanced tests | Enterprise with pragmatic testing |
 | Minimal | Comprehensive | Lean artifacts, thorough tests | Critical bugfix needing confidence |
@@ -402,7 +419,7 @@ You can change the test strategy at three points:
 | Regulated feature requiring compliance | `enterprise` |
 | Default lifecycle without Ideation | `classic` |
 | Lightweight requirements-to-deploy run | `express` |
-| AI-DLC workshop or training lab | `classic` (optionally add `--test-strategy minimal`) |
+| AI-DLC workshop or training lab | `workshop` |
 
 When in doubt, start with `classic` — it is the default and its CONDITIONAL design and operation stages self-skip when they do not apply.
 

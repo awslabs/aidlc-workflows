@@ -207,6 +207,7 @@ describe("t34 stage-protocol.md structure + cross-references (migrated from t34-
     "infra",
     "security-patch",
     "classic",
+    "workshop",
     "express",
   ] as const;
   for (const scope of SCOPES) {

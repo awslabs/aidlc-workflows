@@ -60,14 +60,12 @@
 //       `2>/dev/null` and never checked the exit code); we pin a clean exit on
 //       the subcommand dispatch.
 //   S2: "classic" scope present — the .sh HEADER comment claims all scope
-//       names appear" but only directly asserted 8; classic and express complete the set
+//       names appear" but only directly asserted 8; classic, workshop, and
+//       express complete the set
 //       (visible in the live output, compiled from scope-mapping.json). Closing
 //       the gap between the .sh's stated intent and its asserts.
-//   S3 retired: no shipped scope overrides testStrategy — the .sh header (line 8)
-//       specified a retired workshop override but never
-//       wrote that assert; renderHelpText appends ", <ts> test strategy" only
-//       when def.testStrategy is set (aidlc-utility.ts:151-153). No shipped
-//       scope currently carries an override.
+//   S3: Workshop retains its Minimal testStrategy override; the help renderer
+//       appends ", <ts> test strategy" when def.testStrategy is set.
 //   S4: "--test-strategy" + "--version" utility flags present — documented in
 //       HELP_TEXT_TAIL (aidlc-utility.ts:123-124) but unasserted by the .sh.
 
@@ -123,6 +121,7 @@ describe("t31 aidlc-utility help — CLI contract (migrated from t31-help-text-c
     "infra",
     "security-patch",
     "classic",
+    "workshop",
     "express",
   ] as const;
 

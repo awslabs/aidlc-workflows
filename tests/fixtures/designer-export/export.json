@@ -24,6 +24,7 @@
         "infra",
         "security-patch",
         "classic",
+        "workshop",
         "express"
       ],
       "inputs": "none (first stage after session start)",
@@ -70,6 +71,7 @@
         "infra",
         "security-patch",
         "classic",
+        "workshop",
         "express"
       ],
       "inputs": "none (scans filesystem)",
@@ -116,6 +118,7 @@
         "infra",
         "security-patch",
         "classic",
+        "workshop",
         "express"
       ],
       "inputs": "workspace classification from workspace-detection, scope from orchestrator",
@@ -737,6 +740,7 @@
         "refactor",
         "security-patch",
         "classic",
+        "workshop",
         "express"
       ],
       "inputs": "<record>/aidlc-state.md",
@@ -837,7 +841,8 @@
         "feature",
         "mvp",
         "infra",
-        "classic"
+        "classic",
+        "workshop"
       ],
       "summary_confirmation": "required",
       "inputs": "<record>/aidlc-state.md + (brownfield) reverse-engineering evidence",
@@ -934,6 +939,7 @@
         "infra",
         "security-patch",
         "classic",
+        "workshop",
         "express"
       ],
       "reviewer": "aidlc-product-lead-agent",
@@ -1025,7 +1031,8 @@
         "enterprise",
         "feature",
         "mvp",
-        "classic"
+        "classic",
+        "workshop"
       ],
       "reviewer": "aidlc-product-lead-agent",
       "reviewer_max_iterations": 2,
@@ -1121,7 +1128,8 @@
         "enterprise",
         "feature",
         "mvp",
-        "classic"
+        "classic",
+        "workshop"
       ],
       "reviewer": "aidlc-product-lead-agent",
       "reviewer_max_iterations": 2,
@@ -1215,7 +1223,8 @@
         "enterprise",
         "feature",
         "mvp",
-        "classic"
+        "classic",
+        "workshop"
       ],
       "reviewer": "aidlc-architecture-reviewer-agent",
       "reviewer_max_iterations": 2,
@@ -1307,7 +1316,8 @@
         "enterprise",
         "feature",
         "mvp",
-        "classic"
+        "classic",
+        "workshop"
       ],
       "reviewer": "aidlc-architecture-reviewer-agent",
       "reviewer_max_iterations": 2,
@@ -1395,7 +1405,8 @@
         "enterprise",
         "feature",
         "mvp",
-        "classic"
+        "classic",
+        "workshop"
       ],
       "reviewer": "aidlc-architecture-reviewer-agent",
       "reviewer_max_iterations": 2,
@@ -1502,7 +1513,8 @@
         "enterprise",
         "feature",
         "mvp",
-        "classic"
+        "classic",
+        "workshop"
       ],
       "summary_confirmation": "required",
       "inputs": "All Inception artifacts (requirements, stories, mockups, architecture, units)",
@@ -1624,7 +1636,8 @@
         "feature",
         "mvp",
         "refactor",
-        "classic"
+        "classic",
+        "workshop"
       ],
       "reviewer": "aidlc-architecture-reviewer-agent",
       "reviewer_max_iterations": 2,
@@ -1757,7 +1770,8 @@
         "mvp",
         "infra",
         "security-patch",
-        "classic"
+        "classic",
+        "workshop"
       ],
       "reviewer": "aidlc-architecture-reviewer-agent",
       "reviewer_max_iterations": 2,
@@ -1903,7 +1917,8 @@
         "feature",
         "mvp",
         "infra",
-        "classic"
+        "classic",
+        "workshop"
       ],
       "reviewer": "aidlc-architecture-reviewer-agent",
       "reviewer_max_iterations": 2,
@@ -2055,7 +2070,8 @@
         "feature",
         "mvp",
         "infra",
-        "classic"
+        "classic",
+        "workshop"
       ],
       "reviewer": "aidlc-architecture-reviewer-agent",
       "reviewer_max_iterations": 2,
@@ -2187,6 +2203,7 @@
         "refactor",
         "security-patch",
         "classic",
+        "workshop",
         "express"
       ],
       "reviewer": "aidlc-architecture-reviewer-agent",
@@ -2287,6 +2304,7 @@
         "refactor",
         "security-patch",
         "classic",
+        "workshop",
         "express"
       ],
       "inputs": "ALL code generation outputs across all units",
@@ -2370,7 +2388,8 @@
         "feature",
         "mvp",
         "infra",
-        "classic"
+        "classic",
+        "workshop"
       ],
       "summary_confirmation": "required",
       "inputs": "Code generation output from code-generation stage, build/test results from build-and-test stage",
@@ -2464,6 +2483,7 @@
         "infra",
         "security-patch",
         "classic",
+        "workshop",
         "express"
       ],
       "summary_confirmation": "required",
@@ -2540,7 +2560,8 @@
         "enterprise",
         "feature",
         "infra",
-        "classic"
+        "classic",
+        "workshop"
       ],
       "summary_confirmation": "required",
       "inputs": "Infrastructure design from infrastructure-design stage, CD pipeline config from deployment-pipeline stage",
@@ -2626,6 +2647,7 @@
         "infra",
         "security-patch",
         "classic",
+        "workshop",
         "express"
       ],
       "summary_confirmation": "required",
@@ -2717,6 +2739,7 @@
         "feature",
         "infra",
         "classic",
+        "workshop",
         "express"
       ],
       "summary_confirmation": "required",
@@ -2801,7 +2824,8 @@
       "scopes": [
         "enterprise",
         "feature",
-        "classic"
+        "classic",
+        "workshop"
       ],
       "summary_confirmation": "required",
       "inputs": "Observability setup from observability-setup stage, NFR design from nfr-design stage, infrastructure design from infrastructure-design stage",
@@ -2887,7 +2911,8 @@
       "scopes": [
         "enterprise",
         "feature",
-        "classic"
+        "classic",
+        "workshop"
       ],
       "summary_confirmation": "required",
       "inputs": "NFR requirements from nfr-requirements stage, NFR design from nfr-design stage, deployed application, observability data from observability-setup stage",
@@ -2981,7 +3006,8 @@
       "scopes": [
         "enterprise",
         "feature",
-        "classic"
+        "classic",
+        "workshop"
       ],
       "summary_confirmation": "required",
       "inputs": "All Operation phase artifacts, production monitoring data",
@@ -3102,11 +3128,7 @@
         "performance-validation": "EXECUTE",
         "feedback-optimization": "EXECUTE"
       },
-      "keywords": [
-        "workshop",
-        "lab",
-        "training"
-      ],
+      "keywords": [],
       "description": "The default: full lifecycle without ideation ceremony",
       "skeleton": true
     },
@@ -3465,6 +3487,52 @@
       "description": "CVE response",
       "runner": true,
       "skeleton": false
+    },
+    "workshop": {
+      "depth": "Standard",
+      "stages": {
+        "workspace-scaffold": "EXECUTE",
+        "workspace-detection": "EXECUTE",
+        "state-init": "EXECUTE",
+        "intent-capture": "SKIP",
+        "market-research": "SKIP",
+        "feasibility": "SKIP",
+        "scope-definition": "SKIP",
+        "team-formation": "SKIP",
+        "rough-mockups": "SKIP",
+        "approval-handoff": "SKIP",
+        "reverse-engineering": "EXECUTE",
+        "practices-discovery": "EXECUTE",
+        "requirements-analysis": "EXECUTE",
+        "user-stories": "EXECUTE",
+        "refined-mockups": "EXECUTE",
+        "domain-design": "EXECUTE",
+        "units-generation": "EXECUTE",
+        "contract-design": "EXECUTE",
+        "delivery-planning": "EXECUTE",
+        "functional-design": "EXECUTE",
+        "nfr-requirements": "EXECUTE",
+        "nfr-design": "EXECUTE",
+        "infrastructure-design": "EXECUTE",
+        "code-generation": "EXECUTE",
+        "build-and-test": "EXECUTE",
+        "ci-pipeline": "EXECUTE",
+        "deployment-pipeline": "EXECUTE",
+        "environment-provisioning": "EXECUTE",
+        "deployment-execution": "EXECUTE",
+        "observability-setup": "EXECUTE",
+        "incident-response": "EXECUTE",
+        "performance-validation": "EXECUTE",
+        "feedback-optimization": "EXECUTE"
+      },
+      "keywords": [
+        "workshop",
+        "lab",
+        "training"
+      ],
+      "description": "Facilitated group session with mandatory gates",
+      "testStrategy": "Minimal",
+      "skeleton": true
     }
   },
   "artifacts": [

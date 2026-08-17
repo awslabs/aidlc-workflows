@@ -195,6 +195,10 @@ export interface RunStageDirective {
   // protocol files the conductor reads before the stage body. The prose
   // triggers remain the compatibility fallback when this field is absent.
   protocol_modules?: ProtocolModule[];
+  // Gate-only re-entry after every autonomous swarm Unit and reviewer receipt
+  // converged. Present only as literal true; the conductor must not rerun the
+  // stage body or reviewer.
+  swarm_settled?: true;
   // conductor_persona — set ONLY on the first run-stage of a workflow (decision
   // D-E, SPIKE 6). The engine reads `.claude/aidlc-common/conductor.md` and bakes
   // its contents here so the conductor receives its execution-quality charter
@@ -447,6 +451,7 @@ const RUN_STAGE_FIELDS = [
   "reviewer_max_iterations",
   "review_class",
   "protocol_modules",
+  "swarm_settled",
   "conductor_persona",
   "next_stage",
   "unit",
@@ -471,7 +476,8 @@ const DISPATCH_SUBAGENT_FIELDS = [
     (field) =>
       field !== "single" &&
       field !== "wave" &&
-      field !== "protocol_modules",
+      field !== "protocol_modules" &&
+      field !== "swarm_settled",
   ),
   "worker",
 ] as const;
@@ -725,6 +731,7 @@ function checkRunStageShared(
   }
   if (kind === "run-stage") {
     checkOptionalProtocolModules(o, kind, errors);
+    checkOptionalTrue(o, "swarm_settled", kind, errors);
   }
   // unit: optional on a run-stage directive (present only on a per-unit
   // Construction directive resolved to a concrete Unit of Work). A present
@@ -805,6 +812,18 @@ function checkOptionalBoolean(
   if (!(field in o)) return;
   if (typeof o[field] !== "boolean") {
     errors.push(`${kind}: ${field} must be boolean, got ${describe(o[field])}`);
+  }
+}
+
+function checkOptionalTrue(
+  o: Record<string, unknown>,
+  field: string,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!(field in o)) return;
+  if (o[field] !== true) {
+    errors.push(`${kind}: ${field} must be true when present, got ${describe(o[field])}`);
   }
 }
 

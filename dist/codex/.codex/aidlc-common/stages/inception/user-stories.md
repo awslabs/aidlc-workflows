@@ -40,6 +40,7 @@ scopes:
   - feature
   - mvp
   - classic
+  - workshop
 inputs: <record>/inception/requirements-analysis/requirements.md, RE artifacts (if brownfield)
 outputs: stories.md, personas.md, user-stories-assessment.md, traceability.json (under this stage's record dir, engine-resolved)
 ---

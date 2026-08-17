@@ -21,6 +21,7 @@ scopes:
   - infra
   - security-patch
   - classic
+  - workshop
   - express
 inputs: none (scans filesystem)
 outputs: workspace classification (greenfield/brownfield), technology stack detection

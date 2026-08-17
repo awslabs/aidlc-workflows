@@ -350,6 +350,7 @@ describe("t27 aidlc-utility help (migrated from t27-tool-utility.sh, plan 81)", 
       "infra",
       "security-patch",
       "classic",
+      "workshop",
       "express",
     ]) {
       expect(r.stdout).toContain(scope);

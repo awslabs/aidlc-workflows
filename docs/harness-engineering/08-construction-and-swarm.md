@@ -50,7 +50,7 @@ demands. The shipped default lives in the org rule you author at
 (`org.md:28-42`). Read it as the framework's stance:
 
 - The **walking-skeleton Bolt runs first** for greenfield scopes — `mvp`,
-  `enterprise`, `feature`, `poc`, `classic`, `infra`. Bolt 1 is solo and gated,
+  `enterprise`, `feature`, `poc`, `classic`, `workshop`, `infra`. Bolt 1 is solo and gated,
   and the user approves it before the remaining Bolts run.
 - The **skeleton ceremony is skipped** for incremental scopes — `bugfix`,
   `refactor`, `security-patch`. There is nothing to bootstrap on an existing
@@ -143,7 +143,7 @@ functional-design with zero files. An untagged Unit keeps the full matrix.
 once at the end across everything, so they are not part of the per-Unit fan-out.)
 
 **This parallel surface exists only for the scopes where `units-generation`
-runs** — `enterprise`, `feature`, `mvp`, and `classic`. The incremental scopes
+runs** — `enterprise`, `feature`, `mvp`, `classic`, and `workshop`. The incremental scopes
 (`bugfix`, `refactor`, `security-patch`) and `poc`/`infra`/`express` never run
 `units-generation`, so they produce no edge block, carry no `bolt_dag`, and run
 Construction single-pass with nothing for the swarm to fan out across. Shape the

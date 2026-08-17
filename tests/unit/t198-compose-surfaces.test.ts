@@ -224,7 +224,7 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
 // detect --json: pure read, prints the scan + the resolved registry paths.
 // ===========================================================================
 describe("t198 detect --json is a pure read that names the write target", () => {
-  test("returns scan fields + scopesDir + scopeGridPath + the 10 stock scopes, writes nothing", () => {
+  test("returns scan fields + scopesDir + scopeGridPath + the 11 stock scopes, writes nothing", () => {
     proj = createTestProject();
     const before = readdirSync(proj).sort().join(",");
     const r = runUtility(proj, ["detect", "--json"]);
@@ -235,7 +235,7 @@ describe("t198 detect --json is a pure read that names the write target", () => 
     expect(String(payload.scopesDir)).toContain("scopes");
     expect(String(payload.scopeGridPath)).toContain("scope-grid.json");
     expect(payload.scopes as string[]).toContain("bugfix");
-    expect((payload.scopes as string[]).length).toBe(10);
+    expect((payload.scopes as string[]).length).toBe(11);
     const after = readdirSync(proj).sort().join(",");
     expect(after).toBe(before); // no dir created, no file written
   });

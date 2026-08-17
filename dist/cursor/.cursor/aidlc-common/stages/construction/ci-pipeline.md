@@ -31,6 +31,7 @@ scopes:
   - mvp
   - infra
   - classic
+  - workshop
 inputs: Code generation output from code-generation stage, build/test results from build-and-test stage
 outputs: ci-config.md, quality-gates.md, ci-pipeline-questions.md (under this stage's record dir, engine-resolved)
 ---

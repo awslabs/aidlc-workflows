@@ -41,7 +41,7 @@
 //       completes every init stage before handing off; the .sh only checked
 //       the excluded set).
 //
-// 10 scopes × 3 .sh asserts = 27 -> 30 expect()-bearing test() cases here
+// 11 scopes × 3 assertions = 33 expect()-bearing test() cases here
 // (one describe per scope, 3 test()s each).
 //
 // FIXTURE DISCIPLINE (mirrors the .sh's create_test_project +
@@ -214,6 +214,7 @@ const EXPECTED_SKIPPED: Record<string, string[]> = {
   infra: ["ideation"],
   "security-patch": ["ideation"],
   classic: ["ideation"],
+  workshop: ["ideation"],
   express: ["ideation"],
 };
 
@@ -227,6 +228,7 @@ const SCOPES = [
   "infra",
   "security-patch",
   "classic",
+  "workshop",
   "express",
 ] as const;
 

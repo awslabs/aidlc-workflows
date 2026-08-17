@@ -38,7 +38,7 @@ const TASK =
 
 const STOCK_SCOPES = new Set([
   "bugfix", "enterprise", "feature", "infra", "mvp", "poc", "refactor",
-  "security-patch", "classic", "express",
+  "security-patch", "classic", "workshop", "express",
 ]);
 
 function drive(args: string[]): { rc: number; stdout: string } {

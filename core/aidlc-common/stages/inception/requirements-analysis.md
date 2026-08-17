@@ -45,6 +45,7 @@ scopes:
   - infra
   - security-patch
   - classic
+  - workshop
   - express
 inputs: RE artifacts (if brownfield), user's project description (from <record>/audit/<host>-<clone>.md)
 outputs: requirements.md, requirements-analysis-questions.md (under this stage's record dir, engine-resolved)

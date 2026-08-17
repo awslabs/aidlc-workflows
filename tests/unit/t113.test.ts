@@ -205,6 +205,19 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     ).toBe("VALID");
   });
 
+  test("run-stage accepts only literal true for the settled-swarm marker", () => {
+    expect(
+      errs({
+        ...runStage(),
+        protocol_modules: ["construction", "swarm"],
+        swarm_settled: true,
+      }),
+    ).toBe("VALID");
+    expect(errs({ ...runStage(), swarm_settled: false })).toContain(
+      "run-stage: swarm_settled must be true when present",
+    );
+  });
+
   test("run-stage rejects unknown protocol module hints", () => {
     expect(
       errs({

@@ -1,10 +1,7 @@
 ---
 name: classic
 depth: Standard
-keywords:
-  - workshop
-  - lab
-  - training
+keywords: []
 description: "The default: full lifecycle without ideation ceremony"
 skeleton: on
 review_cap: advisory
@@ -25,13 +22,13 @@ Generation, Delivery Planning, Code Generation, and Build and Test. The
 remaining Inception design work and the Operation tail are CONDITIONAL and
 self-select from the project context, preserving v1's adaptive behavior.
 
-Unlike the former `workshop` scope, `classic` does not lower the test floor.
 Its test strategy inherits Standard from its depth, so production testing
-expectations remain in force.
+expectations remain in force. The separate `workshop` scope retains the
+teaching-oriented Minimal test override for existing workshop workflows.
 
 ## Membership
 
 Initialization, every Inception stage, every Construction stage, and every
 Operation stage are in the grid; all seven Ideation stages are SKIP. The
-retained `workshop`, `lab`, and `training` keywords route those requests to
-this default lifecycle without making `classic` a training-only scope.
+scope intentionally has no keywords: it is selected by explicit name or by the
+freeform default after routing and composition checks.

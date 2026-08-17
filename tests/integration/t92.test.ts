@@ -58,6 +58,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -187,6 +188,11 @@ function makeProj(): string {
   // though the fire succeeded. Mirrors createTestProject() (harness/fixtures.ts).
   const proj = toPortablePath(mkdtempSync(join(tmpdir(), "aidlc-t92-proj-")));
   mkdirSync(join(proj, "aidlc-docs"), { recursive: true });
+  symlinkSync(
+    join(REPO_ROOT, "node_modules"),
+    join(proj, "node_modules"),
+    process.platform === "win32" ? "junction" : "dir",
+  );
   tempDirs.push(proj);
   return proj;
 }

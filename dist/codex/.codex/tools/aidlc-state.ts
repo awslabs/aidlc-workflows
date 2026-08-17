@@ -1488,6 +1488,11 @@ function producesDirsForStage(
   if (rec === null) return [];
   const perUnit = stage.for_each === "unit-of-work";
   if (perUnit) {
+    const resolution = resolveBoltDag(pd);
+    const scope = getField(readStateFile(pd), "Scope");
+    if (resolution.state === "none" && scope === "express") {
+      return [join(rec, "construction", stage.slug)];
+    }
     const ctorRoot = join(rec, "construction");
     if (!existsSync(ctorRoot)) return [];
     const dirs: string[] = [];

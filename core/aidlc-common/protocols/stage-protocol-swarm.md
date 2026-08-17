@@ -1,6 +1,15 @@
 # Swarm Protocol Module
 
-Load this module for every `invoke-swarm` directive; use only the subsection for the active harness.
+Load this module for every `invoke-swarm` directive and every `run-stage` with
+`directive.swarm_settled === true`; use only the subsection for the active
+harness.
+
+**Settled-swarm re-entry.** `swarm_settled: true` is a gate-only directive
+emitted after every Unit body and reviewer receipt has converged. Do not run the
+stage body, dispatch builders, or dispatch a reviewer again. Run only the
+stage-level learnings ritual and approval gate, then report the human's result.
+This rule is self-contained so a fresh session cannot repeat reviews after
+losing the earlier swarm conversation.
 
 ### Claude Code
 

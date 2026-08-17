@@ -77,10 +77,10 @@ function isExecute(scope: string, slug: string): boolean {
 
 describe("t39 scope EXECUTE-count validation — loadScopeMapping (migrated from t39-scope-stage-count-validation.sh, plan 9)", () => {
   // S1 (STRONGER, not in the .sh): the loader returns a usable map keyed by the
-  // ten canonical scopes, each carrying a `stages` record. The .sh assumed
+  // eleven canonical scopes, each carrying a `stages` record. The .sh assumed
   // this shape implicitly by indexing m[scope].stages; pin it once up front so
   // a missing/renamed scope fails loudly here rather than as a TypeError mid-case.
-  test("0a: loadScopeMapping returns the ten canonical scopes (S3)", () => {
+  test("0a: loadScopeMapping returns the eleven canonical scopes (S3)", () => {
     expect(Object.keys(MAPPING).sort()).toEqual(
       [
         "bugfix",
@@ -93,6 +93,7 @@ describe("t39 scope EXECUTE-count validation — loadScopeMapping (migrated from
         "poc",
         "refactor",
         "security-patch",
+        "workshop",
       ].sort(),
     );
   });
@@ -168,6 +169,10 @@ describe("t39 scope EXECUTE-count validation — loadScopeMapping (migrated from
   test("9: classic executes exactly 26 stages", () => {
     const n = execCount("classic");
     expect(n).toBe(26);
+  });
+
+  test("9b: workshop remains a compatible 26-stage scope", () => {
+    expect(execCount("workshop")).toBe(26);
   });
 
   // 10. Express: the fixed lightweight grid.

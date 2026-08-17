@@ -46,6 +46,7 @@ scopes:
   - mvp
   - infra
   - classic
+  - workshop
 inputs: <record>/aidlc-state.md + (brownfield) reverse-engineering evidence
 outputs: "team-practices.md, discovered-rules.md, evidence.md, practices-discovery-timestamp.md, plus one contribution file per support agent. On affirmation, content is promoted to aidlc/spaces/<active-space>/memory/team.md and project.md."
 ---

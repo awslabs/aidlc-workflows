@@ -91,7 +91,7 @@ function firstLine(lines: string[], pred: (l: string) => boolean): string {
   return lines.find(pred) ?? "";
 }
 
-describe("t76 stage-protocol.md — AUQ template + Skip/Abort preservation (none, migrated from t76-halt-and-ask-prose-shape.sh plan 7)", () => {
+describe("t76 stage-protocol-construction.md — AUQ template + Skip/Abort preservation (none, migrated from t76-halt-and-ask-prose-shape.sh plan 7)", () => {
   test("AUQ question carries [path] and [branch_name] [.sh 1]", () => {
     // .sh: assert_grep 'question.*\[path\].*\[branch_name\]'. The harness-
     // neutralization (Step 0.5) renamed the spec field `question:` → `prompt:`

@@ -1,4 +1,4 @@
-// covers: function:validScopes, function:loadScopeMetadata, function:loadScopeMapping, function:scalarField, cli:aidlc-utility(detect-scope)
+// covers: scope:workshop, function:validScopes, function:loadScopeMetadata, function:loadScopeMapping, function:scalarField, cli:aidlc-utility(detect-scope)
 //
 // t125 — scope files: validScopes() + scope metadata derive from
 // .claude/scopes/aidlc-<name>.md presence (milestone 12). Migrated from
@@ -90,7 +90,7 @@ const UTIL = fileURLToPath(
   new URL("../../dist/claude/.claude/tools/aidlc-utility.ts", import.meta.url),
 );
 
-// The 10 scopes the framework ships, alphabetical — the .sh's hard-coded
+// The 11 scopes the framework ships, alphabetical — the .sh's hard-coded
 // expectation (t125:62). Each is a literal independent of source iteration.
 const SHIPPED_SCOPES = [
   "bugfix",
@@ -103,6 +103,7 @@ const SHIPPED_SCOPES = [
   "poc",
   "refactor",
   "security-patch",
+  "workshop",
 ];
 
 // The dropscope fixture .md body (byte-for-byte the .sh heredoc, t125:93-105).
@@ -128,11 +129,11 @@ afterEach(() => {
 });
 
 describe("shipped scope files — frontmatter + derived metadata (in-process)", () => {
-  test("exactly 10 shipped aidlc-*.md scope files exist [.sh test 1]", () => {
+  test("exactly 11 shipped aidlc-*.md scope files exist [.sh test 1]", () => {
     const files = readdirSync(SCOPES_DIR).filter(
       (f) => f.startsWith("aidlc-") && f.endsWith(".md"),
     );
-    expect(files.length).toBe(10);
+    expect(files.length).toBe(11);
   });
 
   test("every shipped scope file's frontmatter name == its slug [.sh test 2]", () => {
@@ -151,7 +152,7 @@ describe("shipped scope files — frontmatter + derived metadata (in-process)", 
     }
   });
 
-  test("validScopes() == the 10 .md-derived names, alphabetical [.sh test 3]", () => {
+  test("validScopes() == the 11 .md-derived names, alphabetical [.sh test 3]", () => {
     expect([...validScopes()]).toEqual(SHIPPED_SCOPES);
   });
 
@@ -164,6 +165,10 @@ describe("shipped scope files — frontmatter + derived metadata (in-process)", 
 
   test("loadScopeMetadata reads classic without a testStrategy override [.sh test 5]", () => {
     expect(loadScopeMetadata().classic.testStrategy).toBeUndefined();
+  });
+
+  test("loadScopeMetadata preserves the Workshop Minimal test override", () => {
+    expect(loadScopeMetadata().workshop.testStrategy).toBe("Minimal");
   });
 
   test("loadScopeMapping poc depth/keywords/description derive from .md [.sh test 6]", () => {

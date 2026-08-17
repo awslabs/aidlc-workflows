@@ -282,7 +282,7 @@ function rowNames(tableOut: string): string[] {
 }
 
 const EXPECTED_ROW_ORDER =
-  "bugfix classic enterprise express feature infra mvp poc refactor security-patch";
+  "bugfix classic enterprise express feature infra mvp poc refactor security-patch workshop";
 
 // ============================================================
 // scope-table — emission shape (.sh §1)
@@ -308,8 +308,9 @@ describe("t67 scope-table emission (migrated from t67-scope-table.sh §1-3)", ()
     expect(scopeTable().out).toContain("| bugfix");
   });
 
-  test("5: scope-table output includes classic and express rows", () => {
+  test("5: scope-table output includes classic, workshop, and express rows", () => {
     expect(scopeTable().out).toContain("| classic");
+    expect(scopeTable().out).toContain("| workshop");
     expect(scopeTable().out).toContain("| express");
   });
 
@@ -346,7 +347,7 @@ describe("t67 scope-table emission (migrated from t67-scope-table.sh §1-3)", ()
     expect(gridCount).toBe(mdCount);
     expect(rowCount).toBe(gridCount);
     // … and the concrete count is pinned.
-    expect(rowCount).toBe(10);
+    expect(rowCount).toBe(11);
   });
 });
 
@@ -422,7 +423,7 @@ describe("t67 detect-scope --from-text keyword inference (migrated from t67 §7)
   test('13: "fix the login bug" -> bugfix', keywordCase("fix the login bug", "bugfix"));
   test('14: "refactor this code" -> refactor', keywordCase("refactor this code", "refactor"));
   test('15: "CVE patch" -> security-patch', keywordCase("CVE patch", "security-patch"));
-  test('16: "run workshop today" -> classic', keywordCase("run workshop today", "classic"));
+  test('16: "run workshop today" -> workshop', keywordCase("run workshop today", "workshop"));
   test('16b: "express" -> express', keywordCase("express", "express"));
   test('17: "spike prototype" -> poc', keywordCase("spike prototype", "poc"));
   test('18: "mvp" -> mvp', keywordCase("mvp", "mvp"));

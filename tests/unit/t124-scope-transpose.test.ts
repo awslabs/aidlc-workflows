@@ -47,7 +47,7 @@
 //   .sh test 9  (compile --check clean tree exits 0)             -> CLI "compile --check on a clean tree exits 0"
 //   .sh test 10 (compile --check stale grid exits 1)             -> CLI "compile --check exits 1 on a stale scope-grid.json (drift guard)"
 //   .sh test 11 (compile --check missing grid exits 1)           -> CLI "compile --check exits 1 when scope-grid.json is missing"
-//   .sh test 12 (grid EXECUTE set == subgraphForScope) -> "shipped grid EXECUTE set is cell-identical to subgraphForScope for all 10 scopes"
+//   .sh test 12 (grid EXECUTE set == subgraphForScope) -> "shipped grid EXECUTE set is cell-identical to subgraphForScope for all 11 scopes"
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -78,7 +78,7 @@ const GRAPH_TOOL = join(AIDLC_SRC, "tools", "aidlc-graph.ts");
 const GRAPH_JSON = join(AIDLC_SRC, "tools", "data", "stage-graph.json");
 const GRID_JSON = join(AIDLC_SRC, "tools", "data", "scope-grid.json");
 
-// The ten scopes the shipped grid carries.
+// The eleven scopes the shipped grid carries.
 const SCOPES = [
   "enterprise",
   "feature",
@@ -89,6 +89,7 @@ const SCOPES = [
   "infra",
   "security-patch",
   "classic",
+  "workshop",
   "express",
 ];
 
@@ -206,7 +207,7 @@ describe("canonicalScopeGridJson() + compileStageGraph() determinism (in-process
 // round-trip invariant the runtime relies on.
 // ===========================================================================
 describe("scope-grid <-> subgraphForScope parity (in-process)", () => {
-  test("shipped grid EXECUTE set is cell-identical to subgraphForScope for all 10 scopes [.sh test 12]", () => {
+  test("shipped grid EXECUTE set is cell-identical to subgraphForScope for all 11 scopes [.sh test 12]", () => {
     const grid = JSON.parse(readFileSync(GRID_JSON, "utf-8")) as Record<
       string,
       { stages: Record<string, "EXECUTE" | "SKIP"> }

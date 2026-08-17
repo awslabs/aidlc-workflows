@@ -37,6 +37,7 @@ scopes:
   - refactor
   - security-patch
   - classic
+  - workshop
   - express
 inputs: ALL code generation outputs across all units
 outputs: build-instructions.md, integration-test-instructions.md, performance-test-instructions.md, security-test-instructions.md, build-and-test-summary.md, test-results.md, cross-unit-traceability.md (under this stage's record dir, engine-resolved)
@@ -54,7 +55,14 @@ Load aidlc-quality-agent (lead) persona from `agents/aidlc-quality-agent.md` and
 
 ### Step 2: Analyze Testing Requirements
 
-Read code generation outputs across all units from `<record>/construction/*/code-generation/code-summary.md` and per-unit test instructions from `<record>/construction/*/code-generation/unit-test-instructions.md`. Review NFR requirements across units (if they exist) to identify performance and security testing needs. Catalog all test types required.
+Read code generation outputs across all units from
+`<record>/construction/*/code-generation/code-summary.md` and per-unit test
+instructions from
+`<record>/construction/*/code-generation/unit-test-instructions.md`. For a
+zero-Unit scope such as `express`, read the stage-level equivalents under
+`<record>/construction/code-generation/`. Review NFR requirements across units
+(if they exist) to identify performance and security testing needs. Catalog all
+test types required.
 
 ### Step 3: Generate Build Instructions
 

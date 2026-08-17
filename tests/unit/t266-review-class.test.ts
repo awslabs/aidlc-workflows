@@ -170,8 +170,8 @@ describe("t266 review class", () => {
     }
   });
 
-  test("scope caps: bugfix, poc, classic are advisory; express is none", () => {
-    for (const scope of ["bugfix", "poc", "classic"]) {
+  test("scope caps: bugfix, poc, classic, workshop are advisory; express is none", () => {
+    for (const scope of ["bugfix", "poc", "classic", "workshop"]) {
       expect(read(`core/scopes/aidlc-${scope}.md`)).toContain(
         "review_cap: advisory"
       );

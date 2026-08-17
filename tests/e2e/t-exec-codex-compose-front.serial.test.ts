@@ -80,6 +80,7 @@ const STOCK_SCOPES = new Set([
   "refactor",
   "security-patch",
   "classic",
+  "workshop",
   "express",
 ]);
 

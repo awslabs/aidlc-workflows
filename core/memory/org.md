@@ -58,7 +58,10 @@ When no posture has been affirmed, our default per scope is:
   floor and CI execution before merge.
 - `bugfix`, `security-patch` add a targeted regression for the specific
   bug/vulnerability and require the existing suite to remain green.
-- `poc`, `refactor`, `express` add no extra new-test floor and require the
+- `express` uses the Minimal strategy: requirement-driven unit tests (one per
+  requirement, with a happy-path floor per component); existing tests remain
+  green.
+- `poc`, `refactor`, `workshop` add no extra new-test floor and require the
   existing suite to remain green.
 
 The active `Test Strategy` still applies in every scope and determines test
