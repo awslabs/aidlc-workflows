@@ -73,6 +73,14 @@ jobs:
     steps:
       - run: |
           PR_NUMBER="${{ needs.get-pr-info.outputs.pr_number }}"
+          # Guard against an empty PR number. This happens when the upstream
+          # get-pr-info job is cancelled or fails (e.g. concurrency cancellation
+          # superseding this run). Fail loudly with an accurate message rather
+          # than letting an empty value produce a misleading downstream error.
+          if [ -z "$PR_NUMBER" ]; then
+            echo "::error::PR number unavailable — the get-pr-info job was cancelled or failed (e.g. concurrency cancellation). Re-run this workflow."
+            exit 1
+          fi
           # Default to 0 (allow all) if not set
           if [ -z "$HALT_MERGES" ]; then
             HALT_MERGES=0
@@ -83,9 +91,9 @@ jobs:
           gh pr list --state "open" --repo "${{ github.repository }}" --json "number,headRefName"
           OPEN_RELEASES=$(gh pr list --state "open" --repo "${{ github.repository }}" --json "number,headRefName" | \
               jq '[.[] | select(.headRefName | startswith("release/"))]')
-          echo $OPEN_RELEASES
+          echo "$OPEN_RELEASES"
           echo "::endgroup::"
-          echo $OPEN_RELEASES | jq --exit-status '[.[] | select(.number != '$PR_NUMBER')] | length == 0' && \
+          echo "$OPEN_RELEASES" | jq --exit-status --arg pr "$PR_NUMBER" '[.[] | select((.number | tostring) != $pr)] | length == 0' && \
               echo "No other open release pull requests"  || \
               (echo "::warning::⚠️ Merges are rejected while there are open release pull requests" && exit 1)
           if [ "$HALT_MERGES" = "0" ]; then
@@ -160,7 +168,7 @@ jobs:
       pull-requests: write
     if: github.event_name == 'pull_request_target'
     steps:
-      - uses: actions/labeler@f27b608878404679385c85cfa523b85ccb86e213 # v6.1.0
+      - uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13 # v7.0.0
         with:
           sync-labels: true
 
