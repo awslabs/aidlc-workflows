@@ -14,6 +14,7 @@ Adds `dist/kiro-unified/` — a Kiro distribution aligned to the **unified agent
 * `loadAgents()` skips `agents/aidlc.md`. A conductor entry is not a stage lead/support agent: it declares `name` only, so it would fail the persona frontmatter contract, and it must stay out of the roster that backs stage `lead_agent` validation. A no-op for every tree that ships no `agents/aidlc.md`.
 * New chapter [AI-DLC on the Kiro unified agent harness](docs/guide/harnesses/kiro-unified.md) — prerequisites (including the `--v3` opt-in), install, which Kiro tree to pick, and what differs, including which hooks ship unregistered and why.
 * The unified tree's adapter validates untrusted nested payload values before reading them — each `stages[]` member on the plan-approval target and each `operations[]` member on review-freeze. A malformed member (`stages: [null]`) previously threw, and since a non-zero PreToolUse exit blocks on this runtime, that turned bad input into a hard block on every subagent dispatch with a stack trace as the reason. Malformed members are dropped, which lands on the fail-open the core guard already commits to for malformed stdin; a well-formed developer stage beside them still refuses.
+* The tree's conductor skill carries 2.6.8's §12a reviewer-step contract and 2.6.9's `recovery-required` / `escalation-required` wave outcomes. A harness SKILL.md is authored per tree, so a shared-protocol change lands in the seven existing trees and leaves a new one behind until it is ported; `t279` and `t278` are the pins that say so.
 
 ## [2.6.9] - 2026-08-17
 
