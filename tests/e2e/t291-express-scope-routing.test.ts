@@ -59,7 +59,7 @@ function utility(p: string, args: string[]) {
 }
 
 function engineEnv(): NodeJS.ProcessEnv {
-  const env = {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
     AIDLC_SKIP_ARTIFACT_GUARD: "1",
     AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
