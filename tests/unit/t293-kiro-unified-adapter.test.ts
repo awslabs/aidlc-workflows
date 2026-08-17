@@ -200,6 +200,32 @@ describe("t293 kiro-unified adapter — payload acquisition for the PreToolUse g
     expect(run.stderr).toBe("");
   });
 
+  // review-freeze reads a nested `operations[]` off an fs_write payload, and it
+  // fires on EVERY write rather than only on a dispatch, so a throw there blocks
+  // more than the plan-approval crash did. The envelope validation the adapter
+  // does on parse covers `toolArgs` itself, never what is inside it.
+  test("review-freeze drops a malformed operations member instead of throwing", () => {
+    const project = freshProject();
+    const run = runAdapter(project, "review-freeze", {
+      tool_name: "fs_write",
+      tool_input: { operations: [null] },
+    });
+
+    expect(run.status).toBe(0);
+    expect(run.stderr).not.toContain("TypeError");
+  });
+
+  test("review-freeze survives a non-array operations", () => {
+    const project = freshProject();
+    const run = runAdapter(project, "review-freeze", {
+      tool_name: "fs_write",
+      tool_input: { operations: "oops" },
+    });
+
+    expect(run.status).toBe(0);
+    expect(run.stderr).not.toContain("TypeError");
+  });
+
   test("without an acquired payload the guard cannot refuse — the silent-inert failure mode", () => {
     const project = freshProject();
     // Same blocked verb as above, except the payload carries no arguments. This is

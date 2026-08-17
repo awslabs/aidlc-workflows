@@ -485,8 +485,19 @@ if (target === "review-freeze") {
     ? { command: (ti.command as string) ?? "" }
     : { file_path: (ti.path as string) ?? (ti.file_path as string) ?? "" };
   if (!shell) {
-    const wops = (ti.operations as Array<{ path?: string }> | undefined) ?? [];
-    coreInput.paths = wops.map((o) => o.path ?? "").filter((p) => p.length > 0);
+    // Same untrusted-nested-input rule as the crew `stages` read below: the
+    // envelope validation above covers toolArgs itself, never what is inside it,
+    // and this is a PreToolUse guard whose non-zero exit BLOCKS — on every write,
+    // not just a dispatch. A non-array `operations`, or a member that is not an
+    // object, is dropped instead of thrown on.
+    const wops = Array.isArray(ti.operations)
+      ? (ti.operations as unknown[]).filter(
+          (o): o is { path?: unknown } => typeof o === "object" && o !== null,
+        )
+      : [];
+    coreInput.paths = wops
+      .map((o) => (typeof o.path === "string" ? o.path : ""))
+      .filter((p) => p.length > 0);
   }
   return runGuard("aidlc-review-freeze.ts", {
     hook_event_name: "PreToolUse",
