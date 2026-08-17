@@ -53,6 +53,7 @@
 import { createHash } from "node:crypto";
 import { type SpawnSyncReturns, spawnSync } from "node:child_process";
 import {
+  accessSync,
   existsSync,
   lstatSync,
   readdirSync,
@@ -1301,6 +1302,25 @@ function statOnlyRefusal(real: string, rel: string): string | null {
       `${rel} is ${st.size} bytes, over the ${EXTRACT_INPUT_BYTE_CAP}-byte per-document cap; ` +
       `it was never opened. Split it or reduce it below the cap, then re-run.`
     );
+  }
+  // Mirror the read boundary's remaining stat-visible refusals, so `list`
+  // reports `present_but_refused` for the same files `sync` skips. Without
+  // these two, a hardlinked or unreadable original listed as `indexed` while
+  // every sync quietly passed over it — the exact list/sync disagreement the
+  // present_but_refused state exists to prevent.
+  if (st.nlink !== 1) {
+    return (
+      `${rel} is multiply linked (a hardlink) and is not trusted. Replace it with an ` +
+      `independent copy — cp <file> <file>.copy && mv <file>.copy <file> — and re-run.`
+    );
+  }
+  try {
+    // fs.constants.R_OK, as a literal: this file's restricted fs allowlist
+    // (biome noRestrictedImports) admits accessSync but not the constants
+    // namespace, and POSIX pins R_OK at 4.
+    accessSync(real, 4);
+  } catch {
+    return `${rel} is not readable by this process (permissions). Fix the file mode, then re-run.`;
   }
   return null;
 }

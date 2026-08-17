@@ -1124,7 +1124,7 @@ describe("t291 commit-time reconciliation and idempotent recovery", () => {
     expect(latest).toContain("**Last Digest**:");
   });
 
-  test("standard audit append refuses symlinked and hard-linked shards", () => {
+  test("standard audit append refuses a symlinked shard and tolerates a hard-linked one", () => {
     const p = projectWithIntent();
     const shard = auditFilePath(p);
     const external = join(p, "external-standard-audit.md");
@@ -1137,15 +1137,26 @@ describe("t291 commit-time reconciliation and idempotent recovery", () => {
     } catch {
       return; // Windows without symlink privilege.
     }
+    // A symlink is a REDIRECT: following it would let a planted link decide
+    // where audit rows land. Refused, and the target stays untouched.
     expect(() => appendAuditEntry("STAGE_STARTED", { Stage: "requirements-analysis" }, p))
       .toThrow();
     expect(readFileSync(external, "utf-8")).toBe(original);
 
     rmSync(shard);
     linkSync(external, shard);
+    // A hardlink is NOT a redirect — it is the same inode under a contained,
+    // symlink-chain-checked path. rsync --link-dest and cp -al backup
+    // snapshots leave a live shard at nlink 2, and refusing that bricked
+    // every later gate/hook append framework-wide, so the ordinary append
+    // path accepts it: the row lands in the shard (and is therefore visible
+    // through the other link too — that is what a hardlink means). The
+    // explicit fork/merge snapshot stays strict; t07 pins that refusal.
     expect(() => appendAuditEntry("STAGE_STARTED", { Stage: "requirements-analysis" }, p))
-      .toThrow();
-    expect(readFileSync(external, "utf-8")).toBe(original);
+      .not.toThrow();
+    const merged = readFileSync(shard, "utf-8");
+    expect(merged).toContain("**Event**: STAGE_STARTED");
+    expect(merged.startsWith(original)).toBe(true); // append-only: nothing truncated
   });
 
   test("same-second imported association events cannot outrank the current shard", () => {

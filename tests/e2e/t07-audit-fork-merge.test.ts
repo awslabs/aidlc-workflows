@@ -483,7 +483,22 @@ describe("t07 Phase B — edge cases", () => {
 
       const merge = runAudit(["audit-merge", "--slug", slug, "--project-dir", p]);
       expect(merge.status).not.toBe(0);
-      expect(readFileSync(external, "utf-8")).toBe(original);
+      const after = readFileSync(external, "utf-8");
+      // The security property in both cases: the worktree DELTA never lands
+      // through the untrusted shard, and nothing is truncated or replaced.
+      expect(after).not.toContain("**Event**: STAGE_STARTED");
+      expect(after.startsWith(original)).toBe(true);
+      if (kind === "symlink") {
+        // A symlinked shard is refused at open (O_NOFOLLOW), so not even the
+        // merge-failure ERROR_LOGGED diagnostic can reach the target.
+        expect(after).toBe(original);
+      } else {
+        // A hardlinked shard refuses the MERGE (readAuditSnapshot is strict
+        // for fork/merge), but the ordinary append path tolerates hardlinks
+        // by design — rsync --link-dest / cp -al backups leave live shards
+        // at nlink 2 — so the failure diagnostic may legitimately append.
+        expect(after).not.toContain("**Event**: AUDIT_MERGED");
+      }
     }
   }, 60000);
 

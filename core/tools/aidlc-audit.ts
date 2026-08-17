@@ -622,7 +622,14 @@ function appendAuditBlockAtPath(
     );
     const opened = fstatSync(fd);
     if (!opened.isFile()) throw new Error(`Refusing non-regular audit shard: ${shardPath}`);
-    if (opened.nlink !== 1) throw new Error(`Refusing multiply-linked audit shard: ${shardPath}`);
+    // No nlink refusal on the ORDINARY append path: rsync --link-dest and
+    // cp -al backup snapshots leave a live shard at nlink 2, and refusing it
+    // here bricked every later gate/hook append framework-wide. A hardlink
+    // aliases the same inode inside an already containment- and
+    // symlink-chain-checked path, so it grants no redirect. The explicit
+    // fork/merge path stays strict: readAuditSnapshot refuses a
+    // multiply-linked main shard, and verifyExpectedPrefix below re-checks
+    // during a merge append.
     if (expectedIdentity &&
         (opened.dev !== expectedIdentity.dev || opened.ino !== expectedIdentity.ino)) {
       throw new Error(`Audit shard changed after validation: ${shardPath}`);
