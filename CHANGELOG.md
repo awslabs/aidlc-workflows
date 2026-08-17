@@ -39,8 +39,10 @@ the surviving originals as new rows.
   back-fill onto a closed record. `dissociate` never needs the flag, so an
   association can always be undone.
 * A document whose extractor is not installed is still catalogued, with the
-  state `extractor_unavailable` visible in `list` — install the tool and
-  re-`onboard` that path. Nothing is silently skipped.
+  state `extractor_unavailable` visible in `list` — install the tool and run
+  `/aidlc knowledge sync`, which retries those rows (`onboard` on the same
+  unchanged path reports `already` and does not retry). Nothing is silently
+  skipped.
 * `rebind <id> --to <path>` repairs a row after a move **and** an edit, the one
   case `sync` cannot resolve because neither the path nor the digest survives to
   tie the new file to the old row.
@@ -137,6 +139,15 @@ the surviving originals as new rows.
   enforcement on a legacy ledger.
 * A valueless `--space` is refused instead of silently mutating the active space,
   and tombstoned content cleanup is retried until the derived text is gone.
+* A hardlinked file under `documents/` is refused (a hardlink can alias content
+  from elsewhere on the filesystem into the corpus); the refusal names the
+  remedy, and `list` reports hardlinked or permission-unreadable originals as
+  `present_but_refused` — the same verdict `sync` reaches — instead of `indexed`.
+* Extracted text over the extraction caps (50 PDF pages via `pdftotext -l`,
+  200,000 characters of output) is truncated; `show` now prints a
+  `truncated  yes (...)` line above the content so a partial extraction is
+  never mistaken for the whole document. The flag was always recorded in the
+  catalog; it is now visible.
 
 ## [2.6.2] - 2026-08-13
 

@@ -2260,6 +2260,17 @@ export function renderShow(d: ShownDocument): string {
   ];
   if (d.intents !== undefined) out.push(`intents    ${d.intents.join(", ")}`);
   if (d.extraction.reason !== undefined) out.push(`reason     ${d.extraction.reason}`);
+  // A truncated extraction must announce itself: an agent answering from the
+  // first 50 pages of a 300-page policy with no signal it read a fraction is
+  // exactly the silent-partial-knowledge failure this feature exists to
+  // prevent. The flag was always recorded; this line makes it visible where
+  // the content is served.
+  if (d.extraction.truncated === true) {
+    const extent = d.extraction.chars !== undefined ? ` at ${d.extraction.chars} characters` : "";
+    out.push(
+      `truncated  yes${extent} — the content below is a PARTIAL extraction, not the whole document`,
+    );
+  }
   if (d.content !== undefined) {
     out.push("", d.content_notice ?? UNTRUSTED_CONTENT_NOTICE, "", "--- content ---", d.content);
   }

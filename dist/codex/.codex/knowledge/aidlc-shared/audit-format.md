@@ -138,12 +138,12 @@ the active space's shared `codekb/<repo>/` tree.
 
 ### Documents (3 events)
 
-The DocumentKB is a **space-level** store, so all three events land in the space-level audit shard (`spaces/<space>/audit/`) even for an intent-scoped document — the intent UUID is recorded as a field rather than selecting the shard. This keeps one document's history in one place across an `associate`/`dissociate` scope change. Deleting `documentkb/` is recoverable from `documents/` plus these events.
+The DocumentKB is a **space-level** store, so all three events land in the space-level audit shard (`spaces/<space>/intents/audit/`) even for an intent-scoped document — the intent UUID is recorded as a field rather than selecting the shard. This keeps one document's history in one place across an `associate`/`dissociate` scope change. These events are provenance, **not a backup**: deleting the whole `documentkb/` tree destroys the per-document records, so document ids, tombstones, and intent links do NOT survive it — the next `sync` re-indexes the surviving originals as brand-new rows. Only a lost `index.json` alone is recoverable (`sync` rebuilds it from the per-document `metadata.json` files).
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
 | `DOCUMENT_INDEXED` | A customer document was indexed into the DocumentKB for the first time (from `onboard`, and from `sync`'s fresh-document branch) | Timestamp, Space, Document, Source, Digest, optional Intent | `tools/aidlc-knowledge.ts` |
-| `DOCUMENT_UPDATED` | An indexed document's record changed — a new revision, a re-extraction, a move, or an intent association change (from `associate`, `dissociate`, `rebind`, and `sync`) | Timestamp, Space, Document, Change, optional Intent | `tools/aidlc-knowledge.ts` |
+| `DOCUMENT_UPDATED` | An indexed document's record changed — a new revision, a re-extraction, a move, or an intent association change (from `associate`, `dissociate`, `rebind`, `onboard`'s edited-row branch, `sync`'s moved/changed/retried branches, and the idempotent audit-repair pass) | Timestamp, Space, Document, Change, optional Intent | `tools/aidlc-knowledge.ts` |
 | `DOCUMENT_REMOVED` | The original is gone; the row became a metadata-only tombstone and extracted content was deleted (from `sync`) | Timestamp, Space, Document, Last Path, Last Digest | `tools/aidlc-knowledge.ts` |
 
 All three are written to the **space-level** shard (`intents/audit/`), not an intent's,

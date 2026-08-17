@@ -354,7 +354,7 @@ space-level shard. Document events therefore remain visible to `--doctor --expor
 after an intent starts, while intent-scoped lifecycle events retain their existing
 record directory and authority boundaries.
 
-Pre-registered for v2.5.55; all three ship with `tools/aidlc-knowledge.ts` (DocumentKB S1 — `onboard`/`sync`/`associate`). t48 forward check skips rows whose Emitter cell still reads `Reserved`; the consumer commit replaces these cells with the real path in the same commit it ships the emit call.
+All three ship with `tools/aidlc-knowledge.ts` (DocumentKB S1). Emitting verbs per event are listed in each row below — `onboard`, `sync`, `associate`, `dissociate`, and `rebind` all emit.
 
 | Event | Emitter | Notes |
 |---|---|---|

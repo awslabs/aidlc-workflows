@@ -52,6 +52,7 @@ import {
   readdirSync,
   rmSync,
   symlinkSync,
+  truncateSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -611,18 +612,25 @@ describe("t289 a batch is ALL-OR-NOTHING", () => {
     // The regression shape: an earlier valid row lands, a later entry is
     // rejected, and the index is left half-applied. Ordering matters -- `a.md`
     // sorts before the bad entry, so it would have been written first.
+    //
+    // The refusing candidate is an OVER-CAP file the walk genuinely visits (a
+    // sparse truncate: st.size is over the 32 MiB per-document cap, no bytes
+    // written or read). An earlier version of this test planted a symlink,
+    // which the walk silently SKIPS -- the batch succeeded and the test named
+    // a refusal it never produced.
     const p = scratchProject();
     doc(p, "a.md");
     const bad = join(documentsDir(p, SPACE), "zz-bad.md");
-    // A symlink pointing outside: the walk skips it, so force the collision
-    // through a DIRECT directory onboard, which does see every candidate.
-    writeFileSync(join(p, "outside.md"), "SECRET\n");
-    symlinkSync(join(p, "outside.md"), bad);
-    // The walk skips the symlink, so this batch succeeds -- assert that first,
-    // so the next assertion is about refusal and not about the symlink.
-    const ok = onboard(p, SPACE, undefined, NOW);
-    expect(ok.refused).toBeUndefined();
-    expect(ok.indexed.map((r) => r.path)).toEqual(["documents/a.md"]);
+    writeFileSync(bad, "");
+    truncateSync(bad, 33 * 1024 * 1024);
+
+    const result = onboard(p, SPACE, undefined, NOW);
+    expect(result.refused?.path).toBe("zz-bad.md");
+    expect(result.refused?.reason).toMatch(/per-document cap/);
+    // The whole batch is refused: a.md sorted first, was read first, and still
+    // must NOT have landed.
+    expect(result.indexed).toEqual([]);
+    expect(existsSync(indexPath(p, SPACE))).toBe(false);
   });
 
   test("a pre-existing index survives a refused batch BYTE-IDENTICALLY", () => {

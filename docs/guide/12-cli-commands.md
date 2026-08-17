@@ -278,13 +278,21 @@ document). Scoping to an intent that has finished is refused unless you add
 
 **Text extraction** is delegated to whatever extractor the project configures. PDF
 gets a default extractor (`pdftotext`) if none is configured; a Word (`.docx`) file
-has no built-in default — it is catalogued and citable either way, but text is only
-extracted once the harness configures a `.docx` extractor. If the
-required one is not installed the document is still catalogued, with the state
-`extractor_unavailable` — visible in `list`, and fixed by installing the tool and
-running `/aidlc knowledge sync`. Re-running `onboard` on the same unchanged path
-reports `already` and does NOT retry extraction — only `sync` re-probes rows in
-this state. Nothing is silently skipped.
+has no built-in default — with none configured it is catalogued and citable as
+`unsupported_type`, and configuring an extractor later applies to newly indexed or
+changed files (an already-indexed `unsupported_type` row re-extracts only after the
+file next changes, or via `rebind`). If a CONFIGURED extractor is not installed the
+document is catalogued as `extractor_unavailable` — visible in `list`, and fixed by
+installing the tool and running `/aidlc knowledge sync`. Re-running `onboard` on the
+same unchanged path reports `already` and does NOT retry extraction — only `sync`
+re-probes rows in this state. Nothing is silently skipped.
+
+**Extraction is capped**: 50 pages for PDF (`pdftotext -l 50`) and 200,000
+characters of extractor output. Past a cap the text is cut and the row records
+`truncated` — `show` prints a `truncated  yes` line above the content and the
+`--json` payload carries the flag inside `extraction`. Treat a truncated
+extraction as a partial view: "the document does not mention X" is not a safe
+conclusion from one.
 
 A configured extractor's `argv` must contain **exactly one `$IN`** — the placeholder
 the document's path is substituted into. A configuration without it is refused when
