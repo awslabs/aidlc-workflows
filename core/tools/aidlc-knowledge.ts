@@ -76,6 +76,7 @@ import {
   knowledgeDir,
   listIntents,
   listSpaces,
+  readAtomicReplacedFileNoFollowOrThrow,
   readRegularFileNoFollowOrThrow,
   readAuditShardEvents,
   removeTreeSync,
@@ -850,7 +851,7 @@ export function readSourcesLocal(projectDir: string, space: string): SourcesLoca
   assertKnowledgeRootTrusted(projectDir, space);
   const p = sourcesLocalPath(projectDir, space);
   if (!existsSync(p)) return null;
-  const raw = readRegularFileNoFollowOrThrow(p, "knowledge/.sources.local.json")
+  const raw = readAtomicReplacedFileNoFollowOrThrow(p, "knowledge/.sources.local.json")
     .toString("utf-8");
   let parsed: unknown;
   try {
@@ -938,7 +939,7 @@ export function readIndex(projectDir: string, space: string): DocumentIndex {
   assertKnowledgeRootTrusted(projectDir, space);
   const path = indexPath(projectDir, space);
   if (!existsSync(path)) return emptyIndex();
-  const raw = readRegularFileNoFollowOrThrow(path, "documentkb/index.json").toString("utf-8");
+  const raw = readAtomicReplacedFileNoFollowOrThrow(path, "documentkb/index.json").toString("utf-8");
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -996,7 +997,7 @@ export function readDocumentMetadata(
   // container and then trusts its contents will read a symlinked metadata.json
   // inside an already-trusted <id>/ dir.
   const metaReal = resolveContainedPath(kbReal, `${id}/metadata.json`);
-  const raw = readRegularFileNoFollowOrThrow(metaReal, `documentkb/${id}/metadata.json`)
+  const raw = readAtomicReplacedFileNoFollowOrThrow(metaReal, `documentkb/${id}/metadata.json`)
     .toString("utf-8");
   let parsed: unknown;
   try {
@@ -2164,7 +2165,7 @@ function verifiedContentBytes(
     const kbReal = realpathSync(documentkbDir(projectDir, space));
     const rel = row.content.replace(/^documentkb\//, "");
     const real = resolveContainedPath(kbReal, rel);
-    const bytes = readRegularFileNoFollowOrThrow(real, `documentkb/${rel}`);
+    const bytes = readAtomicReplacedFileNoFollowOrThrow(real, `documentkb/${rel}`);
     return sha256Hex(bytes) === row.content_sha256 ? bytes : null;
   } catch {
     return null;

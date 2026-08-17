@@ -148,6 +148,11 @@ the surviving originals as new rows.
   `truncated  yes (...)` line above the content so a partial extraction is
   never mistaken for the whole document. The flag was always recorded in the
   catalog; it is now visible.
+* Concurrent `knowledge` commands no longer intermittently fail with
+  `documentkb/index.json changed while opening`: the catalog files are written
+  by atomic replace, and a read racing that rename now retries briefly instead
+  of mistaking the inode swap for tampering (measured: 1 in ~10 concurrent
+  onboards lost its run to this).
 
 ## [2.6.2] - 2026-08-13
 

@@ -5649,7 +5649,11 @@ export function readRegularFileNoFollowOrThrow(path: string, what: string): Buff
     if (code === "ELOOP") {
       throw new Error(`${what} is a symlink, which is not followed: ${path}`);
     }
-    throw new Error(`${what} could not be opened: ${path} (${errorMessage(e)})`);
+    // Preserve the errno so callers (the atomic-replace retry wrapper, shard
+    // readers distinguishing a vanished file) can dispatch on it.
+    const err = new Error(`${what} could not be opened: ${path} (${errorMessage(e)})`);
+    (err as NodeJS.ErrnoException).code = code;
+    throw err;
   }
   try {
     const st = fstatSync(fd);
@@ -5686,7 +5690,7 @@ export function readRegularFileNoFollowOrThrow(path: string, what: string): Buff
     }
     const current = statSync(realpathSync(path));
     if (current.dev !== st.dev || current.ino !== st.ino) {
-      throw new Error(`${what} changed while opening: ${path}`);
+      throw changedDuringReadError(`${what} changed while opening: ${path}`);
     }
     const bytes = readFileSync(fd);
     const after = statSync(realpathSync(path));
@@ -5695,11 +5699,61 @@ export function readRegularFileNoFollowOrThrow(path: string, what: string): Buff
         afterFd.nlink !== 1 || afterFd.size !== st.size ||
         afterFd.mtimeMs !== st.mtimeMs || afterFd.ctimeMs !== st.ctimeMs ||
         bytes.length !== st.size) {
-      throw new Error(`${what} changed while reading: ${path}`);
+      throw changedDuringReadError(`${what} changed while reading: ${path}`);
     }
     return bytes;
   } finally {
     closeSync(fd);
+  }
+}
+
+/** The identity/equality throws above carry a typed code so callers can tell
+ *  "the name changed inodes under me" (retryable when the writer is a known
+ *  atomic-replacer) from a symlink/kind/permission refusal (never retried). */
+export const FILE_CHANGED_DURING_READ = "AIDLC_FILE_CHANGED_DURING_READ";
+function changedDuringReadError(message: string): Error {
+  const err = new Error(message);
+  (err as NodeJS.ErrnoException).code = FILE_CHANGED_DURING_READ;
+  return err;
+}
+
+// The read boundary for FRAMEWORK-OWNED files whose ONLY writer is
+// writeFileAtomic/writeBufferAtomic (tmp + rename) — documentkb/index.json,
+// per-document metadata.json, derived content.md, the sources alias map.
+//
+// An atomic replace swaps the inode behind the name, which the strict
+// reader's identity check cannot distinguish from a hostile name-swap — so a
+// read racing a legitimate concurrent writer threw "changed while opening"
+// and killed the whole command (measured: 2-3 of 24 concurrent onboards
+// under load). The swap is instantaneous, so the fix is a bounded retry:
+// each attempt re-runs the FULL boundary check from open, a hostile swap
+// (symlink, wrong kind) throws a NON-retryable refusal on its next attempt,
+// and a replace-storm that outlasts every retry propagates the original
+// error honestly.
+export function readAtomicReplacedFileNoFollowOrThrow(
+  path: string,
+  what: string,
+  attempts = 8,
+): Buffer {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return readRegularFileNoFollowOrThrow(path, what);
+    } catch (e) {
+      // ENOENT is retryable here too, not only the identity code: mid-swap,
+      // realpath of the just-unlinked inode can surface as a transient
+      // ENOENT (measured on Bun as a literal "<path> (deleted)" statx). For
+      // a file whose writer is atomic-replace, "briefly absent" IS the swap
+      // window; a file that is genuinely gone still propagates once the
+      // retries are exhausted.
+      const code = (e as NodeJS.ErrnoException).code;
+      if ((code !== FILE_CHANGED_DURING_READ && code !== "ENOENT") ||
+          attempt >= attempts) {
+        throw e;
+      }
+      // 5ms × attempt backoff: the rename itself is instantaneous; the wait
+      // only needs to outlast the writer's tmp-write + rename window.
+      Bun.sleepSync(5 * attempt);
+    }
   }
 }
 
