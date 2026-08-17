@@ -13,4 +13,12 @@ paths = [
     '''\.gitleaks-baseline\.json$''',
     '''uv\.lock$''',
     '''packages/shared/tests/test_credential_scrubber\.py$''',
+    '''tests/harness/eval/shared-credential-scrubber\.test\.ts$''',
+]
+regexes = [
+    '''argv-secret-7f4d2''',
+    '''abcdef123456''',
+    '''eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ\.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c''',
+    '''ghp_1234567890abcdefghijklmnopqrstuv''',
+    '''a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4''',
 ]
