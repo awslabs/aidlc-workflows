@@ -1,4 +1,8 @@
 node_modules/
+# Local dogfooding install of the Claude harness (a copy of dist/claude/.claude,
+# plus locally-composed scopes and settings). Source of truth is core/ + harness/;
+# this tree is a per-clone artifact and must never be committed.
+/.claude/
 .claude/CLAUDE.md
 .claude/settings.json
 .claude/settings.local.json

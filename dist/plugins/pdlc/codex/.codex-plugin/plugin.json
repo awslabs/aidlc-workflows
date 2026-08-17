@@ -1,0 +1,8 @@
+{
+  "name": "aidlc-pdlc",
+  "version": "0.1.0",
+  "description": "Product Discovery (AI-PLC) — Working Backwards product discovery for product managers: use-case intake and Agentic/Application categorization, prioritization scoring, PR/FAQ, prototype specs, product strategy and go-to-market, ending in a portable context pack that hands off to core Inception. Reuses aidlc-product-agent as lead and aidlc-product-lead-agent as reviewer.",
+  "author": {
+    "name": "AWS AIDLC"
+  }
+}
