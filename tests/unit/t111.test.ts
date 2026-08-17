@@ -21,7 +21,14 @@
 // red.
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -34,6 +41,8 @@ import {
   auditFilePath,
   readAllAuditShards,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+const REPO_ROOT = join(import.meta.dir, "..", "..");
 
 // --- Per-file temp roots, torn down in afterAll ---------------------------
 const tmpRoots: string[] = [];
@@ -422,6 +431,53 @@ describe("handleAppend — thin wrapper over appendAuditEntry", () => {
     expect(typeof printed.timestamp).toBe("string");
     // The printed timestamp matches the one written into the block.
     expect(content).toContain(`**Timestamp**: ${printed.timestamp}\n`);
+  });
+
+  test("references document ignored Timestamp fields and historical flat-reader handling", () => {
+    const stateMachine = readFileSync(
+      join(REPO_ROOT, "docs", "reference", "12-state-machine.md"),
+      "utf-8",
+    );
+    const auditFormat = readFileSync(
+      join(REPO_ROOT, "core", "knowledge", "aidlc-shared", "audit-format.md"),
+      "utf-8",
+    );
+
+    expect(stateMachine).not.toContain("park/unpark rows carry it");
+    expect(stateMachine).toContain("supplied value is intentionally ignored");
+    expect(stateMachine).toContain("Historical shards are not rewritten");
+    expect(auditFormat).toContain("## Emitter-Owned Fields");
+    expect(auditFormat).toContain("audit append --field Timestamp=...");
+    expect(auditFormat).toContain("deduplicate timestamp fields");
+  });
+
+  test("accepts but ignores a public Timestamp field while preserving sibling fields", () => {
+    const proj = freshProject();
+    const captured: string[] = [];
+    const orig = process.stdout.write.bind(process.stdout);
+    (process.stdout as unknown as { write: typeof process.stdout.write }).write =
+      ((chunk: string | Uint8Array) => {
+        captured.push(typeof chunk === "string" ? chunk : chunk.toString());
+        return true;
+      }) as typeof process.stdout.write;
+
+    try {
+      handleAppend(
+        "ERROR_LOGGED",
+        { Timestamp: "2020-01-01T00:00:00Z", Details: "public append" },
+        proj,
+      );
+    } finally {
+      (process.stdout as unknown as { write: typeof process.stdout.write }).write =
+        orig;
+    }
+
+    const content = readAudit(proj);
+    const printed = JSON.parse(captured[0]);
+    expect(content.split("**Timestamp**:").length - 1).toBe(1);
+    expect(content).toContain(`**Timestamp**: ${printed.timestamp}\n`);
+    expect(content).not.toContain("2020-01-01T00:00:00Z");
+    expect(content).toContain("**Details**: public append\n");
   });
 
   test("propagates the invalid-event-type throw (does not swallow it)", () => {

@@ -3,11 +3,11 @@ All notable changes to this project will be documented in this file.
 
 ## [2.6.14] - 2026-08-17
 
-Audit blocks no longer carry a duplicate `**Timestamp**:` line. `renderAuditBlock` writes the timestamp itself, but did not filter the key out of caller-supplied `fields`, so the three emitters that passed it — `park`, `unpark`, and the `practices-promote` write-failure path — produced two identically-marked lines in one block. Any reader that pairs `**Timestamp**` occurrences with `**Event**` occurrences desynchronised at the first parked workflow and misattributed the time of every later event. **Upgrade:** re-copy your `dist/<harness>/` shell into the project. Existing `audit.md` shards are unaffected and need no migration — the duplicate line is cosmetically redundant, not wrong, and the first occurrence was always the authoritative one.
+New structured audit blocks no longer carry duplicate `**Timestamp**:` lines. `renderAuditBlock` now exclusively owns the `Timestamp` and `Event` fields, while `park`, `unpark`, and the `practices-promote` write-failure path no longer pass redundant timestamps. **Upgrade:** re-copy your `dist/<harness>/` shell into the project. Existing shards remain byte-unchanged: block-aware readers need no migration, while flat readers must split on `---` and use the first emitter-owned timestamp in each block (or deduplicate historical timestamp fields).
 
-* `aidlc-state.ts park`, `unpark`, and the `practices-promote` write-failure path no longer pass a redundant `Timestamp` field; the emitter-written line is unchanged, so the rendered timestamp value is identical to before.
-* `audit append --field Timestamp=...` is still accepted (unchanged CLI contract) but the value is now dropped at render instead of appearing as a second line.
-* Audit-format reference: `WORKFLOW_PARKED` field order corrected to `Timestamp, Stage`, matching every other row.
+* `aidlc-state.ts park`, `unpark`, and the `practices-promote` write-failure path no longer pass a redundant `Timestamp` field; the emitter-written value is unchanged.
+* `audit append --field Timestamp=...` remains accepted for compatibility, but the supplied value is intentionally ignored because structured emitters own `Timestamp`; sibling fields still render normally.
+* Audit references now document emitter-owned fields, the accepted-but-ignored compatibility behavior, and the reader requirements for historical duplicate blocks.
 
 ## [2.6.13] - 2026-08-17
 

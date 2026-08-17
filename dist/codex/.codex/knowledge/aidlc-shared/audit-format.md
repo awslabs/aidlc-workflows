@@ -13,6 +13,15 @@ commands a stage or conductor invokes directly.
 
 All event names follow `SUBJECT_PAST_VERB` — every event answers "what happened?"
 
+## Emitter-Owned Fields
+
+The structured renderer writes exactly one `Timestamp` and one `Event` line per
+block; callers must not supply either field. For compatibility, the generic
+`audit append --field Timestamp=...` form is still accepted, but its value is
+intentionally ignored. Historical shards are not rewritten: readers that parse
+whole files must split on `---` and use the first timestamp in each block, or
+deduplicate timestamp fields produced by older versions.
+
 ## Event Registry (82 events, 21 categories)
 
 ### Workflow Lifecycle (4 events)
