@@ -1,42 +1,40 @@
-// covers: file:aidlc-common/stages/construction/code-generation.md, file:agents/aidlc-developer-agent.md, file:memory/org.md
+// covers: file:tools/aidlc-testing-posture.ts, file:aidlc-common/stages/construction/code-generation.md, file:aidlc-common/stages/inception/practices-discovery.md, file:aidlc-common/protocols/stage-protocol.md, file:agents/aidlc-developer-agent.md, file:memory/org.md
 //
-// t292 - TESTING-POSTURE WIRING. Mechanism: none (readFileSync over authored
-// prose, zero spawn, zero LLM, zero tokens). Technique: deterministic string
-// predicates over the three authored surfaces that connect the affirmed
-// `## Testing Posture` to the code-generation plan's step ordering.
-//
-// WHY THIS EXISTS: practices-discovery interviews the team on testing
-// methodology and promotes the answer to memory/team.md `## Testing Posture`,
-// but for a long time nothing in the Construction code-generation path was
-// scoped to READ that section - a team that affirmed TDD still got an
-// implementation-first plan, silently. The wiring is prose in three places,
-// and prose drifts: any one of these regressions would reopen the gap without
-// failing another test.
-//
-//   1. The stage file's Step 2 (Part 1, authored by the conductor - the
-//      plan-approval guard makes the developer-agent undispatchable before a
-//      plan exists) must resolve `## Testing Posture` and carry BOTH plan
-//      shapes: the test-after structure and the test-first red-green-refactor
-//      layer split.
-//   2. The Step 4 delegation prompt must forward the posture to the Part 2
-//      generation subagent.
-//   3. The developer-agent's Knowledge Loading consult must name
-//      `## Testing Posture` alongside `## Code Style` (it was the only
-//      plan-authoring persona pointed at the styling section but not the
-//      testing one).
-//   4. memory/org.md must not resurrect the dangling "captured by the
-//      testing-strategy stage when it ships" forward-reference - no such
-//      stage exists; practices-discovery owns the capture.
-//
-// The gate reads the AUTHORED surfaces; dist is their byte-parity-guarded copy
-// (t145 / package.ts --check), so gating the authored source covers every tree.
+// t292 - TESTING POSTURE CONTRACT. Deterministic behavior tests for additive
+// posture resolution, methodology-specific plan profiles, strategy/scope
+// combination, approval fingerprinting, and the normal/swarm authored surfaces
+// that consume the contract.
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  approvalFingerprint,
+  buildPlanProfile,
+  combineTestObligations,
+  evaluateCodeGenerationApproval,
+  parseTestingContract,
+  renderTestingContract,
+  resolveTestingPosture,
+  resolveTestingPostureFromSections,
+  type ProjectType,
+  type TestStrategy,
+  type TestingMethodology,
+} from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
 const STAGE_REL = "core/aidlc-common/stages/construction/code-generation.md";
+const PRACTICES_REL =
+  "core/aidlc-common/stages/inception/practices-discovery.md";
+const PROTOCOL_REL =
+  "core/aidlc-common/protocols/stage-protocol.md";
 const AGENT_REL = "core/agents/aidlc-developer-agent.md";
 const ORG_REL = "core/memory/org.md";
 
@@ -44,112 +42,364 @@ function read(rel: string): string {
   return readFileSync(join(REPO_ROOT, rel), "utf-8");
 }
 
-// =========================================================================
-// 1 - Part 1 planning resolves the posture and carries both plan shapes.
-// =========================================================================
-describe("t292 (1) code-generation Step 2 consumes the affirmed posture", () => {
-  const stage = read(STAGE_REL);
+const ORG = [
+  "- **Methodology**: test-after",
+  "- **Ordering**: implement each layer, then test it.",
+].join("\n");
 
-  test("Step 2 resolves ## Testing Posture from the memory layers", () => {
-    expect(stage).toContain("Test ordering follows the affirmed testing posture.");
-    expect(stage).toContain("`## Testing Posture`");
-    // The resolution rule is the delivery-planning idiom: most-specific
-    // non-empty statement across the three memory layers, org fallback when
-    // practices-discovery was skipped.
-    expect(stage).toContain(
-      "aidlc/spaces/<active-space>/memory/{project,team,org}.md",
-    );
-    expect(stage).toContain("most-specific non-empty statement");
-    expect(stage).toContain("practices-discovery was skipped");
+function resolve(
+  sections: { org?: string; team?: string; project?: string },
+  overrides: Partial<{
+    scope: string;
+    testStrategy: TestStrategy;
+    projectType: ProjectType;
+  }> = {},
+) {
+  return resolveTestingPostureFromSections(sections, {
+    scope: overrides.scope ?? "feature",
+    testStrategy: overrides.testStrategy ?? "standard",
+    projectType: overrides.projectType ?? "greenfield",
+  });
+}
+
+describe("t292 (1) additive methodology resolution", () => {
+  test("a project coverage note does not erase team TDD", () => {
+    const contract = resolve({
+      org: ORG,
+      team: "- **Methodology**: tdd\n- **Ordering**: tests first.",
+      project: "The legacy adapter requires an integration regression suite.",
+    });
+    expect(contract.methodology).toBe("tdd");
+    expect(contract.source).toBe("team");
+    expect(contract.applicable_notes.map((n) => n.layer)).toEqual([
+      "org",
+      "team",
+      "project",
+    ]);
   });
 
-  test("posture governs ordering while the test strategy keeps volume", () => {
-    // The protocol's volume axis must survive next to the new ordering axis;
-    // losing either sentence collapses the two concerns back into one.
-    expect(stage).toContain("the test strategy above governs volume");
-    expect(stage).toContain('stage-protocol.md §8 "Test Strategy"');
+  test("ancillary custom coverage wording is not a custom methodology", () => {
+    const contract = resolve({
+      org: ORG,
+      team: "- **Methodology**: tdd\n- **Ordering**: tests first.",
+      project: "Use a custom coverage threshold for the legacy adapter.",
+    });
+    expect(contract.methodology).toBe("tdd");
+    expect(contract.source).toBe("team");
   });
 
-  test("both plan shapes are present: test-after steps and the red-green-refactor split", () => {
-    // Test-after (default) shape: the trailing per-layer test steps.
-    expect(stage).toContain("Step 4: Business logic tests (unit tests for Step 3)");
-    expect(stage).toContain("Step 6: API tests (unit + integration tests for Step 5)");
-    // Test-first shape: the within-layer split, in dependency order.
-    expect(stage).toContain("With a test-first posture (TDD, BDD, ATDD)");
-    for (const step of ["3a", "3b", "3c", "5a", "5b", "5c"]) {
-      expect(stage).toContain(`Step ${step}:`);
+  test("a structured Methodology field must contain one canonical value", () => {
+    expect(() =>
+      resolve({
+        org: ORG,
+        team:
+          "- **Methodology**: tdd | bdd | atdd | test-after | custom\n- **Ordering**: choose later.",
+      }),
+    ).toThrow("Invalid Testing Posture Methodology");
+  });
+
+  test("a contradictory project methodology is rejected, not treated as override", () => {
+    expect(() =>
+      resolve({
+        org: ORG,
+        team: "- **Methodology**: tdd\n- **Ordering**: tests first.",
+        project:
+          "- **Methodology**: test-after\n- **Ordering**: implementation first.",
+      }),
+    ).toThrow("strict-additive");
+  });
+
+  test("a BDD project specialization can preserve scenario-first plus unit-test-after ordering", () => {
+    const contract = resolve({
+      org: ORG,
+      team:
+        "- **Methodology**: bdd\n- **Ordering**: behavior scenarios before implementation.",
+      project: "BDD scenarios first; unit tests after implementation.",
+    });
+    expect(contract.methodology).toBe("custom");
+    expect(contract.source).toBe("project");
+    expect(contract.ordering).toContain("unit tests after implementation");
+  });
+});
+
+describe("t292 (2) methodology-specific plan profiles", () => {
+  const profile = (
+    methodology: TestingMethodology,
+    ordering = "Preserve the custom sequence.",
+  ) => buildPlanProfile(methodology, ordering, "greenfield");
+
+  test("TDD covers every testable layer with Red, Green, and Refactor", () => {
+    const tdd = profile("tdd");
+    expect(tdd.testable_layers).toEqual([
+      "Data model / database behavior",
+      "Repository / data access",
+      "Business logic",
+      "API / endpoint",
+      "Frontend behavior",
+    ]);
+    for (const layer of tdd.testable_layers) {
+      expect(tdd.steps).toContain(
+        `${layer} - Red: write the failing tests and record the failing command output.`,
+      );
+      expect(tdd.steps).toContain(
+        `${layer} - Green: implement only enough behavior to pass.`,
+      );
+      expect(tdd.steps).toContain(
+        `${layer} - Refactor: improve the implementation while tests stay green.`,
+      );
     }
-    expect(stage).toMatch(/Red \(write the layer's failing tests\)/);
-    expect(stage).toMatch(/Green \(implement until they pass\)/);
-    expect(stage).toMatch(/Refactor \(clean up; tests stay green\)/);
   });
 
-  test("the split never crosses layers, preserving dependency ordering", () => {
-    expect(stage).toContain("The split happens within a layer, never across layers.");
-    // The pre-existing rationale sentence the split must not displace.
-    expect(stage).toContain(
-      "dependencies are built before dependents (data models before business logic, business logic before API)",
-    );
-  });
-});
-
-// =========================================================================
-// 2 - Part 2's delegation prompt forwards the posture to the subagent.
-// =========================================================================
-describe("t292 (2) the generation dispatch carries the posture", () => {
-  const stage = read(STAGE_REL);
-
-  test("Step 4 delegation prompt includes the resolved posture and Red-first instruction", () => {
-    expect(stage).toContain("The affirmed testing posture (resolved in Step 2)");
-    expect(stage).toContain(
-      "write each layer's Red-step tests before that layer's implementation",
+  test("BDD is scenario-first across a feature slice, not layer-local TDD", () => {
+    const bdd = profile("bdd");
+    expect(bdd.steps[2]).toContain("Behavior scenarios");
+    expect(bdd.steps[3]).toContain("Feature slice");
+    expect(bdd.steps.some((step) => step.includes("Business logic - Red"))).toBe(
+      false,
     );
   });
 
-  test("failing-output capture is best-effort, bounded by workspace readiness", () => {
-    // Code-generation never installs dependencies or runs suites itself
-    // (build-and-test Step 10 owns the first run), so the evidence capture
-    // must stay conditional: an unconditional "run the tests" here would
-    // fail every greenfield unit.
-    expect(stage).toContain("where the workspace can already run the test suite");
-    expect(stage).toContain("record the failing run's output");
+  test("ATDD puts acceptance tests before the complete cross-layer feature", () => {
+    const atdd = profile("atdd");
+    const acceptance = atdd.steps.findIndex((step) =>
+      step.startsWith("Acceptance Red"),
+    );
+    const implementation = atdd.steps.findIndex((step) =>
+      step.startsWith("Feature implementation"),
+    );
+    expect(acceptance).toBeGreaterThan(0);
+    expect(acceptance).toBeLessThan(implementation);
+  });
+
+  test("custom/mixed preserves its exact ordering without TDD coercion", () => {
+    const ordering = "BDD scenarios first; unit tests after implementation.";
+    const custom = profile("custom", ordering);
+    expect(custom.steps[2]).toContain(ordering);
+    expect(custom.steps.some((step) => step.includes(" - Red:"))).toBe(false);
+  });
+
+  test("test-after pairs implementation and tests for every testable layer", () => {
+    const after = profile("test-after");
+    for (const layer of after.testable_layers) {
+      expect(after.steps).toContain(`${layer} - implement.`);
+      expect(after.steps).toContain(
+        `${layer} - write and run its tests after implementation.`,
+      );
+    }
   });
 });
 
-// =========================================================================
-// 3 - The developer-agent persona consults the testing section.
-// =========================================================================
-describe("t292 (3) developer-agent Knowledge Loading names ## Testing Posture", () => {
-  const agent = read(AGENT_REL);
+describe("t292 (3) runner bootstrap and test obligations", () => {
+  test("greenfield runner setup precedes the first executable test step", () => {
+    const profile = buildPlanProfile("tdd", "tests first", "greenfield");
+    expect(profile.runner_ready_before_first_test).toBe(true);
+    expect(profile.steps[1]).toContain("Bootstrap the minimal test runner");
+    expect(profile.steps[2]).toContain("Red");
+  });
 
-  test("the memory consult names both Code Style and Testing Posture", () => {
-    const consult = agent
-      .split("\n")
-      .find((l) => l.includes("Consult `## Code Style`"));
-    expect(consult).toBeDefined();
-    expect(consult).toContain("`## Testing Posture`");
-    // The affirmed-practice-over-scan rule must survive the extension.
-    expect(consult).toContain(
-      "follow affirmed practice over conventions inferred from a code scan",
+  test("brownfield verifies the exact command instead of bootstrapping", () => {
+    const profile = buildPlanProfile("bdd", "scenarios first", "brownfield");
+    expect(profile.steps[1]).toContain("Verify the existing test runner");
+  });
+
+  test("every scope/strategy pair retains both strategy volume and scope floors", () => {
+    const scopes = [
+      "mvp",
+      "enterprise",
+      "feature",
+      "infra",
+      "bugfix",
+      "security-patch",
+      "poc",
+      "refactor",
+      "workshop",
+    ];
+    const strategies: TestStrategy[] = [
+      "minimal",
+      "standard",
+      "comprehensive",
+    ];
+    for (const scope of scopes) {
+      for (const strategy of strategies) {
+        const obligations = combineTestObligations(scope, strategy);
+        expect(obligations.strategy_volume.length).toBeGreaterThan(0);
+        expect(obligations.scope_floor.length).toBeGreaterThan(0);
+        expect(obligations.combination_rule).toContain("neither replaces");
+      }
+    }
+    expect(
+      combineTestObligations("bugfix", "minimal").scope_floor.join(" "),
+    ).toContain("targeted regression");
+    expect(
+      combineTestObligations("bugfix", "minimal").combination_rule,
+    ).toContain("narrowest necessary test type");
+    expect(
+      combineTestObligations("poc", "minimal").scope_floor.join(" "),
+    ).toContain("no extra new-test floor");
+  });
+});
+
+describe("t292 (4) structured contract and approval fingerprint", () => {
+  test("contract JSON round-trips and changes when an applicable note changes", () => {
+    const first = resolve({
+      org: ORG,
+      team: "- **Methodology**: tdd\n- **Ordering**: tests first.",
+    });
+    const rendered = renderTestingContract(first);
+    expect(parseTestingContract(`# Plan\n\n${rendered}`)).toEqual(first);
+
+    const specialized = resolve({
+      org: ORG,
+      team: "- **Methodology**: tdd\n- **Ordering**: tests first.",
+      project: "Add an integration regression suite.",
+    });
+    expect(specialized.methodology).toBe("tdd");
+    expect(specialized.contract_sha256).not.toBe(first.contract_sha256);
+  });
+
+  test("approval fingerprint binds plan, instructions, and contract", () => {
+    const hash = `sha256:${"a".repeat(64)}`;
+    const baseline = approvalFingerprint("plan", "instructions", hash);
+    expect(approvalFingerprint("plan changed", "instructions", hash)).not.toBe(
+      baseline,
+    );
+    expect(approvalFingerprint("plan", "instructions changed", hash)).not.toBe(
+      baseline,
+    );
+    expect(
+      approvalFingerprint("plan", "instructions", `sha256:${"b".repeat(64)}`),
+    ).not.toBe(baseline);
+  });
+
+  test("a memory change after approval invalidates the unit contract", () => {
+    const project = mkdtempSync(join(tmpdir(), "t292-contract-"));
+    try {
+      const memoryDir = join(project, "aidlc", "spaces", "default", "memory");
+      const recordDir = join(
+        project,
+        "aidlc",
+        "spaces",
+        "default",
+        "intents",
+      );
+      const stageDir = join(
+        recordDir,
+        "construction",
+        "auth",
+        "code-generation",
+      );
+      mkdirSync(memoryDir, { recursive: true });
+      mkdirSync(stageDir, { recursive: true });
+      writeFileSync(
+        join(memoryDir, "org.md"),
+        `# Org\n\n## Testing Posture\n\n${ORG}\n`,
+      );
+      writeFileSync(
+        join(memoryDir, "team.md"),
+        "# Team\n\n## Testing Posture\n\n- **Methodology**: tdd\n- **Ordering**: tests first.\n",
+      );
+      writeFileSync(join(memoryDir, "project.md"), "# Project\n");
+      writeFileSync(
+        join(recordDir, "aidlc-state.md"),
+        [
+          "# State",
+          "- **Project Type**: Greenfield",
+          "- **Scope**: feature",
+          "- **Test Strategy**: Standard",
+          "",
+        ].join("\n"),
+      );
+
+      const contract = resolveTestingPosture(project);
+      const plan = `# Plan\n\n${renderTestingContract(contract)}\n## Steps\n\n- [ ] Run profile\n`;
+      const instructions =
+        "# Unit Test Instructions\n\n## Command\n\n`bun test auth.test.ts`\n";
+      writeFileSync(join(stageDir, "code-generation-plan.md"), plan);
+      writeFileSync(
+        join(stageDir, "unit-test-instructions.md"),
+        instructions,
+      );
+      const fingerprint = approvalFingerprint(
+        plan,
+        instructions,
+        contract.contract_sha256,
+      );
+      writeFileSync(
+        join(stageDir, "code-generation-questions.md"),
+        [
+          "## Plan Approval",
+          `[Approval Fingerprint]: ${fingerprint}`,
+          "A. Approve Plan",
+          "B. Request Changes",
+          "[Answer]: A. Approve Plan",
+          "",
+        ].join("\n"),
+      );
+      expect(evaluateCodeGenerationApproval(project, "auth").ok).toBe(true);
+
+      writeFileSync(
+        join(memoryDir, "project.md"),
+        "# Project\n\n## Testing Posture\n\nAdd an integration regression suite.\n",
+      );
+      const stale = evaluateCodeGenerationApproval(project, "auth");
+      expect(stale.ok).toBe(false);
+      expect(stale.reason).toContain("stale");
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("t292 (5) authored consumers use the same contract", () => {
+  test("Code Generation creates, fingerprints, and dispatches the contract", () => {
+    const stage = read(STAGE_REL);
+    expect(stage).toContain("aidlc-testing-posture.ts render");
+    expect(stage).toContain("aidlc-testing-posture.ts fingerprint");
+    expect(stage).toContain("AIDLC-TESTING-CONTRACT: <contract_sha256>");
+    expect(stage).toContain("BDD");
+    expect(stage).toContain("ATDD");
+    expect(stage).toContain("Custom/mixed");
+  });
+
+  test("developer treats the approved contract as authoritative and conditionally refactors", () => {
+    const agent = read(AGENT_REL);
+    expect(agent).toContain("fingerprinted `## Testing Contract`");
+    expect(agent).toContain("do not independently re-resolve");
+    expect(agent).toContain(
+      "Perform Refactor during initial generation when the approved Testing Contract includes that step",
     );
   });
-});
 
-// =========================================================================
-// 4 - org.md points at the real capture stage, not a phantom one.
-// =========================================================================
-describe("t292 (4) org.md Testing Posture names its capture and consumer", () => {
-  const org = read(ORG_REL);
+  test("Practices Discovery emits structured Methodology and Ordering fields", () => {
+    const practices = read(PRACTICES_REL);
+    expect(practices).toContain("- **Methodology**: tdd | bdd | atdd | test-after | custom");
+    expect(practices).toContain("- **Ordering**:");
+  });
 
-  test("the dangling testing-strategy-stage forward-reference is gone", () => {
-    // No stage by that name exists in core/aidlc-common/stages/; the sentence
-    // made the shipped default read as a placeholder awaiting a stage that
-    // never shipped.
+  test("org defaults state the additive scope/strategy combination", () => {
+    const org = read(ORG_REL);
+    expect(org).toContain("- **Methodology**: test-after");
+    expect(org).toContain("Scope floors are additive");
     expect(org).not.toContain("testing-strategy stage");
   });
 
-  test("capture is attributed to practices-discovery and consumption to Code Generation", () => {
-    expect(org).toContain("affirmed at\npractices-discovery");
-    expect(org).toMatch(/Code\nGeneration orders each layer's implementation and test steps to match/);
+  test("the shared protocol and every harness require approved swarm worker markers", () => {
+    const protocol = read(PROTOCOL_REL);
+    expect(protocol).toContain("## 12b. Autonomous Code Generation Plan Contract");
+    expect(protocol).toContain("AIDLC-TESTING-CONTRACT: <contract_sha256");
+    for (const harness of [
+      "claude",
+      "kiro",
+      "kiro-ide",
+      "codex",
+      "cursor",
+      "opencode",
+      "copilot",
+    ]) {
+      const skill = read(`harness/${harness}/skills/aidlc/SKILL.md`);
+      expect(skill, harness).toContain(
+        '§12b "Autonomous Code Generation Plan Contract"',
+      );
+    }
   });
 });

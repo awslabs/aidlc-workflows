@@ -106,6 +106,7 @@ import {
   worktreeStateFilePath,
 } from "./aidlc-lib.ts";
 import { compiledExecutable } from "./aidlc-runtime-paths.ts";
+import { evaluateCodeGenerationApproval } from "./aidlc-testing-posture.ts";
 
 const TOOLS_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -547,6 +548,25 @@ function handlePrepare(rest: string[]): void {
   const units = splitCsv(flags.units);
   if (units.length === 0) {
     fail("--units resolved to an empty list");
+  }
+  const state = readStateFile(projectDir);
+  const stage = (getField(state, "Current Stage") ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "-");
+  const autonomy = (getField(state, "Construction Autonomy Mode") ?? "").trim();
+  if (stage === "code-generation" && autonomy === "autonomous") {
+    const invalid = units
+      .map((unit) => evaluateCodeGenerationApproval(projectDir, unit))
+      .filter((approval) => !approval.ok);
+    if (invalid.length > 0) {
+      fail(
+        "prepare requires a current, explicitly approved Code Generation plan for every autonomous " +
+          `unit before worktrees are forked: ${invalid
+            .map((approval) => `${approval.unit} (${approval.reason})`)
+            .join("; ")}`,
+      );
+    }
   }
   const dag = resolveBoltDag(projectDir);
   if (dag.state === "malformed") {

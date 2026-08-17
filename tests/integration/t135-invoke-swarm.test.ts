@@ -83,6 +83,11 @@ import {
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
 import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  approvalFingerprint,
+  renderTestingContract,
+  resolveTestingPosture,
+} from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 
 resetAidlcEnv();
 
@@ -184,6 +189,7 @@ let reviewRefusalProj: string | undefined;
 let staleReviewProj: string | undefined;
 let missingArtifactsProj: string | undefined;
 const notReadyProjects: string[] = [];
+const approvalProjects: string[] = [];
 let finalizeStatus = -1;
 let finalizeOut = "";
 let auditBody = "";
@@ -233,6 +239,47 @@ function seedRefereeProject(): string {
     { cwd: proj },
   );
   return proj;
+}
+
+function setAutonomous(proj: string): void {
+  const statePath = seededStateFile(proj);
+  const state = readFileSync(statePath, "utf-8").replace(
+    /^(- \*\*Scope\*\*: .*)$/m,
+    "$1\n- **Construction Autonomy Mode**: autonomous",
+  );
+  writeFileSync(statePath, state);
+}
+
+function seedApprovedCodeGenerationPlan(proj: string, unit: string): void {
+  const contract = resolveTestingPosture(proj);
+  const dir = join(
+    seededRecordDir(proj),
+    "construction",
+    unit,
+    "code-generation",
+  );
+  mkdirSync(dir, { recursive: true });
+  const plan = `# Plan\n\n${renderTestingContract(contract)}\n## Steps\n\n- [ ] Implement\n`;
+  const instructions =
+    "# Unit Test Instructions\n\n## Command\n\n`bun test unit.test.ts`\n";
+  writeFileSync(join(dir, "code-generation-plan.md"), plan);
+  writeFileSync(join(dir, "unit-test-instructions.md"), instructions);
+  const fingerprint = approvalFingerprint(
+    plan,
+    instructions,
+    contract.contract_sha256,
+  );
+  writeFileSync(
+    join(dir, "code-generation-questions.md"),
+    [
+      "## Plan Approval",
+      `[Approval Fingerprint]: ${fingerprint}`,
+      "A. Approve Plan",
+      "B. Request Changes",
+      "[Answer]: A. Approve Plan",
+      "",
+    ].join("\n"),
+  );
 }
 
 function logWorktreeReview(
@@ -500,6 +547,10 @@ afterAll(() => {
     spawnSync("chmod", ["-R", "u+w", project]);
     cleanupWorktreeFixture(project);
   }
+  for (const project of approvalProjects) {
+    spawnSync("chmod", ["-R", "u+w", project]);
+    cleanupWorktreeFixture(project);
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -596,6 +647,51 @@ describe("t135 referee — batch-level swarm audit taxonomy + baton return (the 
 });
 
 describe("t135 referee - autonomous reviewer receipt is a finalize precondition", () => {
+  test("7b: autonomous prepare requires a current approved testing contract for every unit", () => {
+    const proj = seedRefereeProject();
+    approvalProjects.push(proj);
+    setAutonomous(proj);
+    const refused = spawnSync(
+      BUN,
+      [
+        SWARM_TOOL,
+        "--project-dir",
+        proj,
+        "prepare",
+        "--batch",
+        "1",
+        "--units",
+        "planned",
+        "--base",
+        "main",
+      ],
+      { encoding: "utf-8" },
+    );
+    expect(refused.status).not.toBe(0);
+    expect(`${refused.stdout}${refused.stderr}`).toContain(
+      "requires a current, explicitly approved Code Generation plan",
+    );
+
+    seedApprovedCodeGenerationPlan(proj, "planned");
+    const accepted = spawnSync(
+      BUN,
+      [
+        SWARM_TOOL,
+        "--project-dir",
+        proj,
+        "prepare",
+        "--batch",
+        "1",
+        "--units",
+        "planned",
+        "--base",
+        "main",
+      ],
+      { encoding: "utf-8" },
+    );
+    expect(accepted.status).toBe(0);
+  }, 60000);
+
   test("8: a green claimed unit without a worktree review is refused before merge", () => {
     setupReviewRefusal();
     expect(reviewRefusalStatus).toBe(2);

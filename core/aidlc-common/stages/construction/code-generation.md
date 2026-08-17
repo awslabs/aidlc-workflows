@@ -101,9 +101,16 @@ Plan should cover (as applicable to the unit):
 - [ ] Deployment artifacts (Dockerfiles, IaC)
 
 **Test files are MANDATORY in the plan.** Consult the active test strategy (stage-protocol.md §8 "Test Strategy") to determine test scope and volume:
-- **Minimal strategy**: Unit test files only, requirement-driven (1 test per requirement, happy-path floor per component)
+- **Minimal strategy**: Requirement-driven tests (1 per requirement, happy-path unit floor per component); unit tests are the default, but a `bugfix` / `security-patch` targeted regression uses the narrowest level that reproduces the defect
 - **Standard strategy**: Unit test files per component (5-8 tests each) + integration test stubs for key boundaries
 - **Comprehensive strategy**: Unit + integration + E2E test files per component (10-15 tests each)
+
+Apply the active scope's floor additively:
+- `mvp`, `enterprise`, `feature`, `infra`: the selected strategy plus 80% line coverage and CI execution before merge.
+- `bugfix`, `security-patch`: the selected strategy plus a targeted regression for the bug/vulnerability at the narrowest level that reproduces it, even when that adds one integration/E2E test beyond Minimal's unit-test default; the existing suite remains green.
+- `poc`, `refactor`, `workshop`: the selected strategy still applies; the scope adds no extra new-test floor, and the existing suite remains green.
+
+The selected strategy and scope floor are both obligations. Neither replaces the other.
 
 The plan MUST include steps for:
 - [ ] Test files appropriate to the active test strategy
@@ -111,41 +118,24 @@ The plan MUST include steps for:
 
 If the plan presented to the user omits test file steps, add them before presenting. Tests are not deferred to Build and Test — that stage verifies and extends, not creates from scratch.
 
-**Test ordering follows the affirmed testing posture.** Resolve `## Testing Posture` from `aidlc/spaces/<active-space>/memory/{project,team,org}.md` using the most-specific non-empty statement (when practices-discovery was skipped, the active space's `memory/org.md` default applies). The posture governs whether a layer's tests are written before or after its implementation; the test strategy above governs volume. Neither overrides the other.
+**Test ordering follows one deterministic Testing Contract.** Run:
 
-Number each plan step sequentially (Step 1, Step 2, etc.) for clear execution ordering and traceability.
-
-**Recommended plan structure** (adapt if architecture warrants a different ordering). With a test-after or unspecified posture, each layer's tests follow its implementation step:
-
-```
-Step 1: Project structure setup (directories, config files, package.json/Cargo.toml/etc.)
-Step 2: Data models / database schema / migrations
-Step 3: Business logic layer (core domain logic, services)
-Step 4: Business logic tests (unit tests for Step 3)
-Step 5: API / endpoint layer (routes, controllers, handlers)
-Step 6: API tests (unit + integration tests for Step 5)
-Step 7: Repository / data access layer (queries, ORM config)
-Step 8: Frontend components (if applicable — UI components, pages, state)
-Step 9: Frontend tests (component tests, interaction tests)
-Step 10: Configuration and environment setup (.env templates, build config)
-Step 11: Test configuration (vitest.config, jest.config, or equivalent)
-Step 12: Documentation (inline docs, API docs, README updates)
+```bash
+bun {{HARNESS_DIR}}/tools/aidlc-testing-posture.ts render
 ```
 
-With a test-first posture (TDD, BDD, ATDD), do not append a test step after each layer; split each layer into a red-green-refactor sequence instead:
+Paste the command's complete `## Testing Contract` JSON block into `code-generation-plan.md` unchanged. The resolver reads all `## Testing Posture` sections additively and selects the narrowest explicit methodology/order statement; coverage, tooling, integration, or scope notes remain applicable but cannot erase a broader methodology. A contradictory narrower methodology is an error, not an override: halt and ask for the memory rule to be revised.
 
-```
-Step 3a: Business logic - Red (write the layer's failing tests)
-Step 3b: Business logic - Green (implement until they pass)
-Step 3c: Business logic - Refactor (clean up; tests stay green)
-Step 5a: API / endpoint layer - Red
-Step 5b: API / endpoint layer - Green
-Step 5c: API / endpoint layer - Refactor
-```
+Use the contract's `plan_profile.steps` as the required ordering baseline, adapting names and omitting genuinely inapplicable layers without changing the methodology:
+- **TDD**: for every applicable testable layer — data-model/database behavior, repository/data access, business logic, API/endpoint, and frontend behavior — plan Red (failing tests), Green (minimal implementation), then Refactor while green.
+- **BDD**: define executable behavior/scenario examples before each observable feature slice, implement that slice across every required layer, run scenarios green, then refactor. Do not turn BDD into layer-local TDD.
+- **ATDD**: write executable acceptance tests before the complete cross-layer feature implementation, implement against that acceptance contract, run acceptance green, then refactor. Do not split acceptance intent into unrelated per-layer Red steps.
+- **Custom/mixed**: preserve the contract's exact `ordering` text, such as scenario-first BDD with lower-level unit tests after implementation. Never coerce a mixed posture into TDD.
+- **Test-after**: for every applicable testable layer, implement the layer and then write/run that layer's tests.
 
-The split happens within a layer, never across layers. For BDD the Red step writes the feature/scenario files; for ATDD, the acceptance tests. Steps with no test counterpart (project structure, configuration, documentation) keep their single-step form under either posture.
+The contract always puts test-runner readiness before the first executable test step. On greenfield work, bootstrap the minimal runner/configuration and dependency needed to execute the exact unit-scoped command before the first TDD Red, BDD scenario, or ATDD acceptance step. On brownfield work, verify that command before the first test-first step. Record the exact command in `unit-test-instructions.md`; a Red/Green step is invalid if no runnable command exists.
 
-This layer-by-layer approach ensures dependencies are built before dependents (data models before business logic, business logic before API). Deviate when the architecture requires it (e.g., event-driven systems, microservices with independent stacks).
+Number each plan step sequentially (Step 1, Step 2, etc.) for clear execution ordering and traceability. Preserve dependency ordering inside the selected methodology, and deviate only when the architecture requires it (for example, event-driven systems or independently deployable services).
 
 Also create
 `<record>/construction/{unit-name}/code-generation/unit-test-instructions.md`
@@ -157,9 +147,13 @@ before Plan Approval. Consult the active test strategy (stage-protocol.md §8
 - **Standard strategy**: 5-8 tests per component, with key behavior coverage
 - **Comprehensive strategy**: 10-15 tests per component, with thorough coverage
 
+Scope floors remain additive here: a Minimal `bugfix` / `security-patch` still
+includes its targeted regression at the narrowest level that reproduces the
+defect.
+
 Include:
 - Test framework setup and configuration
-- How to run THIS UNIT's tests
+- How to run THIS UNIT's tests, including the exact command that is runnable before the first test-first cycle
 - Expected coverage targets
 - Mocking/stubbing guidance
 - Test data management
@@ -177,8 +171,18 @@ to the user.
 Before presenting the approval, create or update
 `<record>/construction/{unit-name}/code-generation/code-generation-questions.md`
 with a **Plan Approval** question that covers both
-`code-generation-plan.md` and `unit-test-instructions.md`, both options below,
-and a blank `[Answer]:` tag:
+`code-generation-plan.md`, its embedded Testing Contract, and
+`unit-test-instructions.md`. For a revision, reset the existing Plan Approval
+`[Answer]:` to blank before regenerating anything. After both files are final,
+run:
+
+```bash
+bun {{HARNESS_DIR}}/tools/aidlc-testing-posture.ts fingerprint --unit "<unit-name>"
+```
+
+Write the returned hash into the Plan Approval section as
+`[Approval Fingerprint]: sha256:<hash>`, followed by both options below and a
+blank `[Answer]:` tag:
 
 - "Approve Plan" — proceed to code generation
 - "Request Changes" — revise the plan
@@ -186,12 +190,13 @@ and a blank `[Answer]:` tag:
 Then present that question as a structured question and STOP the turn. Fill the
 `[Answer]:` tag only after the human explicitly responds. On "Request Changes",
 record that answer, revise the plan and unit test instructions as needed, reset
-the Plan Approval `[Answer]:` to blank, and present the question again. Any
-post-approval change to `unit-test-instructions.md` reopens Plan Approval:
-reset the `[Answer]:` to blank and re-ask before generation. Do not begin Step
-4, dispatch the developer agent, or infer approval from a forwarding-loop
-continuation. Only an explicit "Approve Plan" response authorizes generation
-from the approved versions of both files.
+the Plan Approval `[Answer]:` to blank, regenerate the Testing Contract and
+fingerprint, and present the question again. Any post-approval change to the
+plan, unit test instructions, `## Testing Posture` memory, scope, test strategy,
+or project type invalidates the fingerprint and reopens Plan Approval. Do not
+begin Step 4, dispatch the developer agent, or infer approval from a
+forwarding-loop continuation. Only an explicit "Approve Plan" response
+authorizes generation from the exact fingerprinted files and contract.
 
 ### Step 4: PART 2 — Generation
 
@@ -207,13 +212,20 @@ Include in the delegation prompt:
   the current unit name when the single-iteration directive has no `unit`
   field). This marker identifies the one unit whose approved plan authorizes
   the dispatch; do not repeat it for contextual dependencies.
+- As the second line, `AIDLC-TESTING-CONTRACT: <contract_sha256>` copied from
+  the approved plan's Testing Contract. The plan-approval guard rejects a
+  missing, different, or stale hash.
 - Design artifacts for the CURRENT UNIT ONLY (not all units)
 - A 1-2 line summary of each inception-phase artifact with its file path (requirements summary, stories summary, app design summary) — the subagent can Read specific files if it needs full content
 - The approved code-generation-plan.md (full content)
 - The approved unit-test-instructions.md (full content)
 - Project workspace details (languages, frameworks, conventions from aidlc-state.md)
 - Instructions to execute each plan step sequentially and mark checkboxes as completed
-- The affirmed testing posture (resolved in Step 2). When it is test-first, instruct the subagent to write each layer's Red-step tests before that layer's implementation and, where the workspace can already run the test suite, to record the failing run's output in the step's checkbox note before implementing - evidence the ordering was honoured, not a retroactive tick.
+- The instruction that the approved Testing Contract embedded in the plan is
+  authoritative for Part 2. The subagent must not independently re-resolve or
+  reinterpret memory. TDD records each Red command's failing output before
+  Green; BDD and ATDD follow their scenario/acceptance-first cross-layer
+  profiles; custom/mixed follows the exact approved ordering.
 
 The subagent generates all code, test files, and configuration artifacts in the workspace.
 

@@ -167,7 +167,15 @@ file. The lead alone updates the four declared artifacts:
 
 1. **team-practices.md** - five sections matching `memory/team.md`
    (`## Way of Working`, `## Walking Skeleton`, `## Testing Posture`,
-   `## Deployment`, `## Code Style`), in team voice.
+   `## Deployment`, `## Code Style`), in team voice. `## Testing Posture`
+   MUST include:
+   - `- **Methodology**: tdd | bdd | atdd | test-after | custom`
+   - `- **Ordering**: <the affirmed ordering in one explicit sentence>`
+
+   Use `custom` whenever the answer mixes cadences (for example, BDD scenarios
+   before implementation with lower-level unit tests after implementation).
+   Keep coverage, tooling, test-type, and scope notes as additional bullets;
+   they do not replace the two structured fields.
 2. **discovered-rules.md** - `## Mandated` rules in `ALWAYS ...` form and
    `## Forbidden` rules in `NEVER ...` form, only for human-stated hard
    constraints.

@@ -21,16 +21,13 @@
 // to the stage steps it skipped, so a blocked call is a recoverable nudge,
 // not a halt.
 //
-// How the hook decides: Step 4 requires the delegation prompt to carry one
-// explicit `AIDLC-UNIT: <unit>` marker sourced from `directive.unit`. The hook
-// resolves the workflow's known units (the compiled bolt DAG when one exists,
-// plus the on-disk construction/<unit>/ dirs - incremental scopes skip
-// units-generation, so the dirs are the only unit register there), resolves
-// that exact marker, and requires the targeted unit to have BOTH a non-empty
-// plan on disk AND an explicit "Approve Plan" answer on its Plan Approval
-// question. Missing, conflicting, and unknown markers block instead of
-// guessing from arbitrary prompt prose. Other answered questions and a
-// "Request Changes" answer never count as approval.
+// How the hook decides: Step 4 requires exact `AIDLC-UNIT` and
+// `AIDLC-TESTING-CONTRACT` markers. The hook resolves the known units (compiled
+// Bolt DAG plus on-disk construction dirs), then requires the target to have a
+// non-empty plan and test instructions, a structured contract matching current
+// memory/scope/strategy/type, an explicit "Approve Plan" answer, and a matching
+// approval fingerprint over those exact bytes. Missing, conflicting, unknown,
+// stale, and post-approval-modified evidence blocks instead of guessing.
 //
 // Fail-open outside the guarded dispatch: a missing or unreadable state file,
 // an active directive/current stage other than code-generation, malformed
@@ -63,6 +60,15 @@ import {
   resolveProjectDirFromHook,
   stateFilePath,
 } from "../tools/aidlc-lib.ts";
+import {
+  evaluateCodeGenerationApproval,
+  promptTestingContractMarkers,
+} from "../tools/aidlc-testing-posture.ts";
+
+export {
+  questionsFileApproved,
+  questionsFileHasPendingPlanApproval,
+} from "../tools/aidlc-testing-posture.ts";
 
 const HOOK_NAME = "plan-approval-guard";
 
@@ -87,8 +93,16 @@ export interface UnitEvidence {
   unit: string;
   /** construction/<unit>/code-generation/code-generation-plan.md exists and is non-empty. */
   planExists: boolean;
+  /** unit-test-instructions.md exists and is non-empty. */
+  instructionsExist: boolean;
   /** The unit's Plan Approval question records an explicit "Approve Plan" answer. */
   approved: boolean;
+  /** The plan's structured Testing Contract matches the current effective posture. */
+  contractValid: boolean;
+  /** The recorded approval fingerprint matches the plan, instructions, and contract. */
+  fingerprintValid: boolean;
+  /** The current approved Testing Contract hash, used to bind the worker brief. */
+  contractHash: string | null;
 }
 
 /** The decision's verdict. `mentioned` carries the explicit marker value(s). */
@@ -104,143 +118,7 @@ export function normalizeStageName(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, "-");
 }
 
-const MARKDOWN_HEADING_RE = /^(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$/;
-const ANSWER_TAG_RE = /^\[Answer\]:[ \t]*(.*)$/;
-const APPROVE_PLAN_RE = /^(?:[A-Z][.)][ \t]*)?["']?Approve Plan["']?$/i;
-const QUESTION_PREFIX_RE = /^(?:(?:q(?:uestion)?[ \t]*)?\d+[ \t]*[:.)-][ \t]*)/i;
-const NUMBERED_QUESTION_HEADING_RE = /^(?:q(?:uestion)?[ \t]*)?\d+[ \t]*[.:)-]?[ \t]*$/i;
 const UNIT_MARKER_RE = /^[ \t]*AIDLC-UNIT[ \t]*:[ \t]*(.*?)[ \t]*$/;
-
-function isPlanApprovalLabel(value: string): boolean {
-  let normalized = value.trim().replace(/[?:][ \t]*$/, "").trim();
-  for (const marker of ["**", "__", "*", "_"]) {
-    if (
-      normalized.startsWith(marker) &&
-      normalized.endsWith(marker) &&
-      normalized.length > marker.length * 2
-    ) {
-      normalized = normalized.slice(marker.length, -marker.length).trim();
-      break;
-    }
-  }
-  return normalized.toLowerCase() === "plan approval";
-}
-
-// Approval evidence inside examples or scaffolding is not authoritative.
-// Preserve visible line boundaries while removing fenced code and HTML
-// comments so the section parser below cannot mistake either for a real
-// persisted question.
-function visibleMarkdownLines(body: string): string[] {
-  const lines = body.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").split("\n");
-  const visible: string[] = [];
-  let inComment = false;
-  let fence: { marker: "`" | "~"; length: number } | null = null;
-
-  for (const rawLine of lines) {
-    if (fence) {
-      const closing = /^ {0,3}([`~]+)[ \t]*$/.exec(rawLine);
-      if (
-        closing &&
-        closing[1][0] === fence.marker &&
-        closing[1].length >= fence.length
-      ) {
-        fence = null;
-      }
-      visible.push("");
-      continue;
-    }
-
-    let line = "";
-    let cursor = 0;
-    while (cursor < rawLine.length) {
-      if (inComment) {
-        const end = rawLine.indexOf("-->", cursor);
-        if (end < 0) {
-          cursor = rawLine.length;
-          break;
-        }
-        inComment = false;
-        cursor = end + 3;
-        continue;
-      }
-
-      const start = rawLine.indexOf("<!--", cursor);
-      if (start < 0) {
-        line += rawLine.slice(cursor);
-        break;
-      }
-      line += rawLine.slice(cursor, start);
-      inComment = true;
-      cursor = start + 4;
-    }
-
-    const opening = /^ {0,3}(`{3,}|~{3,})/.exec(line);
-    if (opening) {
-      fence = {
-        marker: opening[1][0] as "`" | "~",
-        length: opening[1].length,
-      };
-      visible.push("");
-      continue;
-    }
-    visible.push(line);
-  }
-
-  return visible;
-}
-
-// Resolve the latest visible Markdown section identified as "Plan Approval".
-// The identifier may be in the heading (`Q1: Plan Approval`) or the first
-// content line under a conventional numbered heading (`## Q1` followed by
-// `Plan Approval`). Examples inside comments or code fences are already removed.
-function latestPlanApprovalAnswer(body: string): {
-  found: boolean;
-  answer: string | null;
-} {
-  let inPlanApproval = false;
-  let awaitingNumberedQuestionText = false;
-  let foundPlanApproval = false;
-  let latestAnswer: string | null = null;
-
-  for (const line of visibleMarkdownLines(body)) {
-    const heading = line.match(MARKDOWN_HEADING_RE);
-    if (heading) {
-      const headingText = heading[2].trim();
-      inPlanApproval = isPlanApprovalLabel(headingText.replace(QUESTION_PREFIX_RE, ""));
-      awaitingNumberedQuestionText =
-        !inPlanApproval && NUMBERED_QUESTION_HEADING_RE.test(headingText);
-      if (inPlanApproval) {
-        foundPlanApproval = true;
-        latestAnswer = null;
-      }
-      continue;
-    }
-    if (awaitingNumberedQuestionText && line.trim().length > 0) {
-      awaitingNumberedQuestionText = false;
-      inPlanApproval = isPlanApprovalLabel(line);
-      if (inPlanApproval) {
-        foundPlanApproval = true;
-        latestAnswer = null;
-      }
-    }
-    if (!inPlanApproval) continue;
-    const answer = line.match(ANSWER_TAG_RE);
-    if (answer) latestAnswer = answer[1].trim();
-  }
-
-  return { found: foundPlanApproval, answer: latestAnswer };
-}
-
-export function questionsFileApproved(body: string): boolean {
-  const latest = latestPlanApprovalAnswer(body);
-  return latest.found && latest.answer !== null && APPROVE_PLAN_RE.test(latest.answer);
-}
-
-/** True only when the latest visible Plan Approval section has a blank answer tag. */
-export function questionsFileHasPendingPlanApproval(body: string): boolean {
-  const latest = latestPlanApprovalAnswer(body);
-  return latest.found && latest.answer !== null && /^_*$/.test(latest.answer);
-}
 
 /**
  * Return the distinct, non-empty target markers in encounter order. Repeated
@@ -278,11 +156,25 @@ export function evaluatePlanApprovalDispatch(
   if (subagentType !== GUARDED_AGENT) return allow;
   if (normalizeStageName(ctx.currentStage) !== GUARDED_STAGE) return allow;
 
-  const approved = (u: UnitEvidence) => u.planExists && u.approved;
+  const approved = (u: UnitEvidence) =>
+    u.planExists &&
+    u.instructionsExist &&
+    u.approved &&
+    u.contractValid &&
+    u.fingerprintValid &&
+    u.contractHash !== null;
   const marked = promptUnitMarkers(promptText);
   if (marked.length !== 1) return { block: true, mentioned: marked };
   const target = ctx.units.find((u) => u.unit === marked[0]);
-  return { block: target === undefined || !approved(target), mentioned: marked };
+  const contractMarkers = promptTestingContractMarkers(promptText);
+  return {
+    block:
+      target === undefined ||
+      !approved(target) ||
+      contractMarkers.length !== 1 ||
+      contractMarkers[0] !== target.contractHash,
+    mentioned: marked,
+  };
 }
 
 // The block reason handed back to the conductor through the harness's
@@ -298,12 +190,12 @@ export function blockReason(mentioned: string[]): string {
         : "one unit (AIDLC-UNIT marker missing)";
   return (
     `plan-approval guard: code-generation must not dispatch ${GUARDED_AGENT} before the ` +
-    `plan is written and approved for ${scope}. Follow the stage file's Steps 2-3 first: ` +
-    `write <record>/construction/<unit>/code-generation/code-generation-plan.md, create ` +
-    `code-generation-questions.md with a Plan Approval question and a blank [Answer]: tag, ` +
-    `present that question, END the turn, and record the human's explicit "Approve Plan" ` +
-    `answer in the tag. Only then dispatch generation (Step 4), starting the delegation ` +
-    `prompt with the exact line "AIDLC-UNIT: <unit>". ` +
+    `plan, unit-test instructions, and current Testing Contract are fingerprinted and approved ` +
+    `for ${scope}. Follow the stage file's Steps 2-3 first: write the plan and instructions, ` +
+    `embed the resolver's ## Testing Contract JSON, record its current [Approval Fingerprint], ` +
+    `present the Plan Approval question, END the turn, and record the human's explicit ` +
+    `"Approve Plan" answer. Only then dispatch generation (Step 4), starting the delegation ` +
+    `prompt with "AIDLC-UNIT: <unit>" and "AIDLC-TESTING-CONTRACT: <contract hash>". ` +
     `code-generation-plan.md is the INPUT to generation, never a retroactive summary.`
   );
 }
@@ -335,24 +227,18 @@ export function knownUnits(projectDir: string, recordDir: string): string[] {
   return Array.from(units);
 }
 
-export function gatherUnitEvidence(recordDir: string, units: string[]): UnitEvidence[] {
+export function gatherUnitEvidence(projectDir: string, units: string[]): UnitEvidence[] {
   return units.map((unit) => {
-    const stageDirPath = join(recordDir, "construction", unit, GUARDED_STAGE);
-    let planExists = false;
-    let approved = false;
-    try {
-      const planPath = join(stageDirPath, "code-generation-plan.md");
-      if (existsSync(planPath)) {
-        planExists = readFileSync(planPath, "utf-8").trim().length > 0;
-      }
-      const questionsPath = join(stageDirPath, "code-generation-questions.md");
-      if (existsSync(questionsPath)) {
-        approved = questionsFileApproved(readFileSync(questionsPath, "utf-8"));
-      }
-    } catch {
-      // Unreadable evidence counts as missing for this unit.
-    }
-    return { unit, planExists, approved };
+    const approval = evaluateCodeGenerationApproval(projectDir, unit);
+    return {
+      unit,
+      planExists: approval.planExists,
+      instructionsExist: approval.instructionsExist,
+      approved: approval.approved,
+      contractValid: approval.contractValid,
+      fingerprintValid: approval.fingerprintValid,
+      contractHash: approval.contractHash,
+    };
   });
 }
 
@@ -402,7 +288,7 @@ export async function run(input: string): Promise<number> {
     if (normalizeStageName(activeStage) !== GUARDED_STAGE) return 0;
 
     const recordDir = docsRoot(projectDir);
-    units = gatherUnitEvidence(recordDir, knownUnits(projectDir, recordDir));
+    units = gatherUnitEvidence(projectDir, knownUnits(projectDir, recordDir));
     const promptText = [toolInput.prompt, toolInput.description]
       .filter((v): v is string => typeof v === "string")
       .join("\n");

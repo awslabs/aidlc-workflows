@@ -373,7 +373,7 @@ This is one of the framework's five flow-altering hooks and one of its four `Pre
 
 This is one of the framework's five flow-altering hooks and one of its four `PreToolUse` controls. The stage prose says generation never begins before the human answers "Approve Plan" - a field report showed a conductor generating the code first and backfilling `code-generation-plan.md` beside `code-summary.md`, turning the plan into a retroactive summary. The stage-completion artifact guard cannot catch that inversion (it fires at completion, when the backfilled plan already exists), so this hook refuses the dispatch itself.
 
-**Decision.** The guard acts only when the active state-bound directive is code-generation (falling back to `Current Stage` when no valid marker exists) and the tool call is a `Task` dispatch whose `subagent_type` is `aidlc-developer-agent`. This keeps the guard active during a unit-major interleave while the durable cursor remains on the first design stage. Step 4 requires the delegation prompt to start with `AIDLC-UNIT: <directive.unit>` (or the current single-iteration unit). The guard resolves that exact marker against the workflow's known units (the compiled bolt DAG plus the on-disk `construction/<unit>/` dirs), then requires that unit to have BOTH a non-empty `code-generation-plan.md` on disk AND an explicit "Approve Plan" answer on the Plan Approval question in `code-generation-questions.md`. Contextual mentions of sibling units have no effect; missing, conflicting, or unknown markers block. The Plan Approval identifier may share the heading with its question number (`Q1: Plan Approval` or `Question 1 - Plan Approval`) or appear as the first question-text line under a numbered heading (`## Q1` followed by `Plan Approval`); blank tags, "Request Changes", unrelated answered questions, and examples inside HTML comments or fenced code do not authorize generation. The same evidence is mandatory under autonomous Construction, matching the stage's every-execution-mode hard stop. The decision (`evaluatePlanApprovalDispatch`, an exported pure function pinned by `t265`) blocks with **exit 2 + a redirecting stderr reason** naming the missing evidence and the stage steps that produce it, and emits a `PLAN_APPROVAL_BLOCKED` audit row (Tool, Target, Stage, Unit).
+**Decision.** The guard acts only when the active state-bound directive is code-generation (falling back to `Current Stage` when no valid marker exists) and the tool call is a `Task` dispatch whose `subagent_type` is `aidlc-developer-agent`. This keeps the guard active during a unit-major interleave while the durable cursor remains on the first design stage. Step 4 requires the delegation prompt to start with `AIDLC-UNIT: <directive.unit>` and `AIDLC-TESTING-CONTRACT: <hash>`. The guard resolves the Unit marker against the compiled Bolt DAG plus on-disk construction directories, then requires non-empty plan and test-instruction files, a structured Testing Contract that still matches current memory/scope/strategy/type, an explicit "Approve Plan" answer, and an approval fingerprint over those exact bytes. Missing, conflicting, unknown, stale, or post-approval-modified evidence blocks. The Plan Approval identifier may share the heading with its question number (`Q1: Plan Approval` or `Question 1 - Plan Approval`) or appear as the first question-text line under a numbered heading (`## Q1` followed by `Plan Approval`); blank tags, "Request Changes", unrelated answered questions, and examples inside HTML comments or fenced code do not authorize generation. The same evidence is mandatory under autonomous Construction, where `aidlc-swarm.ts prepare` independently verifies it before worktree creation. The decision (`evaluatePlanApprovalDispatch`, pinned by `t265`) blocks with **exit 2 + a redirecting stderr reason** and emits a `PLAN_APPROVAL_BLOCKED` audit row (Tool, Target, Stage, Unit).
 
 **Fail-open outside the guarded dispatch.** No state file, another stage, another agent or tool, malformed stdin, or any internal error allows the call. Once a code-generation developer dispatch is identified, missing or ambiguous target evidence blocks. The deterministic off-switch `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` disables enforcement entirely. On Kiro CLI the conductor agent registers the guard on its `subagent` matcher (the adapter translates the crew schema); on Codex it rides the `spawn_agent` PreToolUse seam; on opencode the plugin consults it before `task` dispatches; Kiro IDE documents the bound as prose-only, like its other guards.
 
@@ -622,7 +622,19 @@ Deterministic handlers avoid LLM overhead for operations that are pure computati
 
 ## Sensor, Learning, and Runtime Tools
 
-Three further `aidlc-*.ts` tools back the v0.5.0 data plane. Each is a thin, deterministic dispatcher: the hooks invoke them automatically, and they are also human-callable for debugging. They follow the same three-concerns split as `aidlc-utility.ts` — determinism lives in the tool, the conflict/contradiction VERDICT is the orchestrator-LLM's, and keep/skip judgement is the user's at a gate.
+Four further `aidlc-*.ts` tools back the data plane. Each is deterministic:
+the hooks/stages invoke them automatically, and they are also human-callable
+for debugging.
+
+### `aidlc-testing-posture.ts` — Code Generation Testing Contract
+
+`resolve`/`render` read the active space's org/team/project Testing Posture
+sections, resolve methodology/order independently from ancillary coverage and
+tooling notes, combine the active scope and Test Strategy obligations, and emit
+the structured contract plus methodology-specific plan profile.
+`fingerprint --unit <unit>` binds the exact plan, unit test instructions, and
+current contract for Plan Approval; `verify --unit <unit>` is the shared
+decision used by the dispatch guard and autonomous swarm `prepare`.
 
 ### `aidlc-sensor.ts` — Sensor dispatcher
 
