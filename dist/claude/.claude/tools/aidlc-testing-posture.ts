@@ -233,20 +233,38 @@ function classifyPosture(section: string): ClassifiedPosture | null {
     if (detected) components.add(detected);
   }
 
-  const ordering = structuredOrdering ?? "";
+  const ordering = structuredOrdering ?? body;
   const mixedOrdering =
-    /\b(first|before|precede)\b/i.test(ordering) &&
-    /\b(after|follow)\b/i.test(ordering);
+    (/\b(?:tests?|scenarios?)\b[^.\n]{0,80}\bfirst(?!-)\b/i.test(ordering) ||
+      /\b(?:tests?|scenarios?)\b[^.\n]{0,80}\bbefore\b[^.\n]{0,40}\bimplement(?:ation|ing)?\b/i.test(
+        ordering,
+      )) &&
+    (/\btests?\b[^.\n]{0,80}\bafter\b[^.\n]{0,40}\bimplement(?:ation|ing)?\b/i.test(
+      ordering,
+    ) ||
+      /\brefactor(?:ing)?\b[^.\n]{0,80}\bafter\b[^.\n]{0,40}\bgreen\b/i.test(
+        ordering,
+      ) ||
+      /\btests?\b[^.\n]{0,80}\bfollow\b[^.\n]{0,40}\bimplement(?:ation|ing)?\b/i.test(
+        ordering,
+      ));
   const customSignal =
     /\b(?:custom|mixed)[ -](?:ordering|cadence|posture|methodology)\b|\b(?:ordering|cadence|posture|methodology)[ -](?:custom|mixed)\b/i.test(
       body,
     );
-  let methodology =
+  if (
+    structured === null &&
+    components.size > 1 &&
+    !customSignal &&
+    !mixedOrdering
+  ) {
+    return null;
+  }
+  const methodology =
     structured ??
-    (customSignal || components.size > 1
+    (customSignal || mixedOrdering
       ? "custom"
       : Array.from(components)[0] ?? null);
-  if (mixedOrdering) methodology = "custom";
   if (methodology === null) return null;
 
   if (methodology !== "custom") components.add(methodology);

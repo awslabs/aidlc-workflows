@@ -46,6 +46,19 @@ const ORG = [
   "- **Methodology**: test-after",
   "- **Ordering**: implement each layer, then test it.",
 ].join("\n");
+const LEGACY_ORG = `We treat tests as a first-class deliverable in every Bolt. Specific
+methodology — TDD, BDD, ATDD, or classic test-after — is captured by the
+testing-strategy stage when it ships.
+
+Until then, our default per scope is:
+- \`mvp\`, \`enterprise\`, \`feature\`, \`infra\` → tests written alongside
+  code; minimum 80% line coverage; tests run in CI before merge.
+- \`bugfix\`, \`security-patch\` → regression test for the specific
+  bug/vulnerability; existing test suite must remain green.
+- \`poc\`, \`refactor\`, \`workshop\` → existing test suite remains green;
+  no new test floor required.
+
+Affirm a stricter posture in \`team.md\` if the team commits to one.`;
 
 function resolve(
   sections: { org?: string; team?: string; project?: string },
@@ -96,6 +109,25 @@ describe("t292 (1) additive methodology resolution", () => {
           "- **Methodology**: tdd | bdd | atdd | test-after | custom\n- **Ordering**: choose later.",
       }),
     ).toThrow("Invalid Testing Posture Methodology");
+  });
+
+  test("structured TDD remains authoritative when Ordering contains before and after", () => {
+    const contract = resolve({
+      org: ORG,
+      team: [
+        "- **Methodology**: tdd",
+        "- **Ordering**: Write each layer's failing tests before implementing; refactor after each green run.",
+      ].join("\n"),
+    });
+    expect(contract.methodology).toBe("tdd");
+    expect(contract.plan_profile.steps[2]).toContain("Red");
+  });
+
+  test("the pre-2.6.8 org enumeration falls through to test-after", () => {
+    const contract = resolve({ org: LEGACY_ORG });
+    expect(contract.methodology).toBe("test-after");
+    expect(contract.source).toBe("fallback");
+    expect(contract.plan_profile.steps[2]).toContain("implement");
   });
 
   test("a contradictory project methodology is rejected, not treated as override", () => {
