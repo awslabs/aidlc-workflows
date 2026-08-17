@@ -418,12 +418,13 @@ aidlc-claude/
 ├── dist/
 │   ├── claude/.claude/                       # what Claude Code users copy
 │   ├── kiro-ide/{AGENTS.md, .kiro/}          # what Kiro IDE users copy
-│   ├── kiro/{AGENTS.md, .kiro/}              # what Kiro CLI users copy
+│   ├── kiro/{AGENTS.md, .kiro/}              # what Kiro CLI 2.x users copy
+│   ├── kiro-unified/{AGENTS.md, .kiro/}      # what Kiro IDE 1.x / CLI --v3 users copy
 │   ├── codex/{AGENTS.md, .agents/, .codex/}  # what Codex CLI users copy
 │   ├── cursor/{AGENTS.md, aidlc/, .cursor/}   # what Cursor IDE/CLI users install
 │   ├── opencode/{AGENTS.md, .aidlc/, .opencode/}  # what opencode users copy
 │   ├── copilot/{AGENTS.md, .aidlc/, .github/}     # what GitHub Copilot users copy
-│   └── plugins/<name>/{claude,codex,copilot,cursor,kiro,kiro-ide,opencode}/  # one real host plugin per harness — install alongside dist/<harness>/
+│   └── plugins/<name>/{claude,codex,copilot,cursor,kiro,kiro-ide,kiro-unified,opencode}/  # one real host plugin per harness — install alongside dist/<harness>/
 │
 │  ─────────── SUPPORTING ───────────
 ├── tests/                      # all-TypeScript suite (t*.test.ts) — resolves dist via AIDLC_SRC

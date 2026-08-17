@@ -7,7 +7,9 @@ All AI-DLC commands start with the orchestrator invocation. This chapter is a co
 > `/skills` → aidlc). The flags and behaviour below are identical either way —
 > only the prefix changes. The examples use `/aidlc`; substitute `$aidlc` on
 > Codex. See the [Kiro CLI](harnesses/kiro-cli.md),
-> [Kiro IDE](harnesses/kiro-ide.md), [Codex CLI](harnesses/codex-cli.md),
+> [Kiro IDE](harnesses/kiro-ide.md),
+> [Kiro unified agent harness](harnesses/kiro-unified.md),
+> [Codex CLI](harnesses/codex-cli.md),
 > [Cursor](harnesses/cursor.md), [opencode](harnesses/opencode.md), and
 > [GitHub Copilot](harnesses/copilot.md) harness guides.
 

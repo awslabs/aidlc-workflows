@@ -147,6 +147,7 @@ continues on **Claude Code** (the `dist/claude/` tree, which ships as a
 `.claude/` directory). On another harness, finish the install in its chapter
 instead - [Running on Kiro CLI](harnesses/kiro-cli.md),
 [Running on Kiro IDE](harnesses/kiro-ide.md),
+[AI-DLC on the Kiro unified agent harness](harnesses/kiro-unified.md),
 [Running on Codex CLI](harnesses/codex-cli.md),
 [AI-DLC on Cursor](harnesses/cursor.md),
 [AI-DLC on opencode](harnesses/opencode.md), or
@@ -203,6 +204,20 @@ cp dist/kiro-ide/AGENTS.md your-project/AGENTS.md   # merge if you already have 
 ```
 
 Then continue in [Running AI-DLC on Kiro IDE](harnesses/kiro-ide.md): prerequisites (Opus 4.8 as the chat model), the v2 hook files, and the PATH note for bun in non-interactive shells.
+
+</details>
+
+<details markdown="1">
+<summary><strong>Kiro unified agent harness (IDE 1.x / CLI <code>--v3</code>)</strong></summary>
+
+```bash
+mkdir -p your-project/.kiro your-project/aidlc
+cp -R dist/kiro-unified/.kiro/. your-project/.kiro/
+cp -R dist/kiro-unified/aidlc/. your-project/aidlc/     # the workspace shell (spaces/default/memory) — a sibling of .kiro/, not inside it
+cp dist/kiro-unified/AGENTS.md your-project/AGENTS.md   # merge if you already have one
+```
+
+Then continue in [AI-DLC on the Kiro unified agent harness](harnesses/kiro-unified.md): which of the three Kiro trees to pick, the `--v3` opt-in, and what differs on this runtime.
 
 </details>
 

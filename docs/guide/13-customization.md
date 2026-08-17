@@ -14,6 +14,7 @@ AI-DLC is designed to adapt to your team's needs. This chapter covers settings o
 > (folder trust) — see
 > [Running on Kiro CLI](harnesses/kiro-cli.md),
 > [Running on Kiro IDE](harnesses/kiro-ide.md),
+> [AI-DLC on the Kiro unified agent harness](harnesses/kiro-unified.md),
 > [Running on Codex CLI](harnesses/codex-cli.md),
 > [AI-DLC on Cursor](harnesses/cursor.md),
 > [AI-DLC on opencode](harnesses/opencode.md), and

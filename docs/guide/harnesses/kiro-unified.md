@@ -56,7 +56,7 @@ without it.
 ## Usage
 
 Open the project on either surface and run `/aidlc --doctor` first: it should
-report 39 checks passed. Then `/aidlc <description>` to start.
+report all checks passed. Then `/aidlc <description>` to start.
 
 On the **CLI**, select the conductor explicitly:
 
@@ -88,8 +88,15 @@ panel.
   `write-audit-log`, `record-human-turn`, `session-start`, `sync-workflow-state`,
   `rebuild-stage-graph`, `log-subagent`, `continue-workflow`,
   `enforce-approval-gate`, `review-freeze`, `plan-approval-guard`,
-  `state-transition-guard`, `verb-intercept`. The last four are PreToolUse
-  guards: a non-zero exit blocks the tool call on both surfaces.
+  `state-transition-guard`, `verb-intercept`. Four of them —
+  `enforce-approval-gate`, `review-freeze`, `plan-approval-guard`,
+  `state-transition-guard` — are PreToolUse guards: a non-zero exit blocks the
+  tool call on both surfaces. `verb-intercept` is **not** one of them. It
+  registers on `UserPromptSubmit`, which cannot block (measured 2026-08-16 on
+  both surfaces: exit 2 does not stop the turn, contradicting the "Can block:
+  Yes" in the official table), so it works by **relay** — it runs the terminal
+  utility itself, hands the verbatim output back on stdout with a
+  do-not-advance instruction, and exits 0 on every path.
 - **`aidlc-reviewer-scope.ts` ships unregistered.** It is a per-persona read
   and write bound, so it would have to fire for a **delegated** agent — and an
   agent-scope hook fires for the active agent only. A reviewer's scope is
