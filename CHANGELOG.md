@@ -1,6 +1,17 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.17] - 2026-08-18
+
+Plugin authors now have a reusable test kit and documented testing tiers for content validation, deterministic composition, and opt-in live harness checks. No upgrade action is needed.
+
+* `tests/harness/plugin-kit.ts` exposes shared plugin projection, fixture composition, content validation, and gated harness invocation helpers.
+* `validatePluginContent()` reports structured findings for manifest identity, stage schema and ownership, artifact namespacing, contribution targets, scope and agent names, and empty stage bodies.
+* `composePluginFixture()` builds a real projection and composes it into a scratch install for deterministic integration checks.
+* `invokeHarness()` dispatches across Claude, Kiro, Codex, Copilot, OpenCode, and Cursor, while `liveGateFor()` identifies the opt-in gate whose unset value means skip.
+* Plugin tests remain auto-discovered under `plugins/<name>/tests/*.test.ts` and can be selected with `bash tests/run-tests.sh --integration --filter "plugin-<name>"`.
+* The Harness Engineer Guide now includes a "Testing your plugin" section with tier tradeoffs and copyable examples.
+
 ## [2.6.16] - 2026-08-18
 
 Code Generation now turns the team's affirmed Testing Posture into one fingerprinted execution contract shared by normal and autonomous generation. The resolver preserves additive project/team/org notes, distinguishes TDD, BDD, ATDD, test-after, and custom/mixed ordering, and binds the approved plan to the active scope and Test Strategy. **Upgrade:** re-copy your `dist/<harness>/` shell so the new `aidlc-testing-posture.ts` tool, stage contract, dispatch guard, swarm precondition, and developer persona are installed.
