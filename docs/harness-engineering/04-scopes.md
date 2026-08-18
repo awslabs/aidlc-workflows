@@ -40,7 +40,7 @@ The scope frontmatter fields are:
 | `description` | No | The one-liner rendered in `/aidlc --help`. (The compiled scope-table in SKILL.md shows only Scope / Depth / TestStrategy / EXECUTE / Total, leaving the description out.) |
 | `skeleton` | No | `on` opts the scope into the walking-skeleton ceremony when practices are scope-dependent; `off` or absence opts out. |
 | `runner` | No | `true` includes the scope in the default generated scope-runner set. |
-| `freeform_default` | No | `true` nominates this scope as the selection-aware fallback when the preferred core default (`classic` or `poc`) is not enabled. |
+| `freeform_default` | No | `true` nominates this scope as the selection-aware fallback when the preferred core default (`feature` or `poc`) is not enabled. |
 
 The loader rejects duplicate scope `name` values across files and names both
 files in the error.
@@ -48,7 +48,7 @@ files in the error.
 ### Freeform default
 
 `freeform_default: true` lets an install nominate the scope used when an
-internal default such as `classic` or `poc` is unavailable after plugin
+internal default such as `feature` or `poc` is unavailable after plugin
 selection. The nomination is checked before the sole-enabled-plugin fallback,
 so a plugin with several scopes can choose its lean default instead of accepting
 the alphabetically first scope.

@@ -333,7 +333,7 @@ under `scopes/<plugin>-<name>.md`, with frontmatter `name` equal to the filename
 stem and `plugin: <plugin>`. Compose copies it into `<harness>/scopes/` without
 clobbering. Membership on plugin-authored stages works through those stages'
 `scopes:` frontmatter. A plugin scope may set `freeform_default: true` to
-nominate itself when the preferred core default is disabled; at most one
+nominate itself when the preferred core `feature`/`poc` default is disabled; at most one
 enabled scope may claim the nomination, and graph compilation rejects an
 ambiguous selected set. Adding a plugin scope to an existing core stage works
 through a contribution's `adds.scopes` (§6) — own-plugin scopes only, and the

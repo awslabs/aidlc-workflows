@@ -18,6 +18,7 @@ import onboardingFills from "./onboarding.fills.ts";
 const manifest: HarnessManifest = {
   name: "claude",
   harnessDir: ".claude",
+  orchestratorSkillPath: ".claude/skills/aidlc/SKILL.md",
   tierFlavor: "claude",
 
   // core/<src> → <harnessDir>/<dst>. Claude keeps every core dir name as-is.

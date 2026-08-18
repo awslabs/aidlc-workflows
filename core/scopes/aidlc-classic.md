@@ -2,16 +2,16 @@
 name: classic
 depth: Standard
 keywords: []
-description: "The default: full lifecycle without ideation ceremony"
+description: "Opt-in v1-style lifecycle without ideation ceremony"
 skeleton: on
 review_cap: advisory
 ---
 
 # classic scope
 
-`classic` is the freeform default scope. It reproduces the AI-DLC v1
-experience: the lifecycle begins after Ideation, then adapts through Inception,
-Construction, and Operation according to each stage's applicability.
+`classic` is an opt-in scope that reproduces the AI-DLC v1 experience: the
+lifecycle begins after Ideation, then adapts through Inception, Construction,
+and Operation according to each stage's applicability.
 
 ## Why these stages, why skip those
 
@@ -30,5 +30,4 @@ teaching-oriented Minimal test override for existing workshop workflows.
 
 Initialization, every Inception stage, every Construction stage, and every
 Operation stage are in the grid; all seven Ideation stages are SKIP. The
-scope intentionally has no keywords: it is selected by explicit name or by the
-freeform default after routing and composition checks.
+scope intentionally has no keywords and is selected by explicit name.

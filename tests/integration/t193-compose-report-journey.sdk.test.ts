@@ -101,7 +101,7 @@ describe("t193 report composer journey (/aidlc compose --report, sdk live)", () 
 
         // The born workflow rides the triaged route: a compact incremental
         // scope (bugfix, or security-patch if the composer judged the hotspot
-        // must deploy) - never the classic freeform default.
+        // must deploy) - never the feature freeform default.
         const stateText = readStateFile(proj) ?? "";
         const scope = readStateField(stateText, "Scope");
         expect(["bugfix", "security-patch"]).toContain(scope ?? "");

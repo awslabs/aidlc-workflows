@@ -63,13 +63,10 @@
 // KNOWN SCOPE (a key in scope-mapping.json), so SKILL.md routes it through the
 // "known scope" path (:329-339), which does NOT render a scope-confirmation gate
 // (that gate is the FREEFORM-text path, :341-362, "confirmation is mandatory for
-// all freeform inputs"). The shipped settings.json env default
-// `AWS_AIDLC_DEFAULT_SCOPE: "classic"` (line 23) AGREES with the keyword, so even
-// the env-substitution path (SKILL.md:103-106) synthesizes `--scope classic` with
-// NO conflict — no feature-vs-classic disambiguation. EITHER interpretation lands
-// classic. The journey is LLM-mediated, so if a residual scope-confirm menu DOES
-// paint on some run, its Recommended default is the classic scope; answer-gate
-// presses Enter and selects it. answer-gate is a no-op disk-poller when no menu is
+// all freeform inputs"). The explicit `--scope classic` flag outranks the shipped
+// `AWS_AIDLC_DEFAULT_SCOPE: "feature"` setting, so both routing paths land on
+// Classic without relying on the implicit default. The journey is LLM-mediated,
+// so answer-gate remains a no-op disk-poller when no menu is
 // up (it checks the terminator FIRST each loop — tui-drive.ts:951-959), so the
 // gateless known-scope path is safe too. NET: robust to both routings; the disk
 // terminator is the truth either way. (LIVE-VERIFY RISK: if a future SKILL.md
@@ -378,7 +375,7 @@ describe("t-tui-t58 workshop-scope (skips Ideation, runs Inception+ at Standard/
         //     .sh's loose `[Ww]orkshop` grep).
         expect(stateMd).toMatch(/^-\s*\*\*Scope\*\*:\s*classic$/m);
 
-        // #12 Depth = Standard (classic default — scope-mapping.json:99). Pin the
+        // #12 Depth = Standard (classic scope — scope-mapping.json). Pin the
         //     field (stronger than the .sh's `Depth.*Standard`).
         expect(stateMd).toMatch(/^-\s*\*\*Depth\*\*:\s*Standard$/m);
 

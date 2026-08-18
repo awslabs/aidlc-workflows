@@ -47,26 +47,26 @@ To change ONE agent's behavior in your installed copy, edit the projected value 
 
 ## Per-Project Default Scope
 
-When every workflow in a project should start at the same scope, set `AWS_AIDLC_DEFAULT_SCOPE` in the `env` block of `.claude/settings.json` (the shipped file already has this set to `classic`):
+When every workflow in a project should start at the same scope, set `AWS_AIDLC_DEFAULT_SCOPE` in the `env` block of `.claude/settings.json` (the shipped file already has this set to `feature`):
 
 ```json
 {
   "env": {
-    "AWS_AIDLC_DEFAULT_SCOPE": "classic"
+    "AWS_AIDLC_DEFAULT_SCOPE": "feature"
   }
 }
 ```
 
 > The shipped `env` block also contains Bedrock model IDs (`CLAUDE_CODE_USE_BEDROCK`, `ANTHROPIC_DEFAULT_OPUS_MODEL`, etc.). Those are listed separately — the example above only shows the scope key for clarity.
 
-With this set, bare `/aidlc` invocations use `classic` as the default scope. The env var is read at workflow initialization only; once the intent's `aidlc-state.md` exists (under its record dir), the state file is authoritative and env changes don't affect an in-flight workflow.
+With this set, bare `/aidlc` invocations use `feature` as the default scope. The env var is read at workflow initialization only; once the intent's `aidlc-state.md` exists (under its record dir), the state file is authoritative and env changes don't affect an in-flight workflow.
 
 **Precedence (highest to lowest):**
 
 1. Explicit CLI flag: `/aidlc feature` or `/aidlc --scope bugfix` wins.
 2. Keyword detection in freeform text: `/aidlc fix the login bug` still maps to `bugfix`. Users can override the detected scope at the existing confirmation prompt.
 3. `AWS_AIDLC_DEFAULT_SCOPE` env var from `.claude/settings.json`.
-4. Hard-coded fallback (`poc` at intent birth, `classic` for unmatched freeform).
+4. Hard-coded fallback (`poc` at intent birth, `feature` for unmatched freeform).
 
 **Valid values:** `enterprise`, `feature`, `mvp`, `poc`, `bugfix`, `refactor`, `infra`, `security-patch`, `classic`, `workshop`, `express`. An invalid value errors at invocation time with a clear message. Teams can define additional scopes by dropping a `.claude/scopes/aidlc-<name>.md` file and tagging the member stages' `scopes:` lists — see [Contributing: Adding a Scope](../reference/11-contributing.md#adding-a-scope). Teams can also define additional agents in `.claude/agents/` — see [Contributing: Adding an Agent](../reference/11-contributing.md#adding-an-agent).
 

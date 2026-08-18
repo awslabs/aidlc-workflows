@@ -1,6 +1,17 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.18] - 2026-08-19
+
+Classic and Express are now additive scope options while existing implicit workflows continue to use the full-lifecycle Feature scope. Express has a deterministic requirements-to-conditional-deploy path, and conditional protocol modules reduce fixed context without dropping reviewer recovery behavior. **Upgrade:** refresh your `dist/<harness>/` shell; existing Workshop and Feature workflows require no state or configuration migration.
+
+* Bare and unmatched freeform scope resolution remains `feature`; use `--scope classic` for the opt-in v1-style lifecycle without Ideation, or `AWS_AIDLC_DEFAULT_SCOPE=classic` to choose it per project.
+* `--scope workshop` remains supported with its established `workshop`, `lab`, and `training` keywords, compatible stage grid, and Minimal test-strategy override.
+* `--scope express` adds the lightweight Requirements Analysis, single-iteration Code Generation, Build and Test, and conditional deploy/observability route with reviewers, Unit DAGs, skeleton ceremony, and swarm dispatch disabled.
+* Express Code Generation artifacts use stage-level paths; Build and Test executes stage-level test instructions and includes stage-level traceability in its final coverage gate alongside per-Unit artifacts.
+* Reviewer, ensemble, Construction, and swarm contracts load as directive-selected protocol modules; converged swarm settlement cannot repeat reviews after resume, and the modules retain bounded stale-receipt recovery.
+* Harness manifests now declare the emitted orchestrator `SKILL.md` path, so custom `skipRunnerGen`/`emit` layouts can refresh generated tables without using a hardcoded location.
+
 ## [2.6.17] - 2026-08-18
 
 Plugin authors now have a reusable test kit and documented testing tiers for content validation, deterministic composition, and opt-in live harness checks. No upgrade action is needed.

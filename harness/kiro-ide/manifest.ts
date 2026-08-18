@@ -26,6 +26,7 @@ import onboardingFills from "./onboarding.fills.ts";
 const manifest: HarnessManifest = {
   name: "kiro-ide",
   harnessDir: ".kiro",
+  orchestratorSkillPath: ".kiro/skills/aidlc/SKILL.md",
   tierFlavor: "kiro",
 
   // Same core projection as kiro CLI.

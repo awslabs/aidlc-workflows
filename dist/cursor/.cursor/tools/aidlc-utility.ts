@@ -5842,7 +5842,7 @@ function handleDetectScope(
   // --input requirement differs by mode:
   //   --scope mode: --input is required (audit event needs original text).
   //   --from-text mode: --input may be empty string — inferScopeFromText
-  //     returns `classic` as the documented default. Missing --input
+  //     returns `feature` as the documented default. Missing --input
   //     entirely is still an error; an empty string is fine.
   const input = flags.input;
   if (input === undefined) {

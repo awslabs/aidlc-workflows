@@ -181,7 +181,7 @@ describe("t114 scope precedence + validation", () => {
 
   test("7: env scope beats default (poc resolved, run-stage emitted)", () => {
     // Valid env scope (poc) resolves; --stage surfaces a run-stage directive.
-    // The default (classic) is never reached because env supplied a valid scope.
+    // The default (feature) is never reached because env supplied a valid scope.
     proj = createOrchestrationTestProject();
     const out = runNext(proj, ["--stage", "intent-capture"], {
       AWS_AIDLC_DEFAULT_SCOPE: "poc",

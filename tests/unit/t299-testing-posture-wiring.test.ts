@@ -1,4 +1,4 @@
-// covers: file:tools/aidlc-testing-posture.ts, file:aidlc-common/stages/construction/code-generation.md, file:aidlc-common/stages/inception/practices-discovery.md, file:aidlc-common/protocols/stage-protocol.md, file:agents/aidlc-developer-agent.md, file:memory/org.md
+// covers: file:tools/aidlc-testing-posture.ts, file:aidlc-common/stages/construction/code-generation.md, file:aidlc-common/stages/inception/practices-discovery.md, file:aidlc-common/protocols/stage-protocol-construction.md, file:aidlc-common/protocols/stage-protocol-swarm.md, file:agents/aidlc-developer-agent.md, file:memory/org.md
 //
 // t299 - TESTING POSTURE CONTRACT. Deterministic behavior tests for additive
 // posture resolution, methodology-specific plan profiles, strategy/scope
@@ -33,8 +33,10 @@ import { REPO_ROOT } from "../harness/fixtures.ts";
 const STAGE_REL = "core/aidlc-common/stages/construction/code-generation.md";
 const PRACTICES_REL =
   "core/aidlc-common/stages/inception/practices-discovery.md";
-const PROTOCOL_REL =
-  "core/aidlc-common/protocols/stage-protocol.md";
+const CONSTRUCTION_PROTOCOL_REL =
+  "core/aidlc-common/protocols/stage-protocol-construction.md";
+const SWARM_PROTOCOL_REL =
+  "core/aidlc-common/protocols/stage-protocol-swarm.md";
 const AGENT_REL = "core/agents/aidlc-developer-agent.md";
 const ORG_REL = "core/memory/org.md";
 
@@ -416,9 +418,13 @@ describe("t299 (5) authored consumers use the same contract", () => {
   });
 
   test("the shared protocol and every harness require approved swarm worker markers", () => {
-    const protocol = read(PROTOCOL_REL);
-    expect(protocol).toContain("## 12b. Autonomous Code Generation Plan Contract");
-    expect(protocol).toContain("AIDLC-TESTING-CONTRACT: <contract_sha256");
+    const construction = read(CONSTRUCTION_PROTOCOL_REL);
+    expect(construction).toContain("## 12b. Autonomous Code Generation Plan Contract");
+    expect(construction).toContain("AIDLC-TESTING-CONTRACT: <contract_sha256");
+    const swarm = read(SWARM_PROTOCOL_REL);
+    expect(swarm).toContain(
+      'stage-protocol-construction.md` §12b "Autonomous Code Generation Plan Contract"',
+    );
     for (const harness of [
       "claude",
       "kiro",
@@ -430,7 +436,7 @@ describe("t299 (5) authored consumers use the same contract", () => {
     ]) {
       const skill = read(`harness/${harness}/skills/aidlc/SKILL.md`);
       expect(skill, harness).toContain(
-        '§12b "Autonomous Code Generation Plan Contract"',
+        "stage-protocol-construction.md` — load on the first Construction directive of the session and on every `invoke-swarm`",
       );
     }
   });

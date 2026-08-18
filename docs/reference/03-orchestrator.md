@@ -62,7 +62,7 @@ When the argument is freeform text (not a known scope keyword):
    - "mvp" / "minimum viable" maps to `mvp`
    - "workshop" / "lab" / "training" maps to `workshop`
    - "express" / "lightweight" maps to `express`
-   - The underlying no-keyword resolver defaults to `classic`; the user-facing
+   - The underlying no-keyword resolver defaults to `feature`; the user-facing
      cold-start path offers composition first for no-match or rich prose
 3. Disambiguation rule: if the text contains BOTH a scope keyword AND a longer project description (more than 5 words), the match is treated as incidental and the COMPOSE OFFER fires instead of a silent default.
 4. On a clear keyword match, confirms with the user, naming the ceremony from the compiled grid: `Starting a "[scope]" workflow for: "[text]" - [N] of [T] stages, [G] approval gates. Confirm to proceed, name a different scope, or say "compose" for a tailored plan.` (A per-unit clause is appended when the scope's Construction stages fan out per Unit of Work.)
@@ -287,14 +287,14 @@ Authoritative data lives in the `.claude/scopes/aidlc-<name>.md` files plus each
 ### Detailed Scope Breakdown
 
 - **enterprise** -- All 33 stages with comprehensive depth. Every stage executes with full artifact detail, deep analysis, and all optional stages included. Suitable for regulated enterprise features requiring complete traceability.
-- **feature** -- All 33 stages with standard depth. Same stage set as enterprise but with moderate artifact detail. Available explicitly through `--scope feature` and `/aidlc-feature`.
+- **feature** -- The backward-compatible freeform default: all 33 stages with standard depth. Same stage set as enterprise but with moderate artifact detail. Also available explicitly through `--scope feature` and `/aidlc-feature`.
 - **mvp** -- Skips most of Ideation (keeps only Intent Capture, light Feasibility, and Scope Definition). Runs all of Inception and Construction. Operation stages optional.
 - **poc** -- Minimal Ideation (only Intent Capture). Core Inception. Only Code Generation and Build and Test from Construction. No Operation.
 - **bugfix** -- No Ideation. Reverse Engineering always included (to find the bug) plus minimal Requirements Analysis. Code Generation and Build and Test only.
 - **refactor** -- No Ideation. Same Inception start as bugfix. Adds Functional Design (as refactoring plan).
 - **infra** -- No Ideation. Infra-focused Requirements Analysis. NFR stages + Infrastructure Design + CI Pipeline from Construction. Deployment and Observability from Operation.
 - **security-patch** -- No Ideation. Reverse Engineering to find vulnerability context plus minimal Requirements Analysis (the auditable statement of the vulnerability and its remediation criteria). NFR Requirements, Code Generation, Build and Test. Deployment Pipeline and Deployment Execution from Operation.
-- **classic** -- The freeform default and the v1-style lifecycle: no Ideation, with all Inception, Construction, and Operation stages in the grid. Only Initialization, Requirements Analysis, Units Generation, Delivery Planning, Code Generation, and Build and Test are ALWAYS; the remaining stages self-select. Standard depth and Standard test strategy preserve the production test floor.
+- **classic** -- The opt-in v1-style lifecycle: no Ideation, with all Inception, Construction, and Operation stages in the grid. Only Initialization, Requirements Analysis, Units Generation, Delivery Planning, Code Generation, and Build and Test are ALWAYS; the remaining stages self-select. Standard depth and Standard test strategy preserve the production test floor.
 - **workshop** -- The compatible facilitated-session lifecycle: the same stage grid as Classic, with the established `workshop` / `lab` / `training` keywords and a Minimal test-strategy override.
 - **express** -- The lightest requirements-to-deploy route: conditional Reverse Engineering, Requirements Analysis, one zero-Unit Code Generation iteration, Build and Test, and a conditional deploy/observability tail. It skips Units Generation, so Bolt, skeleton, ladder, per-Unit, and swarm paths are structurally unreachable. `review_cap: none` disables reviewers.
 

@@ -24,6 +24,6 @@ bodies and the org/team rule layers, not in which stages run.
 
 ## Membership
 
-`feature` marks all 33 stages EXECUTE. It remains fully available through
-`--scope feature` and the `/aidlc-feature` runner, but `classic` is now the
-freeform fallback. There are no keyword triggers of its own.
+`feature` marks all 33 stages EXECUTE. It remains the implicit freeform fallback
+and is also available through `--scope feature` and the `/aidlc-feature` runner.
+There are no keyword triggers of its own.

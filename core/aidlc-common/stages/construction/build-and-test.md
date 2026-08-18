@@ -113,13 +113,15 @@ Create `<record>/construction/build-and-test/build-and-test-summary.md`:
 Attempt to execute the build and test commands documented in the instruction files:
 
 1. **Build**: Run the build commands from `build-instructions.md` via Bash. Capture output.
-2. **Unit tests**: Collect the run commands across all per-unit
-   `<record>/construction/*/code-generation/unit-test-instructions.md` files,
-   deduplicate identical commands, and run each distinct command ONCE via
-   Bash. Every command should already be scoped to its unit. If a file
-   violates that rule and carries a project-wide command, run it once, never N
-   times. Capture and report per-unit pass/fail results without double
-   counting.
+2. **Unit tests**: Collect the run commands from both the stage-level
+   `<record>/construction/code-generation/unit-test-instructions.md` file (when
+   present, including Express) and all per-unit
+   `<record>/construction/*/code-generation/unit-test-instructions.md` files.
+   Deduplicate identical commands and run each distinct command ONCE via Bash.
+   Per-unit commands should already be scoped to their Unit. A stage-level or
+   malformed per-unit file may carry a project-wide command; run that command
+   once, never N times. Capture and report stage-level/per-unit pass/fail
+   results without double counting.
 3. **Integration tests** (if applicable): Run integration test commands. Capture results.
 4. **Report results**: Create or update `<record>/construction/build-and-test/test-results.md` with:
    - Build status (success/failure + output)
@@ -145,12 +147,14 @@ This is a stage-level gate, not the Construction phase boundary. Enumerate:
 - every three-segment `AC` from
   `<record>/inception/user-stories/stories.md` when that stage executed
 
-Read every
-`<record>/construction/*/code-generation/traceability.json`. Verify each
-enumerated ID is covered with status `OK` in at least one Unit and that its
-target file exists. Write
+Read both the stage-level
+`<record>/construction/code-generation/traceability.json` file (when present,
+including Express) and every per-unit
+`<record>/construction/*/code-generation/traceability.json` file. Verify each
+enumerated ID is covered with status `OK` in at least one stage-level or Unit
+entry and that its target file exists. Write
 `<record>/construction/build-and-test/cross-unit-traceability.md` with a
-pass/fail verdict, per-ID coverage, owning Unit, target file, and every
+pass/fail verdict, per-ID coverage, owning stage/Unit, target file, and every
 uncovered element. Any uncovered ID is a build-and-test finding that must be
 surfaced at the approval gate.
 

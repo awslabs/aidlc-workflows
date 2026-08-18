@@ -74,13 +74,13 @@ Core ships 11 named scopes. Each scope defines a stage set and a default depth l
 
 ### classic
 
-**Use when:** You want the default, v1-style lifecycle without Ideation ceremony. The remaining stages adapt to the project at runtime.
+**Use when:** You explicitly want the v1-style lifecycle without Ideation ceremony. The remaining stages adapt to the project at runtime.
 
 - **Stages:** 26 of 33
 - **Default depth:** Standard
 - **Default test strategy:** Standard
 - **Skips:** All Ideation stages (1.1-1.7)
-- **Keywords:** None; selected explicitly or as the freeform default
+- **Keywords:** None; selected explicitly
 
 ### workshop
 
@@ -119,7 +119,7 @@ Authoritative data lives in the `.claude/scopes/aidlc-<name>.md` files (scope id
 | `refactor` | 8 / 33 | Minimal | Minimal | Clean up existing code |
 | `infra` | 13 / 33 | Standard | Standard | Infrastructure change |
 | `security-patch` | 10 / 33 | Minimal | Minimal | CVE response |
-| `classic` | 26 / 33 | Standard | Standard | Default v1-style lifecycle without Ideation |
+| `classic` | 26 / 33 | Standard | Standard | Opt-in v1-style lifecycle without Ideation |
 | `workshop` | 26 / 33 | Standard | Minimal | Facilitated lifecycle with teaching-oriented tests |
 | `express` | 10 / 33 | Minimal | Minimal | Requirements to conditional deploy, no design or reviewers |
 | (auto-detect) | Varies | Varies | Varies | AI determines from freeform intent |
@@ -195,7 +195,7 @@ The engine analyzes your intent against keyword patterns:
 | "mvp", "minimum viable" | `mvp` |
 | "workshop", "lab", "training" | `workshop` |
 | "express", "lightweight" | `express` |
-| Explicit low-context fallback | `classic` when core is enabled; otherwise the sole enabled plugin's first scope when unambiguous |
+| Explicit low-context fallback | `feature` when core is enabled; otherwise the sole enabled plugin's first scope when unambiguous |
 
 **Disambiguation rule:** If your input contains both a scope keyword and a longer project description (more than 5 words), the match is treated as incidental and the compose offer fires instead (below). This prevents mismatches like "Fix the infrastructure monitoring dashboard" being routed to `infra` when a tailored plan is more appropriate.
 
@@ -212,11 +212,11 @@ Confirm to proceed, or reply with a different scope (or `compose`) to course-cor
 
 ## The Adaptive Composer
 
-The underlying resolver's no-keyword default is `classic`, which is used by
+The underlying resolver's no-keyword default is `feature`, which is used by
 explicit fallback paths and low-context utility calls. In the user-facing
 cold-start flow, rich prose, no keyword hit, or a keyword buried in a long
 description enters the compose offer before a workflow is created; it does not
-silently start Classic. You can also force composition:
+silently start Feature. You can also force composition:
 
 ```
 /aidlc compose "harden the deployment pipeline and add observability"
@@ -396,7 +396,7 @@ You can change the test strategy at three points:
 
 | Depth | Test Strategy | Effect | When to use |
 |-------|--------------|--------|-------------|
-| Standard | Standard | Full artifacts, balanced tests | Features and the classic default |
+| Standard | Standard | Full artifacts, balanced tests | Feature, classic, and other production scopes |
 | Standard | Minimal | Full artifacts, Nyquist tests | Workshops, time-boxed sessions |
 | Minimal | Minimal | Lean artifacts, requirement-driven tests | Express, quick bugfixes, patches |
 | Comprehensive | Comprehensive | Full everything | Regulated enterprise features |
@@ -417,11 +417,11 @@ You can change the test strategy at three points:
 | New AWS environment or CDK changes | `infra` |
 | CVE or security vulnerability response | `security-patch` |
 | Regulated feature requiring compliance | `enterprise` |
-| Default lifecycle without Ideation | `classic` |
+| Explicit lifecycle without Ideation | `classic` |
 | Lightweight requirements-to-deploy run | `express` |
 | AI-DLC workshop or training lab | `workshop` |
 
-When in doubt, start with `classic` — it is the default and its CONDITIONAL design and operation stages self-skip when they do not apply.
+When in doubt, start with `feature` for backward-compatible full-lifecycle coverage; choose `classic` explicitly when you want to skip Ideation.
 
 ---
 

@@ -7933,7 +7933,7 @@ interface ScopeMetadata {
    *  resolveReviewClass. */
   reviewCap?: "adversarial" | "advisory" | "none";
   /** When true, this scope is the enabled plugin's freeform/default fallback
-   *  (plugin-only installs where the core `classic`/`poc` defaults are
+   *  (plugin-only installs where the core `feature`/`poc` defaults are
    *  deselected). At most one enabled scope should set this. */
   freeformDefault?: boolean;
 }
@@ -8216,7 +8216,7 @@ export interface DefaultScopeResolution {
   note?: string;
 }
 
-export function selectionAwareDefaultScope(preferred = "classic"): DefaultScopeResolution {
+export function selectionAwareDefaultScope(preferred = "feature"): DefaultScopeResolution {
   const scopes = [...validScopes()];
   if (scopes.includes(preferred)) return { scope: preferred };
 
@@ -8270,7 +8270,7 @@ export function selectionAwareDefaultScope(preferred = "classic"): DefaultScopeR
 /**
  * Thin string-returning wrapper over {@link selectionAwareDefaultScope} for
  * callers that just need the resolved scope name. `preferred` is the caller's
- * core-era literal ("classic" for freeform inference, "poc" for intent birth).
+ * core-era literal ("feature" for freeform inference, "poc" for intent birth).
  * When `preferred` is enabled it wins (stock behaviour preserved); otherwise
  * the nominated freeform default (or the sole enabled plugin's first scope) is
  * returned, falling back to `preferred` when nothing can be chosen.

@@ -78,7 +78,7 @@
 // FINDING F1 (verified, surfaced — not softened). A custom scope is NOT
 // recognized by NAME in freeform dispatch: detect-scope keyword-matches the
 // `keywords[]` list, not the scope KEY, so `/aidlc data-migration ...` as
-// freeform returns the default `classic` scope, NOT data-migration. The
+// freeform returns the default `feature` scope, NOT data-migration. The
 // deterministic setup path is `aidlc-utility.ts init --scope data-migration`;
 // the live halves then resume that custom-scope state.
 //

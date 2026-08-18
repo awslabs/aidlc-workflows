@@ -32,6 +32,7 @@ import emit from "./emit.ts";
 const manifest: HarnessManifest = {
   name: "opencode",
   harnessDir: ".aidlc",
+  orchestratorSkillPath: ".aidlc/skills/aidlc/SKILL.md",
   tierFlavor: "opencode",
 
   // Same core projection as claude, into .aidlc/. The persona .md files ARE

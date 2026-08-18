@@ -692,7 +692,7 @@ function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): strin
   // 6. Generated table regions are build products, not authored prose. Refresh
   //    them only after emit(), because Codex and Copilot place the orchestrator
   //    skill outside <harnessDir>/skills/.
-  refreshGeneratedSkillRegions(treeRoot, harnessDir, m.name);
+  refreshGeneratedSkillRegions(outRoot, treeRoot, harnessDir, m);
   return [...walk(outRoot)];
 }
 
@@ -733,35 +733,39 @@ function runTool(
   return res.stdout ?? "";
 }
 
-function assembledOrchestratorSkill(treeRoot: string): string {
-  const projectRoot = dirname(treeRoot);
-  const candidates = [
-    join(treeRoot, "skills", "aidlc", "SKILL.md"),
-    join(projectRoot, ".agents", "skills", "aidlc", "SKILL.md"),
-    join(projectRoot, ".github", "skills", "aidlc", "SKILL.md"),
-  ];
-  const found = candidates.find((p) => existsSync(p));
-  if (!found) {
+function assembledOrchestratorSkill(
+  outRoot: string,
+  manifest: HarnessManifest,
+): string {
+  const rel = manifest.orchestratorSkillPath;
+  if (isAbsolute(rel) || rel.split(/[\\/]/).includes("..")) {
     throw new Error(
-      `packager: assembled orchestrator SKILL.md not found under ${projectRoot}`,
+      `packager: ${manifest.name} orchestratorSkillPath must stay within its dist root: ${rel}`,
     );
   }
-  return found;
+  const skillPath = join(outRoot, rel);
+  if (!existsSync(skillPath)) {
+    throw new Error(
+      `packager: ${manifest.name} orchestrator SKILL.md not found at ${skillPath}`,
+    );
+  }
+  return skillPath;
 }
 
 function refreshGeneratedSkillRegions(
+  outRoot: string,
   treeRoot: string,
   harnessDir: string,
-  harnessName: string,
+  manifest: HarnessManifest,
 ): void {
-  const skillPath = assembledOrchestratorSkill(treeRoot);
+  const skillPath = assembledOrchestratorSkill(outRoot, manifest);
   let body = readFileSync(skillPath, "utf-8").replace(/\r\n/g, "\n");
 
   for (const region of GENERATED_SKILL_REGIONS) {
     const rendered = runTool(
       treeRoot,
       harnessDir,
-      harnessName,
+      manifest.name,
       ["tools/aidlc-utility.ts", region.verb],
     ).trimEnd();
     const beginIdx = body.indexOf(region.begin);

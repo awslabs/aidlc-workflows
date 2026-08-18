@@ -195,8 +195,8 @@ function loadStateFileIfPresent(projectDir: string): string | null {
 // AWS_AIDLC_DEFAULT_SCOPE env var supplies one. Mirrors the prose
 // orchestrator's freeform-fallback default (SKILL.md detect-scope fallback).
 // selectionAwareDefaultScope() maps this to the sole enabled plugin's
-// nominated default on a plugin-only install where "classic" is deselected.
-const DEFAULT_SCOPE = "classic";
+// nominated default on a plugin-only install where "feature" is deselected.
+const DEFAULT_SCOPE = "feature";
 
 // READ_ONLY_FLAGS (--status/--help/--doctor/--version) and the shared workspace
 // parser (space/space-create/intent) are the terminal-command sources of truth

@@ -70,6 +70,12 @@ export type HarnessManifest = {
   /** The harness directory the token substitutes to (".claude" | ".kiro" | ".codex" | ".aidlc" | ".cursor"). */
   harnessDir: string;
   /**
+   * Project-root-relative path to the emitted orchestrator SKILL.md. Declared
+   * explicitly because emit-owned harnesses may place skills outside
+   * <harnessDir>/skills/ (for example Codex under .agents/skills/).
+   */
+  orchestratorSkillPath: string;
+  /**
    * Which tier-projection flavor this harness's agent surfaces use
    * (core/tools/aidlc-tiers.ts TIER_PROJECTIONS column). Declared here so a
    * new harness picks its projection shape in its manifest - the packager

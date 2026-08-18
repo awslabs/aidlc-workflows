@@ -495,7 +495,7 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
     // named scope on a fresh workspace is a request to START a workflow; the
     // pre-hardening engine relayed a circular no-state error here that told the
     // user to do exactly what they had just done). Pre-finding-2 this mis-read
-    // the scope as prose and emitted an `ask` defaulting to "classic".
+    // the scope as prose and emitted an `ask` defaulting to "feature".
     test("no-state bare known-scope 'bugfix' -> birth print naming intent-create (recognised as scope, not freeform) [finding 2]", () => {
       const r = emitNextNoState("bugfix");
       expect(r.directive.kind).toBe("print");
