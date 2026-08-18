@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { accessSync, appendFileSync, closeSync, constants as fsConstants, cpSync, existsSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, appendFileSync, closeSync, constants as fsConstants, cpSync, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -237,9 +237,16 @@ const KNOWN_RULES_SUBDIR: Record<string, string> = {
   ".cursor": "rules",
 };
 
+/** One MIME type's text extractor, as configured in harness.json. */
+export interface DocumentExtractorSpec {
+  argv: readonly string[];
+  timeoutMs?: number;
+}
+
 interface ShippedHarnessData {
   rulesSubdir: string | null;
   plugins: ReadonlySet<string> | null;
+  documentExtractors: ReadonlyMap<string, DocumentExtractorSpec> | null;
   runnerFrontmatterAdditions: readonly string[];
 }
 
@@ -276,6 +283,97 @@ function readShippedHarnessData(): ShippedHarnessData {
       }
       plugins = new Set(names);
     }
+    // documentExtractors: strict, and fail-closed. The value becomes a PROCESS
+    // INVOCATION, so a half-understood block must never reach spawn: `argv` is an
+    // array of non-empty strings, never a shell string that gets helpfully split.
+    let documentExtractors: ReadonlyMap<string, DocumentExtractorSpec> | null = null;
+    if (Object.hasOwn(parsed, "documentExtractors")) {
+      const raw = (parsed as { documentExtractors?: unknown }).documentExtractors;
+      if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+        throw new Error(
+          `${p}: harness.json field "documentExtractors" must be an object keyed by MIME type.`,
+        );
+      }
+      const map = new Map<string, DocumentExtractorSpec>();
+      for (const [mime, spec] of Object.entries(raw as Record<string, unknown>)) {
+        if (typeof spec !== "object" || spec === null || Array.isArray(spec)) {
+          throw new Error(
+            `${p}: harness.json field "documentExtractors" entry "${mime}" must be an object.`,
+          );
+        }
+        const argv = (spec as { argv?: unknown }).argv;
+        if (typeof argv === "string") {
+          throw new Error(
+            `${p}: harness.json field "documentExtractors" entry "${mime}" argv must be an ARRAY ` +
+              `of strings, not a shell string — it is spawned without a shell, so a string ` +
+              `cannot be split safely.`,
+          );
+        }
+        if (!Array.isArray(argv) || argv.length === 0) {
+          throw new Error(
+            `${p}: harness.json field "documentExtractors" entry "${mime}" argv must be a ` +
+              `non-empty array of strings.`,
+          );
+        }
+        for (const [idx, part] of argv.entries()) {
+          if (typeof part !== "string" || part.length === 0) {
+            throw new Error(
+              `${p}: harness.json field "documentExtractors" entry "${mime}" argv[${idx}] must ` +
+                `be a non-empty string.`,
+            );
+          }
+        }
+        // argv[0] is the EXECUTABLE, never substituted: `extractDocument`'s
+        // spawn is `spawnSync(argv[0], argv.slice(1).map(sub))` -- index 0
+        // names the program, so a "$IN" placeholder there is NEVER replaced
+        // and the tool literally tries to spawn a program called `$IN`.
+        // Measured against the shipped tool: `argv: ["$IN"]` passed the OLD
+        // validator (it counted `$IN` across the WHOLE array and accepted
+        // exactly one, wherever it fell) and every document routed to it
+        // reported `extractor_unavailable` with `extractor.name === "$IN"` --
+        // no extraction ever ran, silently, for a config an author might
+        // reasonably believe was valid ("one $IN, as required").
+        if (argv[0] === "$IN") {
+          throw new Error(
+            `${p}: harness.json field "documentExtractors" entry "${mime}" argv[0] must be a ` +
+              `real executable name, not the "$IN" placeholder -- argv[0] is never substituted ` +
+              `(only argv[1..] receives the document's path), so "$IN" there spawns a program ` +
+              `literally named "$IN".`,
+          );
+        }
+        // Exactly one `$IN`, and only among the ARGUMENTS (argv[1..], the
+        // slice that is actually substituted). Zero means the spawned process
+        // never receives the document path at all -- whatever it prints on
+        // stdout would be recorded as the extraction of EVERY document routed
+        // to this entry, silently. More than one is equally a config error the
+        // author almost certainly did not intend (e.g. a copy-paste), and
+        // there is no stdin-input mode today for a config that wants zero --
+        // so both directions fail closed rather than one being treated as
+        // advisory.
+        const inCount = argv.slice(1).filter((a) => a === "$IN").length;
+        if (inCount !== 1) {
+          throw new Error(
+            `${p}: harness.json field "documentExtractors" entry "${mime}" argv must contain ` +
+              `exactly one "$IN" placeholder among its arguments, argv[1..] (found ${inCount}) ` +
+              `-- that is how the document's path reaches the spawned process; without it the ` +
+              `process never receives the file.`,
+          );
+        }
+        const timeoutMs = (spec as { timeoutMs?: unknown }).timeoutMs;
+        if (timeoutMs !== undefined &&
+            (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0)) {
+          throw new Error(
+            `${p}: harness.json field "documentExtractors" entry "${mime}" timeoutMs must be a ` +
+              `positive number of milliseconds.`,
+          );
+        }
+        map.set(mime, {
+          argv: argv as string[],
+          ...(timeoutMs === undefined ? {} : { timeoutMs: timeoutMs as number }),
+        });
+      }
+      documentExtractors = map;
+    }
     const rulesSubdir =
       typeof parsed.rulesSubdir === "string" && parsed.rulesSubdir.length > 0
         ? parsed.rulesSubdir
@@ -294,7 +392,12 @@ function readShippedHarnessData(): ShippedHarnessData {
       }
       runnerFrontmatterAdditions = [...parsed.runnerFrontmatterAdditions];
     }
-    _shippedHarnessData = { rulesSubdir, plugins, runnerFrontmatterAdditions };
+    _shippedHarnessData = {
+      rulesSubdir,
+      plugins,
+      documentExtractors,
+      runnerFrontmatterAdditions,
+    };
     return _shippedHarnessData;
   } catch (err) {
     if (err instanceof Error && err.message.startsWith(`${p}:`)) throw err;
@@ -303,6 +406,7 @@ function readShippedHarnessData(): ShippedHarnessData {
   _shippedHarnessData = {
     rulesSubdir: null,
     plugins: null,
+    documentExtractors: null,
     runnerFrontmatterAdditions: [],
   };
   return _shippedHarnessData;
@@ -313,10 +417,34 @@ function shippedRulesSubdir(): string | null {
     return readShippedHarnessData().rulesSubdir;
   } catch (err) {
     // rulesSubdir() has historically tolerated malformed/missing harness data.
-    // pluginsEnabled() is the strict reader for the selection field.
-    if (err instanceof Error && err.message.includes('field "plugins"')) return null;
+    // pluginsEnabled() and documentExtractors() are the strict readers for their
+    // own fields.
+    //
+    // The blast radius matters here: this catch STRING-MATCHES, so any validation
+    // error it does not recognise rethrows OUT of a function whose only job is to
+    // name the rules dir. A malformed documentExtractors block would otherwise
+    // break rules resolution -- an unrelated caller crashing on a field it never
+    // reads. Extraction itself still fails closed; the strict accessor below is
+    // where that throw belongs.
+    if (err instanceof Error &&
+        (err.message.includes('field "plugins"') ||
+         err.message.includes('field "documentExtractors"'))) {
+      return null;
+    }
     throw err;
   }
+}
+
+/**
+ * The configured DocumentKB extractors, or null when none are configured.
+ *
+ * STRICT: a malformed block throws here rather than being silently ignored,
+ * because the value becomes a process invocation and a half-parsed extractor is
+ * worse than none. Absent is the normal case — the tool then probes `pdftotext`
+ * on PATH and degrades to `extractor_unavailable`.
+ */
+export function documentExtractors(): ReadonlyMap<string, DocumentExtractorSpec> | null {
+  return readShippedHarnessData().documentExtractors;
 }
 
 export function pluginsEnabled(): ReadonlySet<string> | null {
@@ -724,7 +852,7 @@ export interface TerminalCommand {
   args?: string[];
   error?: string;
   display?: string;
-  source: "read-only-flag" | "workspace-verb" | "plugin-verb";
+  source: "read-only-flag" | "workspace-verb" | "plugin-verb" | "knowledge-verb";
 }
 
 export type PluginCommand =
@@ -781,6 +909,77 @@ function terminalCommandFromPluginCommand(
     ...(tail.length > 0 ? { args: tail } : {}),
     display: originalArgs.join(" "),
     source: "plugin-verb",
+  };
+}
+
+// The DocumentKB verbs, in the order `aidlc knowledge help` lists them. A frozen
+// array rather than a switch so the dispatcher, the docs pin, and the skill can
+// all enumerate the same surface instead of three hand-kept copies drifting.
+// `remove` is deliberately absent: deletion stays "delete your own original,
+// then sync", so the tool never holds a destructive verb over user-owned files.
+export const KNOWLEDGE_VERBS: readonly string[] = Object.freeze([
+  "onboard",
+  "sync",
+  "list",
+  "show",
+  "associate",
+  "dissociate",
+  "rebind",
+]);
+
+export type KnowledgeCommand =
+  | { kind: "not-knowledge" }
+  | { kind: "help" }
+  | { kind: "error"; message: string }
+  | { kind: "run"; argv: string[] };
+
+// Parse the public `knowledge` noun once for every entrypoint, mirroring
+// parsePluginCommand. The slash orchestrator, Kiro's pre-LLM interceptor, and
+// the binary dispatcher must all agree that these are terminal utilities rather
+// than freeform workflow text -- an unrecognized noun does not error, it falls
+// through to the LLM conductor as intent prose, which is how a command can
+// appear to exist and then behave like a prompt.
+//
+// Unlike `plugin`, the verb IS the subcommand: the DocumentKB tool owns its own
+// verb names, so there is no translation table to keep in sync.
+export function parseKnowledgeCommand(args: string[]): KnowledgeCommand {
+  if (args[0] !== "knowledge") return { kind: "not-knowledge" };
+  const verb = args[1];
+  if (verb === "help" || verb === "-h" || verb === "--help") {
+    return { kind: "help" };
+  }
+  if (verb !== undefined && KNOWLEDGE_VERBS.includes(verb)) {
+    return { kind: "run", argv: [verb, ...args.slice(2)] };
+  }
+  const detail = verb ? `unknown verb '${verb}'` : "missing verb";
+  return {
+    kind: "error",
+    message: `aidlc: ${detail} for noun 'knowledge'; try 'aidlc help --all'`,
+  };
+}
+
+function terminalCommandFromKnowledgeCommand(
+  command: KnowledgeCommand,
+  originalArgs: string[],
+): TerminalCommand | null {
+  if (command.kind === "not-knowledge") return null;
+  if (command.kind === "help") {
+    return { subcommand: "help", display: originalArgs.join(" "), source: "knowledge-verb" };
+  }
+  if (command.kind === "error") {
+    return {
+      subcommand: "error",
+      error: command.message,
+      display: originalArgs.join(" "),
+      source: "knowledge-verb",
+    };
+  }
+  const [subcommand, ...tail] = command.argv;
+  return {
+    subcommand,
+    ...(tail.length > 0 ? { args: tail } : {}),
+    display: originalArgs.join(" "),
+    source: "knowledge-verb",
   };
 }
 
@@ -858,6 +1057,10 @@ export function classifyTerminalCommand(args: string[]): TerminalCommand | null 
   const pluginCommand = parsePluginCommand(args);
   if (pluginCommand.kind !== "not-plugin") {
     return terminalCommandFromPluginCommand(pluginCommand, args);
+  }
+  const knowledgeCommand = parseKnowledgeCommand(args);
+  if (knowledgeCommand.kind !== "not-knowledge") {
+    return terminalCommandFromKnowledgeCommand(knowledgeCommand, args);
   }
   // Leading workspace nouns own the command. Any later read-only-looking token
   // is part of that workspace command's argv, not a mode switch, because the
@@ -1129,6 +1332,24 @@ export function intentsDir(projectDir: string, space?: string): string {
 export function knowledgeDir(projectDir: string, space?: string): string {
   const sp = space ?? activeSpace(projectDir);
   return join(workspaceRoot(projectDir), "spaces", sp, "knowledge");
+}
+
+// A `--space <name>` flag names an EXISTING space; it is a path SEGMENT, so it
+// must never reach a join() raw — `--space ../../../outside` would otherwise
+// escape the workspace. `space create` slugifies at the creation chokepoint, so
+// any tool accepting the flag has to enforce the same shape on the way back in.
+// Returns the validated name, or null when it is not a bare slug (the caller
+// owns the exit code and the message).
+//
+// The shape is slugify()'s own output shape — a name `space create` could have
+// produced. A separate constant from BOLT_SLUG_REGEX despite the identical
+// pattern today, following the convention that comment states: Bolt slugs,
+// stage/artifact slugs, and space names are distinct domains that must be free
+// to tighten independently.
+export const SPACE_NAME_REGEX = /^[a-z][a-z0-9-]*$/;
+
+export function validSpaceFlag(raw: string): string | null {
+  return SPACE_NAME_REGEX.test(raw) ? raw : null;
 }
 
 // Enumerate the intent RECORD directories in a space (each `<slug>-<id8>/`
@@ -3530,6 +3751,11 @@ const GATE_RESOLUTION_EVENTS = new Set([
   "QUESTION_ANSWERED",
   "SUMMARY_CONFIRMATION_RECORDED",
 ]);
+const DOCUMENT_AUDIT_EVENTS = new Set([
+  "DOCUMENT_INDEXED",
+  "DOCUMENT_UPDATED",
+  "DOCUMENT_REMOVED",
+]);
 export function humanActedSinceGate(projectDir: string): boolean {
   // Per-shard reads (not the concatenated buffer): buffer position across
   // shards is FILENAME order, not execution order, so it can only serve as an
@@ -3538,19 +3764,30 @@ export function humanActedSinceGate(projectDir: string): boolean {
   // below.
   const shards = auditShards(projectDir);
   const events: { ts: string; shard: number; pos: number; human: boolean }[] = [];
-  let ledgerBytes = 0;
+  let sawPresenceTrackingEvent = false;
   for (let s = 0; s < shards.length; s++) {
     let content: string;
     try {
-      content = readFileSync(shards[s], "utf-8");
-    } catch {
-      continue; // a shard vanished between enumerate and read — skip it
+      content = readAppendOnlyFileNoFollowOrThrow(shards[s], "audit shard").toString("utf-8");
+      assertNoSymlinkInChainOrThrow(realpathSync(projectDir), relative(projectDir, shards[s]));
+    } catch (e) {
+      // ONLY a vanished shard may be skipped. Anything else fails CLOSED:
+      // this function feeds gate resolutions and the autonomous-mode
+      // escalation, and an unreadable shard may hold the only presence
+      // evidence — or the only proof there is none. Treating "could not
+      // read" as "was empty" once inverted this gate to fail-open: the
+      // space shard (document rows only, exempt from presence tracking)
+      // read fine while the intent shard was dropped, `events` came back
+      // empty, and the empty-ledger carve-out below answered "a human
+      // acted" from a ledger nobody had read.
+      if ((e as NodeJS.ErrnoException).code === "ENOENT") continue;
+      return false;
     }
-    ledgerBytes += content.length;
     const blocks = content.replace(/\r\n/g, "\n").split(/\n---\n/);
     for (let i = 0; i < blocks.length; i++) {
       const ev = auditBlockField(blocks[i], "Event");
       if (!ev) continue;
+      if (!DOCUMENT_AUDIT_EVENTS.has(ev)) sawPresenceTrackingEvent = true;
       const isResolution =
         GATE_RESOLUTION_EVENTS.has(ev) ||
         (ev === "AUTONOMY_MODE_SET" &&
@@ -3564,7 +3801,9 @@ export function humanActedSinceGate(projectDir: string): boolean {
       });
     }
   }
-  if (ledgerBytes === 0) return true; // no ledger → no presence tracking → fail open
+  // DocumentKB provenance does not activate human-presence tracking. Any other
+  // audit event does, so a workflow ledger without HUMAN_TURN fails closed.
+  if (events.length === 0) return !sawPresenceTrackingEvent;
   const humans = events.filter((event) => event.human);
   if (humans.length === 0) return false; // no human turn on record
   const resolutions = events.filter((event) => !event.human);
@@ -4261,21 +4500,48 @@ export function auditShardDir(projectDir: string, intent?: string, space?: strin
   return join(dir, "audit");
 }
 
-// Every audit shard path for an intent (sorted). With no intent resolved the
-// enumerated dir is the bare space record root's audit/ — absent on a fresh
-// shell, so the read is []. Readers merge-sort the parsed events by **Timestamp**.
+// Every audit shard selected by the caller (sorted). Normal intent readers stay
+// intent-only, whether the intent is explicit or resolved from the active cursor.
+// The deliberate `undefined intent + explicit space` form adds the space-level
+// shard before the resolved intent shards; DocumentKB recovery and doctor/export
+// use that form because space-level provenance is part of their read model.
+// PRE-BIRTH PARITY: when NO intent resolves at all, the space shard IS the
+// ledger — the append side's auditFilePath falls back to it, so the read side
+// must too, or a project with no intents yet reads an empty ledger where its
+// own appends just landed (that broke 10 fixture suites when this narrowing
+// first shipped without the fallback; base v2 always read the space shard in
+// that state).
+// Readers merge-sort parsed events by **Timestamp**.
 export function auditShards(projectDir: string, intent?: string, space?: string): string[] {
-  const shardDir = auditShardDir(projectDir, intent, space) ?? join(spaceRecordRoot(projectDir, space), "audit");
-  let entries: string[];
-  try {
-    entries = readdirSync(shardDir);
-  } catch {
-    return [];
+  const dirs: string[] = [];
+  if (intent === undefined && space !== undefined) {
+    dirs.push(join(spaceRecordRoot(projectDir, space), "audit"));
   }
-  return entries
-    .filter((f) => f.endsWith(".md"))
-    .sort()
-    .map((f) => join(shardDir, f));
+  const intentDir = auditShardDir(projectDir, intent, space);
+  if (intentDir !== null && !dirs.includes(intentDir)) dirs.push(intentDir);
+  if (intentDir === null && dirs.length === 0) {
+    dirs.push(join(spaceRecordRoot(projectDir, space), "audit"));
+  }
+  const paths: string[] = [];
+  for (const shardDir of dirs) {
+    try {
+      assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, shardDir));
+    } catch {
+      continue;
+    }
+    let entries: string[];
+    try {
+      entries = readdirSync(shardDir);
+    } catch {
+      continue;
+    }
+    for (const file of entries.sort()) {
+      if (file.endsWith(".md")) paths.push(join(shardDir, file));
+    }
+  }
+  // Explicit-space aggregation keeps the resolved intent last for the few
+  // diagnostic paths that inspect the raw audit tail.
+  return paths;
 }
 
 // Concatenate every audit shard's content for an intent into one buffer the
@@ -4290,9 +4556,14 @@ export function readAllAuditShards(projectDir: string, intent?: string, space?: 
   const parts: string[] = [];
   for (const path of shards) {
     try {
-      parts.push(readFileSync(path, "utf-8"));
+      const content = readAppendOnlyFileNoFollowOrThrow(path, "audit shard").toString("utf-8");
+      assertNoSymlinkInChainOrThrow(realpathSync(projectDir), relative(projectDir, path));
+      parts.push(content);
     } catch {
-      // a shard vanished between enumerate and read — skip it
+      // A vanished shard (ENOENT race) or a refused one (symlinked chain,
+      // wrong kind) — skip it. Growth during the read is NOT a failure here:
+      // the append-only reader tolerates it, so a live ledger being appended
+      // to no longer drops its whole shard from this merge.
     }
   }
   return parts.join("\n");
@@ -4321,9 +4592,16 @@ export function readAuditShardEvents(
   for (let shardIndex = 0; shardIndex < shards.length; shardIndex++) {
     let content: string;
     try {
-      content = readFileSync(shards[shardIndex], "utf-8");
+      content = readAppendOnlyFileNoFollowOrThrow(
+        shards[shardIndex],
+        "audit shard",
+      ).toString("utf-8");
+      assertNoSymlinkInChainOrThrow(
+        realpathSync(projectDir),
+        relative(projectDir, shards[shardIndex]),
+      );
     } catch {
-      continue;
+      continue; // vanished or refused shard; growth during read is tolerated
     }
     const blocks = content.replace(/\r\n/g, "\n").split(/\n---\n/);
     for (let pos = 0; pos < blocks.length; pos++) {
@@ -6147,19 +6425,27 @@ function lockAcquireEpochMs(): number {
   return Math.floor(performance.timeOrigin + performance.now());
 }
 
-// Is the lock-owning process still alive? signal 0 probes liveness without
-// delivering a signal: ESRCH ⇒ gone, EPERM ⇒ alive-but-not-ours (still alive),
-// success ⇒ alive. A missing/invalid pid is treated as "not alive" so an
-// unstamped leaked dir is reclaimable on age alone.
-function ownerAlive(owner: LockOwner | null): boolean {
-  if (!owner || !Number.isInteger(owner.pid) || owner.pid <= 0) return false;
+// Is a PID still alive? signal 0 probes liveness without delivering a signal:
+// ESRCH ⇒ gone, EPERM ⇒ alive-but-not-ours (still alive), success ⇒ alive. A
+// missing/invalid pid is treated as "not alive" so an unstamped leaked dir/file
+// is reclaimable on age alone. EXPORTED so a caller outside the lock mechanism
+// (e.g. a staged-transaction collector distinguishing a live writer's staging
+// dir from a crashed one's) can ask the same question this module already
+// answers for the lock reaper, rather than re-deriving it.
+export function isPidAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
-    process.kill(owner.pid, 0);
+    process.kill(pid, 0);
     return true;
   } catch (e) {
     // EPERM ⇒ the process exists but is owned by another user → still alive.
     return (e as NodeJS.ErrnoException)?.code === "EPERM";
   }
+}
+
+function ownerAlive(owner: LockOwner | null): boolean {
+  if (!owner) return false;
+  return isPidAlive(owner.pid);
 }
 
 // A monotonic per-process counter for the steal-rename suffix (no Math.random /
@@ -6506,6 +6792,306 @@ export function writeFileAtomic(path: string, data: string): void {
       try { unlinkSync(tmp); } catch { /* temp may already be gone */ }
     }
     throw err;
+  }
+}
+
+// writeBufferAtomic — the byte-exact twin of writeFileAtomic for binary
+// payloads: a captured PDF, an image, any non-text source. Same exclusive-create
+// sibling-temp-then-rename discipline, deliberately sharing writeFileAtomic's
+// shape so the two cannot drift; the only difference is no utf-8 coercion, so
+// the bytes round-trip identical to the source and stay sha256-verifiable.
+export function writeBufferAtomic(path: string, data: Buffer | Uint8Array): void {
+  const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  let fd: number | undefined;
+  let ownsTmp = false;
+  try {
+    fd = openSync(tmp, "wx");
+    ownsTmp = true;
+    writeFileSync(fd, data);
+    closeSync(fd);
+    fd = undefined;
+    renameSync(tmp, path);
+    ownsTmp = false;
+  } catch (err) {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch { /* preserve the original error */ }
+    }
+    if (ownsTmp) {
+      try { unlinkSync(tmp); } catch { /* temp may already be gone */ }
+    }
+    throw err;
+  }
+}
+
+// ensureDirSync / renameIntoPlace / removeTreeSync — the three raw
+// mkdir/rename/rm primitives, re-exported so a caller that has NO reason to
+// import node:fs's mutating names directly still can. This module already
+// calls mkdirSync/renameSync/rmSync internally (its own lock/atomic-write
+// mechanism has no funnel above it — it IS the funnel); these thin wrappers
+// exist for callers like aidlc-knowledge.ts, whose linter override forbids
+// binding any node:fs name outside the small read-only allowlist, so every
+// directory-create, rename, and recursive-remove in that file must come from
+// here instead. No added behavior beyond the raw primitive — the point is the
+// IMPORT BOUNDARY, not a new atomicity guarantee (mkdir/rename/rm already are
+// what they are).
+export function ensureDirSync(dir: string): void {
+  mkdirSync(dir, { recursive: true });
+}
+
+export function renameIntoPlace(from: string, to: string): void {
+  renameSync(from, to);
+}
+
+export function removeTreeSync(path: string): void {
+  rmSync(path, { recursive: true, force: true });
+}
+
+// Walk `rel` one component at a time from a REAL anchor and refuse if ANY
+// component is a symlink, returning the joined path when the whole chain is
+// clean. Throws (does not exit) so each caller attaches its own message and code.
+//
+// Why per-COMPONENT rather than one realpath of the leaf: a containment check on
+// the fully-resolved leaf answers "does this land inside?" but not "did we travel
+// through something that could be repointed later". Checking each component is
+// what makes the guard hold for a directory that does not exist yet, too — a
+// missing component cannot redirect anything, so it is skipped rather than failed.
+//
+// This is the primitive behind "every leaf is checked, not just the dir": a walk
+// that validates the container and then trusts its contents will happily read a
+// symlinked file inside an already-trusted directory. Callers must run this for
+// each leaf they touch, not once for the parent.
+export function assertNoSymlinkInChainOrThrow(anchorReal: string, rel: string): string {
+  if (rel === "") return anchorReal;
+  if (isAbsolute(rel)) {
+    throw new Error(`path escapes its anchor lexically: ${rel}`);
+  }
+  const parts = rel.split(sep);
+  if (parts.some((part) => part === "..")) {
+    throw new Error(`path component ".." escapes its anchor ${anchorReal}: ${rel}`);
+  }
+  let current = anchorReal;
+  for (const part of parts) {
+    if (part.length === 0) continue;
+    const child = join(current, part);
+    let isSymlink = false;
+    try {
+      isSymlink = lstatSync(child).isSymbolicLink();
+    } catch {
+      // Does not exist yet — nothing to redirect through.
+    }
+    if (isSymlink) {
+      throw new Error(
+        `${child} is a symlink, and no path component may be a symlink here. ` +
+          `A redirected container directory is refused exactly like a symlink found ` +
+          `INSIDE an already-trusted one.`,
+      );
+    }
+    current = child;
+  }
+  return current;
+}
+
+// THE read boundary for any path that came from OUTSIDE the workspace — a CLI
+// flag, a value-transport file, a committed ledger row. Returns the contents of a
+// REGULAR file or throws; it never blocks indefinitely and never follows a link.
+//
+// It lives here, shared, because scoping this check to one tool is what let the
+// same defect ship twice. Two properties, both load-bearing:
+//
+//   TYPE. Only a regular file is read. Rejecting symlinks alone is a denylist
+//   that admits every other kind: a FIFO with no writer blocks forever (and if
+//   the caller holds a lock, it blocks the whole workspace with it), and a
+//   character device such as /dev/zero never reaches EOF, so the read grows a
+//   buffer until the process dies of ENOMEM.
+//
+//   TIME. `lstat(path)` then `readFileSync(path)` validates one file and reads
+//   another if something swapped the name in between — and readFileSync follows
+//   symlinks, so the swap can redirect the read to any file this process can
+//   read. Opening ONCE with O_NOFOLLOW and fstat-ing THAT descriptor makes the
+//   identity checked the identity read; there is no second resolution to race.
+//
+// Throws (does not exit) so each caller can attach its own flag name and exit
+// code. `what` names the thing in the message: "--text-file", "source", ….
+export function readRegularFileNoFollowOrThrow(path: string, what: string): Buffer {
+  let fd: number;
+  try {
+    // O_NONBLOCK matters as much as O_NOFOLLOW here, and for a non-obvious
+    // reason: opening a FIFO for reading BLOCKS IN open() until a writer appears,
+    // so without it the process hangs before fstat can report the kind and reject
+    // it. (Measured: the fix looked complete while a FIFO still hung, and a stack
+    // sample showed the process parked in open(), not read().) O_NONBLOCK is
+    // harmless for a regular file — it does not make reads short — and the
+    // descriptor is rejected below anyway if it is not a regular file.
+    const noFollow = typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0;
+    fd = openSync(path, fsConstants.O_RDONLY | noFollow | fsConstants.O_NONBLOCK);
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === "ELOOP") {
+      throw new Error(`${what} is a symlink, which is not followed: ${path}`);
+    }
+    // Preserve the errno so callers (the atomic-replace retry wrapper, shard
+    // readers distinguishing a vanished file) can dispatch on it.
+    const err = new Error(`${what} could not be opened: ${path} (${errorMessage(e)})`);
+    (err as NodeJS.ErrnoException).code = code;
+    throw err;
+  }
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) {
+      const kind = st.isFIFO()
+        ? "a FIFO / named pipe"
+        : st.isSocket()
+          ? "a socket"
+          : st.isCharacterDevice()
+            ? "a character device"
+            : st.isBlockDevice()
+              ? "a block device"
+              : st.isDirectory()
+                ? "a directory"
+                : "not a regular file";
+      throw new Error(
+        `${what} is not a regular file (${kind}): ${path}. ` +
+          `Only regular files are read — a FIFO, socket, or device file can block ` +
+          `forever or never reach EOF, so it is refused before any read.`,
+      );
+    }
+    if (st.nlink !== 1) {
+      throw new Error(
+        `${what} is multiply linked (a hardlink) and is not trusted: ${path}. ` +
+          `A hardlink can alias content from elsewhere on the filesystem into this ` +
+          `directory. Replace it with an independent copy — ` +
+          `cp <file> <file>.copy && mv <file>.copy <file> — and re-run.`,
+      );
+    }
+    // Fallback for platforms without O_NOFOLLOW, and a pathname/descriptor
+    // identity check for races on every platform.
+    if (lstatSync(path).isSymbolicLink()) {
+      throw new Error(`${what} is a symlink, which is not followed: ${path}`);
+    }
+    const current = statSync(realpathSync(path));
+    if (current.dev !== st.dev || current.ino !== st.ino) {
+      throw changedDuringReadError(`${what} changed while opening: ${path}`);
+    }
+    const bytes = readFileSync(fd);
+    const after = statSync(realpathSync(path));
+    const afterFd = fstatSync(fd);
+    if (after.dev !== st.dev || after.ino !== st.ino ||
+        afterFd.nlink !== 1 || afterFd.size !== st.size ||
+        afterFd.mtimeMs !== st.mtimeMs || afterFd.ctimeMs !== st.ctimeMs ||
+        bytes.length !== st.size) {
+      throw changedDuringReadError(`${what} changed while reading: ${path}`);
+    }
+    return bytes;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** The identity/equality throws above carry a typed code so callers can tell
+ *  "the name changed inodes under me" (retryable when the writer is a known
+ *  atomic-replacer) from a symlink/kind/permission refusal (never retried). */
+export const FILE_CHANGED_DURING_READ = "AIDLC_FILE_CHANGED_DURING_READ";
+function changedDuringReadError(message: string): Error {
+  const err = new Error(message);
+  (err as NodeJS.ErrnoException).code = FILE_CHANGED_DURING_READ;
+  return err;
+}
+
+// The read boundary for FRAMEWORK-OWNED files whose ONLY writer is
+// writeFileAtomic/writeBufferAtomic (tmp + rename) — documentkb/index.json,
+// per-document metadata.json, derived content.md, the sources alias map.
+//
+// An atomic replace swaps the inode behind the name, which the strict
+// reader's identity check cannot distinguish from a hostile name-swap — so a
+// read racing a legitimate concurrent writer threw "changed while opening"
+// and killed the whole command (measured: 2-3 of 24 concurrent onboards
+// under load). The swap is instantaneous, so the fix is a bounded retry:
+// each attempt re-runs the FULL boundary check from open, a hostile swap
+// (symlink, wrong kind) throws a NON-retryable refusal on its next attempt,
+// and a replace-storm that outlasts every retry propagates the original
+// error honestly.
+export function readAtomicReplacedFileNoFollowOrThrow(
+  path: string,
+  what: string,
+  attempts = 8,
+): Buffer {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return readRegularFileNoFollowOrThrow(path, what);
+    } catch (e) {
+      // ENOENT is retryable here too, not only the identity code: mid-swap,
+      // realpath of the just-unlinked inode can surface as a transient
+      // ENOENT (measured on Bun as a literal "<path> (deleted)" statx). For
+      // a file whose writer is atomic-replace, "briefly absent" IS the swap
+      // window; a file that is genuinely gone still propagates once the
+      // retries are exhausted.
+      const code = (e as NodeJS.ErrnoException).code;
+      if ((code !== FILE_CHANGED_DURING_READ && code !== "ENOENT") ||
+          attempt >= attempts) {
+        throw e;
+      }
+      // 5ms × attempt backoff: the rename itself is instantaneous; the wait
+      // only needs to outlast the writer's tmp-write + rename window.
+      Bun.sleepSync(5 * attempt);
+    }
+  }
+}
+
+// The read boundary for FRAMEWORK-OWNED APPEND-ONLY files — audit shards.
+// Same open-once O_NOFOLLOW|O_NONBLOCK discipline as
+// readRegularFileNoFollowOrThrow (TYPE and TIME both hold: only a regular
+// file is read, and the identity fstat-ed is the identity read), with two
+// deliberate relaxations the strict reader must not make and a shard reader
+// must:
+//
+//   GROWTH IS NORMAL. A live ledger is being appended to by hooks and verbs
+//   while readers scan it. The strict reader's size/mtime/ctime equality
+//   check therefore threw on the ledger's NORMAL state — measured: under a
+//   concurrent appender ~88% of strict reads failed — and every consumer's
+//   catch then dropped the ENTIRE shard, silently erasing history from
+//   graph rebuilds, review-budget counts, receipt freshness, and the
+//   human-presence gate. A torn TAIL block is harmless by construction:
+//   every audit parser requires a complete block (Event + Timestamp + the
+//   `\n---\n` terminator) and discards a partial one.
+//
+//   NLINK IS NOT A TRUST SIGNAL HERE. rsync --link-dest and cp -al backup
+//   snapshots leave live project files with nlink 2; refusing them made one
+//   backup run brick every later audit read. Hardlinks cannot redirect a
+//   contained, symlink-chain-checked path — they alias the same inode — so
+//   the strict reader keeps its nlink refusal only where the CONTENT is
+//   untrusted (customer documents) or the operation is an explicit
+//   fork/merge snapshot.
+export function readAppendOnlyFileNoFollowOrThrow(path: string, what: string): Buffer {
+  let fd: number;
+  try {
+    const noFollow = typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0;
+    fd = openSync(path, fsConstants.O_RDONLY | noFollow | fsConstants.O_NONBLOCK);
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === "ELOOP") {
+      throw new Error(`${what} is a symlink, which is not followed: ${path}`);
+    }
+    const err = new Error(`${what} could not be opened: ${path} (${errorMessage(e)})`);
+    (err as NodeJS.ErrnoException).code = code;
+    throw err;
+  }
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) {
+      throw new Error(`${what} is not a regular file: ${path}`);
+    }
+    // Fallback for platforms without O_NOFOLLOW, and a pathname/descriptor
+    // identity check for races on every platform.
+    if (lstatSync(path).isSymbolicLink()) {
+      throw new Error(`${what} is a symlink, which is not followed: ${path}`);
+    }
+    const current = statSync(realpathSync(path));
+    if (current.dev !== st.dev || current.ino !== st.ino) {
+      throw new Error(`${what} changed while opening: ${path}`);
+    }
+    return readFileSync(fd);
+  } finally {
+    closeSync(fd);
   }
 }
 

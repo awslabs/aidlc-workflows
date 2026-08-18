@@ -200,7 +200,7 @@ export default function emit(ctx: EmitContext): void {
   }
   // (d) session skills — copied from core/ with token substitution (the
   // engine dir ships NO skills/ — Copilot never scans it).
-  for (const skill of ["aidlc-session-cost", "aidlc-replay", "aidlc-outcomes-pack"]) {
+  for (const skill of ["aidlc-session-cost", "aidlc-replay", "aidlc-outcomes-pack", "aidlc-knowledge"]) {
     const srcDir = join(coreRoot, "skills", skill);
     if (!existsSync(srcDir)) continue;
     for (const file of walk(srcDir)) {
