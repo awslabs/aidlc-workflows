@@ -119,6 +119,8 @@ import {
   _resetHarnessDataForTests,
   _resetScopeMappingForTests,
   _resetStageGraphForTests,
+  classifyStateVersion,
+  CURRENT_STATE_VERSION,
 } from "./aidlc-lib.ts";
 import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
@@ -2027,13 +2029,22 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
   try {
     const leaks = detectLeakedLocks(projectDir, true);
     if (leaks.length === 0) {
-      results.push({ pass: true, label: "Audit locks: none leaked" });
+      results.push({ pass: true, label: "Runtime locks: none leaked" });
     } else {
       for (const leak of leaks) {
+        const subject = leak.kind === "audit" ? "audit lock"
+          : leak.kind === "active-directive" ? "active-directive lock"
+          : "legacy active-directive transaction";
+        const outcome = leak.cleared ? "cleared" : "not cleared";
+        const manual = leak.reason === "legacy-transaction";
         results.push({
           pass: false,
-          label: `Leaked audit lock on bucket "${leak.bucket}" (${leak.reason}${leak.ownerPid !== null ? `, pid ${leak.ownerPid}` : ""}) — cleared`,
-          fix: "the stale lock was cleared automatically; re-run your /aidlc command",
+          label: `Leaked ${subject} on bucket "${leak.bucket}" (${leak.reason}${leak.ownerPid !== null ? `, pid ${leak.ownerPid}` : ""}) — ${outcome}`,
+          fix: manual
+            ? `stop all AI-DLC processes, inspect ${leak.lockDir}, then remove or restore it under quiescence`
+            : leak.cleared
+              ? "the stale lock was cleared automatically; re-run your /aidlc command"
+              : "the lock owner changed during diagnosis; re-run doctor before manual action",
         });
       }
     }
@@ -2041,31 +2052,46 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
     // Lock-probe failure is non-fatal for the doctor report.
   }
 
-  // State version check — current template adds Worktree Path, Bolt
-  // Refs, and Practices Affirmed Timestamp fields. Older v6 state
-  // files lack them, so setFieldStrict writes would throw at runtime.
-  // Fail loud here with archive-and-reinit guidance per the framework's
-  // pre-1.0 no-migration policy.
+  // State version check — v8 reshapes the Inception design graph:
+  // `application-design` is renamed to `domain-design` and a new
+  // `contract-design` stage is inserted, so a pre-v8 state file carries
+  // stage-progress rows keyed by slugs that no longer exist in the graph.
+  // Advancing such a state hits `emitRunStageForSlug()` on a missing slug
+  // (or silently no-ops a checkbox while `Current Stage` moves on, then
+  // fails in `report`). The framework ships no user-visible migration
+  // pre-1.0, so fail loud here with archive-and-reinit guidance rather than
+  // let a stale-graph state look healthy.
   if (existsSync(stateMdPath)) {
     try {
       const stateContent = readFileSync(stateMdPath, "utf-8");
-      const versionMatch = stateContent.match(/^- \*\*State Version\*\*:\s*(\S+)/m);
-      if (versionMatch === null) {
+      // Shared classifier (aidlc-lib.ts): the SAME parse + branch selection the
+      // runtime guard uses, so doctor and next/report never disagree on whether
+      // a state is unparseable / past / future / ok. Doctor's per-branch rows
+      // let a human see WHICH kind of incompatibility the state hit rather
+      // than routing everything through a generic "not current" line.
+      const verdict = classifyStateVersion(stateContent);
+      if (verdict.kind === "unparseable") {
         results.push({
           pass: false,
           label: "state version readable",
-          fix: "State Version field missing or unparseable in aidlc-state.md. Archive your workspace ('mv aidlc-docs aidlc-docs.v6-archive') and start a fresh workflow (describe what to build).",
+          fix: verdict.message,
         });
-      } else if (versionMatch[1] !== "7") {
+      } else if (verdict.kind === "past") {
         results.push({
           pass: false,
           label: "state version current",
-          fix: `v${versionMatch[1]} state detected. The framework does not ship user-visible migration support pre-1.0. Archive your workspace ('mv aidlc-docs aidlc-docs.v${versionMatch[1]}-archive') and start a fresh workflow (describe what to build) to get a current-template workspace. The current template adds Worktree Path, Bolt Refs, and Practices Affirmed Timestamp fields used by Construction worktrees and practices-discovery.`,
+          fix: verdict.message,
+        });
+      } else if (verdict.kind === "future") {
+        results.push({
+          pass: false,
+          label: "state version compatible",
+          fix: verdict.message,
         });
       } else {
         results.push({
           pass: true,
-          label: "State Version: 7",
+          label: `State Version: ${CURRENT_STATE_VERSION}`,
         });
       }
     } catch {
@@ -4195,7 +4221,7 @@ function handleIntentCreateStateBuild(
 - **Project Type**: ${scan.projectType}
 - **Scope**: ${scope}
 - **Start Date**: ${ts}
-- **State Version**: 7
+- **State Version**: ${CURRENT_STATE_VERSION}
 - **Active Agent**: ${firstPostInitAgent}
 - **Worktree Path**:
 - **Bolt Refs**:

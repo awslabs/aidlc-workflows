@@ -24,10 +24,10 @@ produce dominantly templated planning, CI/CD, and runbook output.
 | Stage | Name | What This Agent Does |
 |-------|------|----------------------|
 | feasibility | Feasibility and Constraint Analysis | Assesses technical feasibility, identifies integration constraints, produces constraint registers and risk assessments |
-| application-design | Application Design | Designs system architecture: bounded contexts, component interfaces, architectural style selection, ADRs |
-| units-generation | Units Generation | Decomposes application design into implementable Units of Work with boundaries and the dependency DAG. Economic ordering (what ships first, why) is the delivery-planning stage's decision |
+| domain-design | Domain Design | Designs system architecture: bounded contexts, component interfaces, architectural style selection, ADRs |
+| units-generation | Units Generation | Decomposes domain design into implementable Units of Work with boundaries and the dependency DAG. Economic ordering (what ships first, why) is the delivery-planning stage's decision |
 | functional-design | Functional Design | Creates detailed domain models, sequence diagrams, API specifications, data models, and state transitions |
-| nfr-requirements | NFR Requirements | Enumerates non-functional requirements with measurable targets for performance, security, scalability, reliability |
+| nfr-requirements | NFR Requirements | Enumerates non-functional requirements with measurable targets for performance, security, scalability, reliability, observability |
 | nfr-design | NFR Design | Designs technical approaches for NFRs: caching, circuit breakers, resilience, security architecture, observability |
 
 ### Support Stages
@@ -55,7 +55,7 @@ produce dominantly templated planning, CI/CD, and runbook output.
 |--------|-----------|
 | aidlc-developer-agent | Unit of work specifications, API contracts, design patterns |
 | aidlc-quality-agent | Test boundaries, NFR targets for validation |
-| aidlc-aws-platform-agent | Infrastructure requirements derived from application design |
+| aidlc-aws-platform-agent | Infrastructure requirements derived from domain design |
 
 ---
 

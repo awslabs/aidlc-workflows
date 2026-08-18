@@ -75,12 +75,17 @@
     "action": "SKIP"
   },
   {
-    "slug": "application-design",
+    "slug": "domain-design",
     "phase": "inception",
     "action": "SKIP"
   },
   {
     "slug": "units-generation",
+    "phase": "inception",
+    "action": "SKIP"
+  },
+  {
+    "slug": "contract-design",
     "phase": "inception",
     "action": "SKIP"
   },

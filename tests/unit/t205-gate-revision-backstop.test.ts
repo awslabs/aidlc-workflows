@@ -404,9 +404,9 @@ describe("t205: approve-time gate-revision backstop", () => {
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
   });
 
-  // --- Scenario 6: autonomous Construction (no human at the gate) - the backstop
-  // is skipped even when the ledger shape would otherwise match.
-  test("6: autonomous mode skips the backstop", () => {
+  // --- Scenario 6: a persisted Construction autonomy field does not exempt an
+  // Ideation-stage revision. The carve-out is phase-scoped, not global.
+  test("6: Construction autonomy does not skip an Ideation backstop", () => {
     const slug = field(proj, "Current Stage");
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
     setAutonomous(proj);
@@ -415,8 +415,8 @@ describe("t205: approve-time gate-revision backstop", () => {
     fireArtifact(proj, feasibilityArtifact(proj, PRIMARY_ARTIFACT));
     const r = guarded(proj, ["approve", slug, "--user-input", "approved"]);
     expect(r.rc).toBe(0);
-    expect(field(proj, "Revision Count")).toBe("0");
-    expect(eventCount(proj, "GATE_REJECTED")).toBe(0);
+    expect(field(proj, "Revision Count")).toBe("1");
+    expect(eventCount(proj, "GATE_REJECTED")).toBe(1);
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
   });
 

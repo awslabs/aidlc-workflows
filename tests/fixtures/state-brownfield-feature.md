@@ -5,7 +5,7 @@
 - **Project Type**: Brownfield
 - **Scope**: feature
 - **Start Date**: 2025-08-20T09:00:00Z
-- **State Version**: 7
+- **State Version**: 8
 - **Active Agent**: aidlc-product-agent
 - **Worktree Path**:
 - **Bolt Refs**:
@@ -62,8 +62,9 @@
 - [-] requirements-analysis — EXECUTE
 - [ ] user-stories — EXECUTE
 - [ ] refined-mockups — EXECUTE
-- [ ] application-design — EXECUTE
+- [ ] domain-design — EXECUTE
 - [ ] units-generation — EXECUTE
+- [ ] contract-design — EXECUTE
 - [ ] delivery-planning — EXECUTE
 
 ### CONSTRUCTION PHASE

@@ -139,7 +139,7 @@ Describe what you want to build and the engine auto-detects the appropriate scop
 
 ```
 /aidlc Fix the null pointer in ProfileSerializer
-> Starting a "bugfix" workflow for: "Fix the null pointer in ProfileSerializer" - 7 of 32 stages, 4 approval gates, 1 stage repeats per unit of work in Construction. Confirm to proceed, name a different scope, or say "compose" for a tailored plan.
+> Starting a "bugfix" workflow for: "Fix the null pointer in ProfileSerializer" - 7 of 33 stages, 4 approval gates, 1 stage repeats per unit of work in Construction. Confirm to proceed, name a different scope, or say "compose" for a tailored plan.
 ```
 
 ---
@@ -309,11 +309,11 @@ When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** sect
 ✓ Hook drops: none recorded
 ✓ State matches last audit event (no drift)
 ✓ Cycle detection: 0 cycles
-✓ Orphan stage files: 32 graph entries all have files
+✓ Orphan stage files: 33 graph entries all have files
 ✓ Uncompiled stage files: 0 stage files missing from the compiled graph
-✓ Enabled plugins: all enabled (no selection); enabled stage counts: aidlc=32
+✓ Enabled plugins: all enabled (no selection); enabled stage counts: aidlc=33
 ✓ Scope validation: 9 scopes valid (29 advisories)
-✓ Schema validation: 32/32 stages valid
+✓ Schema validation: 33/33 stages valid
 ✓ Graph references: 122 artifacts + edges resolved
 ✓ Keyword overlap: no conflicts
 ✓ Rule drift: no team/project rule overlaps org policy
@@ -541,11 +541,11 @@ reviews run for the active workflow.
 **Behavior:** Each reviewer-bearing stage declares a review class in its
 frontmatter — `adversarial` (the reviewer refutes the artifact and the lead
 fixes findings across up to `reviewer_max_iterations` passes) or `advisory`
-(one review pass; findings are quoted verbatim at the approval gate for you to
-triage). The effective class per stage is the LOWEST of the stage's
+(one normal-flow review pass; findings are quoted verbatim at the approval gate
+for you to triage). The effective class per stage is the LOWEST of the stage's
 declaration, the scope's `review_cap` (bugfix, poc, and workshop cap to
 `advisory`), and this override — so `--review advisory` turns every remaining
-adversarial loop into a single decision-support pass, `--review none` skips
+adversarial loop into a single normal-flow decision-support pass, `--review none` skips
 reviewer dispatch entirely, and `--review adversarial` clears the override
 (it cannot raise a class above the stage declaration or the scope cap).
 Autonomous swarm construction is exempt: inside a Bolt the reviewer is the
@@ -553,14 +553,16 @@ only pre-merge verification, so the declared class always applies there.
 Updates the `Review Override` field in `aidlc-state.md` and logs a
 `REVIEW_CLASS_CHANGED` audit event. It can be supplied when a workflow is
 born or alongside `--scope`; a same-as-current scope applies the review
-override as a config change instead of discarding it.
+override as a config change instead of discarding it. For either class, a later
+output write that invalidates a terminal receipt permits one bounded recovery
+request at the next ordinal.
 
 **Valid values:** `adversarial`, `advisory`, `none` (case-insensitive).
 
 **Examples:**
 
 ```
-/aidlc --review advisory              Single-pass reviews, findings at the gate
+/aidlc --review advisory              Single normal-flow pass, findings at the gate
 /aidlc --review none                  No stage reviews this run
 /aidlc --review adversarial           Clear the override (stage defaults apply)
 ```

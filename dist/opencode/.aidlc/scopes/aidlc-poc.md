@@ -23,7 +23,7 @@ No design ceremony, no operations, no delivery planning.
 A proof of concept answers one question — "can this work?" — so it keeps
 only the stages that get to an answer: intent-capture, reverse-engineering,
 requirements-analysis, code-generation, build-and-test. The whole point is
-to discard the rest (application-design, units-generation, nfr work, the
+to discard the rest (domain-design, units-generation, nfr work, the
 operation phase) because a spike is throwaway. If the answer is yes,
 re-scope to `feature`/`mvp` and run the full arc on the real build.
 

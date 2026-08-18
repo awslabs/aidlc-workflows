@@ -1,6 +1,6 @@
 # Phases and Stages
 
-The AI-DLC lifecycle is organized into 5 phases containing 32 stages. This chapter explains each phase, lists its stages, and shows how they connect.
+The AI-DLC lifecycle is organized into 5 phases containing 33 stages. This chapter explains each phase, lists its stages, and shows how they connect.
 
 > **Harness note.** The methodology — the phases, stages, agents, and gates this
 > guide describes — is identical on every harness. Where a mechanic differs by
@@ -27,10 +27,10 @@ graph LR
         I1 -.->|"7 stages"| I7
     end
 
-    subgraph INCEPTION["INCEPTION (2.1-2.8)"]
+    subgraph INCEPTION["INCEPTION (2.1-2.9)"]
         N1["Reverse Engineering"]
         N7["Delivery Planning"]
-        N1 -.->|"8 stages"| N7
+        N1 -.->|"9 stages"| N7
     end
 
     subgraph CONSTRUCTION["CONSTRUCTION (3.1-3.7)"]
@@ -58,7 +58,7 @@ graph LR
     style OPERATION fill:#fce4ec,stroke:#e91e63
 ```
 
-<!-- Text fallback: Linear flow: INITIALIZATION (0.1-0.3) auto-proceeds to IDEATION (1.1-1.7), which passes through Verification Gate 1 to INCEPTION (2.1-2.8), through Verification Gate 2 to CONSTRUCTION (3.1-3.7), through Verification Gate 3 to OPERATION (4.1-4.7). A feedback loop returns from 4.7 back to 1.1. -->
+<!-- Text fallback: Linear flow: INITIALIZATION (0.1-0.3) auto-proceeds to IDEATION (1.1-1.7), which passes through Verification Gate 1 to INCEPTION (2.1-2.9), through Verification Gate 2 to CONSTRUCTION (3.1-3.7), through Verification Gate 3 to OPERATION (4.1-4.7). A feedback loop returns from 4.7 back to 1.1. -->
 
 Phases execute sequentially. At each phase boundary (except Initialization → Ideation), a **verification gate** runs automated traceability checks to catch missing links, orphaned artifacts, or inconsistencies before downstream stages build on them.
 
@@ -155,9 +155,10 @@ flowchart TD
     S22["2.3 Requirements Analysis\n(aidlc-product-agent)"]
     S23["2.4 User Stories\n(aidlc-product-agent)"]
     S24["2.5 Refined Mockups\n(aidlc-design-agent)"]
-    S25["2.6 Application Design\n(aidlc-architect-agent)"]
+    S25["2.6 Domain Design\n(aidlc-architect-agent)"]
     S26["2.7 Units Generation\n(aidlc-architect-agent)"]
-    S27["2.8 Delivery Planning\n(aidlc-delivery-agent)"]
+    S2C["2.8 Contract Design\n(aidlc-architect-agent)"]
+    S27["2.9 Delivery Planning\n(aidlc-delivery-agent)"]
     VG2{{"Verification Gate:\nInception → Construction"}}
 
     BF_CHECK{"Brownfield?\n(from Initialization 0.3)"}
@@ -182,7 +183,9 @@ flowchart TD
     S24 -.->|CONDITIONAL| S25
     S25 -.->|"if in scope"| S26
     S22 -.->|"if 2.6 skipped"| S26
-    S26 ==>|ALWAYS| S27
+    S26 -.->|CONDITIONAL| S2C
+    S26 -.->|"if 2.8 skipped"| S27
+    S2C ==>|ALWAYS| S27
     S27 ==>|ALWAYS| VG2
 
     style S21 fill:#bbdefb,stroke:#1565c0
@@ -193,11 +196,12 @@ flowchart TD
     style S23 fill:#fff9c4,stroke:#f9a825
     style S24 fill:#fff9c4,stroke:#f9a825
     style S25 fill:#fff9c4,stroke:#f9a825
+    style S2C fill:#fff9c4,stroke:#f9a825
     style VG2 fill:#ef9a9a,stroke:#c62828
     style RE_DETAIL fill:#e8eaf6,stroke:#3f51b5
 ```
 
-<!-- Text fallback: Brownfield check (from stage 0.3). If yes, 2.1 Reverse Engineering runs as a two-link pipeline (developer code scan then architect synthesis-and-write). Then 2.2 Practices Discovery runs as a hub-and-spoke on every included scope (lead draft, mutually blind quality/developer/devsecops spokes, human interview, lead integration) and promotes affirmed work to active-space memory. Next are 2.3 Requirements Analysis (ALWAYS), optional 2.4 User Stories mob, optional 2.5 Refined Mockups, optional 2.6 Application Design, 2.7 Units Generation (ALWAYS), and 2.8 Delivery Planning (ALWAYS), followed by Verification Gate 2. -->
+<!-- Text fallback: Brownfield check (from stage 0.3). If yes, 2.1 Reverse Engineering runs as a two-link pipeline (developer code scan then architect synthesis-and-write). Then 2.2 Practices Discovery runs as a hub-and-spoke on every included scope (lead draft, mutually blind quality/developer/devsecops spokes, human interview, lead integration) and promotes affirmed work to active-space memory. Next are 2.3 Requirements Analysis (ALWAYS), optional 2.4 User Stories mob, optional 2.5 Refined Mockups, optional 2.6 Domain Design, 2.7 Units Generation (ALWAYS), optional 2.8 Contract Design, and 2.9 Delivery Planning (ALWAYS), followed by Verification Gate 2. -->
 
 | # | Stage | Lead | Supporting | Key Artifacts | Condition |
 |---|-------|------|-----------|---------------|-----------|
@@ -206,9 +210,10 @@ flowchart TD
 | 2.3 | Requirements Analysis | aidlc-product-agent | — | `requirements.md` | ALWAYS |
 | 2.4 | User Stories | aidlc-product-agent | aidlc-design-agent, aidlc-developer-agent, aidlc-quality-agent | `stories.md`, `personas.md` | User-facing features |
 | 2.5 | Refined Mockups | aidlc-design-agent | aidlc-product-agent | Hi-fi mockups, interaction spec | UI projects |
-| 2.6 | Application Design | aidlc-architect-agent | aidlc-aws-platform-agent, aidlc-design-agent | App design artifacts, ADRs | Per execution plan |
+| 2.6 | Domain Design | aidlc-architect-agent | aidlc-aws-platform-agent, aidlc-design-agent | `components.md`, `decisions.md` (ADRs) | Per execution plan |
 | 2.7 | Units Generation | aidlc-architect-agent | aidlc-delivery-agent | `unit-of-work.md`, `unit-of-work-dependency.md` (DAG), `unit-of-work-story-map.md` | ALWAYS |
-| 2.8 | Delivery Planning | aidlc-delivery-agent | aidlc-architect-agent | `bolt-plan.md`, `team-allocation.md`, `risk-and-sequencing-rationale.md`, `external-dependency-map.md` | ALWAYS |
+| 2.8 | Contract Design | aidlc-architect-agent | aidlc-aws-platform-agent | `contract-summary.md` | CONDITIONAL |
+| 2.9 | Delivery Planning | aidlc-delivery-agent | aidlc-architect-agent | `bolt-plan.md`, `team-allocation.md`, `risk-and-sequencing-rationale.md`, `external-dependency-map.md` | ALWAYS |
 
 **Key behavior:** Stage 2.1 runs as a **pipeline** (2-link chain) — first an aidlc-developer-agent code scan, then an aidlc-architect-agent synthesis that writes the artifacts. It only executes for brownfield projects. Stage 2.2 runs as a **subagent hub-and-spoke** for greenfield and brownfield work: the lead drafts, quality/developer/devsecops inspect it independently, the human interview resolves gaps, and the lead integrates. Stage 2.4 runs as a **mob** — the lead drafts, and the design, developer, and quality agents contribute in parallel via contribution files.
 
@@ -226,14 +231,14 @@ The first fix batched all questions, all design artifacts, then all code generat
 
 The current shape is the middle path: Construction runs **Bolt by Bolt**. Each [Bolt](glossary.md) is one pass through stages 3.1–3.5 for a Unit (or small group of dependency-linked Units). The first Bolt is the **walking skeleton** — gated and interactive: the smallest end-to-end slice that proves the architecture. Once that ships, the **ladder prompt** fires exactly once: "continue autonomously, or gate every Bolt?" Your answer is recorded in state and governs every remaining Bolt in the workflow. Stages 3.6 (Build and Test) and 3.7 (CI Pipeline) run once at the end across everything.
 
-The shape gives you an early confidence checkpoint and a deliberate autonomy choice, with reviewable slices sized to the Bolts 2.8 already planned.
+The shape gives you an early confidence checkpoint and a deliberate autonomy choice, with reviewable slices sized to the Bolts 2.9 already planned.
 
 ### Construction flow
 
 ```mermaid
 flowchart TD
     START(["Begin Construction"])
-    READ[/"Read bolt-plan.md (from 2.8)\n+ unit-of-work-dependency.md (from 2.7)"/]
+    READ[/"Read bolt-plan.md (from 2.9)\n+ unit-of-work-dependency.md (from 2.7)"/]
 
     BOLT1["Bolt 1 — Walking Skeleton\n(stages 3.1–3.5)"]
     GATE1{{"Walking-skeleton gate\nAlways presented"}}
@@ -320,8 +325,8 @@ Failures always stop Construction, even in autonomous mode. That's the one place
 
 | # | Stage | Lead | Supporting | Key Artifacts | Runs |
 |---|-------|------|-----------|---------------|------|
-| 3.1 | Functional Design | aidlc-architect-agent | aidlc-developer-agent | `business-logic-model.md`, `business-rules.md` | Per Bolt (CONDITIONAL by execution plan) |
-| 3.2 | NFR Requirements | aidlc-architect-agent | aidlc-devsecops-agent, aidlc-compliance-agent, aidlc-quality-agent | Security, performance, reliability NFRs | Per Bolt (CONDITIONAL) |
+| 3.1 | Functional Design | aidlc-architect-agent | aidlc-developer-agent | `entities.md`, `rules.md`, `functional-spec.md` | Per Bolt (CONDITIONAL by execution plan) |
+| 3.2 | NFR Requirements | aidlc-architect-agent | aidlc-devsecops-agent, aidlc-compliance-agent, aidlc-quality-agent | Performance, security, scalability, reliability, observability NFRs | Per Bolt (CONDITIONAL) |
 | 3.3 | NFR Design | aidlc-architect-agent | aidlc-aws-platform-agent | NFR design specifications | Per Bolt (CONDITIONAL) |
 | 3.4 | Infrastructure Design | aidlc-aws-platform-agent | aidlc-devsecops-agent, aidlc-compliance-agent | Infrastructure specifications, IaC designs | Per Bolt (CONDITIONAL) |
 | 3.5 | Code Generation | aidlc-developer-agent | — | Application code + code docs | Per Bolt (ALWAYS, per Unit within the Bolt) |
@@ -409,12 +414,12 @@ If verification fails, the conductor reports the issues and asks whether to proc
 | Mode | Stages | User Interaction | Description |
 |------|--------|-----------------|-------------|
 | Inline (auto-proceed) | 0.1, 0.2, 0.3 | None | Run deterministically inside `aidlc-utility intent-create`, no approval gate |
-| Inline | 28 stages | Full | Agent works in conversation, approval gate at end |
+| Inline | 29 stages | Full | Agent works in conversation, approval gate at end |
 | Subagent | 2.2, 3.5 | Practices interview + final gate for 2.2; approval gate for 3.5 | Hub-and-spoke Practices Discovery; focused Code Generation |
 | Pipeline (2-link) | 2.1 | Approval gate only | Developer scan, then architect synthesis-and-write |
 | Mob | 2.4 | Mid-stage judgment questions + approval gate | Lead drafts; design/developer/quality collaborate in parallel via contribution files |
 
-Across all 32 stages, the topology count is **28 inline / 2 subagent / 1 pipeline / 1 mob**.
+Across all 33 stages, the topology count is **29 inline / 2 subagent / 1 pipeline / 1 mob**.
 
 ---
 

@@ -69,7 +69,7 @@
 //       + the JSON envelope — the .sh did a bare file-wide presence grep.
 //   .sh test 5 (v7 state has v0.4.0 fields for mvp)            -> Test 5
 //       init-written aidlc-state.md contains BOTH `- **Worktree Path**:` and
-//       `- **Bolt Refs**:`. STRONGER: also asserts `- **State Version**: 7`
+//       `- **Bolt Refs**:`. STRONGER: also asserts `- **State Version**: 8`
 //       and `- **Scope**: mvp` co-present (the v7 template they ride on).
 //
 // FIXTURE DISCIPLINE: each CLI-emitting case takes a FRESH integration project
@@ -300,7 +300,7 @@ describe("t62 construction-worktrees mvp (migrated from t62-construction-worktre
     expect(lines.some((l) => l.startsWith("- **Worktree Path**:"))).toBe(true);
     expect(lines.some((l) => l.startsWith("- **Bolt Refs**:"))).toBe(true);
     // STRONGER: pin the v7 template + scope these fields ride on.
-    expect(lines).toContain("- **State Version**: 7");
+    expect(lines).toContain("- **State Version**: 8");
     expect(lines).toContain(`- **Scope**: ${SCOPE}`);
   });
 });

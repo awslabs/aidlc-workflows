@@ -14,9 +14,7 @@ produces:
   - validation-report
   - environment-provisioning-questions
 consumes:
-  - artifact: deployment-architecture
-    required: true
-  - artifact: infrastructure-services
+  - artifact: infrastructure-specification
     required: true
   - artifact: cd-config
     required: true
@@ -87,7 +85,7 @@ This stage's outputs are markdown artefacts under `<record>/operation/environmen
 The imported sensors check those outputs:
 
 - **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `<record>/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
-- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `deployment-architecture`, `infrastructure-services`, `cd-config`).
+- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `infrastructure-specification`, `cd-config`).
 
 ## Learn
 

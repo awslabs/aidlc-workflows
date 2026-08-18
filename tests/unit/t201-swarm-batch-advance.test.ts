@@ -100,7 +100,7 @@ function constructionState(): string {
 - **Scope**: feature
 - **Construction Autonomy Mode**: autonomous
 - **Skeleton Stance**: off
-- **State Version**: 7
+- **State Version**: 8
 
 ## Scope Configuration
 - **Stages to Execute**: all

@@ -18,7 +18,7 @@ The aidlc-design-agent leads two stages and supports two others. It ensures that
 | Stage | Phase | Contribution |
 |-------|-------|-------------|
 | 2.4 User Stories | Inception | Enriches stories with interaction details and UX acceptance criteria |
-| 2.6 Application Design | Inception | Contributes UI component specifications |
+| 2.6 Domain Design | Inception | Contributes UI component specifications |
 
 ## What to Expect
 

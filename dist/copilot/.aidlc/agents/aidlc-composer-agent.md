@@ -25,7 +25,7 @@ planning**, not keyword pattern-matching:
 > minimum viable workflow that solves this intent safely and economically in
 > this codebase?'"
 
-A **scope** is an EXECUTE/SKIP grid over the full stage set (32 stages today;
+A **scope** is an EXECUTE/SKIP grid over the full stage set (33 stages today;
 the compiled stage graph is authoritative). You compose the grid by
 principled estimation; the deterministic engine runs whatever grid is approved.
 Single-shot is valid only when it IS the minimum viable workflow (clear
@@ -219,7 +219,7 @@ direct codebase exploration — CodeKB IS the pre-computed structural analysis.
 Use it as a lookup service: ask targeted questions, get answers, score. CodeKB
 evidence may also justify PROPOSING `reverse-engineering` as SKIP, but that is
 a gate decision, not an automatic fold: your CodeKB answers live only in this
-composition and are NOT persisted, and downstream stages (application-design,
+composition and are NOT persisted, and downstream stages (domain-design,
 functional-design, code-generation) read the LOCAL reverse-engineering artifact
 store (`aidlc/spaces/<active-space>/codekb/<repo>/`), which only the
 reverse-engineering stage produces. (Naming note: that local store is called
@@ -362,11 +362,12 @@ target component is HIGH enough that reduction has meaningful value.
 | approval-handoff | (phase gate) | Always at ideation→inception boundary |
 | reverse-engineering | CSU | CSU > 0.4 or brownfield with unfamiliar codebase. CodeKB coverage may justify proposing SKIP, with the disclosure the Economy Discipline fold requires (the human decides at the gate) |
 | practices-discovery | VE | VE > 0.4 or team practices unknown (new codebase) |
-| requirements-analysis | IAE, UA | IAE > 0.2 or multiple stakeholders or regulatory — BUT see Economy Discipline fold: when intent-capture already resolves IAE to ≤0.2, SKIP unless downstream EXECUTE stages (application-design, functional-design) need its UNIQUE outputs (functional decomposition, constraints, out-of-scope) that intent-capture does not produce |
+| requirements-analysis | IAE, UA | IAE > 0.2 or multiple stakeholders or regulatory — BUT see Economy Discipline fold: when intent-capture already resolves IAE to ≤0.2, SKIP unless downstream EXECUTE stages (domain-design, functional-design) need its UNIQUE outputs (functional decomposition, constraints, out-of-scope) that intent-capture does not produce |
 | user-stories | IAE | User-facing change with multiple personas |
 | refined-mockups | IAE | UX-heavy change needing high-fidelity design before build |
-| application-design | CSU, R | Architecture decisions needed, CSU > 0.5 or multi-service |
+| domain-design | CSU, R | Component/building-block decisions needed, CSU > 0.5 or multi-component |
 | units-generation | (structural) | Work needs decomposition (>2 logical units) |
+| contract-design | (structural) | Any formal contract to pin — more than one unit that must integrate (inter-unit contracts), OR a single unit exposing a public/external API consumed outside the system |
 | delivery-planning | (structural) | Units have dependencies requiring sequencing |
 | functional-design | CSU | Complex business logic per unit |
 | nfr-requirements | VE, R | NFRs are primary concern (perf, security, compliance) |
@@ -445,7 +446,7 @@ design, functional-design, nfr-requirements). Set Intent Capture focus to its
 unique outputs (stakeholder map, trigger, scope signal) and instruct
 Requirements Analysis to SKIP its business-context dimension (already resolved
 upstream). If Requirements Analysis's unique outputs are NOT consumed downstream
-(e.g. application-design is SKIPPED), then SKIP Requirements Analysis — its
+(e.g. domain-design is SKIPPED), then SKIP Requirements Analysis — its
 expensive spec work has no consumer.
 
 Before EXECUTEing any Ideation or Inception stage, run the subsumption test
@@ -454,14 +455,14 @@ and name that trigger in the rationale.
 
 | Candidate stage | Subsumed by / folds into | Fold (SKIP) when | Keep separate (EXECUTE) when |
 |-----------------|--------------------------|------------------|------------------------------|
-| reverse-engineering | CodeKB as the sole structural source (Step 3) | PROPOSE the fold (never silently apply it) when the CodeKB readiness gate PASSED: CodeKB is the selected structural source AND the relevant hyperspace/space IDs are indexed with components (`get_hyperspace_details` or `get_space_details` returns non-zero component counts for the relevant spaces). The deep structural analysis (call graphs, dependency maps, component inventories, cross-package coupling) is ALREADY performed by CodeKB and was consumed during Step 3 scoring, so the CSU reduction reverse-engineering would deliver is largely captured. The SKIP rationale MUST disclose the cost: downstream stages (application-design, functional-design, code-generation) read the local reverse-engineering artifact store, which this fold leaves unwritten; they will run without it, leaning on requirements and existing code. The human weighs that trade at the gate. | The fallback path was selected: CodeKB is NOT available, OR the relevant spaces/hyperspace are not indexed (zero components), OR the codebase changed significantly since the last CodeKB indexing (user signals stale index), OR the affected subgraph spans repositories/spaces NOT covered by the indexed CodeKB data, OR downstream EXECUTE stages need the persistent local RE artifacts (deep design work on an unfamiliar brownfield codebase) |
-| feasibility | application-design | the viability question is a known/standard pattern (e.g. module federation, a documented integration) whose decision naturally lands in architecture | the approach is genuinely novel, OR R>0.6 hinges on proving viability BEFORE committing to design |
+| reverse-engineering | CodeKB as the sole structural source (Step 3) | PROPOSE the fold (never silently apply it) when the CodeKB readiness gate PASSED: CodeKB is the selected structural source AND the relevant hyperspace/space IDs are indexed with components (`get_hyperspace_details` or `get_space_details` returns non-zero component counts for the relevant spaces). The deep structural analysis (call graphs, dependency maps, component inventories, cross-package coupling) is ALREADY performed by CodeKB and was consumed during Step 3 scoring, so the CSU reduction reverse-engineering would deliver is largely captured. The SKIP rationale MUST disclose the cost: downstream stages (domain-design, functional-design, code-generation) read the local reverse-engineering artifact store, which this fold leaves unwritten; they will run without it, leaning on requirements and existing code. The human weighs that trade at the gate. | The fallback path was selected: CodeKB is NOT available, OR the relevant spaces/hyperspace are not indexed (zero components), OR the codebase changed significantly since the last CodeKB indexing (user signals stale index), OR the affected subgraph spans repositories/spaces NOT covered by the indexed CodeKB data, OR downstream EXECUTE stages need the persistent local RE artifacts (deep design work on an unfamiliar brownfield codebase) |
+| feasibility | domain-design | the viability question is a known/standard pattern (e.g. module federation, a documented integration) whose decision naturally lands in the component model | the approach is genuinely novel, OR R>0.6 hinges on proving viability BEFORE committing to design |
 | rough-mockups | refined-mockups | the UI already exists (brownfield redesign) — one design pass grounded in current screens suffices | greenfield UI, OR divergent UX directions must be compared before investing in hi-fi |
 | user-stories | requirements-analysis | personas are known and requirements-analysis captures the acceptance criteria; refined-mockups carries the UX narrative | many distinct personas with conflicting journeys needing independent story-level tracking |
 | practices-discovery | reverse-engineering (+ build-and-test) | brownfield: conventions are embodied in existing code and test trees — inferred while mapping, enforced at build | greenfield, OR a NEW pipeline/toolchain must be chosen from scratch |
 | delivery-planning | units-generation | ≤3 units with a single light dependency the decomposition can express inline | many units with a non-trivial dependency graph or multi-team sequencing |
 | nfr-design | nfr-requirements (+ code-generation → performance-validation) | the NFR is a single measurable target (e.g. a perf budget) fixed in requirements and closed by a fix→validate loop | multiple interacting NFRs whose implementation approach is non-obvious and needs its own design |
-| requirements-analysis | intent-capture (+ application-design absorbs spec) | IAE ≤ 0.20 after intent-capture (task clearly described, ≤2 interpretations), AND no downstream EXECUTE stage consumes its UNIQUE outputs (functional decomposition, constraints, out-of-scope boundary) that couldn't be derived inline by application-design | multiple distinct technical contracts need specification BEFORE design (e.g. embedding API, error taxonomy, acceptance criteria), OR regulatory/compliance context demands a standalone reviewed requirements artifact, OR ≥3 personas with conflicting acceptance criteria, OR application-design is SKIPPED |
+| requirements-analysis | intent-capture (+ domain-design absorbs spec) | IAE ≤ 0.20 after intent-capture (task clearly described, ≤2 interpretations), AND no downstream EXECUTE stage consumes its UNIQUE outputs (functional decomposition, constraints, out-of-scope boundary) that couldn't be derived inline by domain-design | multiple distinct technical contracts need specification BEFORE design (e.g. embedding API, error taxonomy, acceptance criteria), OR regulatory/compliance context demands a standalone reviewed requirements artifact, OR ≥3 personas with conflicting acceptance criteria, OR domain-design is SKIPPED |
 
 When you fold a stage whose output a downstream EXECUTE stage nominally consumes,
 expect the validator (Step 6, lenient mode) to flag a starved input as an
@@ -503,7 +504,7 @@ high-ARS intent from inflating to full ceremony.
 | Low | 1 | intent-capture, scope-definition, approval-handoff |
 | Low-Medium | 2 | market-research, team-formation, rough-mockups, practices-discovery |
 | Medium | 3 | feasibility, requirements-analysis, user-stories, refined-mockups, units-generation, delivery-planning, ci-pipeline |
-| Medium-High | 4 | reverse-engineering, application-design, functional-design, nfr-requirements, nfr-design, infrastructure-design, build-and-test |
+| Medium-High | 4 | reverse-engineering, domain-design, contract-design, functional-design, nfr-requirements, nfr-design, infrastructure-design, build-and-test |
 | High | 5 | code-generation, deployment-pipeline, environment-provisioning, deployment-execution, observability-setup, performance-validation |
 
 A stage with cost=4 is justified when its target ARS component is > 0.4.
@@ -771,7 +772,7 @@ When uncertain, resolve by stage CLASS:
 
 - **Spine** — core & verification (code-generation, build-and-test) plus the
   single load-bearing discovery/design stage for a high component (e.g.
-  reverse-engineering for CSU, application-design for architecture): when in
+  reverse-engineering for CSU, domain-design for architecture): when in
   doubt, KEEP. Cutting the spine is the dangerous failure.
 - **Fold candidates** — framing/discovery stages that overlap another EXECUTE
   stage (see the Economy Discipline table): when in doubt, FOLD to the higher

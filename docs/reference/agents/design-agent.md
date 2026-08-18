@@ -25,7 +25,7 @@
 | Stage | Name | What This Agent Contributes |
 |-------|------|-----------------------------|
 | user-stories | User Stories | Enriches stories with interaction details and UX acceptance criteria |
-| application-design | Application Design | Contributes UI component specifications and design system mapping |
+| domain-design | Domain Design | Contributes UI component specifications and design system mapping |
 
 ---
 

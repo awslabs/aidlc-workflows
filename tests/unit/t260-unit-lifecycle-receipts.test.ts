@@ -55,7 +55,7 @@ const BUN = process.execPath;
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const SLUG = "functional-design"; // inline per-unit stage
-const PRODUCES = ["business-logic-model", "business-rules", "domain-entities", "traceability"];
+const PRODUCES = ["entities", "rules", "functional-spec", "traceability"];
 
 // A minimal Construction state with functional-design in-flight and the
 // skeleton stance recorded (mirrors t209's constructionState) — so the engine's
@@ -67,7 +67,7 @@ const CONSTRUCTION_STATE = `# AI-DLC State Tracking
 - **Project**: unit lifecycle receipts test
 - **Project Type**: Greenfield
 - **Scope**: feature
-- **State Version**: 7
+- **State Version**: 8
 - **Skeleton Stance**: on
 
 ## Runtime State
@@ -425,7 +425,7 @@ describe("t260 pause carries the checkpoint and hard-stops the engine", () => {
     expect(unitVerb(proj, "start", "unit-a").rc).toBe(0);
     const p = unitVerb(proj, "pause", "unit-a", [
       "--reason", "blocked on auth contract",
-      "--next-action", "confirm token flow, then finish business-rules.md",
+      "--next-action", "confirm token flow, then finish rules.md",
     ]);
     expect(p.rc).toBe(0);
   }

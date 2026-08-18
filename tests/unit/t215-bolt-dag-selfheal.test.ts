@@ -37,9 +37,9 @@ const SEP = "\u2014";
 const HEAL_NOTE =
   "aidlc-orchestrate: runtime-graph.json bolt_dag is missing or stale; recomputed 2 unit batch(es) from unit-of-work-dependency.md (check the rebuild-stage-graph hook)";
 const FD_PRODUCES = [
-  "business-logic-model",
-  "business-rules",
-  "domain-entities",
+  "entities",
+  "rules",
+  "functional-spec",
   "frontend-components",
   "traceability",
 ];
@@ -83,7 +83,7 @@ function constructionState(current: string, skeletonStance = "on"): string {
 - **Project**: bolt dag self heal test
 - **Project Type**: Greenfield
 - **Scope**: feature
-- **State Version**: 7
+- **State Version**: 8
 - **Skeleton Stance**: ${skeletonStance}
 
 ## Scope Configuration
@@ -103,7 +103,7 @@ ${row(current === "code-generation" ? "-" : " ", "code-generation")}
 ${row(current === "build-and-test" ? "-" : " ", "build-and-test")}
 
 ### INCEPTION PHASE
-${row("x", "application-design")}
+${row("x", "domain-design")}
 ${row("x", "units-generation")}
 
 ## Current Status
@@ -120,7 +120,7 @@ function inceptionState(current: string): string {
 - **Project**: bolt dag self heal test
 - **Project Type**: Greenfield
 - **Scope**: feature
-- **State Version**: 7
+- **State Version**: 8
 
 ## Scope Configuration
 - **Stages to Execute**: all
@@ -131,7 +131,7 @@ function inceptionState(current: string): string {
 ## Stage Progress
 
 ### INCEPTION PHASE
-${row(current === "application-design" ? "-" : " ", "application-design")}
+${row(current === "domain-design" ? "-" : " ", "domain-design")}
 ${row(current === "units-generation" ? "-" : " ", "units-generation")}
 
 ### CONSTRUCTION PHASE
@@ -379,7 +379,7 @@ describe("t215 bolt dag self-heal", () => {
     expect(r.directive.stage).toBe("functional-design");
     expect(r.directive.unit).toBe("alpha");
     expect(r.directive.produces).toContain(
-      `${RP}/construction/alpha/functional-design/business-logic-model.md`,
+      `${RP}/construction/alpha/functional-design/functional-spec.md`,
     );
     expect(r.stderr).toContain(HEAL_NOTE);
     logCapturedStderr(r.stderr);
@@ -403,7 +403,7 @@ describe("t215 bolt dag self-heal", () => {
     expect(r.directive.stage).toBe("functional-design");
     expect(r.directive.unit).toBeUndefined();
     expect(r.directive.produces).toContain(
-      `${RP}/construction/{unit-name}/functional-design/business-logic-model.md`,
+      `${RP}/construction/{unit-name}/functional-design/functional-spec.md`,
     );
     expect(r.stderr).toBe("");
   }, 30000);
@@ -532,11 +532,11 @@ describe("t215 bolt dag self-heal", () => {
   }, 30000);
 
   test("11: non-per-unit stages do not trigger the read-side heal", () => {
-    const proj = seedInceptionProject("application-design");
+    const proj = seedInceptionProject("domain-design");
     seedAlphaBetaDependency(proj);
     const r = runNext(proj);
     expect(r.directive.kind).toBe("run-stage");
-    expect(r.directive.stage).toBe("application-design");
+    expect(r.directive.stage).toBe("domain-design");
     expect(r.directive.unit).toBeUndefined();
     expect(r.directive.produces?.some((p) => p.includes("/construction/"))).toBe(false);
     expect(r.directive.inputs?.some((p) => p.includes("/construction/")) ?? false).toBe(false);
@@ -568,7 +568,7 @@ describe("t215 bolt dag self-heal", () => {
     expect(r.directive.kind).toBe("run-stage");
     expect(r.directive.unit).toBeUndefined();
     expect(r.directive.produces).toContain(
-      `${RP}/construction/{unit-name}/functional-design/business-logic-model.md`,
+      `${RP}/construction/{unit-name}/functional-design/functional-spec.md`,
     );
     expect(r.stderr).toBe("");
   }, 30000);

@@ -5,7 +5,7 @@
 - **Project Type**: Greenfield
 - **Scope**: feature
 - **Start Date**: 2025-06-15T10:30:00Z
-- **State Version**: 7
+- **State Version**: 8
 - **Active Agent**: aidlc-architect-agent
 - **Worktree Path**:
 - **Bolt Refs**:
@@ -62,8 +62,9 @@
 - [x] requirements-analysis — EXECUTE
 - [x] user-stories — EXECUTE
 - [x] refined-mockups — EXECUTE
-- [x] application-design — EXECUTE
+- [x] domain-design — EXECUTE
 - [x] units-generation — EXECUTE
+- [x] contract-design — EXECUTE
 - [x] delivery-planning — EXECUTE
 
 ### CONSTRUCTION PHASE
@@ -95,4 +96,4 @@ Per unit: widget-cart
 ## Session Resume Point
 - **Last Completed Stage**: delivery-planning
 - **Next Action**: Begin the first Construction Bolt (walking-skeleton gate)
-- **Pending Artifacts**: business-logic-model.md
+- **Pending Artifacts**: functional-spec.md

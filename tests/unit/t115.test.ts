@@ -1284,7 +1284,9 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
 
       const refused = state(["approve", "requirements-analysis"], p);
       expect(refused.status).not.toBe(0);
-      expect(refused.out).toContain("fresh REVIEW_COMPLETED");
+      expect(refused.out).toContain(
+        "terminal review receipt from aidlc-product-lead-agent was invalidated",
+      );
       expect(countEvent(p, "GATE_APPROVED")).toBe(0);
 
       expect(state(["reject", "requirements-analysis", "--feedback", "review changed artifact"], p).status).toBe(0);
@@ -1382,7 +1384,9 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
 
       const refused = state(["approve", "requirements-analysis"], p);
       expect(refused.status).not.toBe(0);
-      expect(refused.out).toContain("fresh REVIEW_COMPLETED");
+      expect(refused.out).toContain(
+        "terminal review receipt from aidlc-product-lead-agent was invalidated",
+      );
 
       expect(state(["reject", "requirements-analysis", "--feedback", "artifact changed"], p).status).toBe(0);
       expect(state(["revise", "requirements-analysis"], p).status).toBe(0);

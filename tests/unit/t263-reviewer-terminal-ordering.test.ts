@@ -78,7 +78,8 @@ const GATE_ORDER_PIN =
   "keep the §1 approval question's standard option order (Approve first, Request Changes second)";
 const SKILL_PIN =
   "The terminal receipt ends artifact work";
-const ERROR_PIN = "Terminal ordering: apply any fixes FIRST";
+const STALE_ERROR_PIN =
+  "terminal review receipt from aidlc-product-lead-agent was invalidated";
 
 const tempDirs: string[] = [];
 afterAll(() => {
@@ -107,7 +108,7 @@ describe("t263 reviewer terminal-receipt ordering (receipt-invalidation loop fix
   });
 
   test("every authored harness SKILL.md carries the ordering in its reviewer step", () => {
-    for (const harness of ["claude", "kiro", "kiro-ide", "codex", "opencode", "cursor"]) {
+    for (const harness of ["claude", "kiro", "kiro-ide", "codex", "opencode", "cursor", "copilot"]) {
       const src = readFileSync(
         join(REPO_ROOT, "harness", harness, "skills", "aidlc", "SKILL.md"),
         "utf-8",
@@ -162,8 +163,8 @@ describe("t263 reviewer terminal-receipt ordering (receipt-invalidation loop fix
 
     const refused = run(STATE_TOOL, ["approve", "requirements-analysis"], p, env);
     expect(refused.status).not.toBe(0);
-    expect(refused.out).toContain("fresh REVIEW_COMPLETED");
-    expect(refused.out).toContain(ERROR_PIN);
-    expect(refused.out).toContain("surface them at the gate");
+    expect(refused.out).toContain(STALE_ERROR_PIN);
+    expect(refused.out).toContain("one recovery review pass");
+    expect(refused.out).toContain("Request Changes decision resets the review attempt");
   });
 });

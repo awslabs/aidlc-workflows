@@ -9,7 +9,7 @@
 
 One of the framework's harnesses: `dist/kiro/` runs the same AI-DLC
 methodology on [Kiro CLI](https://kiro.dev/docs/cli/). One deterministic core
-— the tools, 32 stage files, protocols, knowledge, sensors, scopes, and rules
+— the tools, 33 stage files, protocols, knowledge, sensors, scopes, and rules
 — is byte-shared across every harness; only the shell (skills, agent
 configs, hook wiring, activation) differs.
 
@@ -73,7 +73,7 @@ Start `kiro-cli chat` in the project, then invoke the conductor with
 `/aidlc <description>`. `/aidlc --status` reports position; `/aidlc --doctor`,
 `--stage`, `--phase`, `--depth`, and `--test-strategy` all work. Workspace
 navigation uses `/aidlc intent [name]`, `/aidlc space [name]`, and
-`/aidlc space-create <name>`. The per-stage (`/aidlc-application-design`) and
+`/aidlc space-create <name>`. The per-stage (`/aidlc-domain-design`) and
 per-scope (`/aidlc-feature`) runner skills are installed too.
 
 **Start the session from the project root.** The conductor's engine calls are
@@ -143,7 +143,7 @@ Installed and activated? The methodology is the same on every harness — keep
 going with the neutral chapters:
 
 - [Your First Workflow](../02-your-first-workflow.md) — an annotated end-to-end run.
-- [Phases and Stages](../04-phases-and-stages.md) — the 5 phases and 32 stages.
+- [Phases and Stages](../04-phases-and-stages.md) — the 5 phases and 33 stages.
 - [Scopes, Depth, and Test Strategy](../05-scopes-and-depth.md) — right-sizing a run.
 - [Glossary](../glossary.md) — every term defined.
 

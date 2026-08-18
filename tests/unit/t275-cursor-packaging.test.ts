@@ -804,8 +804,8 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       const artifact = "plugin-artifact-x";
       const addArtifact = (content: string) =>
         content.replace(
-          "  - domain-entities\n",
-          `  - domain-entities\n  - ${artifact}\n`,
+          "  - entities\n",
+          `  - entities\n  - ${artifact}\n`,
         );
       writeFileSync(stagePath, addArtifact(readFileSync(stagePath, "utf-8")));
       const sidecarPath = join(

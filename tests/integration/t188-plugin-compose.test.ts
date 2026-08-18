@@ -615,7 +615,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     const slugs = graph(project).map((s) => s.slug);
     expect(slugs).toContain("test-pro-integration");
     expect(slugs).toContain("test-pro-full-suite");
-    expect(graph(project).length).toBe(34); // 32 core + 2 test-pro
+    expect(graph(project).length).toBe(35); // 33 core + 2 test-pro
   });
 
   test("compose refreshes SKILL.md Stage Graph with plugin stages", () => {

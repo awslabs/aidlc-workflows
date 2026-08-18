@@ -168,14 +168,14 @@ compile-snapshotted: a manifest edit during the workflow does NOT
 change what fires for the in-flight workflow's writes (BGP-stability
 property — see [Plane Architecture](02-plane-architecture.md)).
 
-### Per-stage sensor matrix (32 framework stages)
+### Per-stage sensor matrix (33 framework stages)
 
 | Stages | `sensors:` |
 |---|---|
 | 3 initialization (workspace-scaffold, workspace-detection, state-init) | `[]` (deterministic setup, no agent-authored markdown) |
 | `intent-capture` | `[claim-sources, required-sections, upstream-coverage]` (`claim-sources` checks visible inline provenance, authoritative source-register values, and exact human-confirmed assumptions across the stage's deliverables) |
-| 6 other ideation, 5 other inception, 7 operation markdown stages | `[required-sections, upstream-coverage]` |
-| `user-stories`, `application-design`, `units-generation` | `[required-sections, upstream-coverage, traceability]` |
+| 6 other ideation, 6 other inception, 7 operation markdown stages | `[required-sections, upstream-coverage]` |
+| `user-stories`, `domain-design`, `units-generation` | `[required-sections, upstream-coverage, traceability]` |
 | `build-and-test` | `[required-sections, upstream-coverage, type-check]` (linter intentionally omitted — build runs canonical lint) |
 | `ci-pipeline` | `[required-sections, upstream-coverage, linter, type-check]` |
 | 4 per-Unit construction-design stages (`functional-design`, `infrastructure-design`, `nfr-design`, `nfr-requirements`) | `[required-sections, upstream-coverage, linter, type-check, traceability]` |

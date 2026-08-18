@@ -45,7 +45,7 @@ examples:
   - tech-stack.md
   - infrastructure-preferences.md
 description: >
-  Solutions architect responsible for application design, domain modelling,
+  Solutions architect responsible for domain design, contract design,
   NFR patterns, and component decomposition.
 disallowedTools: Task
 tier: judgment
@@ -154,6 +154,14 @@ Mirroring the reference recipe, here is the workflow end to end.
    required frontmatter: `name`, `display_name`, `examples`, `description`,
    `disallowedTools` (including `Task`), `tier`. An optional `tools:`
    allowlist narrows the persona; omit it to inherit the full session toolset.
+   An optional `maxTurns: <n>` caps the agent's turn budget - binding on
+   Claude Code, projected to opencode's native `steps:` key, and inert
+   (persona-prose-only) on Codex CLI, Cursor, GitHub Copilot, and both Kiro
+   surfaces, which expose no per-agent cap key (the Codex TOML emit rewrites
+   the persona's frontmatter citation, and the kiro agent JSONs never receive
+   the key - their schema fail-closes on unknown fields); the two review-only
+   agents ship it today (see the reviewer personas' `## Turn Budget` section
+   for the pairing convention).
    Write the body to match the shipped files' structure (Core Responsibilities,
    Stages Owned, Collaboration, Knowledge Loading, Key Principles).
 2. **Add knowledge files** under `core/knowledge/aidlc-<slug>-agent/` for the

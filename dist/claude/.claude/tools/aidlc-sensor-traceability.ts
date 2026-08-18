@@ -288,7 +288,7 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string):
     addSource(result, idsFromFile(requirements, [ID_PATTERNS.FR, ID_PATTERNS.NFR], "requirements.md"));
     return result;
   }
-  if (stage === "application-design") {
+  if (stage === "domain-design") {
     addSource(
       result,
       existsSync(stories)
@@ -431,7 +431,7 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string):
         }
       }
     }
-    const brPath = join(docsDir, "construction", unit, "functional-design", "business-rules.md");
+    const brPath = join(docsDir, "construction", unit, "functional-design", "rules.md");
     if (existsSync(brPath)) {
       const read = readText(brPath);
       if (read.content !== null) {
@@ -490,8 +490,8 @@ function verifyTargets(
   if (stage === "functional-design" && docsDir) {
     const unit = upstream.unitContext?.unitName ?? extractUnitName(outputPath);
     if (unit) {
-      const brPath = join(docsDir, "construction", unit, "functional-design", "business-rules.md");
-      const rules = idsFromFile(brPath, [ID_PATTERNS.BR], "business-rules.md");
+      const brPath = join(docsDir, "construction", unit, "functional-design", "rules.md");
+      const rules = idsFromFile(brPath, [ID_PATTERNS.BR], "rules.md");
       if (rules.reason) reasons.push(rules.reason);
       const targeted = new Set<string>();
       for (const entry of okEntries) {
@@ -499,7 +499,7 @@ function verifyTargets(
         if (targets.size === 0) invalidTargets.push(`${entry.id}: target must name at least one BRx.y ID`);
         for (const target of targets) {
           targeted.add(target);
-          if (!rules.ids.has(target)) invalidTargets.push(`${entry.id}: target ${target} is absent from business-rules.md`);
+          if (!rules.ids.has(target)) invalidTargets.push(`${entry.id}: target ${target} is absent from rules.md`);
         }
       }
       const explained = new Set(data.reverse.map((entry) => entry.id));

@@ -183,9 +183,11 @@ produces:
   - performance-requirements
   - security-requirements
   - scalability-requirements
+  - observability-requirements
 produces_kinds:
   performance-requirements: [service, ui]
   scalability-requirements: [service]
+  observability-requirements: [service]
 ```
 
 Why it exists: the four construction design stages ran with a fixed produces
@@ -210,6 +212,9 @@ where *every* Unit prunes to empty approves as a no-op rather than deadlocking
 at the artifact guard. The default kind matrix for the four stages is stage
 frontmatter data, reviewable and revertible per entry; removing a wrong entry
 restores the full matrix for that artifact.
+
+The stock NFR stages map both `observability-requirements` and
+`observability-design` to service units.
 
 One trust note: the `kind:` value is enum-checked at the units-generation gate
 (the `required-sections` sensor fails loud on a typo), but the compiled
@@ -268,16 +273,16 @@ key.
 
 A plain kebab-case string list, parallel to `produces:`. It names artifacts
 the stage **may** write per unit but is **not required** to. Absent means
-none; only the two stages that need it declare it, so the compiled
-`stage-graph.json` stays minimal.
+none; only the one stage that needs it (`functional-design`, for
+`frontend-components`) declares it, so the compiled `stage-graph.json` stays
+minimal.
 
 Why it exists: a per-unit Construction stage (`for_each: unit-of-work`) is
 COVERED for a unit only when every `produces[]` artifact exists on disk under
 that unit's record dir (the per-unit coverage check in
 `aidlc-orchestrate.ts`). Some artifacts are genuinely conditional on the unit
 - `functional-design` writes `frontend-components` only when the unit has a
-UI; `infrastructure-design` writes `shared-infrastructure` only when units
-share infrastructure. Listing those under `produces:` forced a backend-only
+UI. Listing that under `produces:` forced a backend-only
 unit to write an N/A stub just to satisfy coverage, and left the stage gate
 unreachable until it did. Moving them to `optional_produces:` exempts them:
 
@@ -398,8 +403,10 @@ never silently ignored.
 
 `review_class` selects the review contract: `adversarial` (the refute-and-repair
 loop above — the default when a `reviewer` is declared without a class) or
-`advisory` (one pass whose findings are quoted verbatim at the human approval
-gate, no repair loop; the effective iteration budget is 1). The shipped split:
+`advisory` (one normal-flow pass whose findings are quoted verbatim at the human
+approval gate, no repair loop; the effective iteration budget is 1). A later
+write that invalidates its terminal receipt permits one bounded recovery request
+at the next ordinal. The shipped split:
 the 7 human-gated ideation/inception prose stages declare `advisory`; the 5
 Construction design/build stages default `adversarial`. `none` is deliberately
 not a stage value — a stage that wants no review deletes its `reviewer:` line;

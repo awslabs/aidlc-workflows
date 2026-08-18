@@ -667,21 +667,15 @@ export function setupIntegrationProject(
 
   if (opts.withInceptionArtifacts) {
     const ra = join(seededRecordDir(proj), "inception", "requirements-analysis");
-    const ad = join(seededRecordDir(proj), "inception", "application-design");
+    const ad = join(seededRecordDir(proj), "inception", "domain-design");
     const ug = join(seededRecordDir(proj), "inception", "units-generation");
     mkdirSync(ra, { recursive: true });
     mkdirSync(ad, { recursive: true });
     mkdirSync(ug, { recursive: true });
     const ia = join(FIXTURES_DIR, "inception-artifacts");
     copyFileSync(join(ia, "requirements.md"), join(ra, "requirements.md"));
-    for (const f of [
-      "components.md",
-      "component-methods.md",
-      "services.md",
-      "component-dependency.md",
-    ]) {
-      copyFileSync(join(ia, f), join(ad, f));
-    }
+    // domain-design collapses to a single consolidated `components.md` catalogue.
+    copyFileSync(join(ia, "components.md"), join(ad, "components.md"));
     for (const f of ["unit-of-work.md", "unit-of-work-story-map.md"]) {
       copyFileSync(join(ia, f), join(ug, f));
     }

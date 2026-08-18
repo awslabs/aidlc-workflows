@@ -77,8 +77,9 @@ const ALL_SLUGS = [
   "requirements-analysis",
   "user-stories",
   "refined-mockups",
-  "application-design",
+  "domain-design",
   "units-generation",
+  "contract-design",
   "delivery-planning",
   "functional-design",
   "nfr-requirements",
@@ -149,7 +150,7 @@ function stateFile(
 - **Project**: gate next-stage test
 - **Project Type**: Greenfield
 - **Scope**: feature
-- **State Version**: 7
+- **State Version**: 8
 - **Skeleton Stance**: on
 
 ## Scope Configuration

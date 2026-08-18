@@ -76,9 +76,9 @@ const RP = `aidlc/spaces/${DEFAULT_SPACE}/intents/${DEFAULT_RECORD_DIR}`;
 // declared under optional_produces and is exempt from per-unit coverage, so it
 // is deliberately NOT in this set.
 const FD_REQUIRED_PRODUCES = [
-  "business-logic-model",
-  "business-rules",
-  "domain-entities",
+  "entities",
+  "rules",
+  "functional-spec",
   "traceability",
 ];
 
@@ -169,7 +169,7 @@ function constructionState(current: string, skeletonStance?: string): string {
 - **Project**: per-unit iteration test
 - **Project Type**: Greenfield
 - **Scope**: feature
-- **State Version**: 7
+- **State Version**: 8
 ${stanceLine}
 ## Scope Configuration
 - **Stages to Execute**: all
@@ -188,7 +188,7 @@ ${stanceLine}
 - [ ] build-and-test — EXECUTE
 
 ### INCEPTION PHASE
-- [-] application-design — EXECUTE
+- [-] domain-design — EXECUTE
 
 ## Current Status
 - **Lifecycle Phase**: CONSTRUCTION
@@ -280,7 +280,7 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     expect(d.stage).toBe("functional-design");
     expect(d.unit).toBe("alpha");
     expect(d.produces).toContain(
-      `${RP}/construction/alpha/functional-design/business-logic-model.md`,
+      `${RP}/construction/alpha/functional-design/functional-spec.md`,
     );
     // The literal placeholder is gone, the real unit was substituted.
     expect(d.produces?.some((p) => p.includes("{unit-name}"))).toBe(false);
@@ -344,7 +344,7 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     expect(d.stage).toBe("functional-design");
     expect(d.unit).toBeUndefined();
     expect(d.produces).toContain(
-      `${RP}/construction/{unit-name}/functional-design/business-logic-model.md`,
+      `${RP}/construction/{unit-name}/functional-design/functional-spec.md`,
     );
   }, 30000);
 
@@ -384,15 +384,15 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     expect(d.message).not.toContain("alpha"); // alpha is covered, not named
   }, 30000);
 
-  // 7: single-row case, a NON-per-unit stage (application-design) still emits
+  // 7: single-row case, a NON-per-unit stage (domain-design) still emits
   // with NO `unit` field and its normal gate, even with a bolt_dag present (the
   // per-unit path must not perturb the non-per-unit single-directive case).
   test("7: a non-per-unit stage emits no unit field and its normal gate", () => {
-    const proj = seedProject("application-design", "on");
+    const proj = seedProject("domain-design", "on");
     seedBoltDag(proj, ["alpha", "beta"]);
     const d = runNext(proj);
     expect(d.kind).toBe("run-stage");
-    expect(d.stage).toBe("application-design");
+    expect(d.stage).toBe("domain-design");
     expect(d.unit).toBeUndefined();
     expect(d.produces?.some((p) => p.includes("/construction/"))).toBe(false);
   }, 30000);
@@ -518,7 +518,7 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     expect(d.gate).toBe("unresolved");
     expect(d.unit).toBeUndefined();
     expect(d.produces).toContain(
-      `${RP}/construction/{unit-name}/functional-design/business-logic-model.md`,
+      `${RP}/construction/{unit-name}/functional-design/functional-spec.md`,
     );
   }, 30000);
 

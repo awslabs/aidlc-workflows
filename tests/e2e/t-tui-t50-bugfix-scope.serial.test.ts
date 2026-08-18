@@ -326,7 +326,7 @@ describe("t-tui-t50-bugfix-scope (answering gates advances bugfix lifecycle on d
         // .sh test 16: state classifies the project as brownfield.
         expect(stateMd).toMatch(/brownfield/i);
         // .sh test 12: State Version is 7.
-        expect(stateMd).toMatch(/State Version\*\*:[ \t]*7\b/);
+        expect(stateMd).toMatch(/State Version\*\*:[ \t]*8\b/);
 
         // .sh tests 4-6: all 3 Initialization stages marked completed `[x]`.
         for (const stage of ["workspace-scaffold", "workspace-detection", "state-init"]) {
