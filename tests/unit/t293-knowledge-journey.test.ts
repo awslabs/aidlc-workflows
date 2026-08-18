@@ -163,12 +163,11 @@ function checkInvariants(p: string, step: string): ListedRow[] {
     ).toBe(false);
   }
 
-  // Every non-tombstoned row's declared content path (if any), and its
-  // summary path (if any), exist under documentkb/<that row's own id>/.
+  // Extracted content exists under documentkb/<that row's own id>/. The schema
+  // owns content/summary path ownership; t288 pins that validator contract.
   for (const row of rows) {
     if (row.status === "tombstoned") continue;
     const shown = run(p, `${step} (show ${row.id})`, ["show", row.id]);
-    const contentPath = shown.content !== undefined ? (shown as { content_path?: string }).content_path : undefined;
     // content is inline text on `show`, not a path; the on-disk path
     // convention is asserted directly against the id, matching the writer.
     if (shown.content !== undefined) {
@@ -180,7 +179,6 @@ function checkInvariants(p: string, step: string): ListedRow[] {
         `${step}: row ${row.id} has content but no content.md under its OWN documentkb/<id>/ dir`,
       ).toBe(true);
     }
-    void contentPath;
   }
 
   // list and show agree on state/status for the same row.

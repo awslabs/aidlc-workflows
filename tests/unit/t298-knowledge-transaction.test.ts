@@ -769,9 +769,9 @@ describe("t298 concurrency: N parallel onboards lose no row", () => {
     expect(new Set(rows.map((r) => r.id)).size).toBe(names.length);
   }, 60000);
 
-  test("a serial control lands the same four rows", () => {
-    // The comparison that makes the concurrent number meaningful: 4 is only
-    // "full survival" if 4 is also what serial execution produces.
+  test("a serial control lands the same twelve rows", () => {
+    // The comparison makes the concurrent number meaningful: 12 is only "full
+    // survival" if 12 is also what serial execution produces.
     const p = projectWithIntent();
     const names = Array.from({ length: 12 }, (_, i) => `f${i}`);
     for (const n of names) doc(p, `${n}.md`, `${n}\n`);

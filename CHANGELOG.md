@@ -138,6 +138,10 @@ the surviving originals as new rows.
 * Explicit space-level audit reads place those shards before the active intent tail,
   and every shard is opened no-follow, preserving diagnostic ordering and refusing
   redirected audit files. Workflow-authority reads remain intent-only.
+* Failed or repeated `audit-fork` and `audit-merge` operations are safely retryable:
+  work that already landed is an idempotent no-op, a dead partial fork is redone,
+  and only a worktree carrying unmerged delta rows refuses with a merge/discard
+  remedy instead of requiring a manual shard delete after a crash.
 * A valueless `--space` is refused instead of silently mutating the active space,
   and tombstoned content cleanup is retried until the derived text is gone.
 * A hardlinked file under `documents/` is refused (a hardlink can alias content

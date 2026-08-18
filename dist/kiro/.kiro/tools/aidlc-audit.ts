@@ -912,10 +912,11 @@ function handleAppendRaw(
 // pre-emit byte-offset (Fork Boundary) and SHA-256 (Source Audit Hash) on
 // AUDIT_FORKED so audit-merge can recover both at gate-approval time.
 //
-// Audit-of-intent semantics: emits AUDIT_FORKED to the main audit BEFORE the
-// mkdir + copy. If the disk operation fails after emit, additionally emits
-// ERROR_LOGGED with [slug=<slug>] [fork-emitted:<ts>] so doctor can
-// reconcile drift at observation time. Mirrors aidlc-worktree.ts pattern.
+// Audit-of-intent semantics: a fresh or dead-partial redo emits AUDIT_FORKED to
+// main BEFORE the mkdir + copy. A complete current fork returns as a no-op. If
+// the disk operation fails after emit, additionally emit ERROR_LOGGED with
+// [slug=<slug>] [fork-emitted:<ts>] so doctor can reconcile drift at
+// observation time. Mirrors aidlc-worktree.ts pattern.
 //
 // Why this exists as a tool subcommand: same load-bearing rationale as
 // aidlc-state.ts practices-promote — stage prose that names a write target
@@ -1001,6 +1002,115 @@ function exactAuditField(block: string, name: string): string | null {
   return matches.length === 1 ? matches[0][1].trim() : null;
 }
 
+interface CompleteAuditBlock {
+  block: string;
+  start: number;
+  end: number;
+}
+
+interface AuditForkRecord extends CompleteAuditBlock {
+  boundary: number;
+  sourceHash: string;
+  timestamp: string;
+}
+
+function completeAuditBlocks(content: string): CompleteAuditBlock[] {
+  const separator = "\n---\n";
+  const blocks: CompleteAuditBlock[] = [];
+  let start = 0;
+  while (start < content.length) {
+    const separatorStart = content.indexOf(separator, start);
+    if (separatorStart < 0) break;
+    const end = separatorStart + separator.length;
+    blocks.push({ block: content.slice(start, separatorStart), start, end });
+    start = end;
+  }
+  return blocks;
+}
+
+function parseAuditForkBlock(block: CompleteAuditBlock, slug: string): AuditForkRecord | null {
+  if (
+    exactAuditField(block.block, "Event") !== "AUDIT_FORKED" ||
+    exactAuditField(block.block, "Bolt slug") !== slug
+  ) {
+    return null;
+  }
+  const boundaryField = exactAuditField(block.block, "Fork Boundary");
+  const sourceHash = exactAuditField(block.block, "Source Audit Hash");
+  const timestamp = exactAuditField(block.block, "Timestamp");
+  if (
+    !boundaryField ||
+    !/^\d+$/.test(boundaryField) ||
+    !sourceHash ||
+    !/^[0-9a-f]{64}$/.test(sourceHash) ||
+    !timestamp
+  ) {
+    return null;
+  }
+  const boundary = Number(boundaryField);
+  if (!Number.isSafeInteger(boundary) || boundary < 0) return null;
+  return { ...block, boundary, sourceHash, timestamp };
+}
+
+function latestAuditFork(content: string, slug: string): AuditForkRecord | null {
+  const blocks = completeAuditBlocks(content);
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const fork = parseAuditForkBlock(blocks[i], slug);
+    if (fork) return fork;
+  }
+  return null;
+}
+
+function forksCorrelate(left: AuditForkRecord, right: AuditForkRecord): boolean {
+  return (
+    left.boundary === right.boundary &&
+    left.sourceHash === right.sourceHash &&
+    left.timestamp === right.timestamp
+  );
+}
+
+function matchingAuditMerge(
+  content: string,
+  slug: string,
+  fork: AuditForkRecord,
+): CompleteAuditBlock | null {
+  for (const block of completeAuditBlocks(content)) {
+    if (block.start < fork.end) continue;
+    if (
+      exactAuditField(block.block, "Event") !== "AUDIT_MERGED" ||
+      exactAuditField(block.block, "Bolt slug") !== slug
+    ) {
+      continue;
+    }
+    const forkTimestamp = exactAuditField(block.block, "Fork Timestamp");
+    if (forkTimestamp !== null) {
+      if (forkTimestamp === fork.timestamp) return block;
+      continue;
+    }
+    // Backward compatibility for receipts written before Fork Timestamp was
+    // added: the boundary + source hash pair uniquely identifies the fork.
+    if (
+      exactAuditField(block.block, "Fork Boundary") === String(fork.boundary) &&
+      exactAuditField(block.block, "Source Audit Hash") === fork.sourceHash
+    ) {
+      return block;
+    }
+  }
+  return null;
+}
+
+function containsDeltaAtBlockBoundary(content: string, delta: string, after: number): boolean {
+  if (delta === "") return false;
+  let position = content.indexOf(delta, after);
+  while (position >= 0) {
+    if (position === after || content.slice(Math.max(0, position - 5), position) === "\n---\n") {
+      return true;
+    }
+    position = content.indexOf(delta, position + 1);
+  }
+  return false;
+}
+
 function handleAuditFork(args: string[], projectDir: string): void {
   const slug = parseSlugFlag(args, "audit-fork");
   // Pin the main-side audit shard AND the worktree mirror to ONE intent so
@@ -1026,11 +1136,6 @@ function handleAuditFork(args: string[], projectDir: string): void {
       `worktree directory not found at ${wtPath}; run aidlc-worktree create first`
     );
   }
-  if (existsSync(wtAuditPath)) {
-    jsonError(
-      `worktree audit already exists at ${wtAuditPath}; refusing to overwrite (audit-fork is one-shot)`
-    );
-  }
 
   if (!acquireAuditLock(projectDir, 50, 100, intent, space)) {
     jsonError("Failed to acquire audit lock after retries");
@@ -1038,77 +1143,106 @@ function handleAuditFork(args: string[], projectDir: string): void {
   let boundary = 0;
   let sourceHash = "";
   let auditTs = "";
+  let alreadyCurrent = false;
   try {
-    if (existsSync(wtAuditPath)) {
-      throw new Error(
-        `worktree audit already exists at ${wtAuditPath}; refusing to overwrite (audit-fork is one-shot)`,
-      );
-    }
     const before = readAuditSnapshot(projectDir, mainAuditPath);
-    boundary = before.bytes.length;
-    sourceHash = createHash("sha256").update(before.bytes).digest("hex");
-    const forkEntry = {
-      eventType: "AUDIT_FORKED",
-      fields: {
-        "Bolt slug": slug,
-        "Source Audit Hash": sourceHash,
-        "Fork Boundary": String(boundary),
-      },
-    };
-    validateAuditEntry(forkEntry);
-    auditTs = isoTimestamp();
-    appendAuditBlockAtPath(
-      projectDir,
-      mainAuditPath,
-      renderAuditBlock(forkEntry, auditTs),
-      {
-        ...before.identity,
-        prefixLength: boundary,
-        prefixHash: sourceHash,
-      },
-    );
-    tapAuditMetric("AUDIT_FORKED", forkEntry.fields, projectDir);
-
-    const projectReal = realpathSync(projectDir);
-    const wtRel = relative(resolve(projectDir), resolve(wtPath));
-    if (wtRel === "" || wtRel === ".." || wtRel.startsWith(`..${sep}`) || isAbsolute(wtRel)) {
-      throw new Error(`worktree path is outside project: ${wtPath}`);
-    }
-    assertNoSymlinkInChainOrThrow(projectReal, wtRel);
-    const wtReal = realpathSync(wtPath);
-    const verifyWorktreeIdentity = (): void => {
-      assertNoSymlinkInChainOrThrow(projectReal, wtRel);
-      if (realpathSync(wtPath) !== wtReal) {
-        throw new Error(`worktree path changed during audit-fork: ${wtPath}`);
+    if (existsSync(wtAuditPath)) {
+      const existing = readAuditSnapshot(projectDir, wtAuditPath);
+      const existingContent = existing.bytes.toString("utf-8");
+      const existingFork = latestAuditFork(existingContent, slug);
+      if (existingFork) {
+        if (existingContent.slice(existingFork.end) !== "") {
+          throw new Error(
+            `worktree audit already exists at ${wtAuditPath} with unmerged work after ` +
+              `AUDIT_FORKED; merge the delta with audit-merge, or discard the worktree`,
+          );
+        }
+        const mainContent = before.bytes.toString("utf-8");
+        const mainFork = latestAuditFork(mainContent, slug);
+        if (!mainFork || !forksCorrelate(existingFork, mainFork)) {
+          throw new Error(
+            `worktree audit already exists at ${wtAuditPath}, but its AUDIT_FORKED row ` +
+              `does not match the authoritative main row; discard the worktree before re-forking`,
+          );
+        }
+        if (!existing.bytes.equals(before.bytes.subarray(0, mainFork.end))) {
+          throw new Error(
+            `worktree audit already exists at ${wtAuditPath}, but its fork prefix differs ` +
+              `from main; discard the worktree before re-forking`,
+          );
+        }
+        boundary = existingFork.boundary;
+        sourceHash = existingFork.sourceHash;
+        auditTs = existingFork.timestamp;
+        alreadyCurrent = true;
       }
-    };
-    // Worktree-local tools must append to the fork shard that audit-merge
-    // consumes. Share the parent clone token inside this isolated worktree;
-    // each worktree still has its own copy of the shard, so concurrent writes
-    // remain isolated until the serial merge. Copy this before the one-shot
-    // audit file so a token-copy failure leaves audit-fork retryable.
-    const wtCloneIdPath = cloneIdPath(wtPath);
-    const cloneBytes = readRegularFileNoFollowOrThrow(cloneIdPath(projectDir), "clone id");
-    verifyWorktreeIdentity();
-    assertNoSymlinkInChainOrThrow(wtReal, relative(wtPath, wtCloneIdPath));
-    mkdirSync(dirname(wtCloneIdPath), { recursive: true });
-    verifyWorktreeIdentity();
-    assertNoSymlinkInChainOrThrow(wtReal, relative(wtPath, wtCloneIdPath));
-    writeBufferAtomic(wtCloneIdPath, cloneBytes);
-    verifyWorktreeIdentity();
-    const mainAfterForkSnapshot = readAuditSnapshot(projectDir, mainAuditPath);
-    if (mainAfterForkSnapshot.identity.dev !== before.identity.dev ||
-        mainAfterForkSnapshot.identity.ino !== before.identity.ino) {
-      throw new Error("main audit changed identity during audit-fork");
     }
-    const mainAfterFork = mainAfterForkSnapshot.bytes;
-    verifyWorktreeIdentity();
-    assertNoSymlinkInChainOrThrow(wtReal, relative(wtPath, wtAuditPath));
-    mkdirSync(dirname(wtAuditPath), { recursive: true });
-    verifyWorktreeIdentity();
-    assertNoSymlinkInChainOrThrow(wtReal, relative(wtPath, wtAuditPath));
-    writeBufferAtomic(wtAuditPath, mainAfterFork);
-    verifyWorktreeIdentity();
+    if (!alreadyCurrent) {
+      boundary = before.bytes.length;
+      sourceHash = createHash("sha256").update(before.bytes).digest("hex");
+      const forkEntry = {
+        eventType: "AUDIT_FORKED",
+        fields: {
+          "Bolt slug": slug,
+          "Source Audit Hash": sourceHash,
+          "Fork Boundary": String(boundary),
+        },
+      };
+      validateAuditEntry(forkEntry);
+      auditTs = isoTimestamp();
+      appendAuditBlockAtPath(
+        projectDir,
+        mainAuditPath,
+        renderAuditBlock(forkEntry, auditTs),
+        {
+          ...before.identity,
+          prefixLength: boundary,
+          prefixHash: sourceHash,
+        },
+      );
+      tapAuditMetric("AUDIT_FORKED", forkEntry.fields, projectDir);
+
+      const projectReal = realpathSync(projectDir);
+      const wtRel = relative(resolve(projectDir), resolve(wtPath));
+      if (wtRel === "" || wtRel === ".." || wtRel.startsWith(`..${sep}`) || isAbsolute(wtRel)) {
+        throw new Error(`worktree path is outside project: ${wtPath}`);
+      }
+      assertNoSymlinkInChainOrThrow(projectReal, wtRel);
+      const wtReal = realpathSync(wtPath);
+      const verifyWorktreeIdentity = (): void => {
+        assertNoSymlinkInChainOrThrow(projectReal, wtRel);
+        if (realpathSync(wtPath) !== wtReal) {
+          throw new Error(`worktree path changed during audit-fork: ${wtPath}`);
+        }
+      };
+      // Worktree-local tools must append to the fork shard that audit-merge
+      // consumes. Share the parent clone token inside this isolated worktree;
+      // each worktree still has its own copy of the shard, so concurrent writes
+      // remain isolated until the serial merge. Copy this before the audit file
+      // so a token-copy failure leaves audit-fork retryable.
+      const wtCloneIdPath = cloneIdPath(wtPath);
+      const cloneBytes = readRegularFileNoFollowOrThrow(cloneIdPath(projectDir), "clone id");
+      verifyWorktreeIdentity();
+      assertNoSymlinkInChainOrThrow(wtReal, relative(wtPath, wtCloneIdPath));
+      mkdirSync(dirname(wtCloneIdPath), { recursive: true });
+      verifyWorktreeIdentity();
+      assertNoSymlinkInChainOrThrow(wtReal, relative(wtPath, wtCloneIdPath));
+      writeBufferAtomic(wtCloneIdPath, cloneBytes);
+      verifyWorktreeIdentity();
+      const mainAfterForkSnapshot = readAuditSnapshot(projectDir, mainAuditPath);
+      if (mainAfterForkSnapshot.identity.dev !== before.identity.dev ||
+          mainAfterForkSnapshot.identity.ino !== before.identity.ino) {
+        throw new Error("main audit changed identity during audit-fork");
+      }
+      const mainAfterFork = mainAfterForkSnapshot.bytes;
+      verifyWorktreeIdentity();
+      assertNoSymlinkInChainOrThrow(wtReal, relative(wtPath, wtAuditPath));
+      mkdirSync(dirname(wtAuditPath), { recursive: true });
+      verifyWorktreeIdentity();
+      assertNoSymlinkInChainOrThrow(wtReal, relative(wtPath, wtAuditPath));
+      writeBufferAtomic(wtAuditPath, mainAfterFork);
+      verifyWorktreeIdentity();
+    }
   } catch (e) {
     const message = e instanceof Error ? errorMessage(e) : String(e);
     try {
@@ -1139,6 +1273,12 @@ function handleAuditFork(args: string[], projectDir: string): void {
     fork_boundary: boundary,
     worktree_audit: wtAuditPath,
     audit_timestamp: auditTs,
+    ...(alreadyCurrent
+      ? {
+          already_current: true,
+          message: "audit fork already exists and is current; no changes made",
+        }
+      : {}),
   });
 }
 
@@ -1164,12 +1304,9 @@ function handleAuditFork(args: string[], projectDir: string): void {
 // (200 retries × 100ms) to absorb N=4-8 Bolt-merge contention in workshop
 // scenarios.
 //
-// Nested-lock pattern: the outer lock guards prefix-hash check + delta
-// append. AUDIT_MERGED emits via appendAuditEntry which acquires its own
-// lock — outer lock is released first to avoid deadlock. Brief release-
-// reacquire window is benign because deltas are append-only and AUDIT_MERGED
-// is a trailing marker; merged-audit chronological order is preserved by the
-// order in which deltas were appended, not by AUDIT_MERGED timestamps.
+// One lock guards prefix validation, retry detection, and the combined
+// delta+AUDIT_MERGED append. The retry pre-check runs immediately before that
+// append; post-write verification order stays unchanged.
 
 function handleAuditMerge(args: string[], projectDir: string): void {
   const slug = parseSlugFlag(args, "audit-merge");
@@ -1193,48 +1330,19 @@ function handleAuditMerge(args: string[], projectDir: string): void {
   const wtSnapshot = readAuditSnapshot(projectDir, wtAuditPath);
   const wtContent = wtSnapshot.bytes.toString("utf-8");
 
-  // Locate the most recent AUDIT_FORKED block matching this slug. Block
-  // structure per appendAuditEntry: "\n## <heading>\n**Timestamp**: <ts>\n
-  // **Event**: <type>\n<fields>\n\n---\n". Blocks are separated by "\n---\n".
-  const blocks = wtContent.split("\n---\n");
-  let forkBlock: string | undefined;
-  for (let i = blocks.length - 1; i >= 0; i--) {
-    const b = blocks[i];
-    if (exactAuditField(b, "Event") === "AUDIT_FORKED" &&
-        exactAuditField(b, "Bolt slug") === slug) {
-      forkBlock = b;
-      break;
-    }
-  }
-  if (!forkBlock) {
+  const fork = latestAuditFork(wtContent, slug);
+  if (!fork) {
     jsonError(`worktree audit missing AUDIT_FORKED entry for slug ${slug}`);
   }
 
-  const boundaryField = exactAuditField(forkBlock, "Fork Boundary");
-  const sourceHash = exactAuditField(forkBlock, "Source Audit Hash");
-  const forkTs = exactAuditField(forkBlock, "Timestamp");
-  if (!boundaryField || !/^\d+$/.test(boundaryField) ||
-      !sourceHash || !/^[0-9a-f]+$/.test(sourceHash) || !forkTs) {
-    jsonError(
-      `worktree audit AUDIT_FORKED entry for slug ${slug} missing Fork Boundary, Source Audit Hash, or Timestamp field`
-    );
-  }
-  const boundary = parseInt(boundaryField, 10);
+  const boundary = fork.boundary;
+  const sourceHash = fork.sourceHash;
+  const forkTs = fork.timestamp;
   // forkTs anchors the audit-of-intent correlation tag for any post-emit
   // failure on this merge — doctor joins this back to the matching
   // AUDIT_FORKED row in main audit by exact-string timestamp match.
 
-  // Compute delta-start by locating the byte position immediately after the
-  // "\n---\n" that closes the AUDIT_FORKED block. indexOf on the matched
-  // forkBlock text gives a stable anchor.
-  const forkBlockStart = wtContent.indexOf(forkBlock);
-  const blockEndSep = "\n---\n";
-  const sepIdx = wtContent.indexOf(blockEndSep, forkBlockStart);
-  if (sepIdx < 0) {
-    jsonError(`worktree audit malformed — no separator after AUDIT_FORKED block for slug ${slug}`);
-  }
-  const deltaStart = sepIdx + blockEndSep.length;
-  const delta = wtContent.slice(deltaStart);
+  const delta = wtContent.slice(fork.end);
   try {
     validateMergeDelta(delta);
   } catch (error) {
@@ -1259,23 +1367,18 @@ function handleAuditMerge(args: string[], projectDir: string): void {
     );
   }
 
-  // Atomic critical section: delta-append + AUDIT_MERGED emit run under a
-  // single lock acquisition. We use appendAuditEntryUnlocked for the
-  // AUDIT_MERGED row so we don't double-acquire the lock — an earlier
-  // design released-and-reacquired across the boundary, which
-  // worked but left a brief window where another merger could interleave.
-  // The catch path also uses the unlocked variant for the same reason: we
-  // already hold the lock when the throw lands, so re-acquiring would either
-  // deadlock or create a release-reacquire race in the error path.
+  // Atomic critical section: retry pre-check + delta + AUDIT_MERGED run under a
+  // single lock acquisition. The catch path uses the unlocked append variant
+  // because we still hold that lock.
   //
-  // Failure-mode worth flagging for doctor: if appendAuditEntryUnlocked
-  // throws AFTER appendFileSync (delta) succeeded, main audit has the delta
-  // but no matching AUDIT_MERGED row. The catch path emits ERROR_LOGGED with
-  // [slug=<slug>] [fork-emitted:<forkTs>] correlation tags so doctor can
-  // detect the orphan-delta case (delta in main, AUDIT_FORKED present, no
-  // AUDIT_MERGED, ERROR_LOGGED with matching forkTs).
+  // Failure-mode worth flagging for doctor: appendAuditBlockAtPath can throw
+  // during its verification after the combined bytes landed. The catch path
+  // emits ERROR_LOGGED with [slug=<slug>] [fork-emitted:<forkTs>] correlation
+  // tags; the next retry's pre-check then observes the receipt or exact delta
+  // and does not append it again.
   let entriesMerged = 0;
-  let result: { appended: true; event: string; timestamp: string };
+  let result: { timestamp: string };
+  let alreadyMerged = false;
   try {
     // Validate the main prefix only after acquiring the same lock that protects
     // the append. The prior pre-lock read allowed another writer to change the
@@ -1292,15 +1395,10 @@ function handleAuditMerge(args: string[], projectDir: string): void {
     // The worktree copy is writable and cannot authoritatively choose how much
     // of main to validate. Recover the matching fork row from main and require
     // every correlation field to agree before trusting the boundary.
-    const mainFork = mainBuf.toString("utf-8").split(/\n---\n/).reverse().find((block) =>
-      exactAuditField(block, "Event") === "AUDIT_FORKED" &&
-      exactAuditField(block, "Bolt slug") === slug
-    );
+    const mainContent = mainBuf.toString("utf-8");
+    const mainFork = latestAuditFork(mainContent, slug);
     if (!mainFork) throw new Error(`main audit is missing AUDIT_FORKED for slug ${slug}`);
-    const mainBoundary = exactAuditField(mainFork, "Fork Boundary");
-    const mainHash = exactAuditField(mainFork, "Source Audit Hash");
-    const mainTimestamp = exactAuditField(mainFork, "Timestamp");
-    if (mainBoundary !== String(boundary) || mainHash !== sourceHash || mainTimestamp !== forkTs) {
+    if (!forksCorrelate(fork, mainFork)) {
       throw new Error("worktree AUDIT_FORKED metadata does not match the authoritative main row");
     }
     if (!Number.isSafeInteger(boundary) || boundary < 0 || boundary > mainBuf.length) {
@@ -1325,31 +1423,47 @@ function handleAuditMerge(args: string[], projectDir: string): void {
     }
     const trimmed = delta.trim();
     if (trimmed !== "") entriesMerged = delta.split(/\n---\n/).filter((b) => b.trim()).length;
-    const mergedEntry = {
-      eventType: "AUDIT_MERGED",
-      fields: {
-        "Bolt slug": slug,
-        "Entries Merged": String(entriesMerged),
-        "Source Audit Hash": sourceHash,
-        "Fork Boundary": String(boundary),
-      },
-    };
-    validateAuditEntry(mergedEntry);
-    const mergedTimestamp = isoTimestamp();
-    // Delta and receipt share one descriptor-pinned append, so no unsafe raw
-    // append can bypass the normal shard protections or interleave between them.
-    appendAuditBlockAtPath(
-      projectDir,
-      mainAuditPath,
-      delta + renderAuditBlock(mergedEntry, mergedTimestamp),
-      {
-        ...mainSnapshot.identity,
-        prefixLength: boundary,
-        prefixHash: sourceHash,
-      },
+    const existingMerge = matchingAuditMerge(mainContent, slug, mainFork);
+    const deltaAlreadyPresent = containsDeltaAtBlockBoundary(
+      mainContent,
+      delta,
+      mainFork.end,
     );
-    tapAuditMetric("AUDIT_MERGED", mergedEntry.fields, projectDir);
-    result = { appended: true, event: "AUDIT_MERGED", timestamp: mergedTimestamp };
+    if (existingMerge || deltaAlreadyPresent) {
+      alreadyMerged = true;
+      result = {
+        timestamp: existingMerge
+          ? exactAuditField(existingMerge.block, "Timestamp") ?? forkTs
+          : forkTs,
+      };
+    } else {
+      const mergedEntry = {
+        eventType: "AUDIT_MERGED",
+        fields: {
+          "Bolt slug": slug,
+          "Entries Merged": String(entriesMerged),
+          "Source Audit Hash": sourceHash,
+          "Fork Boundary": String(boundary),
+          "Fork Timestamp": forkTs,
+        },
+      };
+      validateAuditEntry(mergedEntry);
+      const mergedTimestamp = isoTimestamp();
+      // Delta and receipt share one descriptor-pinned append, so no unsafe raw
+      // append can bypass the normal shard protections or interleave between them.
+      appendAuditBlockAtPath(
+        projectDir,
+        mainAuditPath,
+        delta + renderAuditBlock(mergedEntry, mergedTimestamp),
+        {
+          ...mainSnapshot.identity,
+          prefixLength: boundary,
+          prefixHash: sourceHash,
+        },
+      );
+      tapAuditMetric("AUDIT_MERGED", mergedEntry.fields, projectDir);
+      result = { timestamp: mergedTimestamp };
+    }
   } catch (e) {
     const message = e instanceof Error ? errorMessage(e) : String(e);
     // We still hold the outer lock in the catch path. Use the unlocked
@@ -1381,6 +1495,12 @@ function handleAuditMerge(args: string[], projectDir: string): void {
     source_audit_hash: sourceHash,
     fork_boundary: boundary,
     audit_timestamp: result.timestamp,
+    ...(alreadyMerged
+      ? {
+          already_merged: true,
+          message: "audit merge already applied; no changes made",
+        }
+      : {}),
   });
 }
 

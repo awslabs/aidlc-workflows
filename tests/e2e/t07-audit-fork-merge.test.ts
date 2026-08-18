@@ -1,6 +1,7 @@
 // covers: subcommand:aidlc-audit:audit-fork, subcommand:aidlc-audit:audit-merge
 //
-// CLI-contract port of tests/e2e/t07-audit-fork-merge.sh (TAP plan 31),
+// CLI-contract port of tests/e2e/t07-audit-fork-merge.sh (TAP plan 31), plus
+// retry recovery coverage for already-landed and dead-partial fork/merge work,
 // mechanism = cli. The .sh drives the `aidlc-audit.ts audit-fork` /
 // `audit-merge` primitives — the Bolt-worktree audit fork→merge pair. Both
 // subcommands are still UNCOVERED in tests/.coverage-registry.json as of this
@@ -391,6 +392,70 @@ describe("t07 Phase B — edge cases", () => {
     runAudit(["audit-fork", "--slug", "e2", "--project-dir", p]);
     // B2.2: audit-fork's mkdir -p created the worktree mirror's audit shard.
     expect(existsSync(wtAuditPath(p, "e2"))).toBe(true);
+  }, 30000);
+
+  test("a complete current fork retries as a no-op without changing main", () => {
+    const p = makeFixture();
+    const slug = "retry-fork";
+    createWorktree(p, slug);
+    expect(runAudit(["audit-fork", "--slug", slug, "--project-dir", p]).status).toBe(0);
+    const mainBefore = readFileSync(auditPath(p));
+
+    const retry = runAudit(["audit-fork", "--slug", slug, "--project-dir", p]);
+    expect(retry.status).toBe(0);
+    expect(retry.out).toContain("already exists and is current");
+    expect(countEvent(wtAuditPath(p, slug), "AUDIT_FORKED")).toBe(1);
+    expect(readFileSync(auditPath(p)).equals(mainBefore)).toBe(true);
+  }, 30000);
+
+  test("a dead-partial worktree shard is overwritten by a fresh fork", () => {
+    const p = makeFixture();
+    const slug = "partial-fork";
+    createWorktree(p, slug);
+    mkdirSync(join(wtAuditPath(p, slug), ".."), { recursive: true });
+    writeFileSync(wtAuditPath(p, slug), readFileSync(auditPath(p)));
+
+    const retry = runAudit(["audit-fork", "--slug", slug, "--project-dir", p]);
+    expect(retry.status).toBe(0);
+    const worktreeAudit = readFileSync(wtAuditPath(p, slug), "utf-8");
+    expect(countEvent(wtAuditPath(p, slug), "AUDIT_FORKED")).toBe(1);
+    expect(worktreeAudit).toMatch(/\*\*Event\*\*: AUDIT_FORKED[\s\S]*\n---\n$/);
+  }, 30000);
+
+  test("re-fork refuses a shard with unmerged delta and names both remedies", () => {
+    const p = makeFixture();
+    const slug = "delta-fork";
+    createWorktree(p, slug);
+    expect(runAudit(["audit-fork", "--slug", slug, "--project-dir", p]).status).toBe(0);
+    runAudit([
+      "append", "STAGE_STARTED", "--field", "Stage=delta", "--field", "Agent=test",
+      "--project-dir", wtDir(p, slug),
+    ]);
+
+    const retry = runAudit(["audit-fork", "--slug", slug, "--project-dir", p]);
+    expect(retry.status).not.toBe(0);
+    expect(retry.out).toContain("audit-merge");
+    expect(retry.out).toContain("discard");
+  }, 30000);
+
+  test("a repeated successful merge is a no-op and never duplicates delta rows", () => {
+    const p = makeFixture();
+    const slug = "retry-merge";
+    createWorktree(p, slug);
+    expect(runAudit(["audit-fork", "--slug", slug, "--project-dir", p]).status).toBe(0);
+    runAudit([
+      "append", "STAGE_STARTED", "--field", "Stage=retry-delta", "--field", "Agent=test",
+      "--project-dir", wtDir(p, slug),
+    ]);
+    expect(runAudit(["audit-merge", "--slug", slug, "--project-dir", p]).status).toBe(0);
+    const mainBefore = readFileSync(auditPath(p));
+
+    const retry = runAudit(["audit-merge", "--slug", slug, "--project-dir", p]);
+    expect(retry.status).toBe(0);
+    expect(retry.out).toContain("already applied");
+    expect(readFileSync(auditPath(p)).equals(mainBefore)).toBe(true);
+    expect(countEvent(auditPath(p), "STAGE_STARTED")).toBe(1);
+    expect(countEvent(auditPath(p), "AUDIT_MERGED")).toBe(1);
   }, 30000);
 
   test("B3: missing main audit — fork fails loud, no side effect", () => {

@@ -169,7 +169,9 @@ describe("t288 the happy path is genuinely accepted", () => {
   test("a space-wide row OMITS related_intent_ids entirely", () => {
     const r = validateDocumentIndex(index([row()]));
     expect(r.ok).toBe(true);
-    expect("related_intent_ids" in row()).toBe(false);
+    if (r.ok) {
+      expect("related_intent_ids" in r.value.documents[0]).toBe(false);
+    }
   });
 
   test("an intent-scoped row carries canonical UUIDs", () => {

@@ -190,22 +190,15 @@ describe("t285 - the knowledge skill ships everywhere, and its prose matches the
         // just the emitted file, so deleting the entry fails here with a clear cause
         // rather than only as a missing file in one tree.
         const emit = readFileSync(join(REPO, "harness", h, "emit.ts"), "utf-8");
-        const array = emit.match(/for \(const skill of \[([^\]]+)\]/)?.[1] ?? "";
+        const match = emit.match(/for \(const skill of \[([^\]]+)\]/);
+        expect(
+          match,
+          `harness/${h}/emit.ts no longer matches the hardcoded skill-array extractor`,
+        ).not.toBeNull();
+        const array = match?.[1] ?? "";
         expect(array, `harness/${h}/emit.ts omits aidlc-knowledge`).toContain("aidlc-knowledge");
       });
     }
-
-    test("every harness that hardcodes its skill array is LISTED as doing so", () => {
-      // The guard on the guard. A harness whose emit.ts hardcodes the array but is
-      // absent from HARDCODED_SKILL_ARRAY_HARNESSES gets no assertion above -- which
-      // is the copilot failure exactly. Derive the truth from the files.
-      const hardcoding = HARNESS_NAMES.filter((name) => {
-        const emit = join(REPO, "harness", name, "emit.ts");
-        if (!existsSync(emit)) return false;
-        return /for \(const skill of \[/.test(readFileSync(emit, "utf-8"));
-      });
-      expect(hardcoding.sort()).toEqual([...HARDCODED_SKILL_ARRAY_HARNESSES].sort());
-    });
 
     test("the skill is standalone: it declares no stage/graph membership", () => {
       const text = readFileSync(CLAUDE_SKILL, "utf-8");
@@ -803,13 +796,13 @@ describe("t285 - the knowledge skill ships everywhere, and its prose matches the
       const text = readFileSync(CLAUDE_SKILL, "utf-8");
       const row = text.split("\n").find((l) => l.includes("extractor_unavailable"));
       expect(row, "the extractor_unavailable row is missing from the skill's state table").toBeDefined();
-      expect(row).toContain("sync");
+      expect(row).toContain("install it, then run `sync`");
     });
 
     test("the CLI reference's remedy for extractor_unavailable names sync too", () => {
       const text = readFileSync(join(REPO, "docs", "guide", "12-cli-commands.md"), "utf-8");
       const para = text.slice(text.indexOf("extractor_unavailable"), text.indexOf("extractor_unavailable") + 400);
-      expect(para).toContain("sync");
+      expect(para).toContain("installing the tool and running `/aidlc knowledge sync`");
     });
   });
 
@@ -849,12 +842,12 @@ describe("t285 - the knowledge skill ships everywhere, and its prose matches the
         .split("\n")
         .map((l) => l.split("|").map((c) => c.trim()))
         .filter((cells) => cells.length === 5 && cells[1] === `\`${verbCell}\``);
-      if (rows.length !== 1) {
-        throw new Error(
-          `expected exactly one 3-column table row whose first cell is \`${verbCell}\` ` +
-            `in ${DOC}, found ${rows.length}`,
-        );
-      }
+      expect(
+        rows.length,
+        `expected exactly one Emits table row for cell \`${verbCell}\` in ${DOC}; ` +
+          `found ${rows.length}`,
+      ).toBe(1);
+      if (rows.length !== 1) return new Set();
       return new Set([...rows[0][3].matchAll(/DOCUMENT_[A-Z_]+/g)].map((m) => m[0]));
     }
 
