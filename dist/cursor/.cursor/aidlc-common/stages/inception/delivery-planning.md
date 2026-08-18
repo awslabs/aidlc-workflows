@@ -84,7 +84,7 @@ active space's `memory/org.md` defaults.
 This stage plans the Bolt sequence — the order in which Units of Work are executed through Construction. 2.7 produces the dependency DAG (topology); this stage (2.9) chooses a path through it. Economic value cannot be derived from the DAG — that's a human value judgment.
 
 **Definitions for this stage:**
-- **Bolt** — per `stage-protocol.md` Glossary: one Unit's Construction build (one worktree, one `BOLT_STARTED` / `BOLT_COMPLETED` pair). Independent of walk order, and never a container for several Units. A **Batch** is the group of Units that build concurrently.
+- **Bolt** — per `stage-protocol.md` Glossary: the planned Construction delivery slice from this stage (2.9): one or more Units with a Definition of Done, a confidence hypothesis, and ownership. A **Batch** is the group of Units that build concurrently (runtime; from `unit-of-work-dependency.md`).
 
 These definitions are for YOU. They are not written to be read out, and the user
 has not seen them. Every one of them names something that is about to appear in

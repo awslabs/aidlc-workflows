@@ -56,7 +56,7 @@ Unit dependency analysis (Stage 2.7) produces the DAG — topological order fall
 
 Bolt sequencing (Stage 2.9) is different work. It chooses a path through the DAG weighted by human value judgment — which Bolt ships first, which proves what, which surfaces the biggest risk early. AI can topologically sort; it cannot decide what validates the market hypothesis fastest.
 
-Per the canonical Glossary (`stage-protocol.md` Terminology), a **Bolt** is one Unit's Construction build (one worktree, one `BOLT_STARTED` / `BOLT_COMPLETED` pair) — not a pass through stages 3.1–3.7, and not a bundle of Units. Bolts are not MMFs and not sprints.
+Per the canonical Glossary (`stage-protocol.md` Terminology), a **Bolt** is the planned Construction delivery slice from 2.9: one or more Units with a Definition of Done, a confidence hypothesis, and ownership. Bolts are not MMFs and not sprints.
 
 Heuristics for Bolt sequencing:
 

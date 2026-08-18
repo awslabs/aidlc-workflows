@@ -7,8 +7,9 @@
 // N" sub-step labels (must be GONE from SKILL.md), the four Bolt audit events
 // registered in aidlc-audit.ts, the BOLT_STARTED row in audit-format.md, the
 // Construction Autonomy Mode state field in state-template.md, the stage-protocol
-// Terminology **Bolt** row (one Unit, one worktree, one BOLT_* pair; 3.6/3.7 once
-// after all Units), and the orchestrator-managed gating note in code-generation.md.
+// Terminology **Bolt** row (planned 2.9 delivery slice of one or more Units;
+// 3.6/3.7 once after all Bolts; walk-order and walking-skeleton facts alongside),
+// and the orchestrator-managed gating note in code-generation.md.
 //
 // The .sh carried NO `# covers:` header, so it joined to zero enumerated registry
 // units — and none of the seven enumerated unit classes
@@ -43,7 +44,7 @@
 //   dist/claude/.claude/knowledge/aidlc-shared/state-template.md             (STATE_TEMPLATE)
 //     :93 **Construction Autonomy Mode**: [unset/autonomous/gated]
 //   dist/claude/.claude/aidlc-common/protocols/stage-protocol.md             (STAGE_PROTOCOL)
-//     Terminology **Bolt** row: one Unit / worktree / BOLT_* pair; 3.6 & 3.7 once after all Units
+//     Terminology **Bolt** row: planned 2.9 slice of one or more Units; 3.6 & 3.7 once after all Bolts
 //   dist/claude/.claude/aidlc-common/stages/construction/code-generation.md  (CODE_GEN)
 //     :176 "orchestrator-managed gating" / "suppressed by the orchestrator" note
 //
@@ -58,7 +59,7 @@
 //                   merely anywhere in the file.
 //   .sh test 9     (audit-format.md documents BOLT_STARTED)     -> "audit-format.md documents BOLT_STARTED"
 //   .sh test 10    (state-template.md has Construction Autonomy Mode) -> "state-template.md exposes Construction Autonomy Mode"
-//   .sh test 11    (stage-protocol Terminology: one-Unit Bolt + 3.6/3.7 once) -> "stage-protocol.md Terminology ..."
+//   .sh test 11    (stage-protocol Terminology: planned-slice Bolt + 3.6/3.7 once) -> "stage-protocol.md Terminology ..."
 //   .sh test 12    (code-generation.md notes orchestrator-managed gating) -> "code-generation.md notes orchestrator-managed gating"
 
 import { describe, expect, test } from "bun:test";
@@ -157,25 +158,31 @@ describe("t47 Construction Bolt vocabulary (migrated from t47-construction-bolts
   });
 
   // =========================================================================
-  // Test 11 — stage-protocol.md Terminology **Bolt** row: one Unit, one
-  // worktree, one BOLT_STARTED / BOLT_COMPLETED pair, never a multi-Unit
-  // container; 3.6/3.7 run once after all Units. The retired .sh grepped
-  // 3.1–3.5 on that row (the opt-in unit-major walk). Pin the new row so a
-  // split across unrelated lines can't satisfy the guard, and so the old
-  // 3.1–3.5 definition cannot return on this line.
+  // Test 11 — stage-protocol.md Terminology **Bolt** row: planned 2.9
+  // delivery slice of one or more Units; 3.6/3.7 run once after all
+  // Bolts. Pin the row so a split across unrelated lines can't satisfy
+  // the guard. Walk-order / walking-skeleton runtime facts live on
+  // neighboring Terminology rows.
   // =========================================================================
-  test("stage-protocol.md Terminology ties Bolt to one Unit worktree / BOLT_* pair with 3.6/3.7 once", () => {
-    const boltRow = STAGE_PROTOCOL.split("\n").find((l) =>
-      l.startsWith("| **Bolt** |"),
+  test("stage-protocol.md Terminology ties Bolt to the planned 2.9 slice with 3.6/3.7 once", () => {
+    const lines = STAGE_PROTOCOL.split("\n");
+    const boltRow = lines.find((l) => l.startsWith("| **Bolt** |"));
+    const walkRow = lines.find((l) => l.startsWith("| **Walk order** |"));
+    const skeletonRow = lines.find((l) =>
+      l.startsWith("| **Walking skeleton** |"),
     );
     expect(boltRow).toBeDefined();
-    expect(boltRow).toMatch(/one Unit/i);
-    expect(boltRow).toMatch(/worktree/);
-    expect(boltRow).toMatch(/BOLT_STARTED/);
-    expect(boltRow).toMatch(/BOLT_COMPLETED/);
-    expect(boltRow).toMatch(/never a container/i);
+    expect(boltRow).toMatch(/planned/i);
+    expect(boltRow).toMatch(/2\.9/);
+    expect(boltRow).toMatch(/one or more Units/i);
     expect(boltRow).toMatch(/3\.6.*3\.7.*once/i);
-    expect(boltRow).not.toMatch(/3\.1.*3\.5/);
+    expect(boltRow).not.toMatch(/never a container/i);
+    expect(walkRow).toBeDefined();
+    expect(walkRow).toMatch(/stage-major/);
+    expect(walkRow).toMatch(/unit-major/);
+    expect(skeletonRow).toBeDefined();
+    expect(skeletonRow).toMatch(/every Unit/i);
+    expect(skeletonRow).toMatch(/first design stage/i);
   });
 
   // =========================================================================

@@ -162,7 +162,7 @@ Remaining Inception stages (Requirements Analysis through Delivery Planning) run
 
 ## Construction Phase
 
-Construction builds the solution in reviewable slices. A [Bolt](glossary.md) is one Unit's build: one worktree, one `BOLT_STARTED` / `BOLT_COMPLETED` pair, never a container for several Units. The **default walk is stage-major** (one stage for every Unit, then the next stage). The 2.9 plan sequences Units; the **walking skeleton** is the first Construction gate (the first in-scope Construction stage), not "the first Bolt".
+Construction builds the solution in reviewable slices. A [Bolt](glossary.md) is the planned Construction delivery slice from Delivery Planning (2.9): one or more Units with a Definition of Done, a confidence hypothesis, and ownership. The **default walk is stage-major** (one stage for every Unit, then the next stage) and does not yet treat that plan as a runtime boundary. The **walking skeleton** is the planned first Bolt; under the default walk that gate is the first in-scope Construction stage and covers every Unit's first design stage.
 
 ```
 ─── Construction: Bolt 1 — notification-core (walking skeleton) ───────────

@@ -31,27 +31,30 @@ completion messages, and state tracking.
 
 ## Bolt-by-Bolt Construction
 
-Construction's **default walk is stage-major**: one stage runs for every
-Unit, then the next stage, with code-generation last. The opt-in
+A [Bolt](../../guide/glossary.md) is the planned Construction delivery
+slice from Delivery Planning (2.9): one or more Units with a Definition
+of Done, a confidence hypothesis, and ownership. Construction's
+**default walk is stage-major**: one stage runs for every Unit, then the
+next stage, with code-generation last. That walk does not yet treat the
+2.9 plan as a runtime boundary. The opt-in
 `Construction Iteration: unit-major` walk (one Unit through every
-per-unit stage, then the next Unit) is what older docs described as the
-default. A [Bolt](../../guide/glossary.md) is one Unit's build: one
-worktree, one `BOLT_STARTED` / `BOLT_COMPLETED` pair — the same meaning
-under both walks, never a container for several Units. Those Bolt
-events are emitted on the swarm / worktree path; a default gated run
-does not record them.
+per-unit stage, then the next Unit) is closer to a per-Unit Bolt.
 
-Runtime batches are recomputed from `unit-of-work-dependency.md` (stage
-2.7). `bolt-plan.md` from Delivery Planning (stage 2.9) is the planning
-artifact (sequence, per-Bolt DoD, walking-skeleton marker). That marker
-is advisory against the active-space `team.md` stance
-(`PRACTICES_OVERRIDE` / `bolt-plan-marker-conflict`). Stages 3.6 (Build
-and Test) and 3.7 (CI Pipeline) run **once** at the end across all Units.
+`BOLT_STARTED` / `BOLT_COMPLETED` are emitted on the swarm / worktree
+path; a default gated run does not record them. Runtime batches are
+recomputed from `unit-of-work-dependency.md` (stage 2.7).
+`bolt-plan.md` from stage 2.9 is the planning artifact (sequence,
+per-Bolt DoD, walking-skeleton marker). That marker is advisory against
+the active-space `team.md` stance (`PRACTICES_OVERRIDE` /
+`bolt-plan-marker-conflict`). Under the default walk, the
+walking-skeleton gate is the first in-scope Construction EXECUTE stage
+and covers every Unit's first design stage. Stages 3.6 (Build and Test)
+and 3.7 (CI Pipeline) run **once** at the end across all Units.
 
 ```
 Default walk (stage-major):
   First in-scope Construction stage for every Unit
-  → Walking-skeleton gate (always; first Construction gate)
+  → Walking-skeleton gate (every Unit's first design stage)
   → Ladder prompt (fires once): "autonomous" or "gated"
   Then the next stage for every Unit, code-generation last
 
@@ -120,7 +123,7 @@ Generation stages concurrently by issuing N `Task` calls in a single
 assistant message. One batch-level gate covers them all. Audit events
 (`BOLT_STARTED`, `BOLT_COMPLETED`) carry a `Batch=N` field so siblings are
 recoverable from the log. Those events fire on the swarm / worktree path;
-a Bolt names one Unit, not a bundle.
+a default gated run does not record them.
 
 **Failure handling.** A Bolt failure always halts Construction regardless
 of autonomy mode. Options are retry (re-run just the failed Bolt), skip

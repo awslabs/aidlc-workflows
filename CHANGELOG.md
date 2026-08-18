@@ -1,13 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
-## [2.6.3] - 2026-08-14
+## [2.6.3] - 2026-08-17
 
-Bolt, walking-skeleton, and parallel-batch **definition** wording now matches the default stage-major Construction walk and the swarm-only Bolt events. A Bolt is one Unit's worktree, not a pass through stages 3.1–3.5 and not a bundle of Units. Construction Bolt-gate procedure and 2.9 planning questions are unchanged. No engine or walk-order change. **Upgrade:** re-copy your `dist/<harness>/` shell (or rerun the Cursor installer) so shipped `stage-protocol.md` Terminology matches. No command or flag changes.
+Bolt stays the planned Construction delivery slice from 2.9 (one or more Units, DoD, confidence hypothesis, ownership). Docs now state the current runtime next to that definition: default walk is stage-major, `Construction Iteration: unit-major` is opt-in, `BOLT_*` events fire only on the swarm / worktree path, and runtime batches come from `unit-of-work-dependency.md`. Construction Bolt-gate procedure and 2.9 planning questions are unchanged. No engine or walk-order change. **Upgrade:** re-copy your `dist/<harness>/` shell (or rerun the Cursor installer) so shipped `stage-protocol.md` Terminology matches. No command or flag changes.
 
-* Glossary, stage-protocol terminology, and the Construction reference define Bolt as one Unit's build (`BOLT_STARTED` / `BOLT_COMPLETED` pair), Batch as a group of Units, walk order as a separate axis (default stage-major; opt-in `Construction Iteration: unit-major`), and walking skeleton as the first Construction gate.
-* Parallel-batch and `bolt-plan.md` wording now attributes runtime batches to `unit-of-work-dependency.md` (stage 2.7); the bolt-plan walking-skeleton marker stays advisory against `team.md`.
-* Same definition copies aligned in the user guide, delivery-planning, delivery-agent knowledge, audit-format, code-generation completion-gate note, and the Inception stage reference. Construction Bolt-gate procedure, 2.9 bundling questions, and Construction flow diagrams are unchanged.
+* Glossary, stage-protocol terminology, and the Construction reference keep Bolt as the 2.9 planned slice and document walk order as a separate axis (default stage-major; opt-in `Construction Iteration: unit-major`). The walking-skeleton gate under the default walk covers every Unit's first design stage.
+* Parallel-batch and `bolt-plan.md` wording attributes runtime batches to `unit-of-work-dependency.md` (stage 2.7); the bolt-plan walking-skeleton marker stays advisory against `team.md`. `BOLT_STARTED` / `BOLT_COMPLETED` are documented as swarm / worktree only.
+* Same copies aligned in the user guide, delivery-planning, delivery-agent knowledge, audit-format, and the Inception stage reference. Construction Bolt-gate procedure, 2.9 bundling questions, and Construction flow diagrams are unchanged.
 * No command or flag changes.
 
 ## [2.6.2] - 2026-08-13
