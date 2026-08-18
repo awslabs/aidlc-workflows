@@ -1450,7 +1450,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
       // Basename after `hooks/`, so the probe is dir-relative.
       const unresolved: string[] = [];
       for (const m of manifests) {
-        let parsed: { hooks?: { action?: { command?: unknown } }[] };
+        let parsed: { hooks?: unknown };
         try {
           parsed = JSON.parse(readFileSync(join(hooksDir, m), "utf-8"));
         } catch {
@@ -1458,7 +1458,11 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
           unresolved.push(`${m} (not valid JSON)`);
           continue;
         }
-        for (const hook of parsed.hooks ?? []) {
+        if (!Array.isArray(parsed.hooks)) {
+          unresolved.push(`${m} (hooks is not an array)`);
+          continue;
+        }
+        for (const hook of parsed.hooks as { action?: { command?: unknown } }[]) {
           const command = hook?.action?.command;
           if (typeof command !== "string") continue;
           for (const match of command.matchAll(/hooks\/(aidlc-[A-Za-z0-9_-]+\.ts)/g)) {

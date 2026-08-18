@@ -1,4 +1,4 @@
-// t293-kiro-unified-adapter: the contract the unified Kiro adapter adds on top
+// t301-kiro-unified-adapter: the contract the unified Kiro adapter adds on top
 // of the shim t218 covers for the IDE tree. Two surfaces run this tree (Kiro IDE
 // 1.x and Kiro CLI v3) and both deliver the hook context as JSON on stdin, so
 // every case here pipes a captured payload shape and asserts the observable
@@ -50,7 +50,7 @@ const TREE = join(REPO_ROOT, "dist", "kiro-unified");
 const projects: string[] = [];
 
 function freshProject(): string {
-  const dir = mkdtempSync(join(tmpdir(), "aidlc-t293-"));
+  const dir = mkdtempSync(join(tmpdir(), "aidlc-t301-"));
   cpSync(TREE, dir, { recursive: true });
   projects.push(dir);
   return dir;
@@ -97,7 +97,7 @@ afterAll(() => {
   for (const dir of projects) rmSync(dir, { recursive: true, force: true });
 });
 
-describe("t293 kiro-unified adapter — verb-intercept (UserPromptSubmit)", () => {
+describe("t301 kiro-unified adapter — verb-intercept (UserPromptSubmit)", () => {
   test("a read-only flag runs off-band and comes back with the do-not-advance instruction", () => {
     const project = freshProject();
     const run = runAdapter(project, "verb-intercept", { prompt: "/aidlc --status" });
@@ -175,7 +175,7 @@ describe("t293 kiro-unified adapter — verb-intercept (UserPromptSubmit)", () =
   });
 });
 
-describe("t293 kiro-unified adapter — payload acquisition for the PreToolUse guards", () => {
+describe("t301 kiro-unified adapter — payload acquisition for the PreToolUse guards", () => {
   test("a blocked aidlc-state.ts verb is refused with exit 2 and a stderr reason", () => {
     const project = freshProject();
     const run = runAdapter(project, "state-transition-guard", {
@@ -254,7 +254,7 @@ describe("t293 kiro-unified adapter — payload acquisition for the PreToolUse g
 // is a seam whose failure mode is SILENCE — a shape the adapter does not
 // recognise exits 0 and the unapproved dispatch proceeds — so each is pinned here
 // rather than left to a probe. t147 test 1b is the same contract for `dist/kiro`.
-describe("t293 kiro-unified adapter — plan-approval guard (PreToolUse)", () => {
+describe("t301 kiro-unified adapter — plan-approval guard (PreToolUse)", () => {
   const DEV_PROMPT = "AIDLC-UNIT: todo-core\nImplement todo-core";
   const DEV_STAGE = {
     name: "implement_todo_core",
@@ -369,7 +369,7 @@ describe("t293 kiro-unified adapter — plan-approval guard (PreToolUse)", () =>
 // is the standalone manifests, and doctor's two Markdown-conductor rows are the
 // only thing that looks at them — a row whose failure mode is a healthy report on
 // a tree that would not fire a single hook. Each row is pinned in both directions.
-describe("t293 kiro-unified adapter — doctor's Markdown-conductor hook rows", () => {
+describe("t301 kiro-unified adapter — doctor's Markdown-conductor hook rows", () => {
   function runDoctor(project: string): AdapterRun {
     const result = spawnSync(
       process.execPath,
@@ -424,6 +424,36 @@ describe("t293 kiro-unified adapter — doctor's Markdown-conductor hook rows", 
     const run = runDoctor(project);
 
     expect(run.stdout).toContain("0 standalone hooks/aidlc-*.json manifest(s) wired");
+  });
+
+  test("an object-valued hooks field fails one row without replacing the doctor report", () => {
+    const project = freshProject();
+    writeFileSync(
+      join(hooksDirOf(project), "aidlc-object-hooks.json"),
+      `${JSON.stringify({ version: "v1", hooks: {} })}\n`,
+      "utf-8",
+    );
+    const run = runDoctor(project);
+
+    expect(run.status).toBe(1);
+    expect(run.stdout).toContain("aidlc-object-hooks.json (hooks is not an array)");
+    expect(run.stdout).toContain("settings/cli.json present");
+    expect(run.stderr).not.toContain("not iterable");
+  });
+
+  test("a scalar hooks field fails one row without replacing the doctor report", () => {
+    const project = freshProject();
+    writeFileSync(
+      join(hooksDirOf(project), "aidlc-scalar-hooks.json"),
+      `${JSON.stringify({ version: "v1", hooks: "not-an-array" })}\n`,
+      "utf-8",
+    );
+    const run = runDoctor(project);
+
+    expect(run.status).toBe(1);
+    expect(run.stdout).toContain("aidlc-scalar-hooks.json (hooks is not an array)");
+    expect(run.stdout).toContain("settings/cli.json present");
+    expect(run.stderr).not.toContain("not iterable");
   });
 
   // All twelve manifests dispatch through the adapter, so the adapter IS the
