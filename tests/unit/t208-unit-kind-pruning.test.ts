@@ -436,6 +436,28 @@ describe("t208 engine unit-kind pruning", () => {
     expect(accepted.kind).toBe("done");
   }, 30000);
 
+  test("5g: mixed stale and never-reviewed units get both remedies", () => {
+    const proj = seedProject("functional-design");
+    seedBoltDag(proj, ["alpha", "beta"]);
+    coverUnit(proj, "alpha", "functional-design", FD_PRODUCES);
+    coverUnit(proj, "beta", "functional-design", FD_PRODUCES);
+    logReviewReady(proj, "alpha");
+    logArtifactUpdated(proj, "alpha");
+
+    const refused = runReport(
+      proj,
+      ["--stage", "functional-design", "--result", "approved"],
+      true,
+    );
+    expect(refused.kind).toBe("error");
+    expect(refused.message).toContain("Invalidated receipts: alpha");
+    expect(refused.message).toContain("Never reviewed: beta");
+    expect(refused.message).toContain(
+      "For invalidated units with recovery available (alpha)",
+    );
+    expect(refused.message).toContain("For never-reviewed units (beta)");
+  }, 30000);
+
   // 6: a stage with NO produces_kinds (code-generation) ignores kinds entirely -
   // even a spec unit gets the full produces set.
   test("6: a stage without produces_kinds ignores kinds (full produces)", () => {

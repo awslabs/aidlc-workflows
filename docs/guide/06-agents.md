@@ -278,15 +278,29 @@ artifacts (never the builder's `memory.md` or plan — it forms independent
 judgment), then appends a `## Review` section with a verdict: **READY** or
 **NOT-READY**. How the verdict is handled depends on the stage's review class:
 
-- **Advisory** (the human-gated ideation/inception prose stages): one review
-  pass, whatever the verdict. The findings are quoted verbatim at the approval
-  gate, ranked by severity, as decision support — you triage them, and a
-  Request Changes at the gate is how a finding becomes a revision.
+- **Advisory** (the human-gated ideation/inception prose stages): one normal-flow
+  review pass, whatever the verdict. The findings are quoted verbatim at the
+  approval gate, ranked by severity, as decision support — you triage them, and a
+  Request Changes at the gate is how a finding becomes a revision. If a later
+  output write invalidates the terminal receipt, one bounded recovery request
+  runs at the next ordinal.
 - **Adversarial** (the Construction design/build stages): on NOT-READY the
   builder re-runs to address the findings and the reviewer re-checks, looping
   up to `reviewer_max_iterations` times (default 2, engine-enforced). If
   findings remain after the cap, the workflow proceeds to the approval gate
   with the unresolved findings noted.
+
+The reviewers also run under a hard turn budget - `maxTurns: 60`, authored in
+the persona frontmatter, enforced natively on Claude Code and projected to
+opencode's per-agent `steps: 60`; elsewhere it ships as persona prose. If a
+review comes back without a usable verdict - no `## Review` section, or no
+single canonical READY / NOT-READY line (a capped, crashed, or cut-off
+reviewer) - the conductor re-dispatches that same review once, and a second
+incomplete attempt is recorded as NOT-READY with the finding "review did not
+complete within its turn budget", so a silent cutoff becomes a visible finding
+at the gate instead of a missing verdict. Before every dispatch the conductor
+deletes any leftover `## Review` section, so a stale pre-revision verdict can
+never be misread as covering new work.
 
 The scope can cap the class (`bugfix`, `poc`, and `workshop` cap every stage to
 advisory) and `/aidlc --review <class>` caps it per run. Either way the

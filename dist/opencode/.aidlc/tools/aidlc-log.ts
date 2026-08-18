@@ -17,11 +17,12 @@ import {
   emitError,
   errorMessage,
   extractMarkdownSection,
+  freshReviewReceipts,
   getField,
   holdsAuditLock,
   humanActedSinceLastAnswer,
   humanPresenceGuardDisabled,
-  isAutonomousMode,
+  isAutonomousConstructionDecision,
   isAutonomousSwarmStage,
   loadStageGraphAll,
   isNonAnswer,
@@ -32,11 +33,13 @@ import {
   reviewArtifactFingerprint,
   resolveProjectDir,
   resolveReviewClass,
+  selfAttributedDecisionMarker,
   SUMMARY_CONFIRMATION_CHECKPOINT,
   stateFilePath,
   toPosix,
   withAuditLock,
 } from "./aidlc-lib.js";
+import type { ReviewClass } from "./aidlc-lib.js";
 
 // Resolve the project dir AND assert that an active workflow exists before any
 // audit emit. WHY: aidlc-log is orchestrator-called per-question and threads no
@@ -409,8 +412,33 @@ function handleAnswer(args: string[]): void {
     const content = existsSync(stateFilePath(pd))
       ? readFileSync(stateFilePath(pd), "utf-8")
       : null;
+    const stageNode = loadStageGraphAll().find((stage) => stage.slug === flags.stage);
+    const autonomousDecision = isAutonomousConstructionDecision(content, stageNode?.phase);
     const workflow =
       flags.single === "true" ? `single-stage:${flags.stage}` : undefined;
+
+    // Authorship floor (issue 742): the same interview answer the conductor
+    // wrote for itself. isNonAnswer above rejects a DISMISSED widget; this
+    // rejects a self-attributed one ("A. Nothing to add - CONDUCTOR DEFAULT,
+    // session unattended"), which the presence check below cannot catch because
+    // a human is in the session, just not at this question. Autonomous
+    // Construction is exempt for ordinary answers. Summary confirmation remains
+    // a human-backed checkpoint below: its fresh-turn requirement is not waived
+    // by Construction autonomy even though its text is one of two exact strings.
+    const answerAuthorship =
+      autonomousDecision || humanPresenceGuardDisabled()
+        ? null
+        : selfAttributedDecisionMarker(flags.details, "answer");
+    if (answerAuthorship) {
+      error(
+        `Refusing to record this answer for "${flags.stage}": decision self-attribution blocked ` +
+          `(${answerAuthorship.category}) in --details: "${answerAuthorship.phrase}". ` +
+          "This tripwire detects explicit conductor/model provenance; it does not prove authorship. " +
+          "A stage question is the human's to " +
+          "answer. Re-present it and wait for their reply; recording your own default here would " +
+          "carry it downstream as a human decision.",
+      );
+    }
 
     if (summaryCheckpoint) {
       const pending = pendingSummaryDecision(
@@ -472,7 +500,7 @@ function handleAnswer(args: string[]): void {
       targetAtApprovalGate && hasPendingDecisionAtGate(pd, flags.stage);
     if (targetAtApprovalGate && !pendingDecision) {
       if (
-        !isAutonomousMode(content) &&
+        !autonomousDecision &&
         !humanPresenceGuardDisabled() &&
         !humanActedSinceLastAnswer(pd)
       ) {
@@ -490,7 +518,7 @@ function handleAnswer(args: string[]): void {
       return;
     }
 
-    if (isAutonomousMode(content)) {
+    if (autonomousDecision) {
       // autonomous Construction: no human presence required
     } else if (humanPresenceGuardDisabled()) {
       // scoped test off-switch
@@ -529,7 +557,11 @@ const VALID_VERDICTS = new Set(["READY", "NOT-READY"]);
 type ReviewAttemptSummary = {
   requestCount: number;
   boltStarted: boolean;
+  boltBatch: string | null;
+  boltSlug: string | null;
   pendingIterations: Set<number>;
+  recoveryIteration: number | null;
+  recoverySpent: boolean;
 };
 
 // Count requests in the current stage/unit attempt. The same chronological
@@ -579,6 +611,8 @@ function reviewAttemptSummary(
     getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
   let floor = -1;
   let boltStarted = false;
+  let boltBatch: string | null = null;
+  let boltSlug: string | null = null;
   for (let i = 0; i < events.length; i++) {
     const entry = events[i];
     if (workflow !== undefined) {
@@ -594,6 +628,8 @@ function reviewAttemptSummary(
     if (entry.event === "WORKFLOW_STARTED" || entry.event === "STAGE_JUMPED") {
       floor = i;
       boltStarted = false;
+      boltBatch = null;
+      boltSlug = null;
       continue;
     }
     if (
@@ -604,6 +640,8 @@ function reviewAttemptSummary(
     ) {
       floor = i;
       boltStarted = true;
+      boltBatch = auditBlockField(entry.block, "Batch number");
+      boltSlug = auditBlockField(entry.block, "Bolt slug");
       continue;
     }
     if (
@@ -614,12 +652,16 @@ function reviewAttemptSummary(
     ) {
       floor = i;
       boltStarted = false;
+      boltBatch = null;
+      boltSlug = null;
       continue;
     }
     if (auditBlockField(entry.block, "Stage") !== stage.slug) continue;
     if (entry.event === "GATE_REJECTED") {
       floor = i;
       boltStarted = false;
+      boltBatch = null;
+      boltSlug = null;
     } else if (
       entry.event === "STAGE_STARTED" &&
       !unitMajor &&
@@ -627,10 +669,14 @@ function reviewAttemptSummary(
     ) {
       floor = i;
       boltStarted = false;
+      boltBatch = null;
+      boltSlug = null;
     }
   }
 
   let requestCount = 0;
+  let recoveryIteration: number | null = null;
+  let recoverySpent = false;
   const pendingIterations = new Set<number>();
   for (let i = floor + 1; i < events.length; i++) {
     const entry = events[i];
@@ -659,12 +705,24 @@ function reviewAttemptSummary(
       if (auditBlockField(entry.block, "Retry") !== "pending-request") {
         requestCount++;
       }
+      if (auditBlockField(entry.block, "Recovery") === "stale-receipt") {
+        recoveryIteration = iteration;
+        recoverySpent = true;
+      }
       pendingIterations.add(iteration);
     } else {
       pendingIterations.delete(iteration);
     }
   }
-  return { requestCount, boltStarted, pendingIterations };
+  return {
+    requestCount,
+    boltStarted,
+    boltBatch,
+    boltSlug,
+    pendingIterations,
+    recoveryIteration,
+    recoverySpent,
+  };
 }
 
 function reviewBudgetMessage(stage: string, ordinal: number, budget: number): string {
@@ -676,6 +734,55 @@ function reviewBudgetMessage(stage: string, ordinal: number, budget: number): st
         "quote its findings at the approval gate for the human to triage."
       : "The review loop is exhausted - present the gate with the unresolved findings " +
         "for the human's decision instead of another review pass.")
+  );
+}
+
+function reviewRecoverySpentMessage(
+  stage: string,
+  autonomousBolt?: {
+    unit: string;
+    slug: string | null;
+    batch: string | null;
+  },
+): string {
+  const prefix =
+    `Refusing REVIEW_REQUESTED for "${stage}": the one stale-receipt recovery ` +
+    "review pass was already spent, and its receipt was invalidated again by " +
+    "another later write to a declared produces[] artifact. Stop editing " +
+    "produces[] artifacts after a review receipt. ";
+  if (autonomousBolt) {
+    const slug = autonomousBolt.slug ?? autonomousBolt.unit;
+    const batch = autonomousBolt.batch
+      ? ` batch ${autonomousBolt.batch}`
+      : " the current batch";
+    return (
+      prefix +
+      `Do not put autonomous Unit "${autonomousBolt.unit}" in --claimed and do ` +
+      "not run finalize or merge it. Halt and ask the human whether to restart " +
+      `the Bolt attempt. On an approved retry, return to the main workspace, run ` +
+      `\`aidlc-bolt.ts abort --name "${autonomousBolt.unit}" --slug "${slug}" ` +
+      `--reason "stale review recovery exhausted" --discard\`, then rerun the ` +
+      `current \`aidlc-swarm.ts prepare\` step for Unit "${autonomousBolt.unit}" in` +
+      `${batch} with the original base/repo arguments. The fresh BOLT_STARTED ` +
+      "boundary resets review accounting without claiming convergence. Do not " +
+      "record GATE_REJECTED on the human's behalf."
+    );
+  }
+  return (
+    prefix +
+    "Present this refusal to the human at the approval gate. Only a human " +
+    "Request Changes decision (GATE_REJECTED) resets the review attempt; do not " +
+    "record that rejection on the human's behalf."
+  );
+}
+
+function reviewRecoveryAlreadyRequestedMessage(stage: string, iteration: number): string {
+  return (
+    `Refusing REVIEW_REQUESTED for "${stage}": the one stale-receipt recovery ` +
+    "request already exists in this review attempt. If its dispatch is still " +
+    `unmatched, retry iteration ${iteration} with --retry-pending; if its verdict ` +
+    "was recorded, that recovery receipt is terminal and no further review " +
+    "request is allowed."
   );
 }
 
@@ -735,7 +842,34 @@ function handleReview(args: string[]): void {
       fields.Workflow,
       autonomousCandidate,
     );
-    return { state, node, attempt, autonomousCandidate };
+    const declared = node.review_class ?? "adversarial";
+    let reviewClass: ReviewClass | null = null;
+    let budget: number | null = null;
+    if (autonomousCandidate && attempt.boltStarted) {
+      reviewClass = declared;
+      budget =
+        reviewClass === "advisory"
+          ? 1
+          : node.reviewer_max_iterations ?? 2;
+    } else {
+      try {
+        reviewClass = resolveReviewClass(
+          declared,
+          getField(state, "Scope") ?? "",
+          state,
+        );
+        if (reviewClass === "none") budget = 0;
+        else if (reviewClass === "advisory") budget = 1;
+        else budget = node.reviewer_max_iterations ?? 2;
+      } catch {
+        // Class resolution fails open; ordinal enforcement remains active.
+      }
+    }
+    const receipts =
+      reviewClass === null
+        ? null
+        : freshReviewReceipts(pd, state, node, { reviewClass });
+    return { state, node, attempt, budget, receipts, autonomousCandidate };
   };
 
   // REVIEW_REQUESTED owns its ordinal: require a positive integer, count prior
@@ -748,11 +882,56 @@ function handleReview(args: string[]): void {
     const iteration = Number(flags.iteration);
     fields.Iteration = flags.iteration;
     let retried = false;
+    let recovery: "stale-receipt" | undefined;
     try {
       withAuditLock(pd, () => {
-        const { state, node, attempt, autonomousCandidate } = loadContext();
+        const {
+          attempt,
+          budget,
+          receipts,
+          autonomousCandidate,
+        } = loadContext();
+        const expected = attempt.requestCount + 1;
+        const scopeStale =
+          fields.Workflow === undefined &&
+          receipts !== null &&
+          (flags.unit
+            ? receipts.unitStale.has(flags.unit)
+            : receipts.stageStale);
         if (retryPending) {
           if (!attempt.pendingIterations.has(iteration)) {
+            if (scopeStale) {
+              if (attempt.recoverySpent) {
+                refuseReview(
+                  reviewRecoverySpentMessage(
+                    flags.stage,
+                    autonomousCandidate && attempt.boltStarted && flags.unit
+                      ? {
+                          unit: flags.unit,
+                          slug: attempt.boltSlug,
+                          batch: attempt.boltBatch,
+                        }
+                      : undefined,
+                  ),
+                );
+              }
+              const unitArg = flags.unit ? ` --unit "${flags.unit}"` : "";
+              refuseReview(
+                `Refusing review retry for "${flags.stage}": the prior review ` +
+                  "completed, but its receipt was invalidated by a later artifact " +
+                  "write, so no unmatched request remains. Start the one recovery " +
+                  `pass with \`aidlc-log.ts review --stage "${flags.stage}" ` +
+                  `--reviewer "${flags.reviewer}"${unitArg} --iteration ${expected}\`.`,
+              );
+            }
+            if (attempt.recoverySpent) {
+              refuseReview(
+                reviewRecoveryAlreadyRequestedMessage(
+                  flags.stage,
+                  attempt.recoveryIteration ?? iteration,
+                ),
+              );
+            }
             refuseReview(
               `Refusing review retry for "${flags.stage}": no unmatched ` +
                 `REVIEW_REQUESTED iteration ${iteration} exists in the current audit attempt.`,
@@ -763,32 +942,37 @@ function handleReview(args: string[]): void {
           retried = true;
           return;
         }
-        const expected = attempt.requestCount + 1;
-        const declared = node.review_class ?? "adversarial";
-        let budget: number | null = null;
-        if (autonomousCandidate && attempt.boltStarted) {
-          budget =
-            declared === "advisory"
-              ? 1
-              : node.reviewer_max_iterations ?? 2;
-        } else {
-          try {
-            const effective = resolveReviewClass(
-              declared,
-              getField(state, "Scope") ?? "",
-              state,
-            );
-            if (effective === "none") budget = 0;
-            else if (effective === "advisory") budget = 1;
-            else budget = node.reviewer_max_iterations ?? 2;
-          } catch {
-            // Class resolution fails open; ordinal enforcement remains active.
-          }
+        const recoveryEligible =
+          budget !== null &&
+          scopeStale &&
+          attempt.pendingIterations.size === 0 &&
+          !attempt.recoverySpent;
+        if (scopeStale && attempt.recoverySpent) {
+          refuseReview(
+            reviewRecoverySpentMessage(
+              flags.stage,
+              autonomousCandidate && attempt.boltStarted && flags.unit
+                ? {
+                    unit: flags.unit,
+                    slug: attempt.boltSlug,
+                    batch: attempt.boltBatch,
+                  }
+                : undefined,
+            ),
+          );
         }
-        if (budget !== null && iteration > budget) {
+        if (attempt.recoverySpent) {
+          refuseReview(
+            reviewRecoveryAlreadyRequestedMessage(
+              flags.stage,
+              attempt.recoveryIteration ?? iteration,
+            ),
+          );
+        }
+        if (!recoveryEligible && budget !== null && iteration > budget) {
           refuseReview(reviewBudgetMessage(flags.stage, iteration, budget));
         }
-        if (budget !== null && expected > budget) {
+        if (!recoveryEligible && budget !== null && expected > budget) {
           refuseReview(reviewBudgetMessage(flags.stage, expected, budget));
         }
         if (iteration !== expected) {
@@ -796,6 +980,10 @@ function handleReview(args: string[]): void {
             `Refusing REVIEW_REQUESTED for "${flags.stage}": iteration ${iteration} ` +
               `is out of sequence; expected ${expected} from the current audit attempt.`,
           );
+        }
+        if (recoveryEligible) {
+          fields.Recovery = "stale-receipt";
+          recovery = "stale-receipt";
         }
         emitAudit(pd, "REVIEW_REQUESTED", fields, intent, space);
       }, intent, space);
@@ -807,6 +995,7 @@ function handleReview(args: string[]): void {
       emitted: "REVIEW_REQUESTED",
       stage: flags.stage,
       ...(retried ? { retry: "pending-request" } : {}),
+      ...(recovery ? { recovery } : {}),
     }));
     return;
   }

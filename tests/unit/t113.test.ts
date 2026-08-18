@@ -460,6 +460,14 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     retry.entries[0].review_state =
       "retry-required" as typeof retry.entries[0]["review_state"];
     expect(errs({ ...runStage(), wave: retry })).toBe("VALID");
+
+    for (const state of ["recovery-required", "escalation-required"] as const) {
+      const recovery = structuredClone(wave());
+      recovery.entries[0].build_required = false;
+      recovery.entries[0].review_state =
+        state as typeof recovery.entries[0]["review_state"];
+      expect(errs({ ...runStage(), wave: recovery })).toBe("VALID");
+    }
   });
 
   test("invoke-swarm review_class validates the advisory/adversarial enum", () => {
