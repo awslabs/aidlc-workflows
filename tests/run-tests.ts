@@ -31,10 +31,13 @@ const BUN = process.execPath;
 // safe.directory entries have been copied into the suite's isolated config.
 const NULL_DEVICE = process.platform === "win32" ? "NUL" : "/dev/null";
 const LIVE_MODEL_GATES = [
+  "AIDLC_CLAUDE_SDK_LIVE",
   "AIDLC_TUI_LIVE",
   "AIDLC_KIRO_ACP_LIVE",
   "AIDLC_KIRO_TUI_LIVE",
   "AIDLC_CODEX_EXEC_LIVE",
+  "AIDLC_COPILOT_EXEC_LIVE",
+  "AIDLC_CURSOR_RUN_LIVE",
   "AIDLC_KIRO_IDE_LIVE",
   "AIDLC_OPENCODE_RUN_LIVE",
   "AIDLC_KIRO_UNIFIED_TUI_LIVE",

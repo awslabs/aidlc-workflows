@@ -50,6 +50,7 @@ test-pro/
   scopes/test-pro-validation.md                       # NEW plugin scope
   agents/test-pro-metrics-agent.md                    # NEW support persona
   knowledge/test-pro-metrics-agent/methodology.md     # plugin methodology knowledge
+  tests/plugin.test.ts                                # plugin content and compose tests
 ```
 
 `.aidlc-plugin/plugin.json` is a **declarative** manifest. Its top level mirrors
@@ -336,6 +337,76 @@ Trust is **host-native** — you don't build anything:
 > [`examples/test-pro/`](../reference/examples/test-pro/). See also
 > [Plugin Mechanism §8](../reference/18-plugin-mechanism.md) for the full
 > platform-team worked example.
+
+## Testing your plugin
+
+Use three tiers, from cheapest to most realistic:
+
+1. **Content validation** is the always-on baseline. Call
+   `validatePluginContent()` against the authored plugin root. It runs pure,
+   deterministic checks for manifest identity, stage schema and ownership,
+   artifact namespacing, contribution targets, scope and agent filenames, and
+   non-empty stage bodies. It is fast and gives precise authoring findings, but
+   it does not prove that packaging or composition succeeds.
+2. **Compose integration** is the default CI check. Call
+   `composePluginFixture()` to build the real harness projection, copy a shipped
+   install into scratch space, run the emitted compose hook, and inspect the
+   compiled graph and installed surfaces. It is deterministic and exercises the
+   actual packager and composer, but it does not launch a model-backed harness.
+3. **Live harness e2e** is opt-in compatibility evidence. Call
+   `invokeHarness()` only behind the gate returned by `liveGateFor()`. The live
+   gates are `AIDLC_CLAUDE_SDK_LIVE`, `AIDLC_KIRO_ACP_LIVE`,
+   `AIDLC_CODEX_EXEC_LIVE`, `AIDLC_COPILOT_EXEC_LIVE`,
+   `AIDLC_OPENCODE_RUN_LIVE`, and `AIDLC_CURSOR_RUN_LIVE`. Live runs prove the
+   host can discover and invoke the composed plugin, but they need installed
+   CLIs, credentials, and more time. An unset gate returns a skipped result, so
+   a green test run can mean the live check did not run.
+
+Plugin tests under `plugins/<name>/tests/*.test.ts` are discovered
+automatically and join the integration tier. Run one plugin's tests with:
+
+```bash
+bash tests/run-tests.sh --integration --filter "plugin-<name>"
+```
+
+This content test is the minimum copyable shape:
+
+```ts
+import { expect, test } from "bun:test";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { validatePluginContent } from "../../../tests/harness/plugin-kit.ts";
+
+const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+test("plugin content is valid", () => {
+  expect(validatePluginContent(pluginRoot)).toEqual([]);
+});
+```
+
+Add a deterministic compose test when the plugin ships stages, contributions,
+agents, scopes, sensors, or tools:
+
+```ts
+import { expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { composePluginFixture } from "../../../tests/harness/plugin-kit.ts";
+
+test("plugin composes into a Claude install", () => {
+  const fixture = composePluginFixture({
+    plugin: "your-plugin",
+    harness: "claude",
+  });
+  const graph = JSON.parse(
+    readFileSync(
+      join(fixture.projectDir, ".claude", "tools", "data", "stage-graph.json"),
+      "utf-8",
+    ),
+  ) as Array<{ slug?: string }>;
+  expect(graph.some((stage) => stage.slug === "your-plugin-stage")).toBe(true);
+});
+```
 
 ## Rules of the road
 

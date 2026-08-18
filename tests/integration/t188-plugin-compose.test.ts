@@ -20,18 +20,22 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   acquireAuditLock,
   auditLockDir,
   releaseAuditLock,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
   HARNESS_MATRIX,
   type ShippedHarnessName,
 } from "../harness/harness-matrix.ts";
+import {
+  assertNonEmptyStageBody,
+  buildPluginProjection,
+  composePluginFixture,
+} from "../harness/plugin-kit.ts";
 
-const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const PACKAGE_TS = join(REPO_ROOT, "scripts", "package.ts");
 const BUN = process.execPath; // the bun running this test — robust for hooks
 const TIMEOUT_MS = 60_000;
@@ -39,7 +43,6 @@ const TIMEOUT_MS = 60_000;
 const PLUGIN = "test-pro";
 const CLAUDE_DIST = join(REPO_ROOT, "dist", "claude", ".claude");
 const OPENCODE_DIST = join(REPO_ROOT, "dist", "opencode");
-const COPILOT_DIST = join(REPO_ROOT, "dist", "copilot");
 const KIRO_DIST = join(REPO_ROOT, "dist", "kiro", ".kiro");
 const CODEX_DIST = join(REPO_ROOT, "dist", "codex", ".codex");
 const CURSOR_DIST = join(REPO_ROOT, "dist", "cursor");
@@ -81,17 +84,6 @@ function stageSourcePath(projectDir: string, phase: string, slug: string): strin
 function stageBody(projectDir: string, phase: string, slug: string): string {
   return readFileSync(stageSourcePath(projectDir, phase, slug), "utf-8");
 }
-function bodyAfterFrontmatter(raw: string): string {
-  return raw.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?([\s\S]*)$/)?.[1] ?? "";
-}
-function assertNonEmptyStageBody(file: string): void {
-  const body = bodyAfterFrontmatter(readFileSync(file, "utf-8"));
-  if (body.trim().length === 0) {
-    throw new Error(
-      `${file}: stage body is empty - the stage is behaviorally dead; did a transform drop everything after the closing ---?`
-    );
-  }
-}
 function hookDrops(projectDir: string): string {
   let drops = "";
   const hd = join(projectDir, "aidlc", "spaces", "default", "intents", ".aidlc-hooks-health");
@@ -118,43 +110,24 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     //    seam. This exercises the real emitter without mutating committed dist.
     for (const harness of HARNESS_MATRIX) {
       const built = join(tmp, "plugin", harness.name);
-      const build = spawnSync(
-        BUN,
-        [PACKAGE_TS, "plugin", "build", PLUGIN, harness.name, built],
-        {
-          cwd: REPO_ROOT,
-          encoding: "utf-8",
-          timeout: TIMEOUT_MS - 5_000,
-        },
-      );
-      if (build.status !== 0) {
-        throw new Error(`plugin build failed for ${harness.name}: ${build.stderr}`);
-      }
+      buildPluginProjection(PLUGIN, harness.name, built);
       pluginBuilds.set(harness.name, built);
     }
     pluginBuilt = pluginBuilds.get("claude")!;
 
-    // 2. Fresh base project = a copy of dist/claude/.claude (read-only source).
-    project = join(tmp, "proj");
-    cpSync(CLAUDE_DIST, join(project, ".claude"), { recursive: true });
+    // 2. Preserve a core runner before composing the fresh Claude fixture.
     coreRunnerBefore = readFileSync(
-      join(project, ".claude", "skills", "aidlc-code-generation", "SKILL.md"),
+      join(CLAUDE_DIST, "skills", "aidlc-code-generation", "SKILL.md"),
       "utf-8",
     );
 
-    // 3. Run the real compose hook (as a host SessionStart hook would).
-    const compose = spawnSync(BUN, [join(pluginBuilt, "hooks", "compose.ts")], {
-      cwd: project,
-      encoding: "utf-8",
-      timeout: TIMEOUT_MS - 5_000,
-      env: {
-        ...process.env,
-        CLAUDE_PLUGIN_ROOT: pluginBuilt,
-        CLAUDE_PROJECT_DIR: project,
-        AIDLC_HARNESS_DIR: ".claude",
-      },
-    });
-    if (compose.status !== 0) throw new Error(`compose.ts failed: ${compose.stderr}`);
+    // 3. Compose through the reusable fixture kit.
+    project = composePluginFixture({
+      plugin: PLUGIN,
+      harness: "claude",
+      projectDir: join(tmp, "proj"),
+      pluginBuilt,
+    }).projectDir;
   }, TIMEOUT_MS);
 
   afterAll(() => {
@@ -243,43 +216,12 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
 
   test("Cursor's cross-platform launcher resolves its plugin root from the hook path", () => {
     const built = pluginBuilds.get("cursor")!;
-    const cursorProject = join(tmp, "cursor-compose");
-    mkdirSync(cursorProject, { recursive: true });
-    const initialInstall = spawnSync(
-      BUN,
-      [join(CURSOR_DIST, "install.ts"), cursorProject],
-      {
-        cwd: REPO_ROOT,
-        encoding: "utf-8",
-        timeout: TIMEOUT_MS - 5_000,
-      },
-    );
-    expect(initialInstall.status, initialInstall.stderr).toBe(0);
-    const env: NodeJS.ProcessEnv = { ...process.env };
-    delete env.CLAUDE_PLUGIN_ROOT;
-    delete env.PLUGIN_ROOT;
-    delete env.AIDLC_PLUGIN_ROOT;
-    delete env.CLAUDE_PROJECT_DIR;
-    delete env.CURSOR_PROJECT_DIR;
-    delete env.AIDLC_PROJECT_DIR;
-    env.AIDLC_HARNESS_DIR = ".cursor";
-
-    env.PATH = "";
-    const compose = spawnSync(
-      BUN,
-      [join(built, "hooks", "aidlc-plugin-compose.ts"), ".cursor"],
-      {
-        cwd: built,
-        input: JSON.stringify({
-          hook_event_name: "sessionStart",
-          workspace_roots: [cursorProject],
-        }),
-        encoding: "utf-8",
-        timeout: TIMEOUT_MS - 5_000,
-        env,
-      },
-    );
-    expect(compose.status, compose.stderr).toBe(0);
+    const cursorProject = composePluginFixture({
+      plugin: PLUGIN,
+      harness: "cursor",
+      projectDir: join(tmp, "cursor-compose"),
+      pluginBuilt: built,
+    }).projectDir;
     const cursorGraph = JSON.parse(
       readFileSync(join(cursorProject, ".cursor", "tools", "data", "stage-graph.json"), "utf-8"),
     ) as GraphStage[];
@@ -397,7 +339,6 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
   test("Cursor launcher passes its plugin root through the installed aidlc branch", () => {
     const built = pluginBuilds.get("cursor")!;
     const cursorProject = join(tmp, "cursor-compose-installed-aidlc");
-    cpSync(CURSOR_DIST, cursorProject, { recursive: true });
     const binDir = join(tmp, "cursor-fake-bin");
     mkdirSync(binDir, { recursive: true });
     const aidlc = join(binDir, "aidlc");
@@ -412,35 +353,16 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       ].join("\n"),
     );
     chmodSync(aidlc, 0o755);
-
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
-      AIDLC_HARNESS_DIR: ".cursor",
-    };
-    delete env.CLAUDE_PLUGIN_ROOT;
-    delete env.PLUGIN_ROOT;
-    delete env.AIDLC_PLUGIN_ROOT;
-    delete env.CLAUDE_PROJECT_DIR;
-    delete env.CURSOR_PROJECT_DIR;
-    delete env.AIDLC_PROJECT_DIR;
-
-    const compose = spawnSync(
-      BUN,
-      [join(built, "hooks", "aidlc-plugin-compose.ts"), ".cursor"],
-      {
-        cwd: built,
-        input: JSON.stringify({
-          hook_event_name: "sessionStart",
-          workspace_roots: [cursorProject],
-        }),
-        encoding: "utf-8",
-        timeout: TIMEOUT_MS - 5_000,
-        env,
+    const composed = composePluginFixture({
+      plugin: PLUGIN,
+      harness: "cursor",
+      projectDir: cursorProject,
+      pluginBuilt: built,
+      env: {
+        PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
       },
-    );
-    expect(compose.status, compose.stderr || compose.stdout).toBe(0);
-    expect(compose.stdout).toContain("plugin sync complete: 1 plugin(s)");
+    });
+    expect(composed.composeStdout).toContain("plugin sync complete: 1 plugin(s)");
     const cursorGraph = JSON.parse(
       readFileSync(join(cursorProject, ".cursor", "tools", "data", "stage-graph.json"), "utf-8"),
     ) as GraphStage[];
@@ -490,32 +412,13 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
   });
 
   test("OpenCode compose emits plugin agents to both inline and native rosters", () => {
-    const pluginOpenCode = join(tmp, "plugin", "opencode");
-    const build = spawnSync(
-      BUN,
-      [PACKAGE_TS, "plugin", "build", PLUGIN, "opencode", pluginOpenCode],
-      {
-        cwd: REPO_ROOT,
-        encoding: "utf-8",
-        timeout: TIMEOUT_MS - 5_000,
-      },
-    );
-    if (build.status !== 0) throw new Error(`opencode plugin build failed: ${build.stderr}`);
-
-    const opencodeProject = mkdtempSync(join(tmp, "opencode-compose-"));
-    cpSync(OPENCODE_DIST, opencodeProject, { recursive: true });
-    const compose = spawnSync(BUN, [join(pluginOpenCode, "hooks", "compose.ts")], {
-      cwd: opencodeProject,
-      encoding: "utf-8",
-      timeout: TIMEOUT_MS - 5_000,
-      env: {
-        ...process.env,
-        PLUGIN_ROOT: pluginOpenCode,
-        AIDLC_PROJECT_DIR: opencodeProject,
-        AIDLC_HARNESS_DIR: ".aidlc",
-      },
-    });
-    if (compose.status !== 0) throw new Error(`opencode compose failed: ${compose.stderr}`);
+    const pluginOpenCode = pluginBuilds.get("opencode")!;
+    const opencodeProject = composePluginFixture({
+      plugin: PLUGIN,
+      harness: "opencode",
+      projectDir: mkdtempSync(join(tmp, "opencode-compose-")),
+      pluginBuilt: pluginOpenCode,
+    }).projectDir;
 
     const inline = join(opencodeProject, ".aidlc", "agents", "test-pro-metrics-agent.md");
     const native = join(opencodeProject, ".opencode", "agents", "test-pro-metrics-agent.md");
@@ -532,8 +435,12 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
 
   test("Copilot compose and selection use .github agent and skill surfaces", () => {
     const pluginCopilot = pluginBuilds.get("copilot")!;
-    const copilotProject = mkdtempSync(join(tmp, "copilot-compose-"));
-    cpSync(COPILOT_DIST, copilotProject, { recursive: true });
+    const copilotProject = composePluginFixture({
+      plugin: PLUGIN,
+      harness: "copilot",
+      projectDir: mkdtempSync(join(tmp, "copilot-compose-")),
+      pluginBuilt: pluginCopilot,
+    }).projectDir;
     const env = {
       ...process.env,
       PLUGIN_ROOT: pluginCopilot,
@@ -541,13 +448,6 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       AIDLC_HARNESS_DIR: ".aidlc",
       AIDLC_HARNESS_NAME: "copilot",
     };
-    const compose = spawnSync(BUN, [join(pluginCopilot, "hooks", "compose.ts")], {
-      cwd: copilotProject,
-      encoding: "utf-8",
-      timeout: TIMEOUT_MS - 5_000,
-      env,
-    });
-    if (compose.status !== 0) throw new Error(`copilot compose failed: ${compose.stderr}`);
 
     const inline = join(copilotProject, ".aidlc", "agents", "test-pro-metrics-agent.md");
     const native = join(copilotProject, ".github", "agents", "test-pro-metrics-agent.md");
@@ -572,20 +472,17 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       "utf-8",
     );
     const unsafeProject = mkdtempSync(join(tmp, "copilot-unsafe-agent-"));
-    cpSync(COPILOT_DIST, unsafeProject, { recursive: true });
-    const unsafeCompose = spawnSync(BUN, [join(unsafePlugin, "hooks", "compose.ts")], {
-      cwd: unsafeProject,
-      encoding: "utf-8",
-      timeout: TIMEOUT_MS - 5_000,
+    composePluginFixture({
+      plugin: PLUGIN,
+      harness: "copilot",
+      projectDir: unsafeProject,
+      pluginBuilt: unsafePlugin,
       env: {
         ...env,
         PLUGIN_ROOT: unsafePlugin,
         AIDLC_PROJECT_DIR: unsafeProject,
       },
     });
-    if (unsafeCompose.status !== 0) {
-      throw new Error(`unsafe Copilot compose failed: ${unsafeCompose.stderr}`);
-    }
     expect(
       existsSync(join(unsafeProject, ".github", "agents", "test-pro-metrics-agent.md")),
     ).toBe(false);

@@ -6,7 +6,7 @@
 // the attempt at the gate.
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
@@ -17,6 +17,7 @@ import {
   seededRecordDir,
   seedStateFile,
 } from "../harness/fixtures.ts";
+import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
 const LOG_TOOL = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const STATE_TOOL = join(AIDLC_SRC, "tools", "aidlc-state.ts");
@@ -198,5 +199,30 @@ describe("t291 stale review receipt recovery", () => {
     expect(restarted.status).toBe(0);
     expect(restarted.stdout).toContain('"emitted":"REVIEW_REQUESTED"');
     expect(restarted.stdout).not.toContain('"recovery"');
+  });
+});
+
+describe("t291 stale review receipt recovery prose parity", () => {
+  test("all eight authored and generated conductor skills carry the bounded recovery clauses", () => {
+    expect(HARNESS_MATRIX.length).toBe(8);
+    const clauses = [
+      "If the one recovery receipt is invalidated again",
+      "halt for a human Retry/Abort decision",
+      "the fresh `BOLT_STARTED` boundary resets review accounting",
+      "If a later `produces[]` write invalidates the terminal receipt, issue exactly one distinct recovery request at the next ordinal; either recovery verdict is terminal.",
+      "Review accounting and normal budgets are per Unit; an invalidated terminal receipt gets the same single bounded stale-receipt recovery for that Unit.",
+    ];
+
+    for (const harness of HARNESS_MATRIX) {
+      for (const path of [
+        join(harness.authoredRoot, "skills", "aidlc", "SKILL.md"),
+        join(harness.skillsRoot, "aidlc", "SKILL.md"),
+      ]) {
+        const body = readFileSync(path, "utf-8");
+        for (const clause of clauses) {
+          expect(body, `${harness.name}: ${path}`).toContain(clause);
+        }
+      }
+    }
   });
 });

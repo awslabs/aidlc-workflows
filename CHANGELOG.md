@@ -1,7 +1,7 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
-## [2.6.17] - 2026-08-18
+## [2.6.18] - 2026-08-18
 
 Adds `dist/kiro-unified/` — a Kiro distribution aligned to the **unified agent harness**, the runtime Kiro IDE 1.x and Kiro CLI v3 (`kiro-cli --v3`) share. Both surfaces resolve an agent from its Markdown definition (persona body, `tools:`, `resources:` and `permissions:` in one file) and execute the standalone `.kiro/hooks/aidlc-*.json` manifests, so this tree carries no agent-v1 JSON and no legacy `.kiro.hook` files. The existing `dist/kiro-ide/` and `dist/kiro/` trees are unchanged and remain the install for older IDE builds and for Kiro CLI 2.x respectively; `README.md` § Pick your harness now says which runtime takes which tree. No stage, artifact, or state-schema change. **Upgrade:** nothing to do unless you run Kiro IDE 1.x or `kiro-cli --v3` and want the aligned shell — installing it is a fresh `cp` of `dist/kiro-unified/` into the project, not a layer over an existing `.kiro/` from another Kiro tree.
 
@@ -15,6 +15,17 @@ Adds `dist/kiro-unified/` — a Kiro distribution aligned to the **unified agent
 * New chapter [AI-DLC on the Kiro unified agent harness](docs/guide/harnesses/kiro-unified.md) — prerequisites (including the `--v3` opt-in), install, which Kiro tree to pick, and what differs, including which hooks ship unregistered and why.
 * The unified tree's adapter validates untrusted nested payload values before reading them — each `stages[]` member on the plan-approval target and each `operations[]` member on review-freeze. A malformed member (`stages: [null]`) previously threw, and since a non-zero PreToolUse exit blocks on this runtime, that turned bad input into a hard block on every subagent dispatch with a stack trace as the reason. Malformed members are dropped, which lands on the fail-open the core guard already commits to for malformed stdin; a well-formed developer stage beside them still refuses.
 * The tree's conductor skill carries 2.6.8's §12a reviewer-step contract and 2.6.9's `recovery-required` / `escalation-required` wave outcomes. A harness SKILL.md is authored per tree, so a shared-protocol change lands in the seven existing trees and leaves a new one behind until it is ported; `t279` and `t278` are the pins that say so.
+
+## [2.6.17] - 2026-08-18
+
+Plugin authors now have a reusable test kit and documented testing tiers for content validation, deterministic composition, and opt-in live harness checks. No upgrade action is needed.
+
+* `tests/harness/plugin-kit.ts` exposes shared plugin projection, fixture composition, content validation, and gated harness invocation helpers.
+* `validatePluginContent()` reports structured findings for manifest identity, stage schema and ownership, artifact namespacing, contribution targets, scope and agent names, and empty stage bodies.
+* `composePluginFixture()` builds a real projection and composes it into a scratch install for deterministic integration checks.
+* `invokeHarness()` dispatches across Claude, Kiro, Codex, Copilot, OpenCode, and Cursor, while `liveGateFor()` identifies the opt-in gate whose unset value means skip.
+* Plugin tests remain auto-discovered under `plugins/<name>/tests/*.test.ts` and can be selected with `bash tests/run-tests.sh --integration --filter "plugin-<name>"`.
+* The Harness Engineer Guide now includes a "Testing your plugin" section with tier tradeoffs and copyable examples.
 
 ## [2.6.16] - 2026-08-18
 
