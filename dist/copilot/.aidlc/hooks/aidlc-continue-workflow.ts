@@ -108,10 +108,13 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  ActiveDirectiveLockContendedError,
   activeIntentUuid,
   auditFilePath,
   clearSessionIntentHandoff,
   composeMarkerPath,
+  consumeCopilotConversation,
+  copilotStopEvidence,
   COMPOSE_MARKER_TTL_MS,
   docsRoot,
   errorMessage,
@@ -131,6 +134,7 @@ import {
   stopHookDir,
   STOP_HOOK_PROBE_ENV,
   turnMarkersShowConversational,
+  updateCopilotStopCount,
   SESSION_INTENT_HANDOFF_TTL_MS,
   harnessDir,
 } from "../tools/aidlc-lib.ts";
@@ -827,11 +831,13 @@ function isConversationalStop(
   stateContent: string,
   transcriptPath: string | null,
   format: "claude" | "codex",
+  copilotSession = "",
 ): boolean {
   try {
     if (getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous") {
       return false; // autonomy guard: keep the loop alive
     }
+    if (copilotSession) return consumeCopilotConversation(projectDir, stateContent, copilotSession);
     if (transcriptPath === null || transcriptPath.length === 0) {
       // No transcript delivered — fall back to the marker mtimes.
       return turnMarkersShowConversational(projectDir);
@@ -850,6 +856,9 @@ interface EngineDirective {
   stage?: string;
   unit?: string;
   continueToken?: string;
+  part?: number;
+  parts?: number;
+  retained?: boolean;
   rulesContent?: Array<{ path: string; text: string }>;
 }
 
@@ -951,8 +960,18 @@ function continuationReason(
   stage: string,
   continueToken?: string,
   rulesContent?: Array<{ path: string; text: string }>,
+  retained = false,
 ): string {
   const where = stage.length > 0 ? ` for "${stage}"` : "";
+  if (kind === "rehydrate") {
+    return `AI-DLC coordination evidence is missing or stale. Run one fresh \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts next\`; do not reuse an earlier continuation token.`;
+  }
+  if (retained && kind === "load-steering" && continueToken) {
+    return `The delivered AIDLC steering part${where} is still active. Apply every path/text entry from its already-delivered \`rules_content\`, then run \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts continue "${continueToken}"\`. Keep applying and continuing every returned load-steering part until \`run-stage\`; do not restart at part 1, and do not summarise or narrate rule chunks to the user.`;
+  }
+  if (retained && kind === "run-stage") {
+    return `The exact delivered AIDLC run-stage${where} is still active. Complete that exact stage, then use \`report\` for the real outcome; use \`park\` for a clean pause. Never rubber-stamp approval or revision gates.`;
+  }
   if (kind === "load-steering" && continueToken) {
     const exactContent = JSON.stringify(rulesContent ?? []);
     return (
@@ -1104,7 +1123,19 @@ if (transcriptPath && transcriptFormat === "claude") {
 
 // Consult the engine for the next move. A null directive (engine unavailable /
 // unparseable) fails open — allow the stop.
-const directive = runEngineNextDirective(projectDir);
+const copilotSession = process.env.AIDLC_COPILOT_SESSION_ID === sessionId ? sessionId : "";
+const copilotEvidence = copilotSession ? copilotStopEvidence(projectDir, stateContent, copilotSession) : null;
+if (copilotEvidence?.status === "contended") {
+  recordHookDrop(projectDir, HOOK_NAME, "active-directive lock contended while reading Copilot Stop evidence; allowing stop");
+  return allowStop();
+}
+if (copilotEvidence?.status === "foreign" || copilotEvidence?.status === "resume") return allowStop();
+const retainedDirective = copilotEvidence?.status === "directive" ? copilotEvidence.directive : undefined;
+const directive: EngineDirective | null = copilotEvidence
+  ? retainedDirective
+    ? { ...retainedDirective, retained: true }
+    : { kind: "rehydrate", retained: true }
+  : runEngineNextDirective(projectDir);
 if (directive === null) {
   recordHookDrop(projectDir, HOOK_NAME, "engine next returned no parseable directive; allowing stop");
   return allowStop();
@@ -1233,7 +1264,7 @@ if (isPendingComposeStop(projectDir, stateContent)) {
 // autonomous run, or any read error falls through to the cap-bounded block below,
 // so a conductor that engaged the workflow and then quit mid-loop (and every
 // autonomous run) is still nudged.
-if (isConversationalStop(projectDir, stateContent, transcriptPath, transcriptFormat)) {
+if (isConversationalStop(projectDir, stateContent, transcriptPath, transcriptFormat, copilotSession)) {
   recordHookDrop(
     projectDir,
     HOOK_NAME,
@@ -1246,7 +1277,27 @@ if (isConversationalStop(projectDir, stateContent, transcriptPath, transcriptFor
 // present-gate / ask / print / error). Decide whether to block, honouring the
 // recursion bounds. When the bounds say release, LET GO — a stuck loop must
 // never trap the session.
-const shouldBlock = decideBlock(projectDir, stateContent, stopHookActive);
+let markerCount: { shouldBlock: boolean; count: number } | null = null;
+if (copilotSession && copilotEvidence &&
+    (copilotEvidence.status === "directive" || copilotEvidence.status === "recovery")) {
+  try {
+    markerCount = updateCopilotStopCount(
+        projectDir,
+        stateContent,
+        copilotSession,
+        [kind, activeStage ?? "", activeUnit ?? "", directive.part ?? "", directive.parts ?? "", copilotEvidence.tokenSha256, copilotEvidence.stateSha256, copilotEvidence.resumeStatus, copilotEvidence.resumeAction, copilotEvidence.ownerSession, copilotEvidence.ownerEpoch].join("|"),
+        stopHookActive,
+        blockCap(stateContent),
+      );
+  } catch (error) {
+    if (!(error instanceof ActiveDirectiveLockContendedError)) throw error;
+    recordHookDrop(projectDir, HOOK_NAME, "active-directive lock contended while updating Copilot Stop count; allowing stop");
+    return allowStop();
+  }
+}
+const shouldBlock = copilotSession
+  ? markerCount?.shouldBlock ?? false
+  : decideBlock(projectDir, stateContent, stopHookActive);
 if (!shouldBlock) {
   recordHookDrop(
     projectDir,
@@ -1263,6 +1314,7 @@ return blockStop(
     activeStage ?? currentStageSlug(stateContent),
     directive.continueToken,
     directive.rulesContent,
+    directive.retained,
   ),
 );
 }

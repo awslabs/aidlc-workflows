@@ -529,7 +529,7 @@ When the orchestrator runs a Bolt in phased mode:
 
 When `directive.wave` is present, branch on it before the ordinary per-Unit or gate path; the parent Unit fields are compatibility projections of the first entry and are not separate work. Show parent warnings once, then give every builder the parent stage file, all inline context, and the complete steering bundle verbatim plus only its entry's paths. Dispatch entries concurrently where the harness supports independent workers; serial entry processing is the universal fallback. A builder with `build_required: true` runs the Unit-scoped question/summary checkpoint and writes its Unit artifacts and diary. It does not call the serial `unit start/pause/resume` verbs: the wave directive is the batch checkpoint, and a blocking question keeps the entry open by withholding a path from `entry.required_produces`, returning the question to the conductor, and stopping for the human.
 
-After builds, `review_state: "outstanding"` runs the named iteration; `"retry-required"` repeats the unmatched request with `aidlc-log.ts review --retry-pending`; `"repair-required"` runs the lead-only repair and then the next reviewer iteration. `READY`, terminal `NOT-READY`, and `not-required` need no review work. Reviewer dispatches remain serialized where the single reviewer-scope record is enforced; only an enforcement-free harness may run them as parallel foreground work. Once an entry is build-complete and review-settled, run `bun {{HARNESS_DIR}}/tools/aidlc-state.ts unit complete --wave --stage <slug> --unit <name>`. That command re-verifies the live wave entry, copies new Unit diary entries verbatim into the parent diary with deterministic deduplication, binds the receipt to the final artifact fingerprint, and only then emits `UNIT_COMPLETED`. Therefore a crash before diary fan-in or a later artifact change leaves `completion_required: true` and re-hands the entry; neither a dependent batch nor the stage gate can overtake build, review, memory, or completion evidence. Re-run `next` without report-approve after processing the emitted prefix. Unit-major iteration stays serial and never carries `directive.wave`.
+After builds, `review_state: "outstanding"` runs the named iteration; `"retry-required"` repeats the unmatched request with `aidlc-log.ts review --retry-pending`; `"repair-required"` runs the lead-only repair and then the next reviewer iteration; and `"recovery-required"` runs the one stale-receipt recovery at the emitted `review_iteration`. `"escalation-required"` means that recovery was already spent: do not request another review or complete the Unit; halt and present the situation to the human, and only a human Request Changes decision may reset the stage attempt. `READY`, terminal `NOT-READY`, and `not-required` need no review work. Reviewer dispatches remain serialized where the single reviewer-scope record is enforced; only an enforcement-free harness may run them as parallel foreground work. Once an entry is build-complete and review-settled, run `bun {{HARNESS_DIR}}/tools/aidlc-state.ts unit complete --wave --stage <slug> --unit <name>`. That command re-verifies the live wave entry, copies new Unit diary entries verbatim into the parent diary with deterministic deduplication, binds the receipt to the final artifact fingerprint, and only then emits `UNIT_COMPLETED`. Therefore a crash before diary fan-in or a later artifact change leaves `completion_required: true` and re-hands the entry; neither a dependent batch nor the stage gate can overtake build, review, memory, or completion evidence. Re-run `next` without report-approve after processing the emitted prefix. Unit-major iteration stays serial and never carries `directive.wave`.
 
 **Unit-major iteration (opt-in).** By default the walk above is stage-major: a design stage runs for every Unit, then the next design stage runs for every Unit, and code-generation runs last for every Unit. When the state file records `Construction Iteration: unit-major` under `## Runtime State` (set at delivery-planning via `aidlc-state.ts set-construction-iteration unit-major`, or by a human), the engine instead walks EVERY per-unit Construction stage unit-major: for each Unit in Bolt build order (outer), for each per-unit stage in graph order (inner — the four inline design stages, then code-generation), it emits the first unsettled (stage, Unit) pair with `gate: false`, so one Unit's four design documents are authored consecutively and the Unit is BUILT before the next Unit begins. The first working code therefore lands after ONE Unit's design, not after every Unit's; code-generation's own Step 3 Plan Approval still hard-stops per Unit before generation. The autonomous swarm never fires under unit-major: the walk owns code-generation through the normal non-swarm per-unit settlement path, so an `autonomous` grant changes no routing while the knob is set. The gates are UNCHANGED in count and machinery: the per-stage gates still fire, but late and in a cascade at the end of the block once the whole (stage x Unit) grid — code-generation included — is settled, one human approval per stage per turn. Because a stage's per-Unit work can run while `Current Stage` still points at an earlier stage, a directive's `directive.stage` may name a LATER Construction stage (including code-generation) than `Current Stage`, and a stage's `STAGE_STARTED` audit event may land after that stage's per-Unit artifacts were written; unit-major receipt floors therefore use the current workflow/jump/rejection boundary and survive that later `STAGE_STARTED`. The audit trail stays complete and stage-keyed. Always act on the directive's own `directive.stage` + `directive.unit`, never on `Current Stage`.
 
@@ -1112,7 +1112,7 @@ If the `run-stage` directive includes a `reviewer` field (non-null), the orchest
 The directive's `review_class` field tells you HOW the review runs - the engine has already resolved it (stage declaration, lowered by the scope's `review_cap` and any per-run `--review` override; a `none` resolution omits the reviewer block entirely, so a directive that carries a reviewer always carries a class):
 
 - **`adversarial`** - the refute-and-repair loop below, up to `reviewer_max_iterations` passes with lead fixes between them. The default for Construction stages, where findings are machine-checkable and fix loops converge.
-- **`advisory`** - ONE review pass as decision support for the human gate (`reviewer_max_iterations` is 1). Whatever the verdict, do NOT re-invoke the lead and do NOT re-run the reviewer: record the terminal receipt, proceed to §13, and quote the reviewer's findings VERBATIM at the approval gate for the human to triage. The default for the human-gated ideation/inception prose stages, where readiness is a judgment call that belongs to the human at the gate.
+- **`advisory`** - ONE normal-flow review pass as decision support for the human gate (`reviewer_max_iterations` is 1). Whatever the verdict, do NOT re-invoke the lead and do NOT re-run the reviewer during normal flow: record the terminal receipt, proceed to §13, and quote the reviewer's findings VERBATIM at the approval gate for the human to triage. The bounded stale-receipt recovery below is the only exception. The default for the human-gated ideation/inception prose stages, where readiness is a judgment call that belongs to the human at the gate.
 
 ### What the user hears from this section
 
@@ -1157,14 +1157,15 @@ Everything else in this section is silent. Nothing is said about invoking, handi
    same request command with `--retry-pending` before dispatching again. The
    logger accepts it only while that exact request is unmatched, marks the
    retry in the audit, and does not consume another review iteration. Never
-   use `--retry-pending` after a verdict.
+   use `--retry-pending` after a verdict; a receipt-invalidating write creates
+   a new recovery request at the next ordinal, not a retry of the completed one.
 
 2. **Reviewer executes.** An `adversarial` review runs under the **adversarial review contract**:
 
    - **Refute, don't confirm.** The reviewer's job is to refute the artifact, not to confirm it. It assumes defects exist and hunts for them; READY is the verdict it fails to reach after trying to break the artifact, not the default it starts from.
    - **Ground findings in machine-checkable evidence where it exists.** The reviewer runs the validation tools the invocation lists (via shell) and checks the artifact against its acceptance criteria, its stage definition, and the consumed upstream contracts. A finding backed only by opinion is a suggestion, not grounds for NOT-READY.
 
-   An `advisory` review keeps the evidence-grounding rule but not the refute-until-READY posture: tell the reviewer in the dispatch brief that this is a SINGLE advisory pass whose findings go to the human at the approval gate - report only findings the human should weigh before approving, ranked by severity, with no fix-and-re-review loop behind it.
+   An `advisory` review keeps the evidence-grounding rule but not the refute-until-READY posture: tell the reviewer in the dispatch brief that this is a SINGLE normal-flow advisory pass whose findings go to the human at the approval gate - report only findings the human should weigh before approving, ranked by severity, with no fix-and-re-review loop behind it. The stale-receipt recovery below is a separate bounded request, not a repair loop.
 
    The reviewer sub-agent:
    - Reads the stage definition to understand what SHOULD have been produced
@@ -1185,7 +1186,9 @@ Everything else in this section is silent. Nothing is said about invoking, handi
 
    The recorded receipt is TERMINAL whenever no further review pass follows it: do not write to any `produces[]` artifact between recording it and gate approval (a later write invalidates the receipt and the engine refuses the gate). A verdict may arrive with optional suggestions riding along; do NOT apply them - quote them verbatim in the completion summary for the human to weigh at the gate. A suggestion is gate input, not a defect (step 2: it is not grounds for NOT-READY, so it is not grounds for editing past the terminal receipt either). Riding suggestions also never change the gate itself: keep the §1 approval question's standard option order (Approve first, Request Changes second) - do not present Request Changes as the recommended or first option because a suggestion exists. On harnesses with PreToolUse enforcement the review-freeze hook refuses such a write deterministically (`REVIEW_FREEZE_BLOCKED`); a recorded gate rejection lifts the freeze for the revision path.
 
-   **On an `advisory` review, both verdicts are terminal here.** Do not re-invoke the lead or the reviewer (the engine refuses a REVIEW_REQUESTED beyond the single pass); proceed to §13, then present the approval gate with the reviewer's findings quoted verbatim - severity, location, and recommendation - as decision support: "The reviewer flagged N findings for your review before approving." The human triages; a Request Changes at the gate is how an advisory finding becomes a revision.
+   If a write still invalidates the receipt, the first request after that stale terminal evidence is exactly one recovery review at the next ordinal, even when an adversarial stage had unused normal iterations. The logger marks it `Recovery: stale-receipt`; record either verdict as terminal, then stop editing `produces[]` artifacts. If that recovery receipt is invalidated again, request no further review. On an interactive stage, present the recovery-spent refusal to the human; only Request Changes (`GATE_REJECTED`) resets the attempt.
+
+   **On an `advisory` review, both verdicts are terminal here.** Do not re-invoke the lead or the reviewer during normal flow; proceed to section 13, then present the approval gate with the reviewer's findings quoted verbatim - severity, location, and recommendation - as decision support: "The reviewer flagged N findings for your review before approving." The human triages; a Request Changes at the gate is how an advisory finding becomes a revision. If a `produces[]` artifact was written after the terminal receipt and voided it, the engine permits exactly one recovery request at the next ordinal; record its verdict, then stop editing `produces[]` artifacts.
 
    **On an `adversarial` review**, branch on the verdict:
    - **READY** → the receipt is terminal (above); proceed to §13 learnings ritual then the approval gate
@@ -1212,7 +1215,9 @@ re-presented gate).
 > `REVIEW_COMPLETED` from that reviewer. Per-unit stages require one receipt for
 > every applicable unit. A workflow restart, relevant jump, gate rejection, or
 > later write to a declared stage artifact invalidates older receipts (per-unit
-> writes invalidate only that unit). Only a `READY` or `NOT-READY` verdict is
+> writes invalidate only that unit). After such a write, the engine permits
+> exactly one recovery review request at the next ordinal; record its verdict
+> and stop editing `produces[]` artifacts. Only a `READY` or `NOT-READY` verdict is
 > terminal. The precondition is hard on the review having happened and soft on
 > its verdict: a NOT-READY verdict after the iteration cap still reaches the
 > human gate. Autonomous Construction is not exempt; swarm
@@ -1220,6 +1225,14 @@ re-presented gate).
 > finalization. The swarm referee verifies each configured unit's terminal
 > receipt after its `BOLT_STARTED` boundary before merging it, so autonomy
 > removes human interruptions rather than verification.
+>
+> If an autonomous Unit invalidates its one recovery receipt, halt before
+> `finalize`: do not put the Unit in `--claimed`, do not merge it, and present a
+> human Retry/Abort decision through the halt-and-ask seam. On Retry, return to
+> the main workspace, abort and discard the old Bolt, then rerun the current
+> `aidlc-swarm.ts prepare` step for that Unit with the original batch/base/repo
+> arguments. The fresh worktree and `BOLT_STARTED` boundary reset review
+> accounting without claiming convergence. Never synthesize `GATE_REJECTED`.
 
 ### What the reviewer does NOT do
 
