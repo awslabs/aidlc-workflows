@@ -1,6 +1,17 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.16] - 2026-08-18
+
+Code Generation now turns the team's affirmed Testing Posture into one fingerprinted execution contract shared by normal and autonomous generation. The resolver preserves additive project/team/org notes, distinguishes TDD, BDD, ATDD, test-after, and custom/mixed ordering, and binds the approved plan to the active scope and Test Strategy. **Upgrade:** re-copy your `dist/<harness>/` shell so the new `aidlc-testing-posture.ts` tool, stage contract, dispatch guard, swarm precondition, and developer persona are installed.
+
+* Practices Discovery records explicit `Methodology` and `Ordering` fields; that structured methodology remains authoritative over its ordering prose, a project coverage/tooling note no longer erases a broader team methodology, and a contradictory narrower methodology is rejected. Existing pre-2.6.8 org sections that merely enumerate TDD/BDD/ATDD/test-after are treated as unaffirmed and use the deterministic fallback.
+* Code Generation embeds the resolver's structured Testing Contract and methodology-specific plan profile: TDD uses per-layer Red/Green/Refactor across data, repository, business, API, and frontend; BDD uses scenario-first feature slices; ATDD uses acceptance-first cross-layer implementation; custom/mixed preserves its exact ordering; test-after keeps implementation before tests.
+* Greenfield plans bootstrap a runnable unit-scoped test command before the first Red/scenario/acceptance step. Scope floors and the selected `--test-strategy` now combine additively instead of producing conflicting test obligations.
+* Plan Approval fingerprints the exact plan, unit test instructions, and Testing Contract. A later artifact, memory, scope, strategy, or project-type change invalidates approval, and the developer dispatch must carry matching `AIDLC-UNIT` and `AIDLC-TESTING-CONTRACT` markers.
+* Autonomous Code Generation must obtain the same per-unit Plan Approval before `aidlc-swarm.ts prepare`; the referee blocks worktree creation for missing/stale evidence, and every worker receives the full approved plan, instructions, and contract.
+* The developer persona treats the approved Testing Contract as authoritative and performs Refactor during initial generation when the selected methodology requires it.
+
 ## [2.6.15] - 2026-08-17
 
 Your own documents become something agents can cite. Drop PDFs, Word files,

@@ -261,7 +261,9 @@ Four lead artifacts plus three spoke contributions are written to
 
 - `team-practices.md` -- descriptive, team-voice prose. Five sections matching
   `team.md` headings: Way of Working, Walking Skeleton, Testing Posture,
-  Deployment, Code Style.
+  Deployment, Code Style. Testing Posture carries structured
+  `Methodology: tdd|bdd|atdd|test-after|custom` and `Ordering: ...` bullets;
+  coverage/tooling/scope notes remain additional prose.
 - `discovered-rules.md` -- corrective, agent-facing. Two sections: Mandated
   (`ALWAYS …` rules) and Forbidden (`NEVER …` rules).
 - `evidence.md` -- per-agent finding summary; freshness trail for re-runs.
@@ -300,6 +302,8 @@ On affirmation, content is promoted to:
 5. **Lead Integration** -- Dispatch the pipeline-deploy lead again with the
    draft, all three contribution paths, and the interview answers. The lead
    alone integrates the final artifacts and emits `PRACTICES_DISCOVERED`.
+   Mixed cadences use `Methodology: custom` so Code Generation preserves the
+   explicit ordering rather than coercing the answer into TDD.
 6. **Open the Affirmation Gate** -- Call `aidlc-orchestrate.ts report --stage
    practices-discovery --result awaiting-approval` before asking. Present the
    drafts with exactly two options: **Approve** / **Request Changes**. A
@@ -336,6 +340,10 @@ gate open and the stage incomplete.
   `## Deployment`, `## Code Style`). The stage reads each section from
   `org.md` via `extractMarkdownSection` with the matching Title Case
   heading and section-replaces the same heading in `team.md`.
+- Code Generation's deterministic posture resolver reads the structured
+  Testing Posture fields independently from coverage, tooling, and scope notes.
+  A project-only coverage note therefore specializes the team section without
+  erasing its methodology.
 - On resume, keep the lead draft and every existing contribution file.
   Dispatch only missing spokes, then continue with the interview and lead
   integration. Do not repeat completed support work.

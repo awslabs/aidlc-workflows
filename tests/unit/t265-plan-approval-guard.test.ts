@@ -36,6 +36,11 @@ import {
   normalizeStageName,
   type UnitEvidence,
 } from "../../dist/claude/.claude/hooks/aidlc-plan-approval-guard.ts";
+import {
+  approvalFingerprint,
+  renderTestingContract,
+  resolveTestingPosture,
+} from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import { AIDLC_SRC, FIXTURE_CLONE_ID } from "../harness/fixtures.ts";
 
 const BUN = process.execPath;
@@ -45,10 +50,31 @@ const REPO_ROOT = join(import.meta.dir, "..", "..");
 // (a) The pure decision.
 // ---------------------------------------------------------------------------
 
-const APPROVED: UnitEvidence = { unit: "todo-core", planExists: true, approved: true };
-const PLANNED_ONLY: UnitEvidence = { unit: "todo-core", planExists: true, approved: false };
-const BARE: UnitEvidence = { unit: "todo-core", planExists: false, approved: false };
-const SIBLING_APPROVED: UnitEvidence = { unit: "auth", planExists: true, approved: true };
+const CONTRACT_HASH = `sha256:${"a".repeat(64)}`;
+const APPROVED: UnitEvidence = {
+  unit: "todo-core",
+  planExists: true,
+  instructionsExist: true,
+  approved: true,
+  contractValid: true,
+  fingerprintValid: true,
+  contractHash: CONTRACT_HASH,
+};
+const PLANNED_ONLY: UnitEvidence = {
+  ...APPROVED,
+  approved: false,
+  fingerprintValid: false,
+};
+const BARE: UnitEvidence = {
+  unit: "todo-core",
+  planExists: false,
+  instructionsExist: false,
+  approved: false,
+  contractValid: false,
+  fingerprintValid: false,
+  contractHash: null,
+};
+const SIBLING_APPROVED: UnitEvidence = { ...APPROVED, unit: "auth" };
 
 const CTX = {
   currentStage: "code-generation",
@@ -80,7 +106,7 @@ describe("t265a plan-approval decision table", () => {
     const v = evaluatePlanApprovalDispatch(
       "Task",
       "aidlc-developer-agent",
-      "AIDLC-UNIT: todo-core\nImplement todo-core per the approved plan",
+      `AIDLC-UNIT: todo-core\nAIDLC-TESTING-CONTRACT: ${CONTRACT_HASH}\nImplement todo-core per the approved plan`,
       { ...CTX, units: [APPROVED] },
     );
     expect(v.block).toBe(false);
@@ -101,7 +127,7 @@ describe("t265a plan-approval decision table", () => {
     const v = evaluatePlanApprovalDispatch(
       "Task",
       "aidlc-developer-agent",
-      "AIDLC-UNIT: todo-core\nImplement todo-core using the auth contract for reference",
+      `AIDLC-UNIT: todo-core\nAIDLC-TESTING-CONTRACT: ${CONTRACT_HASH}\nImplement todo-core using the auth contract for reference`,
       { ...CTX, units: [APPROVED, { ...BARE, unit: "auth" }] },
     );
     expect(v.block).toBe(false);
@@ -141,7 +167,7 @@ describe("t265a plan-approval decision table", () => {
     const v = evaluatePlanApprovalDispatch(
       "Task",
       "aidlc-developer-agent",
-      "AIDLC-UNIT: todo-core\nTask copy\nAIDLC-UNIT: todo-core\nTemplate copy",
+      `AIDLC-UNIT: todo-core\nAIDLC-TESTING-CONTRACT: ${CONTRACT_HASH}\nTask copy\nAIDLC-UNIT: todo-core\nTemplate copy`,
       { ...CTX, units: [APPROVED] },
     );
     expect(v.block).toBe(false);
@@ -156,6 +182,32 @@ describe("t265a plan-approval decision table", () => {
       { ...CTX, units: [] },
     );
     expect(v.block).toBe(true);
+  });
+
+  test("missing, conflicting, or stale Testing Contract markers block", () => {
+    const missing = evaluatePlanApprovalDispatch(
+      "Task",
+      "aidlc-developer-agent",
+      "AIDLC-UNIT: todo-core",
+      { ...CTX, units: [APPROVED] },
+    );
+    expect(missing.block).toBe(true);
+
+    const stale = evaluatePlanApprovalDispatch(
+      "Task",
+      "aidlc-developer-agent",
+      `AIDLC-UNIT: todo-core\nAIDLC-TESTING-CONTRACT: sha256:${"b".repeat(64)}`,
+      { ...CTX, units: [APPROVED] },
+    );
+    expect(stale.block).toBe(true);
+
+    const conflicting = evaluatePlanApprovalDispatch(
+      "Task",
+      "aidlc-developer-agent",
+      `AIDLC-UNIT: todo-core\nAIDLC-TESTING-CONTRACT: ${CONTRACT_HASH}\nAIDLC-TESTING-CONTRACT: sha256:${"b".repeat(64)}`,
+      { ...CTX, units: [APPROVED] },
+    );
+    expect(conflicting.block).toBe(true);
   });
 
   test("out-of-scope calls always allow: other tools, other agents, other stages", () => {
@@ -294,7 +346,12 @@ function scratchProject(): string {
     join(AIDLC_SRC, "hooks", "aidlc-plan-approval-guard.ts"),
     join(dir, ".claude", "hooks", "aidlc-plan-approval-guard.ts"),
   );
-  for (const t of ["aidlc-lib.ts", "aidlc-runtime-paths.ts", "aidlc-audit.ts"]) {
+  for (const t of [
+    "aidlc-lib.ts",
+    "aidlc-runtime-paths.ts",
+    "aidlc-audit.ts",
+    "aidlc-testing-posture.ts",
+  ]) {
     cpSync(join(AIDLC_SRC, "tools", t), join(dir, ".claude", "tools", t));
   }
   mkdirSync(join(dir, RECORD_REL), { recursive: true });
@@ -344,23 +401,46 @@ function seedUnit(
     answer?: string | null;
     heading?: string;
     questionText?: string;
+    mutateInstructions?: boolean;
   } = {},
 ): void {
   const dir = join(proj, RECORD_REL, "construction", unit, "code-generation");
   mkdirSync(dir, { recursive: true });
+  let plan = "";
+  let instructions = "";
   if (opts.plan) {
+    const contract = resolveTestingPosture(proj);
+    plan =
+      opts.plan === "empty"
+        ? "  \n"
+        : `# Plan\n\n${renderTestingContract(contract)}\n## Steps\n\n- [ ] Step 1\n`;
+    instructions = "# Unit Test Instructions\n\n## Command\n\n`bun test todo-core.test.ts`\n";
     writeFileSync(
       join(dir, "code-generation-plan.md"),
-      opts.plan === "empty" ? "  \n" : "# Plan\n- [ ] Step 1\n",
+      plan,
+      "utf-8",
+    );
+    writeFileSync(
+      join(dir, "unit-test-instructions.md"),
+      opts.mutateInstructions ? `${instructions}\nchanged\n` : instructions,
       "utf-8",
     );
   }
   if (opts.answer !== undefined) {
+    const contract = resolveTestingPosture(proj);
+    const fingerprint =
+      plan.trim().length > 0 && instructions.length > 0
+        ? approvalFingerprint(
+            plan,
+            opts.mutateInstructions ? `${instructions}\nchanged\n` : instructions,
+            contract.contract_sha256,
+          )
+        : `sha256:${"0".repeat(64)}`;
     writeFileSync(
       join(dir, "code-generation-questions.md"),
       `## ${opts.heading ?? "Plan Approval"}\n${
         opts.questionText === undefined ? "" : `\n${opts.questionText}\n`
-      }[Answer]:${
+      }[Approval Fingerprint]: ${fingerprint}\n[Answer]:${
         opts.answer === null ? "" : ` ${opts.answer}`
       }\n`,
       "utf-8",
@@ -368,12 +448,15 @@ function seedUnit(
   }
 }
 
-const DISPATCH = (prompt: string) => ({
+const DISPATCH = (proj: string, prompt: string) => ({
   hook_event_name: "PreToolUse",
   tool_name: "Task",
   tool_input: {
     subagent_type: "aidlc-developer-agent",
-    prompt: `AIDLC-UNIT: todo-core\n${prompt}`,
+    prompt:
+      `AIDLC-UNIT: todo-core\n` +
+      `AIDLC-TESTING-CONTRACT: ${resolveTestingPosture(proj).contract_sha256}\n` +
+      prompt,
   },
 });
 
@@ -396,7 +479,7 @@ describe("t265b hook lifecycle", () => {
     try {
       seedState(proj);
       seedUnit(proj, "todo-core", { plan: false });
-      const r = runHook(proj, DISPATCH("Generate all code for todo-core"));
+      const r = runHook(proj, DISPATCH(proj, "Generate all code for todo-core"));
       expect(r.code).toBe(2);
       expect(r.stderr).toContain("plan-approval guard");
       expect(r.stderr).toContain("code-generation-plan.md");
@@ -410,20 +493,20 @@ describe("t265b hook lifecycle", () => {
     try {
       seedState(proj);
       seedUnit(proj, "todo-core", { plan: true, answer: null });
-      expect(runHook(proj, DISPATCH("Implement todo-core")).code).toBe(2);
+      expect(runHook(proj, DISPATCH(proj, "Implement todo-core")).code).toBe(2);
       seedUnit(proj, "todo-core", {
         plan: true,
         answer: "A. Approve Plan",
         heading: "Q1: Plan Approval",
       });
-      expect(runHook(proj, DISPATCH("Implement todo-core")).code).toBe(0);
+      expect(runHook(proj, DISPATCH(proj, "Implement todo-core")).code).toBe(0);
       seedUnit(proj, "todo-core", {
         plan: true,
         answer: "A. Approve Plan",
         heading: "Q1",
         questionText: "Plan Approval",
       });
-      expect(runHook(proj, DISPATCH("Implement todo-core")).code).toBe(0);
+      expect(runHook(proj, DISPATCH(proj, "Implement todo-core")).code).toBe(0);
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }
@@ -434,7 +517,34 @@ describe("t265b hook lifecycle", () => {
     try {
       seedState(proj);
       seedUnit(proj, "todo-core", { plan: "empty", answer: "A. Approve Plan" });
-      expect(runHook(proj, DISPATCH("Implement todo-core")).code).toBe(2);
+      expect(runHook(proj, DISPATCH(proj, "Implement todo-core")).code).toBe(2);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("a post-approval plan or instruction change invalidates the fingerprint", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, "todo-core", {
+        plan: true,
+        answer: "A. Approve Plan",
+      });
+      expect(runHook(proj, DISPATCH(proj, "Implement todo-core")).code).toBe(0);
+      const instructions = join(
+        proj,
+        RECORD_REL,
+        "construction",
+        "todo-core",
+        "code-generation",
+        "unit-test-instructions.md",
+      );
+      writeFileSync(
+        instructions,
+        `${readFileSync(instructions, "utf-8")}\nChanged after approval.\n`,
+      );
+      expect(runHook(proj, DISPATCH(proj, "Implement todo-core")).code).toBe(2);
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }
@@ -445,9 +555,9 @@ describe("t265b hook lifecycle", () => {
     try {
       seedState(proj, { autonomy: "autonomous" });
       seedUnit(proj, "todo-core", { plan: false });
-      expect(runHook(proj, DISPATCH("Implement todo-core")).code).toBe(2);
+      expect(runHook(proj, DISPATCH(proj, "Implement todo-core")).code).toBe(2);
       seedUnit(proj, "todo-core", { plan: true, answer: "A. Approve Plan" });
-      expect(runHook(proj, DISPATCH("Implement todo-core")).code).toBe(0);
+      expect(runHook(proj, DISPATCH(proj, "Implement todo-core")).code).toBe(0);
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }
@@ -459,9 +569,9 @@ describe("t265b hook lifecycle", () => {
       seedState(proj, { stage: "functional-design", autonomy: "autonomous" });
       seedActiveDirective(proj, "code-generation", "todo-core");
       seedUnit(proj, "todo-core", { plan: false });
-      expect(runHook(proj, DISPATCH("Implement todo-core")).code).toBe(2);
+      expect(runHook(proj, DISPATCH(proj, "Implement todo-core")).code).toBe(2);
       seedUnit(proj, "todo-core", { plan: true, answer: "A. Approve Plan" });
-      expect(runHook(proj, DISPATCH("Implement todo-core")).code).toBe(0);
+      expect(runHook(proj, DISPATCH(proj, "Implement todo-core")).code).toBe(0);
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }
@@ -471,10 +581,10 @@ describe("t265b hook lifecycle", () => {
     const proj = scratchProject();
     try {
       // No state file at all.
-      expect(runHook(proj, DISPATCH("x")).code).toBe(0);
+      expect(runHook(proj, DISPATCH(proj, "x")).code).toBe(0);
       seedState(proj, { stage: "build-and-test" });
       seedUnit(proj, "todo-core", { plan: false });
-      expect(runHook(proj, DISPATCH("todo-core")).code).toBe(0);
+      expect(runHook(proj, DISPATCH(proj, "todo-core")).code).toBe(0);
       seedState(proj);
       // Other agent / other tool.
       expect(
@@ -496,7 +606,7 @@ describe("t265b hook lifecycle", () => {
       // Off-switch on an otherwise-blocking call.
       seedState(proj);
       expect(
-        runHook(proj, DISPATCH("todo-core"), { AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1" }).code,
+        runHook(proj, DISPATCH(proj, "todo-core"), { AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1" }).code,
       ).toBe(0);
     } finally {
       rmSync(proj, { recursive: true, force: true });
@@ -523,7 +633,7 @@ describe("t265b hook lifecycle", () => {
           .slice(0, 48) || "host";
       const shardPath = join(auditDir, `${host}-${FIXTURE_CLONE_ID}.md`);
       writeFileSync(shardPath, "# AI-DLC Audit Log\n", "utf-8");
-      const r = runHook(proj, DISPATCH("Generate code for todo-core"));
+      const r = runHook(proj, DISPATCH(proj, "Generate code for todo-core"));
       expect(r.code).toBe(2);
       const shard = readFileSync(shardPath, "utf-8");
       expect(shard).toContain("PLAN_APPROVAL_BLOCKED");
@@ -554,6 +664,7 @@ describe("t265c registrations", () => {
       "utf-8",
     );
     expect(stage).toContain("AIDLC-UNIT: <directive.unit>");
+    expect(stage).toContain("AIDLC-TESTING-CONTRACT: <contract_sha256>");
   });
 
   test("claude: settings.json wires the guard on the Task matcher", () => {
