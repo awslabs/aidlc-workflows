@@ -441,9 +441,10 @@ that names a recovery bypass (for example an `AIDLC_DISABLE_*` env var or an
 "archive your workspace" instruction) is always flagged as not safe to automate.
 
 `DOCUMENT_INDEXED`/`DOCUMENT_UPDATED`/`DOCUMENT_REMOVED` live in the space-level
-audit shard. Standard audit readers merge that shard with the active intent's
-shards, so `--doctor --export` includes document history after a workflow starts.
-`list` and `show` continue to read the DocumentKB catalog directly.
+audit shard. `--doctor --export` reads that shard explicitly and combines it with
+the active intent's shards, so the report includes document history after a
+workflow starts while workflow-authority readers remain intent-scoped. `list` and
+`show` continue to read the DocumentKB catalog directly.
 
 **Safety.** The report never includes workspace source, raw state/audit/
 runtime-graph files, artifact/contribution/question/memory bodies, environment

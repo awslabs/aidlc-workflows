@@ -349,10 +349,10 @@ than a directory one level up. An earlier version of this line documented the
 shorter path, which does not exist on disk — measured by onboarding a document and
 finding the written shard.
 
-Standard audit readers enumerate both the resolved intent's shards and this
-space-level shard. Document events therefore remain visible to `--doctor --export`
-after an intent starts, while intent-scoped lifecycle events retain their existing
-record directory and authority boundaries.
+Workflow-authority readers enumerate only the resolved intent's shards. Consumers
+that need space-level provenance request it explicitly; `--doctor --export` does so
+and reads the space shard before the resolved intent shards, keeping document events
+visible without widening lifecycle authority beyond the intent ledger.
 
 All three ship with `tools/aidlc-knowledge.ts` (DocumentKB S1). Emitting verbs per event are listed in each row below — `onboard`, `sync`, `associate`, `dissociate`, and `rebind` all emit.
 

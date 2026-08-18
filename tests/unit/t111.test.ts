@@ -66,10 +66,11 @@ function freshProject(seedAuditMd = false): string {
 }
 
 // Read the whole audit trail (the per-clone shards merged). For these
-// single-clone fixtures it resolves to the one shard the tool wrote, so the
-// returned bytes equal that shard's contents (seed header + appended blocks).
+// pre-intent, single-clone fixtures the explicit default-space read resolves to
+// the one shard the tool wrote, so the returned bytes equal that shard's
+// contents (seed header + appended blocks).
 function readAudit(projectDir: string): string {
-  return readAllAuditShards(projectDir);
+  return readAllAuditShards(projectDir, undefined, "default");
 }
 
 // Whether the resolved audit shard exists on disk (the per-intent successor to

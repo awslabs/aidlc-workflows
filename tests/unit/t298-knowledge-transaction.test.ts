@@ -229,7 +229,7 @@ describe("t298 the audit row lands in the SPACE shard, not the active intent's",
 
     rmSync(shard, { recursive: true, force: true });
     expect(onboard(p, SPACE, abs, NOW).indexed[0].status).toBe("already");
-    expect(readAllAuditShards(p)).toContain("**Event**: DOCUMENT_INDEXED");
+    expect(readAllAuditShards(p, undefined, SPACE)).toContain("**Event**: DOCUMENT_INDEXED");
   });
 
   test("audit recovery projects space history from another clone shard", () => {
@@ -257,27 +257,32 @@ describe("t298 the audit row lands in the SPACE shard, not the active intent's",
     // intents" is true of both.
     expect(withEvent[0].path).toBe(spaceAuditShardPath(p, SPACE));
     expect(withEvent[0].path).toContain(join("intents", "audit"));
-    expect(readAllAuditShards(p)).toContain("**Event**: DOCUMENT_INDEXED");
+    expect(readAllAuditShards(p, undefined, SPACE)).toContain("**Event**: DOCUMENT_INDEXED");
   });
 
-  test("space events remain visible without hiding the active intent audit tail", () => {
+  test("unscoped reads stay intent-only while explicit-space reads preserve the intent tail", () => {
     const p = projectWithIntent();
     for (const name of ["a.md", "b.md", "c.md"]) doc(p, name);
     onboard(p, SPACE, undefined, NOW);
     appendAuditEntry("STAGE_STARTED", { Stage: "requirements-analysis" }, p);
-    const blocks = readAllAuditShards(p).split(/\n---\n/).filter((block) => block.trim());
+    const unscoped = readAllAuditShards(p);
+    expect(unscoped).not.toContain("**Event**: DOCUMENT_INDEXED");
+    expect(unscoped).toContain("**Event**: STAGE_STARTED");
+
+    const explicitSpace = readAllAuditShards(p, undefined, SPACE);
+    expect(explicitSpace).toContain("**Event**: DOCUMENT_INDEXED");
+    const blocks = explicitSpace.split(/\n---\n/).filter((block) => block.trim());
     expect(blocks.at(-1)).toContain("**Event**: STAGE_STARTED");
   });
 
   test("DocumentKB-only audit rows do not activate the human-presence floor", () => {
-    proj = mkdtempSync(join(tmpdir(), "t298-presence-"));
-    mkdirSync(documentsDir(proj, SPACE), { recursive: true });
-    doc(proj, "policy.md");
-    expect(humanActedSinceGate(proj)).toBe(true);
-    onboard(proj, SPACE, undefined, NOW);
-    expect(humanActedSinceGate(proj)).toBe(true);
-    appendAuditEntry("STAGE_STARTED", { Stage: "requirements-analysis" }, proj);
-    expect(humanActedSinceGate(proj)).toBe(false);
+    const p = projectWithIntent();
+    doc(p, "policy.md");
+    expect(humanActedSinceGate(p)).toBe(false);
+    onboard(p, SPACE, undefined, NOW);
+    expect(humanActedSinceGate(p)).toBe(false);
+    appendAuditEntry("HUMAN_TURN", {}, p);
+    expect(humanActedSinceGate(p)).toBe(true);
   });
 
   test("audit repair refuses to append through a symlinked space shard", () => {
@@ -369,7 +374,7 @@ describe("t298 the audit row lands in the SPACE shard, not the active intent's",
       .toBeUndefined();
   });
 
-  test("standard audit readers do not follow a symlinked space shard", () => {
+  test("explicit-space audit readers do not follow a symlinked space shard", () => {
     const p = projectWithIntent();
     const external = join(p, "external-audit.md");
     writeFileSync(
@@ -383,7 +388,7 @@ describe("t298 the audit row lands in the SPACE shard, not the active intent's",
     } catch {
       return; // Windows without symlink privilege.
     }
-    expect(readAllAuditShards(p)).not.toContain("**Document**: leaked");
+    expect(readAllAuditShards(p, undefined, SPACE)).not.toContain("**Document**: leaked");
   });
 
   test("NO intent shard receives the event, even though an intent is active", () => {

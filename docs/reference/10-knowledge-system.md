@@ -88,6 +88,8 @@ tree removes the rebuild source and is not recoverable.
 
 Document provenance is emitted audit-last to the space-level shard at
 `aidlc/spaces/<space>/intents/audit/`, after the catalog write it describes.
+DocumentKB recovery and `--doctor --export` read that shard explicitly. Normal
+workflow-authority readers remain scoped to the active intent's audit shards.
 See [State Machine](12-state-machine.md#audit-last-for-derived-catalogs-document_indexed-document_updated-document_removed)
 for the ordering exception and recovery semantics.
 

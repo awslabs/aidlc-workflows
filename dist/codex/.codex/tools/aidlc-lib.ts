@@ -4492,15 +4492,28 @@ export function auditShardDir(projectDir: string, intent?: string, space?: strin
   return join(dir, "audit");
 }
 
-// Every audit shard visible to an intent (sorted): its own per-intent shards plus
-// the space-level shard. Space-level events (DocumentKB today) outlive any one
-// intent and must remain visible to doctor/export and other standard readers once
-// an active intent exists. With no intent resolved only the space shard is read.
+// Every audit shard selected by the caller (sorted). Normal intent readers stay
+// intent-only, whether the intent is explicit or resolved from the active cursor.
+// The deliberate `undefined intent + explicit space` form adds the space-level
+// shard before the resolved intent shards; DocumentKB recovery and doctor/export
+// use that form because space-level provenance is part of their read model.
+// PRE-BIRTH PARITY: when NO intent resolves at all, the space shard IS the
+// ledger — the append side's auditFilePath falls back to it, so the read side
+// must too, or a project with no intents yet reads an empty ledger where its
+// own appends just landed (that broke 10 fixture suites when this narrowing
+// first shipped without the fallback; base v2 always read the space shard in
+// that state).
 // Readers merge-sort parsed events by **Timestamp**.
 export function auditShards(projectDir: string, intent?: string, space?: string): string[] {
-  const dirs: string[] = [join(spaceRecordRoot(projectDir, space), "audit")];
+  const dirs: string[] = [];
+  if (intent === undefined && space !== undefined) {
+    dirs.push(join(spaceRecordRoot(projectDir, space), "audit"));
+  }
   const intentDir = auditShardDir(projectDir, intent, space);
   if (intentDir !== null && !dirs.includes(intentDir)) dirs.push(intentDir);
+  if (intentDir === null && dirs.length === 0) {
+    dirs.push(join(spaceRecordRoot(projectDir, space), "audit"));
+  }
   const paths: string[] = [];
   for (const shardDir of dirs) {
     try {
@@ -4518,8 +4531,8 @@ export function auditShards(projectDir: string, intent?: string, space?: string)
       if (file.endsWith(".md")) paths.push(join(shardDir, file));
     }
   }
-  // Space-level evidence is visible to every intent, but the active intent must
-  // remain last for the few hook paths that inspect the raw audit tail.
+  // Explicit-space aggregation keeps the resolved intent last for the few
+  // diagnostic paths that inspect the raw audit tail.
   return paths;
 }
 

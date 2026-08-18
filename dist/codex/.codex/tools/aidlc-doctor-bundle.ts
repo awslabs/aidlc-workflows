@@ -52,6 +52,7 @@ import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { basename, join, sep } from "node:path";
 import {
+  activeSpace,
   auditBlockField,
   auditShardDir,
   docsRoot,
@@ -1573,7 +1574,8 @@ function isSymlink(path: string): boolean {
 
 // Read the audit trail, refusing symlinked intent-shard files. The shared audit
 // reader also validates every space/intent directory component and opens each
-// shard no-follow, covering the space-level DocumentKB shard as well.
+// shard no-follow. Doctor explicitly selects the active space so its export also
+// includes the space-level DocumentKB provenance shard.
 // if ANY entry under it is a symlink, we refuse the whole trail rather than
 // leak a redirected file's normalized fields into the report. Audit content is
 // otherwise only surfaced through the allowlisted extractAuditEvents.
@@ -1592,7 +1594,7 @@ function readAuditSafely(projectDir: string): string {
       return "";
     }
   }
-  return readAllAuditShards(projectDir);
+  return readAllAuditShards(projectDir, undefined, activeSpace(projectDir));
 }
 
 function tryChmod(path: string, mode: number): void {
