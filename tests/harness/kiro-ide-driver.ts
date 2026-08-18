@@ -29,7 +29,7 @@
 
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { platform } from "node:os";
 import { join } from "node:path";
 
@@ -56,6 +56,26 @@ interface CdpTargetInfo {
   type: string;
   url?: string;
   webSocketDebuggerUrl?: string;
+}
+
+export interface KiroIdeDomSnapshot {
+  targetType: string;
+  targetUrl: string;
+  context: ExecContext;
+  href: string;
+  title: string;
+  text: string;
+  controls: Array<{
+    tag: string;
+    text: string;
+    ariaLabel: string;
+    disabled: boolean;
+  }>;
+  editors: Array<{
+    tag: string;
+    text: string;
+    ariaLabel: string;
+  }>;
 }
 
 /** One CDP connection to a single page/iframe target. JSON-RPC over a Bun-native
@@ -650,6 +670,81 @@ export async function clickByText(port: number, texts: string[]): Promise<string
   return null;
 }
 
+const SNAPSHOT_DOM_EXPR = `(() => {
+  const norm = (s) => String(s||"").replace(/\\s+/g," ").trim();
+  const visible = (e) => {
+    const r = e.getBoundingClientRect && e.getBoundingClientRect();
+    return !r || (r.width > 0 && r.height > 0);
+  };
+  const controls = [...document.querySelectorAll(
+    "a,button,[role='button'],.monaco-button,.monaco-text-button,.action-label"
+  )]
+    .filter(visible)
+    .map((e) => ({
+      tag: e.tagName,
+      text: norm(e.innerText||e.textContent).slice(0, 240),
+      ariaLabel: norm(e.getAttribute("aria-label")).slice(0, 240),
+      disabled: Boolean(e.disabled || e.getAttribute("aria-disabled") === "true")
+    }))
+    .filter((e) => e.text || e.ariaLabel)
+    .slice(-80);
+  const editors = [...document.querySelectorAll(
+    "textarea,[contenteditable='true'],[role='textbox']"
+  )]
+    .filter(visible)
+    .map((e) => ({
+      tag: e.tagName,
+      text: norm(e.tagName === "TEXTAREA" ? e.value : (e.innerText||e.textContent)).slice(0, 1000),
+      ariaLabel: norm(e.getAttribute("aria-label")).slice(0, 240)
+    }))
+    .slice(-20);
+  const bodyText = norm(document.body && document.body.innerText);
+  return {
+    href: String(location.href),
+    title: String(document.title||""),
+    text: bodyText.slice(-12000),
+    controls,
+    editors
+  };
+})()`;
+
+/** Capture visible text, controls, and editors from every live page/iframe
+ * execution context. Diagnostics only: callers persist snapshots under tmp/. */
+export async function snapshotChatDom(port: number): Promise<KiroIdeDomSnapshot[]> {
+  const snapshots: KiroIdeDomSnapshot[] = [];
+  const targets = await listTargets(port);
+  for (const tgt of targets) {
+    if (!tgt.webSocketDebuggerUrl || (tgt.type !== "page" && tgt.type !== "iframe")) continue;
+    const t = new CdpTarget(tgt.webSocketDebuggerUrl);
+    try {
+      await t.connect();
+      const contexts = await t.enableContexts(600);
+      for (const context of contexts) {
+        try {
+          const view = await t.evaluateInContext<
+            Omit<KiroIdeDomSnapshot, "targetType" | "targetUrl" | "context">
+          >(context.id, SNAPSHOT_DOM_EXPR);
+          if (view.text || view.controls.length > 0 || view.editors.length > 0) {
+            snapshots.push({
+              targetType: tgt.type,
+              targetUrl: tgt.url ?? "",
+              context,
+              ...view,
+            });
+          }
+        } catch {
+          /* context gone */
+        }
+      }
+    } catch {
+      /* target gone */
+    } finally {
+      t.close();
+    }
+  }
+  return snapshots;
+}
+
 /** Auto-approve Kiro's OWN Run/Allow tool-permission prompts (SEPARATE from the
  *  human-presence hooks). Without this the agent turn stalls waiting for a human to
  *  click Run (drive-unblocked.mjs:82-112). The watch loop calls this every iteration.
@@ -730,6 +825,28 @@ export function teardown(handle: KiroIdeHandle): void {
     handle.child.kill("SIGKILL");
   } catch {
     /* already gone */
+  }
+}
+
+/** Remove a seed/profile directory, tolerating Windows lock latency: after
+ *  taskkill ends the Electron tree, the OS can hold file locks inside the
+ *  user-data dir for a short moment, so a bare rmSync throws EBUSY. Bounded
+ *  retries with short waits; anything else (or exhaustion) still throws. */
+export function removeSeedDir(path: string, attempts = 20, waitMs = 250): void {
+  if (process.env.AIDLC_KEEP_TEMP === "1") {
+    process.stderr.write(`[kiro-ide-driver] AIDLC_KEEP_TEMP=1 - preserved ${path}\n`);
+    return;
+  }
+  for (let attempt = 1; ; attempt++) {
+    try {
+      rmSync(path, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      const retryable = code === "EBUSY" || code === "EPERM" || code === "ENOTEMPTY";
+      if (!retryable || attempt >= attempts) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, waitMs);
+    }
   }
 }
 

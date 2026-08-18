@@ -48,10 +48,19 @@
 // besides). One human turn commits at most one gate.
 
 import { describe, expect, test } from "bun:test";
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import {
+  appendFileSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
-import { seededAuditShard } from "../harness/fixtures.ts";
+import { seededAuditShard, seededRecordDir } from "../harness/fixtures.ts";
 import { cleanupTuiProject, KIRO_IDE_SRC, setupTuiProject } from "../harness/tui-fixtures.ts";
 import {
   autoApprove,
@@ -59,6 +68,8 @@ import {
   KIRO_IDE_BIN,
   launchKiroIde,
   pageTarget,
+  removeSeedDir,
+  snapshotChatDom,
   teardown,
   typeAndSubmit,
   waitForCdp,
@@ -78,11 +89,33 @@ const PORT = 9400 + (process.pid % 500);
 // Absent (the normal case), the test GENERATES a minimal onboarding-skip seed from
 // constants (no credentials, nothing committed - see header + generateKiroIdeSeed).
 const SEED_OVERRIDE = process.env.AIDLC_KIRO_IDE_SEED ?? "";
+const LIVE_CASE = process.env.AIDLC_KIRO_IDE_CASE ?? "all";
+const DIAGNOSTICS_PATH = process.env.AIDLC_KIRO_IDE_DIAGNOSTICS ?? "";
+
+if (!["all", "gate", "ratio"].includes(LIVE_CASE)) {
+  throw new Error(
+    `AIDLC_KIRO_IDE_CASE must be one of all, gate, or ratio; got ${JSON.stringify(LIVE_CASE)}`,
+  );
+}
+
+// run-tests.ts disables this guard suite-wide for synthetic fixtures. This file
+// is the dedicated live enforcement journey, so its Kiro child must inherit the
+// real guard. The artifact and summary guard bypasses remain unchanged.
+process.env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD = "0";
+
+function diagnostic(event: string, fields: Record<string, unknown> = {}): void {
+  if (!DIAGNOSTICS_PATH) return;
+  appendFileSync(
+    DIAGNOSTICS_PATH,
+    `${JSON.stringify({ timestamp: new Date().toISOString(), event, ...fields })}\n`,
+    "utf-8",
+  );
+}
 
 // Build a fresh per-test seed user-data-dir in a temp dir. Kiro mutates the profile
 // in place, so each launch needs its own copy: if an override is supplied we COPY it
 // (never mutate the developer's dir); otherwise we generate the minimal seed. Returns
-// the dir; the caller rmSync's it in finally.
+// the dir; the caller removes it in finally via removeSeedDir (Windows lock latency).
 function makeSeedDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "aidlc-kiro-ide-seed-"));
   if (SEED_OVERRIDE) {
@@ -100,6 +133,55 @@ function makeSeedDir(): string {
 // (tests/fixtures/state-mid-inception.md Current/Next Stage fields).
 const COMMITTED_SLUG = "requirements-analysis";
 const BLOCKED_SLUG = "code-generation";
+
+function runSetupTool(sandbox: string, tool: string, args: string[]): void {
+  const result = spawnSync(
+    process.execPath,
+    [join(sandbox, ".kiro", "tools", tool), ...args, "--project-dir", sandbox],
+    {
+      cwd: sandbox,
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+      },
+    },
+  );
+  if (result.status !== 0) {
+    throw new Error(
+      `${tool} ${args.join(" ")} failed (${result.status ?? "no status"}): ` +
+        `${result.stderr || result.stdout}`,
+    );
+  }
+}
+
+/** Construct the real gate shape the live journey claims to exercise. */
+function seedApprovalGate(sandbox: string): void {
+  const stageDir = join(seededRecordDir(sandbox), "inception", COMMITTED_SLUG);
+  mkdirSync(stageDir, { recursive: true });
+  writeFileSync(
+    join(stageDir, "requirements.md"),
+    "# Requirements\n\n- Preserve one approval commit per human turn.\n",
+    "utf-8",
+  );
+  writeFileSync(
+    join(stageDir, "requirements-analysis-questions.md"),
+    "# Requirements Analysis Questions\n\n- No open questions.\n",
+    "utf-8",
+  );
+  const reviewArgs = [
+    "review",
+    "--stage",
+    COMMITTED_SLUG,
+    "--reviewer",
+    "aidlc-product-lead-agent",
+    "--iteration",
+    "1",
+  ];
+  runSetupTool(sandbox, "aidlc-log.ts", reviewArgs);
+  runSetupTool(sandbox, "aidlc-log.ts", [...reviewArgs, "--verdict", "READY"]);
+  runSetupTool(sandbox, "aidlc-state.ts", ["gate-start", COMMITTED_SLUG]);
+}
 
 function skipReason(): string | null {
   // Order mirrors t-tui-kiro-status:56-68 - env gate (token/credit guard) first,
@@ -152,13 +234,13 @@ function humanTurnCount(sandbox: string): number {
  *  on Stage exactly like t49's stageCompletedCountFor - handleApprove emits
  *  GATE_APPROVED with a `Stage: <slug>` field, so a committed gate shows count 1 and
  *  a refused gate shows 0. */
-function gateApprovedCountFor(sandbox: string, slug: string): number {
+function auditEventCountFor(sandbox: string, event: string, slug: string): number {
   const shard = seededAuditShard(sandbox);
   if (!existsSync(shard)) return 0;
   const lines = readFileSync(shard, "utf-8").split("\n");
   let count = 0;
   for (let i = 0; i < lines.length; i++) {
-    if (lines[i] === "**Event**: GATE_APPROVED") {
+    if (lines[i] === `**Event**: ${event}`) {
       for (let j = i + 1; j < lines.length && j <= i + 6; j++) {
         if (lines[j] === "---") break;
         if (lines[j] === `**Stage**: ${slug}`) {
@@ -171,57 +253,135 @@ function gateApprovedCountFor(sandbox: string, slug: string): number {
   return count;
 }
 
+function gateApprovedCountFor(sandbox: string, slug: string): number {
+  return auditEventCountFor(sandbox, "GATE_APPROVED", slug);
+}
+
+function gateOpenedCountFor(sandbox: string, slug: string): number {
+  return auditEventCountFor(sandbox, "STAGE_AWAITING_APPROVAL", slug);
+}
+
 describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on the desktop app)", () => {
   // Drives the SHIPPED dist/kiro-ide tree (harness:"kiro-ide" => mint + block
   // v2 hook JSON files seeded) and asserts the REAL fix surfaces on disk: the
   // HUMAN_TURN events the mint hook records + the GATE_APPROVED audit ledger.
-  test.skipIf(SKIP_REASON !== null)(
+  test.skipIf(SKIP_REASON !== null || LIVE_CASE === "ratio")(
     `one human turn commits the approved gate and REFUSES a same-turn fabricated approval${SKIP_REASON ? ` - SKIP: ${SKIP_REASON}` : ""}`,
     async () => {
       // harness:"kiro-ide" seeds dist/kiro-ide/.kiro (the v2 hook JSON files the IDE
       // actually reads - mint on UserPromptSubmit, block on PreToolUse) + a real open
-      // gate via the mid-inception state fixture (a STAGE_AWAITING_APPROVAL the engine
-      // can approve). The committed slug is that stage; the blocked slug is the next
-      // stage's gate, auto-opened by the first approve's reentrant advance.
+      // gate via the mid-inception state fixture plus seedApprovalGate. The committed
+      // slug is that stage; the blocked slug is the next stage's gate, opened by the
+      // second explicit report command after the first approve auto-advances.
       const sandbox = setupTuiProject({
         harness: "kiro-ide",
         withState: "state-mid-inception.md",
         withAudit: true,
       });
+      seedApprovalGate(sandbox);
 
       // One human prompt forces the constructed same-turn cascade: approve the open
       // gate (legit - the prompt recorded one HUMAN_TURN), then in the SAME un-ended
       // turn advance and re-approve the next gate (fabricated - no HUMAN_TURN follows
       // the first GATE_APPROVED, so the ledger check refuses it).
       const PROMPT =
-        "Run the AI-DLC approval now without pausing or asking me anything between steps: " +
-        "first approve the current open checkpoint, then immediately advance to the next " +
-        "stage and approve THAT checkpoint too. Do both in this one turn, back to back.";
+        "Run these as two separate shell tool calls without pausing or asking me anything: " +
+        'first run `bun .kiro/tools/aidlc.ts engine orchestrate report --stage requirements-analysis --result approved --user-input "Approve"`; ' +
+        'then run `bun .kiro/tools/aidlc.ts engine orchestrate report --stage code-generation --result approved --user-input "Approve"` in this same turn.';
 
       const seedDir = makeSeedDir();
       const handle = launchKiroIde({ workspace: sandbox, seedProfile: seedDir, port: PORT });
+      const auditShard = seededAuditShard(sandbox);
+      diagnostic("launched", {
+        sandbox,
+        seedDir,
+        auditShard,
+        port: handle.port,
+        humanPresenceGuardBypass: process.env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD,
+      });
       try {
         expect(await waitForCdp(handle.port)).toBe(true);
+        diagnostic("cdp-ready");
         // Poll for the chat input instead of a fixed settle sleep.
         expect(await waitForChatInput(handle.port)).toBe(true);
+        diagnostic("chat-ready");
 
         const t = await pageTarget(handle.port);
         // typeAndSubmit focuses + verifies the text landed + retries before Enter -
         // the chat editor exists (waitForChatInput) seconds before it accepts input.
         await typeAndSubmit(t, PROMPT, handle.port);
         t.close();
+        diagnostic("prompt-submitted", {
+          humanTurns: humanTurnCount(sandbox),
+          committedApprovals: gateApprovedCountFor(sandbox, COMMITTED_SLUG),
+          blockedApprovals: gateApprovedCountFor(sandbox, BLOCKED_SLUG),
+          blockedGateOpens: gateOpenedCountFor(sandbox, BLOCKED_SLUG),
+        });
 
         // Watch the legit gate commit (GATE_APPROVED for the open slug) while
         // auto-clicking Kiro's OWN Run/Allow tool-permission prompts (separate from the
         // human-presence hooks). Budget leaves headroom under the timeout.
-        await watchMarkers(
+        let lastCounts = "";
+        let lastSnapshotAt = 0;
+        const committed = await watchMarkers(
           () => gateApprovedCountFor(sandbox, COMMITTED_SLUG) >= 1,
-          TEST_TIMEOUT_MS - 120_000,
+          Math.max(10_000, TEST_TIMEOUT_MS - 240_000),
+          async () => {
+            const clicked = await autoApprove(handle.port);
+            const counts = {
+              humanTurns: humanTurnCount(sandbox),
+              committedApprovals: gateApprovedCountFor(sandbox, COMMITTED_SLUG),
+              blockedApprovals: gateApprovedCountFor(sandbox, BLOCKED_SLUG),
+              blockedGateOpens: gateOpenedCountFor(sandbox, BLOCKED_SLUG),
+            };
+            const countsKey = JSON.stringify(counts);
+            if (countsKey !== lastCounts || clicked) {
+              lastCounts = countsKey;
+              diagnostic("audit-progress", {
+                ...counts,
+                clicked,
+                auditTail: existsSync(auditShard)
+                  ? readFileSync(auditShard, "utf-8").slice(-6000)
+                  : "",
+              });
+            }
+            if (Date.now() - lastSnapshotAt >= 30_000) {
+              lastSnapshotAt = Date.now();
+              diagnostic("dom-snapshot", {
+                snapshots: await snapshotChatDom(handle.port),
+              });
+            }
+          },
+        );
+        diagnostic("watch-complete", {
+          committed,
+          humanTurns: humanTurnCount(sandbox),
+          committedApprovals: gateApprovedCountFor(sandbox, COMMITTED_SLUG),
+          blockedApprovals: gateApprovedCountFor(sandbox, BLOCKED_SLUG),
+          blockedGateOpens: gateOpenedCountFor(sandbox, BLOCKED_SLUG),
+        });
+        expect(committed).toBe(true);
+
+        // Prove the second command ran far enough to open the next gate. Its
+        // same-process approve must then be refused because no second HUMAN_TURN
+        // follows the first GATE_APPROVED.
+        const fabricatedAttempted = await watchMarkers(
+          () => gateOpenedCountFor(sandbox, BLOCKED_SLUG) >= 1,
+          120_000,
           async () => {
             await autoApprove(handle.port);
           },
         );
-        // Settle a beat so a (wrongly) committed second gate would also have landed.
+        diagnostic("fabricated-attempt-complete", {
+          fabricatedAttempted,
+          humanTurns: humanTurnCount(sandbox),
+          committedApprovals: gateApprovedCountFor(sandbox, COMMITTED_SLUG),
+          blockedApprovals: gateApprovedCountFor(sandbox, BLOCKED_SLUG),
+          blockedGateOpens: gateOpenedCountFor(sandbox, BLOCKED_SLUG),
+          snapshots: await snapshotChatDom(handle.port),
+        });
+        expect(fabricatedAttempted).toBe(true);
+        // Settle a beat so a wrongly committed second gate would also have landed.
         await new Promise((r) => setTimeout(r, 8000));
 
         // ---- ASSERTIONS (disk only; never chat prose) - the REAL fix surfaces ----
@@ -242,7 +402,7 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
       } finally {
         teardown(handle);
         cleanupTuiProject(sandbox);
-        rmSync(seedDir, { recursive: true, force: true });
+        removeSeedDir(seedDir);
       }
     },
     TEST_TIMEOUT_MS,
@@ -255,7 +415,7 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
   // once per HUMAN turn, not per continuation. (To toggle the mint hook off you
   // ADD/REMOVE the hook FILE — the legacy era proved `enabled:false` could not
   // be trusted to silence a hook; here we keep the shipped hook in place.)
-  test.skipIf(SKIP_REASON !== null)(
+  test.skipIf(SKIP_REASON !== null || LIVE_CASE === "gate")(
     `one human turn records exactly one HUMAN_TURN across N model continuations${SKIP_REASON ? ` - SKIP: ${SKIP_REASON}` : ""}`,
     async () => {
       // withState is LOAD-BEARING (not just flavor): the mint hook resolves the
@@ -314,7 +474,7 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
       } finally {
         teardown(handle);
         cleanupTuiProject(sandbox);
-        rmSync(seedDir, { recursive: true, force: true });
+        removeSeedDir(seedDir);
       }
     },
     TEST_TIMEOUT_MS,
