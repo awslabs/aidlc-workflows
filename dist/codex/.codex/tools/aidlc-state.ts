@@ -28,6 +28,7 @@ import {
   humanActedSinceGate,
   humanPresenceGuardDisabled,
   intentRepos,
+  isAutonomousConstructionDecision,
   isAutonomousMode,
   isAutonomousSwarmStage,
   isNonAnswer,
@@ -52,6 +53,7 @@ import {
   removeField,
   removeSlug,
   replaceSection,
+  selfAttributedDecisionMarker,
   resolveBoltDag,
   reviewArtifactFingerprint,
   resolveReviewClass,
@@ -806,7 +808,6 @@ function handlePark(_args: string[]): void {
     const timestamp = isoTimestamp();
     emitAudit(pd, "WORKFLOW_PARKED", {
       Stage: currentSlug,
-      Timestamp: timestamp,
     });
     content = setOrInsertField(content, "## Runtime State", "Parked", timestamp);
     content = setOrInsertField(content, "## Runtime State", "Parked At Stage", currentSlug);
@@ -829,7 +830,7 @@ function handleUnpark(_args: string[]): void {
     content = removeField(content, "Parked At Stage");
     if (wasParked) {
       const ts = isoTimestamp();
-      emitAudit(pd, "WORKFLOW_UNPARKED", { Timestamp: ts });
+      emitAudit(pd, "WORKFLOW_UNPARKED", {});
       content = setField(content, "Last Updated", ts);
     }
     writeStateFile(pd, content);
@@ -2529,10 +2530,11 @@ function handleApprove(args: string[]): void {
 
   const stage = findStageBySlug(slug);
   if (!stage) error(`Unknown stage: ${slug}`);
+  const autonomousDecision = isAutonomousConstructionDecision(content, stage.phase);
   validateSlugInState(content, slug, "awaiting-approval");
   const approvalInput = userInput?.trim();
   if (
-    !isAutonomousMode(content) &&
+    !autonomousDecision &&
     !humanPresenceGuardDisabled() &&
     !approvalInput
   ) {
@@ -2545,7 +2547,7 @@ function handleApprove(args: string[]): void {
   // and passing that through --user-input would commit a gate no human
   // approved. Same vocabulary as the interview path (aidlc-log answer).
   if (
-    !isAutonomousMode(content) &&
+    !autonomousDecision &&
     !humanPresenceGuardDisabled() &&
     isNonAnswer(approvalInput)
   ) {
@@ -2553,6 +2555,25 @@ function handleApprove(args: string[]): void {
       `Refusing to approve "${slug}": --user-input "${approvalInput}" is cancellation boilerplate, ` +
         "not an approval. If the human dismissed the gate question, re-present it and wait for a " +
         "real choice; a dismissal is not consent.",
+    );
+  }
+  // Nor is the conductor's OWN decision an approval. The presence guard below
+  // proves a human is in the session; it cannot prove this choice is theirs, so
+  // a self-attributed approval ("CONDUCTOR DEFAULT, session unattended") would
+  // commit a gate no human resolved and leave a GATE_APPROVED row indistinguishable
+  // from a real one. Autonomous Construction is exempt (it owns the decision).
+  const approvalAuthorship =
+    autonomousDecision || humanPresenceGuardDisabled()
+      ? null
+      : selfAttributedDecisionMarker(approvalInput, "approval");
+  if (approvalAuthorship) {
+    error(
+      `Refusing to approve "${slug}": decision self-attribution blocked ` +
+        `(${approvalAuthorship.category}) in --user-input: "${approvalAuthorship.phrase}". ` +
+        "This tripwire detects explicit conductor/model provenance; it does not prove authorship. " +
+        "An approval is the human's to make. End the turn and " +
+        "let them answer; if a completion precondition is blocking you, surface that blocker at " +
+        "the gate instead of recording a decision on their behalf.",
     );
   }
 
@@ -2571,7 +2592,7 @@ function handleApprove(args: string[]): void {
   // mutation so a refusal (error() -> exit) leaves state untouched (same slot
   // as the artifact guard above). Carve-outs FIRST: autonomous Construction
   // (swarm / Bolt) and the suite-wide test bypass never require presence.
-  if (isAutonomousMode(content)) {
+  if (autonomousDecision) {
     // skip the presence check — autonomous Construction has no human at the gate
   } else if (humanPresenceGuardDisabled()) {
     // skip — suite-wide deterministic off-switch (AIDLC_SKIP_HUMAN_PRESENCE_GUARD)
@@ -2606,7 +2627,7 @@ function handleApprove(args: string[]): void {
   let recoveredRevision = false;
   if (
     !revisionBackstopDisabled() &&
-    !isAutonomousMode(content) &&
+    !autonomousDecision &&
     unrecordedRevisionSinceGateOpen(pd, stage)
   ) {
     const priorCount = getField(content, "Revision Count");
@@ -2771,6 +2792,7 @@ function handleReject(args: string[]): void {
 
   const stage = findStageBySlug(slug);
   if (!stage) error(`Unknown stage: ${slug}`);
+  const autonomousDecision = isAutonomousConstructionDecision(content, stage.phase);
   validateSlugInState(content, slug, ["awaiting-approval", "in-progress"]);
   const gateWasMissing = getSlugState(content, slug) === "in-progress";
 
@@ -2778,7 +2800,7 @@ function handleReject(args: string[]): void {
   const recoveryResetNeedsHuman =
     autonomousMode && reviewRecoverySpentInCurrentAttempt(pd, content, stage);
   if (
-    (!autonomousMode || recoveryResetNeedsHuman) &&
+    (!autonomousDecision || recoveryResetNeedsHuman) &&
     !humanPresenceGuardDisabled() &&
     !humanActedSinceGate(pd)
   ) {
@@ -2793,6 +2815,29 @@ function handleReject(args: string[]): void {
     error(
       `Refusing to reject "${slug}": a real human has not acted at this gate since it opened. ` +
         "Requesting changes requires a typed human turn before it can commit.",
+    );
+  }
+
+  // Authorship floor (issue 742). The presence check above proves a human is in
+  // the session, not that this rejection is theirs — so a conductor blocked by
+  // the review-budget/receipt ordering can satisfy it while writing its own
+  // change request, because GATE_REJECTED is the only event that restores an
+  // advisory review budget. That reopen is the single most attractive forgery in
+  // the protocol and the one seen in the field, so refuse the self-attributed
+  // rejection here rather than laundering it into the trail as the human's.
+  // Autonomous Construction is exempt (the conductor owns the decision there).
+  const rejectionAuthorship =
+    autonomousDecision || humanPresenceGuardDisabled()
+      ? null
+      : selfAttributedDecisionMarker(feedback, "rejection");
+  if (rejectionAuthorship) {
+    error(
+      `Refusing to reject "${slug}": decision self-attribution blocked ` +
+        `(${rejectionAuthorship.category}) in --feedback: "${rejectionAuthorship.phrase}". ` +
+        "This tripwire detects explicit conductor/model provenance; it does not prove authorship. " +
+        "Requesting changes is the human's decision. If you need " +
+        "another review pass because a produces[] artifact changed after the reviewer's receipt, " +
+        "say so at the gate and let the human choose - do not record their rejection for them.",
     );
   }
 
@@ -3383,7 +3428,6 @@ function handlePracticesPromote(args: string[]): void {
     try {
       emitAudit(pd, "PRACTICES_OVERRIDE", {
         Reason: reason,
-        Timestamp: isoTimestamp(),
       });
     } catch {
       // If audit emission itself fails, surface the original reason.

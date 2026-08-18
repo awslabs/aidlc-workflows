@@ -128,7 +128,7 @@ const engineCommands = [...engineMain.matchAll(/case "([^"]+)":/g)].map((match) 
 
 describe("documentation parity derives current behavior from authored implementation", () => {
   test("event count and user-guide taxonomy match VALID_EVENT_TYPES", () => {
-    expect(eventTypes.length).toBe(82);
+    expect(eventTypes.length).toBe(85);
 
     const guide = read("docs", "guide", "10-state-and-audit.md");
     const guideTaxonomy = sliceBetween(
@@ -140,6 +140,19 @@ describe("documentation parity derives current behavior from authored implementa
       ...new Set([...guideTaxonomy.matchAll(/`([A-Z][A-Z0-9_]*)`/g)].map((match) => match[1])),
     ].sort();
     expect(guideEvents).toEqual(eventTypes);
+
+    // The taxonomy's CATEGORY count is a second claim in the same prose, and the
+    // event-count regex above does not match a "N categories" phrasing — so it
+    // could drift while every other pin stayed green. Derive it three ways and
+    // require agreement: the prose number, the number of table rows, and the sum
+    // of the per-row counts (which must total the event count).
+    const guideCategoryRows = [
+      ...guideTaxonomy.matchAll(/^\| \*\*[^*]+\*\* \| +(\d+) \|/gm),
+    ].map((match) => Number(match[1]));
+    const guideCategoryClaim = guideTaxonomy.match(/organized into (\d+) categories/);
+    expect(guideCategoryClaim, "the taxonomy must state its category count").not.toBeNull();
+    expect(Number(guideCategoryClaim?.[1])).toBe(guideCategoryRows.length);
+    expect(guideCategoryRows.reduce((sum, n) => sum + n, 0)).toBe(eventTypes.length);
 
     for (const path of [
       ["README.md"],

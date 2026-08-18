@@ -1084,6 +1084,21 @@ describe("t17 park/unpark", () => {
     expect(countEvent(readAudit(proj), "WORKFLOW_UNPARKED")).toBe(1);
   });
 
+  test("park + unpark keep the file-wide **Timestamp** count equal to the block count", () => {
+    // Regression for issue #715. Both emitters used to pass a `Timestamp`
+    // field that renderAuditBlock re-rendered, so each park/unpark block
+    // carried TWO **Timestamp**: lines. A reader that zips **Timestamp**
+    // occurrences against **Event** occurrences then desynchronises for the
+    // rest of the file, misattributing every later event's time.
+    runState(proj, ["park"]);
+    runState(proj, ["unpark"]);
+    const audit = readAudit(proj);
+    const blocks = (audit.match(/^## /gm) ?? []).length;
+    expect(blocks).toBeGreaterThan(0);
+    expect(audit.split("**Timestamp**:").length - 1).toBe(blocks);
+    expect(audit.split("**Event**:").length - 1).toBe(blocks);
+  });
+
   test("unpark is idempotent (no-op + was_parked:false when not parked)", () => {
     const r = runState(proj, ["unpark"]);
     expect(r.rc).toBe(0);

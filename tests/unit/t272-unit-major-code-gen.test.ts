@@ -397,11 +397,16 @@ describe("t272 code-generation joins the unit-major walk", () => {
     );
     const state = readFileSync(seededStateFile(proj), "utf-8");
     expect(state).toContain("- **Current Stage**: functional-design");
-    expect(activeDirectiveMarker(proj)).toEqual({
-      version: 1,
+    expect(activeDirectiveMarker(proj)).toMatchObject({
+      version: 2,
+      kind: "run-stage",
       stage: "code-generation",
       unit: "alpha",
       state_sha256: createHash("sha256").update(state, "utf-8").digest("hex"),
+      delivery: "issued",
+      needs_rehydrate: false,
+      context_epoch: 0,
+      stop_count: 0,
     });
   }, 30000);
 });

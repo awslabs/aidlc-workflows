@@ -394,16 +394,25 @@ if (target === "verb-intercept") {
         if (cmd.subcommand === "select-plugins") return ["plugin", "select", ...forwarded];
         if (cmd.subcommand === "help") return ["plugin", "help"];
       }
+      if (cmd.source === "knowledge-verb") {
+        // The knowledge verb is the subcommand, but the compiled CLI dispatches
+        // through the noun group.
+        if (cmd.subcommand === "help") return ["knowledge", "help"];
+        return ["knowledge", cmd.subcommand, ...forwarded];
+      }
       if (cmd.subcommand === "space-create") return ["space", "create", ...forwarded];
       if (cmd.subcommand === "intent-create") return ["intent", "create", ...forwarded];
       return [cmd.subcommand, ...forwarded];
     })();
+    const toolFile = cmd.source === "knowledge-verb"
+      ? "aidlc-knowledge.ts"
+      : "aidlc-utility.ts";
     const spawned = Bun.spawnSync(
       executable
         ? [executable, ...compiledArgs]
         : [
             process.execPath,
-            join(HOOKS_DIR, "..", "tools", "aidlc-utility.ts"),
+            join(HOOKS_DIR, "..", "tools", toolFile),
             cmd.subcommand,
             ...forwarded,
           ],

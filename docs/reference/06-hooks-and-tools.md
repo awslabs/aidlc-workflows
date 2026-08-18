@@ -37,7 +37,7 @@ Eleven of the seventeen are **non-blocking**. Six are **flow-altering**: the `St
 
 | Hook | Event | Scoping | Matcher | Purpose |
 |------|-------|---------|---------|---------|
-| `record-human-turn.ts` | UserPromptSubmit + PostToolUse | Project-wide (settings.json) | (empty) / `AskUserQuestion` | Record a `HUMAN_TURN` event on every real human prompt and on every answered `AskUserQuestion` widget (gate approvals and interview answers are widget clicks, not typed prompts); the approval/interview gate checks the ledger and requires one since the last gate resolution so a model under autopilot cannot fabricate an approval with no human having acted |
+| `record-human-turn.ts` | UserPromptSubmit + PostToolUse | Project-wide (settings.json) | (empty) / `AskUserQuestion` | Record a `HUMAN_TURN` event when a supported prompt-submit or answered-widget seam fires; the approval/interview gate requires one since the last gate resolution. The event proves ordering/presence only: harnesses do not uniformly expose trusted response text, so it does not authenticate later `--user-input`, `--feedback`, or `--details` prose. |
 | `deliver-stage-rules.ts` | PreToolUse | Project-wide (settings.json) | `Task\|Agent` | **Flow-altering.** Resolve the dispatched stage's substantive active-space rules and append their exact bytes to every AI-DLC subagent brief. Rewrites Claude, Codex, opencode, and Copilot inputs; Kiro CLI cannot rewrite tool arguments, so an incomplete brief proceeds with an advisory warning (Kiro CLI agents preload the active memory tree through `resources`; an unloadable required rule still blocks with repair guidance). Kiro IDE uses always-included workspace steering with live memory-file references. Idempotent when the exact bundle is already present |
 | `plan-approval-guard.ts` | PreToolUse | Project-wide (settings.json) | `Task` | **Flow-altering.** Enforce code-generation's plan-before-generation ordering (stage Steps 2-4) deterministically: while the active directive (or Current Stage fallback) is code-generation, a Task dispatch targeting `aidlc-developer-agent` is refused (exit 2 + a redirecting stderr reason) unless its one explicit `AIDLC-UNIT: <unit>` marker identifies a known unit with a non-empty `code-generation-plan.md` on disk AND a Plan Approval question recording the explicit "Approve Plan" response. Each refusal emits `PLAN_APPROVAL_BLOCKED`; missing, conflicting, or unknown markers block instead of guessing from prompt prose. `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` disables enforcement |
 | `state-transition-guard.ts` | PreToolUse | Project-wide (settings.json) | `Bash` | **Flow-altering.** Refuse direct `aidlc-state.ts` lifecycle verbs and redirect the conductor to `aidlc-orchestrate.ts report`; when the harness supplies delegated-agent identity, also refuse lifecycle/routing commands from reviewers and support agents; read-only state and ordinary build/validation commands remain available |
@@ -162,11 +162,13 @@ These six hooks (the audit/sensor/statusline/rebuild-stage-graph/state-validatio
 
 1. **Project directory resolution:** Same multi-fallback pattern as write-audit-log.ts.
 2. **Audit + state guards:** Exits silently if the `audit/` shard or `aidlc-state.md` does not exist (pre-init).
-3. **Active-stage read:** The engine atomically records each final validated `run-stage` in the active intent's gitignored `.aidlc-active-directive.json`, bound to the exact `aidlc-state.md` SHA-256. Task activation refreshes the digest only when its slug matches the marker, preserving a per-unit directive's unit while rejecting unrelated state changes. The hook uses that stage while the digest matches, then reads its `sensors_applicable` array from `stage-graph.json`. This keeps unit-major code-generation diagnostics under `code-generation` even while the durable cursor remains on an earlier design stage. An isolated `--single` directive replaces any main-workflow marker and a successful `report --single` clears it. A missing, malformed, stale, or graph-unknown marker falls back to `Current Stage`.
+3. **Active-stage read:** The engine atomically records each validated `load-steering` part and final `run-stage` in the active intent's gitignored `.aidlc-active-directive.json`, bound to the exact project, intent, and `aidlc-state.md` SHA-256. Shared marker consumers therefore see the upcoming stage while its rules are still being delivered. Task activation refreshes the digest only when its slug matches the marker, preserving a per-unit directive's unit while rejecting unrelated state changes. The hook uses that stage while the digest matches, then reads its `sensors_applicable` array from `stage-graph.json`. This keeps unit-major code-generation diagnostics under `code-generation` even while the durable cursor remains on an earlier design stage. A pending Copilot attempt may retain the marker across `report --single`; otherwise successful single-stage completion clears it. A missing, malformed, stale, or graph-unknown marker falls back to `Current Stage`.
 4. **Dispatch:** For each applicable Sensor, spawns `aidlc-sensor.ts fire <id> --stage <slug> --output-path <path>`. The dispatcher applies each Sensor's `matches` glob hook-side; a non-matching write is skipped. Outcomes are advisory — the hook never blocks the write.
 5. **Health heartbeat:** Writes `.aidlc-hooks-health/run-sensors.last` on a fire, so the doctor can distinguish a healthy idle hook from a silent failure.
 
 See [Sensor System](07-sensor-system.md) for the manifest schema and the fire lifecycle.
+
+Marker writers serialize through a record-local `.aidlc-active-directive.lock/` whose owner stamp follows the audit-lock dead-owner, unstamped-grace, live-over-age, CAS-reclaim, and exit-cleanup conventions. The canonical marker remains readable while a writer prepares a sibling candidate, and publish, clear, and release are fenced to the exact acquisition token. A waiter or `/aidlc --doctor` CAS-reclaims stamped dead owners, safely fenced over-age owners, and lock directories that remain unstamped beyond the acquisition grace window. Legacy `.aidlc-active-directive.json.transaction` debris still requires quiescent manual recovery because it has no owner identity to reverify.
 
 ### PostToolUse: rebuild-stage-graph.ts
 
@@ -246,12 +248,22 @@ This is one of the framework's five flow-altering hooks, alongside the four PreT
 7. **Pending -> block and inject:** For any other (pending) directive - `run-stage`, `dispatch-subagent`, `invoke-swarm`, `present-gate`, `ask`, `print`, `error` - it prints `{"decision":"block","reason":<on-task continuation>}`, so the same session resumes with the next move injected. The injected `reason` also names `aidlc-orchestrate park` as the clean-pause alternative, so a conductor that wants to stop a long workflow parks rather than advancing.
 8. **Fail open:** Any unexpected failure (unreadable state, an engine that exits non-zero or returns no parseable directive, malformed stdin) allows the stop and records a drop. Failing open is the only safe failure mode for a hook that can otherwise trap a turn.
 
+**Copilot delivered-directive path.** Copilot's PostToolUse adapter records only
+bounded routing and continuation metadata for a successfully delivered
+`next`, `continue`, `report`, or `park` result. On Stop, the shared hook may use
+that supplied directive instead of probing a fresh `next`, but it still runs
+the same terminal, human-wait, conversation, autonomy, and recursion checks in
+the order above. Delivery is scoped to project, active intent, session when
+available, workflow-state digest, owner/context epoch, and command attempt.
+Compaction or state drift invalidates delivery. Missing or invalid evidence
+returns bounded fresh-`next` recovery and never replays an old continuation.
+
 **Security property — the `reason` is an on-task continuation, never an override.** The injected `reason` names the work the conductor still owes ("run the forwarding loop, act on the directive, then report"), never an instruction to do something new or out-of-band. Override-shaped directives are refused by the conductor's own safety training; that refusal is the security property. A buggy or compromised engine therefore can only ever *continue* sanctioned work — it cannot hijack the session to act against the user.
 
 **Recursion guard — a stuck block can never trap the session.** A block that re-fires forever is the one way a hook could trap a turn, so recursion is bounded two ways, both native:
 
 - **`stop_hook_active`** — Claude Code sets this true when the current stop is itself the product of a prior Stop-hook block. The hook reads it as a signal that it is already inside a blocked sequence.
-- **A no-progress counter** - the hook persists a small record under `<record>/.aidlc-stop-hook/block-count.json` (in the intent's record dir), keyed on the workflow's *progress signature* (Current Stage slug + audit-tail length). A `report` that advances the workflow changes that signature, so the counter resets - a healthy loop is never throttled. When the signature is unchanged across consecutive blocks (no report ran), the counter increments. Once the no-progress streak reaches the ceiling - `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`, whose default is **run-mode aware: 2 in an interactive run and 8 under autonomous Construction** (interactive 2 so a chatting or pausing human is released after one nudge; autonomous 8 so an unattended loop, with no human to release it, runs to completion before letting go) - the hook **releases** the turn (allows the stop), so a stuck loop always lets go. An explicit `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` overrides both defaults.
+- **A no-progress counter** - the hook persists a bounded recursion record. On Copilot, the session-scoped coordination marker keys that record on workflow and directive progress rather than audit length: active stage and Unit, directive kind and part position, complete continuation-token hash, workflow-state digest, owner epoch, and active Resume status. A `report`, directive transition, or real takeover changes that signature, so a healthy loop resets while audit-only traffic cannot manufacture progress. Other harnesses retain their existing bounded guard file and progress signature. When the signature is unchanged across consecutive blocks, the counter increments. Once the no-progress streak reaches the ceiling - `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`, whose default is **run-mode aware: 2 in an interactive run and 8 under autonomous Construction** (interactive 2 so a chatting or pausing human is released after one nudge; autonomous 8 so an unattended loop, with no human to release it, runs to completion before letting go) - the hook **releases** the turn (allows the stop), so a stuck loop always lets go. An explicit `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` overrides both defaults.
 
 **Human-wait carve-out - an interactive gate is not punished.** Five cases where the conductor ends its turn *because* it is waiting on the human (or is simply conversational) are handled so the hook never spams the nudge:
 
@@ -361,9 +373,9 @@ This is one of the framework's five flow-altering hooks and one of its four `Pre
 
 This is one of the framework's five flow-altering hooks and one of its four `PreToolUse` controls. The stage prose says generation never begins before the human answers "Approve Plan" - a field report showed a conductor generating the code first and backfilling `code-generation-plan.md` beside `code-summary.md`, turning the plan into a retroactive summary. The stage-completion artifact guard cannot catch that inversion (it fires at completion, when the backfilled plan already exists), so this hook refuses the dispatch itself.
 
-**Decision.** The guard acts only when the active state-bound directive is code-generation (falling back to `Current Stage` when no valid marker exists) and the tool call is a `Task` dispatch whose `subagent_type` is `aidlc-developer-agent`. This keeps the guard active during a unit-major interleave while the durable cursor remains on the first design stage. Step 4 requires the delegation prompt to start with `AIDLC-UNIT: <directive.unit>` (or the current single-iteration unit). The guard resolves that exact marker against the workflow's known units (the compiled bolt DAG plus the on-disk `construction/<unit>/` dirs), then requires that unit to have BOTH a non-empty `code-generation-plan.md` on disk AND an explicit "Approve Plan" answer on the Plan Approval question in `code-generation-questions.md`. Contextual mentions of sibling units have no effect; missing, conflicting, or unknown markers block. The Plan Approval identifier may share the heading with its question number (`Q1: Plan Approval` or `Question 1 - Plan Approval`) or appear as the first question-text line under a numbered heading (`## Q1` followed by `Plan Approval`); blank tags, "Request Changes", unrelated answered questions, and examples inside HTML comments or fenced code do not authorize generation. The same evidence is mandatory under autonomous Construction, matching the stage's every-execution-mode hard stop. The decision (`evaluatePlanApprovalDispatch`, an exported pure function pinned by `t265`) blocks with **exit 2 + a redirecting stderr reason** naming the missing evidence and the stage steps that produce it, and emits a `PLAN_APPROVAL_BLOCKED` audit row (Tool, Target, Stage, Unit).
+**Decision.** The guard acts only when the active state-bound directive is code-generation (falling back to `Current Stage` when no valid marker exists) and the tool call is a `Task` dispatch whose `subagent_type` is `aidlc-developer-agent`. This keeps the guard active during a unit-major interleave while the durable cursor remains on the first design stage. Step 4 requires the delegation prompt to start with `AIDLC-UNIT: <directive.unit>` and `AIDLC-TESTING-CONTRACT: <hash>`. The guard resolves the Unit marker against the compiled Bolt DAG plus on-disk construction directories, then requires non-empty plan and test-instruction files, a structured Testing Contract that still matches current memory/scope/strategy/type, an explicit "Approve Plan" answer, and an approval fingerprint over those exact bytes. Missing, conflicting, unknown, stale, or post-approval-modified evidence blocks. The Plan Approval identifier may share the heading with its question number (`Q1: Plan Approval` or `Question 1 - Plan Approval`) or appear as the first question-text line under a numbered heading (`## Q1` followed by `Plan Approval`); blank tags, "Request Changes", unrelated answered questions, and examples inside HTML comments or fenced code do not authorize generation. The same evidence is mandatory under autonomous Construction, where `aidlc-swarm.ts prepare` independently verifies it before worktree creation. The decision (`evaluatePlanApprovalDispatch`, pinned by `t265`) blocks with **exit 2 + a redirecting stderr reason** and emits a `PLAN_APPROVAL_BLOCKED` audit row (Tool, Target, Stage, Unit).
 
-**Fail-open outside the guarded dispatch.** No state file, another stage, another agent or tool, malformed stdin, or any internal error allows the call. Once a code-generation developer dispatch is identified, missing or ambiguous target evidence blocks. The deterministic off-switch `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` disables enforcement entirely. On Kiro CLI the conductor agent registers the guard on its `subagent` matcher (the adapter translates the crew schema); on Codex it rides the `spawn_agent` PreToolUse seam; on opencode the plugin consults it before `task` dispatches; Kiro IDE documents the bound as prose-only, like its other guards.
+**Fail-open outside the guarded dispatch.** No state file, another stage, another agent or tool, malformed stdin, or any internal error allows the call. Once a code-generation developer dispatch is identified, missing or ambiguous target evidence blocks. The deterministic off-switch `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` disables this PreToolUse hook only. It deliberately does **not** disable the autonomous `aidlc-swarm.ts prepare` precondition: headless worker harnesses may have no dispatch-hook seam, so `prepare` remains the independent hard boundary that prevents unapproved worktree fan-out. To avoid that boundary, restore/approve the plan evidence or return Construction to gated mode rather than disabling the hook. On Kiro CLI the conductor agent registers the guard on its `subagent` matcher (the adapter translates the crew schema); on Codex it rides the `spawn_agent` PreToolUse seam; on opencode the plugin consults it before `task` dispatches; Kiro IDE documents the bound as prose-only, like its other guards.
 
 ---
 
@@ -473,6 +485,7 @@ The audit trail (the intent's `audit/` shards) uses the event taxonomy defined i
 | **Subagent** | 1 | `SUBAGENT_COMPLETED` | log-subagent hook |
 | **Reviewer enforcement** | 2 | `REVIEWER_SCOPE_BLOCKED`, `REVIEW_FREEZE_BLOCKED` | reviewer-scope hook, review-freeze hook |
 | **Plan approval** | 1 | `PLAN_APPROVAL_BLOCKED` | plan-approval-guard hook |
+| **Documents** | 3 | `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED`, `DOCUMENT_REMOVED` | `aidlc-knowledge.ts` (space-level shard even when intent-scoped) |
 | **Utility** | 1 | `HEALTH_CHECKED` | `aidlc-utility.ts doctor` |
 | **Error/Recovery** | 2 | `ERROR_LOGGED`, `RECOVERY_COMPLETED` | `lib.ts emitError`, `aidlc-state.ts acknowledge-compaction` |
 | **Construction Bolt** | 4 | `BOLT_STARTED`, `BOLT_COMPLETED`, `BOLT_FAILED`, `AUTONOMY_MODE_SET` | `aidlc-bolt.ts` |
@@ -609,7 +622,19 @@ Deterministic handlers avoid LLM overhead for operations that are pure computati
 
 ## Sensor, Learning, and Runtime Tools
 
-Three further `aidlc-*.ts` tools back the v0.5.0 data plane. Each is a thin, deterministic dispatcher: the hooks invoke them automatically, and they are also human-callable for debugging. They follow the same three-concerns split as `aidlc-utility.ts` — determinism lives in the tool, the conflict/contradiction VERDICT is the orchestrator-LLM's, and keep/skip judgement is the user's at a gate.
+Four further `aidlc-*.ts` tools back the data plane. Each is deterministic:
+the hooks/stages invoke them automatically, and they are also human-callable
+for debugging.
+
+### `aidlc-testing-posture.ts` — Code Generation Testing Contract
+
+`resolve`/`render` read the active space's org/team/project Testing Posture
+sections, resolve methodology/order independently from ancillary coverage and
+tooling notes, combine the active scope and Test Strategy obligations, and emit
+the structured contract plus methodology-specific plan profile.
+`fingerprint --unit <unit>` binds the exact plan, unit test instructions, and
+current contract for Plan Approval; `verify --unit <unit>` is the shared
+decision used by the dispatch guard and autonomous swarm `prepare`.
 
 ### `aidlc-sensor.ts` — Sensor dispatcher
 
@@ -646,6 +671,30 @@ Materialises the intent's `runtime-graph.json`, the data-plane mirror of `stage-
 | `fragment-merge --slug <slug>` | Remove the worktree fragment (idempotent). Called by `aidlc-bolt.ts complete --merge` | — |
 
 Re-running `compile` against the same audit produces a byte-equivalent graph. It is invoked automatically by the `aidlc-rebuild-stage-graph.ts` PostToolUse Bash hook on every transition-class audit emit (`GATE_APPROVED`, `STAGE_STARTED`, `STAGE_AWAITING_APPROVAL`, `AUDIT_MERGED`, `WORKFLOW_COMPLETED`); manual invocation is a debug surface. The `fragment-fork` / `fragment-merge` primitives ride on the existing fork/merge audit boundaries (`STATE_FORKED` + `AUDIT_FORKED`, `STATE_MERGED` + `AUDIT_MERGED`) and emit no events of their own. All subcommands accept `--project-dir <path>`.
+
+### `aidlc-knowledge.ts` — DocumentKB indexer
+
+Indexes the team's own documents into a per-space catalog agents can cite. Two directories with different owners: `knowledge/documents/` holds the user's originals (the tool never reorganises or deletes them), and `knowledge/documentkb/` is the derived catalog — `index.json` plus a per-document dir carrying `metadata.json` and extracted `content.md`. **Only the index is reconstructible**: `sync` rebuilds a lost `index.json` from every surviving `metadata.json`, tombstones included. Deleting the whole `documentkb/` tree also deletes those `metadata.json` files, so document ids and tombstones do NOT survive — `sync` re-onboards the surviving originals as new rows.
+
+| Subcommand | Purpose | Emits |
+|------------|---------|-------|
+| `onboard [path]` | Index one document, or every not-yet-indexed file under `documents/`. Idempotent — an unchanged file reports `already`, not a second row. An EDITED file at an already-indexed path refreshes that row in place and reports `edited`, so one path never carries two live rows | `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED` |
+| `sync` | Reconcile the catalog with `documents/`: index what is new, tombstone what was deleted, re-extract an invalidated row, and rebuild `index.json` from the per-document records if the index itself is gone | `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED`, `DOCUMENT_REMOVED` |
+| `list [--json]` | The catalog — every row with its extraction/availability state visible | — |
+| `show <id> [--json]` | One document's record plus its extracted text, with the untrusted-content notice inline | — |
+| `associate <id> --intent [slug]` | Scope a document to one intent. Idempotent; reports `fresh` vs `already` | `DOCUMENT_UPDATED` |
+| `dissociate <id> --intent [slug]` | Remove that scoping. Deleting the last one omits the key rather than writing an empty list | `DOCUMENT_UPDATED` |
+| `rebind <id> --to <path>` | Repair a row whose original moved **and** changed — the one case `sync` cannot resolve, because neither path nor digest survives to tie the new file to the old row | `DOCUMENT_UPDATED` |
+
+All subcommands accept `--space <name>` and `--project-dir <path>`; `onboard` also accepts `--intent [slug]` and `--allow-inactive`.
+
+**Writes are journaled.** Extraction happens outside the workspace lock (it can be slow and calls an external executable); inside the lock the tool re-validates the source digest and `rename()`s a fully-formed staging dir into place. A crashed run leaves an orphan directory under `documentkb/.journal/` that no index row references, which is what makes it collectable rather than corrupting. Audit rows land in the **space-level** shard even for an intent-scoped document: a document outlives any intent, and `associate`/`dissociate` can move its scope later, so filing its provenance under whichever intent happened to be active would split one document's history across shards.
+
+**Every path is treated as untrusted input** — from a CLI argument, a directory walk, or a committed index row. Four guards apply. First the *anchor itself* is verified: every verb refuses to run if `knowledge/` or `knowledge/documentkb/` is a symlink, because a redirected container decides where every subsequent write lands (a first run on a project that has neither directory yet is unaffected — absent is not redirected). Then, per path: the shape is schema-validated (relative, POSIX, no `..`, no NUL), no path *component* is a symlink, and containment is re-checked after `realpath` with the bytes read through an `O_NOFOLLOW` handle, so the identity checked is the identity read.
+
+There is deliberately **no `remove` subcommand**: deletion is "delete the user-owned original, then `sync`", so the tool never holds a destructive verb over a user's own files.
+
+> Extracted document text is **untrusted data, not instructions**. `show` ships that rule inline with the content so the two can never be separated.
 
 ---
 
