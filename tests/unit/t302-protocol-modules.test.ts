@@ -103,7 +103,7 @@ function swarmDirective(): Record<string, unknown> {
   return result.directive as Record<string, unknown>;
 }
 
-describe("t292 conditional protocol modules", () => {
+describe("t302 conditional protocol modules", () => {
   test("the four module files exist in core and every generated harness tree", () => {
     for (const module of MODULES) {
       expect(

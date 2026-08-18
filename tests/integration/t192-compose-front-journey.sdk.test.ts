@@ -86,7 +86,7 @@ describe("t192 front composer journey (/aidlc compose -> approve -> write -> bir
       try {
         const scopesDir = join(proj, ".claude", "scopes");
         const gridPath = join(proj, ".claude", "tools", "data", "scope-grid.json");
-        expect(readdirSync(scopesDir).filter((f) => f.endsWith(".md")).length).toBe(10);
+        expect(readdirSync(scopesDir).filter((f) => f.endsWith(".md")).length).toBe(11);
 
         const r = await driveAidlc(`/aidlc compose "${TASK}"`, {
           projectDir: proj,
@@ -101,17 +101,17 @@ describe("t192 front composer journey (/aidlc compose -> approve -> write -> bir
         // (b) the birth ran in the SAME drive (one /aidlc invocation).
         assertToolResultContains(r, "Bash", INIT_STATE_SUMMARY);
 
-        // (c) BOTH scope files landed: an 11th .md + an 11th grid key.
+        // (c) BOTH scope files landed: a 12th .md + a 12th grid key.
         const scopeFiles = readdirSync(scopesDir).filter(
           (f) => f.startsWith("aidlc-") && f.endsWith(".md"),
         );
-        expect(scopeFiles.length).toBe(11);
+        expect(scopeFiles.length).toBe(12);
         const grid = JSON.parse(readFileSync(gridPath, "utf-8")) as Record<
           string,
           { stages?: Record<string, string> }
         >;
         const gridKeys = Object.keys(grid);
-        expect(gridKeys.length).toBe(11);
+        expect(gridKeys.length).toBe(12);
         const composedName = gridKeys.find((k) => !STOCK_SCOPES.has(k));
         expect(composedName).toBeDefined();
         // The grid entry is a real stages map, not an empty stub.

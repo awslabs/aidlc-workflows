@@ -65,6 +65,8 @@ function makeFixture(harness: string, sourceHarness = harness): string {
   copyDir(join(REPO_ROOT, "scripts"), join(root, "scripts"));
   mkdirSync(join(root, "harness"), { recursive: true });
   copyDir(join(REPO_ROOT, "harness", sourceHarness), join(root, "harness", harness));
+  // Emitter imports (notably smol-toml) resolve from the checkout, not from
+  // Bun's mutable global package cache.
   symlinkSync(
     join(REPO_ROOT, "node_modules"),
     join(root, "node_modules"),
@@ -74,9 +76,6 @@ function makeFixture(harness: string, sourceHarness = harness): string {
     mkdirSync(join(root, "dist"), { recursive: true });
     copyDir(join(REPO_ROOT, "dist", harness), join(root, "dist", harness));
   }
-  // Same hermeticity rule as t294: emitter imports (notably smol-toml) must
-  // resolve from the checkout, not from Bun's mutable global package cache.
-  symlinkSync(join(REPO_ROOT, "node_modules"), join(root, "node_modules"));
   return root;
 }
 
@@ -144,6 +143,11 @@ describe("t145 packager contract regressions", () => {
       const manifest = join(root, "harness", "foo", "manifest.ts");
       replaceOnce(manifest, 'name: "claude"', 'name: "foo"');
       replaceOnce(manifest, 'harnessDir: ".claude"', 'harnessDir: ".foo"');
+      replaceOnce(
+        manifest,
+        'orchestratorSkillPath: ".claude/skills/aidlc/SKILL.md"',
+        'orchestratorSkillPath: ".foo/skills/aidlc/SKILL.md"',
+      );
 
       // A first build still needs the harness-neutral stage number/name seed.
       for (const file of ["stage-graph.json", "scope-grid.json"]) {
@@ -237,6 +241,11 @@ describe("t145 packager contract regressions", () => {
     try {
       const manifest = join(root, "harness", "claude", "manifest.ts");
       replaceOnce(manifest, 'harnessDir: ".claude"', 'harnessDir: ".foo"');
+      replaceOnce(
+        manifest,
+        'orchestratorSkillPath: ".claude/skills/aidlc/SKILL.md"',
+        'orchestratorSkillPath: ".foo/skills/aidlc/SKILL.md"',
+      );
 
       const run = runPackage(root, "claude");
       expect(output(run)).toContain("[claude] regenerated dist/claude/.foo");

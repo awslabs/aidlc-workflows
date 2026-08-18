@@ -4852,7 +4852,7 @@
           "mechanism": "tui"
         },
         {
-          "file": "tests/e2e/t291-express-scope-routing.test.ts",
+          "file": "tests/e2e/t301-express-scope-routing.test.ts",
           "mechanism": "cli"
         },
         {
@@ -4880,7 +4880,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/e2e/t291-express-scope-routing.test.ts",
+          "file": "tests/e2e/t301-express-scope-routing.test.ts",
           "mechanism": "cli"
         },
         {
@@ -6520,7 +6520,7 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
-          "file": "tests/e2e/t291-express-scope-routing.test.ts",
+          "file": "tests/e2e/t301-express-scope-routing.test.ts",
           "mechanism": "cli"
         },
         {
@@ -6716,7 +6716,7 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/e2e/t291-express-scope-routing.test.ts",
+          "file": "tests/e2e/t301-express-scope-routing.test.ts",
           "mechanism": "cli"
         },
         {

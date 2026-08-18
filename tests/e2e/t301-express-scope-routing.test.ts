@@ -226,7 +226,7 @@ function detectedScope(p: string, input: string): {
   };
 }
 
-describe("t291 express scope routing (deterministic CLI journey)", () => {
+describe("t301 express scope routing (deterministic CLI journey)", () => {
   test('keyword "express" routes to express', () => {
     expect(detectedScope(project(), "express")).toMatchObject({
       scope: "express",

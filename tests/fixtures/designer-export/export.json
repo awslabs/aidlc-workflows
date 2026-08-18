@@ -3129,7 +3129,7 @@
         "feedback-optimization": "EXECUTE"
       },
       "keywords": [],
-      "description": "The default: full lifecycle without ideation ceremony",
+      "description": "Opt-in v1-style lifecycle without ideation ceremony",
       "skeleton": true
     },
     "enterprise": {
