@@ -7,6 +7,14 @@ import { fileURLToPath } from "node:url";
 import {
   resolveHarnessPath,
 } from "./aidlc-runtime-paths.ts";
+import {
+  artifactFilename,
+  KNOWN_CODEKB_STAGES,
+} from "./aidlc-artifact-vocabulary.ts";
+export {
+  artifactFilename,
+  KNOWN_CODEKB_STAGES,
+} from "./aidlc-artifact-vocabulary.ts";
 // Type-only import for the lazy-loaded aidlc-graph.ts dependency. The
 // runtime require() below avoids the circular import (aidlc-graph.ts
 // imports loadScopeMapping/loadStageGraph from this file). Type-only
@@ -4350,21 +4358,6 @@ export function worktreePath(projectDir: string, boltSlug: string): string {
 //     re-open the completion refusal - the receipt-invalidation loop).
 // Sharing the scan is load-bearing: if the two ever diverged, the hook could
 // block writes the engine would accept, or miss writes the engine will refuse.
-
-// The codekb stages - their produces live in the space-level codekb dir, keyed
-// by repo, NOT under a per-intent record dir. reverse-engineering is the sole
-// member; a future codekb stage joins this set (aidlc-orchestrate.ts and
-// aidlc-sensor.ts keep local mirrors - not exported from here historically).
-export const KNOWN_CODEKB_STAGES: ReadonlySet<string> = new Set([
-  "reverse-engineering",
-]);
-
-// Artifact vocabulary names normally map to Markdown files. Traceability is
-// the structured-data exception: stages still declare the bare vocabulary
-// name while every engine surface resolves it to the JSON sensor input.
-export function artifactFilename(name: string): string {
-  return name === "traceability" ? "traceability.json" : `${name}.md`;
-}
 
 // True when a written File path (from an ARTIFACT_CREATED/ARTIFACT_UPDATED audit
 // row, or a PreToolUse file_path) is one of the stage's declared produces[]

@@ -448,7 +448,7 @@ Don't emit audit events from LLM prose. The following anti-patterns are the reas
 - `**Event**: STAGE_COMPLETED` markdown block written by a stage file — events only come from `appendAuditEntry` in a tool or hook
 - Freeform `## Artifact Update` sections written by hooks — replaced by canonical `ARTIFACT_CREATED` / `ARTIFACT_UPDATED`
 
-The public CLI enforces the sharpest slice of this mechanically: `append` / `append-batch` refuse the authority-bearing receipts the engine's guards read as authorization evidence (`HUMAN_TURN`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `AUTONOMY_MODE_SET`, and the four `UNIT_*` lifecycle receipts — the `CLI_PROTECTED_EVENT_TYPES` set in `aidlc-audit.ts`), every field name must match a strict printable single-line label grammar (and `Event` remains reserved), values have line terminators escaped, and `append-raw` refuses taxonomy event lines or line-breaking headings. The structured renderer exclusively owns `Timestamp` and `Event`, so every block it writes contains exactly one of each; free-form `append-raw` blocks sit outside that guarantee (they carry the emitter's `**Timestamp**:` line, no `**Event**:` line, and a verbatim body). `Timestamp` remains accepted by generic `--field` parsing for compatibility, but a supplied value is intentionally ignored; park/unpark and other owning tools do not pass it. Historical shards are not rewritten: block-aware readers need no migration, while flat readers must split on `---` and use the first emitter-owned timestamp in each block or deduplicate older duplicate timestamp fields. Owning tools and hooks emit through the library import (`appendAuditEntry`), which the floor does not touch. Test fixtures that simulate owning emitters set `AIDLC_ALLOW_DIRECT_AUDIT_EVENTS=1`.
+The public CLI enforces the sharpest slice of this mechanically: `append` / `append-batch` refuse the authority-bearing receipts the engine's guards read as authorization evidence (`STAGE_COMPLETED`, `HUMAN_TURN`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `AUTONOMY_MODE_SET`, and the four `UNIT_*` lifecycle receipts — the `CLI_PROTECTED_EVENT_TYPES` set in `aidlc-audit.ts`), every field name must match a strict printable single-line label grammar (and `Event` remains reserved), values have line terminators escaped, and `append-raw` refuses taxonomy event lines or line-breaking headings. The structured renderer exclusively owns `Timestamp` and `Event`, so every block it writes contains exactly one of each; free-form `append-raw` blocks sit outside that guarantee (they carry the emitter's `**Timestamp**:` line, no `**Event**:` line, and a verbatim body). `Timestamp` remains accepted by generic `--field` parsing for compatibility, but a supplied value is intentionally ignored; park/unpark and other owning tools do not pass it. Historical shards are not rewritten: block-aware readers need no migration, while flat readers must split on `---` and use the first emitter-owned timestamp in each block or deduplicate older duplicate timestamp fields. Owning tools and hooks emit through the library import (`appendAuditEntry`), which the floor does not touch. Test fixtures that simulate owning emitters set `AIDLC_ALLOW_DIRECT_AUDIT_EVENTS=1`.
 
 The drift test at `tests/integration/t48-audit-event-emitters.test.ts` catches drift between this chapter's tables and the code: every event in the tables must have a matching `appendAuditEntry(..., "EVENT", ...)` call in the declared emitter file, and every emission call site in the codebase must appear in the tables. The test also guards against deleted events being resurrected and against pairing invariants (e.g., `handleApprove` must emit both `GATE_APPROVED` and `STAGE_COMPLETED`).
 
@@ -481,7 +481,7 @@ Specifically:
 ## Stage result validity projection
 
 A completed checkbox records execution history. It does not prove that the
-result still matches the runtime artifact instances used by that completion.
+result still matches the runtime artifact instances captured at completion.
 Execution state and result validity are therefore separate concepts.
 
 Each main-workflow `STAGE_COMPLETED` event may carry a schema-2 `Validation
@@ -491,7 +491,7 @@ artifact-vocabulary filename mapping resolves collision-safe names such as
 `build-test-results` -> `test-results.md`.
 
 The audit receipt remains compact because the current projection is stage-level,
-not Unit-level. For each observed canonical artifact it records the producer,
+not Unit-level. For each receipt-recorded canonical artifact it records the producer,
 required flag, instance/present counts, a structure hash over resolved
 path/unit/kind tuples, and a content hash over the corresponding file states.
 
@@ -502,13 +502,21 @@ static optional `consumes` declaration. A missing optional input therefore
 creates no edge; if it later appears, the consumer's own aggregate basis changes
 and becomes stale.
 
+The basis is captured when `STAGE_COMPLETED` is reported. It does not prove
+which bytes the stage read while executing. "Observed dependency" means an
+input recorded in the completion receipt; changes before capture become the
+baseline, while later changes can be detected.
+
 `requires_stage` is not treated as an invalidation edge because the current v2
 schema uses it for both semantic dependency and ordering. An explicit edge kind
 would be required before it can safely participate in validity propagation.
 
-The projection remains read-only. `next` refuses to route beyond stale completed
-results and directs the user to `/aidlc --stage <earliest-affected-stage>`.
-Schema-1 and receipt-less histories remain untracked/fail-open until a normal
-re-completion writes schema 2. The scope is AI-DLC Markdown artifact validity;
+The projection remains read-only and advisory. `next` keeps its normal
+directive kind and adds a machine-readable `stage_validity` field; `/aidlc
+--status` shows the same stale, revalidation, untracked, or unavailable state.
+The suggested recovery is `/aidlc --stage <earliest-affected-stage>`, but this
+release does not enforce it. Schema-1, receipt-less, and capture-failed
+histories remain untracked/fail-open until a normal re-completion writes schema
+2. The scope is AI-DLC Markdown artifact validity;
 source-code, Git-tree, CI, deployment, and external-system validity require
 separate ownership and observation contracts.

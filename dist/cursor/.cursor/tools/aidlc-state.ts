@@ -78,8 +78,10 @@ import {
 } from "./aidlc-lib.js";
 import { memoryDirFor } from "./aidlc-graph.ts";
 import { compiledExecutable } from "./aidlc-runtime-paths.ts";
-import { artifactFileName } from "./aidlc-artifact-resolution.ts";
-import { stageValidationAuditFields } from "./aidlc-validity.ts";
+import {
+  stageValidationAuditFields,
+  VALIDATION_WARNING_FIELD,
+} from "./aidlc-validity.ts";
 import {
   stageUsageAuditFields,
   workflowUsageAuditFields,
@@ -1535,7 +1537,7 @@ function producesArtifactsExist(
   }
   for (const dir of producesDirsForStage(pd, stage)) {
     for (const name of produces) {
-      if (isRegularFile(join(dir, artifactFileName(name)))) return true;
+      if (isRegularFile(join(dir, artifactFilename(name)))) return true;
     }
   }
   return false;
@@ -1969,7 +1971,10 @@ function reviewRecoverySpentInCurrentAttempt(
   return false;
 }
 
-function handleAdvance(args: string[]): void {
+function handleAdvance(
+  args: string[],
+  inheritedValidationWarning?: string,
+): void {
   // Keep only the positional <completed-slug> [<next-slug>]; any flags are
   // filtered out so they are not misread as the next slug.
   const positional = args.filter((a) => !a.startsWith("--"));
@@ -2152,6 +2157,13 @@ function handleAdvance(args: string[]): void {
     content = setPhaseProgress(content, nextStage.phase, "Active");
   }
 
+  const validationFields =
+    !alreadyMarkedCompleted || !stageCompletedAlreadyAudited
+      ? stageValidationAuditFields(pd, completedStage, content)
+      : {};
+  const validationWarning =
+    inheritedValidationWarning ?? validationFields[VALIDATION_WARNING_FIELD];
+
   // 4. Atomic audit emission — audit-first, then state write.
   // If audit fails, throw before touching state (writeStateFile below is skipped).
   try {
@@ -2159,7 +2171,7 @@ function handleAdvance(args: string[]): void {
     if (!alreadyMarkedCompleted || !stageCompletedAlreadyAudited) {
       emitAudit(pd, "STAGE_COMPLETED", {
         Stage: completedSlug,
-        ...stageValidationAuditFields(pd, completedStage, content),
+        ...validationFields,
         Details: `Stage ${completedStage.name} completed`,
         ...usageFields,
       });
@@ -2199,6 +2211,7 @@ function handleAdvance(args: string[]): void {
       already_completed: alreadyMarkedCompleted,
       memory_path: relativeMemoryPath(nextStage.phase, nextStage.slug, relativeRecordDir(pd)),
       timestamp,
+      ...(validationWarning ? { warnings: [validationWarning] } : {}),
     })
   );
   });
@@ -2300,7 +2313,10 @@ function handleFinalize(args: string[]): void {
   });
 }
 
-function handleCompleteWorkflow(args: string[]): void {
+function handleCompleteWorkflow(
+  args: string[],
+  inheritedValidationWarning?: string,
+): void {
   // Keep <completed-slug> positional and distinct from the --reason value.
   // --reason takes a value, so its argument is excluded from positionals too.
   const reasonIdx = args.indexOf("--reason");
@@ -2385,11 +2401,17 @@ function handleCompleteWorkflow(args: string[]): void {
       `State file has invalid Scope "${scope}". Valid scopes: ${[...validScopes()].join(", ")}.`
     );
   }
+  const validationFields =
+    !alreadyMarkedCompleted || !stageCompletedAlreadyAudited
+      ? stageValidationAuditFields(pd, completedStage, content)
+      : {};
+  const validationWarning =
+    inheritedValidationWarning ?? validationFields[VALIDATION_WARNING_FIELD];
   try {
     if (!alreadyMarkedCompleted || !stageCompletedAlreadyAudited) {
       emitAudit(pd, "STAGE_COMPLETED", {
         Stage: completedSlug,
-        ...stageValidationAuditFields(pd, completedStage, content),
+        ...validationFields,
         Details: `Final stage ${completedStage.name} completed`,
         ...stageUsageFields,
       });
@@ -2429,6 +2451,7 @@ function handleCompleteWorkflow(args: string[]): void {
       status: "Completed",
       reason: reason || null,
       timestamp,
+      ...(validationWarning ? { warnings: [validationWarning] } : {}),
     })
   );
   });
@@ -2680,6 +2703,12 @@ function handleApprove(args: string[]): void {
   content = setField(content, "Completed", String(completedCount));
   content = setField(content, "Last Completed Stage", slug);
 
+  // Capture before the first audit append. The lifecycle-facing helper is
+  // fail-open: failures produce a receipt-less completion plus a persistent
+  // warning instead of stranding GATE_APPROVED without STAGE_COMPLETED.
+  const validationFields = stageValidationAuditFields(pd, stage, content);
+  const validationWarning = validationFields[VALIDATION_WARNING_FIELD];
+
   // Atomic audit emissions (audit-first). GATE_APPROVED records the human
   // decision; STAGE_COMPLETED records the state transition the approval
   // implies. Both emit here so the audit trail is correct even if the
@@ -2691,7 +2720,7 @@ function handleApprove(args: string[]): void {
 
     emitAudit(pd, "STAGE_COMPLETED", {
       Stage: slug,
-      ...stageValidationAuditFields(pd, stage, content),
+      ...validationFields,
       Details: `Stage ${stage.name} approved by gate`,
       ...usageFields,
     });
@@ -2725,12 +2754,12 @@ function handleApprove(args: string[]): void {
     // Delegate to handleAdvance. The slug is now [x], so handleAdvance takes
     // the alreadyMarkedCompleted path and skips re-emitting STAGE_COMPLETED.
     // Reentrant call — runs under the depth-2 lock without re-acquire.
-    handleAdvance([slug]);
+    handleAdvance([slug], validationWarning);
   } else {
     // Final stage — complete the workflow. handleCompleteWorkflow re-sets
     // the checkbox to [x] (idempotent) and emits PHASE_COMPLETED +
     // PHASE_VERIFIED + WORKFLOW_COMPLETED. Reentrant call — see above.
-    handleCompleteWorkflow([slug]);
+    handleCompleteWorkflow([slug], validationWarning);
   }
   });
 }

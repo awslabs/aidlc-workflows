@@ -95,6 +95,7 @@ import {
   type RunStageDirective,
   type RunStageWave,
   type RunStageWaveEntry,
+  type StageValidityAdvisory,
   validateDirective,
 } from "./aidlc-directive.ts";
 import {
@@ -119,6 +120,7 @@ import {
   inspectCopilotContinuation,
   isPerUnitStage,
   isRegularFile,
+  KNOWN_CODEKB_STAGES,
   listIntents,
   loadScopeMetadata,
   loadScopeMetadataAll,
@@ -173,7 +175,7 @@ import {
 // and utility never imports this module - no cycle).
 import { inferScopeFromText } from "./aidlc-utility.ts";
 import { resolveHarnessPath, resolveHarnessRoot } from "./aidlc-runtime-paths.ts";
-import { artifactFileName } from "./aidlc-artifact-resolution.ts";
+import { appendAuditEntries } from "./aidlc-audit.ts";
 import { inspectStageValidity } from "./aidlc-validity.ts";
 // AIDLC_STAGE_VALIDITY_PROJECTION_V2
 import {
@@ -222,6 +224,7 @@ interface PreparedEmission {
 }
 
 let engineInvocation: { attemptId?: string; commandKind: "next" | "continue" | "report" | "park"; commandSha256: string } | null = null;
+let activeStageValidityAdvisory: StageValidityAdvisory | undefined;
 
 // Print exactly one directive as JSON to stdout, after validating it against
 // the frozen contract. A malformed directive is a hard error (clean
@@ -230,10 +233,16 @@ let engineInvocation: { attemptId?: string; commandKind: "next" | "continue" | "
 function prepareEmission(directive: Directive): PreparedEmission {
   const route =
     directive.kind === "run-stage" ? runStageRoutes.get(directive) : undefined;
-  const transported =
+  let transported =
     directive.kind === "run-stage" && route
       ? transportRunStage(directive, route)
       : directive;
+  if (activeStageValidityAdvisory) {
+    transported = {
+      ...transported,
+      stage_validity: activeStageValidityAdvisory,
+    } as Directive;
+  }
   // Per-unit Construction beats: `unit` is attached by callers after the
   // run-stage is built, so the builder's stage-entry line is wrong here (the
   // stage was entered on the first unit, not on this one). Every path that sets
@@ -1442,8 +1451,6 @@ function isPerUnit(node: GraphStage): boolean {
 // stage compile. reverse-engineering is the sole member today (it builds the
 // brownfield code understanding the whole space reuses); a future codekb stage
 // joins by adding its slug here, no schema change.
-const KNOWN_CODEKB_STAGES: ReadonlySet<string> = new Set(["reverse-engineering"]);
-
 // True when the node's artifacts belong in the space-level codekb (see set
 // above). Pure predicate over the slug — the per-repo/per-space placement is
 // resolved by the CodekbCtx threaded into resolveArtifactPath.
@@ -1505,13 +1512,13 @@ function resolveArtifactPath(
   // stem, mirroring relativeCodekbDir. Guarded on the ctx being present so a
   // ctx-less caller (defaults) falls through to the record-dir arms below.
   if (isCodekb(owner) && codekbCtx) {
-    return `${relativeCodekbDir(codekbCtx.projectDir, codekbCtx.codekbRepo, codekbCtx.space)}/${artifactFileName(name)}`;
+    return `${relativeCodekbDir(codekbCtx.projectDir, codekbCtx.codekbRepo, codekbCtx.space)}/${filename}`;
   }
   const prefix = recordPrefix ?? relativeSpaceRecordPrefix();
   if (isPerUnit(owner)) {
-    return `${prefix}/construction/${unit}/${owner.slug}/${artifactFileName(name)}`;
+    return `${prefix}/construction/${unit}/${owner.slug}/${filename}`;
   }
-  return `${prefix}/${owner.phase}/${owner.slug}/${artifactFileName(name)}`;
+  return `${prefix}/${owner.phase}/${owner.slug}/${filename}`;
 }
 
 // Resolve a CONSUMED artifact's path. A consumed artifact lives under the stage
@@ -2487,6 +2494,7 @@ function effectivePlanAction(
 // transport may lazily mint its machine-local MAC key, but never mutates shared
 // workflow state.
 function handleNext(args: string[], projectDir: string | undefined): void {
+  activeStageValidityAdvisory = undefined;
   const flags = parseNextFlags(args);
 
   // Turn-shape marker: a `next` that ASKS FOR THE NEXT MOVE is engagement with
@@ -3109,31 +3117,54 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   }
 
   // A completed checkbox is historical execution state, not proof that the
-  // result still matches the artifacts it consumed. Project validity from the
-  // append-only completion evidence before normal routing. This is read-only.
+  // result still matches the artifacts captured at completion. Project
+  // validity before normal routing, but remain detection-only: the normal
+  // directive kind still routes and carries a machine-readable advisory.
   try {
     const validity = inspectStageValidity(pd, stateContent);
-    if (validity.issues.length > 0) {
+    if (
+      validity.issues.length > 0 ||
+      validity.untracked.length > 0 ||
+      validity.warnings.length > 0
+    ) {
       const direct = validity.issues
         .filter((issue) => issue.direct)
         .map((issue) => issue.stage);
       const downstream = validity.issues
         .filter((issue) => !issue.direct)
         .map((issue) => issue.stage);
-      const earliest = direct[0] ?? validity.issues[0].stage;
-      emit(errorDirective(
-        `Completed stage result(s) no longer match their validation basis. ` +
-          `Directly stale: ${direct.join(", ") || "none"}. ` +
-          `Downstream revalidation required: ${downstream.join(", ") || "none"}. ` +
-          `Re-enter the earliest affected stage with /aidlc --stage ${earliest}.`,
-      ));
-      return;
+      const earliest = direct[0] ?? validity.issues[0]?.stage ?? null;
+      const state = validity.warnings.length > 0
+        ? "unavailable"
+        : validity.issues.length > 0
+          ? "drifted"
+          : "untracked";
+      const warning = state === "drifted"
+        ? `Completed stage results have drifted; routing is continuing in advisory mode` +
+          (earliest ? `. Suggested redo: /aidlc --stage ${earliest}.` : ".")
+        : state === "unavailable"
+          ? `Stage-validity inspection is partly unavailable; routing is continuing in advisory mode. ${validity.warnings.join(" ")}`
+          : "Some completed stages have no validation receipt; routing is continuing in advisory mode.";
+      activeStageValidityAdvisory = {
+        state,
+        directly_stale: direct,
+        needs_revalidation: downstream,
+        untracked: validity.untracked,
+        earliest_affected_stage: earliest,
+        warning,
+      };
     }
   } catch (error) {
-    emit(errorDirective(
-      `Stage-validity inspection failed: ${errorMessage(error)}`,
-    ));
-    return;
+    activeStageValidityAdvisory = {
+      state: "unavailable",
+      directly_stale: [],
+      needs_revalidation: [],
+      untracked: [],
+      earliest_affected_stage: null,
+      warning:
+        `Stage-validity inspection failed; routing is continuing in advisory mode: ` +
+        errorMessage(error),
+    };
   }
 
   // Branch 9c - freeform prose while a workflow is ACTIVE. Branch 8 gives
@@ -4744,42 +4775,20 @@ function spawnState(
   };
 }
 
-// Shell out to `aidlc-audit.ts append-batch <entries-json>`. The audit tool
-// validates every entry before touching disk, then writes all blocks under one
-// lock in one append. This is the audit-only path — it touches audit shards,
-// never `aidlc-state.md` — so a `--single` commit cannot reach the main pointer.
-function spawnAuditAppendBatch(
+// The synthetic single-stage owner uses the internal append route because
+// STAGE_COMPLETED is protected from public CLI emission. appendAuditEntries
+// validates the complete pair before touching disk, then writes both blocks
+// under one lock. This remains audit-only and cannot mutate the main pointer.
+function appendSingleStageAuditPair(
   projectDir: string,
   entries: Array<{ eventType: string; fields: Record<string, string> }>,
-): { exitCode: number; stdout: string; stderr: string } {
-  const auditTool = fileURLToPath(new URL("./aidlc-audit.ts", import.meta.url));
-  const command = IS_COMPILED
-    ? [
-        process.execPath,
-        "audit",
-        "append-batch",
-        JSON.stringify(entries),
-        "--project-dir",
-        projectDir,
-      ]
-    : [
-        process.execPath,
-        auditTool,
-        "append-batch",
-        JSON.stringify(entries),
-        "--project-dir",
-        projectDir,
-      ];
-  const result = Bun.spawnSync({
-    cmd: command,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  return {
-    exitCode: result.exitCode,
-    stdout: new TextDecoder().decode(result.stdout),
-    stderr: new TextDecoder().decode(result.stderr),
-  };
+): string | null {
+  try {
+    appendAuditEntries(entries, projectDir);
+    return null;
+  } catch (error) {
+    return errorMessage(error);
+  }
 }
 
 // Record the conductor's classified walking-skeleton stance (the classify
@@ -5154,7 +5163,7 @@ function handleSingleReport(
     emit(errorDirective(evidence.message));
     return;
   }
-  const pair = spawnAuditAppendBatch(pd, [
+  const pairError = appendSingleStageAuditPair(pd, [
     {
       eventType: "STAGE_STARTED",
       fields: {
@@ -5172,11 +5181,10 @@ function handleSingleReport(
       },
     },
   ]);
-  if (pair.exitCode !== 0) {
-    const detail = (pair.stderr || pair.stdout).trim();
+  if (pairError) {
     emit(errorDirective(
       `Failed to record single-stage lifecycle pair for "${node.slug}"` +
-        (detail ? `: ${detail}` : "."),
+        `: ${pairError}`,
     ));
     return;
   }

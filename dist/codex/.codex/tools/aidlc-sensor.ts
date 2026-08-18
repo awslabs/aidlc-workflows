@@ -51,6 +51,7 @@ import {
 	errorMessage,
 	isoTimestamp,
 	isPlainObject,
+	KNOWN_CODEKB_STAGES,
 	recordDir,
 	resolveProjectDir,
 	sensorsDir,
@@ -253,10 +254,6 @@ function handleDescribe(args: string[]): void {
 // full list threads unchanged. An orphan consume (no producer anywhere in
 // the graph) also threads unchanged — that is a graph defect the doctor
 // surfaces; hiding it here would mask it.
-
-const KNOWN_CODEKB_STAGES: ReadonlySet<string> = new Set([
-	"reverse-engineering",
-]);
 
 function artifactDirsForProducer(
 	pd: string,

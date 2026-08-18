@@ -1,4 +1,5 @@
 // covers: core/tools/aidlc-artifact-resolution.ts
+// covers: core/tools/aidlc-artifact-vocabulary.ts
 // covers: core/tools/aidlc-validity.ts
 import { afterEach, describe, expect, test } from "bun:test";
 import {
@@ -10,11 +11,12 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  artifactFileName,
   resolveArtifactInstances,
   type ArtifactRuntimeUnit,
 } from "../../core/tools/aidlc-artifact-resolution.ts";
+import { artifactFilename } from "../../core/tools/aidlc-artifact-vocabulary.ts";
 import { loadGraph } from "../../core/tools/aidlc-graph.ts";
+import { producesArtifactFile } from "../../core/tools/aidlc-lib.ts";
 import {
   captureStageValidationBasis,
   diffStageValidationBasis,
@@ -23,6 +25,8 @@ import {
   parseStageValidationBasis,
   propagateStageInvalidation,
   stageValidationAuditFields,
+  VALIDATION_BASIS_FIELD,
+  VALIDATION_WARNING_FIELD,
   type ArtifactBasis,
   type StageValidationBasis,
   type StageValidityNode,
@@ -364,9 +368,9 @@ describe("v2 stage-graph compatibility", () => {
   });
 
   test("maps collision-safe canonical names to their physical filename", () => {
-    expect(artifactFileName("build-test-results")).toBe("test-results.md");
-    expect(artifactFileName("load-test-results")).toBe("test-results.md");
-    expect(artifactFileName("requirements")).toBe("requirements.md");
+    expect(artifactFilename("build-test-results")).toBe("test-results.md");
+    expect(artifactFilename("load-test-results")).toBe("test-results.md");
+    expect(artifactFilename("requirements")).toBe("requirements.md");
   });
 
   test("resolves build-test-results under test-results.md", () => {
@@ -383,6 +387,27 @@ describe("v2 stage-graph compatibility", () => {
     expect(instances).toHaveLength(1);
     expect(instances[0].relativePath.endsWith("/build-and-test/test-results.md"))
       .toBe(true);
+  });
+
+  test("uses the canonical alias in review-artifact matching", () => {
+    const stage = {
+      slug: "build-and-test",
+      produces: ["build-test-results"],
+    };
+    expect(
+      producesArtifactFile(
+        stage,
+        "aidlc/construction/build-and-test/test-results.md",
+        new Set(),
+      ),
+    ).toBe(true);
+    expect(
+      producesArtifactFile(
+        stage,
+        "aidlc/construction/build-and-test/build-test-results.md",
+        new Set(),
+      ),
+    ).toBe(false);
   });
 
   test("expands per-unit artifacts from runtime units and produces_kinds", () => {
@@ -691,6 +716,88 @@ describe("schema-2 validation basis", () => {
       .toBe(true);
   });
 
+  test("skips a legal optional consume with no producer", () => {
+    const projectDir = tempProject();
+    const state = stateContent(["plugin-consumer"]);
+    initializeProject(projectDir, state);
+    const consumer: StageValidityNode = {
+      slug: "plugin-consumer",
+      phase: "inception",
+      consumes: [{ artifact: "optional-plugin-output", required: false }],
+      produces: [],
+    };
+
+    expect(
+      captureStageValidationBasis(
+        projectDir,
+        consumer,
+        state,
+        [consumer],
+      ).inputs,
+    ).toEqual([]);
+  });
+
+  test("keeps required missing and ambiguous optional producers strict", () => {
+    const projectDir = tempProject();
+    const state = stateContent(["consumer"]);
+    initializeProject(projectDir, state);
+    const requiredConsumer: StageValidityNode = {
+      slug: "consumer",
+      phase: "inception",
+      consumes: [{ artifact: "missing", required: true }],
+      produces: [],
+    };
+    expect(() =>
+      captureStageValidationBasis(
+        projectDir,
+        requiredConsumer,
+        state,
+        [requiredConsumer],
+      ),
+    ).toThrow("found 0");
+
+    const optionalConsumer: StageValidityNode = {
+      ...requiredConsumer,
+      consumes: [{ artifact: "duplicate", required: false }],
+    };
+    const producers: StageValidityNode[] = [
+      { slug: "one", phase: "inception", produces: ["duplicate"] },
+      { slug: "two", phase: "inception", produces: ["duplicate"] },
+      optionalConsumer,
+    ];
+    expect(() =>
+      captureStageValidationBasis(
+        projectDir,
+        optionalConsumer,
+        state,
+        producers,
+      ),
+    ).toThrow("found 2");
+  });
+
+  test("lifecycle capture fails open with a persistent warning", () => {
+    const projectDir = tempProject();
+    const state = stateContent(["consumer"]);
+    initializeProject(projectDir, state);
+    const consumer: StageValidityNode = {
+      slug: "consumer",
+      phase: "inception",
+      consumes: [{ artifact: "missing", required: true }],
+      produces: [],
+    };
+
+    const fields = stageValidationAuditFields(
+      projectDir,
+      consumer,
+      state,
+      [consumer],
+    );
+    expect(fields[VALIDATION_BASIS_FIELD]).toBeUndefined();
+    expect(fields[VALIDATION_WARNING_FIELD]).toContain(
+      "Validity receipt omitted",
+    );
+  });
+
   test("a later STAGE_STARTED clears current tracking without erasing old dependency evidence", () => {
     const tracked = JSON.stringify(basis());
     const audit = [
@@ -833,6 +940,7 @@ describe("read-only inspection", () => {
       ["build-and-test", "needs-revalidation"],
     ]);
     expect(result.untracked).toEqual([]);
+    expect(result.warnings).toEqual([]);
   });
 
   test("schema-1 and receipt-less completions remain untracked and fail open", () => {
@@ -854,5 +962,33 @@ describe("read-only inspection", () => {
     );
     expect(result.issues).toEqual([]);
     expect(result.untracked).toEqual(["requirements-analysis"]);
+    expect(result.warnings).toEqual([]);
+  });
+
+  test("an unavailable recapture is untracked and non-blocking", () => {
+    const tracked = JSON.stringify(basis());
+    const audit = [
+      auditEvent("WORKFLOW_STARTED", "2026-08-05T00:00:00.000Z"),
+      auditEvent("STAGE_COMPLETED", "2026-08-05T00:00:01.000Z", {
+        Stage: "requirements-analysis",
+        [VALIDATION_BASIS_FIELD]: tracked,
+      }),
+    ].join("\n---\n");
+    const result = inspectStageValidity(
+      tempProject(),
+      stateContent(["requirements-analysis"]),
+      {
+        stages: graph,
+        audit,
+        currentBasis: () => {
+          throw new Error("fixture recapture failure");
+        },
+      },
+    );
+    expect(result.issues).toEqual([]);
+    expect(result.untracked).toEqual(["requirements-analysis"]);
+    expect(result.warnings).toEqual([
+      expect.stringContaining("fixture recapture failure"),
+    ]);
   });
 });

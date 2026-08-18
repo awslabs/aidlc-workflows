@@ -21,6 +21,7 @@ import {
  * add a second mutable stale-state file that can drift independently.
  */
 export const VALIDATION_BASIS_FIELD = "Validation Basis";
+export const VALIDATION_WARNING_FIELD = "Validation Warning";
 const VALIDATION_BASIS_SCHEMA = 2 as const;
 
 export type StageValidityStatus = "stale" | "needs-revalidation";
@@ -64,6 +65,8 @@ export interface StageValidityInspection {
    * workflows and the earlier schema-1 draft fail open until re-completion.
    */
   untracked: string[];
+  /** Non-blocking diagnostics for receipts that could not be re-inspected. */
+  warnings: string[];
 }
 
 /** Structural subset shared by StageEntry, GraphStage, and focused fixtures. */
@@ -279,6 +282,11 @@ function uniqueProducer(
   return owners[0];
 }
 
+function validationErrorMessage(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  return raw.replace(/[\r\n\u2028\u2029]+/g, " ").trim();
+}
+
 function projectTypeFrom(
   stateContent: string,
 ): "brownfield" | "greenfield" | null {
@@ -306,6 +314,10 @@ function captureInputBasis(
   for (const consume of stage.consumes ?? []) {
     if (!consumeIsApplicable(consume.conditional_on, projectType)) continue;
     const required = consume.required !== false;
+    const owners = producers.get(consume.artifact) ?? [];
+    // Plugin contributions may legally declare an optional consume without a
+    // producer. With no producer there is no observed edge to record.
+    if (!required && owners.length === 0) continue;
     const owner = uniqueProducer(consume.artifact, producers);
     const instances = resolveArtifactInstances(
       projectDir,
@@ -383,17 +395,25 @@ export function stageValidationAuditFields(
   stages: readonly StageValidityNode[] = loadGraph(),
   options: CaptureStageValidationOptions = {},
 ): Record<string, string> {
-  return {
-    [VALIDATION_BASIS_FIELD]: canonicalJson(
-      captureStageValidationBasis(
-        projectDir,
-        stage,
-        stateContent,
-        stages,
-        options,
+  try {
+    return {
+      [VALIDATION_BASIS_FIELD]: canonicalJson(
+        captureStageValidationBasis(
+          projectDir,
+          stage,
+          stateContent,
+          stages,
+          options,
+        ),
       ),
-    ),
-  };
+    };
+  } catch (error) {
+    return {
+      [VALIDATION_WARNING_FIELD]:
+        `Validity receipt omitted for stage "${stage.slug}": ` +
+        validationErrorMessage(error),
+    };
+  }
 }
 
 function isArtifactBasis(value: unknown): value is ArtifactBasis {
@@ -697,13 +717,25 @@ export function inspectStageValidity(
   const audit = options.audit ?? readAllAuditShards(projectDir);
   const receipts = completionReceiptsFromAudit(audit);
   const directReasons = new Map<string, string[]>();
+  const warnings: string[] = [];
+  const unavailable = new Set<string>();
 
   for (const [slug, previous] of receipts.latestKnown) {
     const stage = stageBySlug.get(slug);
     if (!stage) continue;
-    const current = options.currentBasis
-      ? options.currentBasis(stage, stages)
-      : captureStageValidationBasis(projectDir, stage, stateContent, stages);
+    let current: StageValidationBasis;
+    try {
+      current = options.currentBasis
+        ? options.currentBasis(stage, stages)
+        : captureStageValidationBasis(projectDir, stage, stateContent, stages);
+    } catch (error) {
+      unavailable.add(slug);
+      warnings.push(
+        `Validity inspection unavailable for stage "${slug}": ` +
+          validationErrorMessage(error),
+      );
+      continue;
+    }
     const changes = diffStageValidationBasis(previous, current);
     if (changes.length > 0) directReasons.set(slug, changes);
   }
@@ -717,9 +749,10 @@ export function inspectStageValidity(
   const untracked = stages
     .filter(
       (stage) =>
-        completedSlugs.has(stage.slug) && !receipts.current.has(stage.slug),
+        completedSlugs.has(stage.slug) &&
+        (!receipts.current.has(stage.slug) || unavailable.has(stage.slug)),
     )
     .map((stage) => stage.slug);
 
-  return { issues, untracked };
+  return { issues, untracked, warnings };
 }

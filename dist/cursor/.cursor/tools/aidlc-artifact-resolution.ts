@@ -1,6 +1,10 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import {
+  artifactFilename,
+  KNOWN_CODEKB_STAGES,
+} from "./aidlc-artifact-vocabulary.ts";
+import {
   codekbDir,
   codekbRepoName,
   filterProducesByKind,
@@ -10,22 +14,6 @@ import {
   resolveBoltDag,
   toPosix,
 } from "./aidlc-lib.js";
-
-/**
- * Canonical artifact names usually map to `<name>.md`, but the v2 vocabulary
- * deliberately separates wire identifiers from filenames at collisions.
- * Keep the exceptional mapping in one shared resolver so orchestration,
- * completion guards, and validity receipts cannot drift independently.
- */
-const ARTIFACT_FILENAMES: Readonly<Record<string, string>> = {
-  "build-test-results": "test-results.md",
-  "load-test-results": "test-results.md",
-  "traceability": "traceability.json",
-};
-
-const KNOWN_CODEKB_STAGES: ReadonlySet<string> = new Set([
-  "reverse-engineering",
-]);
 
 export interface ArtifactOwnerNode {
   slug: string;
@@ -49,14 +37,12 @@ export interface ArtifactInstance {
 }
 
 export interface ArtifactResolutionOptions {
+  /** Explicit intent record for targeted read-only queries such as --status. */
+  recordPath?: string;
   /** Deterministic test/embedding seam. Production callers use resolveBoltDag. */
   runtimeUnits?: readonly ArtifactRuntimeUnit[];
   /** Deterministic test/embedding seam for multi-repo codekb placement. */
   codekbRepos?: readonly string[];
-}
-
-export function artifactFileName(artifact: string): string {
-  return ARTIFACT_FILENAMES[artifact] ?? `${artifact}.md`;
 }
 
 export function isCodekbArtifactOwner(owner: { slug: string }): boolean {
@@ -187,7 +173,7 @@ export function resolveArtifactInstances(
   owner: ArtifactOwnerNode,
   options: ArtifactResolutionOptions = {},
 ): ArtifactInstance[] {
-  const filename = artifactFileName(artifact);
+  const filename = artifactFilename(artifact);
 
   if (isCodekbArtifactOwner(owner)) {
     return codekbReposFor(projectDir, options.codekbRepos).map((repo) => {
@@ -203,7 +189,7 @@ export function resolveArtifactInstances(
     });
   }
 
-  const record = recordDir(projectDir);
+  const record = options.recordPath ?? recordDir(projectDir);
   if (record === null) {
     throw new Error(
       `Cannot resolve artifact "${artifact}" for stage "${owner.slug}": ` +

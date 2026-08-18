@@ -680,6 +680,52 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     );
   });
 
+  test("stage_validity is a valid universal advisory field", () => {
+    const stageValidity = {
+      state: "drifted",
+      directly_stale: ["requirements-analysis"],
+      needs_revalidation: ["code-generation"],
+      untracked: [],
+      earliest_affected_stage: "requirements-analysis",
+      warning: "Routing is continuing in advisory mode.",
+    };
+    for (const directive of [
+      loadSteering(),
+      runStage(),
+      dispatchSubagent(),
+      invokeSwarm(),
+      presentGate(),
+      ask(),
+      print(),
+      error(),
+      done(),
+      parked(),
+    ]) {
+      expect(validateDirective({ ...directive, stage_validity: stageValidity }).valid)
+        .toBe(true);
+    }
+  });
+
+  test("stage_validity rejects malformed machine fields", () => {
+    const e = errs({
+      ...runStage(),
+      stage_validity: {
+        state: "blocking",
+        directly_stale: "requirements-analysis",
+        needs_revalidation: [],
+        untracked: [],
+        earliest_affected_stage: 42,
+        warning: false,
+        extra: true,
+      },
+    });
+    expect(e).toContain("stage_validity unknown key: extra");
+    expect(e).toContain("stage_validity.state must be drifted");
+    expect(e).toContain("stage_validity.directly_stale must be string array");
+    expect(e).toContain("stage_validity.earliest_affected_stage must be string or null");
+    expect(e).toContain("stage_validity.warning must be string");
+  });
+
   // ============================================================
   // Shape failures — non-object inputs (3 assertions)
   // .sh lines 186-188

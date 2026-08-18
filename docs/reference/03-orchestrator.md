@@ -840,7 +840,7 @@ Construction and Operation stages MUST use standardized 2-option completion mess
 - [Knowledge System](10-knowledge-system.md) -- 6-step knowledge loading order
 - [Diagrams](diagrams.md) -- all Mermaid diagrams consolidated
 
-## Completed-stage validity barrier
+## Completed-stage validity advisory
 
 Immediately before normal happy-path routing, `next` performs a read-only
 validity inspection. Runtime artifact instances are resolved through the active
@@ -850,13 +850,18 @@ compared through compact stage-level structure/content fingerprints.
 Direct mismatches project `stale`. Propagation follows artifact dependencies
 observed in completed consumer receipts, so absent optional inputs do not cause
 false invalidation. If any completed result is stale or needs revalidation, the
-engine emits one error directive and does not route a later stage.
+engine keeps the normal directive kind and attaches a machine-readable
+`stage_validity` advisory. The conductor surfaces its warning, then continues
+routing. Receipt-less or inspection-unavailable stages are reported as
+untracked/unavailable rather than blocking.
 
-Recovery uses the existing explicit jump path:
+The suggested recovery uses the existing explicit jump path:
 
 ```text
 /aidlc --stage <earliest-affected-stage>
 ```
 
 A successful re-completion writes a fresh receipt. Existing workflows and prior
-Draft receipt formats remain fail-open until their stages complete again.
+Draft receipt formats remain fail-open until their stages complete again. Full
+inspection runs on `next` and explicit `--status`, never on each statusline
+render.

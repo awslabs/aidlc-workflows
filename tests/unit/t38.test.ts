@@ -209,4 +209,14 @@ describe("t38 aidlc-utility status — gate awareness (migrated from t38-utility
     expect(r.out).toContain("Revising Feasibility & Constraints");
     expect(r.out).not.toContain("(revision");
   });
+
+  test("6: --status surfaces untracked completions without failing", () => {
+    const p = seededProj();
+    const r = status(p);
+    expect(r.status).toBe(0);
+    expect(r.out).toContain(
+      "Validity:       Untracked completions — advisory; routing continues",
+    );
+    expect(r.out).toContain("Untracked:");
+  });
 });

@@ -315,7 +315,8 @@ export interface AuditEntryInput {
 }
 
 // Authority-bearing events: rows the engine's guards read as authorization
-// evidence — human presence (humanActedSinceGate), gate resolutions, interview
+// evidence — completed-stage receipts (validity routing), human presence
+// (humanActedSinceGate), gate resolutions, interview
 // answers (one-answer-per-human-turn), reviewer receipts
 // (verifyReviewerPrecondition), swarm attempt/convergence (the finalize and
 // artifact-guard boundaries), and the autonomy grant. Each has exactly one owning emitter that
@@ -326,6 +327,7 @@ export interface AuditEntryInput {
 // the owning emitters set AIDLC_ALLOW_DIRECT_AUDIT_EVENTS=1 (the same escape
 // idiom as AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS in aidlc-state.ts).
 export const CLI_PROTECTED_EVENT_TYPES = new Set([
+  "STAGE_COMPLETED",
   "HUMAN_TURN",
   "GATE_APPROVED",
   "GATE_REJECTED",
@@ -585,8 +587,9 @@ function handleAppendBatch(rawEntries: string, projectDir: string): void {
   });
   // Same ownership floor as `append`: a batch must not smuggle an
   // authority-bearing receipt among diagnostic rows. The engine's own batch
-  // caller (handleSingleReport's synthetic STAGE_STARTED/STAGE_COMPLETED pair)
-  // emits no protected types, so the single-stage path is unaffected.
+  // callers must not smuggle a protected receipt among diagnostic rows. The
+  // synthetic single-stage owner uses appendAuditEntries directly instead of
+  // crossing this public CLI boundary.
   for (const entry of entries) {
     if (CLI_PROTECTED_EVENT_TYPES.has(entry.eventType) && !directAuditEventsAllowed()) {
       refuseProtectedEvent(entry.eventType);

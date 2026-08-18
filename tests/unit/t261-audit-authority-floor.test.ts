@@ -52,7 +52,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -149,6 +149,7 @@ afterEach(() => {
 
 describe("t261 public audit CLI refuses authority-bearing receipts", () => {
   const PROTECTED = [
+    "STAGE_COMPLETED",
     "HUMAN_TURN",
     "GATE_APPROVED",
     "GATE_REJECTED",
@@ -173,6 +174,7 @@ describe("t261 public audit CLI refuses authority-bearing receipts", () => {
       expect(r.out).toContain(event);
     }
     // nothing landed on disk
+    expect(readAllAuditShards(proj)).not.toContain("STAGE_COMPLETED");
     expect(readAllAuditShards(proj)).not.toContain("HUMAN_TURN");
   });
 
@@ -180,13 +182,46 @@ describe("t261 public audit CLI refuses authority-bearing receipts", () => {
     proj = createTestProject();
     const entries = JSON.stringify([
       { eventType: "ERROR_LOGGED", fields: { Details: "x" } },
-      { eventType: "QUESTION_ANSWERED", fields: { Stage: "feasibility", Details: "y" } },
+      { eventType: "STAGE_COMPLETED", fields: { Stage: "feasibility", Details: "y" } },
     ]);
     const r = guarded(AUDIT, ["append-batch", entries], proj);
     expect(r.rc).not.toBe(0);
-    expect(r.out).toContain("QUESTION_ANSWERED");
+    expect(r.out).toContain("STAGE_COMPLETED");
     // the batch is all-or-nothing: the harmless entry must not have committed
     expect(readAllAuditShards(proj)).not.toContain("ERROR_LOGGED");
+    expect(readAllAuditShards(proj)).not.toContain("STAGE_COMPLETED");
+  });
+
+  test("receipt capture failure completes untracked with a visible warning", () => {
+    proj = autonomousConstructionProject();
+    const record = dirname(seededStateFile(proj));
+    const dagDir = join(record, "inception", "units-generation");
+    mkdirSync(dagDir, { recursive: true });
+    writeFileSync(
+      join(dagDir, "unit-of-work-dependency.md"),
+      "```yaml\nunits:\n  - name: api\n    kind: invalid-kind\n    depends_on: []\n```\n",
+      "utf-8",
+    );
+    const direct = {
+      AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+      AIDLC_SKIP_ARTIFACT_GUARD: "1",
+    };
+    expect(
+      guarded(STATE, ["gate-start", "build-and-test"], proj, direct).rc,
+    ).toBe(0);
+    const approved = guarded(
+      STATE,
+      ["approve", "build-and-test", "--user-input", "Approve"],
+      proj,
+      direct,
+    );
+    expect(approved.rc, approved.out).toBe(0);
+    expect(approved.out).toContain("Validity receipt omitted");
+    const audit = readAllAuditShards(proj);
+    expect(audit).toContain("**Event**: GATE_APPROVED");
+    expect(audit).toContain("**Event**: STAGE_COMPLETED");
+    expect(audit).toContain("**Validation Warning**:");
+    expect(audit).not.toContain("**Validation Basis**:");
   });
 
   test("append-raw refuses a body carrying a taxonomy **Event**: line", () => {

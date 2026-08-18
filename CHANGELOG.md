@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.16] - 2026-08-18
+
+Completed-stage artifact drift is now detected through optional audit receipts and surfaced as an advisory without changing workflow routing. Existing workflows require no migration: receipt-less completions remain untracked and fail open, while stages become tracked on their next normal completion. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* `next` keeps its normal directive kind and adds a machine-readable `stage_validity` advisory for drifted, downstream-revalidation, untracked, or unavailable results; `/aidlc --status` renders the same diagnosis on demand without adding work to the statusline.
+* Completion tools capture report-time schema-2 structure/content fingerprints for resolved artifact instances. Capture failures still complete the stage, record a visible `Validation Warning`, and leave that completion untracked.
+* Artifact filenames and CodeKB ownership now come from one shared vocabulary, including `build-test-results` and `load-test-results` resolving to `test-results.md` and `traceability` resolving to `traceability.json`.
+* Public audit append commands refuse `STAGE_COMPLETED`; the owning single-stage report path retains its internal atomic lifecycle pair.
+
 ## [2.6.14] - 2026-08-17
 
 New structured audit blocks no longer carry duplicate `**Timestamp**:` lines. `renderAuditBlock` now exclusively owns the `Timestamp` and `Event` fields, while `park`, `unpark`, and the `practices-promote` write-failure path no longer pass redundant timestamps. **Upgrade:** re-copy your `dist/<harness>/` shell into the project. Existing shards remain byte-unchanged: block-aware readers need no migration, while flat readers must split on `---` and use the first emitter-owned timestamp in each block (or deduplicate historical timestamp fields).

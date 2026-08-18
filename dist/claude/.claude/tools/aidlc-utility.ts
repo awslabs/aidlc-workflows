@@ -123,6 +123,10 @@ import {
   CURRENT_STATE_VERSION,
 } from "./aidlc-lib.ts";
 import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
+import {
+  captureStageValidationBasis,
+  inspectStageValidity,
+} from "./aidlc-validity.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 import {
   compiledExecutable,
@@ -1159,6 +1163,48 @@ To get started:
     phaseProgress += `  ${(phaseLabels[p] || p).padEnd(16)} ${bar} ${done}/${phaseCheckboxes.length}\n`;
   }
 
+  let validityOutput = "Validity:       Current\n";
+  try {
+    const validity = inspectStageValidity(projectDir, content, {
+      stages: graph,
+      audit: readAllAuditShards(projectDir, flags.intent, flags.space),
+      currentBasis: (stage, stages) =>
+        captureStageValidationBasis(projectDir, stage, content, stages, {
+          resolution: { recordPath: dirname(sp) },
+        }),
+    });
+    const directlyStale = validity.issues
+      .filter((issue) => issue.direct)
+      .map((issue) => issue.stage);
+    const needsRevalidation = validity.issues
+      .filter((issue) => !issue.direct)
+      .map((issue) => issue.stage);
+    const earliest = directlyStale[0] ?? validity.issues[0]?.stage ?? null;
+    if (validity.warnings.length > 0) {
+      validityOutput =
+        "Validity:       Inspection partly unavailable — advisory; routing continues\n" +
+        `Directly stale: ${directlyStale.join(", ") || "none"}\n` +
+        `Revalidate:     ${needsRevalidation.join(", ") || "none"}\n` +
+        `Untracked:      ${validity.untracked.join(", ") || "none"}\n` +
+        `Warnings:       ${validity.warnings.join(" ")}\n`;
+    } else if (validity.issues.length > 0) {
+      validityOutput =
+        "Validity:       Drift detected — advisory; routing continues\n" +
+        `Directly stale: ${directlyStale.join(", ") || "none"}\n` +
+        `Revalidate:     ${needsRevalidation.join(", ") || "none"}\n` +
+        `Suggested redo: ${earliest ? `/aidlc --stage ${earliest}` : "none"}\n` +
+        `Untracked:      ${validity.untracked.join(", ") || "none"}\n`;
+    } else if (validity.untracked.length > 0) {
+      validityOutput =
+        "Validity:       Untracked completions — advisory; routing continues\n" +
+        `Untracked:      ${validity.untracked.join(", ")}\n`;
+    }
+  } catch (error) {
+    validityOutput =
+      "Validity:       Inspection unavailable — advisory; routing continues\n" +
+      `Warnings:       ${errorMessage(error)}\n`;
+  }
+
   const output = `AI-DLC Workflow Status
 ==============================
 Project:        ${project}
@@ -1171,6 +1217,7 @@ Completion:     ${completed}/${total} stages (${pct}%)${skipped > 0 ? ` — ${sk
 
 Phase Progress:
 ${phaseProgress}
+${validityOutput}
 Last Completed: ${lastCompleted}
 Next Stage:     ${nextStage}
 `;
