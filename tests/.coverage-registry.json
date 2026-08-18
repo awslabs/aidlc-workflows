@@ -5908,6 +5908,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t300-learnings-cid-collision-followup.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t97.test.ts",
           "mechanism": "cli"
         }
@@ -5925,6 +5929,10 @@
         },
         {
           "file": "tests/unit/t199-learnings-memory-path.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t300-learnings-cid-collision-followup.test.ts",
           "mechanism": "cli"
         },
         {

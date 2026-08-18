@@ -111,6 +111,8 @@ function seedProject(root: string): void {
     join(root, "sel.json"),
     JSON.stringify({
       stage_slug: "user-stories",
+      space: "default",
+      intent: null,
       selections: [
         {
           candidate_id: "c1",
@@ -216,6 +218,6 @@ describe("t158 memory writer/reader round-trip (P6 closed the P5 seam)", () => {
     // resolve a real intent and cidMarker falls back to its documented
     // "unscoped" sentinel (#735's fix).
     const teamMd = readFileSync(join(memoryDirFor(root), "team.md"), "utf-8");
-    expect(teamMd).toContain("cid:unscoped:user-stories:c1");
+    expect(teamMd).toMatch(/cid:unscoped:user-stories:[0-9a-f]{8}/);
   });
 });

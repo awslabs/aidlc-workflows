@@ -135,6 +135,8 @@ function seedProject(root: string): void {
     join(root, "sel.json"),
     JSON.stringify({
       stage_slug: "user-stories",
+      space: "default",
+      intent: null,
       selections: [
         {
           candidate_id: "c9",

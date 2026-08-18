@@ -318,7 +318,11 @@ step between them:
 
 The selections-file is the replay artefact: a crashed persist replays the
 same JSON without re-prompting the human (content-presence idempotency via a
-`<!-- cid:<slug>:<id> -->` marker per written line).
+`<!-- cid:<intent-slug>:<slug>:<content-hash> -->` marker per written line —
+a hash of the learning's own text, not its positional candidate id). The
+selections-file also carries `space`/`intent`, bound once when the
+candidates were surfaced; `persist` uses those, never re-resolving the live
+active-intent cursor itself.
 
 ---
 
