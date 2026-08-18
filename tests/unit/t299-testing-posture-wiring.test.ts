@@ -1,6 +1,6 @@
 // covers: file:tools/aidlc-testing-posture.ts, file:aidlc-common/stages/construction/code-generation.md, file:aidlc-common/stages/inception/practices-discovery.md, file:aidlc-common/protocols/stage-protocol.md, file:agents/aidlc-developer-agent.md, file:memory/org.md
 //
-// t292 - TESTING POSTURE CONTRACT. Deterministic behavior tests for additive
+// t299 - TESTING POSTURE CONTRACT. Deterministic behavior tests for additive
 // posture resolution, methodology-specific plan profiles, strategy/scope
 // combination, approval fingerprinting, and the normal/swarm authored surfaces
 // that consume the contract.
@@ -75,7 +75,7 @@ function resolve(
   });
 }
 
-describe("t292 (1) additive methodology resolution", () => {
+describe("t299 (1) additive methodology resolution", () => {
   test("a project coverage note does not erase team TDD", () => {
     const contract = resolve({
       org: ORG,
@@ -154,7 +154,7 @@ describe("t292 (1) additive methodology resolution", () => {
   });
 });
 
-describe("t292 (2) methodology-specific plan profiles", () => {
+describe("t299 (2) methodology-specific plan profiles", () => {
   const profile = (
     methodology: TestingMethodology,
     ordering = "Preserve the custom sequence.",
@@ -221,7 +221,7 @@ describe("t292 (2) methodology-specific plan profiles", () => {
   });
 });
 
-describe("t292 (3) runner bootstrap and test obligations", () => {
+describe("t299 (3) runner bootstrap and test obligations", () => {
   test("greenfield runner setup precedes the first executable test step", () => {
     const profile = buildPlanProfile("tdd", "tests first", "greenfield");
     expect(profile.runner_ready_before_first_test).toBe(true);
@@ -271,7 +271,7 @@ describe("t292 (3) runner bootstrap and test obligations", () => {
   });
 });
 
-describe("t292 (4) structured contract and approval fingerprint", () => {
+describe("t299 (4) structured contract and approval fingerprint", () => {
   test("contract JSON round-trips and changes when an applicable note changes", () => {
     const first = resolve({
       org: ORG,
@@ -304,7 +304,7 @@ describe("t292 (4) structured contract and approval fingerprint", () => {
   });
 
   test("a memory change after approval invalidates the unit contract", () => {
-    const project = mkdtempSync(join(tmpdir(), "t292-contract-"));
+    const project = mkdtempSync(join(tmpdir(), "t299-contract-"));
     try {
       const memoryDir = join(project, "aidlc", "spaces", "default", "memory");
       const recordDir = join(
@@ -382,7 +382,7 @@ describe("t292 (4) structured contract and approval fingerprint", () => {
   });
 });
 
-describe("t292 (5) authored consumers use the same contract", () => {
+describe("t299 (5) authored consumers use the same contract", () => {
   test("Code Generation creates, fingerprints, and dispatches the contract", () => {
     const stage = read(STAGE_REL);
     expect(stage).toContain("aidlc-testing-posture.ts render");
