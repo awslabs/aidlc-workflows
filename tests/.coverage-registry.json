@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 596,
+    "total": 601,
     "enumeratedByClass": {
-      "function": 336,
+      "function": 341,
       "audit": 85,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 165,
+      "function": 166,
       "audit": 43,
       "scope": 11,
       "stage": 11,
@@ -1815,6 +1815,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:filteredRawIndexEntries",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:filterProducesByKind",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3512,6 +3519,20 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:reviewedSourceRef",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:reviewedSourceRefPrefix",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:REVIEWER_DISPATCH_TTL_MS",
       "minMechanism": "none",
       "coveredBy": [],
@@ -4016,6 +4037,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:UNBINDABLE_FINGERPRINT",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:UNIT_KINDS",
       "minMechanism": "none",
       "coveredBy": [],
@@ -4226,6 +4254,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t229-workspace-parser.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:workspaceSourceFingerprint",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t304-source-freshness-receipts.test.ts",
           "mechanism": "cli"
         }
       ],
