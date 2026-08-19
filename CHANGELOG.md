@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.61] - 2026-08-23
+
+Plugins can now extend `/aidlc --doctor` with selection-aware, fail-loud install checks while preserving advisory findings that do not block CI. **Upgrade:** re-copy `dist/<harness>/` for the updated `aidlc-utility.ts`, then refresh and re-compose each plugin's `dist/plugins/<name>/<harness>/` projection to install its doctor script.
+
+* Ship an optional `tools/<plugin>-doctor.ts` script; doctor runs it only when that installed plugin is enabled.
+* Emit `{"checks":[{"pass":boolean,"label":string,"fix"?:string,"severity"?:"error"|"advisory"}]}` on stdout. Broken, timed-out, or malformed scripts become bounded doctor failures instead of crashing the diagnostic.
+* Error-severity failures exit 1; advisory failures remain visible in live output and `--doctor --export` without changing the exit code.
+* `test-pro` now includes a deterministic, read-only reference doctor script that verifies its composed sensors, scope, and agent.
+
 ## [2.6.60] - 2026-08-23
 
 Kiro CLI and IDE agent Markdown no longer carries the unsupported Claude-only `disallowedTools` key; nested delegation remains blocked by Kiro's native agent tool configuration. **Upgrade:** refresh your `dist/kiro/` or `dist/kiro-ide/` shell, and re-run compose for installed Kiro plugins. An unchanged same-plugin persona is migrated automatically; if doctor reports an already-composed unsupported value, fix the plugin source, remove the named installed persona, and re-run compose.

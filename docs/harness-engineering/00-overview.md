@@ -188,8 +188,9 @@ Read it in order the first time:
    `core/` edits: the manifest contract, the hook adapter, and `emit.ts`.
 10. **[Authoring a Plugin](10-authoring-a-plugin.md)** — package a reusable,
     optional **AIDLC plugin** in `plugins/<name>/`: new stages/agents/scopes/
-    sensors + additive contributions to existing core stages, emitted as a real
-    host plugin per harness. Design in the Developer Reference's single chapter
+    sensors/doctor checks + additive contributions to existing core stages,
+    emitted as a real host plugin per harness. Design in the Developer
+    Reference's single chapter
     ([18 mechanism](../reference/18-plugin-mechanism.md)).
 
 ## Next

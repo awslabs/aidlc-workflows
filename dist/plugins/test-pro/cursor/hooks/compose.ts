@@ -597,6 +597,37 @@ function sensorManifestNamePrecheck(): CopyPrecheck {
   };
 }
 
+function doctorScriptOwnershipPrecheck(): CopyPrecheck {
+  const toolsRoot = join(PLUGIN_ROOT, "tools");
+  const targetRoot = join(HARNESS_DIR, "tools");
+  const foreignOwner = (relPosix: string): string | null => {
+    const match = basename(relPosix).match(/^(.+)-doctor\.ts$/);
+    return match && match[1] !== PLUGIN_NAME ? match[1] : null;
+  };
+  const drop = (relPosix: string, owner: string, landed: boolean): void => {
+    recordDrop(
+      `plugin "${PLUGIN_NAME}" doctor script "${relPosix}" names foreign plugin "${owner}"; doctor scripts must be named "${PLUGIN_NAME}-doctor.ts" so disabled plugins cannot install checks for another identity${landed ? " (the file is already installed; remove it and re-run compose)" : " - not copied"}`,
+      "advisory",
+    );
+  };
+  // Older compose versions may already have landed the foreign file. Audit that
+  // state up front because copyTreeNoClobber skips prechecks for existing paths.
+  for (const file of walk(toolsRoot).filter((p) => p.endsWith("-doctor.ts"))) {
+    const relPosix = relative(toolsRoot, file).replace(/\\/g, "/");
+    const owner = foreignOwner(relPosix);
+    if (owner && existsSync(join(targetRoot, relPosix))) {
+      drop(relPosix, owner, true);
+    }
+  }
+  return ({ rel }) => {
+    const relPosix = rel.replace(/\\/g, "/");
+    const owner = foreignOwner(relPosix);
+    if (!owner) return true;
+    drop(relPosix, owner, false);
+    return false;
+  };
+}
+
 function projectOpencodeAgentMemory(raw: string): string {
   return raw
     .replaceAll(".aidlc/rules/aidlc-org.md", "aidlc/spaces/default/memory/org.md")
@@ -1536,7 +1567,7 @@ try {
   }
   changed = copyTreeNoClobber(join(PLUGIN_ROOT, "knowledge"), join(HARNESS_DIR, "knowledge"), "knowledge") || changed;
   changed = copyTreeNoClobber(join(PLUGIN_ROOT, "sensors"), join(HARNESS_DIR, "sensors"), "sensor", sensorManifestNamePrecheck()) || changed;
-  changed = copyTreeNoClobber(join(PLUGIN_ROOT, "tools"), join(HARNESS_DIR, "tools"), "tool") || changed;
+  changed = copyTreeNoClobber(join(PLUGIN_ROOT, "tools"), join(HARNESS_DIR, "tools"), "tool", doctorScriptOwnershipPrecheck()) || changed;
 
   // 2. Merge contributions into stage SOURCE (structural + prose fragments).
   // Probe ONCE whether the installed engine accepts required_sections — writing

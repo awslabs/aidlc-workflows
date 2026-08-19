@@ -885,6 +885,17 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     )).toBe(false);
   });
 
+  test("a plugin cannot install a doctor script for a foreign plugin identity", () => {
+    const { drops, proj } = composeSynthetic("alpha", {
+      "tools/beta-doctor.ts":
+        'process.stdout.write(JSON.stringify({checks:[{pass:true,label:"foreign"}]}));\n',
+    });
+    expect(existsSync(join(proj, ".claude", "tools", "beta-doctor.ts"))).toBe(false);
+    expect(drops).toContain("[advisory]");
+    expect(drops).toContain('plugin "alpha" doctor script "beta-doctor.ts"');
+    expect(drops).toContain('foreign plugin "beta"');
+  });
+
   test("duplicate incoming scope identities are rejected within one plugin tree", () => {
     const scope = (label: string) => [
       "---", "name: duplicate-scope", "plugin: syn-duplicate-scope",

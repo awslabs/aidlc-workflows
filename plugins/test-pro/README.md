@@ -16,9 +16,12 @@ test coverage** rather than the baseline unit/integration tests core ships. It:
   full-suite execution stage (operation) that runs the regression + edge + API
   suite against the deployed system;
 - **ships two advisory sensors** that read the machine-readable results and report
-  coverage-threshold and requirement-coverage gaps.
+  coverage-threshold and requirement-coverage gaps; and
+- **ships a read-only doctor check** that verifies its composed sensors, scope,
+  and support agent are installed.
 
-It reuses the framework's `aidlc-quality-agent` as the test lead — no new agent.
+It reuses the framework's `aidlc-quality-agent` as the test lead and ships
+`test-pro-metrics-agent` as a support persona.
 
 ## 2. How to use it
 
@@ -28,7 +31,7 @@ the way each host installs plugins (the hybrid model — see
 
 **Author / build** (from the repo):
 ```bash
-bun scripts/package.ts          # emits dist/plugins/test-pro/{claude,codex,kiro,kiro-ide}/
+bun scripts/package.ts          # emits all seven dist/plugins/test-pro/<harness>/ projections
 ```
 
 **Claude Code** (host store):
@@ -53,7 +56,7 @@ AIDLC_PLUGIN_ROOT=<…>/kiro AIDLC_PROJECT_DIR=<project> AIDLC_HARNESS_DIR=.kiro
 
 Then confirm and run:
 ```
-/aidlc --doctor                 # expect 34 stages, 0 failures
+/aidlc --doctor                 # expect 34 stages + Plugin check (test-pro): rows, 0 failures
 /aidlc --scope enterprise       # the test-pro stages route under enterprise/feature
 ```
 
@@ -92,6 +95,7 @@ plugins/test-pro/
   contributions/<phase>/<slug>.md    # the 4 stage MODIFICATIONS (contribution seam)
   sensors/aidlc-<id>.md              # 2 advisory sensor manifests
   tools/aidlc-sensor-*.ts            # the 2 sensor scripts (self-contained)
+  tools/test-pro-doctor.ts            # read-only composed-install checks
   tests/plugin.test.ts               # the plugin's own content validation
   README.md
 ```
