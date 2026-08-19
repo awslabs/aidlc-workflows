@@ -33,10 +33,14 @@
 //
 // IDEMPOTENCY DISCIPLINE (this tool WRITES audit rows): persist appends
 // RULE_LEARNED rows and learnings-file lines keyed by a
-// `cid:<intent-slug>:<slug>:<id>` marker (#735: the intent-slug component
-// prevents an unrelated intent's identically-numbered candidate from
-// colliding on the same workspace-level file; these fixtures resolve no
-// active intent, so "unscoped" is the expected sentinel value throughout).
+// `cid:<intent-slug>:<slug>:<hash>` marker (#735 + PR #747 review: the
+// intent-slug component prevents an unrelated intent's identically-numbered
+// candidate from colliding on the same workspace-level file; the hash
+// component is a content-addressed dedup key, not the positional candidate
+// id — see t306's own coverage of that finding. These fixtures explicitly
+// pin intent: null in the selections file rather than resolving no active
+// intent — persist never re-resolves the live cursor itself — so "unscoped"
+// is the expected sentinel value throughout).
 // The .sh proves persist-twice produces NO duplicate audit row and NO
 // duplicate file line (tests 23/25), and a belt-and-braces recovery (test 24:
 // audit row present, file line deleted -> re-write only). Those assertions are

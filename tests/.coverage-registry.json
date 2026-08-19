@@ -5908,7 +5908,7 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/unit/t300-learnings-cid-collision-followup.test.ts",
+          "file": "tests/unit/t306-learnings-cid-collision-followup.test.ts",
           "mechanism": "cli"
         },
         {
@@ -5932,7 +5932,7 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/unit/t300-learnings-cid-collision-followup.test.ts",
+          "file": "tests/unit/t306-learnings-cid-collision-followup.test.ts",
           "mechanism": "cli"
         },
         {

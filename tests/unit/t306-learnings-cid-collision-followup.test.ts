@@ -1,16 +1,19 @@
 // covers: subcommand:aidlc-learnings:persist, subcommand:aidlc-learnings:surface
 //
-// t300 - aidlc-learnings.ts persist's cid marker + provenance binding.
+// t306 - aidlc-learnings.ts persist's cid marker + provenance binding.
 // Regression test for the defect reported in #735 AND the follow-up
-// findings from PR #747's two review rounds (leandrodamascena,
-// apackeer). Supersedes t278-learnings-cid-intent-scope.test.ts (that slot
-// is now owned by merged PR #617's t278-per-unit-wave suite).
+// findings from PR #747's three review rounds (leandrodamascena,
+// apackeer x2). Supersedes t278-learnings-cid-intent-scope.test.ts (that
+// slot is now owned by merged PR #617's t278-per-unit-wave suite) and was
+// itself renumbered from t300/t284/t278 as upstream v2's own test-slot
+// registry advanced out from under this branch each re-slot.
 //
 // Mechanism: cli. Internals (cidMarker/contentHash/handlePersist/
-// resolveSurfaceIntent) are not exported, so the contract is exercised
+// resolveSurfaceIntent/practiceFilePath/priorSensorProposedRow/
+// legacyLineMatchesText) are not exported, so the contract is exercised
 // behaviourally through the process boundary exactly as t112/t199 do.
 //
-// FOUR findings fixed here, one test group each:
+// SEVEN findings fixed here, one test group each:
 //   1. Same-intent repeat-stage collision (P1) — candidate ids restart at
 //      c1 on every surface() call, so two DIFFERENT learnings landing on
 //      the same positional c1 within the SAME intent must both persist,
@@ -24,6 +27,15 @@
 //   4. Ambiguous intent resolution must fail closed (P2) — multiple intent
 //      records with no valid cursor must fail, not silently degrade to a
 //      shared "unscoped" identity.
+//   5. Practice file not pinned to the surfaced space (P1, round 2) —
+//      practiceFilePath must resolve under the space PINNED at surface
+//      time, not whatever space happens to be active when persist runs.
+//   6. Sensor dedup keyed on the unstable (stage, candidate_id) pair (P2,
+//      round 2) — a re-proposal of the SAME sensor id under a different
+//      (restarts-at-c1) candidate id must not re-emit SENSOR_PROPOSED.
+//   7. Legacy-marker match not gated on text equality (P2, round 2) — a
+//      legacy-format marker sharing a candidate id with a DIFFERENT
+//      learning's text must not be mistaken for a retry of that learning.
 //
 // Source under test (dist/claude/.claude/tools/aidlc-learnings.ts):
 //   cidMarker(intentSlug, slug, hash) => `<!-- cid:${intentSlug}:${slug}:${hash} -->`
@@ -31,10 +43,16 @@
 //   SelectionsFile now REQUIRES { space, intent } — bound at surface() time,
 //   read (never re-resolved) by handlePersist.
 //   resolveSurfaceIntent() fails closed on genuine multi-intent ambiguity.
+//   practiceFilePath(projectDir, scope, space) threads the pinned space into
+//   memoryDirFor(projectDir, space).
+//   priorSensorProposedRow(auditContent, sensorId) dedups SENSOR_PROPOSED by
+//   the sensor's own stable id, not (stage, candidate_id).
+//   legacyLineMatchesText(content, marker, text) gates a legacy-marker match
+//   on the marked line's own text equalling the current selection's text.
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -44,6 +62,7 @@ import {
   intentsDirOf,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath; // the bun running this test
 const LEARNINGS_TS = join(AIDLC_SRC, "tools", "aidlc-learnings.ts");
@@ -104,13 +123,29 @@ function selectionsFile(
   return p;
 }
 
-function runPersist(pd: string, selJson: string): { status: number; out: string } {
+function runPersist(
+  pd: string,
+  selJson: string,
+  opts: { slug?: string; env?: Record<string, string> } = {},
+): { status: number; out: string } {
   const r = spawnSync(
     BUN,
-    [LEARNINGS_TS, "persist", "--slug", STAGE_SLUG, "--selections-json", selJson, "--project-dir", pd],
-    { encoding: "utf-8" },
+    [LEARNINGS_TS, "persist", "--slug", opts.slug ?? STAGE_SLUG, "--selections-json", selJson, "--project-dir", pd],
+    { encoding: "utf-8", env: opts.env ? { ...process.env, ...opts.env } : process.env },
   );
   return { status: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+}
+
+/** Seed a minimal stage .md file with a `sensors:` frontmatter list, at the
+ *  path bindSensorToStage/findStageFile resolve under AIDLC_STAGES_DIR. */
+function seedStageFile(stagesDir: string, phase: string, slug: string): void {
+  const dir = join(stagesDir, phase);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, `${slug}.md`),
+    `---\nslug: ${slug}\nphase: ${phase}\nexecution: ALWAYS\nlead_agent: aidlc-product-agent\nsupport_agents: []\nsensors: []\ninputs: foo\noutputs: bar\n---\n\n# ${slug}\n\n## Steps\n1. do the thing\n`,
+    "utf-8",
+  );
 }
 
 function runSurface(pd: string): { status: number; out: string } {
@@ -148,7 +183,53 @@ function clearActiveIntentCursor(pd: string): void {
   rmSync(join(intentsDir, "active-intent"), { force: true });
 }
 
-describe("t300 aidlc-learnings persist/surface — #735 follow-up (PR #747 review)", () => {
+/** Switch the workspace-wide active-SPACE cursor (aidlc/active-space) — the
+ *  cursor practiceFilePath's pre-fix bug read live instead of using the
+ *  space PINNED in the selections-json at surface() time. */
+function switchActiveSpaceTo(pd: string, space: string): void {
+  writeFileSync(join(pd, "aidlc", "active-space"), `${space}\n`, "utf-8");
+}
+
+function otherSpaceProjectMd(pd: string, space: string): string {
+  return join(pd, "aidlc", "spaces", space, "memory", "project.md");
+}
+
+/** Write a `type: "sensor"` selections file for one candidate. */
+function sensorSelectionsFile(
+  pd: string,
+  name: string,
+  sensorId: string,
+  opts: { originStage?: string; candidateId?: string; intent?: string | null; space?: string } = {},
+): string {
+  const p = join(pd, `${name}.json`);
+  writeFileSync(
+    p,
+    JSON.stringify({
+      stage_slug: STAGE_SLUG,
+      space: opts.space ?? DEFAULT_SPACE,
+      intent: opts.intent === undefined ? DEFAULT_RECORD_DIR : opts.intent,
+      selections: [
+        {
+          candidate_id: opts.candidateId ?? CANDIDATE_ID,
+          type: "sensor",
+          origin_stage: opts.originStage ?? STAGE_SLUG,
+          manifest_fields: {
+            id: sensorId,
+            kind: "deterministic",
+            command: `bun .claude/tools/aidlc-sensor.ts fire ${sensorId}`,
+            default_severity: "advisory",
+            description: "Test sensor",
+            matches: "**/*",
+          },
+        },
+      ],
+    }),
+    "utf-8",
+  );
+  return p;
+}
+
+describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 review)", () => {
   describe("cross-intent scoping (original #735 fix, re-verified under the new marker)", () => {
     test("two intents' identically-numbered candidates for the same stage both persist, not collide", () => {
       const pd = mkProject();
@@ -431,6 +512,135 @@ describe("t300 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       expect(res.status, res.out).toBe(0);
       expect(JSON.parse(res.out).intent).toBe(SECOND_RECORD_DIR);
       expect(JSON.parse(res.out).space).toBe(DEFAULT_SPACE);
+    }, 30000);
+  });
+
+  describe("finding #5 (P1, round 2) — the practice file must land in the SURFACED space, not the live active space", () => {
+    test("surface-under-default then switch active space to 'other' then persist still writes into default's project.md", () => {
+      const pd = mkProject(); // active space is DEFAULT_SPACE
+      const sel = selectionsFile(pd, "sel-space", "Bound to default at surface time", {
+        intent: DEFAULT_RECORD_DIR,
+        space: DEFAULT_SPACE,
+      });
+
+      // Switch the LIVE active-space cursor away from the space the
+      // selection was pinned to at surface() time — the reviewer's exact
+      // repro: seed in space default, switch active space to other, persist.
+      switchActiveSpaceTo(pd, "other");
+
+      const res = runPersist(pd, sel);
+      expect(res.status).toBe(0);
+      expect(JSON.parse(res.out).rule_learned).toBe(1);
+
+      // Pre-fix, practiceFilePath called memoryDirFor(projectDir) with no
+      // space argument, which reads the LIVE active-space cursor — landing
+      // the line in "other"'s project.md instead of the pinned "default"'s.
+      const content = projectMd(pd);
+      expect(content).toContain("Bound to default at surface time");
+
+      const otherPath = otherSpaceProjectMd(pd, "other");
+      const otherContent = existsSync(otherPath) ? readFileSync(otherPath, "utf-8") : "";
+      expect(otherContent).not.toContain("Bound to default at surface time");
+    }, 30000);
+  });
+
+  describe("finding #6 (P2, round 2) — sensor dedup must key on the sensor's own stable id, not (stage, candidate_id)", () => {
+    test("the same sensor id proposed under a DIFFERENT candidate id (a later surface() run) is not re-proposed", () => {
+      const pd = mkProject();
+      const sel1 = sensorSelectionsFile(pd, "sensor-run1", "acceptance-format", { candidateId: "c1" });
+      const res1 = runPersist(pd, sel1);
+      expect(res1.status).toBe(0);
+      expect(JSON.parse(res1.out).sensor_proposed).toBe(1);
+
+      // Candidate ids restart at c1 on every surface() run, so a LATER run
+      // proposing the identical sensor id lands on a different candidate id
+      // (c7 here). Pre-fix, the dedup keyed on (stage, candidate_id) would
+      // miss the prior row under the new id and emit a duplicate
+      // SENSOR_PROPOSED for a sensor that was already proposed.
+      const sel2 = sensorSelectionsFile(pd, "sensor-run2", "acceptance-format", { candidateId: "c7" });
+      const res2 = runPersist(pd, sel2);
+      expect(res2.status).toBe(0);
+      expect(JSON.parse(res2.out).sensor_proposed).toBe(0);
+
+      const audit = readAllAuditShards(pd);
+      const rows = audit.split("\n").filter((l) => /Event.*: SENSOR_PROPOSED/.test(l)).length;
+      expect(rows).toBe(1);
+    }, 30000);
+
+    test("dedup must stay SCOPED to the proposing stage — a second, DIFFERENT stage independently proposing the same sensor id must still get bound", () => {
+      // Self-check on the fix above: dropping (stage, candidate_id) down to
+      // sensorId ALONE (not (origin_stage, sensorId)) would make the no-op
+      // branch global — once ANY stage has proposed a sensor, no OTHER
+      // stage could ever bind that same sensor to its own frontmatter again,
+      // since hasRow would stay true forever regardless of which stage is
+      // asking. A sensor manifest is a singleton, but binding is legitimately
+      // per-stage (Destinations is an array for exactly this reason).
+      const pd = mkProject();
+      const stagesDir = join(pd, ".claude", "skills", "aidlc", "stages");
+      seedStageFile(stagesDir, "inception", "user-stories");
+      seedStageFile(stagesDir, "construction", "requirements-analysis");
+      const env = { AIDLC_STAGES_DIR: stagesDir };
+
+      const sel1 = sensorSelectionsFile(pd, "sensor-stage-a", "acceptance-format", {
+        originStage: "user-stories",
+      });
+      const res1 = runPersist(pd, sel1, { slug: "user-stories", env });
+      expect(res1.status).toBe(0);
+      expect(JSON.parse(res1.out).sensor_proposed).toBe(1);
+      const stageAMd = readFileSync(join(stagesDir, "inception", "user-stories.md"), "utf-8");
+      expect(/^\s*-\s*acceptance-format\s*$/m.test(stageAMd)).toBe(true);
+
+      // A SEPARATE, unrelated stage later independently proposes the SAME
+      // sensor id. The manifest already exists and the sensor was already
+      // proposed once (by a different stage) — but THIS stage has never
+      // been bound, and must still end up with the id in its own frontmatter.
+      const sel2 = sensorSelectionsFile(pd, "sensor-stage-b", "acceptance-format", {
+        originStage: "requirements-analysis",
+      });
+      const res2 = runPersist(pd, sel2, { slug: "requirements-analysis", env });
+      expect(res2.status).toBe(0);
+
+      const stageBMd = readFileSync(join(stagesDir, "construction", "requirements-analysis.md"), "utf-8");
+      expect(/^\s*-\s*acceptance-format\s*$/m.test(stageBMd)).toBe(true);
+    }, 30000);
+  });
+
+  describe("finding #7 (P2, round 2) — a legacy-marker match must be gated on the marked line's own text, not candidate_id alone", () => {
+    test("a DIFFERENT learning reusing a legacy marker's candidate_id is NOT treated as a retry — it persists as a fresh, second learning", () => {
+      const pd = mkProject();
+      const originalText = "Original learning already persisted under the legacy marker";
+      const legacyMarker = `<!-- cid:${STAGE_SLUG}:${CANDIDATE_ID} -->`; // pre-#735 flat format
+      writeFileSync(
+        join(pd, "aidlc", "spaces", DEFAULT_SPACE, "memory", "project.md"),
+        `# Project-Level Rules\n\n## Corrections\n\n- ${originalText} (learned 2026-07-01) ${legacyMarker}\n`,
+        "utf-8",
+      );
+      const auditDir = join(intentsDirOf(pd, DEFAULT_SPACE), DEFAULT_RECORD_DIR, "audit");
+      mkdirSync(auditDir, { recursive: true });
+      writeFileSync(
+        join(auditDir, "legacy-host-clone.md"),
+        `**Timestamp**: 2026-07-01T00:00:00Z\n**Event**: RULE_LEARNED\n**Stage**: ${STAGE_SLUG}\n**Candidate-ID**: ${CANDIDATE_ID}\n**Destination**: project.md\n**Heading**: ## Corrections\n**Source**: orchestrator\n---\n`,
+        "utf-8",
+      );
+
+      // A GENUINELY DIFFERENT learning happens to land on the SAME positional
+      // candidate_id post-upgrade. Pre-fix, the legacy match keyed purely on
+      // (stage, candidate_id) treated this as a retry of the ORIGINAL
+      // learning and silently dropped it — "two different learnings landing
+      // on the same positional candidate id never collide" does not hold
+      // across the upgrade boundary.
+      const differentText = "A completely different learning, same candidate_id by coincidence";
+      const sel = selectionsFile(pd, "different-learning", differentText, {
+        intent: DEFAULT_RECORD_DIR,
+        candidateId: CANDIDATE_ID,
+      });
+      const res = runPersist(pd, sel);
+      expect(res.status).toBe(0);
+      expect(JSON.parse(res.out).rule_learned).toBe(1);
+
+      const content = projectMd(pd);
+      expect(content).toContain(originalText);
+      expect(content).toContain(differentText);
     }, 30000);
   });
 });

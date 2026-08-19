@@ -1,14 +1,17 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
-## [2.6.19] - 2026-08-19
+## [2.6.21] - 2026-08-19
 
-`aidlc-learnings.ts persist`'s write-idempotency now keys on the learning's own content, not its positional candidate id, and binds provenance (space + intent) at `surface()` time instead of re-resolving the live active-intent cursor inside `persist`. Candidate ids restart at `c1` on every `surface()` call, so a later run of the same stage in the same intent previously reused `c1` for a completely different learning and silently dropped the second write; re-resolving the active intent live also meant a surface-then-switch-intent-then-persist sequence could write under the wrong intent's marker. Fixes the follow-up findings from #735's own fix (PR #747 review). **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+`aidlc-learnings.ts persist`'s write-idempotency now keys on the learning's own content, not its positional candidate id, and binds provenance (space + intent) at `surface()` time instead of re-resolving the live active-intent cursor inside `persist`. Candidate ids restart at `c1` on every `surface()` call, so a later run of the same stage in the same intent previously reused `c1` for a completely different learning and silently dropped the second write; re-resolving the active intent live also meant a surface-then-switch-intent-then-persist sequence could write under the wrong intent's marker. Fixes the follow-up findings from #735's own fix, across all three rounds of PR #747 review. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
 
 * `cidMarker`'s third key component is now a content hash of the learning's text (`<!-- cid:<intent-slug>:<stage-slug>:<content-hash> -->`), not the candidate id. An exact retry (crash recovery) still hashes identically and dedups; two different learnings landing on the same positional candidate id never collide.
 * `surface`'s output and the selections-json schema now carry `space`/`intent`, bound once at surface time; `persist` reads and uses these directly rather than re-resolving `activeIntent()`/`activeSpace()` itself. The audit read, audit write, and lock identity are all pinned to the same surface-time intent.
 * Multiple intent records with no valid active-intent cursor now fail closed with an explicit error, rather than silently falling back to the shared `unscoped` identity.
 * Markers and audit rows written under the two prior formats (pre-#735's `<!-- cid:<stage>:<id> -->`, and #735's own first fix's `<!-- cid:<intent>:<stage>:<id> -->`) are still recognized for upgrade-time dedup, so a retried pre-fix learning is not duplicated under the new marker.
+* `practiceFilePath` now also takes the surface-time-pinned space (round 2 review): the lock and audit were already pinned to it, but this path alone still fell back to whichever space happened to be live-active when `persist` ran, so a learning could land in the wrong space's `project.md`/`team.md`.
+* The sensor branch's own dedup now keys `SENSOR_PROPOSED` on `(stage, sensor id)` rather than `(stage, candidate_id)` (round 2 review) — the same unstable-key defect class as the first bullet above, recurring in the sensor path. Stage stays in the key: binding a manifest to a stage's frontmatter is per-stage even though the manifest file itself is a per-project singleton, so a second, unrelated stage independently recommending the same sensor still gets bound.
+* A legacy-marker match is now gated on the marked line's own text equalling the current selection's text (round 2 review) — a legacy marker is keyed on candidate id alone, so a genuinely different learning landing on the same positional candidate id post-upgrade was previously mistaken for a retry of the original and silently dropped.
 
 ## [2.6.18] - 2026-08-19
 

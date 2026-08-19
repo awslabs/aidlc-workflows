@@ -28,7 +28,7 @@
 //
 // --- Provenance binding + content-addressed dedup (#735 follow-up, PR #747
 //     review) ---
-// Three findings from PR #747's two review rounds, fixed here:
+// Seven findings from PR #747's three review rounds, fixed here:
 //   1. Candidate ids restart at c1 on EVERY surface() call, so a later run
 //      of the same stage in the SAME intent reused c1 for a completely
 //      different learning and the old (intent, stage, candidate-id) marker
@@ -46,10 +46,35 @@
 //      shape) are recognized as legacy-compatible dedup matches so a
 //      post-upgrade retry of an already-persisted learning does not
 //      duplicate it under the new content-hash marker.
-// A fourth, related finding: ambiguous intent resolution (multiple intent
-// records, no valid cursor) must fail closed rather than silently
-// degrading to the same shared "unscoped" identity the bug above exists to
-// avoid — see resolveSurfaceIntent().
+//   4. Ambiguous intent resolution (multiple intent records, no valid
+//      cursor) must fail closed rather than silently degrading to the same
+//      shared "unscoped" identity finding #1 exists to avoid — see
+//      resolveSurfaceIntent().
+//   5. The lock identity and audit read/write were pinned to the
+//      surface-time space (finding #2), but practiceFilePath still called
+//      memoryDirFor(projectDir) with no space argument — falling back to
+//      whatever space happened to be LIVE-active when persist ran, not the
+//      one the selection was surfaced under. Fixed by threading the pinned
+//      space through practiceFilePath into memoryDirFor.
+//   6. The sensor branch's own dedup (priorSensorProposedRow, formerly
+//      priorAuditRow) still keyed on (stage, candidate_id) — the same
+//      unstable-key defect class finding #1 fixed for learnings, recurring
+//      for sensors: a later surface() run proposing the SAME sensor id
+//      under a different candidate id re-emitted a duplicate
+//      SENSOR_PROPOSED. Fixed by keying on (stage, the sensor's own stable
+//      manifest id) instead of (stage, candidate_id) — stage stays in the
+//      key because binding is legitimately per-stage even though the
+//      manifest itself is a per-project singleton; dropping stage entirely
+//      would make the no-op branch global and block a second, unrelated
+//      stage from ever binding a sensor another stage had already proposed.
+//   7. A legacy-marker match (finding #3) was recognized by candidate_id
+//      alone, so a genuinely DIFFERENT learning landing on the same
+//      positional candidate_id post-upgrade was mistaken for a retry of the
+//      original and silently dropped — "two different learnings landing on
+//      the same positional candidate id never collide" does not hold across
+//      the upgrade boundary. Fixed by gating a legacy match on the marked
+//      line's own text equalling the current selection's text
+//      (legacyLineMatchesText).
 //
 // The conflict COMPARISON is the orchestrator-LLM's job (the "single-line
 // variant" of the §5 gate model); persist receives only conflict-clear or
@@ -104,8 +129,13 @@ function fail(message: string, code: 1 | 2): never {
 // the SAME MEMORY_SEGMENTS loadRules()/the packager use, so the writer can
 // never drift from the reader root (P5 relocated the reader; P6 closes the
 // seam by pointing the writer at the same place).
-function practiceFilePath(projectDir: string, scope: "project" | "team"): string {
-  return join(memoryDirFor(projectDir), `${scope}.md`);
+// `space` MUST be the space PINNED at surface() time (PR #747 review, round
+// 2) — memoryDirFor's own space arg is optional and falls back to the LIVE
+// active-space cursor when omitted, which is exactly the bug: the lock and
+// audit read/write were already pinned to the surfaced space, but this path
+// alone kept reading whatever space happened to be active when persist ran.
+function practiceFilePath(projectDir: string, scope: "project" | "team", space: string): string {
+  return join(memoryDirFor(projectDir, space), `${scope}.md`);
 }
 
 // Project-tier sensor manifest path. The learning loop scaffolds to the
@@ -430,17 +460,34 @@ function parseSelectionsFile(path: string): SelectionsFile {
   };
 }
 
-// A prior RULE_LEARNED / SENSOR_PROPOSED row for this (Stage, Candidate-ID)?
-function priorAuditRow(
-  auditContent: string,
-  event: "RULE_LEARNED" | "SENSOR_PROPOSED",
-  slug: string,
-  candidateId: string
-): boolean {
-  const rows = findAllEvents(auditContent, event);
-  const stageRe = new RegExp(`^\\*\\*Stage\\*\\*:\\s*${escapeRegex(slug)}\\s*$`, "m");
-  const cidRe = new RegExp(`^\\*\\*Candidate-ID\\*\\*:\\s*${escapeRegex(candidateId)}\\s*$`, "m");
-  return rows.some((r) => stageRe.test(r.block) && cidRe.test(r.block));
+// A prior SENSOR_PROPOSED row for this (origin stage, sensor id)? Keyed on
+// the sensor's own stable manifest id, not the positional candidate_id (PR
+// #747 review, round 2): candidate ids restart at c1 on every surface()
+// call, so a later run of the SAME stage proposing the SAME sensor id under
+// a different candidate id would miss a (stage, candidate_id) match and
+// re-emit a duplicate SENSOR_PROPOSED for a sensor already proposed by that
+// stage — the same unstable-key defect class #735's own fix closed for
+// RULE_LEARNED, recurring here in the sensor branch.
+//
+// Stage stays IN the key, though: a sensor manifest is a per-project
+// singleton (sensorManifestPath), but BINDING it to a stage's frontmatter is
+// legitimately per-stage (Destinations is an array for exactly this reason
+// -- two unrelated stages can each independently recommend the same sensor
+// and each needs its own frontmatter bind). Dropping stage from the key
+// entirely (an earlier version of this fix) made the no-op branch global:
+// once ANY stage had proposed a sensor, no OTHER stage could ever bind that
+// same sensor to its own frontmatter again. `stage` here is the SAME value
+// the SENSOR_PROPOSED audit row's own Stage field is written from (the
+// persist call's top-level stageSlug, not sel.origin_stage), so the read
+// side matches exactly what the write side stored. The two coincide in
+// every real invocation (surface() only ever proposes a sensor for the
+// stage whose Learnings Ritual is currently running, i.e. the same stage
+// persist is being invoked for).
+function priorSensorProposedRow(auditContent: string, stage: string, sensorId: string): boolean {
+  const rows = findAllEvents(auditContent, "SENSOR_PROPOSED");
+  const stageRe = new RegExp(`^\\*\\*Stage\\*\\*:\\s*${escapeRegex(stage)}\\s*$`, "m");
+  const sensorIdRe = new RegExp(`^\\*\\*Sensor ID\\*\\*:\\s*${escapeRegex(sensorId)}\\s*$`, "m");
+  return rows.some((r) => stageRe.test(r.block) && sensorIdRe.test(r.block));
 }
 
 function escapeRegex(s: string): string {
@@ -549,6 +596,23 @@ function legacyMarkerCandidateIdScoped(intentSlug: string, slug: string, candida
   return `<!-- cid:${intentSlug}:${slug}:${candidateId} -->`; // #735's own first fix (PR #747 head)
 }
 
+// A legacy marker match is a genuine retry ONLY when the marked line's own
+// text equals the current selection's text (PR #747 review, round 2):
+// "two different learnings landing on the same positional candidate id
+// never collide" does not hold across the upgrade boundary — a legacy
+// marker is keyed on candidate_id alone (no content hash), so a DIFFERENT
+// learning that happens to land on the same positional candidate_id
+// post-upgrade would otherwise be silently dropped as a false "retry" of
+// the original. Matches the exact line shape persist itself writes:
+// `- <text> (learned <date>) <marker>`.
+function legacyLineMatchesText(content: string, marker: string, text: string): boolean {
+  const re = new RegExp(
+    `^- ${escapeRegex(text)} \\(learned \\d{4}-\\d{2}-\\d{2}\\) ${escapeRegex(marker)}\\s*$`,
+    "m"
+  );
+  return re.test(content);
+}
+
 function handlePersist(args: string[], projectDir: string): void {
   const flags = parseFlags(args);
   const slug = flags.slug;
@@ -602,7 +666,7 @@ function handlePersist(args: string[], projectDir: string): void {
       // returns { path, content } so callers never re-fetch from the Map.
       const fileContent = new Map<string, string>();
       const ensureFile = (scope: "project" | "team"): { path: string; content: string } => {
-        const path = practiceFilePath(projectDir, scope);
+        const path = practiceFilePath(projectDir, scope, pinnedSpace);
         const existing = fileContent.get(path);
         if (existing !== undefined) {
           return { path, content: existing };
@@ -627,17 +691,23 @@ function handlePersist(args: string[], projectDir: string): void {
         const heading = practiceHeading(sel.heading);
 
         // Content-hash match is the stable check; the legacy candidate-id
-        // match is the upgrade-compat fallback for rows written before this
-        // fix shipped (priorLegacyAuditRow requires Content-Hash's ABSENCE,
-        // so it can never mistake a fresh, different-content row for a
-        // legacy retry — see its own comment).
+        // match is the upgrade-compat fallback for rows/lines written before
+        // this fix shipped. A legacy match is gated on the marked LINE's own
+        // text equalling sel.text (PR #747 review, round 2) — see
+        // legacyLineMatchesText's own comment for why candidate_id alone is
+        // not a safe legacy-retry key. priorLegacyAuditRow itself additionally
+        // requires Content-Hash's ABSENCE so it can never mistake a fresh,
+        // different-content row for a legacy retry — see its own comment.
+        const legacyLineMatch =
+          legacyLineMatchesText(
+            content,
+            legacyMarkerCandidateIdScoped(intentSlug, stageSlug, sel.candidate_id),
+            sel.text
+          ) || legacyLineMatchesText(content, legacyMarkerPreIntentScope(stageSlug, sel.candidate_id), sel.text);
         const hasRow =
           priorAuditRowByHash(auditContent, stageSlug, hash) ||
-          priorLegacyAuditRow(auditContent, stageSlug, sel.candidate_id);
-        const hasLine =
-          content.includes(marker) ||
-          content.includes(legacyMarkerCandidateIdScoped(intentSlug, stageSlug, sel.candidate_id)) ||
-          content.includes(legacyMarkerPreIntentScope(stageSlug, sel.candidate_id));
+          (legacyLineMatch && priorLegacyAuditRow(auditContent, stageSlug, sel.candidate_id));
+        const hasLine = content.includes(marker) || legacyLineMatch;
 
         // no-op: audit row AND line both present.
         if (hasRow && hasLine) continue;
@@ -695,12 +765,7 @@ function handlePersist(args: string[], projectDir: string): void {
           fail(`refusing to scaffold a sensor manifest under the framework distribution: ${manifestPath}`, 1);
         }
 
-        const hasRow = priorAuditRow(
-          auditContent,
-          "SENSOR_PROPOSED",
-          stageSlug,
-          sel.candidate_id
-        );
+        const hasRow = priorSensorProposedRow(auditContent, stageSlug, sensorId);
         const hasManifest = existsSync(manifestPath);
 
         if (hasRow && hasManifest) {
