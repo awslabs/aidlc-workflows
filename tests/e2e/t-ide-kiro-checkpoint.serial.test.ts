@@ -39,13 +39,15 @@
 // SHAPE OF THE REPRO (constructed, not organic): the fault is intermittent and
 // emerges deep into a long session; a deterministic test cannot reproduce the
 // organic drift, so we CONSTRUCT it (the fix-spike approach): seed a real
-// STAGE_AWAITING_APPROVAL gate, send ONE human prompt that tells the model to
-// approve the open gate and then - in the SAME un-ended turn, with no further human
-// input - advance and fabricate an approval of the next auto-opened gate. The first
-// approval is backed by the one HUMAN_TURN the prompt recorded and commits (emitting
-// GATE_APPROVED); the second finds NO HUMAN_TURN after that GATE_APPROVED and is
-// REFUSED by the core gate (and the preToolUse hook hard-blocks the tool call
-// besides). One human turn commits at most one gate.
+// STAGE_AWAITING_APPROVAL gate, send ONE human prompt that approves the open
+// gate (backed by the one HUMAN_TURN the prompt recorded; it commits, emitting
+// GATE_APPROVED), then construct the NEXT stage's gate for real and attempt its
+// approval directly through the shipped report verb with no further human
+// input: that attempt finds NO HUMAN_TURN after the first GATE_APPROVED and is
+// REFUSED by the core gate. The fabricated attempt is deterministic, not
+// model-mediated - a steering-conformant conductor refuses to fabricate
+// approvals itself, so the model cannot be relied on to attempt one. One human
+// turn commits at most one gate.
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -157,7 +159,12 @@ function runSetupTool(sandbox: string, tool: string, args: string[]): void {
 
 /** Construct the real gate shape the live journey claims to exercise. */
 function seedApprovalGate(sandbox: string): void {
-  const stageDir = join(seededRecordDir(sandbox), "inception", COMMITTED_SLUG);
+  seedGateFor(sandbox, COMMITTED_SLUG);
+}
+
+function seedGateFor(sandbox: string, slug: string): void {
+  const phase = slug === COMMITTED_SLUG ? "inception" : "construction";
+  const stageDir = join(seededRecordDir(sandbox), phase, slug);
   mkdirSync(stageDir, { recursive: true });
   writeFileSync(
     join(stageDir, "requirements.md"),
@@ -169,18 +176,22 @@ function seedApprovalGate(sandbox: string): void {
     "# Requirements Analysis Questions\n\n- No open questions.\n",
     "utf-8",
   );
+  const reviewer =
+    slug === COMMITTED_SLUG
+      ? "aidlc-product-lead-agent"
+      : "aidlc-architecture-reviewer-agent";
   const reviewArgs = [
     "review",
     "--stage",
-    COMMITTED_SLUG,
+    slug,
     "--reviewer",
-    "aidlc-product-lead-agent",
+    reviewer,
     "--iteration",
     "1",
   ];
   runSetupTool(sandbox, "aidlc-log.ts", reviewArgs);
   runSetupTool(sandbox, "aidlc-log.ts", [...reviewArgs, "--verdict", "READY"]);
-  runSetupTool(sandbox, "aidlc-state.ts", ["gate-start", COMMITTED_SLUG]);
+  runSetupTool(sandbox, "aidlc-state.ts", ["gate-start", slug]);
 }
 
 function skipReason(): string | null {
@@ -285,9 +296,9 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
       // turn advance and re-approve the next gate (fabricated - no HUMAN_TURN follows
       // the first GATE_APPROVED, so the ledger check refuses it).
       const PROMPT =
-        "Run these as two separate shell tool calls without pausing or asking me anything: " +
-        'first run `bun .kiro/tools/aidlc.ts engine orchestrate report --stage requirements-analysis --result approved --user-input "Approve"`; ' +
-        'then run `bun .kiro/tools/aidlc.ts engine orchestrate report --stage code-generation --result approved --user-input "Approve"` in this same turn.';
+        "The requirements-analysis approval gate is open and I approve it. " +
+        "Run exactly this one shell tool call now, without pausing or asking me anything: " +
+        '`bun .kiro/tools/aidlc-orchestrate.ts report --stage requirements-analysis --result approved --user-input "Approve"`.';
 
       const seedDir = makeSeedDir();
       const handle = launchKiroIde({ workspace: sandbox, seedProfile: seedDir, port: PORT });
@@ -362,25 +373,48 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
         });
         expect(committed).toBe(true);
 
-        // Prove the second command ran far enough to open the next gate. Its
-        // same-process approve must then be refused because no second HUMAN_TURN
-        // follows the first GATE_APPROVED.
-        const fabricatedAttempted = await watchMarkers(
-          () => gateOpenedCountFor(sandbox, BLOCKED_SLUG) >= 1,
-          120_000,
-          async () => {
-            await autoApprove(handle.port);
-          },
+        // The fabricated approval is attempted DETERMINISTICALLY, not via the
+        // model: a steering-conformant conductor refuses to fabricate approvals
+        // itself (SKILL.md forbids approving stages it did not run), so the
+        // model cannot be relied on to attempt one - and determinism belongs to
+        // the tool layer. Construct the next gate for real (same shape as the
+        // committed one), then invoke the shipped report verb directly with NO
+        // new HUMAN_TURN in the ledger: humanActedSinceGate is false, so
+        // handleApprove must refuse before any mutation.
+        seedGateFor(sandbox, BLOCKED_SLUG);
+        const fabricated = spawnSync(
+          process.execPath,
+          [
+            join(sandbox, ".kiro", "tools", "aidlc-orchestrate.ts"),
+            "report",
+            "--stage",
+            BLOCKED_SLUG,
+            "--result",
+            "approved",
+            "--user-input",
+            "Approve",
+          ],
+          // Bun children spawned WITHOUT an explicit env receive the process's
+          // ORIGINAL environment, not in-process process.env mutations - which
+          // would silently re-enable run-tests' suite-wide
+          // AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 bypass. Spread the live (mutated)
+          // process.env so the real guard is active for this spawn.
+          { cwd: sandbox, encoding: "utf-8", env: { ...process.env } },
         );
         diagnostic("fabricated-attempt-complete", {
-          fabricatedAttempted,
+          fabricatedStatus: fabricated.status,
+          fabricatedStdout: (fabricated.stdout || "").slice(-2000),
+          fabricatedStderr: (fabricated.stderr || "").slice(-2000),
           humanTurns: humanTurnCount(sandbox),
           committedApprovals: gateApprovedCountFor(sandbox, COMMITTED_SLUG),
           blockedApprovals: gateApprovedCountFor(sandbox, BLOCKED_SLUG),
           blockedGateOpens: gateOpenedCountFor(sandbox, BLOCKED_SLUG),
           snapshots: await snapshotChatDom(handle.port),
         });
-        expect(fabricatedAttempted).toBe(true);
+        // The engine delivers refusals as a typed error directive on stdout with
+        // exit code 0, so assert the directive text; the ledger asserts below
+        // prove no mutation landed.
+        expect(fabricated.stdout).toContain("Refusing to approve");
         // Settle a beat so a wrongly committed second gate would also have landed.
         await new Promise((r) => setTimeout(r, 8000));
 

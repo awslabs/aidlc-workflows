@@ -11,6 +11,7 @@ Classic and Express are now additive scope options while existing implicit workf
 * Express Code Generation artifacts use stage-level paths; Build and Test executes stage-level test instructions and includes stage-level traceability in its final coverage gate alongside per-Unit artifacts.
 * Reviewer, ensemble, Construction, and swarm contracts load as directive-selected protocol modules; converged swarm settlement cannot repeat reviews after resume, and the modules retain bounded stale-receipt recovery.
 * Harness manifests now declare the emitted orchestrator `SKILL.md` path, so custom `skipRunnerGen`/`emit` layouts can refresh generated tables without using a hardcoded location.
+* The live Kiro IDE pre-merge gate (`t-ide-kiro`, `AIDLC_KIRO_IDE_LIVE=1`) now runs on Windows (`%LOCALAPPDATA%\Programs\Kiro\Kiro.exe`) as well as macOS, with `AIDLC_KIRO_IDE_BIN` override and `AIDLC_KIRO_IDE_CASE` / `AIDLC_KIRO_IDE_DIAGNOSTICS` controls.
 
 ## [2.6.17] - 2026-08-18
 
