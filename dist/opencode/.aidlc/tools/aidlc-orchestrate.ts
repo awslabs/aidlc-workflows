@@ -1980,7 +1980,10 @@ function buildRunStageDirective(
   forcePersona = false,
 ): RunStageDirective {
   const artifactUnit =
-    scope === "express" && unit === UNIT_NAME_PLACEHOLDER ? null : unit;
+    unit === UNIT_NAME_PLACEHOLDER &&
+      usesStageLevelPerUnitArtifacts(scope, stateContent)
+      ? null
+      : unit;
   const resolvedConsumes = resolveConsumes(
     node.consumes ?? [],
     node,
@@ -2515,6 +2518,17 @@ function effectivePlanAction(
     ? parseStateStageSuffixes(stateContent).get(slug)
     : undefined;
   return stateAction ?? loadScopeMapping()[scope]?.stages[slug];
+}
+
+// A per-unit stage falls back to one stage-level iteration only when the
+// effective plan excludes the Unit-DAG producer. This distinguishes an
+// intentional zero-Unit scope/composed plan from a normal workflow whose
+// Units Generation stage has not produced its artifact yet.
+function usesStageLevelPerUnitArtifacts(
+  scope: string,
+  stateContent: string | null,
+): boolean {
+  return effectivePlanAction("units-generation", scope, stateContent) !== "EXECUTE";
 }
 
 // The `next` handler reads workflow state and emits exactly one directive. Rule
@@ -3968,9 +3982,10 @@ function emitPerUnitRunStage(
   // single directive (with the {unit-name} placeholder + the unresolved gate)
   // and return. The follow-up `next` (after `report --skeleton-stance`) resolves
   // the gate and re-enters here to begin per-unit iteration.
-  const zeroUnitScope = r.state === "none" && scope === "express";
+  const stageLevelFallback =
+    r.state === "none" && usesStageLevelPerUnitArtifacts(scope, stateContent);
   if (
-    !zeroUnitScope &&
+    !stageLevelFallback &&
     isSkeletonGateStage(node, scope) &&
     readSkeletonStance(stateContent) === null
   ) {
@@ -3980,7 +3995,7 @@ function emitPerUnitRunStage(
 
   switch (r.state) {
     case "none":
-      if (!zeroUnitScope) {
+      if (!stageLevelFallback) {
         emitRunStageForSlug(
           node.slug,
           projectType,

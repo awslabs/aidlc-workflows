@@ -348,6 +348,26 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     );
   }, 30000);
 
+  test("5b: a composed plan that skips Units Generation uses stage-level paths without a DAG", () => {
+    const proj = seedProject("functional-design", "on");
+    const statePath = seededStateFile(proj);
+    writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8").replace(
+        "- [-] domain-design — EXECUTE",
+        "- [S] units-generation — SKIP\n- [-] domain-design — EXECUTE",
+      ),
+    );
+    const d = runNext(proj);
+    expect(d.kind).toBe("run-stage");
+    expect(d.stage).toBe("functional-design");
+    expect(d.unit).toBeUndefined();
+    expect(d.produces).toContain(
+      `${RP}/construction/functional-design/functional-spec.md`,
+    );
+    expect(d.produces?.some((path) => path.includes("{unit-name}"))).toBe(false);
+  }, 30000);
+
   // 6: coverage guard on report, approve with alpha + beta both uncovered ->
   // kind=error naming the remaining units; the transition is NOT committed.
   test("6: approving early while units remain is refused with an error naming them", () => {

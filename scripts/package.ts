@@ -737,7 +737,8 @@ function assembledOrchestratorSkill(
   outRoot: string,
   manifest: HarnessManifest,
 ): string {
-  const rel = manifest.orchestratorSkillPath;
+  const rel = manifest.orchestratorSkillPath ??
+    join(manifest.harnessDir, "skills", "aidlc", "SKILL.md");
   if (isAbsolute(rel) || rel.split(/[\\/]/).includes("..")) {
     throw new Error(
       `packager: ${manifest.name} orchestratorSkillPath must stay within its dist root: ${rel}`,

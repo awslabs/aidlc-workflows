@@ -66,7 +66,8 @@ With this set, bare `/aidlc` invocations use `feature` as the default scope. The
 1. Explicit CLI flag: `/aidlc feature` or `/aidlc --scope bugfix` wins.
 2. Keyword detection in freeform text: `/aidlc fix the login bug` still maps to `bugfix`. Users can override the detected scope at the existing confirmation prompt.
 3. `AWS_AIDLC_DEFAULT_SCOPE` env var from `.claude/settings.json`.
-4. Hard-coded fallback (`poc` at intent birth, `feature` for unmatched freeform).
+4. Hard-coded fallback (`feature` for unmatched freeform and `/aidlc-init`;
+   `poc` only for a direct low-level `intent-create` call without `--scope`).
 
 **Valid values:** `enterprise`, `feature`, `mvp`, `poc`, `bugfix`, `refactor`, `infra`, `security-patch`, `classic`, `workshop`, `express`. An invalid value errors at invocation time with a clear message. Teams can define additional scopes by dropping a `.claude/scopes/aidlc-<name>.md` file and tagging the member stages' `scopes:` lists — see [Contributing: Adding a Scope](../reference/11-contributing.md#adding-a-scope). Teams can also define additional agents in `.claude/agents/` — see [Contributing: Adding an Agent](../reference/11-contributing.md#adding-an-agent).
 
@@ -94,7 +95,7 @@ Specify explicitly or let the orchestrator auto-detect:
 
 ```
 /aidlc enterprise       # Explicit scope
-/aidlc Build a payments API  # Falls back to "classic"
+/aidlc Build a payments API  # No keyword: offers composition; resolver fallback is "feature"
 /aidlc Fix the login bug     # Auto-detects "bugfix"
 ```
 

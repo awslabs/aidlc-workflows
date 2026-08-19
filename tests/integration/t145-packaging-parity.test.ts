@@ -137,7 +137,7 @@ describe("t145 packaging parity — dist/ is in sync with core/ + harness/", () 
 });
 
 describe("t145 packager contract regressions", () => {
-  test("a synthetic harness passes its manifest harnessDir to graph and runner tools", () => {
+  test("a synthetic harness uses the default orchestrator path and passes harnessDir to tools", () => {
     const root = makeFixture("foo", "claude");
     try {
       const manifest = join(root, "harness", "foo", "manifest.ts");
@@ -145,8 +145,8 @@ describe("t145 packager contract regressions", () => {
       replaceOnce(manifest, 'harnessDir: ".claude"', 'harnessDir: ".foo"');
       replaceOnce(
         manifest,
-        'orchestratorSkillPath: ".claude/skills/aidlc/SKILL.md"',
-        'orchestratorSkillPath: ".foo/skills/aidlc/SKILL.md"',
+        'orchestratorSkillPath: ".claude/skills/aidlc/SKILL.md",',
+        "",
       );
 
       // A first build still needs the harness-neutral stage number/name seed.

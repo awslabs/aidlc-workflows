@@ -4,9 +4,11 @@
 // IDE (the Electron desktop app), not the Kiro CLI. Every existing live Kiro test
 // drives the CLI over ACP (t-acp-kiro-*) or over a tmux TUI (t-tui-kiro-*); NONE
 // drives the GUI app. This is the gap, and it is the enforcement surface for the
-// human-presence gate (a HUMAN_TURN event recorded on each human chat turn + a
-// preToolUse hard-block that refuses a model-fabricated approval while a checkpoint
-// gate is open with no HUMAN_TURN since the last gate resolution).
+// human-presence gate. The live IDE half proves UserPromptSubmit records the
+// HUMAN_TURN and a legitimate approval commits through Kiro; a direct shipped-tool
+// attempt then proves the core guard refuses a second approval with no later human
+// turn. The fabricated attempt intentionally bypasses Kiro and does not claim
+// PreToolUse integration coverage.
 //
 // Mirrors the skip-clean conventions of t-tui-kiro-status.serial.test.ts (the
 // closest sibling: live Kiro, opt-in env gate, skipReason() chain, reason in the
@@ -272,18 +274,18 @@ function gateOpenedCountFor(sandbox: string, slug: string): number {
   return auditEventCountFor(sandbox, "STAGE_AWAITING_APPROVAL", slug);
 }
 
-describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on the desktop app)", () => {
-  // Drives the SHIPPED dist/kiro-ide tree (harness:"kiro-ide" => mint + block
-  // v2 hook JSON files seeded) and asserts the REAL fix surfaces on disk: the
-  // HUMAN_TURN events the mint hook records + the GATE_APPROVED audit ledger.
+describe("t-ide-kiro-checkpoint (live Kiro IDE human-turn recording + core gate enforcement)", () => {
+  // Drives the SHIPPED dist/kiro-ide tree and asserts the live HUMAN_TURN event
+  // plus the committed GATE_APPROVED ledger row. The second, fabricated approval
+  // is a hybrid core-enforcement check through the shipped report command.
   test.skipIf(SKIP_REASON !== null || LIVE_CASE === "ratio")(
     `one human turn commits the approved gate and REFUSES a same-turn fabricated approval${SKIP_REASON ? ` - SKIP: ${SKIP_REASON}` : ""}`,
     async () => {
-      // harness:"kiro-ide" seeds dist/kiro-ide/.kiro (the v2 hook JSON files the IDE
-      // actually reads - mint on UserPromptSubmit, block on PreToolUse) + a real open
-      // gate via the mid-inception state fixture plus seedApprovalGate. The committed
-      // slug is that stage; the blocked slug is the next stage's gate, opened by the
-      // second explicit report command after the first approve auto-advances.
+      // harness:"kiro-ide" seeds dist/kiro-ide/.kiro (including the
+      // UserPromptSubmit mint hook) plus a real open gate via the mid-inception
+      // state fixture and seedApprovalGate. The committed slug is that stage; the
+      // blocked slug is the next stage's gate, opened directly after the first
+      // approval auto-advances.
       const sandbox = setupTuiProject({
         harness: "kiro-ide",
         withState: "state-mid-inception.md",
@@ -430,8 +432,8 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
 
         // The model-fabricated same-turn approval was REFUSED - no HUMAN_TURN follows
         // the first GATE_APPROVED, so humanActedSinceGate returned false and
-        // handleApprove error()'d before any mutation (and the preToolUse hook
-        // hard-blocked the tool call besides). The next-stage gate never committed.
+        // handleApprove error()'d before any mutation. This direct process does
+        // not traverse Kiro's PreToolUse hook; the next-stage gate never committed.
         expect(gateApprovedCountFor(sandbox, BLOCKED_SLUG)).toBe(0);
       } finally {
         teardown(handle);

@@ -14,6 +14,12 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
+import {
+  discoverScopes,
+  renderRunner,
+  renderStageRunner,
+  runnableStages,
+} from "../../dist/claude/.claude/tools/aidlc-runner-gen.ts";
 
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const MODULES = [
@@ -208,6 +214,27 @@ describe("t302 conditional protocol modules", () => {
       expect(skill).toContain(
         "When a `run-stage` carries `directive.swarm_settled === true`",
       );
+    }
+  });
+
+  test("generated stage and scope runners load the base protocol and every emitted module", () => {
+    const codeGeneration = runnableStages().find((stage) =>
+      stage.slug === "code-generation"
+    );
+    expect(codeGeneration).toBeDefined();
+    if (!codeGeneration) throw new Error("code-generation is not runnable");
+
+    const stageRunner = renderStageRunner(codeGeneration);
+    const scopes = discoverScopes();
+    const scopeRunner = renderRunner(
+      "express",
+      scopes.express?.description ?? "",
+    );
+    for (const runner of [stageRunner, scopeRunner]) {
+      expect(runner).toContain("aidlc-common/protocols/stage-protocol.md");
+      expect(runner).toContain("stage-protocol-<module>.md");
+      expect(runner).toContain("`directive.protocol_modules`");
+      expect(runner).toContain("Load every listed module before");
     }
   });
 

@@ -171,8 +171,8 @@ disabled plugins remain on disk, but they are not valid runtime scopes until the
 plugin is selected again. If core is disabled and exactly one plugin scope owner
 is enabled, freeform/default scope fallback uses that plugin's first scope
 alphabetically. If multiple plugin scope owners are enabled and core's
-`classic` fallback is unavailable, the orchestrator errors and asks for an
-explicit `--scope`.
+preferred `feature`/`poc` fallback is unavailable, the orchestrator errors and
+asks for an explicit `--scope`.
 
 Disabling a plugin also removes what it merged into core stages, not just its
 own files. Compose records the structural adds it actually applied (produces /

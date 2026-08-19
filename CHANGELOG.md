@@ -9,9 +9,9 @@ Classic and Express are now additive scope options while existing implicit workf
 * `--scope workshop` remains supported with its established `workshop`, `lab`, and `training` keywords, compatible stage grid, and Minimal test-strategy override.
 * `--scope express` adds the lightweight Requirements Analysis, single-iteration Code Generation, Build and Test, and conditional deploy/observability route with reviewers, Unit DAGs, skeleton ceremony, and swarm dispatch disabled.
 * Express Code Generation artifacts use stage-level paths; Build and Test executes stage-level test instructions and includes stage-level traceability in its final coverage gate alongside per-Unit artifacts.
-* Reviewer, ensemble, Construction, and swarm contracts load as directive-selected protocol modules; converged swarm settlement cannot repeat reviews after resume, and the modules retain bounded stale-receipt recovery.
-* Harness manifests now declare the emitted orchestrator `SKILL.md` path, so custom `skipRunnerGen`/`emit` layouts can refresh generated tables without using a hardcoded location.
-* The live Kiro IDE pre-merge gate (`t-ide-kiro`, `AIDLC_KIRO_IDE_LIVE=1`) now runs on Windows (`%LOCALAPPDATA%\Programs\Kiro\Kiro.exe`) as well as macOS, with `AIDLC_KIRO_IDE_BIN` override and `AIDLC_KIRO_IDE_CASE` / `AIDLC_KIRO_IDE_DIAGNOSTICS` controls.
+* Reviewer, ensemble, Construction, and swarm contracts load as directive-selected protocol modules from the main orchestrator and generated stage/scope runners; converged swarm settlement cannot repeat reviews after resume, and the modules retain bounded stale-receipt recovery.
+* Harness manifests may declare a nonstandard emitted orchestrator `SKILL.md` path for custom `skipRunnerGen`/`emit` layouts; standard in-tree layouts remain compatible without the field.
+* The hybrid live Kiro IDE/core pre-merge gate (`t-ide-kiro`, `AIDLC_KIRO_IDE_LIVE=1`) now runs on Windows (`%LOCALAPPDATA%\Programs\Kiro\Kiro.exe`) as well as macOS, with `AIDLC_KIRO_IDE_BIN` override and `AIDLC_KIRO_IDE_CASE` / `AIDLC_KIRO_IDE_DIAGNOSTICS` controls.
 
 ## [2.6.17] - 2026-08-18
 

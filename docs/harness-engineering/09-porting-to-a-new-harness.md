@@ -57,10 +57,10 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
 - `harnessFiles: FileMap[]` — authored surfaces copied verbatim from
   `harness/<name>/<src>` into the dist (`.md` get token substitution).
   `projectRoot: true` lands a file beside the harness dir (e.g. `AGENTS.md`).
-- `orchestratorSkillPath` — project-root-relative path to the assembled
-  orchestrator `SKILL.md`. Declare the actual emitted location, including
-  emit-owned layouts outside `<harnessDir>/skills/` such as
-  `.agents/skills/aidlc/SKILL.md`.
+- `orchestratorSkillPath` (optional) — project-root-relative path to the
+  assembled orchestrator `SKILL.md`. It defaults to
+  `<harnessDir>/skills/aidlc/SKILL.md`; declare it for emit-owned layouts outside
+  that tree, such as `.agents/skills/aidlc/SKILL.md`.
 - `frontmatterAdditions` (optional) - per-file YAML lines appended to a
   core-projected `.md`'s frontmatter during projection, for a harness-NATIVE
   field that must not ship to other harnesses (kiro-ide injects

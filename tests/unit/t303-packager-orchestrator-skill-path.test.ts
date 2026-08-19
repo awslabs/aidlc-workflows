@@ -21,6 +21,8 @@ describe("t303 manifest-owned orchestrator skill path", () => {
         pathToFileURL(join(REPO_ROOT, "harness", name, "manifest.ts")).href
       ) as { default: HarnessManifest };
       const rel = module.default.orchestratorSkillPath;
+      expect(rel).toBeDefined();
+      if (!rel) throw new Error(`${name} does not declare orchestratorSkillPath`);
       expect(rel.length).toBeGreaterThan(0);
       expect(isAbsolute(rel)).toBe(false);
       expect(rel.split(/[\\/]/)).not.toContain("..");
@@ -28,9 +30,12 @@ describe("t303 manifest-owned orchestrator skill path", () => {
     }
   });
 
-  test("package.ts resolves the manifest field without location candidates", () => {
+  test("package.ts resolves the optional manifest field with the in-tree default", () => {
     const source = readFileSync(join(REPO_ROOT, "scripts", "package.ts"), "utf-8");
     expect(source).toContain("manifest.orchestratorSkillPath");
+    expect(source).toContain(
+      'join(manifest.harnessDir, "skills", "aidlc", "SKILL.md")',
+    );
     expect(source).not.toContain('join(projectRoot, ".agents", "skills", "aidlc"');
     expect(source).not.toContain('join(projectRoot, ".github", "skills", "aidlc"');
   });

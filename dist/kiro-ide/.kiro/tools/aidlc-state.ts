@@ -1489,8 +1489,12 @@ function producesDirsForStage(
   const perUnit = stage.for_each === "unit-of-work";
   if (perUnit) {
     const resolution = resolveBoltDag(pd);
-    const scope = getField(readStateFile(pd), "Scope");
-    if (resolution.state === "none" && scope === "express") {
+    const stateContent = readStateFile(pd);
+    const scope = getField(stateContent, "Scope");
+    const unitProducerAction =
+      parseStateStageSuffixes(stateContent).get("units-generation") ??
+      (scope ? loadScopeMapping()[scope]?.stages["units-generation"] : undefined);
+    if (resolution.state === "none" && unitProducerAction !== "EXECUTE") {
       return [join(rec, "construction", stage.slug)];
     }
     const ctorRoot = join(rec, "construction");
