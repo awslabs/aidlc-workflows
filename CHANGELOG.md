@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.18] - 2026-08-19
+
+Bolt stays the planned Construction delivery slice from 2.9 (one or more Units, DoD, confidence hypothesis, ownership). Docs now state the current runtime next to that definition: default walk is stage-major, `Construction Iteration: unit-major` is opt-in, `BOLT_*` events fire only on the swarm / worktree path, and runtime batches come from `unit-of-work-dependency.md`. Construction Bolt-gate procedure and 2.9 planning questions are unchanged. No engine or walk-order change. **Upgrade:** re-copy your `dist/<harness>/` shell (or rerun the Cursor installer) so shipped `stage-protocol.md` Terminology matches. No command or flag changes.
+
+* Glossary, stage-protocol terminology, and the Construction reference keep Bolt as the 2.9 planned slice and document walk order as a separate axis (default stage-major; opt-in `Construction Iteration: unit-major`). The walking-skeleton gate under the default walk is the first in-scope Construction EXECUTE stage.
+* Parallel-batch and `bolt-plan.md` wording attributes runtime batches to `unit-of-work-dependency.md` (stage 2.7); the bolt-plan walking-skeleton marker stays advisory against `team.md`. `BOLT_STARTED` / `BOLT_COMPLETED` are documented as swarm / worktree only.
+* Same copies aligned in the user guide, delivery-planning, delivery-agent knowledge, audit-format, and the Inception stage reference. Construction Bolt-gate procedure, 2.9 bundling questions, and Construction flow diagrams are unchanged.
+* No command or flag changes.
+
 ## [2.6.17] - 2026-08-18
 
 Plugin authors now have a reusable test kit and documented testing tiers for content validation, deterministic composition, and opt-in live harness checks. No upgrade action is needed.

@@ -172,7 +172,7 @@ After the 2nd revision cycle (before the escape hatch activates), include a note
 
 ### Construction Bolt gates (walking skeleton + ladder + halt-and-ask)
 
-Construction introduces three gate patterns that differ from the standard per-stage approval gate. See SKILL.md §CONSTRUCTION Flow for the complete orchestrator behaviour.
+Construction introduces three gate patterns that differ from the standard per-stage approval gate. See SKILL.md §CONSTRUCTION Flow for the complete orchestrator behaviour. This section is the intended Bolt-major ceremony; under the default stage-major walk the walking-skeleton gate is the first in-scope Construction EXECUTE stage, and `BOLT_STARTED` / `BOLT_COMPLETED` are emitted only on the swarm / worktree path — a default gated run does not record them. See Terminology.
 
 **Walking-skeleton gate (first Bolt, always present)**
 
@@ -938,7 +938,7 @@ Key terms used throughout AI-DLC documentation:
 | **Stage** | A discrete step within a phase (e.g., Intent Capture, Requirements Analysis, Code Generation, Observability Setup) |
 | **Scope** | Controls which stages execute and at what depth. Nine built-in scopes, one file per scope under `.kiro/scopes/aidlc-<name>.md`: enterprise, feature, mvp, poc, bugfix, refactor, infra, security-patch, workshop. Custom scopes can be added without editing this file. |
 | **Bolt** | The planned Construction delivery slice from Delivery Planning (2.9): one or more Units with a Definition of Done, a confidence hypothesis, and ownership. Conventionally one pass through stages 3.1–3.5. Stages 3.6 (Build and Test) and 3.7 (CI Pipeline) run **once** after all Bolts complete, not per-Bolt. The default runtime walk does not yet treat this plan as a boundary — see **Walk order**. |
-| **Walking skeleton** | The planned first Bolt — the thinnest end-to-end slice that exercises every integration point. Always gated and interactive. Under the default stage-major walk, that gate is the first in-scope Construction EXECUTE stage and covers every Unit's first design stage. |
+| **Walking skeleton** | The planned first Bolt — the thinnest end-to-end slice that exercises every integration point. Always gated and interactive. Under the default stage-major walk, that gate is the first in-scope Construction EXECUTE stage. |
 | **Ladder prompt** | The single prompt that fires after the walking-skeleton gate asking the user to choose between "continue autonomously" and "gate every Bolt". The choice is recorded in state (`Construction Autonomy Mode`) and governs the rest of Construction. |
 | **Parallel batch** | A group of Units whose dependencies are satisfied and that don't depend on each other, run concurrently in a single orchestrator turn. Runtime batches come from `unit-of-work-dependency.md` (2.7). |
 | **Walk order** | Separate from the Bolt plan. Default = stage-major (a stage runs for every Unit, then the next stage). Opt-in = `Construction Iteration: unit-major` (a Unit runs through every per-unit stage, then the next Unit). `bolt-plan.md` is the planning artifact; its walking-skeleton marker is advisory against the `team.md` stance. |

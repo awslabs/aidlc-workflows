@@ -181,8 +181,8 @@ describe("t47 Construction Bolt vocabulary (migrated from t47-construction-bolts
     expect(walkRow).toMatch(/stage-major/);
     expect(walkRow).toMatch(/unit-major/);
     expect(skeletonRow).toBeDefined();
-    expect(skeletonRow).toMatch(/every Unit/i);
-    expect(skeletonRow).toMatch(/first design stage/i);
+    expect(skeletonRow).toMatch(/first in-scope Construction EXECUTE stage/);
+    expect(skeletonRow).not.toMatch(/first design stage/i);
   });
 
   // =========================================================================

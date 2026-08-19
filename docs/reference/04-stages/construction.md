@@ -47,15 +47,15 @@ recomputed from `unit-of-work-dependency.md` (stage 2.7).
 per-Bolt DoD, walking-skeleton marker). That marker is advisory against
 the active-space `team.md` stance (`PRACTICES_OVERRIDE` /
 `bolt-plan-marker-conflict`). Under the default walk, the
-walking-skeleton gate is the first in-scope Construction EXECUTE stage
-and covers every Unit's first design stage. Stages 3.6 (Build and Test)
-and 3.7 (CI Pipeline) run **once** at the end across all Units.
+walking-skeleton gate is the first in-scope Construction EXECUTE stage.
+Stages 3.6 (Build and Test) and 3.7 (CI Pipeline) run **once** at the
+end across all Units.
 
 ```
 Default walk (stage-major):
-  First in-scope Construction stage for every Unit
-  → Walking-skeleton gate (every Unit's first design stage)
-  → Ladder prompt (fires once): "autonomous" or "gated"
+  First in-scope Construction EXECUTE stage for every Unit
+  → Walking-skeleton gate
+  → Ladder prompt (fires once): "Continue autonomously" or "Gate every Bolt"
   Then the next stage for every Unit, code-generation last
 
 Opt-in (`Construction Iteration: unit-major`):
