@@ -894,18 +894,20 @@ function handleReview(args: string[]): void {
           autonomousCandidate,
         } = loadContext();
         const expected = attempt.requestCount + 1;
+        const sameSourceRecoveryScope =
+          receipts?.newestSourceUnit === (flags.unit ?? null);
+        const sourceScopeStale =
+          sameSourceRecoveryScope && receipts?.sourceStale === true;
         const scopeStale =
           process.env.AIDLC_SKIP_SOURCE_FRESHNESS !== "1" &&
           fields.Workflow === undefined &&
           receipts !== null &&
-          (receipts.sourceStale ||
+          (sourceScopeStale ||
             (flags.unit
               ? receipts.unitStale.has(flags.unit)
               : receipts.stageStale));
-        const sameSourceRecoveryScope =
-          receipts?.newestSourceUnit === (flags.unit ?? null);
         const sourceRecoverySpent =
-          sameSourceRecoveryScope &&
+          sourceScopeStale &&
           (receipts?.sourceRecoverySpent === true ||
             receipts?.sourceStaleProgress?.recoverySpent === true);
         const recoverySpent =
