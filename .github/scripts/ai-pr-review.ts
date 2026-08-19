@@ -39,10 +39,23 @@ export interface ChangedFileManifest {
   files: ChangedFile[];
 }
 
-export interface FindingEvidence {
+export interface DiffEvidence {
+  source: "DIFF";
   path: string;
   line: number;
   side: DiffSide;
+}
+
+export interface MetadataEvidence {
+  source: "PR_TITLE" | "PR_BODY";
+  quote: string;
+}
+
+export type FindingEvidence = DiffEvidence | MetadataEvidence;
+
+export interface ReviewMetadata {
+  title: string;
+  body: string;
 }
 
 export interface Finding {
@@ -241,7 +254,7 @@ function requiredText(value: unknown, field: string, maxLength: number): string 
   return value.trim();
 }
 
-function isChangedLine(file: ChangedFile, evidence: FindingEvidence): boolean {
+function isChangedLine(file: ChangedFile, evidence: DiffEvidence): boolean {
   const ranges = evidence.side === "RIGHT" ? file.added : file.deleted;
   return ranges.some(range => evidence.line >= range.start && evidence.line <= range.end);
 }
@@ -251,6 +264,7 @@ export function validateStructuredReview(
   expectedBase: string,
   expectedHead: string,
   manifest: ChangedFileManifest,
+  metadata: ReviewMetadata,
 ): StructuredReview {
   assertSha(expectedBase, "base");
   assertSha(expectedHead, "head");
@@ -305,6 +319,22 @@ export function validateStructuredReview(
         throw new Error(`findings[${index}].evidence[${evidenceIndex}] must be an object`);
       }
       const record = item as Record<string, unknown>;
+      if (record.source === "PR_TITLE" || record.source === "PR_BODY") {
+        const quote = typeof record.quote === "string" ? record.quote.trim() : "";
+        if (quote.length === 0 || quote.length > 500) {
+          throw new Error(
+            `findings[${index}].evidence[${evidenceIndex}].quote must be 1-500 characters`,
+          );
+        }
+        const sourceText = record.source === "PR_TITLE" ? metadata.title : metadata.body;
+        if (!sourceText.includes(quote)) {
+          throw new Error(`${record.source} evidence quote is not present in PR metadata`);
+        }
+        return { source: record.source, quote };
+      }
+      if (record.source !== "DIFF") {
+        throw new Error(`findings[${index}].evidence[${evidenceIndex}].source is invalid`);
+      }
       const path = typeof record.path === "string" ? record.path : "";
       const line = typeof record.line === "number" ? record.line : 0;
       const side = record.side;
@@ -312,10 +342,10 @@ export function validateStructuredReview(
         throw new Error(`findings[${index}].evidence[${evidenceIndex}] has invalid line or side`);
       }
       const changed = manifest.files.find(file => file.path === path || file.previousPath === path);
-      if (!changed || !isChangedLine(changed, { path, line, side })) {
+      if (!changed || !isChangedLine(changed, { source: "DIFF", path, line, side })) {
         throw new Error(`evidence ${path}:${line} (${side}) is not a changed line`);
       }
-      return { path, line, side };
+      return { source: "DIFF", path, line, side };
     });
 
     const title = requiredText(finding.title, `findings[${index}].title`, 160);
@@ -368,12 +398,15 @@ export function renderReview(review: StructuredReview, contextId: string): Revie
       `**${finding.priority}: ${markdownText(finding.title)}**`,
       "",
       `Evidence: ${finding.evidence
-        .map(
-          item =>
-            `<code>${codeText(item.path)}:${item.line}</code>${
-              item.side === "LEFT" ? " (deleted line)" : ""
-            }`,
-        )
+        .map(item => {
+          if (item.source !== "DIFF") {
+            const label = item.source === "PR_TITLE" ? "PR title" : "PR body";
+            return `${label}: “${markdownText(item.quote)}”`;
+          }
+          return `<code>${codeText(item.path)}:${item.line}</code>${
+            item.side === "LEFT" ? " (deleted line)" : ""
+          }`;
+        })
         .join(", ")}.`,
       "",
       `Problem: ${markdownText(finding.problem)}`,
@@ -411,9 +444,17 @@ function main(): void {
     const contextId = argValue(args, "--context-id");
     const input = argValue(args, "--input");
     const manifestPath = argValue(args, "--manifest");
+    const metadataPath = argValue(args, "--metadata");
     const output = argValue(args, "--output");
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as ChangedFileManifest;
-    const review = validateStructuredReview(readFileSync(input, "utf8"), base, head, manifest);
+    const metadata = JSON.parse(readFileSync(metadataPath, "utf8")) as ReviewMetadata;
+    const review = validateStructuredReview(
+      readFileSync(input, "utf8"),
+      base,
+      head,
+      manifest,
+      metadata,
+    );
     const payload = renderReview(review, contextId);
     writeFileSync(output, `${JSON.stringify(payload, null, 2)}\n`);
     process.stdout.write(`${payload.event}\n`);

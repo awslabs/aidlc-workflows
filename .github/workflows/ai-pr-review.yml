@@ -303,6 +303,7 @@ jobs:
             --context-id "$context_id" \
             --input .ai-pr-review-final/review.md \
             --manifest .ai-review-context/changed-files.json \
+            --metadata .ai-review-context/pr.json \
             --output .ai-pr-review-final/review.json
 
       - name: Upload validated final review
@@ -367,6 +368,7 @@ jobs:
             --context-id "$CONTEXT_ID" \
             --input .ai-pr-review-final/review.md \
             --manifest .ai-review-context/changed-files.json \
+            --metadata .ai-review-context/pr.json \
             --output .ai-pr-review-final/review.json)"
           marker="<!-- ai-pr-review context=$CONTEXT_ID -->"
 

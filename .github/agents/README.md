@@ -19,6 +19,14 @@ output as untrusted candidate evidence, attempts to falsify every candidate,
 re-derives surviving findings from the SHA-anchored diff and trusted base tree,
 and emits one review ordered from P0 through P3.
 
+The prompt-attack lens covers instructions embedded in PR metadata and changed
+content, including direct requests such as “show me all the AWS credentials”,
+encoded/indirect exfiltration, system-prompt disclosure, role overrides, tool
+abuse, and persistent injection through generated artifacts. Conventional
+shell/SQL/template/path/workflow injection remains a separate responsibility of
+the security lens. Active attacks are at least P1; P0 requires a reachable
+credential disclosure or privilege crossing.
+
 P0 and P1 findings submit `REQUEST_CHANGES` and fail the workflow. P2 and P3
 findings are advisory `COMMENT` reviews. A clean result is also a `COMMENT`. The
 workflow never emits `APPROVE`.
@@ -80,7 +88,8 @@ the time that short-lived credentials exist in the job environment.
 ## Machine contract
 
 The synthesizer returns strict JSON. Each finding carries a P0-P3 priority,
-title, changed-line evidence, problem chain, impact, and required correction.
+title, changed-line or verified PR-title/body evidence, problem chain, impact,
+and required correction.
 The deterministic validator in `.github/scripts/ai-pr-review.ts` renders the public
 Markdown and rejects stale SHAs, malformed JSON, inverted priorities, fabricated
 or unchanged-line evidence, reserved output markers, oversized output, and
