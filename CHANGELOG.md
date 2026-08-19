@@ -13,6 +13,12 @@ Classic and Express are new scope options, and the implicit default scope is now
 * Harness manifests may declare a nonstandard emitted orchestrator `SKILL.md` path for custom `skipRunnerGen`/`emit` layouts; standard in-tree layouts remain compatible without the field.
 * The hybrid live Kiro IDE/core pre-merge gate (`t-ide-kiro`, `AIDLC_KIRO_IDE_LIVE=1`) now runs on Windows (`%LOCALAPPDATA%\Programs\Kiro\Kiro.exe`) as well as macOS, with `AIDLC_KIRO_IDE_BIN` override and `AIDLC_KIRO_IDE_CASE` / `AIDLC_KIRO_IDE_DIAGNOSTICS` controls.
 
+Kiro CLI hooks now follow the host's canonical-name/alias glob semantics, while the adapter normalizes the corresponding payload modes before invoking shared hooks. **Upgrade:** re-copy `dist/kiro/` into the project.
+
+* The proven literal `fs_write` registration selects the `write`/`fs_write` alias family exactly once; create, replace, and append payload modes are normalized to the correct Write/Edit audit, sensor, reviewer-scope, and review-freeze inputs.
+* The proven literal `fs_read` registration selects the `read`/`fs_read` alias family exactly once and forwards both top-level and batched operation paths to the reviewer scope guard.
+* The literal `subagent` registration does not select `subagent_response`; the adapter also keeps response shells inert and defensively accepts legacy crew and direct-dispatch payload shapes.
+
 ## [2.6.17] - 2026-08-18
 
 Plugin authors now have a reusable test kit and documented testing tiers for content validation, deterministic composition, and opt-in live harness checks. No upgrade action is needed.

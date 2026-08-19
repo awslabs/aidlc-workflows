@@ -26,6 +26,51 @@ function readJson(p: string): Record<string, unknown> {
   return JSON.parse(readFileSync(p, "utf-8")) as Record<string, unknown>;
 }
 
+interface HookRegistration {
+  matcher?: string;
+  command: string;
+}
+
+interface RegistrationToolNames {
+  writes: string[];
+  reads: string[];
+  dispatches: string[];
+  responses: string[];
+}
+
+const REGISTRATION_TOOL_NAMES = (
+  readJson(
+    join(REPO_ROOT, "tests", "fixtures", "kiro-hook-payloads", "payloads.json"),
+  )._registration_tool_names as RegistrationToolNames
+);
+
+const KIRO_ALIAS_GROUPS = [
+  ["fs_write", "write"],
+  ["fs_read", "read"],
+] as const;
+
+function matchesKiroMatcher(pattern: string, reportedTool: string): boolean {
+  const aliases = KIRO_ALIAS_GROUPS.find((group) =>
+    group.some((name) => name === reportedTool)
+  ) ?? [reportedTool];
+  const glob = new Bun.Glob(pattern);
+  return aliases.some((name) => glob.match(name));
+}
+
+function registrationMatchers(
+  config: Record<string, unknown>,
+  event: "preToolUse" | "postToolUse",
+  target: string,
+): string[] {
+  const hooks = config.hooks as Record<string, HookRegistration[]>;
+  const matchers = (hooks[event] ?? [])
+    .filter((hook) => hook.command.includes(target))
+    .map((hook) => hook.matcher)
+    .filter((matcher): matcher is string => typeof matcher === "string");
+  if (matchers.length === 0) throw new Error(`missing ${event} matcher for ${target}`);
+  return matchers;
+}
+
 interface StageNode {
   mode?: string;
   lead_agent?: string;
@@ -321,6 +366,67 @@ describe("t148 dist/kiro file structure", () => {
     ]);
     const matchers = (hooks.postToolUse ?? []).map((h) => h.matcher).sort();
     expect(matchers).toEqual(["execute_bash", "fs_write", "subagent", "todo_list"]);
+  });
+
+  test("Kiro agent-v1 registrations select the live-captured alias families", () => {
+    const agentDir = join(K, "agents");
+    const configs = readdirSync(agentDir)
+      .filter((name) => name.endsWith(".json"))
+      .map((name) => [name, readJson(join(agentDir, name))] as const);
+
+    for (const [name, config] of configs) {
+      if (!((config.tools as string[]) ?? []).includes("fs_write")) continue;
+      const freeze = registrationMatchers(config, "preToolUse", "review-freeze");
+      const audit = registrationMatchers(config, "postToolUse", "audit-and-sensors");
+      for (const tool of REGISTRATION_TOOL_NAMES.writes) {
+        expect(
+          freeze.filter((matcher) => matchesKiroMatcher(matcher, tool)),
+          `${name}: freeze selection for ${tool}`,
+        ).toHaveLength(1);
+        expect(
+          audit.filter((matcher) => matchesKiroMatcher(matcher, tool)),
+          `${name}: audit selection for ${tool}`,
+        ).toHaveLength(1);
+      }
+    }
+
+    for (const name of [
+      "aidlc-architecture-reviewer-agent.json",
+      "aidlc-product-lead-agent.json",
+    ]) {
+      const config = readJson(join(agentDir, name));
+      const scope = registrationMatchers(config, "preToolUse", "reviewer-scope");
+      for (const tool of REGISTRATION_TOOL_NAMES.reads) {
+        expect(
+          scope.filter((matcher) => matchesKiroMatcher(matcher, tool)),
+          `${name}: reviewer scope selection for ${tool}`,
+        ).toHaveLength(1);
+      }
+    }
+
+    const conductor = readJson(join(agentDir, "aidlc.json"));
+    for (const target of [
+      "deliver-stage-rules",
+      "plan-approval-guard",
+      "log-subagent",
+    ]) {
+      const event = target === "log-subagent" ? "postToolUse" : "preToolUse";
+      const dispatch = registrationMatchers(conductor, event, target);
+      for (const tool of REGISTRATION_TOOL_NAMES.dispatches) {
+        expect(
+          dispatch.filter((matcher) => matchesKiroMatcher(matcher, tool)),
+          `${target}: dispatch selection for ${tool}`,
+        ).toHaveLength(1);
+      }
+      for (const tool of REGISTRATION_TOOL_NAMES.responses) {
+        expect(
+          dispatch.filter((matcher) => matchesKiroMatcher(matcher, tool)),
+          `${target}: response selection for ${tool}`,
+        ).toHaveLength(0);
+      }
+    }
+
+    expect(matchesKiroMatcher("write|fs_write", "write")).toBe(false);
   });
 
   test("workspace activation ships chat.defaultAgent=aidlc (D-5)", () => {

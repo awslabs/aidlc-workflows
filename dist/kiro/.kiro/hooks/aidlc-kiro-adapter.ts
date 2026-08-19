@@ -6,9 +6,11 @@
 // Kiro hook payloads are near-isomorphic to Claude Code's but differ in
 // three load-bearing ways (live-captured on kiro-cli 2.6.1 — see
 // docs/spikes/dist-kiro/findings.md §0.2 in the framework repo):
-//   1. tool_name arrives as the ALIAS: `shell` (execute_bash), `write`
-//      (fs_write).
-//   2. the write payload's file path field is `path`, not `file_path`.
+//   1. tool_name varies by runtime generation: `shell`/`execute_bash`,
+//      `write`/`fs_write`/`str_replace`/`fs_append`, and
+//      `subagent`/`invoke_sub_agent`/`subagent_<agent>`.
+//   2. file paths can arrive as `path`, `file_path`, `paths[]`, or
+//      `operations[].path`.
 //   3. `todo_list` input is command-shaped ({command: "create",
 //      task_list_description: "...", tasks: [{task_description}]}) — there is
 //      no status/activeForm transition.
@@ -64,6 +66,87 @@ interface KiroHookInput {
   tool_response?: unknown;
   prompt?: string;
   assistant_response?: string;
+}
+
+interface KiroDispatch {
+  coreTool: "subagent" | "Task";
+  coreInput: Record<string, unknown>;
+  agents: string[];
+  prompt: string;
+}
+
+function firstNonBlank(values: unknown[]): string {
+  return values.find(
+    (value): value is string => typeof value === "string" && value.trim().length > 0,
+  ) ?? "";
+}
+
+function inputPaths(input: Record<string, unknown>): string[] {
+  const paths: string[] = [];
+  const add = (value: unknown) => {
+    if (typeof value === "string" && value.length > 0) paths.push(value);
+  };
+  add(input.path);
+  add(input.file_path);
+  if (Array.isArray(input.paths)) for (const path of input.paths) add(path);
+  if (Array.isArray(input.operations)) {
+    for (const operation of input.operations) {
+      if (operation && typeof operation === "object") {
+        add((operation as { path?: unknown }).path);
+      }
+    }
+  }
+  return [...new Set(paths)];
+}
+
+function kiroDispatch(input: KiroHookInput): KiroDispatch | null {
+  const tool = input.tool_name ?? "";
+  const toolInput = input.tool_input ?? {};
+  // Kiro emits this auxiliary response shell after a delegate completes. It
+  // is not a dispatch and must never produce a completion or steering event.
+  if (tool === "subagent_response") return null;
+  if (tool === "subagent") {
+    const stages = Array.isArray(toolInput.stages)
+      ? toolInput.stages.filter(
+          (stage): stage is { role?: unknown; prompt_template?: unknown } =>
+            stage !== null && typeof stage === "object",
+        )
+      : [];
+    const agents = stages.map((stage) => {
+      const role = typeof stage.role === "string" ? stage.role.trim() : "";
+      return role || "unknown";
+    });
+    const prompt = [
+      firstNonBlank([toolInput.task]),
+      ...stages
+        .filter((stage) =>
+          typeof stage.role === "string" && stage.role.trim() === "aidlc-developer-agent"
+        )
+        .map((stage) => firstNonBlank([stage.prompt_template])),
+    ].filter((part) => part.length > 0).join("\n");
+    return { coreTool: "subagent", coreInput: toolInput, agents, prompt };
+  }
+
+  const named = /^subagent_(.+)$/.exec(tool);
+  if (tool !== "invoke_sub_agent" && named === null) return null;
+  const namedAgent = named?.[1]?.trim() ?? "";
+  const agent = namedAgent || firstNonBlank([
+    toolInput.name,
+    toolInput.subagent_type,
+    toolInput.agent,
+    toolInput.agent_name,
+    toolInput.role,
+  ]).trim();
+  const prompt = firstNonBlank([toolInput.prompt, toolInput.task]);
+  return {
+    coreTool: "Task",
+    coreInput: {
+      ...toolInput,
+      ...(agent ? { subagent_type: agent } : {}),
+    },
+    agents: agent ? [agent] : [],
+    prompt,
+  };
 }
 
 export async function run(
@@ -526,26 +609,16 @@ if (target === "state-transition-guard") {
 
 // --- plan-approval-guard: code-generation plan-before-generation (preToolUse) ---
 //
-// Kiro's delegation surface is the `subagent` tool: tool_input carries
-// {task, stages: [{name, role, prompt_template}]} (see
-// tests/fixtures/kiro-hook-payloads/payloads.json postToolUse_subagent).
-// The shim forwards one Task-shaped payload to the core hook when any
-// pipeline stage's role is the developer agent, joining the top-level task
-// and the developer stages' prompt templates as the prompt text from which the
-// core hook reads the explicit AIDLC-UNIT marker. Exit 2 + stderr is Kiro's
+// Legacy `subagent` calls carry {task, stages: [{role, prompt_template}]};
+// newer direct calls carry the agent in `subagent_<agent>` (or a structured
+// field on `invoke_sub_agent`) and the brief in tool_input.prompt. The shim
+// forwards one Task-shaped payload to the core hook when a dispatch targets
+// the developer agent. Exit 2 + stderr is Kiro's
 // reject contract, forwarded verbatim. Fail-open: a different tool, no
 // developer role in the pipeline, or an unspawnable core hook allows the call.
 if (target === "plan-approval-guard") {
-  const tool = kiro.tool_name ?? "";
-  if (tool !== "subagent") return 0;
-  const ti = kiro.tool_input ?? {};
-  const stages = (ti.stages as Array<{ role?: string; prompt_template?: string }>) ?? [];
-  const devStages = stages.filter((s) => s.role === "aidlc-developer-agent");
-  if (devStages.length === 0) return 0;
-  const prompt = [
-    (ti.task as string) ?? "",
-    ...devStages.map((s) => s.prompt_template ?? ""),
-  ].filter((t) => t.length > 0).join("\n");
+  const dispatch = kiroDispatch(kiro);
+  if (!dispatch?.agents.includes("aidlc-developer-agent")) return 0;
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
   const command = executable
     ? [executable, "hook", "plan-approval-guard"]
@@ -557,7 +630,10 @@ if (target === "plan-approval-guard") {
         JSON.stringify({
           hook_event_name: "PreToolUse",
           tool_name: "Task",
-          tool_input: { subagent_type: "aidlc-developer-agent", prompt },
+          tool_input: {
+            subagent_type: "aidlc-developer-agent",
+            prompt: dispatch.prompt,
+          },
         }),
         "utf-8",
       ),
@@ -584,8 +660,8 @@ if (target === "plan-approval-guard") {
 // as agent_type so the core hook still compares against the dispatch record's
 // reviewer field - a stale record naming a DIFFERENT reviewer then fails
 // open exactly like on Claude/Codex, instead of scoping the wrong agent.
-// The shim normalizes the alias payload (shell -> Bash {command}; read ->
-// Read {paths} from operations[]; write -> Write {path}) and forwards the
+// The shim normalizes the alias payload (shell -> Bash, read aliases -> Read,
+// and mutation aliases -> Write/Edit) and forwards the
 // core hook's stderr + exit code verbatim - exit 2 + stderr is Kiro's
 // reject contract, the same channel guard-tool-call uses. Fail-open: a
 // missing name (scoped_registration fallback) or an unspawnable core hook
@@ -593,25 +669,20 @@ if (target === "plan-approval-guard") {
 if (target === "reviewer-scope") {
   const tool = kiro.tool_name ?? "";
   const ti = kiro.tool_input ?? {};
+  const canonical = canonicalTool(tool, ti);
   let coreTool = "";
   const coreInput: Record<string, unknown> = {};
-  if (tool === "shell" || tool === "execute_bash") {
+  if (canonical === "Bash") {
     coreTool = "Bash";
     coreInput.command = (ti.command as string) ?? "";
-  } else if (tool === "read" || tool === "fs_read") {
+  } else if (canonical === "Read") {
     coreTool = "Read";
-    const ops = (ti.operations as Array<{ path?: string; pattern?: string }>) ?? [];
-    coreInput.paths = ops.map((o) => o.path ?? "").filter((p) => p.length > 0);
-    coreInput.path = (ti.path as string) ?? "";
-  } else if (tool === "write" || tool === "fs_write") {
-    coreTool = "Write";
-    coreInput.file_path = (ti.path as string) ?? (ti.file_path as string) ?? "";
-    // Batch shape: mirror the read side - if the payload carries an
-    // operations[] collection, every per-operation path is inspected too
-    // (a batched write across siblings must not bypass on the top-level
-    // path being absent).
-    const wops = (ti.operations as Array<{ path?: string }>) ?? [];
-    coreInput.paths = wops.map((o) => o.path ?? "").filter((p) => p.length > 0);
+    coreInput.paths = inputPaths(ti);
+  } else if (canonical === "Write" || canonical === "Edit" || tool === "delete_file") {
+    coreTool = canonical === "Write" ? "Write" : "Edit";
+    const paths = inputPaths(ti);
+    coreInput.file_path = paths[0] ?? "";
+    coreInput.paths = paths;
   } else {
     return 0;
   }
@@ -647,23 +718,22 @@ if (target === "reviewer-scope") {
 
 // --- review-freeze: the §12a terminal-receipt write-freeze -------------------
 //
-// Registered on every mutation-capable conductor/delegate fs_write and
-// execute_bash surface. The shim normalizes writes to the core hook's Write
-// shape (top-level path plus batched operations[] paths) and shell calls to its
+// Registered on every mutation-capable conductor/delegate write matcher and
+// execute_bash surface. The shim normalizes mutations to the core hook's
+// Write/Edit shape and shell calls to its
 // Bash shape, then forwards stderr + exit code verbatim. Fail-open: an
 // unspawnable core hook allows the call.
 if (target === "review-freeze") {
   const tool = kiro.tool_name ?? "";
-  if (!["write", "fs_write", "shell", "execute_bash"].includes(tool)) return 0;
   const ti = kiro.tool_input ?? {};
-  const shell = tool === "shell" || tool === "execute_bash";
+  const canonical = canonicalTool(tool, ti);
+  const shell = canonical === "Bash";
+  const mutation = canonical === "Write" || canonical === "Edit" || tool === "delete_file";
+  if (!shell && !mutation) return 0;
+  const paths = inputPaths(ti);
   const coreInput: Record<string, unknown> = shell
     ? { command: (ti.command as string) ?? "" }
-    : { file_path: (ti.path as string) ?? (ti.file_path as string) ?? "" };
-  if (!shell) {
-    const wops = (ti.operations as Array<{ path?: string }>) ?? [];
-    coreInput.paths = wops.map((o) => o.path ?? "").filter((p) => p.length > 0);
-  }
+    : { file_path: paths[0] ?? "", paths };
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
   const command = executable
     ? [executable, "hook", "review-freeze"]
@@ -672,7 +742,7 @@ if (target === "review-freeze") {
     stdin: Buffer.from(
       JSON.stringify({
         hook_event_name: "PreToolUse",
-        tool_name: shell ? "Bash" : "Write",
+        tool_name: shell ? "Bash" : canonical === "Write" ? "Write" : "Edit",
         tool_input: coreInput,
         cwd: projectDir,
       }),
@@ -706,13 +776,21 @@ if (target === "review-freeze") {
 // path stays on the harnesses that support updatedInput (Claude, Codex,
 // opencode).
 if (target === "deliver-stage-rules") {
-  if ((kiro.tool_name ?? "") !== "subagent") return 0;
+  const dispatch = kiroDispatch(kiro);
+  if (dispatch === null) return 0;
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
   const command = executable
     ? [executable, "hook", "deliver-stage-rules"]
     : [process.execPath, join(HOOKS_DIR, "aidlc-deliver-stage-rules.ts")];
   const r = Bun.spawnSync(command, {
-    stdin: Buffer.from(input, "utf-8"),
+    stdin: Buffer.from(
+      JSON.stringify({
+        ...kiro,
+        tool_name: dispatch.coreTool,
+        tool_input: dispatch.coreInput,
+      }),
+      "utf-8",
+    ),
     cwd: projectDir,
     stdout: "pipe",
     stderr: "pipe",
@@ -747,8 +825,17 @@ if (target === "deliver-stage-rules") {
 
 // Normalize Kiro's alias tool names to the canonical names the core hooks
 // match on. Both alias and canonical forms are accepted defensively.
-function canonicalTool(name: string): string {
-  if (name === "write" || name === "fs_write") return "Write";
+function canonicalTool(
+  name: string,
+  input: Record<string, unknown> = {},
+): string {
+  if (name === "write" || name === "fs_write") {
+    return ["str_replace", "append"].includes(String(input.command ?? ""))
+      ? "Edit"
+      : "Write";
+  }
+  if (name === "str_replace" || name === "fs_append") return "Edit";
+  if (["read", "fs_read", "read_file", "read_files"].includes(name)) return "Read";
   if (name === "shell" || name === "execute_bash") return "Bash";
   return name;
 }
@@ -756,8 +843,8 @@ function canonicalTool(name: string): string {
 type Forward = { hook: string; input: Record<string, unknown> } | null;
 
 function buildForward(): Forward {
-  const tool = canonicalTool(kiro.tool_name ?? "");
   const ti = kiro.tool_input ?? {};
+  const tool = canonicalTool(kiro.tool_name ?? "", ti);
 
   switch (target) {
     case "session-start":
@@ -779,15 +866,15 @@ function buildForward(): Forward {
       };
 
     case "audit-and-sensors": {
-      // postToolUse(write) → write-audit-log THEN run-sensors (both ship core).
-      if (tool !== "Write") return null;
-      const filePath = (ti.path as string) ?? (ti.file_path as string) ?? "";
+      // postToolUse(write/edit) → write-audit-log THEN run-sensors (both ship core).
+      if (tool !== "Write" && tool !== "Edit") return null;
+      const filePath = inputPaths(ti)[0] ?? "";
       if (!filePath) return null;
       return {
         hook: "__audit_and_sensors__", // handled specially below (two hooks)
         input: {
           hook_event_name: "PostToolUse",
-          tool_name: "Write",
+          tool_name: tool,
           tool_input: { file_path: filePath },
         },
       };
@@ -827,9 +914,9 @@ function buildForward(): Forward {
     }
 
     case "log-subagent": {
-      if ((kiro.tool_name ?? "") !== "subagent") return null;
-      const stages = (ti.stages as Array<{ role?: string }>) ?? [];
-      const roles = [...new Set(stages.map((s) => s.role ?? "unknown"))].join(",");
+      const dispatch = kiroDispatch(kiro);
+      if (dispatch === null) return null;
+      const roles = [...new Set(dispatch.agents)].join(",");
       return {
         hook: "aidlc-log-subagent.ts",
         input: {
