@@ -310,4 +310,15 @@ describe("t202 gate next-stage name (issue: approval option always said Code Gen
     expect(d.message).toContain("Refusing to emit run-stage");
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
   }, 30000);
+
+  test("7: a terminal user-stories fixture must skip the v8 contract-design row", () => {
+    const laterStages = ALL_SLUGS.slice(ALL_SLUGS.indexOf("user-stories") + 1);
+    const stale = seedProject("user-stories", {
+      skipped: laterStages.filter((slug) => slug !== "contract-design"),
+    });
+    expect(runNext(stale).next_stage).toBe("Contract Design");
+
+    const current = seedProject("user-stories", { skipped: laterStages });
+    expect(runNext(current).next_stage).toBeNull();
+  }, 30000);
 });

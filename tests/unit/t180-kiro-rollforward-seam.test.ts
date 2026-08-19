@@ -181,6 +181,80 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
     }
   });
 
+  // 2d/2e are the KIRO-ONLY half of the knowledge noun. The failure mode is
+  // asymmetric: `/aidlc knowledge …` can work in Claude, Codex, kiro-ide and
+  // opencode and still be swallowed here, because only Kiro runs this pre-LLM
+  // interceptor. Nothing outside this file catches that.
+  test("2d: knowledge onboard dispatches off-band and stamps the knowledge-verb latch", () => {
+    const dir = scratchProject();
+    try {
+      const r = runAdapter(dir, "verb-intercept", {
+        prompt: promptWithNext("knowledge onboard --json"),
+        cwd: dir,
+      });
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("SYSTEM (deterministic harness dispatch)");
+      expect(r.stdout).toContain("/aidlc knowledge onboard --json");
+      const latch = JSON.parse(readFileSync(latchPath(dir), "utf-8")) as {
+        turn?: number;
+        flag?: string;
+        source?: string;
+      };
+      expect(latch.turn).toBe(1);
+      expect(latch.source).toBe("knowledge-verb");
+      expect(latch.flag).toBe("knowledge onboard --json");
+      // The NON-COMPILED path must spawn aidlc-knowledge.ts, not
+      // aidlc-utility.ts. Every terminal family before DocumentKB lived in the
+      // utility tool, so the adapter hardcoded it; a knowledge verb sent there
+      // gets "unknown subcommand". Assert on the relayed output because that is
+      // the only observable -- and without this the tool-selection line is
+      // unpinned (verified: reverting it left the whole file green).
+      //
+      // The verb is `onboard` because that is what the tool implements today.
+      // Using a not-yet-built verb made this assert against the tool's OWN
+      // "unknown subcommand" error rather than against the wrong-tool error it
+      // exists to catch -- a test that passed for the wrong reason until the
+      // tool arrived, then failed for the wrong reason too.
+      const relayed = r.stdout.match(/--- OUTPUT ---\n([\s\S]*?)\n--- END OUTPUT ---/)?.[1] ?? "";
+      expect(relayed).not.toMatch(/unknown subcommand/i);
+      expect(relayed).not.toMatch(/Usage: aidlc-utility/i);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("2e: compiled knowledge dispatch restores the public noun + verb argv", () => {
+    const dir = scratchProject();
+    try {
+      const executable = fakeCompiledExecutable(dir);
+      // Every verb, because the adapter's compiledArgs branch is a hand-written
+      // translation: the noun must be re-prepended or the compiled CLI receives
+      // a bare verb it does not route.
+      for (const command of [
+        "knowledge onboard docs/policy.pdf",
+        "knowledge sync",
+        "knowledge list --json",
+        "knowledge show abc-123",
+        "knowledge associate abc-123 --intent auth",
+        "knowledge dissociate abc-123 --intent auth",
+        "knowledge rebind abc-123 --to docs/moved.pdf",
+        "knowledge help",
+      ]) {
+        const r = runAdapter(
+          dir,
+          "verb-intercept",
+          { prompt: promptWithNext(command), cwd: dir },
+          { AIDLC_COMPILED_EXECUTABLE: executable },
+        );
+        expect(r.code, command).toBe(0);
+        const relayed = r.stdout.match(/--- OUTPUT ---\n([\s\S]*?)\n--- END OUTPUT ---/)?.[1].trim();
+        expect(relayed, command).toBe(command);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("3: non-terminal freeform input stamps a turn-bound forwarding latch", () => {
     const dir = scratchProject();
     try {

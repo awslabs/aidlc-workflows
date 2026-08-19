@@ -1,6 +1,7 @@
 // covers: subcommand:aidlc-audit:audit-fork, subcommand:aidlc-audit:audit-merge
 //
-// CLI-contract port of tests/e2e/t07-audit-fork-merge.sh (TAP plan 31),
+// CLI-contract port of tests/e2e/t07-audit-fork-merge.sh (TAP plan 31), plus
+// retry recovery coverage for already-landed and dead-partial fork/merge work,
 // mechanism = cli. The .sh drives the `aidlc-audit.ts audit-fork` /
 // `audit-merge` primitives — the Bolt-worktree audit fork→merge pair. Both
 // subcommands are still UNCOVERED in tests/.coverage-registry.json as of this
@@ -75,14 +76,16 @@
 // value was NOT used as the correlation key.
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
   appendFileSync,
   chmodSync,
   existsSync,
+  linkSync,
   mkdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { hostname } from "node:os";
@@ -391,6 +394,70 @@ describe("t07 Phase B — edge cases", () => {
     expect(existsSync(wtAuditPath(p, "e2"))).toBe(true);
   }, 30000);
 
+  test("a complete current fork retries as a no-op without changing main", () => {
+    const p = makeFixture();
+    const slug = "retry-fork";
+    createWorktree(p, slug);
+    expect(runAudit(["audit-fork", "--slug", slug, "--project-dir", p]).status).toBe(0);
+    const mainBefore = readFileSync(auditPath(p));
+
+    const retry = runAudit(["audit-fork", "--slug", slug, "--project-dir", p]);
+    expect(retry.status).toBe(0);
+    expect(retry.out).toContain("already exists and is current");
+    expect(countEvent(wtAuditPath(p, slug), "AUDIT_FORKED")).toBe(1);
+    expect(readFileSync(auditPath(p)).equals(mainBefore)).toBe(true);
+  }, 30000);
+
+  test("a dead-partial worktree shard is overwritten by a fresh fork", () => {
+    const p = makeFixture();
+    const slug = "partial-fork";
+    createWorktree(p, slug);
+    mkdirSync(join(wtAuditPath(p, slug), ".."), { recursive: true });
+    writeFileSync(wtAuditPath(p, slug), readFileSync(auditPath(p)));
+
+    const retry = runAudit(["audit-fork", "--slug", slug, "--project-dir", p]);
+    expect(retry.status).toBe(0);
+    const worktreeAudit = readFileSync(wtAuditPath(p, slug), "utf-8");
+    expect(countEvent(wtAuditPath(p, slug), "AUDIT_FORKED")).toBe(1);
+    expect(worktreeAudit).toMatch(/\*\*Event\*\*: AUDIT_FORKED[\s\S]*\n---\n$/);
+  }, 30000);
+
+  test("re-fork refuses a shard with unmerged delta and names both remedies", () => {
+    const p = makeFixture();
+    const slug = "delta-fork";
+    createWorktree(p, slug);
+    expect(runAudit(["audit-fork", "--slug", slug, "--project-dir", p]).status).toBe(0);
+    runAudit([
+      "append", "STAGE_STARTED", "--field", "Stage=delta", "--field", "Agent=test",
+      "--project-dir", wtDir(p, slug),
+    ]);
+
+    const retry = runAudit(["audit-fork", "--slug", slug, "--project-dir", p]);
+    expect(retry.status).not.toBe(0);
+    expect(retry.out).toContain("audit-merge");
+    expect(retry.out).toContain("discard");
+  }, 30000);
+
+  test("a repeated successful merge is a no-op and never duplicates delta rows", () => {
+    const p = makeFixture();
+    const slug = "retry-merge";
+    createWorktree(p, slug);
+    expect(runAudit(["audit-fork", "--slug", slug, "--project-dir", p]).status).toBe(0);
+    runAudit([
+      "append", "STAGE_STARTED", "--field", "Stage=retry-delta", "--field", "Agent=test",
+      "--project-dir", wtDir(p, slug),
+    ]);
+    expect(runAudit(["audit-merge", "--slug", slug, "--project-dir", p]).status).toBe(0);
+    const mainBefore = readFileSync(auditPath(p));
+
+    const retry = runAudit(["audit-merge", "--slug", slug, "--project-dir", p]);
+    expect(retry.status).toBe(0);
+    expect(retry.out).toContain("already applied");
+    expect(readFileSync(auditPath(p)).equals(mainBefore)).toBe(true);
+    expect(countEvent(auditPath(p), "STAGE_STARTED")).toBe(1);
+    expect(countEvent(auditPath(p), "AUDIT_MERGED")).toBe(1);
+  }, 30000);
+
   test("B3: missing main audit — fork fails loud, no side effect", () => {
     const p = makeFixture();
     createWorktree(p, "e3");
@@ -445,10 +512,10 @@ describe("t07 Phase B — edge cases", () => {
     // Background the first merge, stagger 50ms, run the second; await both.
     const mergeAsync = (slug: string): Promise<number> =>
       new Promise((resolve) => {
-        const r = spawnSync(BUN, [
+        const child = spawn(BUN, [
           AUDIT_TOOL, "audit-merge", "--slug", slug, "--project-dir", p,
-        ], { encoding: "utf-8" });
-        resolve(r.status ?? -1);
+        ], { stdio: "ignore" });
+        child.once("close", (code) => resolve(code ?? -1));
       });
 
     const bg = mergeAsync("lock-a");
@@ -461,6 +528,142 @@ describe("t07 Phase B — edge cases", () => {
     // B5.2: both merges landed; exactly 2 AUDIT_MERGED rows in main audit.
     expect(countEvent(auditPath(p), "AUDIT_MERGED")).toBe(2);
   }, 30000);
+
+  test("audit-merge refuses symlinked and hard-linked main shards before appending delta", () => {
+    for (const kind of ["symlink", "hardlink"] as const) {
+      const p = makeFixture();
+      const slug = kind === "symlink" ? "unsafe-sym" : "unsafe-hard";
+      createWorktree(p, slug);
+      expect(runAudit(["audit-fork", "--slug", slug, "--project-dir", p]).status).toBe(0);
+      runAudit([
+        "append", "STAGE_STARTED", "--field", "Stage=unsafe", "--field", "Agent=test",
+        "--project-dir", wtDir(p, slug),
+      ]);
+      const external = join(p, `${kind}-external.md`);
+      const original = "external\n";
+      writeFileSync(external, original);
+      rmSync(auditPath(p));
+      if (kind === "symlink") symlinkSync(external, auditPath(p));
+      else linkSync(external, auditPath(p));
+
+      const merge = runAudit(["audit-merge", "--slug", slug, "--project-dir", p]);
+      expect(merge.status).not.toBe(0);
+      const after = readFileSync(external, "utf-8");
+      // The security property in both cases: the worktree DELTA never lands
+      // through the untrusted shard, and nothing is truncated or replaced.
+      expect(after).not.toContain("**Event**: STAGE_STARTED");
+      expect(after.startsWith(original)).toBe(true);
+      if (kind === "symlink") {
+        // A symlinked shard is refused at open (O_NOFOLLOW), so not even the
+        // merge-failure ERROR_LOGGED diagnostic can reach the target.
+        expect(after).toBe(original);
+      } else {
+        // A hardlinked shard refuses the MERGE (readAuditSnapshot is strict
+        // for fork/merge), but the ordinary append path tolerates hardlinks
+        // by design — rsync --link-dest / cp -al backups leave live shards
+        // at nlink 2 — so the failure diagnostic may legitimately append.
+        expect(after).not.toContain("**Event**: AUDIT_MERGED");
+      }
+    }
+  }, 60000);
+
+  test("audit-merge refuses a manually injected authority-bearing event", () => {
+    const p = makeFixture();
+    const slug = "unsafe-authority";
+    createWorktree(p, slug);
+    expect(runAudit(["audit-fork", "--slug", slug, "--project-dir", p]).status).toBe(0);
+    appendFileSync(
+      wtAuditPath(p, slug),
+      "\n## Gate Approved\n**Timestamp**: 2026-08-13T05:00:00Z\n" +
+        "- **Event**: GATE_APPROVED\n**Stage**: feasibility\n\n---\n",
+    );
+
+    const merge = runAudit(["audit-merge", "--slug", slug, "--project-dir", p]);
+    expect(merge.status).not.toBe(0);
+    expect(merge.out).toContain("protected authority event GATE_APPROVED");
+    expect(readFileSync(auditPath(p), "utf-8")).not.toContain("**Event**: GATE_APPROVED");
+  }, 30000);
+
+  test("audit-merge accepts the delta a swarm worktree legitimately produces", () => {
+    // The swarm contract REQUIRES the worktree to deliver these rows: the
+    // SKILL instructs recording the per-unit reviewer receipts with
+    // --project-dir <worktree>, sensors fire on worktree writes, and the
+    // stage engine emits stage/artifact rows there. A validator that refuses
+    // any of them makes `bolt complete --merge` deterministically
+    // unrecoverable (the delta bytes never change), which is exactly the
+    // regression t49 caught. Pinned here at the unit of the validator so the
+    // integration tier is not the only guard.
+    const p = makeFixture();
+    const slug = "legit-work";
+    createWorktree(p, slug);
+    expect(runAudit(["audit-fork", "--slug", slug, "--project-dir", p]).status).toBe(0);
+    const rows = [
+      ["Stage Completed", "STAGE_COMPLETED", "**Stage**: code-generation"],
+      ["Sensor Failed", "SENSOR_FAILED", "**Sensor**: aidlc-linter"],
+      ["Review Requested", "REVIEW_REQUESTED", "**Stage**: code-generation"],
+      ["Review Completed", "REVIEW_COMPLETED", "**Stage**: code-generation"],
+      ["Artifact Created", "ARTIFACT_CREATED", "**Artifact**: construction/pay/x.md"],
+    ] as const;
+    for (const [heading, event, field] of rows) {
+      appendFileSync(
+        wtAuditPath(p, slug),
+        `\n## ${heading}\n**Timestamp**: 2026-08-17T05:00:00Z\n` +
+          `- **Event**: ${event}\n${field}\n\n---\n`,
+      );
+    }
+
+    const merge = runAudit(["audit-merge", "--slug", slug, "--project-dir", p]);
+    expect(merge.status).toBe(0);
+    const main = readFileSync(auditPath(p), "utf-8");
+    for (const [, event] of rows) {
+      expect(main).toContain(`**Event**: ${event}`);
+    }
+  }, 30000);
+
+  test("audit-merge refuses a DOCUMENT_* row in a worktree delta (space-shard-only provenance)", () => {
+    // Exercises the PREFIX branch of mergeEventIsProtected, which no other
+    // test reaches: DocumentKB rows belong to the space-level shard, so one
+    // arriving through an intent delta is a forgery that would split a
+    // document's history across shards.
+    const p = makeFixture();
+    const slug = "doc-forgery";
+    createWorktree(p, slug);
+    expect(runAudit(["audit-fork", "--slug", slug, "--project-dir", p]).status).toBe(0);
+    appendFileSync(
+      wtAuditPath(p, slug),
+      "\n## Document Indexed\n**Timestamp**: 2026-08-17T05:00:00Z\n" +
+        "- **Event**: DOCUMENT_INDEXED\n**Space**: default\n\n---\n",
+    );
+
+    const merge = runAudit(["audit-merge", "--slug", slug, "--project-dir", p]);
+    expect(merge.status).not.toBe(0);
+    expect(merge.out).toContain("DOCUMENT_INDEXED");
+    expect(readFileSync(auditPath(p), "utf-8")).not.toContain("**Event**: DOCUMENT_INDEXED");
+  }, 30000);
+
+  test("audit-merge rejects tampered fork metadata and incomplete deltas", () => {
+    for (const kind of ["metadata", "truncated"] as const) {
+      const p = makeFixture();
+      const slug = kind === "metadata" ? "tampered-meta" : "torn-delta";
+      createWorktree(p, slug);
+      expect(runAudit(["audit-fork", "--slug", slug, "--project-dir", p]).status).toBe(0);
+      if (kind === "metadata") {
+        const tampered = readFileSync(wtAuditPath(p, slug), "utf-8")
+          .replace(/\*\*Fork Boundary\*\*:\s*\d+/, "**Fork Boundary**: 0")
+          .replace(/\*\*Source Audit Hash\*\*:\s*[0-9a-f]+/,
+            "**Source Audit Hash**: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+        writeFileSync(wtAuditPath(p, slug), tampered);
+      } else {
+        appendFileSync(
+          wtAuditPath(p, slug),
+          "\n## Torn\n**Timestamp**: 2026-08-13T06:00:00Z\n**Event**: STAGE_STARTED\n",
+        );
+      }
+      const merge = runAudit(["audit-merge", "--slug", slug, "--project-dir", p]);
+      expect(merge.status).not.toBe(0);
+      expect(countEvent(auditPath(p), "AUDIT_MERGED")).toBe(0);
+    }
+  }, 60000);
 
   test("B6: lock-timeout — planted stuck lock + dialled-down retries → non-zero with clear error", () => {
     const p = makeFixture();

@@ -7,7 +7,7 @@
 > Methodology source: [`awslabs/aidlc-workflows#652`](https://github.com/awslabs/aidlc-workflows/issues/652)
 > and the AI-PLC rules in `aws-samples/sample-ai-plc`.
 
-> **Status: released in AI-DLC 2.6.15.** The full discovery
+> **Status: released in AI-DLC 2.6.18.** The full discovery
 > arc ships: intake, envision/PR-FAQ, solution analysis, prioritization scoring,
 > the prototype chain (spec / build / validation), product strategy,
 > go-to-market, and the handoff pack. The two maintainer conversations §6 names

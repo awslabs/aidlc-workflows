@@ -252,6 +252,7 @@ export const TOOL_DESCRIPTORS: readonly ToolDescriptor[] = [
   { file: "aidlc-audit.ts", kind: "switch", anchor: "subcommand" },
   { file: "aidlc-bolt.ts", kind: "switch", anchor: "subcommand" },
   { file: "aidlc-jump.ts", kind: "switch", anchor: "subcommand" },
+  { file: "aidlc-knowledge.ts", kind: "switch", anchor: "subcommand" },
   { file: "aidlc-log.ts", kind: "switch", anchor: "subcommand" },
   { file: "aidlc-worktree.ts", kind: "switch", anchor: "subcommand" },
   { file: "aidlc-validate.ts", kind: "switch", anchor: "subcommand" },

@@ -22,7 +22,7 @@ intentionally ignored. Historical shards are not rewritten: readers that parse
 whole files must split on `---` and use the first timestamp in each block, or
 deduplicate timestamp fields produced by older versions.
 
-## Event Registry (82 events, 21 categories)
+## Event Registry (85 events, 22 categories)
 
 ### Workflow Lifecycle (4 events)
 
@@ -154,6 +154,23 @@ the active space's shared `codekb/<repo>/` tree.
 |-------|------|-----------------|---------|
 | `PLAN_APPROVAL_BLOCKED` | A code-generation developer-agent dispatch was refused because a targeted unit lacked a non-empty, explicitly approved `code-generation-plan.md` (stage Steps 2-3 must precede Step 4) | Timestamp, Tool, Target, Stage, Unit | `hooks/aidlc-plan-approval-guard.ts` (PreToolUse) |
 
+### Documents (3 events)
+
+The DocumentKB is a **space-level** store, so all three events land in the space-level audit shard (`spaces/<space>/intents/audit/`) even for an intent-scoped document — the intent UUID is recorded as a field rather than selecting the shard. This keeps one document's history in one place across an `associate`/`dissociate` scope change. These events are provenance, **not a backup**: deleting the whole `documentkb/` tree destroys the per-document records, so document ids, tombstones, and intent links do NOT survive it — the next `sync` re-indexes the surviving originals as brand-new rows. Only a lost `index.json` alone is recoverable (`sync` rebuilds it from the per-document `metadata.json` files).
+
+| Event | When | Required Fields | Emitter |
+|-------|------|-----------------|---------|
+| `DOCUMENT_INDEXED` | A customer document was indexed into the DocumentKB for the first time (from `onboard`, and from `sync`'s fresh-document branch) | Timestamp, Space, Document, Source, Digest, optional Intent | `tools/aidlc-knowledge.ts` |
+| `DOCUMENT_UPDATED` | An indexed document's record changed — a new revision, a re-extraction, a move, or an intent association change (from `associate`, `dissociate`, `rebind`, `onboard`'s edited-row branch, `sync`'s moved/changed/retried branches, and the idempotent audit-repair pass) | Timestamp, Space, Document, Change, optional Intent | `tools/aidlc-knowledge.ts` |
+| `DOCUMENT_REMOVED` | The original is gone; the row became a metadata-only tombstone and extracted content was deleted (from `sync`) | Timestamp, Space, Document, Last Path, Last Digest | `tools/aidlc-knowledge.ts` |
+
+All three are written to the **space-level** shard (`intents/audit/`), not an intent's,
+even when the document carries `related_intent_ids`. A document outlives any single
+intent and `associate`/`dissociate` can move its scope, so filing its provenance under
+the active intent would split one document's history across shards. An
+`associate`/`dissociate` that changes nothing emits **no** event: a per-call event
+would fill the ledger with non-changes and break reconstruction-from-the-ledger.
+
 ### Utility Events (1 event)
 
 | Event | When | Required Fields | Emitter |
@@ -190,7 +207,7 @@ Emitted during Phase 3 (Construction) when Bolts run inside per-Bolt git worktre
 | `STATE_FORKED` | State file forked to worktree on Bolt start | Timestamp, Bolt slug, Worktree path, Source state hash, Target state hash | `tools/aidlc-state.ts` (`fork`) |
 | `STATE_MERGED` | Worktree's state merged back to main state on gate approval | Timestamp, Bolt slug, Worktree path, Source state hash, Target state hash, Conflict resolution | `tools/aidlc-state.ts` (`merge`) |
 | `AUDIT_FORKED` | Audit log forked to worktree on Bolt start (audit-of-intent — emit precedes the byte-copy) | Timestamp, Bolt slug, Source Audit Hash, Fork Boundary | `tools/aidlc-audit.ts` (`audit-fork`) |
-| `AUDIT_MERGED` | Worktree's audit entries appended to main audit on gate approval; per-Bolt entry order preserved, cross-Bolt order reflects merge-completion order | Timestamp, Bolt slug, Entries Merged, Source Audit Hash, Fork Boundary | `tools/aidlc-audit.ts` (`audit-merge`) |
+| `AUDIT_MERGED` | Worktree's audit entries appended to main audit on gate approval; per-Bolt entry order preserved, cross-Bolt order reflects merge-completion order | Timestamp, Bolt slug, Entries Merged, Source Audit Hash, Fork Boundary, Fork Timestamp | `tools/aidlc-audit.ts` (`audit-merge`) |
 
 ### Practices (4 events)
 

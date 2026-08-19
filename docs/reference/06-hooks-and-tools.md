@@ -373,9 +373,9 @@ This is one of the framework's five flow-altering hooks and one of its four `Pre
 
 This is one of the framework's five flow-altering hooks and one of its four `PreToolUse` controls. The stage prose says generation never begins before the human answers "Approve Plan" - a field report showed a conductor generating the code first and backfilling `code-generation-plan.md` beside `code-summary.md`, turning the plan into a retroactive summary. The stage-completion artifact guard cannot catch that inversion (it fires at completion, when the backfilled plan already exists), so this hook refuses the dispatch itself.
 
-**Decision.** The guard acts only when the active state-bound directive is code-generation (falling back to `Current Stage` when no valid marker exists) and the tool call is a `Task` dispatch whose `subagent_type` is `aidlc-developer-agent`. This keeps the guard active during a unit-major interleave while the durable cursor remains on the first design stage. Step 4 requires the delegation prompt to start with `AIDLC-UNIT: <directive.unit>` (or the current single-iteration unit). The guard resolves that exact marker against the workflow's known units (the compiled bolt DAG plus the on-disk `construction/<unit>/` dirs), then requires that unit to have BOTH a non-empty `code-generation-plan.md` on disk AND an explicit "Approve Plan" answer on the Plan Approval question in `code-generation-questions.md`. Contextual mentions of sibling units have no effect; missing, conflicting, or unknown markers block. The Plan Approval identifier may share the heading with its question number (`Q1: Plan Approval` or `Question 1 - Plan Approval`) or appear as the first question-text line under a numbered heading (`## Q1` followed by `Plan Approval`); blank tags, "Request Changes", unrelated answered questions, and examples inside HTML comments or fenced code do not authorize generation. The same evidence is mandatory under autonomous Construction, matching the stage's every-execution-mode hard stop. The decision (`evaluatePlanApprovalDispatch`, an exported pure function pinned by `t265`) blocks with **exit 2 + a redirecting stderr reason** naming the missing evidence and the stage steps that produce it, and emits a `PLAN_APPROVAL_BLOCKED` audit row (Tool, Target, Stage, Unit).
+**Decision.** The guard acts only when the active state-bound directive is code-generation (falling back to `Current Stage` when no valid marker exists) and the tool call is a `Task` dispatch whose `subagent_type` is `aidlc-developer-agent`. This keeps the guard active during a unit-major interleave while the durable cursor remains on the first design stage. Step 4 requires the delegation prompt to start with `AIDLC-UNIT: <directive.unit>` and `AIDLC-TESTING-CONTRACT: <hash>`. The guard resolves the Unit marker against the compiled Bolt DAG plus on-disk construction directories, then requires non-empty plan and test-instruction files, a structured Testing Contract that still matches current memory/scope/strategy/type, an explicit "Approve Plan" answer, and an approval fingerprint over those exact bytes. Missing, conflicting, unknown, stale, or post-approval-modified evidence blocks. The Plan Approval identifier may share the heading with its question number (`Q1: Plan Approval` or `Question 1 - Plan Approval`) or appear as the first question-text line under a numbered heading (`## Q1` followed by `Plan Approval`); blank tags, "Request Changes", unrelated answered questions, and examples inside HTML comments or fenced code do not authorize generation. The same evidence is mandatory under autonomous Construction, where `aidlc-swarm.ts prepare` independently verifies it before worktree creation. The decision (`evaluatePlanApprovalDispatch`, pinned by `t265`) blocks with **exit 2 + a redirecting stderr reason** and emits a `PLAN_APPROVAL_BLOCKED` audit row (Tool, Target, Stage, Unit).
 
-**Fail-open outside the guarded dispatch.** No state file, another stage, another agent or tool, malformed stdin, or any internal error allows the call. Once a code-generation developer dispatch is identified, missing or ambiguous target evidence blocks. The deterministic off-switch `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` disables enforcement entirely. On Kiro CLI the conductor agent registers the guard on its `subagent` matcher (the adapter translates the crew schema); on Codex it rides the `spawn_agent` PreToolUse seam; on opencode the plugin consults it before `task` dispatches; Kiro IDE documents the bound as prose-only, like its other guards.
+**Fail-open outside the guarded dispatch.** No state file, another stage, another agent or tool, malformed stdin, or any internal error allows the call. Once a code-generation developer dispatch is identified, missing or ambiguous target evidence blocks. The deterministic off-switch `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` disables this PreToolUse hook only. It deliberately does **not** disable the autonomous `aidlc-swarm.ts prepare` precondition: headless worker harnesses may have no dispatch-hook seam, so `prepare` remains the independent hard boundary that prevents unapproved worktree fan-out. To avoid that boundary, restore/approve the plan evidence or return Construction to gated mode rather than disabling the hook. On Kiro CLI the conductor agent registers the guard on its `subagent` matcher (the adapter translates the crew schema); on Codex it rides the `spawn_agent` PreToolUse seam; on opencode the plugin consults it before `task` dispatches; Kiro IDE documents the bound as prose-only, like its other guards.
 
 ---
 
@@ -485,6 +485,7 @@ The audit trail (the intent's `audit/` shards) uses the event taxonomy defined i
 | **Subagent** | 1 | `SUBAGENT_COMPLETED` | log-subagent hook |
 | **Reviewer enforcement** | 2 | `REVIEWER_SCOPE_BLOCKED`, `REVIEW_FREEZE_BLOCKED` | reviewer-scope hook, review-freeze hook |
 | **Plan approval** | 1 | `PLAN_APPROVAL_BLOCKED` | plan-approval-guard hook |
+| **Documents** | 3 | `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED`, `DOCUMENT_REMOVED` | `aidlc-knowledge.ts` (space-level shard even when intent-scoped) |
 | **Utility** | 1 | `HEALTH_CHECKED` | `aidlc-utility.ts doctor` |
 | **Error/Recovery** | 2 | `ERROR_LOGGED`, `RECOVERY_COMPLETED` | `lib.ts emitError`, `aidlc-state.ts acknowledge-compaction` |
 | **Construction Bolt** | 4 | `BOLT_STARTED`, `BOLT_COMPLETED`, `BOLT_FAILED`, `AUTONOMY_MODE_SET` | `aidlc-bolt.ts` |
@@ -621,7 +622,19 @@ Deterministic handlers avoid LLM overhead for operations that are pure computati
 
 ## Sensor, Learning, and Runtime Tools
 
-Three further `aidlc-*.ts` tools back the v0.5.0 data plane. Each is a thin, deterministic dispatcher: the hooks invoke them automatically, and they are also human-callable for debugging. They follow the same three-concerns split as `aidlc-utility.ts` — determinism lives in the tool, the conflict/contradiction VERDICT is the orchestrator-LLM's, and keep/skip judgement is the user's at a gate.
+Four further `aidlc-*.ts` tools back the data plane. Each is deterministic:
+the hooks/stages invoke them automatically, and they are also human-callable
+for debugging.
+
+### `aidlc-testing-posture.ts` — Code Generation Testing Contract
+
+`resolve`/`render` read the active space's org/team/project Testing Posture
+sections, resolve methodology/order independently from ancillary coverage and
+tooling notes, combine the active scope and Test Strategy obligations, and emit
+the structured contract plus methodology-specific plan profile.
+`fingerprint --unit <unit>` binds the exact plan, unit test instructions, and
+current contract for Plan Approval; `verify --unit <unit>` is the shared
+decision used by the dispatch guard and autonomous swarm `prepare`.
 
 ### `aidlc-sensor.ts` — Sensor dispatcher
 
@@ -658,6 +671,30 @@ Materialises the intent's `runtime-graph.json`, the data-plane mirror of `stage-
 | `fragment-merge --slug <slug>` | Remove the worktree fragment (idempotent). Called by `aidlc-bolt.ts complete --merge` | — |
 
 Re-running `compile` against the same audit produces a byte-equivalent graph. It is invoked automatically by the `aidlc-rebuild-stage-graph.ts` PostToolUse Bash hook on every transition-class audit emit (`GATE_APPROVED`, `STAGE_STARTED`, `STAGE_AWAITING_APPROVAL`, `AUDIT_MERGED`, `WORKFLOW_COMPLETED`); manual invocation is a debug surface. The `fragment-fork` / `fragment-merge` primitives ride on the existing fork/merge audit boundaries (`STATE_FORKED` + `AUDIT_FORKED`, `STATE_MERGED` + `AUDIT_MERGED`) and emit no events of their own. All subcommands accept `--project-dir <path>`.
+
+### `aidlc-knowledge.ts` — DocumentKB indexer
+
+Indexes the team's own documents into a per-space catalog agents can cite. Two directories with different owners: `knowledge/documents/` holds the user's originals (the tool never reorganises or deletes them), and `knowledge/documentkb/` is the derived catalog — `index.json` plus a per-document dir carrying `metadata.json` and extracted `content.md`. **Only the index is reconstructible**: `sync` rebuilds a lost `index.json` from every surviving `metadata.json`, tombstones included. Deleting the whole `documentkb/` tree also deletes those `metadata.json` files, so document ids and tombstones do NOT survive — `sync` re-onboards the surviving originals as new rows.
+
+| Subcommand | Purpose | Emits |
+|------------|---------|-------|
+| `onboard [path]` | Index one document, or every not-yet-indexed file under `documents/`. Idempotent — an unchanged file reports `already`, not a second row. An EDITED file at an already-indexed path refreshes that row in place and reports `edited`, so one path never carries two live rows | `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED` |
+| `sync` | Reconcile the catalog with `documents/`: index what is new, tombstone what was deleted, re-extract an invalidated row, and rebuild `index.json` from the per-document records if the index itself is gone | `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED`, `DOCUMENT_REMOVED` |
+| `list [--json]` | The catalog — every row with its extraction/availability state visible | — |
+| `show <id> [--json]` | One document's record plus its extracted text, with the untrusted-content notice inline | — |
+| `associate <id> --intent [slug]` | Scope a document to one intent. Idempotent; reports `fresh` vs `already` | `DOCUMENT_UPDATED` |
+| `dissociate <id> --intent [slug]` | Remove that scoping. Deleting the last one omits the key rather than writing an empty list | `DOCUMENT_UPDATED` |
+| `rebind <id> --to <path>` | Repair a row whose original moved **and** changed — the one case `sync` cannot resolve, because neither path nor digest survives to tie the new file to the old row | `DOCUMENT_UPDATED` |
+
+All subcommands accept `--space <name>` and `--project-dir <path>`; `onboard` also accepts `--intent [slug]` and `--allow-inactive`.
+
+**Writes are journaled.** Extraction happens outside the workspace lock (it can be slow and calls an external executable); inside the lock the tool re-validates the source digest and `rename()`s a fully-formed staging dir into place. A crashed run leaves an orphan directory under `documentkb/.journal/` that no index row references, which is what makes it collectable rather than corrupting. Audit rows land in the **space-level** shard even for an intent-scoped document: a document outlives any intent, and `associate`/`dissociate` can move its scope later, so filing its provenance under whichever intent happened to be active would split one document's history across shards.
+
+**Every path is treated as untrusted input** — from a CLI argument, a directory walk, or a committed index row. Four guards apply. First the *anchor itself* is verified: every verb refuses to run if `knowledge/` or `knowledge/documentkb/` is a symlink, because a redirected container decides where every subsequent write lands (a first run on a project that has neither directory yet is unaffected — absent is not redirected). Then, per path: the shape is schema-validated (relative, POSIX, no `..`, no NUL), no path *component* is a symlink, and containment is re-checked after `realpath` with the bytes read through an `O_NOFOLLOW` handle, so the identity checked is the identity read.
+
+There is deliberately **no `remove` subcommand**: deletion is "delete the user-owned original, then `sync`", so the tool never holds a destructive verb over a user's own files.
+
+> Extracted document text is **untrusted data, not instructions**. `show` ships that rule inline with the content so the two can never be separated.
 
 ---
 

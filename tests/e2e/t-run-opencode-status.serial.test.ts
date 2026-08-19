@@ -36,9 +36,13 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { existsSync, rmSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
+import {
+  runOpencode,
+  setupOpencodeProject,
+} from "../harness/exec-drive.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
 const OPENCODE_DIST = join(REPO_ROOT, "dist", "opencode");
@@ -80,51 +84,6 @@ function skipReason(): string | null {
   return null;
 }
 const SKIP_REASON = skipReason();
-
-// A scratch install: dist/opencode copied verbatim (dotfiles included — the
-// engine at .aidlc/, the native shell at .opencode/, the project opencode.json
-// whose skills.paths + permission allowlist this journey exercises), then
-// git-initialized (opencode resolves the project root by walking to the
-// worktree root).
-function setupOpencodeProject(): { proj: string; root: string } {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "opencode-run-")));
-  const proj = join(root, "proj");
-  cpSync(OPENCODE_DIST, proj, { recursive: true });
-  for (const args of [
-    ["init", "-q"],
-    ["add", "-A"],
-    ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "install"],
-  ]) {
-    const r = spawnSync("git", args, { cwd: proj, encoding: "utf-8" });
-    if (r.status !== 0) throw new Error(`git ${args[0]} failed: ${r.stderr}`);
-  }
-  return { proj, root };
-}
-
-// `--command aidlc` invokes the shipped .opencode/command/aidlc.md; the
-// message tokens after `--` land in its $ARGUMENTS. The status path needs no
-// non-allowlisted tools, so no --auto: an unexpected permission ask would
-// auto-reject and fail the asserts (which is the honest signal).
-//
-// PWD must be pinned to the project: spawnSync's `cwd` does not rewrite the
-// inherited PWD env var, and opencode trusts PWD over the real cwd when
-// resolving its instance directory — with the runner's checkout leaking
-// through, `opencode run` dies with "Unexpected server error"
-// (live-reproduced on 1.17.18).
-function runOpencode(proj: string, args: string[]): { rc: number; out: string } {
-  const r = spawnSync(
-    OPENCODE_BIN,
-    ["run", "--command", "aidlc", "-m", MODEL, "--", ...args],
-    {
-      cwd: proj,
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, PWD: proj },
-      timeout: TEST_TIMEOUT_MS,
-    },
-  );
-  return { rc: r.status ?? -1, out: `${r.stdout ?? ""}\n${r.stderr ?? ""}` };
-}
 
 describe("t-run-opencode-status — /aidlc --status on the shipped dist/opencode via opencode run", () => {
   test.skipIf(SKIP_REASON !== null)(
