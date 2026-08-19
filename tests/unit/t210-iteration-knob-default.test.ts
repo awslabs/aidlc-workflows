@@ -45,6 +45,7 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 resetAidlcEnv();
 
@@ -53,10 +54,11 @@ const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const BUN = process.execPath;
 
 const FD_PRODUCES = [
-  "business-logic-model",
-  "business-rules",
-  "domain-entities",
+  "entities",
+  "rules",
+  "functional-spec",
   "frontend-components",
+  "traceability",
 ];
 
 const tempDirs: string[] = [];
@@ -95,7 +97,7 @@ function constructionState(opts: {
 - **Project**: iteration knob default test
 - **Project Type**: Greenfield
 - **Scope**: feature
-- **State Version**: 7
+- **State Version**: 8
 - **Skeleton Stance**: on
 ${autonomyLine}## Scope Configuration
 - **Stages to Execute**: all
@@ -114,7 +116,7 @@ ${autonomyLine}## Scope Configuration
 - [ ] build-and-test — EXECUTE
 
 ### INCEPTION PHASE
-- [-] application-design — EXECUTE
+- [-] domain-design — EXECUTE
 
 ## Current Status
 - **Lifecycle Phase**: CONSTRUCTION
@@ -133,7 +135,7 @@ function coverUnit(
   const dir = join(seededRecordDir(proj), "construction", unit, slug);
   mkdirSync(dir, { recursive: true });
   for (const name of producesNames) {
-    writeFileSync(join(dir, `${name}.md`), `# ${name} for ${unit}\n`);
+    writeFileSync(join(dir, artifactFilename(name)), `# ${name} for ${unit}\n`);
   }
 }
 

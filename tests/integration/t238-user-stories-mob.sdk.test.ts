@@ -78,7 +78,7 @@ function userStoriesState(projectDir: string): string {
 - **Project Type**: Greenfield
 - **Scope**: feature
 - **Start Date**: 2026-07-17T00:00:00Z
-- **State Version**: 7
+- **State Version**: 8
 - **Active Agent**: aidlc-product-agent
 - **Worktree Path**:
 - **Bolt Refs**:
@@ -86,7 +86,7 @@ function userStoriesState(projectDir: string): string {
 
 ## Scope Configuration
 - **Stages to Execute**: 0.1, 0.2, 0.3, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 2.2, 2.3, 2.4
-- **Stages to Skip**: 2.1, 2.5, 2.6, 2.7, 2.8, 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7
+- **Stages to Skip**: 2.1, 2.5, 2.6, 2.7, 2.8, 2.9, 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7
 - **Depth**: Minimal
 - **Test Strategy**: Minimal
 
@@ -135,8 +135,9 @@ function userStoriesState(projectDir: string): string {
 - [x] requirements-analysis — EXECUTE
 - [-] user-stories — EXECUTE
 - [S] refined-mockups — SKIP (live SDK fixture terminal boundary)
-- [S] application-design — SKIP (live SDK fixture terminal boundary)
+- [S] domain-design — SKIP (live SDK fixture terminal boundary)
 - [S] units-generation — SKIP (live SDK fixture terminal boundary)
+- [S] contract-design — SKIP (live SDK fixture terminal boundary)
 - [S] delivery-planning — SKIP (live SDK fixture terminal boundary)
 
 ### CONSTRUCTION PHASE
@@ -490,6 +491,13 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
             /"stage"\s*:\s*"user-stories"/.test(toolResult.resultText),
         );
         expect(runStage, "expected the engine's user-stories run-stage directive").toBeDefined();
+        const runStageDirective = JSON.parse(runStage?.resultText ?? "{}") as {
+          next_stage?: string | null;
+        };
+        expect(
+          runStageDirective.next_stage,
+          "the terminal live fixture routed to another stage after user-stories",
+        ).toBeNull();
         expect(runStage?.resultText).toContain(
           ".claude/agents/aidlc-product-agent.md",
         );

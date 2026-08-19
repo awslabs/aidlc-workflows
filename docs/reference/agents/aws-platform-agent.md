@@ -25,7 +25,7 @@
 | Stage | Name | What This Agent Contributes |
 |-------|------|-----------------------------|
 | feasibility | Feasibility and Constraint Analysis | Assesses AWS service availability, regional constraints, and cloud platform limitations |
-| application-design | Application Design | Advises on cloud-native patterns, managed service integration, and serverless options |
+| domain-design | Domain Design | Advises on cloud-native patterns, managed service integration, and serverless options |
 | nfr-design | NFR Design | Translates NFRs into infrastructure specifications, auto-scaling policies, and resilience configurations |
 | feedback-optimization | Feedback and Optimization | Identifies cost optimization opportunities and infrastructure tuning based on production metrics |
 

@@ -44,7 +44,7 @@
     },
     {
       "file": "docs/harness-engineering/06-sensors.md",
-      "text": "`aidlc-docs/` arm kept for a pre-migration project), the two code-quality checks",
+      "text": "`aidlc-docs/` arm kept for a pre-migration project), traceability scopes to",
       "why": "prose explaining the legacy aidlc-docs arm of the sensor glob"
     },
     {

@@ -123,7 +123,7 @@ export function main(argv: string[]): void {
 
 	// Coverage is a property of the STAGE's output, not of each file: a
 	// multi-artifact stage legitimately splits its upstream citations
-	// across sibling deliverables (business-rules.md cites the domain
+	// across sibling deliverables (rules.md cites the entity
 	// model; tech-stack-decisions.md has no reason to). So when the
 	// dispatcher threads --deliverables (the stage's produces union,
 	// already filtered of `*-questions`/`*-timestamp` scaffolding), the

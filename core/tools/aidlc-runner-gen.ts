@@ -307,7 +307,7 @@ conductor runs the same forwarding loop as \`/aidlc\`.
 // emits byte-identical SKILL.md files. Also PRUNES any stale init-phase
 // stage-runner dir (aidlc-state-init, aidlc-workspace-detection,
 // aidlc-workspace-scaffold) left by an earlier generation that emitted runners
-// for all 32 stages. Returns the slugs written.
+// for all 33 stages. Returns the slugs written.
 function handleWrite(): string[] {
   const skillsDir = defaultSkillsDir(true);
   const slugs = stageSlugs();
@@ -598,6 +598,7 @@ export function renderRunner(scope: string, description: string): string {
     if (harnessName === "copilot") {
       return "start a new Copilot CLI session or open a new VS Code agent chat";
     }
+    if (harnessName === "cursor") return "start a new Cursor chat session";
     if (activeHarnessDir === ".claude") return "use `/clear` (or restart Claude Code)";
     if (activeHarnessDir === ".codex") return "exit or restart Codex CLI and start a new session";
     if (activeHarnessDir === ".kiro") {

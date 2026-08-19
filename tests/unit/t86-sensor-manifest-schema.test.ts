@@ -1,9 +1,9 @@
-// covers: function:parseSensorManifest, function:validateSensorManifest, file:sensors/aidlc-claim-sources.md, file:sensors/aidlc-required-sections.md, file:sensors/aidlc-upstream-coverage.md, file:sensors/aidlc-linter.md, file:sensors/aidlc-type-check.md
+// covers: function:parseSensorManifest, function:validateSensorManifest, file:sensors/aidlc-claim-sources.md, file:sensors/aidlc-required-sections.md, file:sensors/aidlc-upstream-coverage.md, file:sensors/aidlc-traceability.md, file:sensors/aidlc-linter.md, file:sensors/aidlc-type-check.md
 //
-// t86 — sensor manifest schema for the 5 framework sensors + the legacy
+// t86 — sensor manifest schema for the 6 framework sensors + the legacy
 // negative-case fixtures. Migrated from tests/unit/t86-sensor-manifest-schema.sh
-// (extended plan 34: Part 1 = 6 existence rows, Part 2 = 5 manifests × 5
-// frontmatter rows = 25, Part 3 = 3 negative-fixture rejection rows).
+// (extended plan 40: Part 1 = 7 existence rows, Part 2 = 6 manifests × 5
+// frontmatter rows = 30, Part 3 = 3 negative-fixture rejection rows).
 //
 // Mechanism: none. This is a pure schema / structural check over shipped bytes
 // — no process boundary, no argv/exit/stdout seam, no LLM, zero tokens. The .sh
@@ -78,13 +78,14 @@ import {
 const SENSORS_DIR = join(AIDLC_SRC, "sensors");
 const NEG_DIR = join(FIXTURES_DIR, "v05-mr3-sensors-dir");
 
-// The 5 framework manifests, keyed by their expected frontmatter id. id MUST
+// The 6 framework manifests, keyed by their expected frontmatter id. id MUST
 // equal the filename stem minus the `aidlc-` prefix and the `.md` suffix
 // (filename↔id contract). Same roster as the .sh's SENSOR_NAMES.
 const SENSOR_NAMES = [
   "claim-sources",
   "required-sections",
   "upstream-coverage",
+  "traceability",
   "linter",
   "type-check",
 ] as const;
@@ -117,7 +118,7 @@ describe("t86 sensor manifest schema (extended from t86-sensor-manifest-schema.s
     expect(statSync(SENSORS_DIR).isDirectory()).toBe(true);
   });
 
-  test("each of the 5 framework manifests exists [Part 1 ×5]", () => {
+  test("each of the 6 framework manifests exists [Part 1 ×6]", () => {
     for (const name of SENSOR_NAMES) {
       const f = manifestPath(name);
       expect(existsSync(f), `missing sensors/aidlc-${name}.md`).toBe(true);
@@ -125,7 +126,7 @@ describe("t86 sensor manifest schema (extended from t86-sensor-manifest-schema.s
   });
 
   // ===========================================================================
-  // Part 2 — per-manifest frontmatter shape (5 manifests × 5 checks = 25 rows).
+  // Part 2 — per-manifest frontmatter shape (6 manifests × 5 checks = 30 rows).
   // Each manifest gets ONE test() that runs the REAL validator (stronger than
   // the .sh's awk) and pins the five field literals the .sh asserted.
   // ===========================================================================
@@ -211,19 +212,20 @@ describe("t86 sensor manifest schema (extended from t86-sensor-manifest-schema.s
   });
 
   // Re-count the extended assertion budget so a silently dropped manifest or
-  // negative case is caught (6 existence + 5×5 frontmatter + 3 negatives = 34).
-  test("covers EXACTLY 34 assertions", () => {
-    const PART1 = 1 + SENSOR_NAMES.length; // dir + 5 files = 6
-    const PART2 = SENSOR_NAMES.length * 5; // 5 manifests × 5 checks = 25
+  // negative case is caught (7 existence + 6×5 frontmatter + 3 negatives = 40).
+  test("covers EXACTLY 40 assertions", () => {
+    const PART1 = 1 + SENSOR_NAMES.length; // dir + 6 files = 7
+    const PART2 = SENSOR_NAMES.length * 5; // 6 manifests × 5 checks = 30
     const PART3 = 3; // 3 negative-case fixtures
-    expect(PART1).toBe(6);
-    expect(PART2).toBe(25);
+    expect(PART1).toBe(7);
+    expect(PART2).toBe(30);
     expect(PART3).toBe(3);
-    expect(PART1 + PART2 + PART3).toBe(34);
+    expect(PART1 + PART2 + PART3).toBe(40);
     expect([...SENSOR_NAMES]).toEqual([
       "claim-sources",
       "required-sections",
       "upstream-coverage",
+      "traceability",
       "linter",
       "type-check",
     ]);

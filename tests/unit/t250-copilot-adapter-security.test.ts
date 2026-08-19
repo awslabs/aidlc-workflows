@@ -108,7 +108,13 @@ const AUDIT_TOOL_STUB = `export function appendAuditEntry(_k: string, _d: unknow
 const LIB_TOOL_STUB = `import { join } from "node:path";
 export function stateFilePath(projectDir: string): string {
   return join(projectDir, ".aidlc-state-absent.json");
-}\n`;
+}
+export function claimCopilotCommand(): { allowed: true; attemptId: string } {
+  return { allowed: true, attemptId: "00000000-0000-4000-8000-000000000001" };
+}
+export function settleCopilotCommand(): string { return "settled"; }
+export function settleCopilotIntentBoundary(): boolean { return false; }
+export function recordCopilotHumanSequence(): boolean { return true; }\n`;
 
 interface Scratch {
   projectRoot: string;

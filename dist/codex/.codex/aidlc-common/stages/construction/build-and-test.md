@@ -9,14 +9,16 @@ support_agents:
 mode: inline
 produces:
   - build-instructions
-  - unit-test-instructions
   - integration-test-instructions
   - performance-test-instructions
   - security-test-instructions
   - build-and-test-summary
   - build-test-results
+  - cross-unit-traceability
 consumes:
   - artifact: code-generation-plan
+    required: true
+  - artifact: unit-test-instructions
     required: true
   - artifact: code-summary
     required: true
@@ -36,7 +38,7 @@ scopes:
   - security-patch
   - workshop
 inputs: ALL code generation outputs across all units
-outputs: build-instructions.md, unit-test-instructions.md, integration-test-instructions.md, performance-test-instructions.md, security-test-instructions.md, build-and-test-summary.md, test-results.md (under this stage's record dir, engine-resolved)
+outputs: build-instructions.md, integration-test-instructions.md, performance-test-instructions.md, security-test-instructions.md, build-and-test-summary.md, test-results.md, cross-unit-traceability.md (under this stage's record dir, engine-resolved)
 ---
 
 # Build and Test
@@ -51,7 +53,7 @@ Load aidlc-quality-agent (lead) persona from `agents/aidlc-quality-agent.md` and
 
 ### Step 2: Analyze Testing Requirements
 
-Read code generation outputs across all units from `<record>/construction/*/code-generation/code-summary.md`. Review NFR requirements across units (if they exist) to identify performance and security testing needs. Catalog all test types required.
+Read code generation outputs across all units from `<record>/construction/*/code-generation/code-summary.md` and per-unit test instructions from `<record>/construction/*/code-generation/unit-test-instructions.md`. Review NFR requirements across units (if they exist) to identify performance and security testing needs. Catalog all test types required.
 
 ### Step 3: Generate Build Instructions
 
@@ -64,17 +66,15 @@ Create `<record>/construction/build-and-test/build-instructions.md`:
 
 ### Step 4-8: Generate Test Instructions (Strategy-Aware)
 
-Consult the active test strategy from `aidlc-state.md` → `**Test Strategy**` (see stage-protocol.md §8 "Test Strategy"). Generate test instruction files based on the strategy level:
+Consult the active test strategy from `aidlc-state.md` → `**Test Strategy**` (see stage-protocol.md §8 "Test Strategy"). Generate additional test instruction files based on the strategy level:
 
-**Minimal strategy** — generate ONLY:
-- `unit-test-instructions.md`: Requirement-driven unit tests (1 test per requirement, happy-path floor per component). ~5-15 tests total. Skip all other test types.
+**Minimal strategy** — generate no additional test instruction files. Unit
+tests are covered per-unit by Code Generation.
 
 **Standard strategy** — generate:
-- `unit-test-instructions.md`: 5-8 tests per component, key behavior coverage
 - `integration-test-instructions.md`: Key boundary tests, cross-unit interaction
 
 **Comprehensive strategy** — generate all applicable:
-- `unit-test-instructions.md`: 10-15 tests per component, thorough coverage
 - `integration-test-instructions.md`: Cross-unit interaction, external dependency handling
 - `performance-test-instructions.md` (IF NFR performance requirements exist): Load testing, benchmarks, regression detection
 - `security-test-instructions.md` (IF NFR security requirements exist): SAST/DAST, auth testing, injection testing
@@ -104,7 +104,13 @@ Create `<record>/construction/build-and-test/build-and-test-summary.md`:
 Attempt to execute the build and test commands documented in the instruction files:
 
 1. **Build**: Run the build commands from `build-instructions.md` via Bash. Capture output.
-2. **Unit tests**: Run the unit test command from `unit-test-instructions.md` via Bash. Capture pass/fail counts.
+2. **Unit tests**: Collect the run commands across all per-unit
+   `<record>/construction/*/code-generation/unit-test-instructions.md` files,
+   deduplicate identical commands, and run each distinct command ONCE via
+   Bash. Every command should already be scoped to its unit. If a file
+   violates that rule and carries a project-wide command, run it once, never N
+   times. Capture and report per-unit pass/fail results without double
+   counting.
 3. **Integration tests** (if applicable): Run integration test commands. Capture results.
 4. **Report results**: Create or update `<record>/construction/build-and-test/test-results.md` with:
    - Build status (success/failure + output)
@@ -161,13 +167,31 @@ test-results.md, and present them in this run's isolated-run summary.
 
 **On success**: Update the Build and Test Summary with actual results (not just instructions).
 
-### Step 11: Completion Handoff
+### Step 11: Cross-Unit Final Coverage Gate
+
+This is a stage-level gate, not the Construction phase boundary. Enumerate:
+
+- every `FR` and `NFR` from
+  `<record>/inception/requirements-analysis/requirements.md`
+- every three-segment `AC` from
+  `<record>/inception/user-stories/stories.md` when that stage executed
+
+Read every
+`<record>/construction/*/code-generation/traceability.json`. Verify each
+enumerated ID is covered with status `OK` in at least one Unit and that its
+target file exists. Write
+`<record>/construction/build-and-test/cross-unit-traceability.md` with a
+pass/fail verdict, per-ID coverage, owning Unit, target file, and every
+uncovered element. Any uncovered ID is a build-and-test finding that must be
+surfaced at the approval gate.
+
+### Step 12: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
 `bun .codex/tools/aidlc-orchestrate.ts report --stage build-and-test --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
-### Step 12: Completion
+### Step 13: Completion
 
 Present completion message and approval gate:
 
@@ -196,7 +220,8 @@ The imported sensors check those outputs:
 - **`required-sections`** verifies each instruction file contains the
   registry default (≥2 H2 headings).
 - **`upstream-coverage`** verifies the prose references the upstream
-  artefacts this stage consumes (`code-generation-plan`, `code-summary`).
+  artefacts this stage consumes (`code-generation-plan`,
+  `unit-test-instructions`, `code-summary`).
 - **`type-check`** runs against any TypeScript/TSX code touched as part
   of test generation (matches `**/*.{ts,tsx}`).
 

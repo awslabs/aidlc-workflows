@@ -85,7 +85,7 @@ Things that are **not** artifacts in this registry:
    entry and `requires_stage[]` slug must resolve against the derived registry.
    Orphan consumers are reported as broken references.
 
-All 32 stage files declare `produces:`, so the derivation returns the full
+All 33 stage files declare `produces:`, so the derivation returns the full
 registry. The tool is well-defined on empty data too — a stage with no
 `produces:` simply contributes nothing — but in the shipped framework every
 stage is populated.
@@ -131,9 +131,10 @@ The canonical names are split so the two never collide on the wire:
 
 - `build-test-results` — emitted by `build-and-test`. Pairs with
   sibling names in that stage: `build-instructions`,
-  `unit-test-instructions`, `integration-test-instructions`,
-  `performance-test-instructions`, `security-test-instructions`,
-  `build-and-test-summary`.
+  `integration-test-instructions`, `performance-test-instructions`,
+  `security-test-instructions`, `build-and-test-summary`.
+- `unit-test-instructions` is produced per-unit by `code-generation` and
+  consumed by `build-and-test`.
 - `load-test-results` — emitted by `performance-validation`. Pairs with
   `load-test-plan` already produced by the same stage.
 
@@ -148,27 +149,34 @@ wire identifier, not the filename.
 ## Filesystem mapping
 
 Artifacts live on disk at paths that are derivable from `(canonical
-name) + (producing stage) + (per-unit flag)`. Two shapes today:
+name) + (producing stage) + (per-unit flag)`. Markdown is the default extension;
+the canonical `traceability` artifact is the structured-data exception and
+resolves to `traceability.json`. Two placement shapes apply:
 
-- **Non-per-unit stages (24 of 29):**
-  `<record>/<phase>/<stage>/<canonical-name>.md`
+- **Non-per-unit stages (25 of 30):**
+  `<record>/<phase>/<stage>/<artifact-filename>`
   Example: `feasibility-assessment` (produced by the Ideation
   `feasibility` stage) lives at
   `<record>/ideation/feasibility/feasibility-assessment.md`.
 
-- **Per-unit Construction stages (5 of 29):** `nfr-requirements`,
+- **Per-unit Construction stages (5 of 30):** `nfr-requirements`,
   `nfr-design`, `functional-design`, `infrastructure-design`, and
   `code-generation`. These emit one copy of each artifact per Unit of
   Work during Construction:
-  `<record>/construction/{unit-name}/<stage>/<canonical-name>.md`
-  Example: `business-logic-model` (produced by `functional-design`) lives
+  `<record>/construction/{unit-name}/<stage>/<artifact-filename>`
+  Example: `functional-spec` (produced by `functional-design`) lives
   at
-  `<record>/construction/{unit-name}/functional-design/business-logic-model.md`.
+  `<record>/construction/{unit-name}/functional-design/functional-spec.md`.
 
 Per-unit status is declared by the stage's `for_each: unit-of-work`
 frontmatter field — the five Construction stages that run once per Unit carry
 it; the rest omit it. A future helper could compute the path mechanically from
 stage graph + canonical name.
+
+`artifactFilename()` in `aidlc-lib.ts` is the shared extension resolver used by
+directives, per-Unit coverage, completion guards, and review fingerprints.
+Every artifact except `traceability` resolves to `<canonical-name>.md`;
+`traceability` resolves to `traceability.json`.
 
 **Codekb is the space-level exception.** Reverse-engineering's 9 artifacts
 (`business-overview`, `architecture`, `code-structure`, `api-documentation`,
@@ -200,8 +208,8 @@ bun dist/claude/.claude/tools/aidlc-graph.ts artifacts
 Prints one canonical name per line, alphabetically sorted.
 
 Pre-PR-8 output is empty — stages haven't migrated to YAML yet and
-`produces:` isn't populated. Post-PR-8 the output grows to roughly 118
-names across 29 non-initialisation stages.
+`produces:` isn't populated. Post-PR-8 the output grows to roughly 119
+names across 30 non-initialisation stages.
 
 Pipe through `wc -l` for a count, `grep` for a filter, or `diff` against
 an expected baseline for a drift check.

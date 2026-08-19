@@ -15,7 +15,7 @@ This document contains all Mermaid diagrams that visualize the AI-DLC (AI-Driven
 
 ## 1. End-to-End Lifecycle
 
-The AI-DLC methodology organizes work into five sequential phases. Each phase has a verification gate at its boundary that must pass before the next phase begins. The full lifecycle spans 32 stages across the five phases, with scope determining which stages actually execute.
+The AI-DLC methodology organizes work into five sequential phases. Each phase has a verification gate at its boundary that must pass before the next phase begins. The full lifecycle spans 33 stages across the five phases, with scope determining which stages actually execute.
 
 ```mermaid
 graph LR
@@ -31,10 +31,10 @@ graph LR
         I1 -.->|"7 stages"| I7
     end
 
-    subgraph INCEPTION["INCEPTION (2.1-2.8)"]
+    subgraph INCEPTION["INCEPTION (2.1-2.9)"]
         N1["Reverse Engineering"]
         N7["Delivery Planning"]
-        N1 -.->|"8 stages"| N7
+        N1 -.->|"9 stages"| N7
     end
 
     subgraph CONSTRUCTION["CONSTRUCTION (3.1-3.7)"]
@@ -116,9 +116,10 @@ flowchart TD
     S22["2.3 Requirements Analysis\n(aidlc-product-agent)"]
     S23["2.4 User Stories\n(aidlc-product-agent)"]
     S24["2.5 Refined Mockups\n(aidlc-design-agent)"]
-    S25["2.6 Application Design\n(aidlc-architect-agent)"]
+    S25["2.6 Domain Design\n(aidlc-architect-agent)"]
     S26["2.7 Units Generation\n(aidlc-architect-agent)"]
-    S27["2.8 Delivery Planning\n(aidlc-delivery-agent)"]
+    S28["2.8 Contract Design\n(aidlc-architect-agent)"]
+    S27["2.9 Delivery Planning\n(aidlc-delivery-agent)"]
     VG2{{"Verification Gate:\nInception --> Construction"}}
 
     BF_CHECK{"Brownfield?\n(from Initialization 0.3)"}
@@ -143,7 +144,9 @@ flowchart TD
     S24 -.->|CONDITIONAL| S25
     S25 -.->|CONDITIONAL| S26
     S25 ==>|ALWAYS| S27
+    S26 -.->|"if multi-unit"| S28
     S26 -.->|CONDITIONAL| S27
+    S28 -.->|CONDITIONAL| S27
     S27 ==>|ALWAYS| VG2
 
     style S21 fill:#bbdefb,stroke:#1565c0
@@ -644,9 +647,10 @@ This reference table maps every stage to its execution mode and lead agent for q
 | 2.3 | Requirements Analysis | inline | aidlc-product-agent |
 | 2.4 | User Stories | mob | aidlc-product-agent |
 | 2.5 | Refined Mockups | inline | aidlc-design-agent |
-| 2.6 | Application Design | inline | aidlc-architect-agent |
+| 2.6 | Domain Design | inline | aidlc-architect-agent |
 | 2.7 | Units Generation | inline | aidlc-architect-agent |
-| 2.8 | Delivery Planning | inline | aidlc-delivery-agent |
+| 2.8 | Contract Design | inline | aidlc-architect-agent |
+| 2.9 | Delivery Planning | inline | aidlc-delivery-agent |
 | 3.1 | Functional Design | inline | aidlc-architect-agent |
 | 3.2 | NFR Requirements | inline | aidlc-architect-agent |
 | 3.3 | NFR Design | inline | aidlc-architect-agent |

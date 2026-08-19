@@ -5,7 +5,7 @@
 - **Project Type**: Greenfield
 - **Scope**: feature
 - **Start Date**: 2025-06-15T10:30:00Z
-- **State Version**: 7
+- **State Version**: 8
 - **Active Agent**: aidlc-architect-agent
 - **Worktree Path**:
 - **Bolt Refs**:
@@ -62,8 +62,9 @@
 - [ ] requirements-analysis — EXECUTE
 - [ ] user-stories — EXECUTE
 - [ ] refined-mockups — EXECUTE
-- [ ] application-design — EXECUTE
+- [ ] domain-design — EXECUTE
 - [ ] units-generation — EXECUTE
+- [ ] contract-design — EXECUTE
 - [ ] delivery-planning — EXECUTE
 
 ### CONSTRUCTION PHASE

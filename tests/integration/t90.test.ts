@@ -185,23 +185,23 @@ const STATE_FEATURE = ["- **Scope**: feature", "- **Current Stage**: scope-defin
 // STAGE_STARTED carries Stage + Agent + Workflow; STAGE_COMPLETED carries
 // Stage + Details + Workflow. The Workflow value is the synthetic
 // `single-stage:<slug>` id that marks the pair as belonging to NO main
-// workflow. application-design (inception, aidlc-architect-agent per
+// workflow. domain-design (inception, aidlc-architect-agent per
 // stage-graph.json) is deliberately UNRELATED to the main workflow's slugs.
 const SINGLE_STAGE_PAIR = `## Stage Start
 **Timestamp**: 2026-05-27T10:20:00Z
 **Event**: STAGE_STARTED
-**Stage**: application-design
+**Stage**: domain-design
 **Agent**: aidlc-architect-agent
-**Workflow**: single-stage:application-design
+**Workflow**: single-stage:domain-design
 
 ---
 
 ## Stage Completion
 **Timestamp**: 2026-05-27T10:25:00Z
 **Event**: STAGE_COMPLETED
-**Stage**: application-design
-**Details**: Single-stage run of application-design completed
-**Workflow**: single-stage:application-design
+**Stage**: domain-design
+**Details**: Single-stage run of domain-design completed
+**Workflow**: single-stage:domain-design
 
 ---
 `;
@@ -600,7 +600,7 @@ describe("t90 aidlc-runtime compile — CLI contract (migrated from t90-runtime-
     const g = readGraph(proj);
     const slugs = g.stages.map((s: { stage_slug: string }) => s.stage_slug);
     expect(slugs).toContain("intent-capture");
-    expect(slugs).not.toContain("application-design");
+    expect(slugs).not.toContain("domain-design");
     expect(g.stages).toHaveLength(1);
     expect(g.stages[0].outcome).toBe("approved");
   });

@@ -96,6 +96,7 @@ describe("t148 dist/kiro file structure", () => {
       "agents/aidlc-developer-agent.json",
       "agents/aidlc-architect-agent.json",
       "settings/cli.json",
+      "settings/mcp.json",
     ]) {
       expect(existsSync(join(K, f))).toBe(true);
     }
@@ -186,7 +187,7 @@ describe("t148 dist/kiro file structure", () => {
     }
   });
 
-  test("Kiro CLI and IDE agent JSON stay equivalent outside host-capable hooks", () => {
+  test("Kiro CLI and IDE agent JSON stay equivalent outside host hooks and CLI-only MCP fields", () => {
     const cliDir = join(REPO_ROOT, "harness", "kiro", "agents");
     const ideDir = join(REPO_ROOT, "harness", "kiro-ide", "agents");
     const shared = readdirSync(cliDir)
@@ -202,6 +203,12 @@ describe("t148 dist/kiro file structure", () => {
       const ide = readJson(join(ideDir, name));
       delete cli.hooks;
       delete ide.hooks;
+      delete cli.includeMcpJson;
+      delete cli.$schema;
+      delete ide.$schema;
+      cli.tools = ((cli.tools as string[]) ?? []).filter(
+        (tool) => !tool.startsWith("@"),
+      );
       expect(ide, name).toEqual(cli);
     }
   });

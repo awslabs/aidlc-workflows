@@ -93,7 +93,10 @@ import {
   seededStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
-import { boltSlugForUnit } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  artifactFilename,
+  boltSlugForUnit,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath;
 const SWARM_TOOL = join(AIDLC_SRC, "tools", "aidlc-swarm.ts");
@@ -182,9 +185,19 @@ function logWorktreeReview(proj: string, unit: string): void {
   const worktree = wtPath(proj, unit);
   const dir = join(seededRecordDir(worktree), "construction", unit, "functional-design");
   mkdirSync(dir, { recursive: true });
-  for (const name of ["business-logic-model", "business-rules", "domain-entities"]) {
-    const artifact = join(dir, `${name}.md`);
-    if (!existsSync(artifact)) writeFileSync(artifact, `# ${name}\n`);
+  for (const name of ["entities", "rules", "functional-spec", "traceability"]) {
+    const artifact = join(dir, artifactFilename(name));
+    const body =
+      name === "traceability"
+        ? `${JSON.stringify({
+            stage: "functional-design",
+            unit,
+            upstream_ids: [],
+            coverage: [],
+            reverse: [],
+          })}\n`
+        : `# ${name}\n`;
+    if (!existsSync(artifact)) writeFileSync(artifact, body);
   }
   for (const terminal of [false, true]) {
     const args = [

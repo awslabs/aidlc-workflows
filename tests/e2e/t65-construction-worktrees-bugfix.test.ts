@@ -210,6 +210,6 @@ describe("t65 Construction-worktrees per-scope contract — bugfix (migrated fro
     expect(lines.some((l) => l.startsWith("- **Bolt Refs**:"))).toBe(true);
     // Pin the template version that introduced these fields, proving they came
     // from the current init template rather than a stale state shape.
-    expect(state).toContain("**State Version**: 7");
+    expect(state).toContain("**State Version**: 8");
   });
 });

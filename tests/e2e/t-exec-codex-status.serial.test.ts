@@ -31,23 +31,16 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import {
-  cpSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  realpathSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import {
+  execCodex,
+  setupCodexProject,
+} from "../harness/exec-drive.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
 const CODEX_DIST = join(REPO_ROOT, "dist", "codex");
 const CODEX_BIN = process.env.AIDLC_CODEX_BIN ?? "codex";
-const AWS_PROFILE = process.env.AIDLC_CODEX_AWS_PROFILE ?? "codex";
-const AWS_REGION = process.env.AIDLC_CODEX_AWS_REGION ?? "us-east-2";
 
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "600", 10);
 const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
@@ -69,68 +62,6 @@ function skipReason(): string | null {
   return null;
 }
 const SKIP_REASON = skipReason();
-
-// A scratch install: dist/codex copied verbatim, git-initialized (project
-// hooks.json discovery requires a git repo — MR-3 finding D10), a scratch
-// CODEX_HOME with Bedrock provider + project trust + the trust pre-seed from
-// `package.ts codex trust` so hooks fire with zero TUI passes.
-function setupCodexProject(): { proj: string; home: string; root: string } {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "codex-exec-")));
-  const proj = join(root, "proj");
-  const home = join(root, "codex-home");
-  mkdirSync(home, { recursive: true });
-  cpSync(join(CODEX_DIST, ".codex"), join(proj, ".codex"), { recursive: true });
-  cpSync(join(CODEX_DIST, ".agents"), join(proj, ".agents"), { recursive: true });
-  cpSync(join(CODEX_DIST, "AGENTS.md"), join(proj, "AGENTS.md"));
-  for (const args of [
-    ["init", "-q"],
-    ["add", "-A"],
-    ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "install"],
-  ]) {
-    const r = spawnSync("git", args, { cwd: proj, encoding: "utf-8" });
-    if (r.status !== 0) throw new Error(`git ${args[0]} failed: ${r.stderr}`);
-  }
-  const trust = spawnSync(
-    "bun",
-    [join(REPO_ROOT, "scripts", "package.ts"), "codex", "trust", "--project", proj],
-    { encoding: "utf-8", cwd: REPO_ROOT },
-  );
-  if (trust.status !== 0) throw new Error(`trust emit failed: ${trust.stderr}`);
-  writeFileSync(
-    join(home, "config.toml"),
-    [
-      `model = "openai.gpt-5.5"`,
-      `model_provider = "amazon-bedrock"`,
-      `model_context_window = 1000000`,
-      `model_reasoning_effort = "low"`,
-      ``,
-      `[model_providers.amazon-bedrock.aws]`,
-      `profile = "${AWS_PROFILE}"`,
-      `region = "${AWS_REGION}"`,
-      ``,
-      `[shell_environment_policy]`,
-      `set = { AIDLC_RULES_DIR = ".codex/aidlc-rules" }`,
-      ``,
-      `[projects."${proj}"]`,
-      `trust_level = "trusted"`,
-      ``,
-      trust.stdout,
-    ].join("\n"),
-    "utf-8",
-  );
-  return { proj, home, root };
-}
-
-function execCodex(proj: string, home: string, prompt: string): { rc: number; out: string } {
-  const r = spawnSync(CODEX_BIN, ["exec", prompt], {
-    cwd: proj,
-    encoding: "utf-8",
-    stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, CODEX_HOME: home },
-    timeout: TEST_TIMEOUT_MS,
-  });
-  return { rc: r.status ?? -1, out: `${r.stdout ?? ""}\n${r.stderr ?? ""}` };
-}
 
 describe("t-exec-codex-status — $aidlc --status on the shipped dist/codex via codex exec", () => {
   test.skipIf(SKIP_REASON !== null)(

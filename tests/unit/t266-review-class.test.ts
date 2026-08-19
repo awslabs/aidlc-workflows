@@ -127,8 +127,9 @@ describe("t266 review class", () => {
     "requirements-analysis",
     "user-stories",
     "refined-mockups",
-    "application-design",
+    "domain-design",
     "units-generation",
+    "contract-design",
   ];
   const ADVERSARIAL_STAGES = [
     "functional-design",
@@ -350,6 +351,7 @@ describe("t266 review class", () => {
       "harness/codex/skills/aidlc/SKILL.md",
       "harness/opencode/skills/aidlc/SKILL.md",
       "harness/cursor/skills/aidlc/SKILL.md",
+      "harness/copilot/skills/aidlc/SKILL.md",
       "dist/claude/.claude/skills/aidlc/SKILL.md",
     ];
     for (const rel of skills) {

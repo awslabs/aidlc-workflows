@@ -1,4 +1,4 @@
-// covers: cli:aidlc-audit(append-protected,append-batch-protected,append-raw-event-line,reserved-field-keys), subcommand:aidlc-bolt:set-autonomy, function:humanActedSinceGate, function:hasUnsafeSingleLineCharacter, function:isNonAnswer
+// covers: cli:aidlc-audit(append-protected,append-batch-protected,append-raw-event-line,reserved-field-keys), subcommand:aidlc-bolt:set-autonomy, function:humanActedSinceGate, function:hasUnsafeSingleLineCharacter, function:isNonAnswer, function:selfAttributedDecisionMarker, function:isAutonomousConstructionDecision
 //
 // t261 — the authority floor on the audit surface (issue 681, claims 3/4/7/8).
 // Four related guarantees, each with a REFUSE case and an ALLOW case so the
@@ -25,6 +25,16 @@
 //      status=completed with answer "Cancelled"), `approve --user-input` and
 //      `reject --feedback` refuse it at the gate. Substantive answers that
 //      merely CONTAIN a cancellation word pass.
+//   5. A conductor-AUTHORED decision is not a human decision either (issue
+//      742). humanActedSinceGate proves PRESENCE, not INTENT, so a deadlocked
+//      conductor can satisfy it while writing the human's decision itself —
+//      observed in the field as GATE_REJECTED rows carrying "AGENT-INITIATED,
+//      NOT A HUMAN REJECTION" (the only event that resets an advisory review
+//      budget), plus self-approvals and self-answers as "CONDUCTOR DEFAULT,
+//      session unattended". All three call sites refuse the self-attributed
+//      text, leave no partial receipt, and do not consume the human's turn;
+//      substantive prose that merely discusses agent-initiated code or a
+//      conductor default setting passes; autonomous Construction is exempt.
 //
 // CRITICAL test-harness note: run-tests.ts sets AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1
 // and AIDLC_ALLOW_DIRECT_AUDIT_EVENTS=1 for the whole suite. This test DELETES
@@ -52,7 +62,12 @@ import {
   seedStateFile,
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
-import { humanActedSinceGate, readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  humanActedSinceGate,
+  isAutonomousConstructionDecision,
+  readAllAuditShards,
+  selfAttributedDecisionMarker,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath;
 const AUDIT = join(AIDLC_SRC, "tools", "aidlc-audit.ts");
@@ -108,6 +123,22 @@ function guardedAsync(
 // broader direct-audit fixture escape.
 function mintHumanTurn(proj: string): void {
   appendAuditEntry("HUMAN_TURN", {}, proj);
+}
+
+function autonomousConstructionProject(): string {
+  const p = createTestProject();
+  seedStateFile(p, join(FIXTURES, "state-construction-with-worktree.md"));
+  const statePath = seededStateFile(p);
+  const state = readFileSync(statePath, "utf-8")
+    .replace("- [-] code-generation — EXECUTE", "- [-] build-and-test — EXECUTE")
+    .replace("- **Current Stage**: code-generation", "- **Current Stage**: build-and-test")
+    .replace("- **Next Stage**: build-and-test", "- **Next Stage**: ci-pipeline")
+    .replace(
+      "- **Construction Autonomy Mode**: gated",
+      "- **Construction Autonomy Mode**: autonomous",
+    );
+  writeFileSync(statePath, state, "utf-8");
+  return p;
 }
 
 let proj = "";
@@ -204,8 +235,9 @@ describe("t261 public audit CLI refuses authority-bearing receipts", () => {
     expect(batch.rc).not.toBe(0);
     expect(batch.out).toContain("Invalid audit field key");
 
-    // Timestamp is a documented field on park/unpark rows — it must not refuse,
-    // and it cannot spoof (the emitter's own **Timestamp**: line is first).
+    // Timestamp is accepted by the public `append` CLI — it must not refuse,
+    // and it cannot spoof: renderAuditBlock drops it, so the emitter's own
+    // **Timestamp**: line is the only one in the block (issue #715).
     const ts = guarded(
       AUDIT,
       ["append", "ERROR_LOGGED", "--field", "Timestamp=2020-01-01T00:00:00Z"],
@@ -459,5 +491,257 @@ describe("t261 cancellation boilerplate is not a decision", () => {
     const ok = guarded(STATE, ["approve", "feasibility", "--user-input", "Approve"], proj, direct);
     expect(ok.rc).toBe(0);
     expect(readAllAuditShards(proj)).toContain("GATE_APPROVED");
+  });
+});
+
+describe("t261 explicit decision self-attribution tripwire", () => {
+  const DIRECT = {
+    AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+    AIDLC_SKIP_ARTIFACT_GUARD: "1",
+  };
+
+  function ideationProject(): string {
+    const p = createTestProject();
+    seedStateFile(p, join(FIXTURES, "state-mid-ideation.md"));
+    return p;
+  }
+
+  function openGate(p: string): void {
+    expect(guarded(STATE, ["gate-start", "feasibility"], p, DIRECT).rc).toBe(0);
+    mintHumanTurn(p);
+  }
+
+  // This is deliberately a high-confidence tripwire, not proof of human
+  // authorship. It rejects explicit self-attribution observed in issue 742 and
+  // closely equivalent decision-noun variants.
+  const SELF_ATTRIBUTED_REJECTIONS = [
+    "AGENT-INITIATED, NOT A HUMAN REJECTION. The human approved at 08:50; completion is blocked by a circular guard dependency and this reopen exists solely to obtain a review budget.",
+    "NOT a human rejection. Recorded by the conductor to reopen the revision cycle honestly: the produces[] artifacts were revised after the reviewer's receipt.",
+    "NOT a human rejection. Conductor-recorded to reopen the cycle so the corrected document can get a genuine third review.",
+    "B. Request Changes - CONDUCTOR DEFAULT, session unattended, taking the conductor's own stated recommendation.",
+    "This rejection was generated by the AI.",
+    "Model-authored rejection to reopen the review cycle.",
+    "I, the conductor, am rejecting this.",
+    "The assistant chose this rejection.",
+  ];
+
+  test.each(SELF_ATTRIBUTED_REJECTIONS)("reject refuses explicit self-attribution (%#)", (feedback) => {
+    proj = ideationProject();
+    openGate(proj);
+    const stateBefore = readFileSync(seededStateFile(proj), "utf-8");
+    const r = guarded(STATE, ["reject", "feasibility", "--feedback", feedback], proj, DIRECT);
+    expect(r.rc).not.toBe(0);
+    expect(r.out).toContain("decision self-attribution blocked");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(stateBefore);
+    const shards = readAllAuditShards(proj);
+    expect(shards).not.toContain("GATE_REJECTED");
+    expect(shards).not.toContain("STAGE_REVISING");
+    expect(shards).toContain("ERROR_LOGGED");
+  });
+
+  test("approve --user-input refuses a self-attributed approval", () => {
+    proj = ideationProject();
+    openGate(proj);
+    const r = guarded(
+      STATE,
+      [
+        "approve",
+        "feasibility",
+        "--user-input",
+        "Approve - CONDUCTOR DEFAULT, session unattended. Reviewer returned READY on the third pass.",
+      ],
+      proj,
+      DIRECT,
+    );
+    expect(r.rc).not.toBe(0);
+    expect(r.out).toContain("decision self-attribution blocked");
+    expect(readAllAuditShards(proj)).not.toContain("GATE_APPROVED");
+  });
+
+  test("answer --details refuses a self-attributed interview answer", () => {
+    proj = ideationProject();
+    mintHumanTurn(proj);
+    const r = guarded(
+      LOG,
+      [
+        "answer",
+        "--stage",
+        "feasibility",
+        "--details",
+        "A. Nothing to add - CONDUCTOR DEFAULT, session unattended. Grounds: candidate 1 is already a standing rule.",
+      ],
+      proj,
+    );
+    expect(r.rc).not.toBe(0);
+    expect(r.out).toContain("decision self-attribution blocked");
+    expect(readAllAuditShards(proj)).not.toContain("QUESTION_ANSWERED");
+  });
+
+  const SUBSTANTIVE = [
+    "revert the agent-initiated retry in scheduler.ts, it double-charges on timeout",
+    "The conductor default timeout of 30s is too low - make it configurable",
+    "the unattended batch job should retry three times before paging",
+    "This is not a human response time issue",
+    "This isn't a human rejection-handler issue",
+    "never confirmed by the human resources team",
+    "the report was written by the conductor service",
+    "The session was unattended after the websocket dropped",
+    "Mumbai initiated rejection handling after the timeout",
+    "Revert the AI-initiated rejection handler; it drops valid requests",
+    "Remove the model-authored decision example from the documentation",
+    "Delete the AI-generated rejection, because the API returns it twice",
+    "Remove the model-authored decision, cited in section 2",
+    "Change the assistant default, because it points to prod",
+    "Tune conductor default-timeout to twenty minutes",
+    'Remove the phrase "NOT A HUMAN REJECTION" from the guide',
+    "Remove the phrase 'NOT A HUMAN REJECTION.' from the guide",
+    "Document `Approve - CONDUCTOR DEFAULT, session unattended` as a blocked example",
+    "Document ``NOT A HUMAN REJECTION`` as prohibited",
+    "~~~\nNOT A HUMAN REJECTION\n~~~",
+    "```text\nNOT A HUMAN REJECTION.",
+    "~~~text\nCONDUCTOR DEFAULT.",
+    "> NOT A HUMAN REJECTION",
+    "   > NOT A HUMAN REJECTION",
+    "> Example:\nNOT A HUMAN REJECTION",
+    "Split P-2 into two personas and add the supervising-N-tasks situation",
+  ];
+
+  test.each(SUBSTANTIVE)("reject --feedback accepts substantive human prose (%#)", (feedback) => {
+    proj = ideationProject();
+    openGate(proj);
+    const r = guarded(STATE, ["reject", "feasibility", "--feedback", feedback], proj, DIRECT);
+    expect(r.rc).toBe(0);
+    expect(readAllAuditShards(proj)).toContain("GATE_REJECTED");
+  });
+
+  test("the helper pins the fail-open limitation for unlabelled decisions", () => {
+    for (const text of [
+      "Approve",
+      "Request changes: reopen for another review",
+      "The implementation needs another pass",
+    ]) {
+      expect(selfAttributedDecisionMarker(text, "approval")).toBeNull();
+      expect(selfAttributedDecisionMarker(text, "rejection")).toBeNull();
+    }
+  });
+
+  test("the helper detects explicit actor variants for each decision kind", () => {
+    expect(selfAttributedDecisionMarker(
+      "This approval was generated by the AI.",
+      "approval",
+    )?.category).toBe("model-authored-decision");
+    expect(selfAttributedDecisionMarker(
+      "I, the conductor, am rejecting this.",
+      "rejection",
+    )?.category).toBe("model-authored-decision");
+    expect(selfAttributedDecisionMarker(
+      "The assistant chose this answer.",
+      "answer",
+    )?.category).toBe("model-authored-decision");
+    expect(selfAttributedDecisionMarker(
+      "It's not a human rejection; that's deliberate.",
+      "rejection",
+    )?.category).toBe("non-human-decision");
+    for (const text of [
+      "This isn't a human rejection.",
+      "This isn’t a human rejection.",
+      "NOT A HUMAN’S REJECTION.",
+      "NOT A HUMAN REJECTION — reopening for review.",
+      "This rejection was generated by an AI.",
+      "The AI rejected this.",
+      "The AI rejected this to reopen the review.",
+      "The assistant chose this rejection - reopening for review.",
+      "I, as the conductor, am rejecting this.",
+      "CONDUCTOR DEFAULT.",
+      "CONDUCTOR DEFAULT!",
+      "CONDUCTOR DEFAULT?",
+      "CONDUCTOR DEFAULT。",
+      "NOT A HUMAN’S REJECTION。",
+    ]) {
+      expect(selfAttributedDecisionMarker(text, "rejection"), text).not.toBeNull();
+    }
+    expect(selfAttributedDecisionMarker(
+      "```text\nNOT A HUMAN REJECTION.\n```\nNOT A HUMAN REJECTION.",
+      "rejection",
+    )?.category).toBe("non-human-decision");
+  });
+
+  test("a refusal does not consume the turn: the human's own choice still commits", () => {
+    proj = ideationProject();
+    openGate(proj);
+    const forged = guarded(
+      STATE,
+      ["approve", "feasibility", "--user-input", "Approve - CONDUCTOR DEFAULT, session unattended."],
+      proj,
+      DIRECT,
+    );
+    expect(forged.rc).not.toBe(0);
+    const real = guarded(STATE, ["approve", "feasibility", "--user-input", "Approve"], proj, DIRECT);
+    expect(real.rc).toBe(0);
+    expect(readAllAuditShards(proj)).toContain("GATE_APPROVED");
+  });
+
+  test("an autonomous field does not exempt an Ideation decision", () => {
+    proj = createTestProject();
+    seedStateFile(proj, join(FIXTURES, "state-mid-ideation.md"));
+    const statePath = seededStateFile(proj);
+    writeFileSync(
+      statePath,
+      `${readFileSync(statePath, "utf-8")}\n- **Construction Autonomy Mode**: autonomous\n`,
+      "utf-8",
+    );
+    openGate(proj);
+    const r = guarded(
+      STATE,
+      ["reject", "feasibility", "--feedback", "NOT a human rejection."],
+      proj,
+      DIRECT,
+    );
+    expect(r.rc).not.toBe(0);
+    expect(readAllAuditShards(proj)).not.toContain("GATE_REJECTED");
+  });
+
+  test("autonomous exemption is phase-scoped to Construction", () => {
+    const state = "- **Construction Autonomy Mode**: autonomous\n";
+    expect(isAutonomousConstructionDecision(state, "initialization")).toBe(false);
+    expect(isAutonomousConstructionDecision(state, "ideation")).toBe(false);
+    expect(isAutonomousConstructionDecision(state, "inception")).toBe(false);
+    expect(isAutonomousConstructionDecision(state, "construction")).toBe(true);
+    expect(isAutonomousConstructionDecision(state, "operation")).toBe(false);
+  });
+
+  test("autonomous Construction reject and ordinary answer use the phase-scoped exemption", () => {
+    proj = autonomousConstructionProject();
+    expect(guarded(STATE, ["gate-start", "build-and-test"], proj, DIRECT).rc).toBe(0);
+    const rejected = guarded(
+      STATE,
+      ["reject", "build-and-test", "--feedback", "NOT A HUMAN REJECTION."],
+      proj,
+      DIRECT,
+    );
+    expect(rejected.rc, rejected.out).toBe(0);
+    expect(readAllAuditShards(proj)).toContain("GATE_REJECTED");
+
+    cleanupTestProject(proj);
+    proj = autonomousConstructionProject();
+    const answered = guarded(
+      LOG,
+      ["answer", "--stage", "build-and-test", "--details", "CONDUCTOR DEFAULT."],
+      proj,
+    );
+    expect(answered.rc, answered.out).toBe(0);
+    expect(readAllAuditShards(proj)).toContain("QUESTION_ANSWERED");
+  });
+
+  test("the floor rides the same off-switch as the other authority guards", () => {
+    proj = ideationProject();
+    expect(guarded(STATE, ["gate-start", "feasibility"], proj, DIRECT).rc).toBe(0);
+    const r = guarded(
+      STATE,
+      ["reject", "feasibility", "--feedback", "NOT a human rejection. Conductor-recorded."],
+      proj,
+      { ...DIRECT, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" },
+    );
+    expect(r.rc).toBe(0);
   });
 });

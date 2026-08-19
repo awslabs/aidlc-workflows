@@ -29,6 +29,8 @@ consumes:
     required: true
   - artifact: unit-of-work-story-map
     required: false
+  - artifact: contract-summary
+    required: false
   - artifact: team-practices
     required: false
 requires_stage:
@@ -61,8 +63,9 @@ Load aidlc-architect-agent for build order validation.
 Read all Inception phase artifacts:
 - Requirements from `<record>/inception/requirements-analysis/`
 - User stories from `<record>/inception/user-stories/`
-- Application design from `<record>/inception/application-design/`
+- Domain design (component catalogue) from `<record>/inception/domain-design/components.md`
 - Units from `<record>/inception/units-generation/`
+- Inter-unit contracts from `<record>/inception/contract-design/contract-summary.md` (if produced) — contract ownership and open contract questions map onto Bolt sequencing and the walking skeleton
 - Team formation from `<record>/ideation/team-formation/` (if exists)
 
 **If practices-discovery executed**, resolve three sections from
@@ -78,7 +81,7 @@ active space's `memory/org.md` defaults.
 
 ### Step 3: Generate Clarifying Questions
 
-This stage plans the Bolt sequence — the order in which Units of Work are executed through Construction. 2.7 produces the dependency DAG (topology); 2.8 chooses a path through it. Economic value cannot be derived from the DAG — that's a human value judgment.
+This stage plans the Bolt sequence — the order in which Units of Work are executed through Construction. 2.7 produces the dependency DAG (topology); this stage (2.9) chooses a path through it. Economic value cannot be derived from the DAG — that's a human value judgment.
 
 **Definitions for this stage:**
 - **Bolt** — per `stage-protocol.md` Glossary: "a deployable unit of work within Construction — one pass through stages 3.1–3.7." A Bolt wraps one or more Units of Work and runs once through the Construction stages.
@@ -143,11 +146,20 @@ the explanation.
 
 ### Step 6: Phase Boundary Verification
 
-Run Inception → Construction verification check:
-- Requirements → Stories → Architecture alignment
-- All stories trace to requirements
-- Architecture covers all stories
-- Write results to `<record>/verification/phase-check-inception.md`
+Run the Inception → Construction completeness audit. Read every
+`traceability.json` produced by the Inception stages that executed:
+
+- `<record>/inception/user-stories/traceability.json`
+- `<record>/inception/domain-design/traceability.json`
+- `<record>/inception/units-generation/traceability.json`
+
+(Contract Design produces no `traceability.json` — it owns formal contracts,
+not requirement coverage — so it does not contribute to this phase-boundary
+check.) Confirm there are no unresolved findings, including `GAP`, `ORPHAN`, invalid
+targets, or missing upstream IDs. Consolidate the tables into
+`<record>/verification/phase-check-inception.md` with a pass/fail verdict at
+the top. If any finding remains, stop the transition and revisit the owning
+stage before Construction begins.
 
 ### Step 7: Completion Handoff
 
@@ -186,7 +198,7 @@ This stage's outputs are markdown artefacts under `<record>/inception/delivery-p
 The imported sensors check those outputs:
 
 - **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `<record>/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
-- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `requirements`, `stories`, `mockups`, `components`, `unit-of-work`, `unit-of-work-dependency`, `unit-of-work-story-map`, `team-practices`).
+- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `requirements`, `stories`, `mockups`, `components`, `unit-of-work`, `unit-of-work-dependency`, `unit-of-work-story-map`, `contract-summary`, `team-practices`).
 
 ## Learn
 

@@ -28,7 +28,7 @@ conductor based on workflow context:
 |------|----------|-------------|
 | `stage-protocol.md` | Core protocol: approval gates, completion messages, question flow, state tracking, agent persona loading, depth guidance, terminology, content validation, subagent return formats, and the §13 Learnings Ritual | Every stage (mandatory) |
 | `stage-protocol-recovery.md` | Error Recovery + Change Handling | On session resume, or when a change event is detected mid-stage |
-| `stage-protocol-governance.md` | Phase Boundary Verification (§13) | At phase boundaries (1.7->2.1, 2.8->3.1, 3.7->4.1) |
+| `stage-protocol-governance.md` | Phase Boundary Verification (§13) | At phase boundaries (1.7->2.1, 2.9->3.1, 3.7->4.1) |
 
 ### Conditional Loading Logic (from SKILL.md Routing)
 
@@ -40,7 +40,7 @@ The conductor's Routing section defines the loading rules:
   event is detected mid-stage. This keeps error recovery and change handling
   out of context for normal forward-progress stages.
 - **`stage-protocol-governance.md`**: load at phase boundaries
-  (1.7->2.1, 2.8->3.1, 3.7->4.1) to run the Phase Boundary Verification
+  (1.7->2.1, 2.9->3.1, 3.7->4.1) to run the Phase Boundary Verification
   traceability check. This limits governance overhead to the points where it
   is needed.
 
@@ -54,7 +54,7 @@ corrections as durable Rules is handled by the §13 Learnings Ritual in
 ## Overview
 
 The stage protocol is the mandatory behavioral contract governing how every
-stage in the AI-DLC workflow executes. All 32 stages across five phases
+stage in the AI-DLC workflow executes. All 33 stages across five phases
 (Initialization, Ideation, Inception, Construction, Operation) follow this protocol without
 exception. The conductor (`SKILL.md`) hands stage execution to agent
 personas; the protocol stays independent of phase and agent, defining
@@ -284,7 +284,7 @@ Progress: [N]/[total] overall | [phase-N]/[phase-total] [Phase] stages complete.
 ```
 
 Count only current-phase stages. Include completed and skipped in numerator.
-Example: `Progress: 13/32 overall | 3/7 IDEATION stages complete. Next: Approval & Handoff`
+Example: `Progress: 13/33 overall | 3/7 IDEATION stages complete. Next: Approval & Handoff`
 
 ---
 
@@ -459,7 +459,7 @@ Before beginning any stage, transition sidebar tasks:
 2. Current stage task -> mark `in_progress` with `activeForm: "Running [Stage Name]"`
 
 Rules: task must be `in_progress` for spinner to display. Update BEFORE
-reading stage file. Applies to all 32 stages. If task IDs lost (compaction),
+reading stage file. Applies to all 33 stages. If task IDs lost (compaction),
 use `TaskList` to find by subject. For skipped stages:
 `TaskUpdate({ taskId: [ID], status: "completed", description: "[original] -- Skipped: [reason]" })`
 
@@ -663,7 +663,7 @@ existence, then offers to resume from the last incomplete stage.
 | **Inception -- RE** | Per-repo RE artifacts at `aidlc/spaces/<active-space>/codekb/<repo>/`; ideation scope/feasibility |
 | **Inception -- Practices Discovery** | Preserve the lead draft and existing contribution files; dispatch only missing quality/developer/devsecops spokes, then continue with the human interview and lead integration |
 | **Inception -- Requirements** | Per-repo `codekb/` artifacts (if performed); requirements-analysis docs |
-| **Inception -- Design** | Requirements; user stories; application-design docs |
+| **Inception -- Design** | Requirements; user stories; domain-design docs |
 | **Inception -- Delivery Planning** | All inception artifacts; delivery-planning if partial |
 | **Construction -- Code Gen** | Current unit's design artifacts, story design, acceptance criteria, prior code |
 | **Construction -- Build/Test** | Current unit's code, test plans, acceptance criteria, build config |
@@ -750,7 +750,7 @@ Affect prior stages:
 
 New requirements or scope-level modifications:
 1. Document in the `audit/` shards
-2. Return to Requirements Analysis (2.3) or Delivery Planning (2.8)
+2. Return to Requirements Analysis (2.3) or Delivery Planning (2.9)
 3. Re-plan from that point
 4. If change affects stage selection (e.g., `poc` -> `feature`), use the
    scope/recompose command so the engine updates the plan atomically
@@ -793,15 +793,15 @@ and problem complexity.
 
 | Scope | Default Depth | Test Strategy | Typical Stages | Notes |
 |-------|--------------|---------------|---------------:|-------|
-| enterprise | Comprehensive | Comprehensive | 32 | All stages |
-| feature | Standard | Standard | 32 | All stages |
-| mvp | Standard | Standard | 22 | Skip all Operation |
+| enterprise | Comprehensive | Comprehensive | 33 | All stages |
+| feature | Standard | Standard | 33 | All stages |
+| mvp | Standard | Standard | 23 | Skip all Operation |
 | poc | Minimal | Minimal | ~8 | Initialization + Ideation + core Inception |
 | bugfix | Minimal | Minimal | ~8 | Targeted |
 | refactor | Minimal | Minimal | 8 | Targeted |
 | infra | Standard | Standard | ~13 | Infra-focused |
 | security-patch | Minimal | Minimal | ~10 | Security-focused |
-| workshop | Standard | **Minimal** | 25 | Standard depth for learning; Nyquist testing for pace |
+| workshop | Standard | **Minimal** | 26 | Standard depth for learning; Nyquist testing for pace |
 
 User can override depth or test strategy at any approval gate.
 
@@ -959,20 +959,37 @@ engine from three inputs (low-wins): the stage's declared class, the active
 scope's `review_cap`, and any per-run `--review` override. A `none` resolution
 omits the reviewer block entirely and the stage runs reviewless.
 
-1. **Invoke.** Delegate to the agent named in `directive.reviewer`, passing the
-   stage definition path, the Q&A file, the produced artifact paths, and any
-   validation tools from frontmatter — never the builder's `memory.md` or plan, so
-   the reviewer forms independent judgment.
+1. **Invoke.** Before every dispatch - the first, a NOT-READY re-invoke, or a
+   re-review after a Part 0 gate-rejection revision - the conductor first
+   deletes any existing `## Review` section on the primary artifact: review
+   history lives in the audit ledger, and a leftover section (in the worst
+   case a pre-revision `READY`) is exactly what a re-review that is itself
+   cut off before writing would be misread against. With the delete rule,
+   "no current `## Review` section" means "incomplete review" uniformly on
+   every path. The conductor then delegates to the agent named in
+   `directive.reviewer`, passing the stage definition path, the Q&A file, the
+   produced artifact paths, and any validation tools from frontmatter - never
+   the builder's `memory.md` or plan, so the reviewer forms independent
+   judgment.
 2. **Review.** An `adversarial` review runs under the adversarial review contract:
    the reviewer tries to refute the artifact rather than confirm it, grounding
    findings in machine-checkable evidence where it exists (READY is the verdict
    it fails to reach, not the default). An `advisory` review keeps the
-   evidence-grounding rule but is a single decision-support pass: findings are
+   evidence-grounding rule but is a single normal-flow decision-support pass: findings are
    ranked by severity for the human at the gate, with no repair loop behind
    them. Either way the reviewer reads the definition, Q&A, and artifacts, runs
-   any listed validation tools, and appends a `## Review` section to the primary
-   artifact with a **READY** or **NOT-READY** verdict.
-3. **Verdict.** On `advisory`, both verdicts are terminal: the workflow proceeds
+   any listed validation tools, and appends exactly ONE `## Review` section to
+   the primary artifact with exactly one verdict line: **READY** or
+   **NOT-READY**. The reviewers run under a hard turn budget (`maxTurns: 60`),
+   authored once in the persona frontmatter and enforced natively where the
+   harness has a lever: Claude Code reads the key verbatim (the sub-agent is
+   stopped mid-task, no final-message turn) and the opencode packager projects
+   it to the native per-agent `steps: 60` (the runner grants one final
+   text-only turn - a summary can return, but no tool call can write the
+   review). Codex TOML personas, Cursor, Copilot, and Kiro CLI/IDE expose no
+   per-agent cap key, so there the budget is persona prose only (the personas'
+   `## Turn Budget` section plans for the worst-case cutoff on every harness).
+3. **Verdict.** On `advisory`, both verdicts are terminal in normal flow: the workflow proceeds
    to the learnings ritual and the gate, where the findings are quoted verbatim
    for the human to triage (`reviewer_max_iterations` is 1, engine-enforced).
    On `adversarial`: READY → proceed to the learnings ritual then the gate.
@@ -980,6 +997,21 @@ omits the reviewer block entirely and the stage runs reviewless.
    2) → the lead agent re-runs to address the findings and the reviewer
    re-checks. NOT-READY with iterations exhausted → proceed to the gate with the
    unresolved findings noted.
+   A verdict only counts when it parses: exactly ONE current `## Review`
+   section with exactly one canonical verdict token. A missing section (a
+   capped or crashed reviewer is stopped without writing one - step 1 deletes
+   any prior section before every dispatch, so a leftover can never stand in
+   for it), a section without a canonical verdict line, or duplicated
+   sections/verdicts is an INCOMPLETE attempt: the conductor retries the same
+   unmatched request once with `--retry-pending` (no iteration consumed - an
+   advisory normal-flow budget is exactly one pass, so a counted cut-off would exhaust it
+   without any review happening), and a second incomplete attempt records the
+   terminal receipt `--verdict NOT-READY` with the finding "review did not
+   complete within its turn budget" - the gate is reached with a concrete
+   finding, never presented on (or deadlocked by) a silently missing verdict.
+   On `adversarial` with iterations remaining the re-invoke skips the lead
+   (the artifact was never reviewed; there is nothing for the builder to act
+   on).
    The recorded receipt is terminal whenever no further review pass follows it:
    any later write to a `produces[]` artifact invalidates it and the engine
    refuses the gate, so fixes happen inside the iteration loop, never after the
@@ -988,17 +1020,27 @@ omits the reviewer block entirely and the stage runs reviewless.
 
 The iteration budget is engine-enforced: `aidlc-log.ts review` refuses a
 `REVIEW_REQUESTED` whose `--iteration` exceeds the stage's effective budget, so
-a conductor that loses count cannot run unbounded review passes. The reviewer
+a conductor that loses count cannot run unbounded review passes. The only
+exception is a terminal receipt invalidated by a later `produces[]` write: the
+first request after stale evidence is exactly one marked recovery request at
+the next ordinal, even when normal adversarial budget remained. Either
+recovery verdict is terminal; a second invalidation requires human reset
+instead of another request. Autonomous Units halt before `finalize` and
+restart their Bolt attempt only after a human decision. The reviewer
 never blocks — the human always has final say at the gate — and does not fire
 for stages without a `reviewer` field. See the `reviewer` /
 `reviewer_max_iterations` / `review_class` frontmatter fields in
 [Stage Definition](15-stage-definition.md).
 
-If reviewer dispatch fails, times out, or the session ends after
-`REVIEW_REQUESTED` but before a verdict, rerun the same request command with
-`--retry-pending` before dispatching again. The logger accepts this recovery
-only for the same unmatched request, records `Retry: pending-request`, and does
-not consume another iteration. A completed request cannot be retried.
+If reviewer dispatch fails, times out, ends the session after
+`REVIEW_REQUESTED` but before a verdict, or returns an incomplete attempt (no
+current `## Review` section, or no single canonical verdict), rerun the same
+request command with `--retry-pending` before dispatching again - at most once
+per request; a second incomplete attempt records the terminal `NOT-READY`
+receipt instead. The logger accepts this recovery only for the same unmatched
+request, records `Retry: pending-request`, and does not consume another
+iteration. A completed request cannot be retried; stale-receipt recovery is a
+distinct request at the next ordinal.
 
 ---
 

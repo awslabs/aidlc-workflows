@@ -17,23 +17,28 @@
 //   releaseAuditLock / withAuditLock — composite-keyed depth + exit handlers.
 //   WORKSPACE_LOCK_SENTINEL / DEFAULT_LOCK_STALE_MS (AIDLC_LOCK_STALE_MS env).
 
+import { createHash, randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   acquireAuditLock,
+  ActiveDirectiveLockContendedError,
   auditLockDir,
   auditLockIdentity,
   auditLockOwnedByProcess,
   detectLeakedLocks,
   holdsAuditLock,
   releaseAuditLock,
+  writeActiveDirectiveMarker,
   WORKSPACE_LOCK_SENTINEL,
   withAuditLock,
-} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+} from "../../core/tools/aidlc-lib.ts";
 
 const PD = "/tmp/aidlc-t161-project";
+const REPO_ROOT = join(import.meta.dir, "..", "..");
 
 // Clean any lock dirs this test family might leave under tmpdir() between cases.
 function cleanLocks(): void {
@@ -236,6 +241,118 @@ describe("t161 stale-lock reaper", () => {
       expect(existsSync(lockDir)).toBe(false);
     } finally {
       rmSync(realPd, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("t161 active-directive owner lock and doctor findings", () => {
+  function markerProject(): { projectDir: string; recordDir: string; state: string } {
+    const projectDir = mkdtempSync(join(tmpdir(), "aidlc-t161-marker-"));
+    const recordName = "auth-deadbeef";
+    const intents = join(projectDir, "aidlc", "spaces", "default", "intents");
+    const recordDir = join(intents, recordName);
+    mkdirSync(recordDir, { recursive: true });
+    writeFileSync(join(projectDir, "aidlc", "active-space"), "default\n");
+    writeFileSync(join(intents, "active-intent"), `${recordName}\n`);
+    writeFileSync(join(intents, "intents.json"), `${JSON.stringify([{
+      uuid: "deadbeef-0000-7000-8000-000000000001",
+      slug: "auth",
+      dirName: recordName,
+      status: "in-flight",
+    }])}\n`);
+    const state = "- **Current Stage**: requirements-analysis\n";
+    writeFileSync(join(recordDir, "aidlc-state.md"), state);
+    return { projectDir, recordDir, state };
+  }
+
+  function writeMarker(projectDir: string, state: string): void {
+    writeActiveDirectiveMarker(projectDir, {
+      kind: "run-stage",
+      stage: "requirements-analysis",
+      state_sha256: createHash("sha256").update(state).digest("hex"),
+    });
+  }
+
+  test("dead stamped owners recover, fresh live owners contend, and canonical bytes stay readable", () => {
+    const fixture = markerProject();
+    try {
+      writeMarker(fixture.projectDir, fixture.state);
+      const markerPath = join(fixture.recordDir, ".aidlc-active-directive.json");
+      const lockDir = join(fixture.recordDir, ".aidlc-active-directive.lock");
+      const before = readFileSync(markerPath, "utf-8");
+      const deadToken = randomUUID();
+      mkdirSync(join(lockDir, deadToken), { recursive: true });
+      writeFileSync(join(lockDir, "owner.json"), JSON.stringify({
+        pid: 2_000_000_000,
+        startedAtMs: 0,
+        reapLiveOwnerAfterStale: true,
+        token: deadToken,
+      }));
+      writeMarker(fixture.projectDir, fixture.state);
+      expect(readFileSync(markerPath, "utf-8")).not.toBe(before);
+      expect(existsSync(lockDir)).toBe(false);
+
+      const liveToken = randomUUID();
+      mkdirSync(join(lockDir, liveToken), { recursive: true });
+      writeFileSync(join(lockDir, "owner.json"), JSON.stringify({
+        pid: process.pid,
+        startedAtMs: Math.floor(performance.timeOrigin + performance.now()),
+        reapLiveOwnerAfterStale: true,
+        token: liveToken,
+      }));
+      const canonical = readFileSync(markerPath, "utf-8");
+      expect(() => writeMarker(fixture.projectDir, fixture.state)).toThrow(ActiveDirectiveLockContendedError);
+      expect(readFileSync(markerPath, "utf-8")).toBe(canonical);
+    } finally {
+      rmSync(fixture.projectDir, { recursive: true, force: true });
+    }
+  }, 10000);
+
+  test("post-grace unstamped locks recover through CAS while legacy transaction debris stays manual", () => {
+    const fixture = markerProject();
+    const lockDir = join(fixture.recordDir, ".aidlc-active-directive.lock");
+    const legacy = join(fixture.recordDir, ".aidlc-active-directive.json.transaction");
+    process.env.AIDLC_LOCK_UNSTAMPED_GRACE_MS = "1";
+    try {
+      mkdirSync(lockDir);
+      utimesSync(lockDir, new Date(0), new Date(0));
+      writeFileSync(legacy, "{}\n");
+      expect(detectLeakedLocks(fixture.projectDir, false)).toContainEqual(expect.objectContaining({
+        kind: "active-directive",
+        reason: "unstamped",
+        cleared: false,
+        lockDir,
+      }));
+      cpSync(join(REPO_ROOT, "dist", "claude", ".claude"), join(fixture.projectDir, ".claude"), { recursive: true });
+      cpSync(join(REPO_ROOT, "core", "tools", "aidlc-lib.ts"), join(fixture.projectDir, ".claude", "tools", "aidlc-lib.ts"));
+      cpSync(join(REPO_ROOT, "core", "tools", "aidlc-utility.ts"), join(fixture.projectDir, ".claude", "tools", "aidlc-utility.ts"));
+      const doctor = spawnSync(process.execPath, [
+        join(fixture.projectDir, ".claude", "tools", "aidlc-utility.ts"),
+        "doctor",
+        "--project-dir",
+        fixture.projectDir,
+      ], { encoding: "utf-8" });
+      const doctorOutput = `${doctor.stdout ?? ""}\n${doctor.stderr ?? ""}`;
+      expect(doctorOutput).toContain("active-directive lock");
+      expect(doctorOutput).toContain("unstamped) — cleared");
+      expect(doctorOutput).toContain("legacy active-directive transaction");
+      expect(doctorOutput).toContain("not cleared");
+      const findings = detectLeakedLocks(fixture.projectDir, true);
+      expect(findings).toContainEqual(expect.objectContaining({
+        kind: "legacy-active-directive-transaction",
+        reason: "legacy-transaction",
+        cleared: false,
+        lockDir: legacy,
+      }));
+      expect(existsSync(lockDir)).toBe(false);
+      expect(existsSync(legacy)).toBe(true);
+      mkdirSync(lockDir);
+      utimesSync(lockDir, new Date(0), new Date(0));
+      expect(() => writeMarker(fixture.projectDir, fixture.state)).not.toThrow();
+      expect(existsSync(lockDir)).toBe(false);
+    } finally {
+      delete process.env.AIDLC_LOCK_UNSTAMPED_GRACE_MS;
+      rmSync(fixture.projectDir, { recursive: true, force: true });
     }
   });
 });

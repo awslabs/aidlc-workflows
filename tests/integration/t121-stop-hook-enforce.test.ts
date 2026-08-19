@@ -85,11 +85,12 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   utimesSync,
@@ -180,6 +181,55 @@ function seedActiveDirectiveMarker(proj: string, stage: string, unit?: string): 
       state_sha256: createHash("sha256").update(state, "utf-8").digest("hex"),
     })}\n`,
   );
+}
+
+const COPILOT_SESSION = "t121-copilot-owner";
+function seedCopilotDirective(proj: string, kind = "run-stage", unit?: string): void {
+  const state = readFileSync(seededStateFile(proj), "utf-8");
+  const digest = createHash("sha256").update(state).digest("hex");
+  const commandDigest = createHash("sha256").update("next").digest("hex");
+  writeFileSync(
+    join(seededRecordDir(proj), ".aidlc-active-directive.json"),
+    `${JSON.stringify({
+      version: 2,
+      revision: 1,
+      project_sha256: createHash("sha256").update(realpathSync(proj)).digest("hex"),
+      intent_uuid: "00000000-0000-7000-8000-000000000001",
+      state_present: true,
+      state_sha256: digest,
+      owner_session: COPILOT_SESSION,
+      owner_epoch: 1,
+      context_epoch: 0,
+      kind,
+      stage: "requirements-analysis",
+      ...(unit ? { unit } : {}),
+      delivery: "delivered",
+      needs_rehydrate: false,
+      active_attempt: {
+        id: "settled-next",
+        command_kind: "next",
+        command_sha256: commandDigest,
+        issued_state_sha256: digest,
+        session_id: COPILOT_SESSION,
+        owner_epoch: 1,
+        context_epoch: 0,
+        status: "settled",
+        result_kind: kind,
+      },
+      event_sequence: 1,
+      human_sequence: 0,
+      engine_sequence: 1,
+      conversation_sequence: 0,
+      stop_count: 0,
+    }, null, 2)}\n`,
+  );
+}
+
+function rewriteCopilotMarker(proj: string, update: (marker: Record<string, unknown>) => void): void {
+  const path = join(seededRecordDir(proj), ".aidlc-active-directive.json");
+  const marker = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+  update(marker);
+  writeFileSync(path, `${JSON.stringify(marker, null, 2)}\n`);
 }
 
 const tempDirs: string[] = [];
@@ -676,10 +726,12 @@ function runHook(
   cap = "",
   unit = "",
   stage = "requirements-analysis",
+  copilotSession = "",
 ): HookResult {
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
     CLAUDE_PROJECT_DIR: proj,
+    AIDLC_HARNESS_DIR: ".claude",
     MOCK_KIND: kind,
     MOCK_UNIT: unit,
     MOCK_STAGE: stage,
@@ -688,15 +740,30 @@ function runHook(
   // An empty value is falsy in blockCap() (:69 `if (!raw)`), so it behaves
   // exactly like unset — the default cap of 8. Pass it through for parity.
   env.CLAUDE_CODE_STOP_HOOK_BLOCK_CAP = cap;
+  if (copilotSession) env.AIDLC_COPILOT_SESSION_ID = copilotSession;
+  else delete env.AIDLC_COPILOT_SESSION_ID;
   // The hook reads stdin + env only; it ignores argv (mirrors the .sh's bare
   // `bun "$HOOK_TS"`).
   const res = spawnSync(BUN, [HOOK_TS], {
     input: payload,
     encoding: "utf-8",
+    cwd: proj,
     env,
     timeout: 20_000,
   });
   return { rc: res.status ?? -1, out: (res.stdout ?? "").trim() };
+}
+
+function runCopilotStop(proj: string, cap = "2"): HookResult {
+  return runHook(
+    proj,
+    JSON.stringify({ session_id: COPILOT_SESSION, stop_hook_active: false }),
+    "run-stage",
+    cap,
+    "",
+    "requirements-analysis",
+    COPILOT_SESSION,
+  );
 }
 
 function runStatusSync(proj: string, stage: string): number {
@@ -1938,14 +2005,14 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
   }, 30000);
 
   // --- (i.2) MISSED COMMANDS: jump / state-skip count as engagement; bolt --help does not ---
-  test("(i) engaged: `aidlc-jump.ts execute application-design` after the human prompt BLOCKS", () => {
+  test("(i) engaged: `aidlc-jump.ts execute domain-design` after the human prompt BLOCKS", () => {
     const proj = makeProject();
     seedActive(proj, "requirements-analysis");
     // aidlc-jump moves the pointer (state-mutating); pre-fix it was not in the
     // engagement set, so a jump-then-bail was misread as chat. Now it BLOCKS.
     const tp = seedTranscriptEntries(proj, "claude", [
       { kind: "human", text: "jump ahead" },
-      { kind: "bash", command: "bun .claude/tools/aidlc-jump.ts execute application-design" },
+      { kind: "bash", command: "bun .claude/tools/aidlc-jump.ts execute domain-design" },
     ]);
     const r = runHook(
       proj,
@@ -2046,4 +2113,124 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect(r.rc).toBe(0);
     expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
   }, 30000);
+
+  test("(j) a supplied Copilot directive preserves done, parked, ask, approval/revision, and inverse safeguards", () => {
+    for (const kind of ["done", "parked", "ask"] as const) {
+      const proj = makeProject();
+      seedActive(proj);
+      seedCopilotDirective(proj, kind);
+      expect(runCopilotStop(proj).out, kind).toBe("");
+    }
+    const run = makeProject();
+    seedActive(run);
+    seedCopilotDirective(run);
+    expect((JSON.parse(runCopilotStop(run).out) as { decision?: string }).decision).toBe("block");
+
+    const autonomousPark = makeProject();
+    seedInProgressWithQuestions(autonomousPark, { autonomy: "autonomous" });
+    seedCopilotDirective(autonomousPark, "parked");
+    expect((JSON.parse(runCopilotStop(autonomousPark, "8").out) as { decision?: string }).decision).toBe("block");
+
+    for (const state of ["?", "R"] as const) {
+      const proj = makeProject();
+      seedActiveWithCheckbox(proj, state);
+      seedCopilotDirective(proj);
+      expect(runCopilotStop(proj).out, state).toBe("");
+    }
+    const inProgress = makeProject();
+    seedActiveWithCheckbox(inProgress, "-");
+    seedCopilotDirective(inProgress);
+    expect((JSON.parse(runCopilotStop(inProgress).out) as { decision?: string }).decision).toBe("block");
+  }, 30000);
+
+  test("(j) a supplied Copilot directive preserves pending question, decision, compose, and every inverse", () => {
+    for (const [answer, allowed] of [["", true], ["resolved", false]] as const) {
+      const proj = makeProject();
+      seedInProgressWithQuestions(proj, { questions: `# Question\n[Answer]: ${answer}\n` });
+      seedCopilotDirective(proj);
+      const stopped = runCopilotStop(proj).out;
+      expect(stopped === "", answer || "blank").toBe(allowed);
+    }
+    for (const [answered, allowed] of [[false, true], [true, false]] as const) {
+      const proj = makeProject();
+      seedInProgressWithQuestions(proj);
+      seedInteractionAudit(proj, [
+        { event: "STAGE_STARTED", stage: "requirements-analysis" },
+        { event: "DECISION_RECORDED", stage: "requirements-analysis" },
+        ...(answered ? [{ event: "QUESTION_ANSWERED" as const, stage: "requirements-analysis" }] : []),
+      ]);
+      seedCopilotDirective(proj);
+      expect(runCopilotStop(proj).out === "", String(answered)).toBe(allowed);
+    }
+    for (const pending of [true, false]) {
+      const proj = makeProject();
+      seedInProgressWithQuestions(proj);
+      if (pending) writeFileSync(join(proj, "aidlc", ".aidlc-compose-pending"), "pending\n");
+      seedCopilotDirective(proj);
+      expect(runCopilotStop(proj).out === "", String(pending)).toBe(pending);
+    }
+  }, 30000);
+
+  test("(j) supplied conversational evidence is consume-once, autonomy-guarded, and bounded in the marker transaction", () => {
+    const chat = makeProject();
+    seedActive(chat);
+    seedCopilotDirective(chat);
+    rewriteCopilotMarker(chat, (marker) => {
+      marker.event_sequence = 2;
+      marker.human_sequence = 2;
+      marker.engine_sequence = 1;
+    });
+    expect(runCopilotStop(chat).out).toBe("");
+    expect((JSON.parse(runCopilotStop(chat).out) as { decision?: string }).decision).toBe("block");
+
+    const inverse = makeProject();
+    seedActive(inverse);
+    seedCopilotDirective(inverse);
+    rewriteCopilotMarker(inverse, (marker) => {
+      marker.event_sequence = 2;
+      marker.human_sequence = 1;
+      marker.engine_sequence = 2;
+    });
+    expect((JSON.parse(runCopilotStop(inverse).out) as { decision?: string }).decision).toBe("block");
+
+    const autonomous = makeProject();
+    seedInProgressWithQuestions(autonomous, { autonomy: "autonomous" });
+    seedCopilotDirective(autonomous);
+    rewriteCopilotMarker(autonomous, (marker) => {
+      marker.event_sequence = 2;
+      marker.human_sequence = 2;
+      marker.engine_sequence = 1;
+    });
+    expect((JSON.parse(runCopilotStop(autonomous, "8").out) as { decision?: string }).decision).toBe("block");
+
+    const bounded = makeProject();
+    seedActive(bounded);
+    seedCopilotDirective(bounded);
+    expect((JSON.parse(runCopilotStop(bounded).out) as { decision?: string }).decision).toBe("block");
+    expect(runCopilotStop(bounded).out).toBe("");
+    const persisted = JSON.parse(readFileSync(join(seededRecordDir(bounded), ".aidlc-active-directive.json"), "utf-8")) as { stop_count?: number };
+    expect(persisted.stop_count).toBe(2);
+  }, 30000);
+
+  test("(j) active-directive contention is fail-open and never reported as foreign ownership", () => {
+    const proj = makeProject();
+    seedActive(proj);
+    seedCopilotDirective(proj);
+    const markerPath = join(seededRecordDir(proj), ".aidlc-active-directive.json");
+    const before = readFileSync(markerPath, "utf-8");
+    const lockDir = join(seededRecordDir(proj), ".aidlc-active-directive.lock");
+    const token = randomUUID();
+    mkdirSync(join(lockDir, token), { recursive: true });
+    writeFileSync(join(lockDir, "owner.json"), JSON.stringify({
+      pid: process.pid,
+      startedAtMs: Math.floor(performance.timeOrigin + performance.now()),
+      reapLiveOwnerAfterStale: true,
+      token,
+    }));
+    const stopped = runCopilotStop(proj);
+    expect(stopped.rc).toBe(0);
+    expect(stopped.out).toBe("");
+    expect(readFileSync(markerPath, "utf-8")).toBe(before);
+    expect(statSync(lockDir).isDirectory()).toBe(true);
+  }, 10000);
 });

@@ -240,9 +240,9 @@ Contents: 4 minimal .md files (architecture-overview, technology-stack, codebase
 
 ### Inception Artifacts Fixture: `tests/fixtures/inception-artifacts/`
 
-Pre-seeded inception phase output for tests that jump into construction. Copied into `$PROJ/aidlc/spaces/default/intents/<record>/inception/{requirements-analysis,application-design,units-generation}/` during setup.
+Pre-seeded inception phase output for tests that jump into construction. Copied into `$PROJ/aidlc/spaces/default/intents/<record>/inception/{requirements-analysis,domain-design,units-generation}/` during setup.
 
-Contents: 7 minimal .md files (requirements, components, component-methods, services, component-dependency, unit-of-work, unit-of-work-story-map) describing the Todo app. Unit name: `todo-core`.
+Contents: minimal .md files (requirements, the consolidated `components.md` catalogue, unit-of-work, unit-of-work-story-map) describing the Todo app. Unit name: `todo-core`.
 
 ### Construction Artifacts Fixture: `tests/fixtures/construction-artifacts/`
 
@@ -269,7 +269,7 @@ Contents: 1 minimal .md file (functional-design) describing the todo-core unit's
 
 1. Choose the stage to test and identify what state fixture it needs (the state must show that stage as the current/next stage)
 2. Create or reuse a state fixture in `tests/fixtures/`
-3. Create `tests/integration/tNN-stage-SLUG.test.ts` and use the shared TypeScript harness helpers (`tests/harness/fixtures.ts`, `tests/harness/sdk-drive.ts`, or `tests/harness/tui-drive.ts`) rather than shell TAP helpers.
+3. Create `tests/integration/tNN-stage-SLUG.test.ts` and use the shared TypeScript harness helpers (`tests/harness/fixtures.ts`, `tests/harness/sdk-drive.ts`, `tests/harness/tui-drive.ts`, `tests/harness/plugin-kit.ts`, or `tests/harness/exec-drive.ts`) rather than shell TAP helpers.
 4. Run with `bun tests/run-tests.ts --integration` or directly: `bun test tests/integration/tNN-stage-SLUG.test.ts`
 
 ## How to Add Acceptance Assertions

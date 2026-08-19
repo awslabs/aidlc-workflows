@@ -8,7 +8,7 @@ design, non-functional requirements and design, infrastructure design, code
 generation, build/test verification, and CI pipeline configuration.
 
 Construction is the fourth of five phases in the AI-DLC methodology. It is
-driven by the **execution plan** produced during Delivery Planning (Stage 2.8).
+driven by the **execution plan** produced during Delivery Planning (Stage 2.9).
 The plan determines which stages execute, which are skipped, and in what order
 units are built.
 
@@ -32,7 +32,7 @@ completion messages, and state tracking.
 ## Bolt-by-Bolt Construction
 
 Construction executes **Bolt by Bolt**, driven by `bolt-plan.md` (Bolt
-sequence + walking-skeleton marker) from stage 2.8 and the dependency DAG
+sequence + walking-skeleton marker) from stage 2.9 and the dependency DAG
 from stage 2.7. A [Bolt](../../guide/glossary.md) is one pass through stages
 3.1–3.5 for a Unit or small group of dependency-linked Units. Stages 3.6
 (Build and Test) and 3.7 (CI Pipeline) run **once** at the end across all
@@ -131,7 +131,7 @@ SKILL.md §CONSTRUCTION Flow for the canonical specification.
 | Stage | Name                  | Execution   | Condition                                                                                          | Lead Agent          | Support Agents    | Mode                       | Per-Unit |
 |-------|-----------------------|-------------|----------------------------------------------------------------------------------------------------|---------------------|-------------------|-----------------------------|----------|
 | 3.1   | Functional Design     | CONDITIONAL | New data models, complex business logic, or business rules need design                             | aidlc-architect-agent     | aidlc-developer-agent   | inline                      | Yes      |
-| 3.2   | NFR Requirements      | CONDITIONAL | Performance, security, scalability concerns, or tech stack selection needed                         | aidlc-architect-agent     | aidlc-devsecops-agent, aidlc-compliance-agent, aidlc-quality-agent   | inline                      | Yes      |
+| 3.2   | NFR Requirements      | CONDITIONAL | Performance, security, scalability, reliability, or observability requirements needed, or tech stack selection needed | aidlc-architect-agent     | aidlc-devsecops-agent, aidlc-compliance-agent, aidlc-quality-agent   | inline                      | Yes      |
 | 3.3   | NFR Design            | CONDITIONAL | NFR Requirements was executed and NFR patterns need design                                          | aidlc-architect-agent     | aidlc-aws-platform-agent| inline                      | Yes      |
 | 3.4   | Infrastructure Design | CONDITIONAL | Infrastructure services need mapping, deployment architecture required, or cloud resources needed   | aidlc-aws-platform-agent  | aidlc-devsecops-agent, aidlc-compliance-agent   | inline                      | Yes      |
 | 3.5   | Code Generation       | ALWAYS      | Always executes for every unit in the execution plan                                               | aidlc-developer-agent     | (none)            | subagent (aidlc-developer-agent)  | Yes      |
@@ -154,8 +154,8 @@ SKILL.md §CONSTRUCTION Flow for the canonical specification.
 | Lead Agent        | aidlc-architect-agent                                                                                   |
 | support_agents    | aidlc-developer-agent                                                                                   |
 | mode              | inline                                                                                            |
-| Inputs            | unit-of-work.md, unit-of-work-story-map.md, requirements.md, application design artifacts         |
-| Outputs           | `<record>/construction/{unit-name}/functional-design/` -- business-logic-model.md, business-rules.md, domain-entities.md, CONDITIONAL: frontend-components.md |
+| Inputs            | unit-of-work.md, unit-of-work-story-map.md, requirements.md, domain design artifacts         |
+| Outputs           | `<record>/construction/{unit-name}/functional-design/` -- functional-spec.md, rules.md, entities.md, CONDITIONAL: frontend-components.md |
 
 ### Purpose
 
@@ -168,7 +168,7 @@ feasibility input.
 - Unit definition from `<record>/inception/units-generation/unit-of-work.md`
 - Assigned stories from `<record>/inception/units-generation/unit-of-work-story-map.md`
 - Requirements from `<record>/inception/requirements-analysis/requirements.md`
-- Application design artifacts from `<record>/inception/application-design/`
+- Domain design artifacts from `<record>/inception/domain-design/`
 
 ### Steps
 
@@ -177,7 +177,7 @@ feasibility input.
    input. Apply aidlc-architect-agent as the primary perspective.
 
 2. **Read Unit Context** -- Read the unit definition, assigned stories,
-   requirements, and application design artifacts.
+   requirements, and domain design artifacts.
 
 3. **Create Functional Design Plan** -- Analyze the unit's scope and create a
    questions file at
@@ -205,12 +205,12 @@ feasibility input.
 
 5. **Generate Artifacts** -- Generate the following in
    `<record>/construction/{unit-name}/functional-design/`:
-   - **business-logic-model.md**: Detailed algorithms, workflows, data
+   - **functional-spec.md**: Detailed algorithms, workflows, data
      transformations, processing sequences, and decision trees for the unit's
      business logic
-   - **business-rules.md**: Decision rules, validation logic, constraints,
+   - **rules.md**: Decision rules, validation logic, constraints,
      policies, conditional behavior, and business invariants
-   - **domain-entities.md**: Entities, relationships, data structures,
+   - **entities.md**: Entities, relationships, data structures,
      attributes, lifecycle states, and entity interaction patterns
    - **frontend-components.md** (CONDITIONAL -- only if unit includes
      frontend/UI): Component hierarchy, props/state design, interaction flows,
@@ -225,9 +225,9 @@ feasibility input.
 
 | Artifact                 | Description                                                              |
 |--------------------------|--------------------------------------------------------------------------|
-| business-logic-model.md  | Algorithms, workflows, data transformations, processing sequences, decision trees |
-| business-rules.md        | Decision rules, validation logic, constraints, policies, conditional behavior |
-| domain-entities.md       | Entities, relationships, data structures, attributes, lifecycle states   |
+| functional-spec.md  | Algorithms, workflows, data transformations, processing sequences, decision trees |
+| rules.md        | Decision rules, validation logic, constraints, policies, conditional behavior |
+| entities.md       | Entities, relationships, data structures, attributes, lifecycle states   |
 | frontend-components.md   | (CONDITIONAL) Component hierarchy, props/state, interaction flows, form validation, API integration |
 
 ### Approval Gate
@@ -254,18 +254,18 @@ Strictly 2-option: Approve / Request Changes.
 | Stage             | 3.2                                                                                               |
 | Phase             | Construction                                                                                      |
 | Execution         | CONDITIONAL (per execution plan)                                                                  |
-| Condition         | Performance requirements, security considerations, scalability concerns, or tech stack selection needed. Skip if no NFR requirements and tech stack already determined. |
+| Condition         | Performance, security, scalability, reliability, or observability requirements needed, or tech stack selection needed. Skip if no NFR requirements and tech stack already determined. |
 | Per-Unit          | Yes                                                                                               |
 | Lead Agent        | aidlc-architect-agent                                                                                   |
 | support_agents    | aidlc-devsecops-agent, aidlc-compliance-agent, aidlc-quality-agent                                       |
 | mode              | inline                                                                                            |
 | Inputs            | functional design artifacts, requirements.md, RE artifacts                                        |
-| Outputs           | `<record>/construction/{unit-name}/nfr-requirements/` -- performance-requirements.md, security-requirements.md, scalability-requirements.md, reliability-requirements.md, tech-stack-decisions.md |
+| Outputs           | `<record>/construction/{unit-name}/nfr-requirements/` -- performance-requirements.md, security-requirements.md, scalability-requirements.md, reliability-requirements.md, observability-requirements.md, tech-stack-decisions.md |
 
 ### Purpose
 
 Define non-functional requirements across performance, security, scalability,
-reliability, and technology selection for a single unit. The aidlc-architect-agent
+reliability, observability, and technology selection for a single unit. The aidlc-architect-agent
 leads, with the aidlc-devsecops-agent providing security input, the
 aidlc-compliance-agent providing regulatory input, and the aidlc-quality-agent
 providing testability and measurability input.
@@ -321,6 +321,9 @@ providing testability and measurability input.
      capacity planning, data growth, concurrency targets
    - **reliability-requirements.md**: Availability targets (SLA/SLO), fault
      tolerance requirements, backup/recovery, graceful degradation
+   - **observability-requirements.md**: Monitoring requirements, logging
+     standards, distributed tracing needs, alerting thresholds, dashboard
+     requirements, SLI/SLO definitions
    - **tech-stack-decisions.md**: Technology selections and rationale --
      languages, frameworks, databases, infrastructure tools, and justification
      for each choice
@@ -338,6 +341,7 @@ providing testability and measurability input.
 | security-requirements.md     | Authentication, authorization, data protection, compliance, threats        |
 | scalability-requirements.md  | Load projections, scaling triggers, capacity planning, concurrency         |
 | reliability-requirements.md  | Availability targets (SLA/SLO), fault tolerance, backup/recovery           |
+| observability-requirements.md | Monitoring, logging, tracing, alerting, dashboards, SLI/SLO definitions    |
 | tech-stack-decisions.md      | Technology selections with rationale for each choice                       |
 
 ### Approval Gate
@@ -346,13 +350,13 @@ Strictly 2-option: Approve / Request Changes.
 
 ### Notes -- NFR Granularity Expansion
 
-This stage produces **5 artifact files**, expanded from the upstream reference
+This stage produces **6 artifact files**, expanded from the upstream reference
 which defines only 2 files for NFR Requirements. This is a deliberate deviation
 documented in SKILL.md ("Deliberate Deviations from Reference"). The finer
 granularity improves traceability and allows per-concern review without
-overloading a single document. The five files separate performance, security,
-scalability, and reliability into dedicated artifacts, and add a dedicated
-tech-stack-decisions.md for technology selection rationale.
+overloading a single document. The six files separate performance, security,
+scalability, reliability, and observability into dedicated artifacts, and add
+a dedicated tech-stack-decisions.md for technology selection rationale.
 
 ---
 
@@ -371,7 +375,7 @@ tech-stack-decisions.md for technology selection rationale.
 | support_agents    | aidlc-aws-platform-agent                                                                                |
 | mode              | inline                                                                                            |
 | Inputs            | NFR requirements artifacts, functional design artifacts                                           |
-| Outputs           | `<record>/construction/{unit-name}/nfr-design/` -- performance-design.md, security-design.md, scalability-design.md, reliability-design.md, logical-components.md |
+| Outputs           | `<record>/construction/{unit-name}/nfr-design/` -- performance-design.md, security-design.md, scalability-design.md, reliability-design.md, observability-design.md, logical-components.md |
 
 ### Purpose
 
@@ -384,7 +388,7 @@ infrastructure and platform input.
 - NFR requirements from `<record>/construction/{unit-name}/nfr-requirements/`
 - Functional design artifacts from
   `<record>/construction/{unit-name}/functional-design/` (if they exist)
-- Application design from `<record>/inception/application-design/` for
+- Domain design from `<record>/inception/domain-design/` for
   architectural context
 
 ### Steps
@@ -394,7 +398,7 @@ infrastructure and platform input.
    platform input.
 
 2. **Read Prior Artifacts** -- Read NFR requirements, functional design
-   artifacts (if they exist), and application design for architectural context.
+   artifacts (if they exist), and domain design for architectural context.
 
 3. **Generate Design Questions** -- Create a questions file at
    `<record>/construction/{unit-name}/nfr-design/nfr-design-questions.md`
@@ -405,6 +409,8 @@ infrastructure and platform input.
    - Performance optimization (latency budgets, throughput targets, resource
      pooling)
    - Security approach (defense in depth, zero trust, encryption standards)
+   - Observability approach (metrics and SLI/SLO targets, structured logging,
+     tracing depth, alerting philosophy, dashboard needs)
    - Logical component boundaries (service isolation, failure domains, blast
      radius)
 
@@ -427,6 +433,9 @@ infrastructure and platform input.
      data partitioning/sharding, queue-based decoupling, stateless design
    - **Reliability**: Circuit breakers, retry policies with backoff, health
      checks, graceful degradation, failover strategies, data replication
+   - **Observability**: Metrics collection strategy, structured logging design,
+     distributed tracing architecture, alerting rules, dashboard specifications,
+     SLI/SLO tracking, correlation ID propagation
 
 6. **Generate Artifacts** -- Generate the following in
    `<record>/construction/{unit-name}/nfr-design/`:
@@ -440,6 +449,9 @@ infrastructure and platform input.
    - **reliability-design.md**: Resilience patterns, circuit breaker
      configuration, retry policies, health check design, failover procedures,
      backup strategy
+   - **observability-design.md**: Metrics collection architecture, structured
+     logging design, distributed tracing strategy, alerting rules and escalation,
+     dashboard specifications, SLI/SLO definitions, correlation ID propagation
    - **logical-components.md**: Logical infrastructure component inventory --
      service boundaries, failure domains, blast radius mapping, component
      isolation strategy, shared resource identification. Bridges NFR design
@@ -459,6 +471,7 @@ infrastructure and platform input.
 | security-design.md     | Auth architecture, encryption design, input validation, security headers        |
 | scalability-design.md  | Scaling architecture, load distribution, data partitioning, auto-scaling rules  |
 | reliability-design.md  | Resilience patterns, circuit breakers, retry policies, failover procedures      |
+| observability-design.md | Metrics, structured logs, tracing, alerts, dashboards, SLI/SLO definitions      |
 | logical-components.md  | Component inventory, service boundaries, failure domains, blast radius mapping  |
 
 ### Approval Gate
@@ -467,7 +480,7 @@ Strictly 2-option: Approve / Request Changes.
 
 ### Notes -- NFR Design Granularity
 
-This stage produces **5 artifact files** (4 NFR-specific designs plus
+This stage produces **6 artifact files** (5 NFR-specific designs plus
 logical-components.md), expanded from the upstream reference which defines only
 2 files for NFR Design. This is a deliberate deviation documented in SKILL.md
 ("Deliberate Deviations from Reference"). The logical-components.md artifact
@@ -490,8 +503,8 @@ by mapping where NFR patterns apply at the component level.
 | Lead Agent        | aidlc-aws-platform-agent                                                                                |
 | support_agents    | aidlc-devsecops-agent, aidlc-compliance-agent                                                           |
 | mode              | inline                                                                                            |
-| Inputs            | NFR design artifacts, application design, functional design                                       |
-| Outputs           | `<record>/construction/{unit-name}/infrastructure-design/` -- deployment-architecture.md, infrastructure-services.md, monitoring-design.md, cicd-pipeline.md, CONDITIONAL: shared-infrastructure.md |
+| Inputs            | NFR design artifacts, domain design, functional design                                       |
+| Outputs           | `<record>/construction/{unit-name}/infrastructure-design/` -- infrastructure-specification.md (deployment + services + CONDITIONAL shared), monitoring-design.md, cicd-pipeline.md |
 
 ### Purpose
 
@@ -505,7 +518,7 @@ aidlc-compliance-agent checking data residency and regulatory constraints.
 - NFR design from `<record>/construction/{unit-name}/nfr-design/` (if exists)
 - Functional design from
   `<record>/construction/{unit-name}/functional-design/` (if exists)
-- Application design from `<record>/inception/application-design/`
+- Domain design from `<record>/inception/domain-design/`
 - NFR requirements from
   `<record>/construction/{unit-name}/nfr-requirements/` (if exists)
 
@@ -516,7 +529,7 @@ aidlc-compliance-agent checking data residency and regulatory constraints.
    (data residency, regulatory constraints) personas and knowledge for support input.
 
 2. **Read Prior Artifacts** -- Read all prior design artifacts for context:
-   NFR design, functional design, application design, NFR requirements.
+   NFR design, functional design, domain design, NFR requirements.
 
 3. **Generate Infrastructure Questions** -- Create a questions file at
    `<record>/construction/{unit-name}/infrastructure-design/infrastructure-design-questions.md`
@@ -551,21 +564,21 @@ aidlc-compliance-agent checking data residency and regulatory constraints.
      management
 
 6. **Generate Artifacts** -- Generate the following in
-   `<record>/construction/{unit-name}/infrastructure-design/`:
-   - **deployment-architecture.md**: Compute resources, networking, storage,
-     environment definitions, infrastructure-as-code approach, resource sizing
-   - **infrastructure-services.md**: Database design, caching layer, messaging
-     infrastructure, external service integrations, service discovery
-   - **monitoring-design.md**: Metrics and KPIs, log strategy, tracing
-     configuration, alert definitions, dashboard specifications, incident
-     response
-   - **cicd-pipeline.md**: Pipeline stages, build configuration, test
+   `<record>/construction/{unit-name}/infrastructure-design/`. Keep the content
+   **tabular** (deployment, services, shared, and monitoring are tables):
+   - **infrastructure-specification.md**: the core infra design — a
+     **Deployment** table (compute, networking, storage, environments, IaC,
+     sizing), an **Infrastructure Services** table (databases, caches,
+     messaging, integrations, service discovery), and a CONDITIONAL **Shared
+     Infrastructure** table (shared resources across units + ownership/access
+     boundaries), all in one document
+   - **monitoring-design.md**: the monitoring that implements NFR Design's
+     observability-design strategy, tabular — metrics/KPIs,
+     alerts, SLIs/SLOs, plus log-aggregation and tracing configuration and
+     dashboard specifications
+   - **cicd-pipeline.md**: pipeline stages, build configuration, test
      automation integration, deployment strategy (blue-green, canary, rolling),
-     rollback procedures, secrets management in CI/CD
-   - **shared-infrastructure.md** (CONDITIONAL -- produce when multiple units
-     share infrastructure resources): Shared databases, shared caches, shared
-     message queues, shared networking, cross-unit service discovery, resource
-     ownership and access boundaries
+     rollback procedures, environment promotion, secrets management in CI/CD
 
 7. **Prepare Completion** -- Verify the unit's Infrastructure Design
    artifacts. Do not edit state; report the gate outcome through
@@ -575,26 +588,26 @@ aidlc-compliance-agent checking data residency and regulatory constraints.
 
 ### Outputs
 
-| Artifact                   | Description                                                               |
-|----------------------------|---------------------------------------------------------------------------|
-| deployment-architecture.md | Compute, networking, storage, environment definitions, IaC approach       |
-| infrastructure-services.md | Databases, caching, messaging, external integrations, service discovery   |
-| monitoring-design.md       | Metrics, logs, tracing, alerts, dashboards, SLI/SLO tracking             |
-| cicd-pipeline.md           | Pipeline stages, build config, deployment strategy, rollback procedures   |
-| shared-infrastructure.md   | (CONDITIONAL) Shared resources across units, ownership boundaries         |
+| Artifact                       | Description                                                               |
+|--------------------------------|---------------------------------------------------------------------------|
+| infrastructure-specification.md | Deployment (compute/networking/storage/environments/IaC), infrastructure services, and CONDITIONAL shared resources — tabular |
+| monitoring-design.md           | Metrics, alerts, SLIs/SLOs, logs, tracing, dashboards — tabular where possible |
+| cicd-pipeline.md               | Pipeline stages, build config, deployment strategy, rollback procedures   |
 
 ### Approval Gate
 
 Strictly 2-option: Approve / Request Changes.
 
-### Notes -- Infrastructure Design Expansion
+### Notes -- Infrastructure Design Consolidation
 
-This stage produces **5 artifact files**, expanded from the upstream reference
-which has 2-3 files. This is a deliberate deviation documented in SKILL.md
-("Deliberate Deviations from Reference"). The additions of monitoring-design.md
-and cicd-pipeline.md as dedicated artifacts improve operational visibility.
-shared-infrastructure.md is produced conditionally only when multiple units
-share infrastructure resources.
+This stage produces **3 artifact files**. Deployment, infrastructure services,
+and shared resources were consolidated into a single tabular
+`infrastructure-specification.md` (closer to the upstream reference's single
+infra doc), while `monitoring-design.md` and `cicd-pipeline.md` stay dedicated
+artifacts because downstream Operation stages consume them independently
+(observability-setup reads monitoring; deployment-pipeline reads the CI/CD
+design). Shared infrastructure is a CONDITIONAL section of the specification,
+present only when multiple units share resources.
 
 ---
 
@@ -613,7 +626,7 @@ share infrastructure resources.
 | support_agents    | (none -- focused implementation)                                                                  |
 | mode              | subagent (Task tool subagent_type: aidlc-developer-agent)                                               |
 | Inputs            | ALL prior design artifacts for this unit                                                          |
-| Outputs           | application code (workspace root) + `<record>/construction/{unit-name}/code-generation/` -- code-generation-plan.md, code-generation-questions.md, code-summary.md |
+| Outputs           | application code (workspace root) + `<record>/construction/{unit-name}/code-generation/` -- code-generation-plan.md, code-generation-questions.md, unit-test-instructions.md, code-summary.md |
 
 ### Purpose
 
@@ -638,7 +651,7 @@ the execution plan. Code is written to the workspace root, never to
 - NFR design from `<record>/construction/{unit-name}/nfr-design/` (if exists)
 - Infrastructure design from
   `<record>/construction/{unit-name}/infrastructure-design/` (if exists)
-- Application design from `<record>/inception/application-design/`
+- Domain design from `<record>/inception/domain-design/`
 - Unit definition from
   `<record>/inception/units-generation/unit-of-work.md`
 - Story map from
@@ -652,35 +665,41 @@ This stage has a **two-part structure**: planning followed by generation.
 
 1. **Read All Unit Artifacts** -- Read all design artifacts for the current
    unit (functional design, NFR requirements, NFR design, infrastructure
-   design, application design, unit definition, story map).
+   design, domain design, unit definition, story map).
 
 2. **Create Code Generation Plan** -- Create a detailed plan at
    `<record>/construction/{unit-name}/code-generation/code-generation-plan.md`
    with checkboxes for each implementation step. Include story-to-code-step
    traceability -- map each plan step back to the user story it implements.
 
-   **Recommended plan structure** (adapt if architecture warrants different
-   ordering):
+   Run `aidlc-testing-posture.ts render` and paste its complete
+   `## Testing Contract` JSON block into the plan. The resolver reads
+   org/team/project Testing Posture sections additively: a project coverage or
+   integration note remains applicable but does not erase a team methodology;
+   a contradictory narrower methodology is rejected.
 
-   ```
-   Step 1:  Project structure setup (directories, config files, package.json/Cargo.toml/etc.)
-   Step 2:  Data models / database schema / migrations
-   Step 3:  Business logic layer (core domain logic, services)
-   Step 4:  Business logic tests (unit tests for Step 3)
-   Step 5:  API / endpoint layer (routes, controllers, handlers)
-   Step 6:  API tests (unit + integration tests for Step 5)
-   Step 7:  Repository / data access layer (queries, ORM config)
-   Step 8:  Frontend components (if applicable -- UI components, pages, state)
-   Step 9:  Frontend tests (component tests, interaction tests)
-   Step 10: Configuration and environment setup (.env templates, build config)
-   Step 11: Test configuration (vitest.config, jest.config, or equivalent)
-   Step 12: Documentation (inline docs, API docs, README updates)
-   ```
+   The contract supplies a methodology-specific plan profile:
 
-   This layer-by-layer approach ensures dependencies are built before
-   dependents (data models before business logic, business logic before API).
-   Deviate when the architecture requires it (e.g., event-driven systems,
-   microservices with independent stacks).
+   - **TDD** -- Red/Green/Refactor for every applicable testable layer: data,
+     repository, business logic, API, and frontend.
+   - **BDD** -- executable behavior scenarios before an observable feature
+     slice, followed by cross-layer implementation, green scenarios, and
+     refactoring. It is not converted to layer-local TDD.
+   - **ATDD** -- executable acceptance tests before the complete cross-layer
+     feature implementation, followed by acceptance-green and refactoring.
+   - **Custom/mixed** -- the exact affirmed ordering is preserved, including
+     combinations such as scenario-first BDD with lower-level unit tests after
+     implementation.
+   - **Test-after** -- implementation then tests for every applicable testable
+     layer.
+
+   Greenfield plans bootstrap a minimal runnable test command before the first
+   Red/scenario/acceptance step; brownfield plans verify the existing command
+   first. The selected Test Strategy supplies volume/types and the scope adds
+   its floor (coverage/CI, targeted regression, or no additional floor);
+   neither obligation replaces the other. Under Minimal, a bug/security
+   targeted regression may add one integration/E2E test when that is the
+   narrowest level that reproduces the defect.
 
    **Test files are MANDATORY in the plan.** The plan MUST include steps for:
    - Unit test files (one per component/module with key behavior coverage)
@@ -693,17 +712,40 @@ This stage has a **two-part structure**: planning followed by generation.
    Number each plan step sequentially (Step 1, Step 2, etc.) for clear
    execution ordering and traceability.
 
-3. **Plan Approval** -- Present the plan summary to the user and request
-   approval. First create or reset
+   Also create
+   `<record>/construction/{unit-name}/code-generation/unit-test-instructions.md`
+   before Plan Approval. Match the active test strategy:
+   - **Minimal**: Requirement-driven unit tests (1 test per requirement,
+     happy-path floor per component), approximately 5-15 tests total
+   - **Standard**: 5-8 tests per component, with key behavior coverage
+   - **Comprehensive**: 10-15 tests per component, with thorough coverage
+
+   Include test framework setup and configuration, the exact runnable command
+   available before the first test-first cycle, expected coverage targets,
+   mocking/stubbing guidance, and test data management. Every run command MUST
+   be scoped to this unit using exact test file paths or an exact unit filter.
+   A bare project-wide command such as `npm test` is not acceptable because
+   Build and Test executes every unit's commands.
+
+   Present the unit test instruction summary together with the plan summary.
+
+3. **Plan Approval** -- Request approval for both
+   `code-generation-plan.md`, its Testing Contract, and
+   `unit-test-instructions.md`. On a revision, reset the prior `[Answer]:` to
+   blank first. Run `aidlc-testing-posture.ts fingerprint --unit <unit>` after
+   both files are final, then create or reset
    `<record>/construction/{unit-name}/code-generation/code-generation-questions.md`
-   with a **Plan Approval** question and blank `[Answer]:`, then render it as a
-   structured question and stop the turn:
+   with that `[Approval Fingerprint]`, a **Plan Approval** question, and blank
+   `[Answer]:`; render it as a structured question and stop the turn:
    - "Approve Plan" -- proceed to code generation
    - "Request Changes" -- revise the plan
 
    Fill the tag only after the human responds. A request for changes is
-   recorded, the plan is revised, and the Plan Approval tag is reset to blank
-   before re-prompting. A forwarding-loop continuation is never approval.
+   recorded, both files are revised as needed, the contract/fingerprint are
+   regenerated, and the Plan Approval tag is reset before re-prompting. A
+   post-approval plan/instruction change or Testing Posture/scope/strategy/type
+   change invalidates the fingerprint and reopens approval. A forwarding-loop
+   continuation is never approval.
 
 #### PART 2 -- Generation (Steps 4-7)
 
@@ -719,6 +761,9 @@ This stage has a **two-part structure**: planning followed by generation.
      `AIDLC-UNIT: <directive.unit>` (or the current unit name for a
      single-iteration directive without `unit`). Contextual dependencies do
      not receive additional markers.
+   - As the second line, `AIDLC-TESTING-CONTRACT: <contract_sha256>` from the
+     approved plan. The dispatch guard rejects missing, different, or stale
+     hashes.
    - The lead agent's persona from `agents/aidlc-developer-agent.md` and knowledge
      from `.claude/knowledge/aidlc-developer-agent/` (included in the prompt
      since subagents cannot access conversation history)
@@ -727,10 +772,14 @@ This stage has a **two-part structure**: planning followed by generation.
      (requirements summary, stories summary, app design summary) -- the
      subagent can Read specific files if it needs full content
    - The approved code-generation-plan.md (full content)
+   - The approved unit-test-instructions.md (full content)
    - Project workspace details (languages, frameworks, conventions from
      aidlc-state.md)
    - Instructions to execute each plan step sequentially and mark checkboxes
      as completed
+   - The approved Testing Contract is authoritative. The subagent does not
+     independently re-resolve memory; it executes the approved TDD, BDD, ATDD,
+     test-after, or custom/mixed profile exactly.
 
    **Context budget:** Pass only the current unit's design artifacts, not all
    units. Summarize inception artifacts with file paths rather than embedding
@@ -756,6 +805,7 @@ This stage has a **two-part structure**: planning followed by generation.
 |---------------------------|---------------------------------------------------------------------|
 | code-generation-plan.md   | Detailed plan with checkboxes, story traceability, step sequencing  |
 | code-generation-questions.md | Persisted Plan Approval question and explicit human answer       |
+| unit-test-instructions.md | Per-unit setup, scoped run commands, coverage, mocks, and test data |
 | code-summary.md           | Files created/modified, decisions, test coverage, plan deviations   |
 | (application code)        | All source code, tests, and config written to workspace root        |
 
@@ -781,6 +831,9 @@ Strictly 2-option: Approve / Request Changes.
 - **Mandatory test file inclusion**: Test files MUST be part of the code
   generation plan. Stage 3.6 (Build and Test) verifies and extends tests but
   does not create them from scratch.
+- **Unit-scoped execution**: Each per-unit test instruction file uses exact
+  test paths or an exact unit filter so the cross-unit execution stage does
+  not rerun the project-wide suite for every unit.
 - **Brownfield awareness**: In brownfield projects, the subagent modifies
   existing files in-place rather than creating duplicates.
 
@@ -801,19 +854,21 @@ Strictly 2-option: Approve / Request Changes.
 | support_agents    | aidlc-devsecops-agent                                                                                   |
 | mode              | inline                                                                                            |
 | Inputs            | ALL code generation outputs across all units                                                      |
-| Outputs           | `<record>/construction/build-and-test/` -- build-instructions.md, unit-test-instructions.md, integration-test-instructions.md, performance-test-instructions.md, security-test-instructions.md, build-and-test-summary.md, test-results.md, plus conditional test instruction files |
+| Outputs           | `<record>/construction/build-and-test/` -- build-instructions.md, integration-test-instructions.md, performance-test-instructions.md, security-test-instructions.md, build-and-test-summary.md, test-results.md, plus conditional test instruction files |
 
 ### Purpose
 
-Generate test instructions across all test types, then actually execute the
-build and tests via Bash. This stage operates across ALL units -- it is NOT
-per-unit. The aidlc-quality-agent leads with the aidlc-devsecops-agent providing security
-testing expertise.
+Generate cross-unit test instructions, consume the per-unit unit test
+instructions, then actually execute the build and tests via Bash. This stage
+operates across ALL units -- it is NOT per-unit. The aidlc-quality-agent leads
+with the aidlc-devsecops-agent providing security testing expertise.
 
 ### Inputs
 
 - Code generation outputs across all units from
   `<record>/construction/*/code-generation/code-summary.md`
+- Per-unit test instructions from
+  `<record>/construction/*/code-generation/unit-test-instructions.md`
 - NFR requirements across units (if they exist) for performance and security
   testing needs
 
@@ -822,9 +877,10 @@ testing expertise.
 1. **Load Personas** -- Load aidlc-quality-agent (lead) persona and knowledge. Load
    aidlc-devsecops-agent persona and knowledge for security testing input.
 
-2. **Analyze Testing Requirements** -- Read code generation outputs across all
-   units. Review NFR requirements (if they exist) to identify performance and
-   security testing needs. Catalog all test types required.
+2. **Analyze Testing Requirements** -- Read code generation summaries and
+   per-unit test instructions across all units. Review NFR requirements (if
+   they exist) to identify performance and security testing needs. Catalog
+   all test types required.
 
 3. **Generate Build Instructions** -- Create
    `<record>/construction/build-and-test/build-instructions.md`:
@@ -834,50 +890,21 @@ testing expertise.
    - Build verification steps
    - Troubleshooting common build issues
 
-4. **Generate Unit Test Instructions** -- Create
-   `<record>/construction/build-and-test/unit-test-instructions.md`:
-   - Test framework setup and configuration
-   - How to run unit tests (commands, flags, filters)
-   - Expected test coverage targets
-   - Mocking/stubbing guidance
-   - Test data management
-
-5. **Generate Integration Test Instructions** -- Create
-   `<record>/construction/build-and-test/integration-test-instructions.md`:
-   - Test environment prerequisites (databases, services, queues)
-   - How to run integration tests
-   - Cross-unit interaction testing
-   - External dependency handling (stubs, test doubles, sandboxes)
-   - Test data setup and teardown
-
-6. **Generate Performance Test Instructions** (CONDITIONAL) -- IF NFR
-   performance requirements exist for any unit, create
-   `performance-test-instructions.md`:
-   - Load testing tools and configuration
-   - Performance test scenarios mapped to NFR targets
-   - Baseline measurements and benchmarks
-   - Stress and soak test procedures
-   - Performance regression detection
-
-7. **Generate Security Test Instructions** (CONDITIONAL) -- IF NFR security
-   requirements exist for any unit, create
-   `security-test-instructions.md`:
-   - Security scanning tools (SAST, DAST, dependency audit)
-   - Authentication/authorization test scenarios
-   - Input validation and injection testing
-   - Compliance verification steps
-   - Vulnerability assessment procedures
-
-8. **Generate Additional Test Types** (CONDITIONAL) -- As applicable based on
-   project architecture, create specifically named files:
-   - **contract-test-instructions.md**: For microservice APIs --
-     consumer-driven contracts, schema validation, API compatibility
-   - **e2e-test-instructions.md**: For UI-driven applications -- browser
-     automation, user journey tests, cross-browser verification
-   - **accessibility-test-instructions.md**: For user-facing interfaces --
-     WCAG compliance, screen reader testing, keyboard navigation
+4-8. **Generate Additional Test Instructions** -- Consult the active test
+   strategy and generate the matching cross-unit instruction files:
+   - **Minimal**: Generate no additional files. Unit tests are covered
+     per-unit by Code Generation.
+   - **Standard**: Generate `integration-test-instructions.md` for key
+     boundaries and cross-unit interactions.
+   - **Comprehensive**: Generate integration instructions, plus
+     `performance-test-instructions.md` when performance NFRs exist and
+     `security-test-instructions.md` when security NFRs exist.
+   - At any strategy, add specifically named contract, E2E, accessibility, or
+     other instruction files when the project context requires them.
 
    All files go in `<record>/construction/build-and-test/`.
+   Each file includes framework setup, run commands and filters, coverage
+   targets, and test data or environment setup.
 
 9. **Generate Build and Test Summary** -- Create
    `<record>/construction/build-and-test/build-and-test-summary.md`:
@@ -892,8 +919,11 @@ testing expertise.
 
     a. **Build**: Run the build commands from build-instructions.md via Bash.
        Capture output.
-    b. **Unit tests**: Run the unit test command from
-       unit-test-instructions.md via Bash. Capture pass/fail counts.
+    b. **Unit tests**: Collect commands from every per-unit
+       `code-generation/unit-test-instructions.md`, deduplicate identical
+       commands, and run each distinct command once. Commands should be
+       unit-scoped; if a file contains a project-wide command, run it once,
+       never once per unit. Report per-unit pass/fail without double counting.
     c. **Integration tests** (if applicable): Run integration test commands.
        Capture results.
     d. **Report results**: Create or update
@@ -977,8 +1007,7 @@ testing expertise.
 | Artifact                          | Description                                                     | Condition          |
 |-----------------------------------|-----------------------------------------------------------------|--------------------|
 | build-instructions.md             | Dependency install, env setup, build commands, troubleshooting  | Always             |
-| unit-test-instructions.md         | Test framework setup, run commands, coverage targets, mocking   | Always             |
-| integration-test-instructions.md  | Prerequisites, cross-unit testing, external deps, data setup    | Always             |
+| integration-test-instructions.md  | Prerequisites, cross-unit testing, external deps, data setup    | Standard/Comprehensive |
 | performance-test-instructions.md  | Load testing, NFR scenarios, baselines, stress/soak tests       | If NFR perf exists |
 | security-test-instructions.md     | SAST/DAST, auth testing, injection testing, compliance          | If NFR sec exists  |
 | contract-test-instructions.md     | Consumer-driven contracts, schema validation, API compat        | If microservices   |
@@ -1122,7 +1151,7 @@ through a phased construction flow:
 **Per-unit stages (3.1-3.5):**
 - 3.1 Functional Design -- Business logic, domain models, rules (architect-led)
 - 3.2 NFR Requirements -- Performance, security, scalability, reliability,
-  tech stack (architect-led)
+  observability, tech stack (architect-led)
 - 3.3 NFR Design -- Concrete patterns for NFR categories (architect-led)
 - 3.4 Infrastructure Design -- Deployment, services, monitoring, CI/CD
   (aws-platform-led)
@@ -1139,7 +1168,7 @@ through a phased construction flow:
 - Stages 3.1-3.4 are CONDITIONAL; 3.5-3.6 ALWAYS execute; 3.7 is CONDITIONAL
 - All conditional stages follow the execution plan from Delivery Planning
 - Per-unit loop ensures one unit completes fully before the next begins
-- NFR artifacts use expanded granularity (5 files for requirements, 5 for
+- NFR artifacts use expanded granularity (6 files for requirements, 6 for
   design) compared to the upstream reference
 - Infrastructure Design is expanded to 5 artifacts with dedicated monitoring
   and CI/CD files
@@ -1150,9 +1179,10 @@ through a phased construction flow:
   Operation
 
 **Deliberate deviations from upstream reference:**
-- NFR Requirements: 5 files (expanded from 2 in reference)
-- NFR Design: 5 files including logical-components.md (expanded from 2 in
+- NFR Requirements: 6 files (expanded from 2 in reference)
+- NFR Design: 6 files including logical-components.md (expanded from 2 in
   reference)
-- Infrastructure Design: 5 files including monitoring-design.md and
-  cicd-pipeline.md (expanded from 2-3 in reference)
+- Infrastructure Design: 3 files — a consolidated infrastructure-specification.md
+  (deployment + services + shared) plus dedicated monitoring-design.md and
+  cicd-pipeline.md
 - Plan/question file co-location with stage artifacts

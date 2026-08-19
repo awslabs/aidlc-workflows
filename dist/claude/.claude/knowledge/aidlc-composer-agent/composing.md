@@ -21,7 +21,7 @@ caution nor default economy is acceptable.
   exists (reverse-engineering on brownfield, or CodeKB evidence where indexed),
   state what "done" means, and change-plus-verify (code-generation,
   build-and-test). They do not need market-research, user-stories, or
-  application-design - those discover and shape a product that already exists.
+  domain-design - those discover and shape a product that already exists.
 - **Net-new surface.** A new feature, product, or service needs the discovery
   arc: intent-capture, scope-definition, then the inception design stages in
   proportion to how much NEW structure it introduces.

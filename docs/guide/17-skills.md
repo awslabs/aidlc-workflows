@@ -17,9 +17,10 @@ Every command this implementation ships is a skill under `.claude/skills/`. They
 
 - **`/aidlc`** — the full orchestrator. No flags baked in; it detects your scope (or you describe what you want), then drives every stage in your scope to completion. This is the one you reach for most.
 - **Scope-runners** — `/aidlc-bugfix`, `/aidlc-feature`, `/aidlc-mvp`, `/aidlc-security-patch`. Same full workflow, with a scope fixed and scope detection skipped.
-- **Stage-runners** — `/aidlc-application-design`, `/aidlc-code-generation`, and 27 more. Run one stage in isolation, never touching your main workflow. Plugin-owned stages use their bare plugin-prefixed command name, such as `/test-pro-integration`.
+- **Stage-runners** — `/aidlc-domain-design`, `/aidlc-code-generation`, and 27 more. Run one stage in isolation, never touching your main workflow. Plugin-owned stages use their bare plugin-prefixed command name, such as `/test-pro-integration`.
 - **`/aidlc-init`** — birth the first intent (run the whole Initialization phase) in one step; opt-in packaging over the engine's auto-birth.
 - **Session skills** — `/aidlc-session-cost`, `/aidlc-replay`, `/aidlc-outcomes-pack`. Read-only views over a workflow; covered in [Session Management](11-session-management.md).
+- **`/aidlc-knowledge`** — the DocumentKB: index the team's own documents (PDFs, Word files, Markdown, plain text) into a per-space catalog agents can cite. Standalone like the session skills, but read-write: it changes the catalog and emits document audit events (never workflow state). Same surface as `/aidlc knowledge <verb>`; see [CLI Commands](12-cli-commands.md) for the verbs.
 
 Everything a runner does is reachable from `/aidlc` with a flag. The runners are packaging — typing `/aidlc-bugfix` and seeing it in your `/` menu is good ergonomics, nothing more. Delete every runner and the shortcuts go; the capability stays, reachable through `/aidlc` flags.
 
@@ -66,7 +67,7 @@ Once a workflow has started, its scope is fixed in `aidlc-state.md`, so re-runni
 A stage-runner runs a **single stage in isolation**. It uses the stage's configured agents and reviewer, records a synthetic completion, and stops without workflow learnings or an approval gate. It never advances your main workflow's `Current Stage`; the tool itself enforces that isolation.
 
 ```
-/aidlc-application-design
+/aidlc-domain-design
 /aidlc-code-generation
 /aidlc-requirements-analysis
 /aidlc-reverse-engineering
@@ -102,9 +103,10 @@ The three bootstrap **initialization** stages ship no stage-runner — birthing 
 |---|---|---|---|
 | Orchestrator | `/aidlc` | Full workflow, scope detected | — |
 | Scope-runner | `/aidlc-bugfix`, `/aidlc-feature`, `/aidlc-mvp`, `/aidlc-security-patch` | Full workflow, scope fixed, no detection | `/aidlc --scope <name>` |
-| Stage-runner | `/aidlc-application-design`, `/aidlc-code-generation`, … (29 total) | One stage in isolation, never advances your workflow | `/aidlc --stage <slug> --single` |
+| Stage-runner | `/aidlc-domain-design`, `/aidlc-code-generation`, … (29 total) | One stage in isolation, never advances your workflow | `/aidlc --stage <slug> --single` |
 | Init wrapper | `/aidlc-init` | Birth the first intent (run Initialization) | `/aidlc` on a fresh workspace |
 | Session views | `/aidlc-session-cost`, `/aidlc-replay`, `/aidlc-outcomes-pack` | Read-only workflow reports | see [Session Management](11-session-management.md) |
+| Document knowledge | `/aidlc-knowledge` | Index and read the team's own documents (per-space DocumentKB) | `/aidlc knowledge <verb>` |
 
 There's one stage-runner for every runnable stage in the lifecycle. To see the full set, list your skills directory:
 

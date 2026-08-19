@@ -150,8 +150,8 @@ describe("t44 stage-instruction completeness — parseStageFrontmatter (migrated
     expect(fileMatches(findStageFile("scope-definition"), /scope-document\.md/)).toBe(true);
   });
 
-  test("5: application-design steps mention components.md", () => {
-    expect(fileMatches(findStageFile("application-design"), /components\.md/)).toBe(true);
+  test("5: domain-design steps mention components.md", () => {
+    expect(fileMatches(findStageFile("domain-design"), /components\.md/)).toBe(true);
   });
 
   test("6: units-generation steps mention unit-of-work.md", () => {
@@ -298,7 +298,7 @@ describe("t44 stage-instruction completeness — parseStageFrontmatter (migrated
       "intent-capture",
       "requirements-analysis",
       "reverse-engineering",
-      "application-design",
+      "domain-design",
       "delivery-planning",
       "approval-handoff",
     ];

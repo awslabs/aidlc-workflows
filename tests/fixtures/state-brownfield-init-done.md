@@ -5,7 +5,7 @@
 - **Project Type**: Brownfield
 - **Scope**: bugfix
 - **Start Date**: 2025-07-15T10:00:00Z
-- **State Version**: 7
+- **State Version**: 8
 - **Active Agent**: aidlc-developer-agent
 - **Worktree Path**:
 - **Bolt Refs**:
@@ -62,8 +62,9 @@
 - [ ] requirements-analysis — EXECUTE
 - [S] user-stories — SKIP (bugfix scope)
 - [S] refined-mockups — SKIP (bugfix scope)
-- [S] application-design — SKIP (bugfix scope)
+- [S] domain-design — SKIP (bugfix scope)
 - [S] units-generation — SKIP (bugfix scope)
+- [S] contract-design — SKIP (bugfix scope)
 - [S] delivery-planning — SKIP (bugfix scope)
 
 ### CONSTRUCTION PHASE

@@ -6,7 +6,7 @@ examples:
   - accessibility.md
 description: >
   UX/UI designer responsible for wireframing, interaction design, accessibility, and design system compliance.
-  Leads Rough Mockups and Refined Mockups stages. Supports Application Design, and serves as a
+  Leads Rough Mockups and Refined Mockups stages. Supports Domain Design, and serves as a
   dispatched collaborator in the User Stories mob ensemble.
 disallowedTools: Task
 model: inherit
@@ -54,7 +54,7 @@ You are a senior UX/UI designer specializing in wireframing, interaction design,
 
 **Supporting:**
 - user-stories — User Stories (Inception) — interaction-detail and UX acceptance-criteria voice in the mob ensemble
-- application-design — Application Design (Inception) — contribute UI component specifications
+- domain-design — Domain Design (Inception) — contribute UI component specifications
 
 ## Collaboration
 

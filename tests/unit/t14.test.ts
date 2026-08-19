@@ -95,8 +95,8 @@ describe("t14 stage-content-validation — parseStageFrontmatter (migrated from 
   // S1 (STRONGER): the .sh planned exactly 160 assertions over 32 stages x 5.
   // Pin the discovered stage count so a dropped/renamed/added stage dir fails
   // loudly here rather than as an opaque TAP plan mismatch.
-  test("discovers exactly 32 stage files (5 assertions each = 160)", () => {
-    expect(STAGES.length).toBe(32);
+  test("discovers exactly 33 stage files (5 assertions each = 165)", () => {
+    expect(STAGES.length).toBe(33);
   });
 
   // S2 (STRONGER): pin parseStageFrontmatter's two documented throw paths — the

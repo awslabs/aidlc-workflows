@@ -38,6 +38,7 @@ const manifest: HarnessManifest = {
     { src: "skills/aidlc-session-cost", dst: "skills/aidlc-session-cost" },
     { src: "skills/aidlc-replay", dst: "skills/aidlc-replay" },
     { src: "skills/aidlc-outcomes-pack", dst: "skills/aidlc-outcomes-pack" },
+    { src: "skills/aidlc-knowledge", dst: "skills/aidlc-knowledge" },
   ],
 
   // Authored Kiro shell surfaces. These carry literal `.kiro` (harness-specific
@@ -65,6 +66,7 @@ const manifest: HarnessManifest = {
     { src: "agents/aidlc-operations-agent.json", dst: "agents/aidlc-operations-agent.json" },
     { src: "hooks/aidlc-kiro-adapter.ts", dst: "hooks/aidlc-kiro-adapter.ts" },
     { src: "settings/cli.json", dst: "settings/cli.json" },
+    { src: "settings/mcp.json", dst: "settings/mcp.json" },
     // Project-root .gitignore (beside .kiro/, not inside it) — re-rooted under
     // aidlc/spaces/* for the workspace layout (SEED): cursors + machine-local
     // runtime ignored, the shared work (memory/codekb/registry/state/audit

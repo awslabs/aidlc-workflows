@@ -126,7 +126,7 @@ function seedCanaryIntent(proj: string): void {
     // The raw slug in an allowlisted field: forces it through emission so the
     // intent-id hashing must fire (a redaction miss would leak it here).
     `- **Next Stage**: ${INTENT_SLUG}`,
-    "- **State Version**: 7",
+    "- **State Version**: 8",
     "",
     "## Stage Progress",
     "### IDEATION PHASE",
@@ -242,6 +242,34 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(rel).toContain("report.json");
     expect(rel).toContain("manifest.json");
     expect(rel).toContain("evidence/normalized.json");
+  }, 30000);
+
+  test("2b: normalized evidence includes safe space-level DocumentKB fields", () => {
+    const proj = freshProject();
+    seedCanaryIntent(proj);
+    const spaceAudit = join(proj, "aidlc", "spaces", "default", "intents", "audit");
+    mkdirSync(spaceAudit, { recursive: true });
+    writeFileSync(
+      join(spaceAudit, "documents.md"),
+      "## Document Updated\n**Timestamp**: 2026-05-19T12:00:00Z\n" +
+        "**Event**: DOCUMENT_UPDATED\n**Space**: default\n**Document**: doc-id\n" +
+        "**Change**: changed\n**Digest**: abc123\n**Source**: documents/private-name.md\n",
+    );
+    const { bundleDir } = runExport(proj);
+    expect(bundleDir).not.toBeNull();
+    const normalized = JSON.parse(
+      readFileSync(join(bundleDir!, "evidence", "normalized.json"), "utf-8"),
+    );
+    const event = normalized.auditEvents.find(
+      (row: Record<string, string>) => row.Event === "DOCUMENT_UPDATED",
+    );
+    expect(event).toMatchObject({
+      Space: "default",
+      Document: "doc-id",
+      Change: "changed",
+      Digest: "abc123",
+    });
+    expect(event.Source).toBeUndefined();
   }, 30000);
 
   test("3: report.json exposes findings + timeline.stages and the gate-unresolved error", () => {
@@ -609,7 +637,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
       "## Project Information",
       "- **Status**: InProgress",
       `- **Current Stage**: ${CUSTOM_SLUG}`,
-      "- **State Version**: 7",
+      "- **State Version**: 8",
       "",
       "## Stage Progress",
       "### CONSTRUCTION PHASE",

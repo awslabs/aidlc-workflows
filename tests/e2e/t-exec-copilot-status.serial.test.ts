@@ -33,9 +33,12 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, realpathSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
+import {
+  runCopilot,
+  setupCopilotProject,
+} from "../harness/exec-drive.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
 const COPILOT_DIST = join(REPO_ROOT, "dist", "copilot");
@@ -78,42 +81,6 @@ function skipReason(): string | null {
   return null;
 }
 const SKIP_REASON = skipReason();
-
-// A scratch install: dist/copilot copied verbatim (dotfiles included — the
-// engine at .aidlc/, the shell at .github/), then git-initialized (Copilot
-// resolves repo context from the git root).
-function setupCopilotProject(): string {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "copilot-exec-")));
-  const proj = join(root, "proj");
-  cpSync(COPILOT_DIST, proj, { recursive: true });
-  for (const args of [
-    ["init", "-q"],
-    ["add", "-A"],
-    ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "install"],
-  ]) {
-    const r = spawnSync("git", args, { cwd: proj, encoding: "utf-8" });
-    if (r.status !== 0) throw new Error(`git ${args[0]} failed: ${r.stderr}`);
-  }
-  return proj;
-}
-
-// `/aidlc --status` rides the prompt (slash-skill invocation); --allow-all-tools
-// lets the engine's read-only bun calls run unprompted in -p mode. --no-remote
-// keeps the session off GitHub's session sync.
-function runCopilot(proj: string, args: string): { rc: number; out: string } {
-  const r = spawnSync(
-    COPILOT_BIN,
-    ["-p", `/aidlc ${args}`, "-s", "--no-remote", "--allow-all-tools"],
-    {
-      cwd: proj,
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, PWD: proj },
-      timeout: TEST_TIMEOUT_MS,
-    },
-  );
-  return { rc: r.status ?? -1, out: `${r.stdout ?? ""}\n${r.stderr ?? ""}` };
-}
 
 describe("t-exec-copilot-status — /aidlc --status on the shipped dist/copilot via copilot -p", () => {
   test.skipIf(SKIP_REASON !== null)(

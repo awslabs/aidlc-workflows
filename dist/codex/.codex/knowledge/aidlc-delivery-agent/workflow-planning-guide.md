@@ -10,8 +10,9 @@ Derive stage configuration from the work breakdown analysis. For each conditiona
 
 | Stage | EXECUTE when | SKIP when |
 |-------|-------------|-----------|
-| Application Design | Work streams introduce new components/services, new architectural boundaries, greenfield projects | All streams modify existing components only, no new service boundaries |
+| Domain Design | Work streams introduce new components/services, new architectural boundaries, greenfield projects | All streams modify existing components only, no new service boundaries |
 | Units Generation | Multiple independent work streams, cross-cutting concerns requiring sequenced delivery | Single stream or tightly coupled streams that form one natural unit |
+| Contract Design | More than one unit must integrate, or a unit exposes a public/external API to formalise before parallel build | Single self-contained unit with no inter-unit boundaries and no external API |
 
 ### CONSTRUCTION stages (per-unit)
 
@@ -49,11 +50,11 @@ For each stage decision, tie the rationale to specific work streams:
 4. **Test isolation**: Each stream should be independently testable where possible
 5. **Critical path optimization**: Identify the longest dependency chain and prioritize unblocking it
 
-## Economic vs topological sequencing (for Bolt Planning in Stage 2.8)
+## Economic vs topological sequencing (for Bolt Planning in Stage 2.9)
 
 Unit dependency analysis (Stage 2.7) produces the DAG — topological order falls out of it mechanically. That's geometry: what the system is.
 
-Bolt sequencing (Stage 2.8) is different work. It chooses a path through the DAG weighted by human value judgment — which Bolt ships first, which proves what, which surfaces the biggest risk early. AI can topologically sort; it cannot decide what validates the market hypothesis fastest.
+Bolt sequencing (Stage 2.9) is different work. It chooses a path through the DAG weighted by human value judgment — which Bolt ships first, which proves what, which surfaces the biggest risk early. AI can topologically sort; it cannot decide what validates the market hypothesis fastest.
 
 Per the canonical Glossary (`stage-protocol.md` line 657), a **Bolt** is "a deployable unit of work within Construction — one pass through stages 3.1–3.7." Bolts are not MMFs and not sprints.
 

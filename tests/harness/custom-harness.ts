@@ -72,7 +72,7 @@
 //     must be a NON-init stage AND the lowest-numbered non-init EXECUTE in its
 //     scope to become Current Stage (firstPostInit) at init. schema-snapshot at
 //     2.0 (inception) is the lowest non-init EXECUTE -> init writes
-//     Current Stage=schema-snapshot. migration-plan (2.9) is reached after
+//     Current Stage=schema-snapshot. migration-plan (2.10) is reached after
 //     schema-snapshot's gate.
 //   - sensor->stage binding ........... stage frontmatter `sensors: [<id>]` only
 //     (aidlc-graph.ts:497 resolveSensorsForStage); manifest `matches:` glob is
@@ -142,12 +142,13 @@ export const SNAPSHOT_ARTIFACT = "source-schema";
 // --- TAIL stage: migration-plan — plans the cutover ------------------------
 
 /** The migration-plan STAGE — the chain's tail. The activity: read the captured
- *  source-schema and plan the cutover. Number 2.9 (NOT 2.05: numericStageOrder
- *  parseInts the minor part, so 2.05 would sort AFTER 2.1). 2.9 sorts after 2.0
- *  and after the SKIP'd shipped 2.1-2.8; the only live edge is 2.0->2.9, and
- *  numericStageOrder("2.0","2.9") < 0 satisfies the edge-local invariant. */
+ *  source-schema and plan the cutover. Number 2.10 (NOT 2.05: numericStageOrder
+ *  parseInts the minor part, so 2.05 would sort AFTER 2.1). 2.10 sorts after 2.0
+ *  and after the SKIP'd shipped 2.1-2.9 (delivery-planning now owns 2.9); the
+ *  only live edge is 2.0->2.10, and numericStageOrder("2.0","2.10") < 0
+ *  satisfies the edge-local invariant. */
 export const PLAN_STAGE_SLUG = "migration-plan";
-export const PLAN_STAGE_NUMBER = "2.9";
+export const PLAN_STAGE_NUMBER = "2.10";
 export const PLAN_STAGE_NAME = "Migration Plan";
 export const PLAN_STAGE_PHASE = "inception";
 

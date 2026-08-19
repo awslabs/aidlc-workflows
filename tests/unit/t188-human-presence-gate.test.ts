@@ -156,7 +156,13 @@ function summaryEvidence(
 function setAutonomous(proj: string): void {
   const sf = seededStateFile(proj);
   const content = readFileSync(sf, "utf-8");
-  writeFileSync(sf, `${content}\n- **Construction Autonomy Mode**: autonomous\n`, "utf-8");
+  const next = content.includes("**Construction Autonomy Mode**:")
+    ? content.replace(
+        /- \*\*Construction Autonomy Mode\*\*:[^\n]*/,
+        "- **Construction Autonomy Mode**: autonomous",
+      )
+    : `${content}\n- **Construction Autonomy Mode**: autonomous\n`;
+  writeFileSync(sf, next, "utf-8");
 }
 
 function summaryQuestions(proj: string, answer = ""): string {
@@ -224,7 +230,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     recordHumanTurn(proj); // the human typed a prompt
     guarded(proj, ["gate-start", slug]); // agent opens the gate (same turn)
     const r = guarded(proj, ["approve", slug, "--user-input", "ok"]);
-    expect(r.rc).toBe(0);
+    expect(r.rc, r.out).toBe(0);
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
     // Auto-advanced off feasibility.
     expect(field(proj, "Current Stage")).not.toBe(slug);
@@ -281,20 +287,34 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(eventCount(proj, "GATE_APPROVED")).toBe(2);
   });
 
-  // --- Scenario D: AUTONOMY carve-out ----------------------------------------
-  //
-  // state has `Construction Autonomy Mode: autonomous` -> approve COMMITS with NO
-  // HUMAN_TURN (swarm/Bolt has no human at the gate). The ledger is non-empty, so
-  // the pass is the autonomy carve-out, not the fail-open-empty-ledger path.
-  test("D: autonomous Construction approves with NO HUMAN_TURN (carve-out)", () => {
+  // --- Scenario D: AUTONOMY carve-out is Construction-only -------------------
+  test("D: a Construction autonomy field does NOT waive an Ideation gate", () => {
     const slug = field(proj, "Current Stage");
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
     setAutonomous(proj);
     guarded(proj, ["gate-start", slug]); // ledger non-empty, but no HUMAN_TURN
     const r = guarded(proj, ["approve", slug, "--user-input", "ok"]);
-    expect(r.rc).toBe(0);
+    expect(r.rc).not.toBe(0);
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
+    expect(field(proj, "Current Stage")).toBe(slug);
+  });
+
+  test("D2: an actual autonomous Construction stage may approve without a human turn", () => {
+    cleanupTestProject(proj);
+    proj = createTestProject();
+    seedStateFile(proj, "state-construction-with-worktree.md");
+    const statePath = seededStateFile(proj);
+    const state = readFileSync(statePath, "utf-8")
+      .replace("- [-] code-generation — EXECUTE", "- [-] build-and-test — EXECUTE")
+      .replace("- **Current Stage**: code-generation", "- **Current Stage**: build-and-test")
+      .replace("- **Next Stage**: build-and-test", "- **Next Stage**: ci-pipeline");
+    writeFileSync(statePath, state, "utf-8");
+    setAutonomous(proj);
+
+    guarded(proj, ["gate-start", "build-and-test"]);
+    const r = guarded(proj, ["approve", "build-and-test", "--user-input", "ok"]);
+    expect(r.rc, r.out).toBe(0);
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
-    expect(field(proj, "Current Stage")).not.toBe(slug);
   });
 
   // --- Scenario E: STALE human turn ------------------------------------------

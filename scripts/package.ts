@@ -413,7 +413,11 @@ const ACTIVE_SPACE_VALUE = "default\n";
 // open-set descriptor. Pretty-printed + trailing newline keeps committed
 // output diff-friendly and stable under --check.
 function writeHarnessData(treeRoot: string, m: HarnessManifest): void {
-  const data = {
+  // A FRESH object, deliberately: the runtime READER tolerates unknown keys, but
+  // this writer alone decides what ships. Anything hand-added to the committed
+  // harness.json therefore fails `--check` and is erased on the next build -- so
+  // a new configuration field has to be added HERE to exist at all.
+  const data: Record<string, unknown> = {
     name: m.name,
     harnessDir: m.harnessDir,
     rulesSubdir: m.rulesRename ?? "rules",
@@ -421,6 +425,9 @@ function writeHarnessData(treeRoot: string, m: HarnessManifest): void {
       ? { runnerFrontmatterAdditions: m.runnerFrontmatterAdditions }
       : {}),
   };
+  // Emitted only when a manifest sets it, so the three-field output stays
+  // byte-identical for every harness that does not -- which is all of them today.
+  if (m.documentExtractors) data.documentExtractors = m.documentExtractors;
   const dst = join(treeRoot, HARNESS_DATA);
   mkdirSync(dirname(dst), { recursive: true });
   writeFileSync(dst, `${JSON.stringify(data, null, 2)}\n`);

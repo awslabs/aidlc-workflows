@@ -134,17 +134,19 @@ afterEach(() => {
 // =========================================================================
 
 describe("t89 sensors_applicable resolution (in-process compileStageGraph)", () => {
-  // Case 1 (.sh:64-66): basic-import — code-generation resolves 2 sensors.
-  test("basic-import: code-generation has 2 resolved sensors", () => {
+  // Case 1 (.sh:64-66): basic-import - code-generation resolves 4 sensors.
+  test("basic-import: code-generation has 4 resolved sensors", () => {
     const { stages } = compileWithSensors(join(FIXTURES, "basic-import"));
-    expect(stageBySlug(stages, "code-generation").sensors_applicable).toHaveLength(2);
+    expect(stageBySlug(stages, "code-generation").sensors_applicable).toHaveLength(4);
   });
 
   // Case 2 (.sh:68-70): resolved entries carry id and .claude/... path.
   test("basic-import: first sensor id+path correct", () => {
     const { stages } = compileWithSensors(join(FIXTURES, "basic-import"));
     const first = stageBySlug(stages, "code-generation").sensors_applicable[0];
-    expect(`${first.id}|${first.path}`).toBe("linter|.claude/sensors/aidlc-linter.md");
+    expect(`${first.id}|${first.path}`).toBe(
+      "required-sections|.claude/sensors/aidlc-required-sections.md",
+    );
   });
 
   // Case 3 (.sh:72-75): matches glob copied verbatim from the manifest.
@@ -194,7 +196,7 @@ describe("t89 sensors_applicable resolution (in-process compileStageGraph)", () 
   test("multiple-imports: resolution order matches authored order", () => {
     const { stages } = compileWithSensors(join(FIXTURES, "basic-import"));
     const ids = stageBySlug(stages, "functional-design").sensors_applicable.map((s) => s.id);
-    expect(ids).toEqual(["required-sections", "upstream-coverage", "linter", "type-check"]);
+    expect(ids).toEqual(["required-sections", "upstream-coverage", "linter", "type-check", "traceability"]);
   });
 
   // Case 7 (.sh:98-101): every initialization stage (sensors: []) resolves [].
@@ -332,14 +334,14 @@ describe("t89 sensors_applicable resolution (in-process compileStageGraph)", () 
     expect(keys[idx + 1]).toBe("sensors_applicable");
   });
 
-  // Case 19 (.sh:230-241): per-stage matrix — code-generation=2, build-and-test=3,
-  // workspace-scaffold=0, functional-design=4.
-  test("per-stage matrix: CG=2, BT=3, WS=0, FD=4", () => {
+  // Case 19 (.sh:230-241): per-stage matrix - code-generation=4, build-and-test=3,
+  // workspace-scaffold=0, functional-design=5.
+  test("per-stage matrix: CG=4, BT=3, WS=0, FD=5", () => {
     const { stages } = compileWithSensors(join(FIXTURES, "basic-import"));
-    expect(stageBySlug(stages, "code-generation").sensors_applicable.length).toBe(2);
+    expect(stageBySlug(stages, "code-generation").sensors_applicable.length).toBe(4);
     expect(stageBySlug(stages, "build-and-test").sensors_applicable.length).toBe(3);
     expect(stageBySlug(stages, "workspace-scaffold").sensors_applicable.length).toBe(0);
-    expect(stageBySlug(stages, "functional-design").sensors_applicable.length).toBe(4);
+    expect(stageBySlug(stages, "functional-design").sensors_applicable.length).toBe(5);
   });
 
   // Direct-unit reinforcement (not a distinct .sh case, but pins the units the
@@ -353,6 +355,7 @@ describe("t89 sensors_applicable resolution (in-process compileStageGraph)", () 
       "claim-sources",
       "linter",
       "required-sections",
+      "traceability",
       "type-check",
       "upstream-coverage",
     ]);

@@ -39,6 +39,7 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 resetAidlcEnv();
 
@@ -86,7 +87,7 @@ const RP = `aidlc/spaces/${DEFAULT_SPACE}/intents/${DEFAULT_RECORD_DIR}`;
 
 // functional-design's REQUIRED produces[] - the coverage set. frontend-components
 // is under optional_produces and is deliberately NOT here.
-const FD_REQUIRED = ["business-logic-model", "business-rules", "domain-entities"];
+const FD_REQUIRED = ["entities", "rules", "functional-spec", "traceability"];
 const FD_OPTIONAL = "frontend-components";
 
 const tempDirs: string[] = [];
@@ -123,7 +124,7 @@ function constructionState(current: string, skeletonStance = "on"): string {
 - **Project**: optional-produces coverage test
 - **Project Type**: Greenfield
 - **Scope**: feature
-- **State Version**: 7
+- **State Version**: 8
 - **Skeleton Stance**: ${skeletonStance}
 
 ## Scope Configuration
@@ -143,7 +144,7 @@ function constructionState(current: string, skeletonStance = "on"): string {
 - [ ] build-and-test — EXECUTE
 
 ### INCEPTION PHASE
-- [-] application-design — EXECUTE
+- [-] domain-design — EXECUTE
 
 ## Current Status
 - **Lifecycle Phase**: CONSTRUCTION
@@ -158,7 +159,7 @@ function coverUnit(proj: string, unit: string, slug: string, names: string[]): v
   const dir = join(seededRecordDir(proj), "construction", unit, slug);
   mkdirSync(dir, { recursive: true });
   for (const name of names) {
-    writeFileSync(join(dir, `${name}.md`), `# ${name} for ${unit}\n`);
+    writeFileSync(join(dir, artifactFilename(name)), `# ${name} for ${unit}\n`);
   }
 }
 
@@ -216,7 +217,7 @@ describe("t206 optional_produces exempt from per-unit coverage", () => {
       review_state: "outstanding",
       required_produces: FD_REQUIRED.map(
         (name) =>
-          `${RP}/construction/alpha/functional-design/${name}.md`,
+          `${RP}/construction/alpha/functional-design/${artifactFilename(name)}`,
       ),
     });
     expect(
@@ -236,14 +237,14 @@ describe("t206 optional_produces exempt from per-unit coverage", () => {
 
   // 2: guard - a MISSING REQUIRED artifact still blocks coverage even when the
   // OPTIONAL one is present. Cover alpha with two required + the optional but
-  // NOT domain-entities -> alpha is still uncovered, so next re-emits alpha with
-  // the gate suppressed (optional presence cannot substitute for a required one).
+  // NOT functional-spec/traceability -> alpha is still uncovered, so next re-emits
+  // alpha with the gate suppressed (optional presence cannot substitute for a required one).
   test("2: an optional artifact cannot substitute for a missing required artifact", () => {
     const proj = seedProject("functional-design");
     seedBoltDag(proj, ["alpha", "beta"]);
     coverUnit(proj, "alpha", "functional-design", [
-      "business-logic-model",
-      "business-rules",
+      "entities",
+      "rules",
       FD_OPTIONAL,
     ]);
     const d = runNext(proj);
@@ -308,8 +309,8 @@ describe("t206 optional_produces exempt from per-unit coverage", () => {
     coverUnit(proj, "alpha", "functional-design", FD_REQUIRED);
     // beta covered by only two required + the optional -> still uncovered.
     coverUnit(proj, "beta", "functional-design", [
-      "business-logic-model",
-      "business-rules",
+      "entities",
+      "rules",
       FD_OPTIONAL,
     ]);
     const d = runReport(proj, [
@@ -337,7 +338,7 @@ describe("t206 optional_produces exempt from per-unit coverage", () => {
     );
     // and still lists a required one.
     expect(d.produces).toContain(
-      `${RP}/construction/alpha/functional-design/business-logic-model.md`,
+      `${RP}/construction/alpha/functional-design/functional-spec.md`,
     );
   }, 30000);
 });

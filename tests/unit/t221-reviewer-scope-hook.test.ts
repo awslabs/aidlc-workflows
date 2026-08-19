@@ -53,7 +53,7 @@ const CURRENT_UNIT_CONTEXT: ScopeContext = {
 const DISPATCH: Pick<ReviewerDispatch, "unit" | "exempt"> = {
   unit: "U03-scoring",
   exempt: [
-    "aidlc/spaces/default/intents/x/inception/application-design/components.md",
+    "aidlc/spaces/default/intents/x/inception/domain-design/components.md",
     "aidlc/spaces/default/intents/x/construction/U01-infra/functional-design/design.md",
   ],
 };
@@ -89,7 +89,7 @@ describe("t221 (a) evaluateReviewerScope decision table", () => {
     {
       name: "shared inception contract allowed (no construction/ component)",
       tool: "Read",
-      input: { file_path: "aidlc/spaces/default/intents/x/inception/application-design/components.md" },
+      input: { file_path: "aidlc/spaces/default/intents/x/inception/domain-design/components.md" },
       block: false,
     },
     {

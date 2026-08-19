@@ -13,7 +13,7 @@ Authoritative generated views:
 - **Project Type**: [Greenfield/Brownfield]
 - **Scope**: [scope slug from compiled scope grid]
 - **Start Date**: [ISO 8601 timestamp]
-- **State Version**: 7
+- **State Version**: 8
 - **Active Agent**: [current lead agent slug]
 - **Worktree Path**: [empty when not in a worktree]
 - **Bolt Refs**: [empty list or comma-separated bolt slugs]

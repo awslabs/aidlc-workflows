@@ -96,7 +96,7 @@ On the interactive path the conductor holds the loop, because only it can ask th
 
 ## 4. Plural skills, runners, and the shared spine
 
-The orchestrator is one skill among many. Each harness ships a plural set under its skills directory (`<harness-dir>/skills/`, e.g. `dist/claude/.claude/skills/`): the base `aidlc` orchestrator, one **stage-runner** per runnable stage (core stages use `aidlc-<slug>`; plugin-owned stages use their bare plugin-prefixed slug), one **scope-runner** per `runner: true` scope (core scopes use `aidlc-<scope>`; plugin-owned scopes use their bare name), the read-only session skills (`aidlc-session-cost`, `aidlc-replay`, `aidlc-outcomes-pack`), and `aidlc-init`. All of the routing-and-execution knowledge lives once in the **shared spine** authored at `core/aidlc-common/` (shipped as `<harness-dir>/aidlc-common/`): the `conductor.md` persona, the `protocols/`, and the 32 stage files under `stages/{initialization,ideation,inception,construction,operation}/`.
+The orchestrator is one skill among many. Each harness ships a plural set under its skills directory (`<harness-dir>/skills/`, e.g. `dist/claude/.claude/skills/`): the base `aidlc` orchestrator, one **stage-runner** per runnable stage (core stages use `aidlc-<slug>`; plugin-owned stages use their bare plugin-prefixed slug), one **scope-runner** per `runner: true` scope (core scopes use `aidlc-<scope>`; plugin-owned scopes use their bare name), the read-only session skills (`aidlc-session-cost`, `aidlc-replay`, `aidlc-outcomes-pack`), and `aidlc-init`. All of the routing-and-execution knowledge lives once in the **shared spine** authored at `core/aidlc-common/` (shipped as `<harness-dir>/aidlc-common/`): the `conductor.md` persona, the `protocols/`, and the 33 stage files under `stages/{initialization,ideation,inception,construction,operation}/`.
 
 The runner skills are generated, never hand-written, by `tools/aidlc-runner-gen.ts`:
 
@@ -128,13 +128,17 @@ The referee is **stateless** — no iteration counter, no persisted progress —
 
 | Subcommand | Role | Emits |
 |------------|------|-------|
-| `prepare --batch <n> --units <a,b,c> [--base <branch>] [--degraded-from <subagent\|ultracode>]` | Fork an isolated git worktree per unit (composing `aidlc-worktree create` + `aidlc-bolt start --worktree`). Runs before any worker, so it cannot fold into `check`. | `SWARM_STARTED` (plus `SWARM_DEGRADED` when a loud downgrade is reported). |
+| `prepare --batch <n> --units <a,b,c> [--base <branch>] [--degraded-from <subagent\|ultracode>]` | On autonomous Code Generation, first require each Unit's current fingerprinted plan, test instructions, Testing Contract, and explicit Plan Approval. Then fork an isolated git worktree per Unit (composing `aidlc-worktree create` + `aidlc-bolt start --worktree`). | `SWARM_STARTED` (plus `SWARM_DEGRADED` when a loud downgrade is reported). |
 | `check <unit> --check-cmd <cmd> [--test-file <path>]` | Stateless single-unit verdict: run the project's own check command (exit 0 = green, the authoritative signal — a worker's self-claim is never trusted) plus an anti-tamper compare of the protected file against its forked-git baseline. Prints `{converged, tampered, reason}`; exits 0 iff genuinely converged. | None (advisory; informs the conductor's retry decision). |
 | `finalize --batch <n> --units <a,b,c> --claimed <a,b> --check-cmd <cmd> [--test-file <path>] [--reasons <unit>=<reason>,…]` | The authoritative gate: **re-run the check on every claimed unit** and, when the current stage declares a reviewer, require that unit's matching terminal receipt after its Bolt started. A claimed unit that is red, tampered, or unreviewed is refused before merge (the lying-conductor guard), then genuine passes merge back under the serial HOLD-MERGE lock. Exits 0 (batch converged and merged) or 2 (failure envelope). A converged unit whose merge-back failed lands in `merge_failures` and gets NO `SWARM_UNIT_CONVERGED` row until a finalize retry scoped to that unit merges it. | `SWARM_UNIT_CONVERGED` / `SWARM_UNIT_FAILED` / `SWARM_BATON_RETURNED` / `SWARM_COMPLETED`. |
 
-These six `SWARM_*` events are part of the 82-event audit taxonomy (see [State Machine](12-state-machine.md)). On an exit-2 envelope the conductor takes the baton back - failure always halts and re-engages the human regardless of autonomy mode.
+These six `SWARM_*` events are part of the 85-event audit taxonomy (see [State Machine](12-state-machine.md)). On an exit-2 envelope the conductor takes the baton back - failure always halts and re-engages the human regardless of autonomy mode.
 
 **The driver seam.** `AIDLC_USE_SWARM=1` selects an inline Dynamic Workflow driver (the conductor authors a `Workflow` whose JS owns the per-unit pipeline and the iteration cap); unset selects the subagent floor (N parallel `Task` calls in one message, one per unit). If `=1` but the Workflow tool is unavailable, the conductor **loud-degrades** to the floor and passes `--degraded-from ultracode` so the referee emits `SWARM_DEGRADED`. The runaway backstop is not a cap inside the tool - it is the harness's Stop-hook ceiling, which is 8 blocks on this autonomous-Construction path (§3).
+
+Every Code Generation worker receives the same approved contract as the normal
+path: `AIDLC-UNIT`, `AIDLC-TESTING-CONTRACT`, the full plan, and the full unit
+test instructions. Workers never re-resolve Testing Posture independently.
 
 **The Bolt-DAG.** The batch the swarm fans out comes from the `bolt_dag` node of `runtime-graph.json` (see [Runtime Graph](13-runtime-graph.md)), parsed from units-generation's `unit-of-work-dependency.md` edge block. The node carries `units` (each with its `depends_on` list) and `batches` — topological levels where every unit's dependencies are satisfied by prior batches, so a batch's units can fan out in parallel. The node is present only once a valid edge block exists on disk; an absent, malformed, or cyclic block omits the node entirely (the gate-time required-sections sensor flags those upstream).
 
@@ -144,6 +148,6 @@ These six `SWARM_*` events are part of the 82-event audit taxonomy (see [State M
 
 - **The conductor's own chapter** — the forwarding loop, the gate ritual, and the learnings ritual in full. See [Orchestrator](03-orchestrator.md).
 - **The execution-truth artefact the engine and swarm read** — `runtime-graph.json` and its `bolt_dag` node. See [Runtime Graph](13-runtime-graph.md).
-- **The transitions `report` commits** - the workflow / phase / stage machines and the 82-event audit taxonomy. See [State Machine](12-state-machine.md).
+- **The transitions `report` commits** - the workflow / phase / stage machines and the 85-event audit taxonomy. See [State Machine](12-state-machine.md).
 - **The deterministic spine** — the Stop hook and the other framework hooks and tools. See [Hooks and Tools](06-hooks-and-tools.md).
 - **Using the runners day to day** — the typeable `/aidlc-<stage>` and `/aidlc-<scope>` commands. See the User Guide's [Skills and Runner Commands](../guide/17-skills.md).
