@@ -509,6 +509,21 @@ describe(`${PLUGIN_NAME} plugin — own content validation`, () => {
       expect(r.findings.some((f) => f.includes("no source tag"))).toBe(true);
     });
 
+    test("a link-reference tag does not ground a scoring rationale", () => {
+      const r = fire(
+        "link-reference-rationale",
+        "pdlc-prioritization",
+        "pdlc-prioritization-scoring.md",
+        `${GROUNDED_SCORING.replace(
+          "| Task Boundedness | 20 | 7 | A quote either balances or it does not [Q1] |",
+          "| Task Boundedness [artifact:pdlc-use-cases] | 20 | 7 | [Q1] |"
+        )}\n[Q1]: https://example.invalid/\n`
+      );
+      expect(r.pass).toBe(false);
+      expect(r.findings.some((f) => f.includes("scoring row rationale carries no source tag"))).toBe(true);
+      expect(r.findings.some((f) => f.includes("scoring row has no rationale beyond its source tag"))).toBe(true);
+    });
+
     test("accepts pipeless GFM scoring tables while enforcing rationale content", () => {
       const pipeless = GROUNDED_SCORING
         .replace("| Criterion | Weight | Score | Rationale |", "Criterion | Weight | Score | Rationale")
@@ -672,7 +687,7 @@ describe(`${PLUGIN_NAME} plugin — own content validation`, () => {
     });
 
     // mode: inline with no support agents is the only shape that composes on all
-    // six harnesses (the dispatch guard) AND stays clear of the ensemble-evidence
+    // seven harnesses (the dispatch guard) AND stays clear of the ensemble-evidence
     // precondition that `mob`/`subagent`-with-supports turns on.
     test("every stage is mode: inline with no support agents", () => {
       for (const s of stages) {

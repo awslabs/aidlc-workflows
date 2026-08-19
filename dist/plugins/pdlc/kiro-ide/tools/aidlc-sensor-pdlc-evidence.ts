@@ -249,9 +249,18 @@ function sourceTags(text: string, labels: ReadonlySet<string>): string[] {
   return tags;
 }
 
-function hasSourceTag(text: string): boolean {
+function hasSourceTag(text: string, labels: ReadonlySet<string>): boolean {
   SOURCE_TAG_RE.lastIndex = 0;
-  const hasTag = SOURCE_TAG_RE.test(text);
+  let hasTag = false;
+  let match: RegExpExecArray | null;
+  match = SOURCE_TAG_RE.exec(text);
+  while (match !== null) {
+    if (!labels.has(normalizedLabel(match[1]))) {
+      hasTag = true;
+      break;
+    }
+    match = SOURCE_TAG_RE.exec(text);
+  }
   SOURCE_TAG_RE.lastIndex = 0;
   return hasTag;
 }
@@ -519,7 +528,7 @@ function cellsOf(line: string): string[] {
 // A number attached to a judgment with no stated reason is the exact failure
 // this sensor exists for: six weighted criteria scored 0-10 is where invented
 // numbers hide. Applies to pdlc-prioritization-scoring.md only.
-function scoringTableFindings(lines: string[]): string[] {
+function scoringTableFindings(lines: string[], labels: ReadonlySet<string>): string[] {
   const findings: string[] = [];
   let index = 0;
   while (index < lines.length) {
@@ -555,12 +564,13 @@ function scoringTableFindings(lines: string[]): string[] {
     }
     for (const row of rows) {
       const rationale = row.cells[rationaleColumn] ?? "";
-      if (!hasSourceTag(rationale)) {
+      if (!hasSourceTag(rationale, labels)) {
         findings.push(`line ${row.line}: scoring row rationale carries no source tag`);
       }
       // A citation is not a reason. Strip the source tags first: a rationale
       // cell holding only `[Q3]` cites where a number came from and still never
-      // says why the number is that number.
+      // says why the number is that number. A link-reference-defined tag is
+      // neither a grounding citation nor explanatory prose.
       const value = rationale.replace(SOURCE_TAG_RE, "").trim();
       if (value.length === 0 || EMPTY_RATIONALE_RE.test(value)) {
         findings.push(`line ${row.line}: scoring row has no rationale beyond its source tag`);
@@ -622,7 +632,7 @@ export function main(argv: string[]): void {
         `## ${ASSUMPTIONS_HEADING} lists none of them`,
     );
   }
-  if (stem === SCORING_STEM) findings.push(...scoringTableFindings(lines));
+  if (stem === SCORING_STEM) findings.push(...scoringTableFindings(lines, labels));
 
   emit({
     pass: findings.length === 0,

@@ -340,8 +340,7 @@ floor, while `upstream-coverage` can report an unreferenced consume. The
 provenance note required in Step 6 makes a ranking-selected candidate observable
 without adding a record-dir path or compromising portability. Its required
 content shape remains the format reference in `pdlc-prototype-spec-format.md`,
-and its real portability test remains the reviewer's and human's check at the
-gate.
+and its real portability test belongs to the human at the approval gate.
 
 The `pdlc-evidence` sensor is deliberately NOT imported. Its target set is
 `pdlc-prfaq.md` and `pdlc-prioritization-scoring.md`, neither of which this stage

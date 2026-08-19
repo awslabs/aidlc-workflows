@@ -15,7 +15,7 @@ so the plugin composes.
 * The `pdlc-evidence` advisory sensor checks source-tag grounding in PR/FAQ and
   prioritization-scoring artifacts; plugin-owned scope and stage runners are
   available as `/pdlc-discovery` and `/pdlc-<stage>`.
-* PDLc projects for Claude Code, Codex CLI, Cursor, Kiro CLI, Kiro IDE,
+* PDLc projections for Claude Code, Codex CLI, Cursor, Kiro CLI, Kiro IDE,
   opencode, and GitHub Copilot are emitted under `dist/plugins/pdlc/`.
 
 ## [2.6.17] - 2026-08-18
