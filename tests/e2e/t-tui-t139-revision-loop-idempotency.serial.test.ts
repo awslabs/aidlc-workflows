@@ -278,7 +278,7 @@ function launchBugfix(session: string, sandbox: string): void {
   expect(waitFor(session, "\\[AIDLC\\].*ready", 45000, 800)).toBe(true);
 
   // Explicit `--scope bugfix` (not the bare keyword) so the shipped
-  // AWS_AIDLC_DEFAULT_SCOPE=workshop env-default does NOT trigger a scope-
+  // AWS_AIDLC_DEFAULT_SCOPE=classic env-default does NOT trigger a scope-
   // disambiguation gate at START (the t50 lesson, SKILL.md:105 "explicit CLI flag
   // wins"). The trailing description satisfies the step-6 "what to build?" prompt
   // up front (answer-gate can't type free text).

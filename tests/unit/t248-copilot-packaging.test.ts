@@ -159,7 +159,19 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
     expect(orchestrator).toContain("| `load-steering` |");
     expect(orchestrator).toContain("directive.continue_token");
     expect(orchestrator).toContain("The orchestration engine emits eight kinds today");
-    expect(orchestrator).toContain("rules as the accumulated `load-steering` bundle");
+    expect(orchestrator).toContain("stage-protocol-ensemble.md");
+    const ensembleProtocol = readFileSync(
+      join(
+        ENGINE,
+        "aidlc-common",
+        "protocols",
+        "stage-protocol-ensemble.md",
+      ),
+      "utf-8",
+    );
+    expect(ensembleProtocol).toContain(
+      "rules as the accumulated `load-steering` bundle",
+    );
     expect(existsSync(join(ENGINE, "hooks", "aidlc-deliver-stage-rules.ts"))).toBe(true);
     const questionRendering = readFileSync(
       join(SHELL, "skills", "aidlc", "question-rendering.md"),

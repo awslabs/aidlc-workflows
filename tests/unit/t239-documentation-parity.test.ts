@@ -235,6 +235,12 @@ describe("documentation parity derives current behavior from authored implementa
 
   test("Kiro IDE documentation names only IDE-native enforcement and configuration surfaces", () => {
     const skill = read("harness", "kiro-ide", "skills", "aidlc", "SKILL.md");
+    const reviewerProtocol = read(
+      "core",
+      "aidlc-common",
+      "protocols",
+      "stage-protocol-reviewer.md",
+    );
     const questionRendering = read(
       "harness",
       "kiro-ide",
@@ -246,7 +252,10 @@ describe("documentation parity derives current behavior from authored implementa
 
     expect(existsSync(join(ideHooks, "aidlc-reviewer-scope.kiro.hook"))).toBe(false);
     expect(existsSync(join(ideHooks, "aidlc-reviewer-scope.json"))).toBe(false);
-    expect(skill).toContain("read-scope bound is prose-only on this harness");
+    expect(skill).toContain("stage-protocol-reviewer.md");
+    expect(reviewerProtocol).toContain(
+      "On a harness without reviewer-scope enforcement (Kiro IDE today)",
+    );
     expect(skill).not.toContain(".aidlc-reviewer-dispatch.json");
     expect(skill).not.toContain("kiro-cli");
     expect(questionRendering).toContain("Kiro IDE has no structured-question tool");

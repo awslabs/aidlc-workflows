@@ -41,6 +41,7 @@ Each is identical to passing `--scope` to the orchestrator:
 
 ```
 /aidlc-bugfix          ==  /aidlc --scope bugfix
+/aidlc-express         ==  /aidlc --scope express
 /aidlc-feature         ==  /aidlc --scope feature
 ```
 
@@ -51,7 +52,7 @@ You can pass a description and flags straight through, exactly as you would to `
 /aidlc-feature --status
 ```
 
-**Only four core scopes ship a runner** — the high-traffic ones marked `runner: true` in their scope files. The framework defines nine scopes total (see [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md)); every other one — `enterprise`, `poc`, `infra`, `refactor`, `workshop` — is always reachable through the orchestrator. Plugin-owned scopes can also set `runner: true`; their runner uses the bare plugin-prefixed scope name, such as `/test-pro-validation`.
+**Five core scopes ship a runner** — the high-traffic ones marked `runner: true` in their scope files. The framework defines 11 scopes total (see [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md)); every other one — `enterprise`, `poc`, `infra`, `refactor`, `classic`, `workshop` — is always reachable through the orchestrator. Plugin-owned scopes can also set `runner: true`; their runner uses the bare plugin-prefixed scope name, such as `/test-pro-validation`.
 
 ```
 /aidlc --scope enterprise
@@ -102,7 +103,7 @@ The three bootstrap **initialization** stages ship no stage-runner — birthing 
 | Family | Examples | What it does | Orchestrator equivalent |
 |---|---|---|---|
 | Orchestrator | `/aidlc` | Full workflow, scope detected | — |
-| Scope-runner | `/aidlc-bugfix`, `/aidlc-feature`, `/aidlc-mvp`, `/aidlc-security-patch` | Full workflow, scope fixed, no detection | `/aidlc --scope <name>` |
+| Scope-runner | `/aidlc-bugfix`, `/aidlc-express`, `/aidlc-feature`, `/aidlc-mvp`, `/aidlc-security-patch` | Full workflow, scope fixed, no detection | `/aidlc --scope <name>` |
 | Stage-runner | `/aidlc-domain-design`, `/aidlc-code-generation`, … (29 total) | One stage in isolation, never advances your workflow | `/aidlc --stage <slug> --single` |
 | Init wrapper | `/aidlc-init` | Birth the first intent (run Initialization) | `/aidlc` on a fresh workspace |
 | Session views | `/aidlc-session-cost`, `/aidlc-replay`, `/aidlc-outcomes-pack` | Read-only workflow reports | see [Session Management](11-session-management.md) |
@@ -150,10 +151,10 @@ For the mechanics of writing a stage file, see [Customization](13-customization.
 ```
 # Full workflow
 /aidlc                              detect scope, run everything
-/aidlc --scope enterprise           any of the 9 scopes
+/aidlc --scope enterprise           any of the 11 scopes
 
-# Scope-runners (the 4 high-traffic doors)
-/aidlc-bugfix · /aidlc-feature · /aidlc-mvp · /aidlc-security-patch
+# Scope-runners (the 5 high-traffic doors)
+/aidlc-bugfix · /aidlc-express · /aidlc-feature · /aidlc-mvp · /aidlc-security-patch
 
 # One stage, isolated (never advances your workflow)
 /aidlc-code-generation              == /aidlc --stage code-generation --single

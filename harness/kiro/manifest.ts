@@ -23,6 +23,7 @@ import onboardingFills from "./onboarding.fills.ts";
 const manifest: HarnessManifest = {
   name: "kiro",
   harnessDir: ".kiro",
+  orchestratorSkillPath: ".kiro/skills/aidlc/SKILL.md",
   tierFlavor: "kiro",
 
   // Same core projection as claude, EXCEPT: rules→steering, and the

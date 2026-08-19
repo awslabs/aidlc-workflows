@@ -407,6 +407,24 @@ describe("t185: stage-completion artifact guard (#366)", () => {
       const r = guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
       expect(r.rc).toBe(0);
     });
+
+    test("PASSES stage-level code-generation artifacts when the effective plan skips Units Generation", () => {
+      guarded(proj, ["set", "Current Stage=code-generation"]);
+      guarded(proj, ["checkbox", "code-generation=in-progress"]);
+      const statePath = seededStateFile(proj);
+      const state = readFileSync(statePath, "utf-8").replace(
+        /^(- \[[ xSR?-]\] units-generation\s+—\s+)EXECUTE$/m,
+        "$1SKIP",
+      );
+      writeFileSync(statePath, state);
+      writeRecordDoc(proj, "construction/code-generation/code-generation-plan.md");
+      writeRecordDoc(proj, "construction/code-generation/unit-test-instructions.md");
+      writeRecordDoc(proj, "construction/code-generation/code-summary.md");
+      writeWorkspaceFile(proj, "src/stage-level.ts");
+
+      const r = guarded(proj, ["gate-start", "code-generation"]);
+      expect(r.rc).toBe(0);
+    });
   });
 
   // --- Layer 1 (codekb placement): reverse-engineering -----------------------

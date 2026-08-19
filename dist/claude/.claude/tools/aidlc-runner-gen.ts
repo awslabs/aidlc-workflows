@@ -175,7 +175,14 @@ that flag without this skill.
    exactly as the directive describes; do not load the conductor persona by hand,
    the engine delivers it.
 
-2. When the stage's work is done, commit the single-stage record:
+2. Before acting on the directive, read
+   \`${harnessDir()}/aidlc-common/protocols/stage-protocol.md\`. Then read every
+   \`${harnessDir()}/aidlc-common/protocols/stage-protocol-<module>.md\` named by
+   \`directive.protocol_modules\`. Load every listed module before reading the
+   stage body or running its topology; skip only a module already loaded earlier
+   in this session.
+
+3. When the stage's work is done, commit the single-stage record:
 
    \`\`\`bash
    bun ${harnessDir()}/tools/aidlc-orchestrate.ts report --single --stage ${node.slug} --result completed
@@ -237,15 +244,16 @@ no standalone meaning.
    tool then falls back to the scope token):
 
    \`\`\`bash
-   bun ${harnessDir()}/tools/aidlc-utility.ts intent-create --arguments "<description>" --label "<2-3 word essence>"
+   bun ${harnessDir()}/tools/aidlc-utility.ts intent-create --scope <scope> --arguments "<description>" --label "<2-3 word essence>"
    \`\`\`
 
-   Pass \`--scope <name>\` only if the user named one; otherwise omit it and the
-   engine picks the install's default scope. If the user gave neither a scope nor
-   a description, do not run a bare \`intent-create\`: ask what they want to build
-   or which scope to use. When only a scope was supplied, omit \`--arguments\` and
-   \`--label\`. Print the tool's output and stop. This does not advance a stage;
-   run \`/aidlc\` afterwards to continue.
+   Pass the user's \`--scope <name>\` when they named one; otherwise omit
+   \`--scope\` — the tool resolves the implicit default itself
+   (\`AWS_AIDLC_DEFAULT_SCOPE\`, else \`classic\`). If the user gave neither a
+   scope nor a description, do not run a bare \`intent-create\`: ask what they
+   want to build or which scope to use. When only a scope was supplied, omit
+   \`--arguments\` and \`--label\`. Print the tool's output and stop. This does
+   not advance a stage; run \`/aidlc\` afterwards to continue.
 `;
 }
 
@@ -633,7 +641,14 @@ engine owns all routing; the conductor persona arrives on the first directive's
 ## The loop
 
 1. \`directive = bun ${harnessDir()}/tools/aidlc-orchestrate.ts next --scope ${scope} $ARGUMENTS\`
-2. Act on \`directive.kind\` exactly as the orchestrator does (run-stage / ask / print / error / done) — see \`aidlc-common/protocols/stage-protocol.md\`.
+2. Before acting on each directive, read
+   \`${harnessDir()}/aidlc-common/protocols/stage-protocol.md\` once per session,
+   then read every
+   \`${harnessDir()}/aidlc-common/protocols/stage-protocol-<module>.md\` named by
+   \`directive.protocol_modules\`. Load every listed module before acting; skip
+   only a module already loaded earlier in this session. Then act on
+   \`directive.kind\` exactly as the orchestrator does (run-stage / invoke-swarm /
+   ask / print / error / done).
 3. \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts report --stage <directive.stage> --result <outcome> [--user-input "<text>"]\` when the directive names a stage; omit \`--stage\` only for non-stage report round-trips.
 4. Repeat from step 1 until \`directive.kind == done\`.
 

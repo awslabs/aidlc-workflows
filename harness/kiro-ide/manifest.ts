@@ -26,6 +26,7 @@ import onboardingFills from "./onboarding.fills.ts";
 const manifest: HarnessManifest = {
   name: "kiro-ide",
   harnessDir: ".kiro",
+  orchestratorSkillPath: ".kiro/skills/aidlc/SKILL.md",
   tierFlavor: "kiro",
 
   // Same core projection as kiro CLI.
@@ -115,7 +116,7 @@ const manifest: HarnessManifest = {
   // protocol has them append a `## Review` section to the primary artifact
   // (the same grant their CLI JSONs carry). The nine ensemble collaborators
   // (2.5.0 roster closure) also get write: the everyone-writes model has each
-  // collaborator author its own contribution file (stage-protocol §11); the
+  // collaborator author its own contribution file (stage-protocol-ensemble §11); the
   // contributions-dir-only bound is prose + the engine's ensemble evidence
   // check, since IDE grants cannot express per-stage paths. Never grant a
   // delegation tool here - delegates must not nest.

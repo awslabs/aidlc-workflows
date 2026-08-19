@@ -45,6 +45,7 @@ scopes:
   - feature
   - mvp
   - infra
+  - classic
   - workshop
 inputs: <record>/aidlc-state.md + (brownfield) reverse-engineering evidence
 outputs: "team-practices.md, discovered-rules.md, evidence.md, practices-discovery-timestamp.md, plus one contribution file per support agent. On affirmation, content is promoted to aidlc/spaces/<active-space>/memory/team.md and project.md."
@@ -119,8 +120,8 @@ Each support agent writes:
 `<record>/inception/practices-discovery/contributions/<agent-slug>.md`
 
 The first line must be `**Collaborator:** <agent-slug>`, followed by
-`## Contribution` and `## Positions` as defined by `stage-protocol.md` section
-11. Collect all three files before the interview. Their presence and identity
+`## Contribution` and `## Positions` as defined by
+`stage-protocol-ensemble.md` §11. Collect all three files before the interview. Their presence and identity
 markers are deterministic completion evidence checked by the engine.
 
 ### Step 4: Interview (Always)

@@ -36,7 +36,9 @@ CONDITIONAL stages that do not apply to the current scope.
 | refactor         | None (Ideation skipped entirely)            |
 | infra            | None (Ideation skipped entirely)            |
 | security-patch   | None (Ideation skipped entirely)            |
+| classic          | None (Ideation skipped entirely)            |
 | workshop         | None (Ideation skipped entirely)            |
+| express          | None (Ideation skipped entirely)            |
 
 ---
 

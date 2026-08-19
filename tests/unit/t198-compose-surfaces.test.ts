@@ -16,9 +16,9 @@
 //     same-turn birth `next` - so classifyTerminalCommand(["compose", ...])
 //     must stay null (the Kiro-adapter regression pin).
 //   - Branch 8 (cold-start freeform, no --scope) now routes by keyword
-//     inference instead of the static feature-default confirm: a clear keyword
+//     inference instead of the static static-default confirm: a clear keyword
 //     hit (<=5 words) asks a one-line confirm NAMING THE MATCHED SCOPE; rich /
-//     unmatched prose asks the COMPOSE OFFER (never a silent feature default).
+//     unmatched prose asks the COMPOSE OFFER (never a silent default).
 //   - `detect --json` is a pure read: prints the workspace scan + the resolved
 //     scopesDir/scopeGridPath (so the composer is TOLD where to write) and
 //     leaves the project dir untouched.
@@ -186,7 +186,7 @@ describe("t198 mid-flow compose -> in-flight dispatch, not an advance", () => {
 
 // ===========================================================================
 // Branch 8 rewiring: inference-driven confirm vs the compose offer. The old
-// behavior was a static feature-default confirm for ALL freeform prose.
+// behavior was a static static-default confirm for ALL freeform prose.
 // ===========================================================================
 describe("t198 Branch 8: inference confirm + compose offer", () => {
   test("clear keyword hit (<=5 words) -> one-line confirm naming the MATCHED scope", () => {
@@ -198,7 +198,7 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(String(d.question)).toContain("compose");
   });
 
-  test("rich prose (no clear hit) -> the compose offer, never a silent feature default", () => {
+  test("rich prose (no clear hit) -> the compose offer, never a silent default", () => {
     proj = createTestProject();
     const d = directiveOf(
       runNext(proj, ["build a distributed cache layer with consistency guarantees"]).out,
@@ -224,7 +224,7 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
 // detect --json: pure read, prints the scan + the resolved registry paths.
 // ===========================================================================
 describe("t198 detect --json is a pure read that names the write target", () => {
-  test("returns scan fields + scopesDir + scopeGridPath + the 9 stock scopes, writes nothing", () => {
+  test("returns scan fields + scopesDir + scopeGridPath + the 11 stock scopes, writes nothing", () => {
     proj = createTestProject();
     const before = readdirSync(proj).sort().join(",");
     const r = runUtility(proj, ["detect", "--json"]);
@@ -235,6 +235,7 @@ describe("t198 detect --json is a pure read that names the write target", () => 
     expect(String(payload.scopesDir)).toContain("scopes");
     expect(String(payload.scopeGridPath)).toContain("scope-grid.json");
     expect(payload.scopes as string[]).toContain("bugfix");
+    expect((payload.scopes as string[]).length).toBe(11);
     const after = readdirSync(proj).sort().join(",");
     expect(after).toBe(before); // no dir created, no file written
   });

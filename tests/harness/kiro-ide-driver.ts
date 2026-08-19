@@ -27,16 +27,18 @@
 //     never a 44MB clone of a real profile (spike gotcha: leaks personal/internal
 //     state, must never ship in a public repo).
 
-import { type ChildProcess, spawn } from "node:child_process";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { platform } from "node:os";
 import { join } from "node:path";
 
-/** Default launch binary; override via AIDLC_KIRO_IDE_BIN (mirrors AIDLC_CODEX_BIN).
- *  macOS-only as written - Kiro.app is a .app bundle, not a PATH command. */
-export const KIRO_IDE_BIN =
-  process.env.AIDLC_KIRO_IDE_BIN ?? "/Applications/Kiro.app/Contents/MacOS/Electron";
+/** Default launch binary; override via AIDLC_KIRO_IDE_BIN (mirrors AIDLC_CODEX_BIN). */
+const DEFAULT_KIRO_IDE_BIN =
+  platform() === "win32"
+    ? join(process.env.LOCALAPPDATA ?? "", "Programs", "Kiro", "Kiro.exe")
+    : "/Applications/Kiro.app/Contents/MacOS/Electron";
+export const KIRO_IDE_BIN = process.env.AIDLC_KIRO_IDE_BIN ?? DEFAULT_KIRO_IDE_BIN;
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -54,6 +56,26 @@ interface CdpTargetInfo {
   type: string;
   url?: string;
   webSocketDebuggerUrl?: string;
+}
+
+export interface KiroIdeDomSnapshot {
+  targetType: string;
+  targetUrl: string;
+  context: ExecContext;
+  href: string;
+  title: string;
+  text: string;
+  controls: Array<{
+    tag: string;
+    text: string;
+    ariaLabel: string;
+    disabled: boolean;
+  }>;
+  editors: Array<{
+    tag: string;
+    text: string;
+    ariaLabel: string;
+  }>;
 }
 
 /** One CDP connection to a single page/iframe target. JSON-RPC over a Bun-native
@@ -186,13 +208,14 @@ export class CdpTarget {
 // reaches chat. The ONLY load-bearing flag that skips it is the global-state row
 // `kiroAgent.onboarding.onboardingCompleted = "true"` in
 // User/globalStorage/state.vscdb (an empty fresh DB seeded with just that row was
-// verified to land directly on the workbench). Kiro AUTH is machine-level (Keychain
-// / IdC, NOT in the profile - grepping the real DB's 80 keys for
-// auth/token/credential/cookie/sso/secret returned nothing), so the seed needs ZERO
-// credentials. We therefore GENERATE the seed from constants at setup time rather
-// than committing or copying any real profile - nothing sensitive ever touches the
-// repo. The two extra rows + settings only mute cosmetic notification toasts (MCP
-// tools, Builder steering, git-repo prompt); the onboarding row is what unblocks chat.
+// verified to land directly on the workbench). The macOS spike found Kiro auth outside
+// the profile (grepping the real DB's 80 keys for auth/token/credential/cookie/sso/secret
+// returned nothing), so this seed contains ZERO credentials. A signed-in host is still
+// required; on Windows an unsigned host reaches chat but rejects prompts with an
+// authentication wall. We GENERATE the seed from constants at setup time rather than
+// committing or copying any real profile - nothing sensitive ever touches the repo. The
+// two extra rows + settings only mute cosmetic notification toasts (MCP tools, Builder
+// steering, git-repo prompt); the onboarding row is what unblocks chat.
 const SEED_STATE_ROWS: ReadonlyArray<readonly [string, string]> = [
   ["kiroAgent.onboarding.onboardingCompleted", "true"], // load-bearing: skips the import wall
   ["releaseNotes/lastVersion", "0.0.0"], // mute the release-notes popup (version-agnostic stub)
@@ -225,10 +248,10 @@ const SEED_SETTINGS = {
 } as const;
 
 /** Build a minimal Kiro IDE user-data-dir under `dir` that skips first-run onboarding,
- *  from CONSTANTS only - no real profile is copied and no credentials are written (auth
- *  is machine-level). Returns `dir`. The caller owns `dir` (use a temp dir; Kiro mutates
- *  the profile in place). Safe to ship: the generated state.vscdb holds exactly the rows
- *  in SEED_STATE_ROWS and nothing else. */
+ *  from CONSTANTS only - no real profile is copied and no credentials are written.
+ *  Returns `dir`. The caller owns `dir` (use a temp dir; Kiro mutates the profile in
+ *  place). Safe to ship: the generated state.vscdb holds exactly the rows in
+ *  SEED_STATE_ROWS and nothing else. */
 export function generateKiroIdeSeed(dir: string): string {
   const userDir = join(dir, "User");
   const globalStorage = join(userDir, "globalStorage");
@@ -252,8 +275,8 @@ export function generateKiroIdeSeed(dir: string): string {
 export interface LaunchOptions {
   /** The scratch workspace dir Kiro opens (carries the .kiro/hooks/aidlc-*.json v2 hooks). */
   workspace: string;
-  /** A DISTILLED seed user-data-dir so onboarding + sign-in are skipped. NOT a clone
-   *  of a real profile (see header / README open items). */
+  /** A DISTILLED seed user-data-dir that skips onboarding. It carries no sign-in
+   *  credentials and is NOT a clone of a real profile. */
   seedProfile: string;
   /** The remote-debugging port. TEST-GRADE: caller passes a unique/ephemeral port
    *  (e.g. derived from process.pid) - the spike hardcoded 9337/9340/9341 which
@@ -331,7 +354,9 @@ export async function pageTarget(port: number): Promise<CdpTarget> {
 // Chat input: focus, wait, type, submit.
 // ---------------------------------------------------------------------------
 
+const CONTROL = 2;
 const META = 4;
+const PRIMARY_SHORTCUT_MODIFIER = platform() === "darwin" ? META : CONTROL;
 const SHIFT = 8;
 
 /** The prompt the Kiro chat input renders - the SAME signal the Kiro TUI test waits
@@ -410,19 +435,18 @@ export async function waitForChatInput(port: number, timeoutMs = 60_000): Promis
   return false;
 }
 
-/** Cmd+Shift+L = the "Kiro: Focus Chat Input" command (drive-unblocked.mjs:117-118).
- *  META|SHIFT, KeyL, vk 76. */
+/** Cmd+Shift+L on macOS or Ctrl+Shift+L on Windows focuses the Kiro chat input. */
 export async function focusChat(t: CdpTarget): Promise<void> {
   await t.send("Input.dispatchKeyEvent", {
     type: "rawKeyDown",
-    modifiers: META | SHIFT,
+    modifiers: PRIMARY_SHORTCUT_MODIFIER | SHIFT,
     key: "L",
     code: "KeyL",
     windowsVirtualKeyCode: 76,
   });
   await t.send("Input.dispatchKeyEvent", {
     type: "keyUp",
-    modifiers: META | SHIFT,
+    modifiers: PRIMARY_SHORTCUT_MODIFIER | SHIFT,
     key: "L",
     code: "KeyL",
     windowsVirtualKeyCode: 76,
@@ -475,18 +499,18 @@ export async function readChatText(port: number): Promise<string> {
   return "";
 }
 
-/** Cmd+A then Delete to clear the focused chat editor (between retries). */
+/** Select-all then Delete to clear the focused chat editor between retries. */
 async function selectAllAndDelete(t: CdpTarget): Promise<void> {
   await t.send("Input.dispatchKeyEvent", {
     type: "rawKeyDown",
-    modifiers: META,
+    modifiers: PRIMARY_SHORTCUT_MODIFIER,
     key: "a",
     code: "KeyA",
     windowsVirtualKeyCode: 65,
   });
   await t.send("Input.dispatchKeyEvent", {
     type: "keyUp",
-    modifiers: META,
+    modifiers: PRIMARY_SHORTCUT_MODIFIER,
     key: "a",
     code: "KeyA",
     windowsVirtualKeyCode: 65,
@@ -646,6 +670,81 @@ export async function clickByText(port: number, texts: string[]): Promise<string
   return null;
 }
 
+const SNAPSHOT_DOM_EXPR = `(() => {
+  const norm = (s) => String(s||"").replace(/\\s+/g," ").trim();
+  const visible = (e) => {
+    const r = e.getBoundingClientRect && e.getBoundingClientRect();
+    return !r || (r.width > 0 && r.height > 0);
+  };
+  const controls = [...document.querySelectorAll(
+    "a,button,[role='button'],.monaco-button,.monaco-text-button,.action-label"
+  )]
+    .filter(visible)
+    .map((e) => ({
+      tag: e.tagName,
+      text: norm(e.innerText||e.textContent).slice(0, 240),
+      ariaLabel: norm(e.getAttribute("aria-label")).slice(0, 240),
+      disabled: Boolean(e.disabled || e.getAttribute("aria-disabled") === "true")
+    }))
+    .filter((e) => e.text || e.ariaLabel)
+    .slice(-80);
+  const editors = [...document.querySelectorAll(
+    "textarea,[contenteditable='true'],[role='textbox']"
+  )]
+    .filter(visible)
+    .map((e) => ({
+      tag: e.tagName,
+      text: norm(e.tagName === "TEXTAREA" ? e.value : (e.innerText||e.textContent)).slice(0, 1000),
+      ariaLabel: norm(e.getAttribute("aria-label")).slice(0, 240)
+    }))
+    .slice(-20);
+  const bodyText = norm(document.body && document.body.innerText);
+  return {
+    href: String(location.href),
+    title: String(document.title||""),
+    text: bodyText.slice(-12000),
+    controls,
+    editors
+  };
+})()`;
+
+/** Capture visible text, controls, and editors from every live page/iframe
+ * execution context. Diagnostics only: callers persist snapshots under tmp/. */
+export async function snapshotChatDom(port: number): Promise<KiroIdeDomSnapshot[]> {
+  const snapshots: KiroIdeDomSnapshot[] = [];
+  const targets = await listTargets(port);
+  for (const tgt of targets) {
+    if (!tgt.webSocketDebuggerUrl || (tgt.type !== "page" && tgt.type !== "iframe")) continue;
+    const t = new CdpTarget(tgt.webSocketDebuggerUrl);
+    try {
+      await t.connect();
+      const contexts = await t.enableContexts(600);
+      for (const context of contexts) {
+        try {
+          const view = await t.evaluateInContext<
+            Omit<KiroIdeDomSnapshot, "targetType" | "targetUrl" | "context">
+          >(context.id, SNAPSHOT_DOM_EXPR);
+          if (view.text || view.controls.length > 0 || view.editors.length > 0) {
+            snapshots.push({
+              targetType: tgt.type,
+              targetUrl: tgt.url ?? "",
+              context,
+              ...view,
+            });
+          }
+        } catch {
+          /* context gone */
+        }
+      }
+    } catch {
+      /* target gone */
+    } finally {
+      t.close();
+    }
+  }
+  return snapshots;
+}
+
 /** Auto-approve Kiro's OWN Run/Allow tool-permission prompts (SEPARATE from the
  *  human-presence hooks). Without this the agent turn stalls waiting for a human to
  *  click Run (drive-unblocked.mjs:82-112). The watch loop calls this every iteration.
@@ -705,14 +804,22 @@ export async function screenshot(t: CdpTarget): Promise<Buffer | null> {
   return s?.data ? Buffer.from(s.data, "base64") : null;
 }
 
-/** SIGKILL the Electron process (drive-unblocked.mjs:166-167). Honour AIDLC_KEEP_TEMP
- *  by leaving it running so a failed live run is inspectable. */
+/** Kill the Electron process tree. Honour AIDLC_KEEP_TEMP by leaving it running so a
+ *  failed live run is inspectable. */
 export function teardown(handle: KiroIdeHandle): void {
   if (process.env.AIDLC_KEEP_TEMP === "1") {
     process.stderr.write(
       `[kiro-ide-driver] AIDLC_KEEP_TEMP=1 - Kiro left running on :${handle.port}\n`,
     );
     return;
+  }
+  if (platform() === "win32" && handle.child.pid !== undefined) {
+    const result = spawnSync(
+      "taskkill",
+      ["/PID", String(handle.child.pid), "/T", "/F"],
+      { stdio: "ignore", windowsHide: true },
+    );
+    if (!result.error && result.status === 0) return;
   }
   try {
     handle.child.kill("SIGKILL");
@@ -721,8 +828,29 @@ export function teardown(handle: KiroIdeHandle): void {
   }
 }
 
-/** Presence test for the launch binary (existsSync, NOT a --version PATH probe -
- *  Kiro.app is launched by absolute path, not resolvable on PATH). macOS-only. */
+/** Remove a seed/profile directory, tolerating Windows lock latency: after
+ *  taskkill ends the Electron tree, the OS can hold file locks inside the
+ *  user-data dir for a short moment, so a bare rmSync throws EBUSY. Bounded
+ *  retries with short waits; anything else (or exhaustion) still throws. */
+export function removeSeedDir(path: string, attempts = 20, waitMs = 250): void {
+  if (process.env.AIDLC_KEEP_TEMP === "1") {
+    process.stderr.write(`[kiro-ide-driver] AIDLC_KEEP_TEMP=1 - preserved ${path}\n`);
+    return;
+  }
+  for (let attempt = 1; ; attempt++) {
+    try {
+      rmSync(path, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      const retryable = code === "EBUSY" || code === "EPERM" || code === "ENOTEMPTY";
+      if (!retryable || attempt >= attempts) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, waitMs);
+    }
+  }
+}
+
+/** Presence test for the launch binary (existsSync, NOT a --version PATH probe). */
 export function kiroIdeAvailable(bin = KIRO_IDE_BIN): boolean {
-  return platform() === "darwin" && existsSync(bin);
+  return (platform() === "darwin" || platform() === "win32") && existsSync(bin);
 }

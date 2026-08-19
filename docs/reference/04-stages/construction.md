@@ -108,7 +108,7 @@ current batch until every applicable Unit has all of that evidence, then permits
 a dependent batch or the single stage gate. Waves never apply under
 `Construction Iteration: unit-major`; harnesses without a parallel dispatch
 primitive process the entries serially. See
-`stage-protocol.md` §3 "Per-unit batch waves" for the full contract.
+`stage-protocol-construction.md` § "Per-unit batch waves" for the full contract.
 
 **Parallel batches.** When two or more Bolts share dependency-satisfaction
 and don't depend on each other, the conductor dispatches their Code
@@ -121,7 +121,7 @@ recoverable from the log.
 of autonomy mode. Options are retry (re-run just the failed Bolt), skip
 (mark `[S]` and continue — dependent Bolts may also fail), or abort.
 Successful siblings in a parallel batch keep their `[x]` status and
-artifacts. See `stage-protocol.md` §1 "Construction Bolt gates" and
+artifacts. See `stage-protocol-construction.md` § "Construction Bolt gates" and
 SKILL.md §CONSTRUCTION Flow for the canonical specification.
 
 ---

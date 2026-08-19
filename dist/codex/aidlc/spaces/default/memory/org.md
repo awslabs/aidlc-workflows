@@ -54,10 +54,13 @@ When no posture has been affirmed, our default per scope is:
 - **Methodology**: test-after
 - **Ordering**: implement each applicable testable layer, then write and run
   that layer's tests.
-- `mvp`, `enterprise`, `feature`, `infra` add an 80% line-coverage floor and
-  CI execution before merge.
+- `mvp`, `enterprise`, `feature`, `infra`, `classic` add an 80% line-coverage
+  floor and CI execution before merge.
 - `bugfix`, `security-patch` add a targeted regression for the specific
   bug/vulnerability and require the existing suite to remain green.
+- `express` uses the Minimal strategy: requirement-driven unit tests (one per
+  requirement, with a happy-path floor per component); existing tests remain
+  green.
 - `poc`, `refactor`, `workshop` add no extra new-test floor and require the
   existing suite to remain green.
 

@@ -117,7 +117,7 @@
 //     state-initialization-done.md, and swaps ONLY the Scope field. The
 //     init-done checkboxes are scope-agnostic for the jump path (resolve
 //     validates SKIP against scope-mapping.json, not the checkbox suffixes), so
-//     one fixture serves all 9 scopes — same single-fixture rationale as the
+//     one fixture serves all 11 scopes — same single-fixture rationale as the
 //     .sh. All temp dirs cleaned in afterAll.
 //   - resetAidlcEnv() runs first (mirrors the .sh's reset_aidlc_env): scope is
 //     partly resolved from AWS_AIDLC_DEFAULT_SCOPE, so a developer's exported
@@ -371,7 +371,9 @@ const GOLDEN: GoldenRow[] = [
   { scope: "refactor", fingerprint: "reverse-engineering", phase: "inception", skip: "market-research" },
   { scope: "infra", fingerprint: "practices-discovery", phase: "inception", skip: "reverse-engineering" },
   { scope: "security-patch", fingerprint: "reverse-engineering", phase: "inception", skip: "user-stories" },
+  { scope: "classic", fingerprint: "reverse-engineering", phase: "inception", skip: "intent-capture" },
   { scope: "workshop", fingerprint: "reverse-engineering", phase: "inception", skip: "intent-capture" },
+  { scope: "express", fingerprint: "reverse-engineering", phase: "inception", skip: "intent-capture" },
 ];
 
 describe("t118 engine differential corpus — aidlc-orchestrate next (migrated from t118-engine-differential.sh, plan 24)", () => {

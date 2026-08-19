@@ -1,9 +1,9 @@
-// covers: scope:workshop
+// covers: scope:classic
 //
 // t-tui-t58-workshop-scope.serial.tui.test.ts — drive the workshop SCOPE-ROUTING
-// journey through a REAL claude TUI and prove that `/aidlc workshop` skips the
+// journey through a REAL claude TUI and prove that `/aidlc --scope classic` skips the
 // ENTIRE Ideation phase, runs Inception/Construction/Operation at Standard depth
-// with a Minimal test strategy, and lands < 30 completed stages — ON DISK + as
+// with a Standard test strategy, and lands < 30 completed stages — ON DISK + as
 // the workshop facilitator SEES it painted. NET-NEW (not a port of an existing
 // .test.ts): a Pattern-B answer-gate journey authored from the original
 // tests/e2e/t58-workflow-workshop-scope.sh (plan 14), with the
@@ -16,8 +16,8 @@
 //
 // WHAT IT PROVES (the .sh's 14 assertions, equal-or-stronger, on the same on-disk
 // surface, PLUS the rendered statusline value-add):
-//   ROUTING IS DATA-DRIVEN (scope-mapping.json `workshop`):
-//     - workshop has depth "Standard", testStrategy "Minimal", and SKIPs every
+//   ROUTING IS DATA-DRIVEN (scope-mapping.json `classic`):
+//     - classic has depth "Standard", inherits testStrategy "Standard", and SKIPs every
 //       ideation stage (intent-capture..approval-handoff all SKIP — lines 105 of
 //       scope-mapping.json), EXECUTEs all inception/construction/operation.
 //     - state-init (aidlc-utility.ts:2044-2099) writes the FULL stage-progress
@@ -35,9 +35,9 @@
 //     #5  Construction stages present        -> /code-generation|build-and-test/
 //     #6  Operation stages present           -> /deployment-pipeline|observability-setup/
 //     #7-9 init stages [x]                    -> `[x] workspace-scaffold|-detection|state-init`
-//     #11 workshop scope recorded            -> `- **Scope**: workshop`
+//     #11 classic scope recorded            -> `- **Scope**: classic`
 //     #12 Depth = Standard                    -> `- **Depth**: Standard`
-//     #13 Test Strategy = Minimal             -> `- **Test Strategy**: Minimal`
+//     #13 Test Strategy = Standard             -> `- **Test Strategy**: Standard`
 //     #14 completed < 30                       -> `- **Completed**: N` with N < 30
 //     #15 audit log substantial               -> audit.md > 200 bytes (+ WORKSPACE_INITIALISED)
 //   RENDER (the tui-only value-add the headless .sh / SDK path is blind to):
@@ -49,7 +49,7 @@
 //       scope-mapping describes it as "Facilitated group session with mandatory
 //       gates") with a NON-PROSE footer (`Enter to select` / `Submit answers`).
 //
-// WHY PATTERN B (answer-gate, NOT Pattern A): `/aidlc workshop` does NOT run a
+// WHY PATTERN B (answer-gate, NOT Pattern A): `/aidlc --scope classic` does NOT run a
 // one-shot config edit — it starts a workflow that then asks "What would you like
 // to build?" (SKILL.md:337) and runs the workshop's mandatory gates. A Pattern-A
 // "wait + assert" test would HANG on the first menu it does not answer. So we run
@@ -59,22 +59,20 @@
 // post-init range (aidlc-state.ts:258/405/472 syncs `- **Completed**:` to the
 // live `[x]` count on every advance). We NEVER wait on rewordable screen prose.
 //
-// SCOPE-CONFIRMATION GATE — verified routing + live-verify guard: `workshop` is a
+// SCOPE-CONFIRMATION GATE — verified routing + live-verify guard: `classic` is a
 // KNOWN SCOPE (a key in scope-mapping.json), so SKILL.md routes it through the
 // "known scope" path (:329-339), which does NOT render a scope-confirmation gate
 // (that gate is the FREEFORM-text path, :341-362, "confirmation is mandatory for
-// all freeform inputs"). The shipped settings.json env default
-// `AWS_AIDLC_DEFAULT_SCOPE: "workshop"` (line 23) AGREES with the keyword, so even
-// the env-substitution path (SKILL.md:103-106) synthesizes `--scope workshop` with
-// NO conflict — no feature-vs-workshop disambiguation. EITHER interpretation lands
-// workshop. The journey is LLM-mediated, so if a residual scope-confirm menu DOES
-// paint on some run, its Recommended default is the workshop scope; answer-gate
-// presses Enter and selects it. answer-gate is a no-op disk-poller when no menu is
+// all freeform inputs"). The explicit `--scope classic` flag outranks the shipped
+// `AWS_AIDLC_DEFAULT_SCOPE: "classic"` setting (which happens to agree), so both
+// routing paths land on
+// Classic without relying on the implicit default. The journey is LLM-mediated,
+// so answer-gate remains a no-op disk-poller when no menu is
 // up (it checks the terminator FIRST each loop — tui-drive.ts:951-959), so the
 // gateless known-scope path is safe too. NET: robust to both routings; the disk
 // terminator is the truth either way. (LIVE-VERIFY RISK: if a future SKILL.md
 // change makes the bare keyword render a scope picker whose default is NOT
-// workshop, this would land a different scope — the final `- **Scope**: workshop`
+// classic, this would land a different scope — the final `- **Scope**: classic`
 // disk assert would then RED, which is the test doing its job: a FINDING about the
 // routing, never a thing to soften.)
 //
@@ -172,8 +170,8 @@ function skipReason(): string | null {
 }
 const SKIP_REASON = skipReason();
 
-// The 7 ideation slugs (SKILL.md:465-471 stage graph). The workshop scope SKIPs
-// EVERY one (scope-mapping.json `workshop.stages`), so none may ever be marked
+// The 7 ideation slugs (SKILL.md:465-471 stage graph). The classic scope SKIPs
+// EVERY one (scope-mapping.json `classic.stages`), so none may ever be marked
 // `[x]` — the .sh's Test 3 grep, here a per-slug disk read.
 const IDEATION_SLUGS = [
   "intent-capture",
@@ -212,14 +210,14 @@ function completedCount(projectDir: string): number {
   }
 }
 
-describe("t-tui-t58 workshop-scope (skips Ideation, runs Inception+ at Standard/Minimal)", () => {
+describe("t-tui-t58 workshop-scope (skips Ideation, runs Inception+ at Standard/Standard)", () => {
   test.skipIf(SKIP_REASON !== null)(
-    `workshop scope routing skips Ideation + lands Inception/Construction/Operation on disk${SKIP_REASON ? ` — SKIP: ${SKIP_REASON}` : ""}`,
+    `classic scope routing skips Ideation + lands Inception/Construction/Operation on disk${SKIP_REASON ? ` — SKIP: ${SKIP_REASON}` : ""}`,
     async () => {
       const session = `aidlc_tui_t58_${process.pid}`;
       // --no-aidlc-docs: a brand-new workspace the journey scaffolds itself (the
       // .sh's `setup_integration_project --no-aidlc-docs`). Use an explicit
-      // `--scope workshop` flag so this test exercises the workshop lifecycle,
+      // `--scope classic` flag so this test exercises the workshop lifecycle,
       // not the separate scope-confirmation/disambiguation surface.
       const proj = setupTuiProject({ noAidlcDocs: true });
       // Render value-add: tail the grid while the workshop runs to prove (a) the
@@ -265,7 +263,7 @@ describe("t-tui-t58 workshop-scope (skips Ideation, runs Inception+ at Standard/
           "--session",
           session,
           "--keys",
-          "/aidlc --scope workshop Build a simple task tracker",
+          "/aidlc --scope classic Build a simple task tracker",
           "--literal",
           "--no-enter",
         ]);
@@ -291,7 +289,7 @@ describe("t-tui-t58 workshop-scope (skips Ideation, runs Inception+ at Standard/
         // post-init range. Anchored 5..29 — > the .sh's "init + at least one
         // post-init" floor and < the .sh's "< 30" ceiling, so the SAME terminator
         // proves the workshop progressed past Initialization AND respected the
-        // workshop scope's 25-EXECUTE cap. answer-gate is a no-op disk-poller if no
+        // classic scope's 25-EXECUTE cap. answer-gate is a no-op disk-poller if no
         // menu paints (known-scope path), so this is safe for BOTH routings.
         const gateRc = await new Promise<number>((resolve) => {
           const child = spawn(
@@ -358,7 +356,7 @@ describe("t-tui-t58 workshop-scope (skips Ideation, runs Inception+ at Standard/
         for (const slug of IDEATION_SLUGS) {
           const reX = new RegExp(`\\[x\\]\\s*${slug}\\b`, "i");
           if (reX.test(stateMd)) {
-            throw new Error(`ideation stage '${slug}' was marked [x] — workshop must SKIP it`);
+            throw new Error(`ideation stage '${slug}' was marked [x] — classic must SKIP it`);
           }
         }
 
@@ -374,20 +372,18 @@ describe("t-tui-t58 workshop-scope (skips Ideation, runs Inception+ at Standard/
           expect(new RegExp(`\\[x\\]\\s*${stage}\\b`, "i").test(stateMd)).toBe(true);
         }
 
-        // #11 workshop scope recorded — pin the exact field (stronger than the
+        // #11 classic scope recorded — pin the exact field (stronger than the
         //     .sh's loose `[Ww]orkshop` grep).
-        expect(stateMd).toMatch(/^-\s*\*\*Scope\*\*:\s*workshop$/m);
+        expect(stateMd).toMatch(/^-\s*\*\*Scope\*\*:\s*classic$/m);
 
-        // #12 Depth = Standard (workshop default — scope-mapping.json:99). Pin the
+        // #12 Depth = Standard (classic scope — scope-mapping.json). Pin the
         //     field (stronger than the .sh's `Depth.*Standard`).
         expect(stateMd).toMatch(/^-\s*\*\*Depth\*\*:\s*Standard$/m);
 
-        // #13 Test Strategy = Minimal (workshop default, independent of Standard
-        //     depth — scope-mapping.json:100; aidlc-utility.ts:1942 prefers
-        //     scopeDef.testStrategy). Pin the field.
-        expect(stateMd).toMatch(/^-\s*\*\*Test Strategy\*\*:\s*Minimal$/m);
+        // #13 Test Strategy = Standard (classic inherits from Standard depth).
+        expect(stateMd).toMatch(/^-\s*\*\*Test Strategy\*\*:\s*Standard$/m);
 
-        // #14 completed < 30 (workshop is 25/32 EXECUTE — the scope cap). The
+        // #14 completed < 30 (classic is 26/33 EXECUTE — the scope cap). The
         //     terminator already proved >= 5; here pin the < 30 ceiling on the
         //     final disk read.
         const completed = completedCount(proj);
@@ -403,7 +399,7 @@ describe("t-tui-t58 workshop-scope (skips Ideation, runs Inception+ at Standard/
         expect(auditMd.length).toBeGreaterThan(200);
         expect(auditMd).toContain("WORKSPACE_INITIALISED");
         const wiIdx = auditMd.indexOf("WORKSPACE_INITIALISED");
-        expect(auditMd.slice(wiIdx, wiIdx + 500)).toMatch(/Scope.*:\s*workshop/);
+        expect(auditMd.slice(wiIdx, wiIdx + 500)).toMatch(/Scope.*:\s*classic/);
 
         // ===================== RENDER (the tui-only value-add) ===================
         // The captured pane painted `[AIDLC] INCEPTION` (the workshop went straight
