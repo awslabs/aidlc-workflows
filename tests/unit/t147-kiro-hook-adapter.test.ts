@@ -532,6 +532,20 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       expect(direct.stderr).toContain(
         "did not carry the active-stage rule bundle verbatim",
       );
+
+      const blankPrompt = runAdapter(dir, "deliver-stage-rules", {
+        ...FIXTURES.preToolUse_invoke_sub_agent as Record<string, unknown>,
+        cwd: dir,
+        tool_input: {
+          name: "aidlc-product-agent",
+          prompt: "",
+          task: basePrompt,
+        },
+      });
+      expect(blankPrompt.code, blankPrompt.stderr).toBe(0);
+      expect(blankPrompt.stderr).toContain(
+        "did not carry the active-stage rule bundle verbatim",
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

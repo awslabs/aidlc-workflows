@@ -143,6 +143,7 @@ function kiroDispatch(input: KiroHookInput): KiroDispatch | null {
     coreInput: {
       ...toolInput,
       ...(agent ? { subagent_type: agent } : {}),
+      ...(prompt ? { prompt } : {}),
     },
     agents: agent ? [agent] : [],
     prompt,
