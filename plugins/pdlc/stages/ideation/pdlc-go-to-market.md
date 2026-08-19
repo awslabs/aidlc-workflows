@@ -282,14 +282,14 @@ artifacts, then report `--result revised` before re-presenting.
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under its record dir. The imported
-`required-sections` sensor checks that `pdlc-gtm-plan.md` carries the
-`Launch Objective`, `Audience & Messaging`, `Channels`, `Pricing & Packaging`,
-`Launch Sequence`, `Enablement & Support`, `Launch Metrics`, `Launch Risks`, and
-`Assumptions & Open Questions` headings. `upstream-coverage` checks that the
-consumed `pdlc-product-strategy`, `pdlc-prfaq`, and `pdlc-validation-results`
-were actually referenced rather than merely declared — the optional two read as
-absent by design when their producing stage did not run.
+This stage's outputs are markdown artefacts under its record dir. No template
+currently resolves for them, so the imported `required-sections` sensor enforces
+only a structural floor of at least two `##` headings. The heading list in Step
+5 remains an authoring requirement, not a sensor-enforced heading check.
+`upstream-coverage` checks that the consumed `pdlc-product-strategy`,
+`pdlc-prfaq`, and `pdlc-validation-results` were actually referenced rather
+than merely declared — the optional two read as absent by design when their
+producing stage did not run.
 
 The `pdlc-evidence` sensor is deliberately NOT imported here. Its target set is
 `pdlc-prfaq.md` and `pdlc-prioritization-scoring.md`; this stage writes neither,

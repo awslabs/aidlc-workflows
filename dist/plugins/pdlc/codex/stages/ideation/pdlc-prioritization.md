@@ -188,7 +188,9 @@ Apply this grounding contract to both this artifact and the ranking:
 4. Never invent a measurement, a user count, a cost, a vendor, or a compliance
    position to justify a score.
 5. The artifact MUST contain `## Assumptions & Open Questions`. Write `None.`
-   when there are none.
+   only when there are no open questions and no rationale using
+   `Unknown (open question) [assumption]`. Every entry in that section carries
+   `[assumption]`.
 
 Create `<record>/ideation/pdlc-prioritization/pdlc-prioritization-scoring.md`
 with:
@@ -257,13 +259,12 @@ artifacts, then report `--result revised` before re-presenting.
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under its record dir. The imported
-`required-sections` sensor checks that `pdlc-prioritization-scoring.md` carries
-the `Agentic Scoring`, `Application Scoring`, and `Assumptions & Open Questions`
-headings, and that `pdlc-prioritization-ranking.md` carries `Ranking`,
-`Top Selection`, and `Assumptions & Open Questions`. `upstream-coverage` checks
-that the consumed `pdlc-use-cases` and `pdlc-identified-solutions` were actually
-referenced.
+This stage's outputs are markdown artefacts under its record dir. No template
+currently resolves for them, so the imported `required-sections` sensor enforces
+only a structural floor of at least two `##` headings. The scoring and ranking
+heading lists in Steps 5 and 6 remain authoring requirements, not
+sensor-enforced heading checks. `upstream-coverage` checks that the consumed
+`pdlc-use-cases` and `pdlc-identified-solutions` were actually referenced.
 
 The imported `pdlc-evidence` sensor fires on
 `pdlc-prioritization-scoring.md` — the highest-value target in the whole plugin,
@@ -273,10 +274,13 @@ block carries an inline source tag which resolves (`[Q<n>]` to a filled answer i
 `pdlc-prioritization-questions.md`; `[desc]`, `[scope]`, `[memory:<id>]`, and
 `[artifact:pdlc-<name>]` to a visible entry in that file's `## Sources`
 register, with `[artifact:…]` additionally resolving to a file that exists), that
-`[assumption]` appears only under `## Assumptions & Open Questions`, and that
-every scoring table has a rationale column with no empty cells. It is advisory,
-and it deliberately does not check whether a score is the RIGHT score or whether
-the weighted totals add up — that is the reviewer's judgment.
+`[assumption]` appears outside `## Assumptions & Open Questions` only in
+`Unknown (open question) [assumption]`, that each such marker requires a
+non-`None.` entry in that section, that every entry there carries
+`[assumption]`, and that every scoring table has a rationale column with no
+empty cells and a source tag in each rationale cell. It is advisory, and it
+deliberately does not check whether a score is the RIGHT score or whether the
+weighted totals add up — that is the reviewer's judgment.
 
 ## Learn
 

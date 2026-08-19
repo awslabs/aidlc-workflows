@@ -216,7 +216,12 @@ artifacts, then report `--result revised` before re-presenting.
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under its record dir. The imported `required-sections` sensor checks the `Use Cases`, `Handoff Readiness`, and `Assumptions & Open Questions` headings; `upstream-coverage` checks that the consumed discovery artifacts were read.
+This stage's outputs are markdown artefacts under its record dir. No template
+currently resolves for them, so the imported `required-sections` sensor enforces
+only a structural floor of at least two `##` headings. `Use Cases`, `Handoff
+Readiness`, and `Assumptions & Open Questions` remain authoring requirements in
+Step 3, not sensor-enforced heading checks. `upstream-coverage` checks that the
+consumed discovery artifacts were read.
 
 Every consume except `pdlc-use-cases` is `required: false`, and that is the whole
 design of this stage expressed in frontmatter: an upstream stage that did not run

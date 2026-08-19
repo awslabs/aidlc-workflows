@@ -1,6 +1,23 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.15] - 2026-08-19
+
+AI-DLC now ships the installable `pdlc` product-discovery plugin, providing a
+Working Backwards discovery workflow from use-case intake through a developer
+handoff pack. **Upgrade:** re-copy your `dist/<harness>/` shell, install the
+matching `dist/plugins/pdlc/<harness>/` projection, and start a fresh session
+so the plugin composes.
+
+* New `pdlc-discovery` scope and ten product-discovery stages cover intake,
+  PR/FAQ and solution analysis, prioritization, prototype work, strategy,
+  go-to-market, and the `pdlc-context-pack` handoff to core Inception.
+* The `pdlc-evidence` advisory sensor checks source-tag grounding in PR/FAQ and
+  prioritization-scoring artifacts; plugin-owned scope and stage runners are
+  available as `/pdlc-discovery` and `/pdlc-<stage>`.
+* PDLc projects for Claude Code, Codex CLI, Cursor, Kiro CLI, Kiro IDE,
+  opencode, and GitHub Copilot are emitted under `dist/plugins/pdlc/`.
+
 ## [2.6.14] - 2026-08-17
 
 New structured audit blocks no longer carry duplicate `**Timestamp**:` lines. `renderAuditBlock` now exclusively owns the `Timestamp` and `Event` fields, while `park`, `unpark`, and the `practices-promote` write-failure path no longer pass redundant timestamps. **Upgrade:** re-copy your `dist/<harness>/` shell into the project. Existing shards remain byte-unchanged: block-aware readers need no migration, while flat readers must split on `---` and use the first emitter-owned timestamp in each block (or deduplicate historical timestamp fields).

@@ -194,12 +194,11 @@ function sectionsNamed(lines: string[], heading: string): string[][] {
 }
 
 function isTableSeparator(line: string): boolean {
-  return /^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$/.test(line);
+  return /^\s*\|?(?:\s*:?-+:?\s*\|)+\s*:?-+:?\s*\|?\s*$/.test(line);
 }
 
 function isTableLine(line: string): boolean {
-  const trimmed = line.trim();
-  return trimmed.startsWith("|") && trimmed.endsWith("|");
+  return line.trim().includes("|");
 }
 
 function isListItem(line: string): boolean {
@@ -248,6 +247,13 @@ function sourceTags(text: string, labels: ReadonlySet<string>): string[] {
     tags.push(match[1]);
   }
   return tags;
+}
+
+function hasSourceTag(text: string): boolean {
+  SOURCE_TAG_RE.lastIndex = 0;
+  const hasTag = SOURCE_TAG_RE.test(text);
+  SOURCE_TAG_RE.lastIndex = 0;
+  return hasTag;
 }
 
 // --- The source universe ----------------------------------------------------
@@ -466,6 +472,9 @@ function checkClaimTags(
     findings.push(`${location}: claim carries no source tag`);
     return { inBodyAssumption: false };
   }
+  if (block.inAssumptions && !tags.includes("assumption")) {
+    findings.push(`${location}: assumption/open question lacks [assumption]`);
+  }
   let inBodyAssumption = false;
   for (const tag of tags) {
     if (tag === "assumption") {
@@ -545,10 +554,14 @@ function scoringTableFindings(lines: string[]): string[] {
       continue;
     }
     for (const row of rows) {
+      const rationale = row.cells[rationaleColumn] ?? "";
+      if (!hasSourceTag(rationale)) {
+        findings.push(`line ${row.line}: scoring row rationale carries no source tag`);
+      }
       // A citation is not a reason. Strip the source tags first: a rationale
       // cell holding only `[Q3]` cites where a number came from and still never
       // says why the number is that number.
-      const value = (row.cells[rationaleColumn] ?? "").replace(SOURCE_TAG_RE, "").trim();
+      const value = rationale.replace(SOURCE_TAG_RE, "").trim();
       if (value.length === 0 || EMPTY_RATIONALE_RE.test(value)) {
         findings.push(`line ${row.line}: scoring row has no rationale beyond its source tag`);
       }

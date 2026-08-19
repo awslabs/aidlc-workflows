@@ -13,7 +13,9 @@ produces:
   - pdlc-pain-point-analysis
   - pdlc-prfaq
   - pdlc-envision-questions
-consumes: []
+consumes:
+  - artifact: pdlc-use-cases
+    required: false
 requires_stage: []
 reviewer: aidlc-product-lead-agent
 reviewer_max_iterations: 2
@@ -160,12 +162,13 @@ Apply this grounding contract to `pdlc-prfaq.md` and
 3. Never invent a customer name, a quote, a metric, a price, a date, or an
    adoption figure. For a required but unresolved field write
    `Unknown (open question) [assumption]`; omit optional fields.
-4. A quote attributed to a customer or a leader is either the user's own words
-   from an answer, or it is written as an illustrative quote and tagged
-   `[assumption]`. Never present a composed quote as a real one.
+4. A quote attributed to a customer or a leader is the user's own words from an
+   answer. Never compose an illustrative quote or present one as a real quote.
 5. Never turn an unselected option into an exclusion or a requirement.
 6. The artifact MUST contain `## Assumptions & Open Questions`. Write `None.`
-   when there are none.
+   only when there are no open questions and no in-body
+   `Unknown (open question) [assumption]` markers. Every entry in that section
+   carries `[assumption]`.
 
 Create `<record>/ideation/pdlc-envision/pdlc-prfaq.md` with:
 
@@ -202,18 +205,21 @@ artifacts, then report `--result revised` before re-presenting.
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under its record dir. The imported
-`required-sections` sensor checks that `pdlc-pain-point-analysis.md` carries the
-`Pain Points` and `Assumptions & Open Questions` headings, and that
-`pdlc-prfaq.md` carries `Press Release`, `Customer FAQ`, `Internal FAQ`, and
-`Assumptions & Open Questions`.
+This stage's outputs are markdown artefacts under its record dir. No template
+currently resolves for them, so the imported `required-sections` sensor enforces
+only a structural floor of at least two `##` headings. The `Pain Points`,
+`Press Release`, `Customer FAQ`, `Internal FAQ`, and `Assumptions & Open
+Questions` lists in Steps 5 and 6 remain authoring requirements, not
+sensor-enforced heading checks.
 
 The imported `pdlc-evidence` sensor fires on `pdlc-prfaq.md` and checks that
 every substantive paragraph, list item, and table row carries an inline source
 tag which resolves — `[Q<n>]` to a filled answer in
 `pdlc-envision-questions.md`, `[desc]`/`[scope]`/`[memory:<id>]`/`[artifact:…]`
 to a visible entry in that file's `## Sources` register — and that
-`[assumption]` appears only under `## Assumptions & Open Questions`. It is
+`[assumption]` appears outside `## Assumptions & Open Questions` only in
+`Unknown (open question) [assumption]`. Each such marker requires a non-`None.`
+entry in that section, and every entry there carries `[assumption]`. It is
 advisory: it checks that a source was named and exists, never whether the source
 supports the claim. That judgment is the reviewer's.
 

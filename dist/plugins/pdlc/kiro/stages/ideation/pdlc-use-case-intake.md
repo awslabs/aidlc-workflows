@@ -171,7 +171,11 @@ artifacts, then report `--result revised` before re-presenting.
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under its record dir. The imported `required-sections` sensor checks that `pdlc-use-cases.md` carries the `Agentic Use Cases`, `Application Use Cases`, and `Assumptions & Open Questions` headings.
+This stage's outputs are markdown artefacts under its record dir. No template
+currently resolves for them, so the imported `required-sections` sensor enforces
+only a structural floor of at least two `##` headings. The `Agentic Use Cases`,
+`Application Use Cases`, and `Assumptions & Open Questions` lists in Step 6
+remain authoring requirements, not sensor-enforced heading checks.
 
 ## Learn
 

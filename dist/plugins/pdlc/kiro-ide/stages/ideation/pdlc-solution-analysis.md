@@ -17,6 +17,8 @@ consumes:
     required: true
   - artifact: pdlc-prfaq
     required: false
+  - artifact: pdlc-use-cases
+    required: false
 requires_stage:
   - pdlc-envision
 sensors:
@@ -184,12 +186,13 @@ artifacts, then report `--result revised` before re-presenting.
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under its record dir. The imported
-`required-sections` sensor checks that `pdlc-identified-solutions.md` carries the
-`Identified Solutions`, `Pain Coverage`, and `Assumptions & Open Questions`
-headings; `upstream-coverage` checks that the consumed
-`pdlc-pain-point-analysis` and `pdlc-prfaq` were actually referenced rather than
-merely declared.
+This stage's outputs are markdown artefacts under its record dir. No template
+currently resolves for them, so the imported `required-sections` sensor enforces
+only a structural floor of at least two `##` headings. The heading list in Step 5
+remains an authoring requirement, not a sensor-enforced heading check.
+`upstream-coverage` checks that the consumed `pdlc-pain-point-analysis`,
+`pdlc-prfaq`, and `pdlc-use-cases` were actually referenced rather than merely
+declared.
 
 ## Learn
 

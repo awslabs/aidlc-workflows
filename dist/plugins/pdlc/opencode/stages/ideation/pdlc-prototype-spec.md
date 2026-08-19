@@ -15,7 +15,7 @@ produces:
   - pdlc-prototype-spec-questions
 consumes:
   - artifact: pdlc-prioritization-ranking
-    required: true
+    required: false
   - artifact: pdlc-prioritization-scoring
     required: false
   - artifact: pdlc-use-cases
@@ -39,7 +39,7 @@ required_sections:
   - "Look & Feel"
   - "Accessibility Floor"
   - "Assumptions & Open Questions"
-inputs: pdlc-prioritization-ranking from pdlc-prioritization (required), plus pdlc-prioritization-scoring, pdlc-use-cases, and pdlc-prfaq where present
+inputs: pdlc-prioritization-ranking from pdlc-prioritization where present, plus pdlc-prioritization-scoring, pdlc-use-cases, and pdlc-prfaq where present
 outputs: pdlc-prototype-spec.md, pdlc-design-context.md, pdlc-prototype-spec-questions.md, and one portable prototypes/<slug>/PROTOTYPE-<slug>.md per selected candidate (under this stage's record dir, engine-resolved)
 ---
 
@@ -81,9 +81,9 @@ demonstrate.
 ### Step 2: Load Prior Context
 
 - Read `pdlc-prioritization-ranking.md` from the `pdlc-prioritization` record dir
-  — required. Its `## Top Selection` names the candidates this stage specs, and
-  the "what the prototype would have to show" line per candidate is the seed of
-  each spec's success criterion
+  where present. Its `## Top Selection` names the candidates this stage specs,
+  and the "what the prototype would have to show" line per candidate is the seed
+  of each spec's success criterion
 - Read `pdlc-prioritization-scoring.md` from the same dir where present. The
   per-criterion rationales say WHY a candidate ranked where it did, which is what
   a prototype has to test — a candidate that scored high on assumed Data
@@ -256,6 +256,10 @@ only makes sense with the record dir open is a defect. Concretely:
   because a tag resolving into a record dir the reader does not have is worse
   than no tag: it looks like provenance and delivers none. Provenance for this
   file lives in the register written in Step 7, which stays in the record
+- **State the selection provenance without a record path.** Include
+  `pdlc-prioritization-ranking` in a short provenance note when a ranking
+  selected the candidate. This keeps the portable file self-contained while
+  making its declared upstream dependency observable to `upstream-coverage`
 - **Restate the design context**, do not reference it. Each portable spec carries
   the brand, device, and look-and-feel it needs, even though that repeats
   `pdlc-design-context.md` across three files. This is deliberate duplication of
@@ -322,22 +326,22 @@ artifacts, then report `--result revised` before re-presenting.
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under its record dir. The imported
-`required-sections` sensor checks that `pdlc-prototype-spec.md` carries the
-`Selected Candidates`, `Spec Register`, `Prototype Boundaries`, and
-`Assumptions & Open Questions` headings, and that `pdlc-design-context.md`
-carries `Brand & Tone`, `Devices & Viewports`, `Screens & Flows`, `Look & Feel`,
-`Accessibility Floor`, and `Assumptions & Open Questions`. `upstream-coverage`
-checks that the consumed `pdlc-prioritization-ranking`,
-`pdlc-prioritization-scoring`, `pdlc-use-cases`, and `pdlc-prfaq` were actually
-referenced rather than merely declared.
+This stage's outputs are markdown artefacts under its record dir. No template
+currently resolves for them, so the imported `required-sections` sensor enforces
+only a structural floor of at least two `##` headings. The record-artifact
+heading lists in Steps 5 and 7 remain authoring requirements, not
+sensor-enforced heading checks. `upstream-coverage` checks that the consumed
+`pdlc-prioritization-ranking`, `pdlc-prioritization-scoring`, `pdlc-use-cases`,
+and `pdlc-prfaq` were actually referenced rather than merely declared.
 
-Each portable `prototypes/<slug>/PROTOTYPE-<slug>.md` is checked by neither. It
-is not a record artifact with a fixed heading set to police — it is a handover
-document whose required shape is the format reference in
-`pdlc-prototype-spec-format.md`, and whose real test is the portability test in
-Step 6, which no sensor can perform. That check is the reviewer's and the human's
-at the gate.
+Each portable `prototypes/<slug>/PROTOTYPE-<slug>.md` is also in the
+record-tree sensor match. `required-sections` applies the same two-H2 structural
+floor, while `upstream-coverage` can report an unreferenced consume. The
+provenance note required in Step 6 makes a ranking-selected candidate observable
+without adding a record-dir path or compromising portability. Its required
+content shape remains the format reference in `pdlc-prototype-spec-format.md`,
+and its real portability test remains the reviewer's and human's check at the
+gate.
 
 The `pdlc-evidence` sensor is deliberately NOT imported. Its target set is
 `pdlc-prfaq.md` and `pdlc-prioritization-scoring.md`, neither of which this stage

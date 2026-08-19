@@ -33,11 +33,13 @@ Two rules that carry most of the weight:
 paragraph could be deleted without the reader losing anything, there is no
 problem — there is an idea looking for one.
 
-**Every number is either sourced or marked.** A press release attracts numbers:
-adoption, time saved, error reduction, price. Each one is either something the
-user stated (tag it) or an illustration (mark it `[assumption]`). A made-up
-figure in a press release is indistinguishable on the page from a measured one,
-and six weeks later nobody remembers which it was.
+**Every number is either sourced or omitted.** A press release attracts numbers:
+adoption, time saved, error reduction, price. Use a number only when the user
+stated it and tag it. For a required but unresolved field, write
+`Unknown (open question) [assumption]` and record the open question as a
+`[assumption]` entry in `## Assumptions & Open Questions`. A made-up figure in a
+press release is indistinguishable on the page from a measured one, and six
+weeks later nobody remembers which it was.
 
 ## Part 2 — the Customer FAQ
 
@@ -97,6 +99,8 @@ kill it. That is the process working.
 
 `pdlc-envision` requires an inline source tag on every substantive paragraph,
 list item, and table row, plus an `## Assumptions & Open Questions` section, and
-the `pdlc-evidence` sensor checks it. The reason is specific to this artifact:
+the `pdlc-evidence` sensor checks it. Every entry in that section carries
+`[assumption]`; outside it, that tag is valid only in
+`Unknown (open question) [assumption]`. The reason is specific to this artifact:
 the PR/FAQ's form makes assertion cheap and verification impossible. Tags restore
 the distinction the form erases. See `pdlc-overconfidence-prevention.md`.

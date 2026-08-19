@@ -261,15 +261,14 @@ artifacts, then report `--result revised` before re-presenting.
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under its record dir. The imported
-`required-sections` sensor checks that `pdlc-validation-results.md` carries the
-`Validation Method`, `Feedback by Prototype`, `Success Criteria Assessment`,
-`Findings`, and `Assumptions & Open Questions` headings, and that
-`pdlc-build-decision.md` carries `Decision`, `Winner`, `Not Chosen`,
-`Conditions & Next Steps`, and `Assumptions & Open Questions`.
-`upstream-coverage` checks that the consumed `pdlc-prototype-build-log`,
-`pdlc-iteration-log`, `pdlc-prototype-spec`, and `pdlc-prioritization-ranking`
-were actually referenced rather than merely declared.
+This stage's outputs are markdown artefacts under its record dir. No template
+currently resolves for them, so the imported `required-sections` sensor enforces
+only a structural floor of at least two `##` headings. The validation-results and
+build-decision heading lists in Steps 5 and 6 remain authoring requirements, not
+sensor-enforced heading checks. `upstream-coverage` checks that the consumed
+`pdlc-prototype-build-log`, `pdlc-iteration-log`, `pdlc-prototype-spec`, and
+`pdlc-prioritization-ranking` were actually referenced rather than merely
+declared.
 
 The `pdlc-evidence` sensor is deliberately NOT imported. Its target set is
 `pdlc-prfaq.md` and `pdlc-prioritization-scoring.md`, and this stage writes

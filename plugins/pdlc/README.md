@@ -7,12 +7,11 @@
 > Methodology source: [`awslabs/aidlc-workflows#652`](https://github.com/awslabs/aidlc-workflows/issues/652)
 > and the AI-PLC rules in `aws-samples/sample-ai-plc`.
 
-> **Status: all ten stages authored — not yet released.** The full discovery
+> **Status: released in AI-DLC 2.6.15.** The full discovery
 > arc ships: intake, envision/PR-FAQ, solution analysis, prioritization scoring,
 > the prototype chain (spec / build / validation), product strategy,
-> go-to-market, and the handoff pack. What is deliberately still outstanding is
-> release mechanics (no version bump, no CHANGELOG entry, no marketplace
-> listing) and the two conversations §6 names. Every stage is `CONDITIONAL`
+> go-to-market, and the handoff pack. The two maintainer conversations §6 names
+> remain outstanding. Every stage is `CONDITIONAL`
 > except intake and the pack, so a run executes the stages it needs and the pack
 > reports the rest as absent by design — see §5.
 
@@ -46,7 +45,7 @@ Codex, opencode, or Copilot (the dispatch guard in `compose.ts` requires a
 harness-native agent surface, and Kiro's `trustedAgents` roster is not
 extensible by compose), and `reviewer:` triggers that guard even on
 `mode: inline` stages. Core agents everywhere is what makes the plugin portable
-across all six harnesses.
+across all seven harnesses.
 
 ## 2. How to use it
 
@@ -54,7 +53,7 @@ across all six harnesses.
 
 **Author / build** (from the repo):
 ```bash
-bun scripts/package.ts    # emits dist/plugins/pdlc/{claude,codex,kiro,kiro-ide,opencode,copilot}/
+bun scripts/package.ts    # emits dist/plugins/pdlc/{claude,codex,copilot,cursor,kiro,kiro-ide,opencode}/
 bun test plugins/pdlc/tests/plugin.test.ts
 ```
 
@@ -71,6 +70,12 @@ codex plugin marketplace add <…>/dist/plugins/pdlc/codex
 codex plugin add aidlc-pdlc@aidlc-plugins   # approve the one-time hook trust
 ```
 
+**Cursor** (folder-drop; the SessionStart hook composes on the next chat):
+```bash
+cp -r dist/plugins/pdlc/cursor/. <project>/
+# start a fresh Cursor IDE chat or restart Cursor CLI (`agent`)
+```
+
 **Kiro / opencode / Copilot** (no store — folder-drop + compose):
 ```bash
 cp -r dist/plugins/pdlc/kiro/. <project>/
@@ -82,6 +87,7 @@ Then run it:
 ```
 /aidlc --doctor
 /aidlc pdlc-discovery
+/pdlc-discovery
 ```
 
 > **No keyword triggers.** `pdlc-discovery` must be named explicitly. Keyword
@@ -90,6 +96,11 @@ Then run it:
 > permanently shadow one of them — with no error, on every cold start. Claiming
 > none makes the whole class of collision impossible. §4 covers the rest of the
 > co-existence posture.
+
+`/aidlc pdlc-discovery` is the normal orchestrator invocation. The generated
+bare `/pdlc-discovery` runner starts the same scope directly. Each discovery
+stage also has a bare `/pdlc-<stage>` runner for its single-stage mode, for
+example `/pdlc-envision`; use the orchestrator form for a full discovery run.
 
 ## 3. The stages and their artifacts
 
@@ -239,13 +250,10 @@ tag-pinned plugin cannot be hot-fixed when it rots, and a stale pin fails as a
 resolver error nobody traces back to a methodology file. The same reasoning keeps
 model ids out: the stage asks.
 
-## 6. Still outstanding
+## 6. Remaining decisions
 
 Not authoring gaps — decisions and mechanics that sit outside the plugin files:
 
-- **Release mechanics.** No `aidlc-version.ts` bump, no README badge, no
-  `CHANGELOG.md` entry, no marketplace listing. Those fire when this becomes a
-  PR, not per slice.
 - **Two conversations.** Core may ship its own product-discovery path
   ([#526](https://github.com/awslabs/aidlc-workflows/pull/526)); §4 makes
   co-existence work without a negotiation, but the conversation is still worth

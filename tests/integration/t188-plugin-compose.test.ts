@@ -646,6 +646,48 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       .toBe(coreRunnerBefore);
   });
 
+  test("composes the pdlc plugin", () => {
+    const pdlcBuilt = join(tmp, "pdlc", "claude");
+    const build = spawnSync(BUN, [PACKAGE_TS, "plugin", "build", "pdlc", "claude", pdlcBuilt], {
+      cwd: REPO_ROOT,
+      encoding: "utf-8",
+      timeout: TIMEOUT_MS - 5_000,
+    });
+    expect(build.status, build.stderr).toBe(0);
+
+    const pdlcProject = join(tmp, "pdlc-project");
+    cpSync(CLAUDE_DIST, join(pdlcProject, ".claude"), { recursive: true });
+    const compose = spawnSync(BUN, [join(pdlcBuilt, "hooks", "compose.ts")], {
+      cwd: pdlcProject,
+      encoding: "utf-8",
+      timeout: TIMEOUT_MS - 5_000,
+      env: {
+        ...process.env,
+        CLAUDE_PLUGIN_ROOT: pdlcBuilt,
+        CLAUDE_PROJECT_DIR: pdlcProject,
+        AIDLC_HARNESS_DIR: ".claude",
+      },
+    });
+    expect(compose.status, compose.stderr).toBe(0);
+
+    expect(existsSync(join(pdlcProject, ".claude", "skills", "pdlc-discovery", "SKILL.md"))).toBe(true);
+    expect(stage(pdlcProject, "pdlc-envision")).toBeDefined();
+    expect(
+      stageBody(pdlcProject, "inception", "requirements-analysis"),
+    ).toContain("pdlc-context-pack");
+    expect(
+      existsSync(
+        join(
+          pdlcProject,
+          ".claude",
+          "knowledge",
+          "aidlc-product-agent",
+          "pdlc-terminology.md",
+        ),
+      ),
+    ).toBe(true);
+  });
+
   test("compose does not auto-enable a plugin excluded by an existing selection", () => {
     const selectedProj = mkdtempSync(join(tmp, "selection-advisory-"));
     cpSync(CLAUDE_DIST, join(selectedProj, ".claude"), { recursive: true });

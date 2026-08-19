@@ -299,15 +299,15 @@ artifacts, then report `--result revised` before re-presenting.
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under its record dir. The imported
-`required-sections` sensor checks that `pdlc-product-strategy.md` carries the
-`Vision`, `Target Market & Beachhead`, `Positioning`, `Differentiation`,
-`Business Model`, `Success Metrics`, `Strategic Risks`, and
-`Assumptions & Open Questions` headings. `upstream-coverage` checks that the
-consumed `pdlc-use-cases`, `pdlc-prfaq`, `pdlc-prioritization-ranking`,
-`pdlc-validation-results`, and `pdlc-build-decision` were actually referenced
-rather than merely declared — and the ones whose producing stage did not run read
-as absent by design, not as a failure.
+This stage's outputs are markdown artefacts under its record dir. No template
+currently resolves for them, so the imported `required-sections` sensor enforces
+only a structural floor of at least two `##` headings. The heading list in Step
+5 remains an authoring requirement, not a sensor-enforced heading check.
+`upstream-coverage` checks that the consumed `pdlc-use-cases`, `pdlc-prfaq`,
+`pdlc-prioritization-ranking`, `pdlc-validation-results`, and
+`pdlc-build-decision` were actually referenced rather than merely declared —
+and the ones whose producing stage did not run read as absent by design, not as
+a failure.
 
 The `pdlc-evidence` sensor is deliberately NOT imported here. Its target set is
 two files — `pdlc-prfaq.md` and `pdlc-prioritization-scoring.md` — and this stage

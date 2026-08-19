@@ -36,9 +36,11 @@ be designed against.
 
 Sourced means it traces to something specific and re-readable: the user's own
 description, a filled answer in this stage's questions file, a rule in the space
-memory layer, or an upstream `pdlc-*` artifact that exists on disk. Marked means
-it carries `[assumption]` and appears in the artifact's
-`## Assumptions & Open Questions` section.
+memory layer, or an upstream `pdlc-*` artifact that exists on disk. An entry in
+`## Assumptions & Open Questions` is marked only when it carries
+`[assumption]`. Outside that section, `[assumption]` is valid only in
+`Unknown (open question) [assumption]`; each such in-body marker requires a
+non-`None.` entry in the assumptions section.
 
 An unsourced, unmarked claim is a fabrication regardless of how reasonable it is.
 Plausibility is not provenance — plausible-and-wrong is the failure mode, since
@@ -53,7 +55,7 @@ implausible claims get caught.
 | `[Q<n>]` | a **filled** answer under `## Q<n>.` in this stage's sibling questions file |
 | `[memory:M<n>]` | a rule in `aidlc/spaces/<active-space>/memory/{org,team,project}.md`, registered in `## Sources` |
 | `[artifact:pdlc-<name>]` | an upstream `pdlc-<name>.md` that exists under this run's record dir, registered in `## Sources` |
-| `[assumption]` | nothing — it declares the absence of a source, and is valid only inside `## Assumptions & Open Questions` |
+| `[assumption]` | nothing — it declares the absence of a source. Every `## Assumptions & Open Questions` entry carries it; outside that section it is valid only in `Unknown (open question) [assumption]`, with a corresponding non-`None.` assumptions entry |
 
 `[artifact:…]` is what stops the tag discipline becoming re-interrogation. A
 score that follows from the intake register cites the register; the user answered
@@ -63,8 +65,8 @@ that question once, at the stage that asked it, and the tag says where.
 
 **1. The invented quote.** A customer quote in a press release that nobody said.
 The most common fabrication in this flow, and the most damaging, because a quote
-is evidence by form. Either use the user's words from an answer, or write it as an
-illustration and tag it `[assumption]`.
+is evidence by form. Use only the user's words from an answer; omit a composed
+illustration rather than presenting it as a quote.
 
 **2. The unsourced metric.** "Reduces processing time by 60%." Where did 60 come
 from? If the user did not say it and no document holds it, it is either an
@@ -73,8 +75,10 @@ assumption or it is not in the artifact.
 **3. The midpoint default.** Scoring a criterion 5 because the answer is unknown.
 This is the quietest failure of all: it produces a complete, professional-looking
 table where the unknowns are invisible and the weighted total is arithmetic
-performed on nothing. Score it, and write the rationale as
-`Unknown (open question) [assumption]` so the gap survives into the ranking.
+performed on nothing. Score it, write the rationale as
+`Unknown (open question) [assumption]`, and record the open question as a
+`[assumption]` entry in the assumptions section so the gap survives into the
+ranking.
 
 **4. The invented persona.** A named user with a title, a workflow, and
 frustrations that came from pattern-matching rather than from the user. Personas

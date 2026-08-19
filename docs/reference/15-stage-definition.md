@@ -163,11 +163,11 @@ How "source work" is detected depends on the workspace:
   filesystem-existence check: at least one file must exist outside the `aidlc/`
   workspace tree and the harness dirs.
 
-Today only `code-generation` declares it (it is the one stage whose body writes
-application code to the workspace root). A team that adds its own code- or
-config-emitting stage (a contract generator, an IaC executor) should set
-`workspace_requires: true` on it so the same guard applies. Bypass it for CI
-with `AIDLC_SKIP_ARTIFACT_GUARD=1`.
+Today `code-generation` and the PDLc plugin's `pdlc-prototype-build` declare
+it; both stages write runnable code to the workspace root. A team that adds its
+own code- or config-emitting stage (a contract generator, an IaC executor)
+should set `workspace_requires: true` on it so the same guard applies. Bypass
+it for CI with `AIDLC_SKIP_ARTIFACT_GUARD=1`.
 
 ### `produces_kinds`
 

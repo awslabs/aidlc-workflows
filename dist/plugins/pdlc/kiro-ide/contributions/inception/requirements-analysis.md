@@ -21,10 +21,10 @@ PR/FAQ, the prototype evidence, and the product-strategy and go-to-market
 decisions.
 
 `required: false` is load-bearing. Most runs have no pack, because most teams
-do not run product discovery in the same record — and #482's presence-split
-means an absent pack whose producer was never in the plan reads as *absent by
-design*, not as a missing input. Do not ask the user for one, and do not treat
-its absence as a gap.
+do not run product discovery in the same record. When the pack's producer was
+never included in the plan, treat an absent pack as *absent by design*, not as
+a missing input. Do not ask the user for one, and do not treat its absence as a
+gap.
 
 When a pack IS present:
 

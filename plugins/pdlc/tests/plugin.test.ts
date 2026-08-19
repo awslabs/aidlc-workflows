@@ -39,6 +39,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = join(HERE, "..");
 const REPO_ROOT = join(PLUGIN_ROOT, "..", "..");
 const CORE_STAGES = join(REPO_ROOT, "dist", "claude", ".claude", "aidlc-common", "stages");
+const CORE_SCOPES = join(REPO_ROOT, "core", "scopes");
 const AGENTS_DIR = join(REPO_ROOT, "dist", "claude", ".claude", "agents");
 const CORE_SENSORS = join(REPO_ROOT, "dist", "claude", ".claude", "sensors");
 
@@ -100,6 +101,15 @@ function addsList(fm: string, key: string): string[] {
   if (!section) return [];
   return [...section.matchAll(/^ {4}- (.+?)\s*$/gm)].map((m) =>
     m[1].replace(/^"(.*)"$/, "$1").replace(/^'(.*)'$/, "$1").trim()
+  );
+}
+
+function contributionConsumes(fm: string): Array<{ artifact: string; required: boolean }> {
+  const addsBlock = fm.match(/^adds:\n([\s\S]*?)(?=^\S|$(?![\s\S]))/m)?.[1] ?? "";
+  const consumesBlock =
+    addsBlock.match(/^ {2}consumes:\n((?: {4}.+\n?)*)/m)?.[1] ?? "";
+  return [...consumesBlock.matchAll(/^ {4}- artifact:\s*(.+)\n {6}required:\s*(true|false)\s*$/gm)].map(
+    ([, artifact, required]) => ({ artifact: artifact.trim(), required: required === "true" })
   );
 }
 
@@ -172,6 +182,21 @@ describe(`${PLUGIN_NAME} plugin — own content validation`, () => {
           expect(artifact.startsWith(`${PLUGIN_NAME}-`)).toBe(true);
         }
       });
+
+      if (name === "requirements-analysis.md") {
+        test("context-pack contribution consume remains optional", () => {
+          expect(contributionConsumes(fm)).toContainEqual({
+            artifact: "pdlc-context-pack",
+            required: false,
+          });
+        });
+
+        test("context-pack contribution describes absence without a bare issue reference", () => {
+          const body = stageBodyAfterFrontmatter(readFileSync(file, "utf-8"));
+          expect(body).not.toMatch(/(?<!\w)#\d+\b/);
+          expect(body).toContain("absent by design");
+        });
+      }
     }
   });
 
@@ -340,22 +365,27 @@ describe(`${PLUGIN_NAME} plugin — own content validation`, () => {
     // Lays out a minimal engine-shaped record (<record>/<phase>/<stage>/) so the
     // sensor's sibling-questions and record-root derivation are exercised for
     // real rather than stubbed.
-    function fire(caseName: string, deliverable: string, body: string): {
+    function fire(
+      caseName: string,
+      stage: string,
+      deliverable: string,
+      body: string
+    ): {
       pass: boolean;
       findings: string[];
       reason?: string;
     } {
-      const stageDir = join(ROOT, caseName, "ideation", "pdlc-prioritization");
+      const stageDir = join(ROOT, caseName, "ideation", stage);
       const intakeDir = join(ROOT, caseName, "ideation", "pdlc-use-case-intake");
       mkdirSync(stageDir, { recursive: true });
       mkdirSync(intakeDir, { recursive: true });
       writeFileSync(join(intakeDir, "pdlc-use-cases.md"), "# use cases\n");
-      writeFileSync(join(stageDir, "pdlc-prioritization-questions.md"), QUESTIONS);
+      writeFileSync(join(stageDir, `${stage}-questions.md`), QUESTIONS);
       const target = join(stageDir, deliverable);
       writeFileSync(target, body);
       const run = spawnSync(
         "bun",
-        [SCRIPT, "--stage", "pdlc-prioritization", "--output-path", target],
+        [SCRIPT, "--stage", stage, "--output-path", target],
         { encoding: "utf-8" }
       );
       if (run.status !== 0) {
@@ -385,13 +415,13 @@ describe(`${PLUGIN_NAME} plugin — own content validation`, () => {
     ].join("\n");
 
     test("a fully grounded scoring artifact passes", () => {
-      const r = fire("grounded", "pdlc-prioritization-scoring.md", GROUNDED_SCORING);
+      const r = fire("grounded", "pdlc-prioritization", "pdlc-prioritization-scoring.md", GROUNDED_SCORING);
       expect(r.findings).toEqual([]);
       expect(r.pass).toBe(true);
     });
 
     test("a non-target write is a clean pass-through, not a finding", () => {
-      const r = fire("passthrough", "pdlc-prioritization-ranking.md", "Untagged prose.\n");
+      const r = fire("passthrough", "pdlc-prioritization", "pdlc-prioritization-ranking.md", "Untagged prose.\n");
       expect(r.pass).toBe(true);
       expect(r.findings).toEqual([]);
       expect(r.reason).toContain("not a pdlc-evidence target");
@@ -400,6 +430,7 @@ describe(`${PLUGIN_NAME} plugin — own content validation`, () => {
     test("an untagged claim is caught", () => {
       const r = fire(
         "untagged",
+        "pdlc-prioritization",
         "pdlc-prioritization-scoring.md",
         GROUNDED_SCORING.replace(" [Q1] |", " |")
       );
@@ -410,6 +441,7 @@ describe(`${PLUGIN_NAME} plugin — own content validation`, () => {
     test("a tag pointing at an unanswered question is caught", () => {
       const r = fire(
         "unanswered",
+        "pdlc-prioritization",
         "pdlc-prioritization-scoring.md",
         GROUNDED_SCORING.replace("[Q1]", "[Q2]")
       );
@@ -420,6 +452,7 @@ describe(`${PLUGIN_NAME} plugin — own content validation`, () => {
     test("an unregistered artifact citation is caught", () => {
       const r = fire(
         "unregistered",
+        "pdlc-prioritization",
         "pdlc-prioritization-scoring.md",
         GROUNDED_SCORING.replace("[artifact:pdlc-use-cases]", "[artifact:pdlc-invented]")
       );
@@ -430,6 +463,7 @@ describe(`${PLUGIN_NAME} plugin — own content validation`, () => {
     test("a missing assumptions section is caught", () => {
       const r = fire(
         "no-assumptions",
+        "pdlc-prioritization",
         "pdlc-prioritization-scoring.md",
         GROUNDED_SCORING.replace("## Assumptions & Open Questions\n\nNone.\n", "")
       );
@@ -440,6 +474,7 @@ describe(`${PLUGIN_NAME} plugin — own content validation`, () => {
     test("a score whose rationale is only a citation is caught", () => {
       const r = fire(
         "tag-only-rationale",
+        "pdlc-prioritization",
         "pdlc-prioritization-scoring.md",
         GROUNDED_SCORING.replace("A quote either balances or it does not [Q1]", "[Q1]")
       );
@@ -450,6 +485,7 @@ describe(`${PLUGIN_NAME} plugin — own content validation`, () => {
     test("an [assumption] that hides from the assumptions section is caught", () => {
       const r = fire(
         "hidden-assumption",
+        "pdlc-prioritization",
         "pdlc-prioritization-scoring.md",
         GROUNDED_SCORING.replace(
           "A quote either balances or it does not [Q1]",
@@ -465,11 +501,107 @@ describe(`${PLUGIN_NAME} plugin — own content validation`, () => {
     test("a tag neutralised by a link reference definition does not ground a claim", () => {
       const r = fire(
         "link-reference",
+        "pdlc-prioritization",
         "pdlc-prioritization-scoring.md",
         `${GROUNDED_SCORING}\n[Q1]: https://example.invalid/\n`
       );
       expect(r.pass).toBe(false);
       expect(r.findings.some((f) => f.includes("no source tag"))).toBe(true);
+    });
+
+    test("accepts pipeless GFM scoring tables while enforcing rationale content", () => {
+      const pipeless = GROUNDED_SCORING
+        .replace("| Criterion | Weight | Score | Rationale |", "Criterion | Weight | Score | Rationale")
+        .replace("|---|---|---|---|", "--- | --- | --- | ---")
+        .replace("| Decision Value | 25 | 8 | Reps choose inconsistently today [artifact:pdlc-use-cases] |", "Decision Value | 25 | 8 |")
+        .replace("| Task Boundedness | 20 | 7 | A quote either balances or it does not [Q1] |", "Task Boundedness | 20 | 7 | A quote either balances or it does not [Q1]");
+      const failed = fire("pipeless-fail", "pdlc-prioritization", "pdlc-prioritization-scoring.md", pipeless);
+      expect(failed.findings.some((f) => f.includes("scoring row rationale carries no source tag"))).toBe(true);
+
+      const passed = fire(
+        "pipeless-pass",
+        "pdlc-prioritization",
+        "pdlc-prioritization-scoring.md",
+        pipeless.replace("Decision Value | 25 | 8 |", "Decision Value | 25 | 8 | Reps choose inconsistently today [artifact:pdlc-use-cases]")
+      );
+      expect(passed.findings).toEqual([]);
+    });
+
+    test("accepts one-dash scoring delimiters while enforcing rationale columns", () => {
+      const noRationale = GROUNDED_SCORING
+        .replace("| Criterion | Weight | Score | Rationale |", "| Criterion | Weight | Score |")
+        .replace("|---|---|---|---|", "|-|-|-|")
+        .replace(/\s+\|$/gm, "");
+      const r = fire("one-dash", "pdlc-prioritization", "pdlc-prioritization-scoring.md", noRationale);
+      expect(r.findings.some((f) => f.includes("scoring table has no rationale/reason/evidence column"))).toBe(true);
+    });
+
+    test("requires a source tag in the rationale cell", () => {
+      const tagOutsideRationale = GROUNDED_SCORING.replace(
+        "| Decision Value | 25 | 8 | Reps choose inconsistently today [artifact:pdlc-use-cases] |",
+        "| Decision Value [Q1] | 25 | 8 | Reps choose inconsistently today |"
+      );
+      const failed = fire(
+        "rationale-tag-fail",
+        "pdlc-prioritization",
+        "pdlc-prioritization-scoring.md",
+        tagOutsideRationale
+      );
+      expect(failed.findings.some((f) => f.includes("scoring row rationale carries no source tag"))).toBe(true);
+
+      const passed = fire(
+        "rationale-tag-pass",
+        "pdlc-prioritization",
+        "pdlc-prioritization-scoring.md",
+        tagOutsideRationale.replace("Reps choose inconsistently today |", "Reps choose inconsistently today [Q1] |")
+      );
+      expect(passed.findings).toEqual([]);
+    });
+
+    const GROUNDED_PRFAQ = [
+      "## Press Release",
+      "",
+      "The launch resolves an open requirement: Unknown (open question) [assumption]",
+      "",
+      "## Customer FAQ",
+      "",
+      "Customers receive the documented workflow [desc].",
+      "",
+      "## Internal FAQ",
+      "",
+      "The team must verify the unresolved requirement [desc].",
+      "",
+      "## Assumptions & Open Questions",
+      "",
+      "- The launch requirement is unresolved [assumption].",
+      "",
+    ].join("\n");
+
+    test("fires evidence sensor on pdlc-prfaq", () => {
+      const documented = fire("prfaq-pass", "pdlc-envision", "pdlc-prfaq.md", GROUNDED_PRFAQ);
+      expect(documented.findings).toEqual([]);
+
+      const bareAssumption = fire(
+        "prfaq-bare-assumption",
+        "pdlc-envision",
+        "pdlc-prfaq.md",
+        GROUNDED_PRFAQ.replace("Unknown (open question) [assumption]", "Illustrative launch claim [assumption]")
+      );
+      expect(
+        bareAssumption.findings.some((f) =>
+          f.includes("[assumption] outside ## Assumptions & Open Questions")
+        )
+      ).toBe(true);
+    });
+
+    test("requires [assumption] inside the assumptions section", () => {
+      const missingTag = fire(
+        "assumptions-section-tag",
+        "pdlc-envision",
+        "pdlc-prfaq.md",
+        GROUNDED_PRFAQ.replace("- The launch requirement is unresolved [assumption].", "- The launch requirement is unresolved [desc].")
+      );
+      expect(missingTag.findings.some((f) => f.includes("assumption/open question lacks [assumption]"))).toBe(true);
     });
   });
 
@@ -615,27 +747,48 @@ describe(`${PLUGIN_NAME} plugin — own content validation`, () => {
       }
     });
 
-    // `required_sections:` is parsed, merged, un-merged - and read by NOTHING.
-    // The heading set is enforced only via a space-memory template (not
-    // projectable by a plugin) or via `## Sensors` body prose. So the prose is
-    // the load-bearing declaration and the frontmatter is forward-looking intent;
-    // this pins that they agree.
-    test("every required_sections heading is also stated in the stage's ## Sensors prose", () => {
+    // `required_sections:` is declarative today. For plugin outputs with no
+    // template, the shipped sensor enforces only a two-H2 structural floor; the
+    // named lists remain stage authoring requirements.
+    test("every stage accurately describes the required-sections structural floor", () => {
       for (const s of stages) {
-        const declared = (s.fm.required_sections as string[]) ?? [];
-        if (declared.length === 0) continue;
         const sensorsProse = s.body.split(/^## Sensors\s*$/m)[1]?.split(/^## /m)[0] ?? "";
         if (sensorsProse.trim().length === 0) {
-          throw new Error(`${s.name}: declares required_sections but has no ## Sensors prose`);
+          throw new Error(`${s.name}: has no ## Sensors prose`);
         }
-        for (const heading of declared) {
-          if (!sensorsProse.includes(heading)) {
-            throw new Error(
-              `${s.name}: required_sections declares "${heading}" but the ## Sensors prose never states it - frontmatter alone enforces nothing, so this heading is unchecked`
-            );
-          }
+        if (
+          !sensorsProse.includes("structural floor of at least two `##` headings") ||
+          !sensorsProse.includes("authoring requirement") ||
+          !sensorsProse.includes("sensor-enforced heading check")
+        ) {
+          throw new Error(
+            `${s.name}: must describe required-sections as the two-H2 structural floor and keep named headings as authoring requirements`
+          );
         }
       }
+    });
+
+    test("declares optional inputs for the documented degradation paths", () => {
+      const expectedOptional = new Map([
+        ["pdlc-envision", "pdlc-use-cases"],
+        ["pdlc-solution-analysis", "pdlc-use-cases"],
+        ["pdlc-prototype-spec", "pdlc-prioritization-ranking"],
+        ["pdlc-prototype-build", "pdlc-prototype-spec"],
+      ]);
+      for (const [stage, artifact] of expectedOptional) {
+        const entry = (bySlug.get(stage)?.fm.consumes as Array<{ artifact: string; required: boolean }>)
+          ?.find((consume) => consume.artifact === artifact);
+        expect(entry).toEqual({ artifact, required: false });
+      }
+    });
+
+    test("portable prototype sensor guidance admits the record-local coverage path", () => {
+      const spec = bySlug.get("pdlc-prototype-spec");
+      if (!spec) throw new Error("pdlc-prototype-spec is missing");
+      const sensorsProse = spec.body.split(/^## Sensors\s*$/m)[1]?.split(/^## /m)[0] ?? "";
+      expect(sensorsProse).toContain("PROTOTYPE-<slug>.md");
+      expect(sensorsProse).toContain("can report an unreferenced consume");
+      expect(spec.body).toContain("provenance note");
     });
 
     // The body compartments the stage protocol expects. t87/t37 pin these for
@@ -789,6 +942,19 @@ describe(`${PLUGIN_NAME} plugin — own content validation`, () => {
       ]);
     });
 
+    test("uses user confirmation instead of a credential-presence command", () => {
+      requireAll("credential confirmation", body, [
+        "does not inspect the environment or run a credential-presence command",
+        "ask the user to confirm",
+        "do not construct, run, or suggest a shell command to inspect it.",
+      ]);
+    });
+
+    test("uses only PDLc terminology in prototype-build instructions", () => {
+      expect(body).not.toMatch(/\bsource flow\b/i);
+      expect(body).not.toMatch(/\bworkshop\b/i);
+    });
+
     test("carries credential isolation at the subprocess boundary", () => {
       requireAll("subprocess isolation", body, [
         "export only the selected provider's",
@@ -878,6 +1044,16 @@ describe(`${PLUGIN_NAME} plugin — own content validation`, () => {
   // co-existence breaks WITHOUT producing an error — the reason they are worth
   // pinning rather than leaving to review.
   describe("co-existence invariants", () => {
+    test("pdlc scope name is disjoint from core scope names", () => {
+      const coreNames = new Set(
+        walk(CORE_SCOPES).map((file) => scalarField(frontmatterOf(readFileSync(file, "utf-8")), "name"))
+      );
+      expect(coreNames.size).toBeGreaterThan(0);
+      for (const scope of ownScopeNames()) {
+        expect(coreNames.has(scope)).toBe(false);
+      }
+    });
+
     // Keyword inference takes the FIRST ALPHABETICAL match across all scopes
     // (findScopeByKeyword). A keyword this plugin claims that a core scope also
     // claims does not fail compile — it permanently shadows one of them on

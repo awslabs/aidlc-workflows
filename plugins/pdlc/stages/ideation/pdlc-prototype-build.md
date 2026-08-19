@@ -5,7 +5,7 @@ name: Prototype Build
 plugin: pdlc
 phase: ideation
 execution: CONDITIONAL
-condition: Execute when a prototype spec exists and the user wants it built and run locally — either a PROTOTYPE-<slug>.md this run wrote in pdlc-prototype-spec, or one handed in from elsewhere with no discovery behind it (Entry Point 1). Skip when discovery stops at the handoff pack, when the specs are being given to a development team to build, or when this machine must not run local processes; say which at the gate.
+condition: Execute when the user supplies a portable PROTOTYPE-<slug>.md and wants it built and run locally. It may have been written by pdlc-prototype-spec in this run or handed in from elsewhere. Skip when discovery stops at the handoff pack, when the specs are being given to a development team to build, or when this machine must not run local processes; say which at the gate.
 lead_agent: aidlc-developer-agent
 support_agents: []
 mode: inline
@@ -16,7 +16,7 @@ produces:
   - pdlc-prototype-build-questions
 consumes:
   - artifact: pdlc-prototype-spec
-    required: true
+    required: false
   - artifact: pdlc-design-context
     required: false
 requires_stage:
@@ -35,7 +35,7 @@ required_sections:
   - "Iterations"
   - "Outstanding Defects"
   - "Assumptions & Open Questions"
-inputs: pdlc-prototype-spec (the portable PROTOTYPE-<slug>.md files, required — either written by pdlc-prototype-spec or handed in), plus pdlc-design-context where it exists
+inputs: A portable PROTOTYPE-<slug>.md supplied by the user (required); the record-side pdlc-prototype-spec and pdlc-design-context artifacts are optional context when this run produced them
 outputs: pdlc-prototype-build-log.md, pdlc-iteration-log.md, pdlc-prototype-build-questions.md (under this stage's record dir, engine-resolved); runnable prototype code under prototypes/<slug>/ at the WORKSPACE root
 ---
 
@@ -73,13 +73,13 @@ never ran discovery.
 
 ### Step 2: Locate the Specs
 
-Two entry paths, and they are equally normal:
+Two source forms are equally normal:
 
 1. **From this run** — read `pdlc-prototype-spec.md` from the
    `pdlc-prototype-spec` record dir, take its `## Spec Register`, and read each
    `prototypes/<slug>/PROTOTYPE-<slug>.md` it names. Read
    `pdlc-design-context.md` from the same dir where present
-2. **Handed in (Entry Point 1)** — a `PROTOTYPE-*.md` the user supplies with no
+2. **Handed in** — a `PROTOTYPE-*.md` the user supplies with no
    discovery behind it. It is self-contained by design, so read it and do not go
    looking for a record dir that does not exist. Ask where the file is; do not
    scan the filesystem for candidates
@@ -173,11 +173,9 @@ visible in the conversation:
 > ⚠️ **IMPORTANT: Do NOT paste your credentials into this chat or any
 > `[Answer]:` tag in `pdlc-prototype-build-questions.md`.**
 
-Set them as environment variables in your own shell instead; this stage checks
-only whether they are present. (The warning is carried verbatim from the source
-flow, with one edit: its bare `[Answer]:` *field* is named here as core's
-`[Answer]:` tag inside this stage's questions file, which is where core's
-question format puts it.)
+Set them as environment variables in your own shell instead. This stage does not
+inspect the environment or run a credential-presence command: ask the user to
+confirm that the provider's required credential is configured.
 
 Then, without exception:
 
@@ -190,11 +188,9 @@ Then, without exception:
 > Never include credential values in AI-generated code, comments, or output
 > files.
 
-An existence check means testing that the variable is set and non-empty and
-reporting `yes` or `no` — never printing it, never writing it into a file, never
-including it in a command whose text is echoed back. Ask the user to set the
-variable in their shell and to tell you when it is set; then verify presence
-only.
+Record only the user's yes/no confirmation that the required credential is
+configured. Do not ask for the variable name or value, and do not construct,
+run, or suggest a shell command to inspect it.
 
 **The never-log list applies to every log, artifact, and audit entry this stage
 writes:**
@@ -221,8 +217,9 @@ deliberately records the SHAPE rather than a pinned table of names and model ids
 | A hosted model API (Anthropic, OpenAI, Google, and the like) | one long-lived API key in one environment variable, named by that provider's own documentation | `credentials configured: yes/no`, the provider name, the model id the user gave |
 | A local runtime | usually nothing — a base URL | the base URL, and that no credential was needed |
 
-Ask the user which variable their provider uses rather than guessing at a name,
-and never write the name-plus-value pair anywhere.
+Use the provider's documented environment-variable name in local code only; do
+not ask the user to disclose that name or any value, and never write a
+name-plus-value pair anywhere.
 
 ### Step 5: Prepare the Environment
 
@@ -250,10 +247,9 @@ Concretely:
   version pinned in this stage file** — there is none here on purpose, because a
   version pinned inside a tag-pinned plugin cannot be hot-fixed when it rots, and
   a stale pin fails as a resolver error nobody traces back to a methodology file
-- For an agentic prototype the source flow uses the Strands Agents SDK plus a
-  small local web server (`strands-agents`, `strands-agents-tools`, `flask`,
-  `flask-cors`). Name the packages, agree the versions, pin them, record them.
-  For an Application prototype, prefer no dependency at all
+- For an Agentic prototype, choose only the PyPI packages needed for the
+  user-approved prototype shape, agree the versions with the user, pin them, and
+  record them. For an Application prototype, prefer no dependency at all
 - Never `pip install` a URL, a `git+` reference, a local wheel of unknown origin,
   or an unpinned name. PyPI, pinned, or not at all
 - Never use `sudo`, and never write outside the prototype directory
@@ -262,7 +258,7 @@ And the standing note the prototype itself inherits:
 
 > **SECURITY NOTE**: Prototypes are for local demonstration only. They run on
 > localhost and must not be exposed to external networks or deployed to
-> production/public-facing environments from this workshop.
+> production/public-facing environments from this prototype stage.
 
 Bind the local server to `127.0.0.1` explicitly rather than `0.0.0.0`, and say so
 in the build log. `0.0.0.0` on a laptop on a conference network is an exposed
@@ -409,15 +405,13 @@ artifacts, then report `--result revised` before re-presenting.
 ## Sensors
 
 This stage's record outputs are markdown artefacts under its record dir; its code
-output is at the workspace root and is not sensor territory. The imported
-`required-sections` sensor checks that `pdlc-prototype-build-log.md` carries the
-`Provider Selection`, `Environment`, `Prototypes Built`, `How to Run`,
-`Security Posture`, and `Assumptions & Open Questions` headings, and that
-`pdlc-iteration-log.md` carries `Iterations`, `Outstanding Defects`, and
-`Assumptions & Open Questions`. `upstream-coverage` checks that the consumed
-`pdlc-prototype-spec` and `pdlc-design-context` were actually referenced — on the
-handed-in path (Entry Point 1) the spec is the file the user supplied, and the log
-records that, so an absent record-dir spec is absent by design and not a failure.
+output is at the workspace root and is not sensor territory. No template
+currently resolves for the record outputs, so the imported `required-sections`
+sensor enforces only a structural floor of at least two `##` headings. The build
+and iteration-log heading lists in Steps 9 and 10 remain authoring requirements,
+not sensor-enforced heading checks. `upstream-coverage` checks that the optional
+record-side `pdlc-prototype-spec` and `pdlc-design-context` inputs were actually
+referenced when present.
 
 The `pdlc-evidence` sensor is deliberately NOT imported. Its target set is
 `pdlc-prfaq.md` and `pdlc-prioritization-scoring.md`, and this stage writes
