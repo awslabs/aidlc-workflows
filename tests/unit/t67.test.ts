@@ -443,8 +443,8 @@ describe("t67 detect-scope --from-text boundary + fallback (migrated from t67 §
     );
   };
 
-  test('20: "debug this issue" -> feature (word-boundary, no bugfix)', fallbackCase("debug this issue", "feature"));
-  test('21: "fixture scope testing" -> feature (word-boundary, no bugfix)', fallbackCase("fixture scope testing", "feature"));
+  test('20: "debug this issue" -> classic (word-boundary, no bugfix)', fallbackCase("debug this issue", "classic"));
+  test('21: "fixture scope testing" -> classic (word-boundary, no bugfix)', fallbackCase("fixture scope testing", "classic"));
 
   // §8b multi-word keyword matches despite extra whitespace.
   test('22: "minimum  viable" (double-space) -> mvp', () => {
@@ -458,16 +458,16 @@ describe("t67 detect-scope --from-text boundary + fallback (migrated from t67 §
   });
 
   // §9 >5-word input with keywords -> feature default.
-  test('23: ">5-word input with keywords -> feature default"', fallbackCase("I want to fix the broken auth flow quickly today", "feature"));
+  test('23: ">5-word input with keywords -> classic default"', fallbackCase("I want to fix the broken auth flow quickly today", "classic"));
 
   // §10 empty input -> feature default (valid CLI path under --from-text).
-  test("24: empty input -> feature default", () => {
+  test("24: empty input -> classic default", () => {
     const p = proj();
     const r = detectFromText("", p);
     expect(r.status).toBe(0);
-    expect(ackScope(r)).toBe("feature");
+    expect(ackScope(r)).toBe("classic");
     expect(auditField(readAudit(p), "SCOPE_DETECTED", "Detected scope")).toBe(
-      "feature",
+      "classic",
     );
     // STRONGER: a keyword-less match also marks Source=freeform.
     expect(auditField(readAudit(p), "SCOPE_DETECTED", "Source")).toBe("freeform");

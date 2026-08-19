@@ -149,6 +149,7 @@ import {
   scopeCostSummary,
   selectionAwareDefaultScope,
   resolveDefaultScope,
+  DEFAULT_SCOPE,
   type StageEntry,
   stateFilePath,
   swarmConvergedUnits,
@@ -192,11 +193,12 @@ function loadStateFileIfPresent(projectDir: string): string | null {
 }
 
 // The default scope when neither the state file, a --scope flag, nor the
-// AWS_AIDLC_DEFAULT_SCOPE env var supplies one. Mirrors the prose
-// orchestrator's freeform-fallback default (SKILL.md detect-scope fallback).
-// selectionAwareDefaultScope() maps this to the sole enabled plugin's
-// nominated default on a plugin-only install where "feature" is deselected.
-const DEFAULT_SCOPE = "feature";
+// AWS_AIDLC_DEFAULT_SCOPE env var supplies one lives in aidlc-lib.ts
+// (DEFAULT_SCOPE, imported above) so exactly one constant plus the env var
+// control the implicit default everywhere. Mirrors the prose orchestrator's
+// freeform-fallback default (SKILL.md detect-scope fallback).
+// selectionAwareDefaultScope() maps it to the sole enabled plugin's
+// nominated default on a plugin-only install where it is deselected.
 
 // READ_ONLY_FLAGS (--status/--help/--doctor/--version) and the shared workspace
 // parser (space/space-create/intent) are the terminal-command sources of truth

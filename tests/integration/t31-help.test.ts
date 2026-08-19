@@ -49,7 +49,7 @@
 //   .sh:41  "--help"            -> "lists --help utility"
 //   .sh:47  "All 33 stages"     -> "enterprise/feature shows 'All 33 stages'"
 //   .sh:48  "7 of 33 stages"    -> "bugfix shows compiled '7 of 33 stages'"
-//   .sh:49  "(default)"         -> "feature row shows '(default)' marker"
+//   .sh:49  "(default)"         -> "classic row shows '(default)' marker"
 //   .sh:52  "--force"           -> "lists --force flag"
 //   .sh:55  "--stage"           -> "lists --stage utility"
 //   .sh:56  "--phase"           -> "lists --phase utility"
@@ -177,10 +177,10 @@ describe("t31 aidlc-utility help — CLI contract (migrated from t31-help-text-c
     expect(HELP.stdout).toContain("7 of 33 stages");
   });
 
-  test("feature row shows '(default)' marker", () => {
-    const featureLine = HELP.stdout
+  test("classic row shows '(default)' marker", () => {
+    const classicLine = HELP.stdout
       .split("\n")
-      .find((line) => line.trimStart().startsWith("feature"));
-    expect(featureLine).toContain("(default)");
+      .find((line) => line.trimStart().startsWith("classic"));
+    expect(classicLine).toContain("(default)");
   });
 });

@@ -47,7 +47,7 @@ To change ONE agent's behavior in your installed copy, edit the projected value 
 
 ## Per-Project Default Scope
 
-When every workflow in a project should start at the same scope, set `AWS_AIDLC_DEFAULT_SCOPE` in the `env` block of `.claude/settings.json` (the shipped file already has this set to `feature`):
+When every workflow in a project should start at the same scope, set `AWS_AIDLC_DEFAULT_SCOPE` in the `env` block of `.claude/settings.json` (the shipped file already has this set to `classic`, matching the framework's hard-coded fallback — set it to `feature` to run the full lifecycle by default):
 
 ```json
 {
@@ -66,8 +66,10 @@ With this set, bare `/aidlc` invocations use `feature` as the default scope. The
 1. Explicit CLI flag: `/aidlc feature` or `/aidlc --scope bugfix` wins.
 2. Keyword detection in freeform text: `/aidlc fix the login bug` still maps to `bugfix`. Users can override the detected scope at the existing confirmation prompt.
 3. `AWS_AIDLC_DEFAULT_SCOPE` env var from `.claude/settings.json`.
-4. Hard-coded fallback (`feature` for unmatched freeform and `/aidlc-init`;
-   `poc` only for a direct low-level `intent-create` call without `--scope`).
+4. Hard-coded fallback: `classic` — the single framework default, used by
+   unmatched-freeform resolution, `/aidlc-init`, and a direct low-level
+   `intent-create` call without `--scope`. Nothing else controls the implicit
+   default.
 
 **Valid values:** `enterprise`, `feature`, `mvp`, `poc`, `bugfix`, `refactor`, `infra`, `security-patch`, `classic`, `workshop`, `express`. An invalid value errors at invocation time with a clear message. Teams can define additional scopes by dropping a `.claude/scopes/aidlc-<name>.md` file and tagging the member stages' `scopes:` lists — see [Contributing: Adding a Scope](../reference/11-contributing.md#adding-a-scope). Teams can also define additional agents in `.claude/agents/` — see [Contributing: Adding an Agent](../reference/11-contributing.md#adding-an-agent).
 
@@ -95,7 +97,7 @@ Specify explicitly or let the orchestrator auto-detect:
 
 ```
 /aidlc enterprise       # Explicit scope
-/aidlc Build a payments API  # No keyword: offers composition; resolver fallback is "feature"
+/aidlc Build a payments API  # No keyword: offers composition; resolver fallback is "classic"
 /aidlc Fix the login bug     # Auto-detects "bugfix"
 ```
 

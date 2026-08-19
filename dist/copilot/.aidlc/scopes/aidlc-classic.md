@@ -2,14 +2,15 @@
 name: classic
 depth: Standard
 keywords: []
-description: "Opt-in v1-style lifecycle without ideation ceremony"
+description: "V1-style lifecycle without ideation ceremony — the implicit default"
 skeleton: on
 review_cap: advisory
 ---
 
 # classic scope
 
-`classic` is an opt-in scope that reproduces the AI-DLC v1 experience: the
+`classic` is the implicit default scope — used when neither the user nor
+`AWS_AIDLC_DEFAULT_SCOPE` names one — and reproduces the AI-DLC v1 experience: the
 lifecycle begins after Ideation, then adapts through Inception, Construction,
 and Operation according to each stage's applicability.
 

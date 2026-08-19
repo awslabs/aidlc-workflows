@@ -37,7 +37,7 @@ Ad-hoc AI coding works until the project gets real. Then context drifts between 
 
 - **[5 phases, 32 stages](docs/guide/04-phases-and-stages.md)** — Initialization, Ideation, Inception, Construction, Operation
 - **[14-agent roster](docs/guide/06-agents.md)** — 11 domain experts, 2 quality-gate reviewers, and the adaptive-workflows composer
-- **[11 adaptive scopes](docs/guide/05-scopes-and-depth.md)** (enterprise through express, with the full-lifecycle feature default, opt-in classic, and workshop retained for facilitated sessions) plus an **[adaptive composer](docs/guide/05-scopes-and-depth.md#the-adaptive-composer)** (`/aidlc compose`) that proposes a tailored stage plan from your task, a scan report, or the running workflow
+- **[11 adaptive scopes](docs/guide/05-scopes-and-depth.md)** (enterprise through express, with the v1-style classic default — `AWS_AIDLC_DEFAULT_SCOPE` overrides it — the full-lifecycle feature scope, and workshop retained for facilitated sessions) plus an **[adaptive composer](docs/guide/05-scopes-and-depth.md#the-adaptive-composer)** (`/aidlc compose`) that proposes a tailored stage plan from your task, a scan report, or the running workflow
 - **[3 depth levels](docs/guide/05-scopes-and-depth.md#the-3-depth-levels)** (Minimal/Standard/Comprehensive) — control artifact detail per stage
 - **[3 test strategy levels](docs/guide/05-scopes-and-depth.md#the-3-test-strategy-levels)** (Minimal/Standard/Comprehensive) — independent of depth for flexible test coverage
 - **[CLI utilities](docs/guide/12-cli-commands.md)** — jump to any stage or phase, check status, change scope/depth/test strategy mid-workflow

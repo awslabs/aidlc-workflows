@@ -7933,7 +7933,7 @@ interface ScopeMetadata {
    *  resolveReviewClass. */
   reviewCap?: "adversarial" | "advisory" | "none";
   /** When true, this scope is the enabled plugin's freeform/default fallback
-   *  (plugin-only installs where the core `feature`/`poc` defaults are
+   *  (plugin-only installs where the core `classic` default is
    *  deselected). At most one enabled scope should set this. */
   freeformDefault?: boolean;
 }
@@ -8216,7 +8216,26 @@ export interface DefaultScopeResolution {
   note?: string;
 }
 
-export function selectionAwareDefaultScope(preferred = "feature"): DefaultScopeResolution {
+// The framework's single hard-coded default scope — the bottom of every
+// default ladder (the engine's scope resolution, `/aidlc-init`, the low-level
+// `intent-create` fallback, and the help-text "(default)" marker). Exactly two
+// things control the implicit default: the AWS_AIDLC_DEFAULT_SCOPE env var
+// (which overrides when set) and this constant (when the var is unset).
+export const DEFAULT_SCOPE = "classic";
+
+// AWS_AIDLC_DEFAULT_SCOPE resolved with the engine ladder's semantics: unset →
+// null; a valid scope → itself; an installed-but-disabled scope → the
+// selection-aware rescue; an unknown value → returned verbatim so the caller's
+// own validation owns the canonical `Unknown scope` error.
+export function envDefaultScope(): string | null {
+  const envScope = (process.env.AWS_AIDLC_DEFAULT_SCOPE || "").trim();
+  if (envScope.length === 0) return null;
+  if (validScopes().has(envScope)) return envScope;
+  if (loadScopeMetadataAll()[envScope] === undefined) return envScope;
+  return selectionAwareDefaultScope(envScope).scope;
+}
+
+export function selectionAwareDefaultScope(preferred: string = DEFAULT_SCOPE): DefaultScopeResolution {
   const scopes = [...validScopes()];
   if (scopes.includes(preferred)) return { scope: preferred };
 
@@ -8270,7 +8289,8 @@ export function selectionAwareDefaultScope(preferred = "feature"): DefaultScopeR
 /**
  * Thin string-returning wrapper over {@link selectionAwareDefaultScope} for
  * callers that just need the resolved scope name. `preferred` is the caller's
- * core-era literal ("feature" for freeform inference, "poc" for intent birth).
+ * core-era literal (DEFAULT_SCOPE, "classic", for both freeform inference and
+ * intent birth).
  * When `preferred` is enabled it wins (stock behaviour preserved); otherwise
  * the nominated freeform default (or the sole enabled plugin's first scope) is
  * returned, falling back to `preferred` when nothing can be chosen.

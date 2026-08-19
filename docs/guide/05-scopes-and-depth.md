@@ -119,7 +119,7 @@ Authoritative data lives in the `.claude/scopes/aidlc-<name>.md` files (scope id
 | `refactor` | 8 / 33 | Minimal | Minimal | Clean up existing code |
 | `infra` | 13 / 33 | Standard | Standard | Infrastructure change |
 | `security-patch` | 10 / 33 | Minimal | Minimal | CVE response |
-| `classic` | 26 / 33 | Standard | Standard | Opt-in v1-style lifecycle without Ideation |
+| `classic` | 26 / 33 | Standard | Standard | V1-style lifecycle without Ideation — the implicit default |
 | `workshop` | 26 / 33 | Standard | Minimal | Facilitated lifecycle with teaching-oriented tests |
 | `express` | 10 / 33 | Minimal | Minimal | Requirements to conditional deploy, no design or reviewers |
 | (auto-detect) | Varies | Varies | Varies | AI determines from freeform intent |
@@ -212,7 +212,8 @@ Confirm to proceed, or reply with a different scope (or `compose`) to course-cor
 
 ## The Adaptive Composer
 
-The underlying resolver's no-keyword default is `feature`, which is used by
+The underlying resolver's no-keyword default is `classic` (overridable with
+`AWS_AIDLC_DEFAULT_SCOPE`), which is used by
 explicit fallback paths and low-context utility calls. In the user-facing
 cold-start flow, rich prose, no keyword hit, or a keyword buried in a long
 description enters the compose offer before a workflow is created; it does not

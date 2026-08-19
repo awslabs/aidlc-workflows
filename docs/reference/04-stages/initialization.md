@@ -129,7 +129,7 @@ All three stages run inside a single deterministic `bun .claude/tools/aidlc-util
 
 ### Inputs
 - Workspace classification from workspace-detection (same tool call)
-- Scope configuration (from `--scope` flag or `poc` default)
+- Scope configuration (from `--scope` flag, `AWS_AIDLC_DEFAULT_SCOPE`, or the `classic` default)
 - Depth / test-strategy overrides if passed
 - State contract from `.claude/knowledge/aidlc-shared/state-template.md`
 - Compiled `tools/data/stage-graph.json` and `tools/data/scope-grid.json`

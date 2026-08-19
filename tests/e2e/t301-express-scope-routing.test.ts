@@ -260,10 +260,10 @@ describe("t301 express scope routing (deterministic CLI journey)", () => {
     expect(execute).toEqual(EXPRESS_STAGES);
   });
 
-  test("freeform text with no scope keyword preserves the feature default", () => {
+  test("freeform text with no scope keyword falls back to the classic default", () => {
     expect(detectedScope(project(), "build a simple task tracker")).toMatchObject(
       {
-        scope: "feature",
+        scope: "classic",
         source: "freeform",
       },
     );

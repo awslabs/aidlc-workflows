@@ -20,7 +20,7 @@
     "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-statusline.ts\""
   },
   "env": {
-    "AWS_AIDLC_DEFAULT_SCOPE": "feature",
+    "AWS_AIDLC_DEFAULT_SCOPE": "classic",
     "CLAUDE_CODE_USE_BEDROCK": "1",
     "AWS_REGION": "us-east-1",
     "ANTHROPIC_DEFAULT_FABLE_MODEL": "global.anthropic.claude-fable-5[1m]",

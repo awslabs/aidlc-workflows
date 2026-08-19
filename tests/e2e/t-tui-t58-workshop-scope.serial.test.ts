@@ -64,7 +64,8 @@
 // "known scope" path (:329-339), which does NOT render a scope-confirmation gate
 // (that gate is the FREEFORM-text path, :341-362, "confirmation is mandatory for
 // all freeform inputs"). The explicit `--scope classic` flag outranks the shipped
-// `AWS_AIDLC_DEFAULT_SCOPE: "feature"` setting, so both routing paths land on
+// `AWS_AIDLC_DEFAULT_SCOPE: "classic"` setting (which happens to agree), so both
+// routing paths land on
 // Classic without relying on the implicit default. The journey is LLM-mediated,
 // so answer-gate remains a no-op disk-poller when no menu is
 // up (it checks the terminator FIRST each loop — tui-drive.ts:951-959), so the
