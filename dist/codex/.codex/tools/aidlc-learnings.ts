@@ -28,7 +28,7 @@
 //
 // --- Provenance binding + content-addressed dedup (#735 follow-up, PR #747
 //     review) ---
-// Seven findings from PR #747's three review rounds, fixed here:
+// Eight findings from PR #747's four review rounds, fixed here:
 //   1. Candidate ids restart at c1 on EVERY surface() call, so a later run
 //      of the same stage in the SAME intent reused c1 for a completely
 //      different learning and the old (intent, stage, candidate-id) marker
@@ -75,6 +75,13 @@
 //      the upgrade boundary. Fixed by gating a legacy match on the marked
 //      line's own text equalling the current selection's text
 //      (legacyLineMatchesText).
+//   8. `intent: null` is a real surface-time provenance value, but persist
+//      converted it to `undefined`, whose audit-path meaning is "resolve the
+//      live/lone intent." If an intent was born between surface and replay,
+//      the unscoped learning was therefore audited under that later intent.
+//      Fixed by failing closed inside the lock when an unscoped selections
+//      file is replayed after any intent record appears; the user must
+//      re-run surface and regenerate the selections file.
 //
 // The conflict COMPARISON is the orchestrator-LLM's job (the "single-line
 // variant" of the §5 gate model); persist receives only conflict-clear or
@@ -105,6 +112,7 @@ import {
   readStateFile,
   resolveProjectDir,
   runtimeGraphPath,
+  validSpaceFlag,
   withAuditLock,
   writeFileAtomic,
   harnessDir,
@@ -444,8 +452,29 @@ function parseSelectionsFile(path: string): SelectionsFile {
   if (typeof parsed.space !== "string") {
     fail("selections-json is malformed: missing or non-string space (bind it from surface's output)", 1);
   }
+  if (validSpaceFlag(parsed.space) === null) {
+    fail(
+      "selections-json is malformed: space must be a lowercase slug beginning with a letter " +
+        "and containing only lowercase letters, digits, or hyphens (bind it from surface's output)",
+      1
+    );
+  }
   if (parsed.intent !== null && typeof parsed.intent !== "string") {
     fail("selections-json is malformed: intent must be a string or null (bind it from surface's output)", 1);
+  }
+  if (
+    typeof parsed.intent === "string" &&
+    (parsed.intent === "" ||
+      parsed.intent === "." ||
+      parsed.intent.includes("..") ||
+      parsed.intent.includes("/") ||
+      parsed.intent.includes("\\"))
+  ) {
+    fail(
+      "selections-json is malformed: intent must be a non-empty record-directory name without " +
+        'path separators or ".." (bind it from surface\'s output)',
+      1
+    );
   }
   const selectionsRaw: unknown = parsed.selections;
   if (!Array.isArray(selectionsRaw)) {
@@ -644,6 +673,14 @@ function handlePersist(args: string[], projectDir: string): void {
   let lockResult: { rule_learned: number; sensor_proposed: number; bound_stages: string[] };
   try {
     lockResult = withAuditLock(projectDir, () => {
+      if (selFile.intent === null && listIntentDirs(projectDir, pinnedSpace).length > 0) {
+        fail(
+          `cannot persist an unscoped selections replay in space "${pinnedSpace}": the selections ` +
+            "file was surfaced when the space had no intent records, but intent records now exist. " +
+            "Re-run the stage's surface step and regenerate the selections file, then retry.",
+          1
+        );
+      }
       // Read across every per-clone audit shard of the PINNED intent (single
       // shard in the common case).
       const auditContent = readAllAuditShards(projectDir, pinnedIntent, pinnedSpace);

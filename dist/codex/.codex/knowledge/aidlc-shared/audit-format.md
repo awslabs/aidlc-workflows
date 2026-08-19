@@ -253,7 +253,7 @@ Emitted by stage-protocol §13 (Learnings Ritual). The runtime-graph compile emi
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
 | `MEMORY_EMPTY` | A stage approval triggered a runtime-graph compile and the stage's memory.md had zero non-blank entries under any of the four §13 headings | Timestamp, Stage | `tools/aidlc-runtime.ts compile` |
-| `RULE_LEARNED` | The learning gate persisted a kept learning as a practice line under the routed heading in `{project,team}.md` | Timestamp, Stage, Candidate-ID, Destination, Heading, Source | `tools/aidlc-learnings.ts persist` |
+| `RULE_LEARNED` | The learning gate persisted a kept learning as a practice line under the routed heading in `{project,team}.md` | Timestamp, Stage, Candidate-ID, Content-Hash, Destination, Heading, Source | `tools/aidlc-learnings.ts persist` |
 | `SENSOR_PROPOSED` | The learning gate scaffolded a project-tier sensor manifest and bound it to the originating stage's `sensors:` frontmatter | Timestamp, Stage, Candidate-ID, Sensor ID, Manifest path, Matches, Destinations, Source | `tools/aidlc-learnings.ts persist` |
 
 ### Swarm (6 events)

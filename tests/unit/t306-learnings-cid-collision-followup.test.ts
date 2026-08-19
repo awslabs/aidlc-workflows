@@ -2,8 +2,8 @@
 //
 // t306 - aidlc-learnings.ts persist's cid marker + provenance binding.
 // Regression test for the defect reported in #735 AND the follow-up
-// findings from PR #747's three review rounds (leandrodamascena,
-// apackeer x2). Supersedes t278-learnings-cid-intent-scope.test.ts (that
+// findings from PR #747's four review rounds (leandrodamascena,
+// apackeer x3). Supersedes t278-learnings-cid-intent-scope.test.ts (that
 // slot is now owned by merged PR #617's t278-per-unit-wave suite) and was
 // itself renumbered from t300/t284/t278 as upstream v2's own test-slot
 // registry advanced out from under this branch each re-slot.
@@ -13,7 +13,7 @@
 // legacyLineMatchesText) are not exported, so the contract is exercised
 // behaviourally through the process boundary exactly as t112/t199 do.
 //
-// SEVEN findings fixed here, one test group each:
+// EIGHT findings fixed here, one test group each:
 //   1. Same-intent repeat-stage collision (P1) — candidate ids restart at
 //      c1 on every surface() call, so two DIFFERENT learnings landing on
 //      the same positional c1 within the SAME intent must both persist,
@@ -36,6 +36,9 @@
 //   7. Legacy-marker match not gated on text equality (P2, round 2) — a
 //      legacy-format marker sharing a candidate id with a DIFFERENT
 //      learning's text must not be mistaken for a retry of that learning.
+//   8. An unscoped selections replay must fail closed if an intent is born
+//      after surface time — `intent: null` must never resolve to that later
+//      live/lone intent for the audit write.
 //
 // Source under test (dist/claude/.claude/tools/aidlc-learnings.ts):
 //   cidMarker(intentSlug, slug, hash) => `<!-- cid:${intentSlug}:${slug}:${hash} -->`
@@ -52,7 +55,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -442,6 +445,41 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       expect(res.status).toBe(1);
       expect(res.out).toContain("intent");
     }, 30000);
+
+    test("path-traversing space fails before writing outside aidlc/spaces", () => {
+      const pd = mkProject();
+      const escaped = join(pd, "escaped-space");
+      const sel = selectionsFile(pd, "malformed-space-traversal", "must not escape", {
+        space: "../../escaped-space",
+      });
+
+      const res = runPersist(pd, sel);
+      expect(res.status).not.toBe(0);
+      expect(res.out).toContain("lowercase slug");
+      expect(existsSync(escaped)).toBe(false);
+    }, 30000);
+
+    test("non-conforming space name fails loudly", () => {
+      const pd = mkProject();
+      const sel = selectionsFile(pd, "malformed-space-shape", "must not write", {
+        space: "Bad Space",
+      });
+
+      const res = runPersist(pd, sel);
+      expect(res.status).not.toBe(0);
+      expect(res.out).toContain("lowercase slug");
+    }, 30000);
+
+    test("path-traversing intent fails before audit-path resolution", () => {
+      const pd = mkProject();
+      const sel = selectionsFile(pd, "malformed-intent-traversal", "must not escape", {
+        intent: "../../escaped-intent",
+      });
+
+      const res = runPersist(pd, sel);
+      expect(res.status).not.toBe(0);
+      expect(res.out).toContain("record-directory name");
+    }, 30000);
   });
 
   describe("finding #4 (P2) — ambiguous intent resolution fails closed", () => {
@@ -641,6 +679,39 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       const content = projectMd(pd);
       expect(content).toContain(originalText);
       expect(content).toContain(differentText);
+    }, 30000);
+  });
+
+  describe("finding #8 (P1, round 4) — an unscoped replay must not resolve to an intent born after surface", () => {
+    test("intent:null fails closed after a new intent record appears", () => {
+      const pd = createTestProject();
+      projects.push(pd);
+      const text = "Surfaced before any intent existed";
+      const sel = selectionsFile(pd, "unscoped-before-birth", text, { intent: null });
+
+      seedIntent(pd, SECOND_RECORD_DIR);
+      switchActiveIntentTo(pd, SECOND_RECORD_DIR);
+
+      const res = runPersist(pd, sel);
+      expect(res.status).not.toBe(0);
+      expect(res.out).toContain("Re-run the stage's surface step");
+      expect(readAllAuditShards(pd, SECOND_RECORD_DIR, DEFAULT_SPACE)).not.toContain(
+        "RULE_LEARNED",
+      );
+
+      const projectFiles: string[] = [];
+      const walk = (dir: string): void => {
+        if (!existsSync(dir)) return;
+        for (const entry of readdirSync(dir, { withFileTypes: true })) {
+          const path = join(dir, entry.name);
+          if (entry.isDirectory()) walk(path);
+          else if (entry.isFile() && entry.name === "project.md") projectFiles.push(path);
+        }
+      };
+      walk(pd);
+      for (const path of projectFiles) {
+        expect(readFileSync(path, "utf-8")).not.toContain(text);
+      }
     }, 30000);
   });
 });
