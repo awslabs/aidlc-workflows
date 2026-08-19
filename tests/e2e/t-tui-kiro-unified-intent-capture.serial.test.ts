@@ -80,6 +80,62 @@ function waitFor(session: string, pattern: string, timeoutMs: number, stableMs: 
     ]).rc === 0
   );
 }
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+// Kiro CLI 2.12.1 keeps animating its Thinking glyph and Tasks/status footer
+// after the conductor has finished rendering a question and the idle input is
+// available. The shared drive's whole-screen stability contract is correct for
+// the other TUI suites, so this journey compares only its question surface.
+function stableKiroQuestionSurface(screen: string): string {
+  const lines = screen.split(/\r?\n/);
+  const tasksFooter = lines.findIndex((line) => /\bTasks · \d+ remaining\b/.test(line));
+  const content = tasksFooter >= 0 ? lines.slice(0, tasksFooter) : lines;
+  return content
+    .filter((line) => !/Thinking\.\.\. \(esc to cancel\)/.test(line))
+    .filter((line) => !/^\s*╰ \.\.\.\s*$/.test(line))
+    .filter((line) => !/\bCredits:.*\bTime:/.test(line))
+    .map((line) => line.trimEnd())
+    .join("\n")
+    .trimEnd();
+}
+
+function waitForKiroQuestion(
+  session: string,
+  previousSurface: string,
+  timeoutMs: number,
+  stableMs: number,
+): string | null {
+  const deadline = Date.now() + timeoutMs;
+  let candidate = "";
+  let stableSince = 0;
+  while (Date.now() < deadline) {
+    const captured = drive(["capture", "--session", session]);
+    const screen = captured.stdout;
+    if (captured.rc === 0 && screen.includes(IDLE_PATTERN)) {
+      const surface = stableKiroQuestionSurface(screen);
+      if (surface !== "" && surface !== previousSurface) {
+        if (surface !== candidate) {
+          candidate = surface;
+          stableSince = Date.now();
+        } else if (Date.now() - stableSince >= stableMs) {
+          return screen;
+        }
+      } else {
+        candidate = "";
+        stableSince = 0;
+      }
+    } else {
+      candidate = "";
+      stableSince = 0;
+    }
+    sleepSync(500);
+  }
+  return null;
+}
+
 function send(session: string, keys: string, literal: boolean): void {
   const args = ["send", "--session", session, "--keys", keys, "--no-enter"];
   if (literal) args.push("--literal");
@@ -197,17 +253,23 @@ describe("t-tui-kiro-unified-intent-capture (kiro-cli --v3 on the shipped dist/k
         const deadline = Date.now() + Math.max(120000, TEST_TIMEOUT_MS - 60000);
         let terminated = false;
         const answerState = createKiroNumberedProseAnswerState();
+        let previousQuestionSurface = "";
         while (Date.now() < deadline) {
           if (lastCompletedIsIntentCapture(sandbox)) {
             terminated = true;
             break;
           }
-          if (!waitFor(session, IDLE_PATTERN, 240000, 1500)) continue;
+          const screen = waitForKiroQuestion(
+            session,
+            previousQuestionSurface,
+            240000,
+            1500,
+          );
+          if (screen === null) continue;
           if (lastCompletedIsIntentCapture(sandbox)) {
             terminated = true;
             break;
           }
-          const screen = drive(["capture", "--session", session]).stdout;
           const answer = nextKiroNumberedProseAnswer(screen, answerState);
           if (answer === null) {
             // The WHOLE capture, not its tail: the prompt sits above the input
@@ -218,6 +280,7 @@ describe("t-tui-kiro-unified-intent-capture (kiro-cli --v3 on the shipped dist/k
               `kiro-cli --v3 stopped at an unrecognized intent-capture prompt:\n${screen}`,
             );
           }
+          previousQuestionSurface = stableKiroQuestionSurface(screen);
           send(session, answer, true);
         }
         if (!terminated) terminated = lastCompletedIsIntentCapture(sandbox);
