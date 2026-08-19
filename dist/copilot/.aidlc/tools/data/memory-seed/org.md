@@ -44,17 +44,26 @@ persists as `Construction Autonomy Mode` in `aidlc-state.md`.
 
 ## Testing Posture
 
-We treat tests as a first-class deliverable in every Bolt. Specific
-methodology — TDD, BDD, ATDD, or classic test-after — is captured by the
-testing-strategy stage when it ships.
+We treat tests as a first-class deliverable in every Bolt. The specific
+methodology (TDD, BDD, ATDD, or classic test-after) is affirmed at
+practices-discovery and recorded in `team.md` under this heading with explicit
+`Methodology` and `Ordering` fields; Code Generation resolves those fields
+independently from coverage, tooling, and scope notes.
 
-Until then, our default per scope is:
-- `mvp`, `enterprise`, `feature`, `infra` → tests written alongside
-  code; minimum 80% line coverage; tests run in CI before merge.
-- `bugfix`, `security-patch` → regression test for the specific
-  bug/vulnerability; existing test suite must remain green.
-- `poc`, `refactor`, `workshop` → existing test suite remains green;
-  no new test floor required.
+When no posture has been affirmed, our default per scope is:
+- **Methodology**: test-after
+- **Ordering**: implement each applicable testable layer, then write and run
+  that layer's tests.
+- `mvp`, `enterprise`, `feature`, `infra` add an 80% line-coverage floor and
+  CI execution before merge.
+- `bugfix`, `security-patch` add a targeted regression for the specific
+  bug/vulnerability and require the existing suite to remain green.
+- `poc`, `refactor`, `workshop` add no extra new-test floor and require the
+  existing suite to remain green.
+
+The active `Test Strategy` still applies in every scope and determines test
+volume/types. Scope floors are additive; they never reduce or replace the
+selected strategy.
 
 Affirm a stricter posture in `team.md` if the team commits to one.
 

@@ -672,28 +672,34 @@ This stage has a **two-part structure**: planning followed by generation.
    with checkboxes for each implementation step. Include story-to-code-step
    traceability -- map each plan step back to the user story it implements.
 
-   **Recommended plan structure** (adapt if architecture warrants different
-   ordering):
+   Run `aidlc-testing-posture.ts render` and paste its complete
+   `## Testing Contract` JSON block into the plan. The resolver reads
+   org/team/project Testing Posture sections additively: a project coverage or
+   integration note remains applicable but does not erase a team methodology;
+   a contradictory narrower methodology is rejected.
 
-   ```
-   Step 1:  Project structure setup (directories, config files, package.json/Cargo.toml/etc.)
-   Step 2:  Data models / database schema / migrations
-   Step 3:  Business logic layer (core domain logic, services)
-   Step 4:  Business logic tests (unit tests for Step 3)
-   Step 5:  API / endpoint layer (routes, controllers, handlers)
-   Step 6:  API tests (unit + integration tests for Step 5)
-   Step 7:  Repository / data access layer (queries, ORM config)
-   Step 8:  Frontend components (if applicable -- UI components, pages, state)
-   Step 9:  Frontend tests (component tests, interaction tests)
-   Step 10: Configuration and environment setup (.env templates, build config)
-   Step 11: Test configuration (vitest.config, jest.config, or equivalent)
-   Step 12: Documentation (inline docs, API docs, README updates)
-   ```
+   The contract supplies a methodology-specific plan profile:
 
-   This layer-by-layer approach ensures dependencies are built before
-   dependents (data models before business logic, business logic before API).
-   Deviate when the architecture requires it (e.g., event-driven systems,
-   microservices with independent stacks).
+   - **TDD** -- Red/Green/Refactor for every applicable testable layer: data,
+     repository, business logic, API, and frontend.
+   - **BDD** -- executable behavior scenarios before an observable feature
+     slice, followed by cross-layer implementation, green scenarios, and
+     refactoring. It is not converted to layer-local TDD.
+   - **ATDD** -- executable acceptance tests before the complete cross-layer
+     feature implementation, followed by acceptance-green and refactoring.
+   - **Custom/mixed** -- the exact affirmed ordering is preserved, including
+     combinations such as scenario-first BDD with lower-level unit tests after
+     implementation.
+   - **Test-after** -- implementation then tests for every applicable testable
+     layer.
+
+   Greenfield plans bootstrap a minimal runnable test command before the first
+   Red/scenario/acceptance step; brownfield plans verify the existing command
+   first. The selected Test Strategy supplies volume/types and the scope adds
+   its floor (coverage/CI, targeted regression, or no additional floor);
+   neither obligation replaces the other. Under Minimal, a bug/security
+   targeted regression may add one integration/E2E test when that is the
+   narrowest level that reproduces the defect.
 
    **Test files are MANDATORY in the plan.** The plan MUST include steps for:
    - Unit test files (one per component/module with key behavior coverage)
@@ -714,29 +720,32 @@ This stage has a **two-part structure**: planning followed by generation.
    - **Standard**: 5-8 tests per component, with key behavior coverage
    - **Comprehensive**: 10-15 tests per component, with thorough coverage
 
-   Include test framework setup and configuration, how to run this unit's
-   tests, expected coverage targets, mocking/stubbing guidance, and test data
-   management. Every run command MUST be scoped to this unit using exact test
-   file paths or an exact unit filter. A bare project-wide command such as
-   `npm test` is not acceptable because Build and Test executes every unit's
-   commands.
+   Include test framework setup and configuration, the exact runnable command
+   available before the first test-first cycle, expected coverage targets,
+   mocking/stubbing guidance, and test data management. Every run command MUST
+   be scoped to this unit using exact test file paths or an exact unit filter.
+   A bare project-wide command such as `npm test` is not acceptable because
+   Build and Test executes every unit's commands.
 
    Present the unit test instruction summary together with the plan summary.
 
 3. **Plan Approval** -- Request approval for both
-   `code-generation-plan.md` and `unit-test-instructions.md`. First create or
-   reset
+   `code-generation-plan.md`, its Testing Contract, and
+   `unit-test-instructions.md`. On a revision, reset the prior `[Answer]:` to
+   blank first. Run `aidlc-testing-posture.ts fingerprint --unit <unit>` after
+   both files are final, then create or reset
    `<record>/construction/{unit-name}/code-generation/code-generation-questions.md`
-   with a **Plan Approval** question and blank `[Answer]:`, then render it as a
-   structured question and stop the turn:
+   with that `[Approval Fingerprint]`, a **Plan Approval** question, and blank
+   `[Answer]:`; render it as a structured question and stop the turn:
    - "Approve Plan" -- proceed to code generation
    - "Request Changes" -- revise the plan
 
    Fill the tag only after the human responds. A request for changes is
-   recorded, both files are revised as needed, and the Plan Approval tag is
-   reset to blank before re-prompting. Any post-approval change to
-   `unit-test-instructions.md` reopens Plan Approval the same way a plan
-   change does. A forwarding-loop continuation is never approval.
+   recorded, both files are revised as needed, the contract/fingerprint are
+   regenerated, and the Plan Approval tag is reset before re-prompting. A
+   post-approval plan/instruction change or Testing Posture/scope/strategy/type
+   change invalidates the fingerprint and reopens approval. A forwarding-loop
+   continuation is never approval.
 
 #### PART 2 -- Generation (Steps 4-7)
 
@@ -752,6 +761,9 @@ This stage has a **two-part structure**: planning followed by generation.
      `AIDLC-UNIT: <directive.unit>` (or the current unit name for a
      single-iteration directive without `unit`). Contextual dependencies do
      not receive additional markers.
+   - As the second line, `AIDLC-TESTING-CONTRACT: <contract_sha256>` from the
+     approved plan. The dispatch guard rejects missing, different, or stale
+     hashes.
    - The lead agent's persona from `agents/aidlc-developer-agent.md` and knowledge
      from `.claude/knowledge/aidlc-developer-agent/` (included in the prompt
      since subagents cannot access conversation history)
@@ -765,6 +777,9 @@ This stage has a **two-part structure**: planning followed by generation.
      aidlc-state.md)
    - Instructions to execute each plan step sequentially and mark checkboxes
      as completed
+   - The approved Testing Contract is authoritative. The subagent does not
+     independently re-resolve memory; it executes the approved TDD, BDD, ATDD,
+     test-after, or custom/mixed profile exactly.
 
    **Context budget:** Pass only the current unit's design artifacts, not all
    units. Summarize inception artifacts with file paths rather than embedding

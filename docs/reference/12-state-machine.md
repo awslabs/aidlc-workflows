@@ -325,7 +325,7 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 | `SUBAGENT_COMPLETED` | `hooks/aidlc-log-subagent.ts` | Records subagent completion via SubagentStop hook |
 | `REVIEWER_SCOPE_BLOCKED` | `hooks/aidlc-reviewer-scope.ts` | A per-unit reviewer's tool call refused for reaching into sibling units' `construction/` paths (the §12a read-scope bound); one row per refusal |
 | `REVIEW_FREEZE_BLOCKED` | `hooks/aidlc-review-freeze.ts` | A file-tool or shell `produces[]` write refused because it would invalidate a fresh terminal review receipt before the gate (READY or terminal NOT-READY under the effective class); one row per refusal |
-| `PLAN_APPROVAL_BLOCKED` | `hooks/aidlc-plan-approval-guard.ts` | A code-generation developer-agent dispatch refused because a targeted unit lacked a non-empty, explicitly approved `code-generation-plan.md` (stage Steps 2-3 must precede Step 4); one row per refusal |
+| `PLAN_APPROVAL_BLOCKED` | `hooks/aidlc-plan-approval-guard.ts` | A code-generation developer-agent dispatch refused because a targeted unit lacked a current fingerprinted plan, test instructions, Testing Contract, explicit approval, or matching worker-brief marker; one row per refusal |
 
 ### Diagnostics and workspace
 

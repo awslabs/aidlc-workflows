@@ -42,16 +42,16 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import {
+  runCursor,
+  setupCursorProject,
+} from "../harness/exec-drive.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
 const CURSOR_DIST = join(REPO_ROOT, "dist", "cursor");
 const CURSOR_BIN = process.env.AIDLC_CURSOR_BIN ?? "agent";
-// "auto" is the one model every plan can use (Free rejects all named models
-// with rc 0 — see the trap above). Override for repeatable named-model runs.
-const MODEL = process.env.AIDLC_CURSOR_MODEL ?? "auto";
 
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "600", 10);
 const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 600) * 1000;
@@ -74,46 +74,6 @@ function skipReason(): string | null {
   return null;
 }
 const SKIP_REASON = skipReason();
-
-// A scratch install: dist/cursor copied verbatim (dotfiles included — the
-// engine + native surfaces at .cursor/, AGENTS.md and the aidlc/ memory tree
-// at the root), then git-initialized (Cursor resolves the workspace root by
-// walking to the repo root).
-function setupCursorProject(): { proj: string; root: string } {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "cursor-run-")));
-  const proj = join(root, "proj");
-  cpSync(CURSOR_DIST, proj, { recursive: true });
-  for (const args of [
-    ["init", "-q"],
-    ["add", "-A"],
-    ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "install"],
-  ]) {
-    const r = spawnSync("git", args, { cwd: proj, encoding: "utf-8" });
-    if (r.status !== 0) throw new Error(`git ${args[0]} failed: ${r.stderr}`);
-  }
-  return { proj, root };
-}
-
-// `agent -p "/aidlc <flags>"` invokes the shipped .cursor/skills/aidlc skill
-// with the flag text forwarded inline (live-verified forwarding shape).
-// --trust skips the workspace-trust prompt on the scratch dir. The status
-// path needs only the pre-approved Shell(bun) allowlist, so no -f/--force:
-// an unexpected permission ask would auto-reject and fail the asserts
-// (which is the honest signal).
-function runCursor(proj: string, promptText: string): { rc: number; out: string } {
-  const r = spawnSync(
-    CURSOR_BIN,
-    ["-p", promptText, "--trust", "--model", MODEL, "--output-format", "text"],
-    {
-      cwd: proj,
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, PWD: proj },
-      timeout: TEST_TIMEOUT_MS,
-    },
-  );
-  return { rc: r.status ?? -1, out: `${r.stdout ?? ""}\n${r.stderr ?? ""}` };
-}
 
 describe("t-run-cursor-status — /aidlc --status on the shipped dist/cursor via agent -p", () => {
   test.skipIf(SKIP_REASON !== null)(
