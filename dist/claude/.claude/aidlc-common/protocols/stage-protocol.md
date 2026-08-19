@@ -751,7 +751,7 @@ Use these templates for non-standard events. Each provides structured fields for
 Each stage specifies its lead and supporting agents. To load a persona:
 
 ### Knowledge loading order (for all stage types):
-1. `aidlc/spaces/<active-space>/memory/{org,team,project}.md` — active-space method and guardrails (always; most-specific non-empty statement wins)
+1. `aidlc/spaces/<active-space>/memory/{org,team,project}.md` — active-space method and guardrails (always; every applicable layer is additive, and topic-specific resolvers may select explicit decision fields without dropping the remaining rules)
 2. `.claude/knowledge/aidlc-shared/` — shared methodology principles
 3. `.claude/knowledge/[agent-name]/` — agent-specific methodology
 4. `aidlc/spaces/<active-space>/knowledge/aidlc-shared/` — team shared knowledge (if exists)
@@ -900,7 +900,9 @@ Test volume scales with the active test strategy. The test strategy defaults to 
 Just as the Nyquist rate is the minimum sampling frequency to reconstruct a signal, Minimal test strategy generates the minimum tests needed to verify every requirement — no more, no less.
 - 1 verifiable test per identified requirement (requirement-driven, not component-driven)
 - Happy-path floor: every component gets at least 1 happy-path unit test regardless of requirement mapping
-- Unit tests ONLY — skip integration, E2E, performance, security
+- Unit tests by default. A `bugfix` / `security-patch` targeted regression may
+  use integration or E2E when that is the narrowest level that reproduces the
+  defect; this additive scope floor does not expand unrelated test volume.
 - ~5-15 tests total for a typical project
 - Soft guideline — LLM can exceed when safety-critical context demands it (e.g., security-critical bugfix)
 
@@ -1242,6 +1244,46 @@ re-presented gate).
 - Does not access the builder's plan.md or memory.md
 - Does not block the workflow — the human always gets final say at the gate
 - Does not fire for stages without a `reviewer` field in the directive
+
+## 12b. Autonomous Code Generation Plan Contract
+
+An `invoke-swarm` directive for `code-generation` changes where generation
+runs, not whether planning and Plan Approval happen. Before `aidlc-swarm.ts
+prepare`:
+
+1. For every unit in `directive.units`, execute Code Generation Part 1 through
+   Plan Approval preparation in the main workspace: create
+   `code-generation-plan.md`, embed the exact `## Testing Contract` emitted by
+   `aidlc-testing-posture.ts render`, create `unit-test-instructions.md`, write
+   the current `[Approval Fingerprint]`, and present that unit's Plan Approval
+   question. A revision resets `[Answer]:` to blank before the resolver or
+   fingerprint is regenerated.
+2. STOP for each unanswered Plan Approval. After the human explicitly chooses
+   `Approve Plan`, record the answer and re-run `next`; the engine may re-emit
+   the same batch while other units still need approval. Do not fork worktrees
+   or dispatch implementation workers during these planning turns.
+3. Call `prepare` only after every unit in the emitted batch has current
+   approval evidence. On autonomous Code Generation, `prepare` verifies the
+   plan, test instructions, embedded contract, answer, and fingerprint before
+   creating any worktree. A stale memory/scope/test-strategy/project-type input
+   therefore reopens approval instead of silently changing execution.
+4. Every worker brief starts with exactly:
+
+   ```text
+   AIDLC-UNIT: <unit>
+   AIDLC-TESTING-CONTRACT: <contract_sha256 from that unit's approved plan>
+   ```
+
+   Then include the full approved `code-generation-plan.md` and
+   `unit-test-instructions.md`. The approved Testing Contract is authoritative:
+   workers do not re-resolve memory, and retries reuse the same approved bytes.
+   The plan-approval guard rejects a delegated worker whose marker is missing,
+   stale, or different from the approved plan. Headless worker harnesses that
+   cannot run the hook still remain protected by `prepare` and this mandatory
+   brief contract.
+
+Only after all four obligations are satisfied does the ordinary swarm
+prepare/fan-out/check/review/finalize loop run.
 
 ## 13. Learnings Ritual
 

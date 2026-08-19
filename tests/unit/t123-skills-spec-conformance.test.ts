@@ -84,9 +84,13 @@ import { defaultScopeBatch } from "../../dist/claude/.claude/tools/aidlc-runner-
 
 const STAGE_GRAPH = join(AIDLC_SRC, "tools", "data", "stage-graph.json");
 
-// --- The four base skills (orchestrator + the three read-only session skills).
+// --- The base skills: the orchestrator plus the standalone skills that sit
+// OUTSIDE the lifecycle graph (the three read-only session skills, and
+// aidlc-knowledge, which manages the document catalog). None is a generated
+// runner, so each is named here rather than derived.
 const BASE_SKILLS = [
   "aidlc",
+  "aidlc-knowledge",
   "aidlc-outcomes-pack",
   "aidlc-replay",
   "aidlc-session-cost",

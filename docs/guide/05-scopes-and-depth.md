@@ -311,7 +311,9 @@ Inspired by the Nyquist rate from signal processing: the minimum sampling freque
 
 - **1 test per identified requirement** (requirement-driven, not component-driven)
 - **Happy-path floor:** every component gets at least 1 happy-path unit test, even if no requirement maps to it
-- **Unit tests only** — skip integration, E2E, performance, and security tests
+- **Unit tests by default.** A bugfix/security-patch targeted regression may
+  use integration or E2E when that is the narrowest level that reproduces the
+  defect; unrelated test volume remains Minimal.
 - **~5-15 tests total** for a typical project
 - Soft guideline — the agent can exceed when safety-critical context demands it
 

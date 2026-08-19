@@ -269,7 +269,7 @@ Contents: 1 minimal .md file (functional-design) describing the todo-core unit's
 
 1. Choose the stage to test and identify what state fixture it needs (the state must show that stage as the current/next stage)
 2. Create or reuse a state fixture in `tests/fixtures/`
-3. Create `tests/integration/tNN-stage-SLUG.test.ts` and use the shared TypeScript harness helpers (`tests/harness/fixtures.ts`, `tests/harness/sdk-drive.ts`, or `tests/harness/tui-drive.ts`) rather than shell TAP helpers.
+3. Create `tests/integration/tNN-stage-SLUG.test.ts` and use the shared TypeScript harness helpers (`tests/harness/fixtures.ts`, `tests/harness/sdk-drive.ts`, `tests/harness/tui-drive.ts`, `tests/harness/plugin-kit.ts`, or `tests/harness/exec-drive.ts`) rather than shell TAP helpers.
 4. Run with `bun tests/run-tests.ts --integration` or directly: `bun test tests/integration/tNN-stage-SLUG.test.ts`
 
 ## How to Add Acceptance Assertions

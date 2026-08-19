@@ -126,6 +126,8 @@ import {
   loadScopeMapping,
   nextInScopeStage,
   parseCheckboxes,
+  type KnowledgeCommand,
+  parseKnowledgeCommand,
   type PluginCommand,
   parsePluginCommand,
   parseStateStageSuffixes,
@@ -697,6 +699,7 @@ interface ParsedFlags {
   intent?: string; // freeform request text (no leading --flag)
   workspaceCommand?: WorkspaceCommand; // leading workspace command (space/space-create/intent)
   pluginCommand?: Exclude<PluginCommand, { kind: "not-plugin" }>; // leading plugin noun: terminal list/sync/select/help/error
+  knowledgeCommand?: Exclude<KnowledgeCommand, { kind: "not-knowledge" }>; // leading knowledge noun: terminal DocumentKB verbs/help/error
   compose?: boolean; // leading `compose` verb: force the composer (front or in-flight)
   newScope?: boolean; // --new-scope: force the composer to SYNTHESIZE a custom scope even when a stock scope matches
   report?: string; // --report <path>: compose from a scan report (the composer triages the file)
@@ -723,6 +726,8 @@ function parseNextFlags(args: string[]): ParsedFlags {
   }
   const pluginCommand = parsePluginCommand(args);
   if (pluginCommand.kind !== "not-plugin") return { pluginCommand };
+  const knowledgeCommand = parseKnowledgeCommand(args);
+  if (knowledgeCommand.kind !== "not-knowledge") return { knowledgeCommand };
   // Leading workspace nouns own the command. Any later read-only-looking token
   // is part of that workspace command's argv, not a mode switch, because the
   // public grammar promises leading-token semantics.
@@ -2544,7 +2549,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // swallowed. Inert on Claude/Codex: the latch files are never written there (no
   // seam) → fresh is always false → falls through. Advisory: any failure fails
   // open to the normal `next`.
-  if (!flags.readOnly && !flags.workspaceCommand && !flags.pluginCommand && !flags.stage && !flags.phase &&
+  if (!flags.readOnly && !flags.workspaceCommand && !flags.pluginCommand && !flags.knowledgeCommand && !flags.stage && !flags.phase &&
       !flags.scope && !flags.positionalScope && !flags.intent && !flags.resume &&
       !flags.depth && !flags.testStrategy && !flags.review &&
       !flags.single && !flags.compose && !flags.newScope && !flags.report) {
@@ -2564,7 +2569,8 @@ function handleNext(args: string[], projectDir: string | undefined): void {
         if (typeof lr.turn === "number") latchTurn = lr.turn;
         if (typeof lr.flag === "string") {
           // Read-only flags render with `--`; noun commands render as typed.
-          const nounCommand = lr.source === "workspace-verb" || lr.source === "plugin-verb";
+          const nounCommand = lr.source === "workspace-verb" || lr.source === "plugin-verb" ||
+            lr.source === "knowledge-verb";
           label = nounCommand ? `\`${lr.flag}\`` : `--${lr.flag}`;
         }
       }
@@ -2649,6 +2655,25 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     const suffix = tail.length > 0 ? ` ${tail.map(shellArg).join(" ")}` : "";
     emit(printDirective(
       `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${verb}${suffix}\`, print its output verbatim, then stop. This is a terminal utility, NOT workflow work: do NOT run \`next\` and do NOT advance, resume, or run any workflow stage.`,
+    ));
+    return;
+  }
+
+  // Branch 1d - DocumentKB verbs are terminal commands, never freeform intent
+  // text. Same shape as 1c, but the directive names aidlc-knowledge.ts: this is
+  // the first public noun whose verbs live in their own tool rather than in
+  // aidlc-utility.ts, so the tool name is part of what each site must agree on.
+  if (flags.knowledgeCommand) {
+    const command = flags.knowledgeCommand;
+    if (command.kind === "error") {
+      emit(errorDirective(command.message));
+      return;
+    }
+    const argv = command.kind === "help" ? ["help"] : command.argv;
+    const [verb, ...tail] = argv;
+    const suffix = tail.length > 0 ? ` ${tail.map(shellArg).join(" ")}` : "";
+    emit(printDirective(
+      `Run \`bun ${harnessDir()}/tools/aidlc-knowledge.ts ${verb}${suffix}\`, print its output verbatim, then stop. This is a terminal utility, NOT workflow work: do NOT run \`next\` and do NOT advance, resume, or run any workflow stage.`,
     ));
     return;
   }
