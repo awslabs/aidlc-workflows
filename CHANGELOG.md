@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 
 Completed-stage artifact drift is now detected through optional audit receipts and surfaced as an advisory without changing workflow routing. Existing workflows require no migration: receipt-less completions remain untracked and fail open, while stages become tracked on their next normal completion. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
 
-* `next` keeps its normal directive kind and adds a machine-readable `stage_validity` advisory for drifted, downstream-revalidation, untracked, or unavailable results; `/aidlc --status` renders the same diagnosis on demand without adding work to the statusline.
+* `next` keeps its normal directive kind and adds a machine-readable `stage_validity` advisory for drifted, downstream-revalidation, or unavailable results. Untracked-only completions are reported by `/aidlc --status` without adding per-turn noise for pre-upgrade histories or work to the statusline.
 * Completion tools capture report-time schema-2 structure/content fingerprints for resolved artifact instances. Capture failures still complete the stage, record a visible `Validation Warning`, and leave that completion untracked.
 * Artifact filenames and CodeKB ownership now come from one shared vocabulary, including `build-test-results` and `load-test-results` resolving to `test-results.md` and `traceability` resolving to `traceability.json`.
 * Public audit append commands refuse `STAGE_COMPLETED`; the owning single-stage report path retains its internal atomic lifecycle pair.

@@ -179,7 +179,6 @@ import { inferScopeFromText } from "./aidlc-utility.ts";
 import { resolveHarnessPath, resolveHarnessRoot } from "./aidlc-runtime-paths.ts";
 import { appendAuditEntries } from "./aidlc-audit.ts";
 import { inspectStageValidity } from "./aidlc-validity.ts";
-// AIDLC_STAGE_VALIDITY_PROJECTION_V2
 import {
   readRuleBundle,
   rulesContentEntries,
@@ -3145,13 +3144,12 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // result still matches the artifacts captured at completion. Project
   // validity before normal routing, but remain detection-only: the normal
   // directive kind still routes and carries a machine-readable advisory.
+  // Untracked-only history stays in /aidlc --status because redoing work only
+  // to mint a receipt is make-work. Drift and unavailable inspection stay
+  // per-turn because they are actionable.
   try {
     const validity = inspectStageValidity(pd, stateContent);
-    if (
-      validity.issues.length > 0 ||
-      validity.untracked.length > 0 ||
-      validity.warnings.length > 0
-    ) {
+    if (validity.issues.length > 0 || validity.warnings.length > 0) {
       const direct = validity.issues
         .filter((issue) => issue.direct)
         .map((issue) => issue.stage);
@@ -3159,17 +3157,11 @@ function handleNext(args: string[], projectDir: string | undefined): void {
         .filter((issue) => !issue.direct)
         .map((issue) => issue.stage);
       const earliest = direct[0] ?? validity.issues[0]?.stage ?? null;
-      const state = validity.warnings.length > 0
-        ? "unavailable"
-        : validity.issues.length > 0
-          ? "drifted"
-          : "untracked";
+      const state = validity.warnings.length > 0 ? "unavailable" : "drifted";
       const warning = state === "drifted"
         ? `Completed stage results have drifted; routing is continuing in advisory mode` +
           (earliest ? `. Suggested redo: /aidlc --stage ${earliest}.` : ".")
-        : state === "unavailable"
-          ? `Stage-validity inspection is partly unavailable; routing is continuing in advisory mode. ${validity.warnings.join(" ")}`
-          : "Some completed stages have no validation receipt; routing is continuing in advisory mode.";
+        : `Stage-validity inspection is partly unavailable; routing is continuing in advisory mode. ${validity.warnings.join(" ")}`;
       activeStageValidityAdvisory = {
         state,
         directly_stale: direct,

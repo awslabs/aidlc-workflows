@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 590,
+    "total": 592,
     "enumeratedByClass": {
-      "function": 332,
+      "function": 334,
       "audit": 85,
       "scope": 9,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 164,
+      "function": 165,
       "audit": 43,
       "scope": 9,
       "stage": 11,
@@ -1079,6 +1079,18 @@
         {
           "file": "tests/unit/t71.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:artifactFilename",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t281-sensor-traceability.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -2305,6 +2317,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:KNOWN_CODEKB_STAGES",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",

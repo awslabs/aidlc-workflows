@@ -554,11 +554,17 @@ schema uses it for both semantic dependency and ordering. An explicit edge kind
 would be required before it can safely participate in validity propagation.
 
 The projection remains read-only and advisory. `next` keeps its normal
-directive kind and adds a machine-readable `stage_validity` field; `/aidlc
---status` shows the same stale, revalidation, untracked, or unavailable state.
+directive kind and adds a machine-readable `stage_validity` field for stale,
+revalidation, or unavailable results. Untracked-only histories appear in
+`/aidlc --status` rather than every `next`.
 The suggested recovery is `/aidlc --stage <earliest-affected-stage>`, but this
 release does not enforce it. Schema-1, receipt-less, and capture-failed
 histories remain untracked/fail-open until a normal re-completion writes schema
 2. The scope is AI-DLC Markdown artifact validity;
 source-code, Git-tree, CI, deployment, and external-system validity require
 separate ownership and observation contracts.
+
+Receipt lookup starts at the latest `WORKFLOW_STARTED` event in the selected
+intent audit. Historical ledgers from releases that supported forced re-init
+may contain a new boundary from `--init --force`; completions before that
+boundary read as untracked and fail open until their stages complete again.

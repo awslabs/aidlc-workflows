@@ -98,6 +98,10 @@ const SCOPE_GRID_PATH = join(TOOLS_DIR, "data", "scope-grid.json");
 const AUDIT_PATH = join(TOOLS_DIR, "aidlc-audit.ts");
 const LIB_PATH = join(TOOLS_DIR, "aidlc-lib.ts");
 const GRAPH_PATH = join(TOOLS_DIR, "aidlc-graph.ts");
+const ARTIFACT_VOCABULARY_PATH = join(
+  TOOLS_DIR,
+  "aidlc-artifact-vocabulary.ts",
+);
 
 const REGISTRY_PATH =
   process.env.AIDLC_COVERAGE_REGISTRY ?? join(TESTS_DIR, ".coverage-registry.json");
@@ -544,7 +548,7 @@ export function enumerateRenderSurfaces(): Unit[] {
   return units;
 }
 
-/** Exported lib functions from aidlc-lib.ts + aidlc-graph.ts. Matches a
+/** Exported lib functions from shared library modules. Matches a
  *  top-level `export function|const|class|async function NAME`. unitId is
  *  `function:NAME` so it joins to the `function:NAME` covers-IDs t106-t111 use. */
 export function enumerateExportedFunctions(): Unit[] {
@@ -554,6 +558,10 @@ export function enumerateExportedFunctions(): Unit[] {
   for (const [path, rel] of [
     [LIB_PATH, "dist/claude/.claude/tools/aidlc-lib.ts"],
     [GRAPH_PATH, "dist/claude/.claude/tools/aidlc-graph.ts"],
+    [
+      ARTIFACT_VOCABULARY_PATH,
+      "dist/claude/.claude/tools/aidlc-artifact-vocabulary.ts",
+    ],
   ] as const) {
     const src = readFileSync(path, "utf-8");
     for (const m of src.matchAll(re)) {

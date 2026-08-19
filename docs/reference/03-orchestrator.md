@@ -852,8 +852,9 @@ observed in completed consumer receipts, so absent optional inputs do not cause
 false invalidation. If any completed result is stale or needs revalidation, the
 engine keeps the normal directive kind and attaches a machine-readable
 `stage_validity` advisory. The conductor surfaces its warning, then continues
-routing. Receipt-less or inspection-unavailable stages are reported as
-untracked/unavailable rather than blocking.
+routing. Inspection-unavailable stages remain a per-turn advisory because they
+need attention. Receipt-less histories are reported as untracked by
+`/aidlc --status` only, so migration does not add a warning to every `next`.
 
 The suggested recovery uses the existing explicit jump path:
 

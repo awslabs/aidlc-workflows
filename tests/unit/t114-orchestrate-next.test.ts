@@ -152,7 +152,7 @@ describe("t114 happy path: in-flight current stage -> run-stage", () => {
     expect(runNext(proj, []).out).toContain('"stage":"reverse-engineering"');
   });
 
-  test("completed stages without receipts route normally with a machine advisory", () => {
+  test("untracked-only completions route normally without a per-turn advisory", () => {
     proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
     const statePath = seededStateFile(proj);
@@ -170,18 +170,10 @@ describe("t114 happy path: in-flight current stage -> run-stage", () => {
     expect(result.status).toBe(0);
     const directive = JSON.parse((result.stdout ?? "").trim()) as {
       kind: string;
-      stage_validity?: {
-        state: string;
-        untracked: string[];
-        warning: string;
-      };
+      stage_validity?: unknown;
     };
     expect(directive.kind).toBe("load-steering");
-    expect(directive.stage_validity?.state).toBe("untracked");
-    expect(directive.stage_validity?.untracked.length).toBeGreaterThan(0);
-    expect(directive.stage_validity?.warning).toContain(
-      "routing is continuing in advisory mode",
-    );
+    expect(directive.stage_validity).toBeUndefined();
   });
 });
 
