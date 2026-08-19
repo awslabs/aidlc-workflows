@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.21] - 2026-08-19
+
+Kiro CLI agent-v1 hooks retain the literal selectors required by the host's canonical-name/alias glob semantics, while the adapter now normalizes selected payloads before shared guards and observers run. **Upgrade:** re-copy `dist/kiro/` into the project.
+
+* Literal `fs_write` and `fs_read` registrations select the live-proven write/read alias families exactly once; write command modes reach canonical Write/Edit audit and sensors, while top-level, list, and operation paths reach reviewer scope and review freeze.
+* Literal `subagent` registrations do not select `subagent_response`; legacy crew and defensive direct-dispatch payloads share one normalization path, and a nonblank `task` cannot be hidden by a blank higher-priority `prompt` during stage-rule delivery.
+
 ## [2.6.18] - 2026-08-19
 
 Classic and Express are new scope options, and the implicit default scope is now Classic — a **declared behavior change**: invocations that name no scope and match no keyword now run the v1-style lifecycle without Ideation instead of the full-lifecycle Feature scope. Exactly two things control the implicit default: the `AWS_AIDLC_DEFAULT_SCOPE` env var (which overrides) and the framework's hard-coded `classic` fallback. Express has a deterministic requirements-to-conditional-deploy path, and conditional protocol modules reduce fixed context without dropping reviewer recovery behavior. **Upgrade:** refresh your `dist/<harness>/` shell; in-flight workflows keep their persisted scope and need no migration; set `AWS_AIDLC_DEFAULT_SCOPE=feature` (Claude: the `.claude/settings.json` `env` block, which now ships `classic`) to keep the previous full-lifecycle default.
@@ -12,12 +19,6 @@ Classic and Express are new scope options, and the implicit default scope is now
 * Reviewer, ensemble, Construction, and swarm contracts load as directive-selected protocol modules from the main orchestrator and generated stage/scope runners; converged swarm settlement cannot repeat reviews after resume, and the modules retain bounded stale-receipt recovery.
 * Harness manifests may declare a nonstandard emitted orchestrator `SKILL.md` path for custom `skipRunnerGen`/`emit` layouts; standard in-tree layouts remain compatible without the field.
 * The hybrid live Kiro IDE/core pre-merge gate (`t-ide-kiro`, `AIDLC_KIRO_IDE_LIVE=1`) now runs on Windows (`%LOCALAPPDATA%\Programs\Kiro\Kiro.exe`) as well as macOS, with `AIDLC_KIRO_IDE_BIN` override and `AIDLC_KIRO_IDE_CASE` / `AIDLC_KIRO_IDE_DIAGNOSTICS` controls.
-
-Kiro CLI hooks now follow the host's canonical-name/alias glob semantics, while the adapter normalizes the corresponding payload modes before invoking shared hooks. **Upgrade:** re-copy `dist/kiro/` into the project.
-
-* The proven literal `fs_write` registration selects the `write`/`fs_write` alias family exactly once; create, replace, and append payload modes are normalized to the correct Write/Edit audit, sensor, reviewer-scope, and review-freeze inputs.
-* The proven literal `fs_read` registration selects the `read`/`fs_read` alias family exactly once and forwards both top-level and batched operation paths to the reviewer scope guard.
-* The literal `subagent` registration does not select `subagent_response`; the adapter also keeps response shells inert and defensively accepts legacy crew and direct-dispatch payload shapes.
 
 ## [2.6.17] - 2026-08-18
 

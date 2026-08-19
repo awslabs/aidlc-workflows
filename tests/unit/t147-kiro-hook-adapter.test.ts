@@ -703,7 +703,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
             cwd: dir,
             tool_name,
             tool_input: tool_name === "read_files"
-              ? { paths: ["construction/sibling-unit/design.md"] }
+              ? { paths: [null, "construction/sibling-unit/design.md"] }
               : { path: "construction/sibling-unit/design.md" },
           },
           ["aidlc-architecture-reviewer-agent"],
@@ -736,7 +736,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
           ...(FIXTURES.preToolUse_fs_read as Record<string, unknown>),
           cwd: dir,
           tool_input: {
-            operations: [{ path: "construction/sibling-unit/design.md" }],
+            operations: [null, { path: "construction/sibling-unit/design.md" }],
           },
         },
         ["aidlc-architecture-reviewer-agent"],
@@ -811,6 +811,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       }
 
       for (const command of ["str_replace", "append"]) {
+        const before = readAudit(dir);
         const edited = runAdapter(dir, "audit-and-sensors", {
           ...(FIXTURES.postToolUse_fs_write_str_replace as Record<string, unknown>),
           cwd: dir,
@@ -823,7 +824,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
           },
         });
         expect(edited.code, command).toBe(0);
-        expect(readAudit(dir), command).toContain("**Tool**: Edit");
+        expect(readAudit(dir).slice(before.length), command).toContain("**Tool**: Edit");
       }
 
       rmSync(auditHeartbeat, { force: true });
