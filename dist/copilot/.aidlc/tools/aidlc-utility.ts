@@ -1940,6 +1940,60 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
         });
       }
     }
+
+    // Hooks GLOBALLY disabled (issue #802). Every check above verifies the hook
+    // files are present and wired, but Claude Code honours `disableAllHooks:
+    // true` in any settings layer, which silently skips EVERY hook — audit
+    // emission, state sync, sensor dispatch, stage-graph rebuild, the lot. A
+    // regulated-industry install (IT policy sets the flag) then passes doctor
+    // clean yet blocks at runtime on the first stage: the exact false positive
+    // reported. The presence rows can't catch it, so probe the flag explicitly.
+    //
+    // Resolve it the way Claude Code does — the HIGHEST-precedence layer that
+    // sets the key wins — so a lower layer's `true` overridden by a higher
+    // layer's `false` does not false-alarm. Precedence (high→low): enterprise
+    // managed settings, project settings.local.json, project settings.json,
+    // user ~/.claude/settings.json. (Command-line `--disable-all-hooks` sits
+    // between managed and local but is not persisted, so it is unprobeable.)
+    const managedSettings =
+      process.platform === "darwin"
+        ? "/Library/Application Support/ClaudeCode/managed-settings.json"
+        : process.platform === "win32"
+          ? join(process.env.PROGRAMDATA || "C:\\ProgramData", "ClaudeCode", "managed-settings.json")
+          : "/etc/claude-code/managed-settings.json";
+    const home = process.env.HOME || process.env.USERPROFILE || "";
+    const hookDisableLayers: Array<[string, string]> = [
+      [managedSettings, "enterprise managed settings"],
+      [join(projectDir, harness, "settings.local.json"), ".claude/settings.local.json"],
+      [join(projectDir, harness, "settings.json"), ".claude/settings.json"],
+      ...(home ? [[join(home, ".claude", "settings.json"), "~/.claude/settings.json"] as [string, string]] : []),
+    ];
+    let hooksDisabledBy: string | null = null;
+    for (const [path, label] of hookDisableLayers) {
+      try {
+        const parsed = JSON.parse(readFileSync(path, "utf-8")) as { disableAllHooks?: unknown };
+        // Only a layer that EXPLICITLY sets the boolean resolves it; a layer
+        // that omits the key defers to the next-lower layer.
+        if (typeof parsed.disableAllHooks === "boolean") {
+          if (parsed.disableAllHooks) hooksDisabledBy = label;
+          break; // highest-precedence definition wins, true or false
+        }
+      } catch {
+        // Absent/unreadable/malformed layer — the wiring-config rows own those
+        // cases; here we only care about an explicit disableAllHooks setting.
+      }
+    }
+    results.push({
+      pass: hooksDisabledBy === null,
+      label:
+        hooksDisabledBy === null
+          ? "Hooks enabled (no disableAllHooks override)"
+          : `Hooks DISABLED via "disableAllHooks": true in ${hooksDisabledBy} — AI-DLC cannot run (audit, state sync, sensors, and stage-graph rebuild are all silently skipped even though the hook files are present)`,
+      fix:
+        hooksDisabledBy === null
+          ? undefined
+          : `remove "disableAllHooks": true from ${hooksDisabledBy} (or set it to false in a higher-precedence layer such as .claude/settings.local.json) and restart the Claude Code session. If IT policy enforces disabled hooks, AI-DLC v2 is not compatible with this environment — its workflow engine is hook-driven.`,
+    });
   } else {
     // Kiro / Codex: the wiring config is not settings.json (it is
     // agents/aidlc.json / hooks.json — checked below). The core hook bodies
