@@ -10,7 +10,7 @@ import { pathToFileURL } from "node:url";
 import type { HarnessManifest } from "../../scripts/manifest-types.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
-describe("t300 manifest-owned orchestrator skill path", () => {
+describe("t303 manifest-owned orchestrator skill path", () => {
   test("every harness declares an in-tree emitted skill that exists in dist", async () => {
     const harnesses = readdirSync(join(REPO_ROOT, "harness"))
       .filter((name) => existsSync(join(REPO_ROOT, "harness", name, "manifest.ts")))
