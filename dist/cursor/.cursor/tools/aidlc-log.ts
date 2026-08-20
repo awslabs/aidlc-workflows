@@ -17,6 +17,7 @@ import {
   emitError,
   errorMessage,
   extractMarkdownSection,
+  formatReceivedReply,
   freshReviewReceipts,
   getField,
   holdsAuditLock,
@@ -355,16 +356,6 @@ function handleAnswer(args: string[]): void {
   if (!flags.stage) error("Missing --stage <slug>");
   if (!flags.details) error("Missing --details <text>");
 
-  // A cancelled/dismissed/auto-resolved question widget is not an answer.
-  // Some harnesses return a completed-looking object for a dismissed question.
-  if (isNonAnswer(flags.details)) {
-    error(
-      `Refusing to record "${flags.details.trim() || "(empty)"}" as an answer: it is cancellation ` +
-        "boilerplate, not a human decision. If the user dismissed the question, re-present it and " +
-        "wait for a real answer; do not log the dismissal.",
-    );
-  }
-
   if (
     flags.checkpoint !== undefined &&
     flags.checkpoint !== "summary-confirmation"
@@ -380,7 +371,19 @@ function handleAnswer(args: string[]): void {
     flags.details !== "Request changes"
   ) {
     error(
-      'Summary confirmation --details must be exactly "Looks correct" or "Request changes".',
+      `Refusing to record summary confirmation: received reply ${formatReceivedReply(flags.details)}: ` +
+        'it did not match an offered choice. Valid choices are "Looks correct" or ' +
+        '"Request changes". Re-present those choices and wait for the human to choose one.',
+    );
+  }
+
+  // A cancelled/dismissed/auto-resolved question widget is not an answer.
+  // Some harnesses return a completed-looking object for a dismissed question.
+  if (isNonAnswer(flags.details)) {
+    error(
+      `Refusing to record received reply ${formatReceivedReply(flags.details)} as an answer: ` +
+        "it is cancellation boilerplate, not a human decision. If the user dismissed the " +
+        "question, re-present it and wait for a real answer; do not log the dismissal.",
     );
   }
 

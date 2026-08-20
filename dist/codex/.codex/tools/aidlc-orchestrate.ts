@@ -114,6 +114,7 @@ import {
   errorMessage,
   filterProducesByKind,
   firstInScopeStageOfPhase,
+  formatReceivedReply,
   freshReviewReceipts,
   getField,
   intentRepos,
@@ -4825,8 +4826,9 @@ interface ReportFlags {
   stage?: string; // --stage <slug>: the acted stage (required under --single; preferred for main workflow reports)
 }
 
-// Extract report's flags. --result is the verdict; --user-input rides through
-// to approve's GATE_APPROVED row; --reason rides through to complete-workflow.
+// Extract report's flags. --result is the verdict; --user-input carries the
+// exact offered choice, while --reason carries rejection feedback or an early
+// completion reason.
 // --skeleton-stance carries the conductor's classified walking-skeleton stance
 // (the classify round-trip): it does NOT commit a transition — it records the
 // stance so the next `next` resolves the deferred gate.
@@ -5664,6 +5666,52 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   }
 
   const isGated = node.phase !== "initialization";
+  const protectedHumanGate =
+    isGated &&
+    stageCheckbox.state !== "completed" &&
+    readAutonomyMode(stateContent) !== "autonomous" &&
+    process.env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD !== "1";
+
+  if (protectedHumanGate && flags.result === "rejected") {
+    if (flags.userInput?.trim() !== "Request Changes") {
+      emit(errorDirective(
+        `report --result rejected for "${slug}" received reply ` +
+          `${formatReceivedReply(flags.userInput)} which did not match an offered choice at ` +
+          "the held gate. Re-present the original held gate with every " +
+          "offered choice and wait for the human to choose one.",
+      ));
+      return;
+    }
+    if (!flags.reason?.trim()) {
+      emit(errorDirective(
+        `report --result rejected for "${slug}" requires nonblank revision feedback in ` +
+          "--reason, separate from --user-input \"Request Changes\".",
+      ));
+      return;
+    }
+  }
+
+  if (
+    protectedHumanGate &&
+    FORWARD_RESULTS.has(flags.result ?? "")
+  ) {
+    const rawRevisionCount = getField(stateContent, "Revision Count");
+    const parsedRevisionCount = rawRevisionCount ? parseInt(rawRevisionCount, 10) : 0;
+    const revisionCount = Number.isFinite(parsedRevisionCount) ? parsedRevisionCount : 0;
+    const approvalChoice = flags.userInput?.trim();
+    const matchesOfferedApproval =
+      approvalChoice === "Approve" ||
+      (approvalChoice === "Accept as-is" && revisionCount >= 3);
+    if (!matchesOfferedApproval) {
+      emit(errorDirective(
+        `report --result ${flags.result} for "${slug}" received reply ` +
+          `${formatReceivedReply(approvalChoice)} which did not match an offered choice at ` +
+          "the held gate. Re-present the original held gate with every offered " +
+          "choice and wait for the human to choose one.",
+      ));
+      return;
+    }
+  }
 
   // Gate lifecycle reports keep every model-issued state transition behind the
   // engine boundary. They resolve before artifact/ensemble completion guards:
@@ -5715,14 +5763,15 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         ));
         return;
       }
-      const feedback = (flags.userInput ?? flags.reason)?.trim();
+      const feedback = flags.reason?.trim() ?? flags.userInput?.trim();
       if (!feedback) {
         emit(errorDirective(
-          `report --result rejected for "${slug}" requires nonblank --user-input or --reason feedback.`,
+          `report --result rejected for "${slug}" requires nonblank revision feedback.`,
         ));
         return;
       }
       subArgs = ["reject", slug, "--feedback", feedback];
+      if (flags.userInput) subArgs.push("--user-input", flags.userInput);
     } else {
       if (stageCheckbox.state !== "revising") {
         emit(errorDirective(
@@ -5776,19 +5825,6 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         "Run aidlc-state.ts practices-promote after the human approves; it records " +
         "Practices Affirmed Timestamp and a fresh PRACTICES_AFFIRMED receipt for " +
         "this stage attempt, then report --result approved --user-input \"<exact choice>\".",
-    ));
-    return;
-  }
-
-  if (
-    isGated &&
-    stageCheckbox.state !== "completed" &&
-    readAutonomyMode(stateContent) !== "autonomous" &&
-    process.env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD !== "1" &&
-    !flags.userInput?.trim()
-  ) {
-    emit(errorDirective(
-      `report --result ${flags.result} for "${slug}" requires --user-input with the human's exact approval choice.`,
     ));
     return;
   }

@@ -3821,6 +3821,16 @@ export function isNonAnswer(text: string | undefined | null): boolean {
   return t.length === 0 || NON_ANSWER_RE.test(t);
 }
 
+const RECEIVED_REPLY_DISPLAY_LIMIT = 120;
+export function formatReceivedReply(text: string | undefined | null): string {
+  const normalized = (text ?? "").trim().replace(/\s+/g, " ") || "(empty)";
+  const display =
+    normalized.length <= RECEIVED_REPLY_DISPLAY_LIMIT
+      ? normalized
+      : `${normalized.slice(0, RECEIVED_REPLY_DISPLAY_LIMIT - 3)}...`;
+  return JSON.stringify(display);
+}
+
 // HUMAN_TURN proves only that a prompt-submit seam fired after the previous
 // resolution. Several harnesses do not expose trusted prompt text, so the
 // framework cannot prove that --user-input/--feedback/--details came from the

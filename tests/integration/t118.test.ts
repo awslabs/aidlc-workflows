@@ -82,7 +82,7 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   cleanupTestProject,
@@ -96,6 +96,7 @@ import {
   seedStateFile,
   resetAidlcEnv,
 } from "../harness/fixtures.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -118,8 +119,12 @@ interface CliResult {
   stdout: string;
 }
 
-function run(tool: string, args: string[]): CliResult {
-  const res = spawnSync(BUN, [tool, ...args], { encoding: "utf-8" });
+function run(
+  tool: string,
+  args: string[],
+  env: NodeJS.ProcessEnv = process.env,
+): CliResult {
+  const res = spawnSync(BUN, [tool, ...args], { encoding: "utf-8", env });
   const stdout = res.stdout ?? "";
   return {
     status: res.status ?? -1,
@@ -474,11 +479,150 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
       "--result",
       "approved",
       "--user-input",
-      "human ok",
+      "Approve",
       "--project-dir",
       p,
     ]);
     expect(directive(r).kind).toBe("done");
+  }, 30000);
+
+  test("SP7-invalid: an unmatched gate reply is acknowledged, leaves the gate open, and does not consume the retry", () => {
+    const p = projWithState("state-mid-ideation.md");
+    const guardedEnv = { ...process.env };
+    delete guardedEnv.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    run(ORCHESTRATE, [
+      "report",
+      "--stage",
+      "feasibility",
+      "--result",
+      "awaiting-approval",
+      "--project-dir",
+      p,
+    ]);
+    appendAuditEntry("HUMAN_TURN", {}, p);
+
+    const invalid = directive(
+      run(ORCHESTRATE, [
+        "report",
+        "--result",
+        "approved",
+        "--user-input",
+        "go ahead",
+        "--project-dir",
+        p,
+      ], guardedEnv),
+    );
+    expect(invalid.kind).toBe("error");
+    expect(invalid.message).toContain('received reply "go ahead"');
+    expect(invalid.message).toContain("original held gate with every offered choice");
+    expect(invalid.message).not.toContain("Valid choices are");
+    expect(readFileSync(statePath(p), "utf-8")).toContain("- [?] feasibility");
+    expect(eventCount(p, "GATE_APPROVED")).toBe(0);
+
+    const accepted = directive(
+      run(ORCHESTRATE, [
+        "report",
+        "--result",
+        "approved",
+        "--user-input",
+        "Approve",
+        "--project-dir",
+        p,
+      ], guardedEnv),
+    );
+    expect(accepted.kind).toBe("done");
+    expect(eventCount(p, "GATE_APPROVED")).toBe(1);
+  }, 30000);
+
+  test("SP7-reject: the exact Request Changes decision is separate from feedback", () => {
+    const p = projWithState("state-mid-ideation.md");
+    const guardedEnv = { ...process.env };
+    delete guardedEnv.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    run(ORCHESTRATE, [
+      "report",
+      "--stage",
+      "feasibility",
+      "--result",
+      "awaiting-approval",
+      "--project-dir",
+      p,
+    ]);
+    appendAuditEntry("HUMAN_TURN", {}, p);
+
+    const mixed = directive(run(ORCHESTRATE, [
+      "report",
+      "--result",
+      "rejected",
+      "--user-input",
+      "Request Changes: tighten the schema",
+      "--reason",
+      "tighten the schema",
+      "--project-dir",
+      p,
+    ], guardedEnv));
+    expect(mixed.kind).toBe("error");
+    expect(eventCount(p, "GATE_REJECTED")).toBe(0);
+
+    const accepted = directive(run(ORCHESTRATE, [
+      "report",
+      "--result",
+      "rejected",
+      "--user-input",
+      "Request Changes",
+      "--reason",
+      "tighten the schema",
+      "--project-dir",
+      p,
+    ], guardedEnv));
+    expect(accepted.kind).toBe("print");
+    expect(eventCount(p, "GATE_REJECTED")).toBe(1);
+  }, 30000);
+
+  test("SP7-escape: Accept as-is is accepted only after three revision cycles", () => {
+    const p = projWithState("state-mid-ideation.md");
+    const guardedEnv = { ...process.env };
+    delete guardedEnv.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    run(ORCHESTRATE, [
+      "report",
+      "--stage",
+      "feasibility",
+      "--result",
+      "awaiting-approval",
+      "--project-dir",
+      p,
+    ]);
+    appendAuditEntry("HUMAN_TURN", {}, p);
+
+    const premature = directive(run(ORCHESTRATE, [
+      "report",
+      "--result",
+      "approved",
+      "--user-input",
+      "Accept as-is",
+      "--project-dir",
+      p,
+    ], guardedEnv));
+    expect(premature.kind).toBe("error");
+    expect(eventCount(p, "GATE_APPROVED")).toBe(0);
+
+    writeFileSync(
+      statePath(p),
+      readFileSync(statePath(p), "utf-8").replace(
+        "- **Revision Count**: 0",
+        "- **Revision Count**: 3",
+      ),
+    );
+    const accepted = directive(run(ORCHESTRATE, [
+      "report",
+      "--result",
+      "approved",
+      "--user-input",
+      "Accept as-is",
+      "--project-dir",
+      p,
+    ], guardedEnv));
+    expect(accepted.kind).toBe("done");
+    expect(eventCount(p, "GATE_APPROVED")).toBe(1);
   }, 30000);
 
   // ============================================================

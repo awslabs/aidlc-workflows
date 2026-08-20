@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.50] - 2026-08-21
+
+Approval checkpoints now reject replies that do not exactly match a currently offered decision, while change-request feedback travels separately from the selected choice. **Upgrade:** refresh your `dist/<harness>/` shell so the gate protocol, deterministic transition guards, and harness instructions stay aligned.
+
+* Protected approvals accept only `Approve`, plus `Accept as-is` once the stage has reached three revision cycles; arbitrary prose can no longer commit `GATE_APPROVED`.
+* Protected rejections require `--user-input "Request Changes"` and carry the requested revision separately in `--reason`, preventing feedback text from being mistaken for the selected decision.
+* Invalid or cancellation replies leave the gate and human-turn evidence untouched and direct the conductor to re-render the original held question with every offered choice, including conditional options.
+* Summary-confirmation refusals quote the unmatched reply and restate their exact two choices without recording a receipt.
+
 ## [2.6.49] - 2026-08-21
 
 Frontmatter string-list fields now accept single-line YAML flow sequences as well as block sequences, preventing valid inline lists from silently parsing as empty. **Upgrade:** refresh your `dist/<harness>/` shell to install the corrected parser.

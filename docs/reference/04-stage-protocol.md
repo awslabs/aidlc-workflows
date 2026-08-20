@@ -94,7 +94,7 @@ with a fresh timestamp.
 |---|-------|
 | 1 | At the approval gate, call `bun .claude/tools/aidlc-orchestrate.ts report --stage <slug> --result awaiting-approval`. The engine flips state from `[-]` to `[?]` AwaitingApproval and emits `STAGE_AWAITING_APPROVAL` atomically, so status shows the held gate while the prompt is open. (`STAGE_STARTED` / the `[-]` transition was emitted when the stage became active.) |
 | 2 | For non-gate questions, log options BEFORE calling `AskUserQuestion` via `bun .claude/tools/aidlc-log.ts decision` (not by hand-writing to the `audit/` shards), then log the exact response via `aidlc-log.ts answer`. |
-| 3 | After an approval-gate response, call `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"` for approval or `aidlc-orchestrate.ts report --stage <slug> --result rejected --user-input "<feedback>"` for request-changes. Never call `aidlc-log.ts decision` or `aidlc-log.ts answer` for the gate. After revision work, report `--result revised` before re-presenting it. |
+| 3 | After an approval-gate response, call `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"` for approval or `aidlc-orchestrate.ts report --stage <slug> --result rejected --user-input "Request Changes" --reason "<feedback>"` for request-changes. Never call `aidlc-log.ts decision` or `aidlc-log.ts answer` for the gate. After revision work, report `--result revised` before re-presenting it. |
 | 4 | Never summarize user input -- pass exact option labels to the owning log or report tool; for automated stages use `N/A -- [reason]` |
 | 5 | One audit entry per interaction -- the log/state tools enforce single-event emission; never merge multiple events into one call |
 | 6 | At stage end, call `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"` (gated stages) or `report --stage <slug> --result completed` (Initialization). The engine flips `[?]`/`[-]` to `[x]`, emits `GATE_APPROVED` when gated, and emits `STAGE_COMPLETED` atomically through the state tool |
@@ -137,6 +137,11 @@ AskUserQuestion({
 field (the display name of the next in-scope stage, computed by the engine at
 emit time), or `Complete workflow` when `next_stage` is null. The conductor
 never guesses the next stage.
+
+If a reply matches none of the choices currently shown, the conductor quotes
+the received reply briefly, says that it did not match an offered choice, and
+re-presents every valid choice in the same turn. It does not report a lifecycle
+transition, record a decision, or consume the gate turn for that reply.
 
 **No Emergent Behavior Rule:** Construction and Operation stages (phases 3-4)
 must always use this 2-option format. They must never introduce additional
@@ -361,7 +366,9 @@ Log the mode choice to the `audit/` shards. Users can switch modes mid-stage.
   matching `aidlc-log.ts answer` command. The receipt binds the human turn to
   the exact questions-file digest. On **Request changes**, ask **"What should
   change?"** and stop again before editing any answer; after feedback and
-  revision, reset the confirmation to blank before re-prompting.
+  revision, reset the confirmation to blank before re-prompting. Any other
+  reply is acknowledged as not matching an offered choice, both valid choices
+  are re-presented in the same turn, and neither the tag nor receipt is written.
 
 #### Edit File (Self-Guided Mode)
 

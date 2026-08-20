@@ -22,6 +22,7 @@ import {
   findStageBySlug,
   findAllEvents,
   firstInScopeStageOfPhase,
+  formatReceivedReply,
   freshReviewReceipts,
   getField,
   hasUnsafeSingleLineCharacter,
@@ -2611,7 +2612,7 @@ function handleGateStart(args: string[]): void {
   });
 }
 
-// approve <slug> [--user-input <text>]
+// approve <slug> [--user-input <exact-choice>]
 // Transition: [?] → [x] AND auto-advance to the next in-scope stage (or
 // complete the workflow if this was the final stage). Human judgment ends
 // at the gate response; everything after is deterministic bookkeeping, so
@@ -2646,30 +2647,6 @@ function handleApprove(args: string[]): void {
   const autonomousDecision = isAutonomousConstructionDecision(content, stage.phase);
   validateSlugInState(content, slug, "awaiting-approval");
   const approvalInput = userInput?.trim();
-  if (
-    !autonomousDecision &&
-    !humanPresenceGuardDisabled() &&
-    !approvalInput
-  ) {
-    error(
-      `Refusing to approve "${slug}": --user-input must contain the human's exact approval choice.`,
-    );
-  }
-  // Cancellation boilerplate is not an approval choice: a dismissed/timed-out
-  // question widget can surface as a completed-looking answer ("Cancelled"),
-  // and passing that through --user-input would commit a gate no human
-  // approved. Same vocabulary as the interview path (aidlc-log answer).
-  if (
-    !autonomousDecision &&
-    !humanPresenceGuardDisabled() &&
-    isNonAnswer(approvalInput)
-  ) {
-    error(
-      `Refusing to approve "${slug}": --user-input "${approvalInput}" is cancellation boilerplate, ` +
-        "not an approval. If the human dismissed the gate question, re-present it and wait for a " +
-        "real choice; a dismissal is not consent.",
-    );
-  }
   // Nor is the conductor's OWN decision an approval. The presence guard below
   // proves a human is in the session; it cannot prove this choice is theirs, so
   // a self-attributed approval ("CONDUCTOR DEFAULT, session unattended") would
@@ -2688,6 +2665,25 @@ function handleApprove(args: string[]): void {
         "let them answer; if a completion precondition is blocking you, surface that blocker at " +
         "the gate instead of recording a decision on their behalf.",
     );
+  }
+  if (!autonomousDecision && !humanPresenceGuardDisabled()) {
+    const rawRevisionCount = getField(content, "Revision Count");
+    const parsedRevisionCount = rawRevisionCount ? parseInt(rawRevisionCount, 10) : 0;
+    const revisionCount = Number.isFinite(parsedRevisionCount) ? parsedRevisionCount : 0;
+    const matchesOfferedApproval =
+      approvalInput === "Approve" ||
+      (approvalInput === "Accept as-is" && revisionCount >= 3);
+    if (!matchesOfferedApproval) {
+      const cancellation = isNonAnswer(approvalInput)
+        ? " The reply is cancellation boilerplate, not consent."
+        : "";
+      error(
+        `Refusing to approve "${slug}": received reply ${formatReceivedReply(approvalInput)} ` +
+          `did not match an offered choice at the held gate.${cancellation} ` +
+          "Re-present the original held gate with every offered choice and wait for the human " +
+          "to choose one.",
+      );
+    }
   }
 
   // Artifact guard (issue #366): a stage cannot be approved without evidence of
@@ -2870,30 +2866,24 @@ function parseApproveFlags(args: string[]): { userInput?: string } {
   };
 }
 
-// reject <slug> [--feedback <text>] — transition [?] → [R], emit GATE_REJECTED + STAGE_REVISING, increment Revision Count.
+// reject <slug> [--user-input <exact-choice>] [--feedback <text>] — transition
+// [?] → [R], emit GATE_REJECTED + STAGE_REVISING, increment Revision Count.
 // Also accepts [-]: gate-start is optional before the human prompt, so a
 // rejection may arrive with no open gate. The reject self-heals by emitting
 // the missing STAGE_AWAITING_APPROVAL (tagged Recovered=true) ahead of the
 // rejection pair — mirroring report's approve-side gate backfill.
 function handleReject(args: string[]): void {
-  if (args.length < 1) error("Usage: aidlc-state.ts reject <slug> [--feedback <text>]");
+  if (args.length < 1) {
+    error(
+      'Usage: aidlc-state.ts reject <slug> [--user-input "Request Changes"] ' +
+        "[--feedback <text>]",
+    );
+  }
   const slug = args[0];
-  const feedback = getFlagValue(args.slice(1), "--feedback")?.trim();
-  if (!feedback) {
-    error(
-      `Refusing to reject "${slug}": --feedback must contain the human's requested changes.`,
-    );
-  }
-  // Same non-answer floor as approve: a dismissed gate question is neither an
-  // approval nor a change request — it must not commit GATE_REJECTED and spin
-  // the revision loop on cancellation boilerplate.
-  if (isNonAnswer(feedback)) {
-    error(
-      `Refusing to reject "${slug}": --feedback "${feedback}" is cancellation boilerplate, not a ` +
-        "change request. If the human dismissed the gate question, re-present it and wait for a " +
-        "real choice.",
-    );
-  }
+  const decision = getFlagValue(args.slice(1), "--user-input")?.trim();
+  const feedback =
+    (getFlagValue(args.slice(1), "--feedback") ??
+      getFlagValue(args.slice(1), "--reason"))?.trim();
 
   const pd = resolveProjectDir(projectDir);
   // C2b lost-update safety: validate→increment Revision Count→emit-audit→write
@@ -2910,6 +2900,34 @@ function handleReject(args: string[]): void {
   const autonomousDecision = isAutonomousConstructionDecision(content, stage.phase);
   validateSlugInState(content, slug, ["awaiting-approval", "in-progress"]);
   const gateWasMissing = getSlugState(content, slug) === "in-progress";
+  if (
+    !autonomousDecision &&
+    !humanPresenceGuardDisabled() &&
+    decision !== "Request Changes"
+  ) {
+    const cancellation = isNonAnswer(decision)
+      ? " The reply is cancellation boilerplate, not a decision."
+      : "";
+    error(
+      `Refusing to reject "${slug}": received reply ${formatReceivedReply(decision)} did not ` +
+        `match an offered choice at the held gate.${cancellation} ` +
+        "Re-present the original held gate with every offered choice and wait for the human " +
+        "to choose one.",
+    );
+  }
+  if (!feedback) {
+    error(
+      `Refusing to reject "${slug}": Request Changes requires nonblank revision feedback in ` +
+        "--feedback (or --reason through aidlc-orchestrate.ts report).",
+    );
+  }
+  if (isNonAnswer(feedback)) {
+    error(
+      `Refusing to reject "${slug}": revision feedback ${formatReceivedReply(feedback)} is ` +
+        "cancellation boilerplate. Re-present the original held gate with every offered choice " +
+        "and wait for the human to choose one.",
+    );
+  }
 
   const autonomousMode = isAutonomousMode(content);
   const recoveryResetNeedsHuman =
