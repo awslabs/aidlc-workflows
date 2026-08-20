@@ -280,13 +280,13 @@ function transform(
     s = substituteToken(s, harnessDir);
     s = applyRulesRename(s, harnessDir, rulesRename);
     if (harness) s = projectTierFrontmatter(s, srcPath, harness);
-    // Cursor persona bodies are mutable active-space pointers. Ship their
-    // memory references on the default seed so the first startup's
-    // repointHarnessIncludes(project, "default") is byte-identical; later
-    // space switches still rewrite the same concrete segment in place.
+    // Cursor, opencode, and Copilot persona bodies are mutable active-space
+    // pointers. Ship their memory references on the default seed so the first
+    // startup's repointHarnessIncludes(project, "default") is byte-identical;
+    // later space switches still rewrite the same concrete segment in place.
     const posixPath = srcPath.split(sep).join("/");
     if (
-      harness === "cursor" &&
+      (harness === "cursor" || harness === "opencode" || harness === "copilot") &&
       posixPath.includes("/agents/") &&
       posixPath.endsWith("-agent.md")
     ) {
