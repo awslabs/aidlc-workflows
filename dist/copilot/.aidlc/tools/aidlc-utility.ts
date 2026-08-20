@@ -3239,10 +3239,10 @@ interface ScanResult {
   languages: string;     // e.g. "TypeScript, JavaScript"
   frameworks: string;    // e.g. "React, Vite"
   buildSystem: string;   // e.g. "npm (package.json)"
-  // Comma-joined top-level subdirectory name(s) the nested-project fallback
-  // classified Brownfield from. Absent when the root itself decided the verdict
-  // (the common case). Surfaced only in the WORKSPACE_SCANNED audit event and
-  // the `detect --json` payload, never in the state file.
+  // Comma-joined workspace-relative directory path(s) the nested-project
+  // fallback classified Brownfield from. Absent when the root itself decided
+  // the verdict (the common case). Surfaced only in the WORKSPACE_SCANNED audit
+  // event and the `detect --json` payload, never in the state file.
   nestedRoot?: string;
   submodules: SubmoduleEntry[]; // [] when no .gitmodules / none parseable
 }
@@ -3318,11 +3318,11 @@ const SOURCE_MANIFESTS = [
   "Gemfile",
 ];
 
-// Top-level directories the nested-project fallback never descends into: they
-// commonly hold sample/snippet/boilerplate code that is not the project's own
-// source. The harness/VCS/build dirs in SCAN_EXCLUDE and SCAN_SOURCE_DIRS
-// (already scanned at the root) are skipped separately. Lowercased for a
-// case-insensitive match.
+// Directory names the nested-project fallback never descends into at any
+// container level: they commonly hold sample/snippet/boilerplate code that is
+// not the project's own source. The harness/VCS/build dirs in SCAN_EXCLUDE and
+// SCAN_SOURCE_DIRS are skipped separately. Lowercased for a case-insensitive
+// match.
 const NESTED_SCAN_EXCLUDE = new Set([
   "aidlc",
   "docs",
@@ -3340,13 +3340,32 @@ const NESTED_SCAN_EXCLUDE = new Set([
   "scripts",
 ]);
 
+const NESTED_SCAN_MAX_DEPTH = 3;
+const SCAN_EXCLUDE_LOWER = new Set(
+  [...SCAN_EXCLUDE].map((entry) => entry.toLowerCase())
+);
+const SCAN_SOURCE_DIRS_LOWER = new Set(
+  SCAN_SOURCE_DIRS.map((entry) => entry.toLowerCase())
+);
+
+function skipNestedScanDir(entry: string): boolean {
+  const lower = entry.toLowerCase();
+  return (
+    entry.startsWith(".") ||
+    SCAN_EXCLUDE_LOWER.has(lower) ||
+    NESTED_SCAN_EXCLUDE.has(lower) ||
+    SCAN_SOURCE_DIRS_LOWER.has(lower)
+  );
+}
+
 // skipDirs: directory names to skip at THIS level only (not propagated into
 // the recursion); the caller counts those dirs through a separate deeper call.
 function countFilesByLang(
   dir: string,
   counts: Record<string, number>,
   maxDepth: number,
-  skipDirs?: ReadonlySet<string>
+  skipDirs?: ReadonlySet<string>,
+  skipNestedContainers = false
 ): void {
   if (maxDepth < 0) return;
   let entries: string[];
@@ -3368,6 +3387,7 @@ function countFilesByLang(
     if (st.isSymbolicLink()) continue;
     if (st.isDirectory()) {
       if (skipDirs?.has(entry)) continue;
+      if (skipNestedContainers && skipNestedScanDir(entry)) continue;
       countFilesByLang(full, counts, maxDepth - 1);
     } else if (st.isFile()) {
       const dot = entry.lastIndexOf(".");
@@ -3485,8 +3505,8 @@ function hasNonDevDeps(projectDir: string): boolean {
 }
 
 // The signal evaluation for a single directory, used for both the workspace
-// root and (via the nested-project fallback) each depth-1 subdirectory. Returns
-// the raw brownfield signal plus the findings so the caller can aggregate.
+// root and each directory visited by the nested-project fallback. Returns the
+// raw brownfield signal plus the findings so the caller can aggregate.
 //
 //   fileScanDepth = the countFilesByLang depth for the SOURCE-FILE signal:
 //     - root: 0 for the top-level file sweep (files directly under dir; the
@@ -3495,10 +3515,10 @@ function hasNonDevDeps(projectDir: string): boolean {
 //       skip, files only) PLUS a depth-6 recurse into each present
 //       SCAN_SOURCE_DIRS entry.
 //     - a nested container: 1, sweeping the container's own files plus one
-//       level of arbitrary subdirs so a project under `wordbook/**` or
-//       `backend/server/**` is seen. A present SCAN_SOURCE_DIRS entry is
-//       skipped by the sweep: the depth-6 recurse below is its only counter,
-//       so files directly under it are never counted twice.
+//       level of arbitrary candidate subdirs so a project under `wordbook/**`
+//       or `backend/server/**` is seen. Excluded/container source directories
+//       are skipped by that sweep. A present SCAN_SOURCE_DIRS entry is counted
+//       only by the depth-6 recurse below, so files are never counted twice.
 interface DirSignals {
   brownfield: boolean;
   langCounts: Record<string, number>;
@@ -3506,7 +3526,11 @@ interface DirSignals {
   buildSystem: string;
 }
 
-function scanSignals(dir: string, fileScanDepth: number): DirSignals {
+function scanSignals(
+  dir: string,
+  fileScanDepth: number,
+  nestedContainer = false
+): DirSignals {
   let entries: string[] = [];
   try {
     entries = readdirSync(dir);
@@ -3525,7 +3549,13 @@ function scanSignals(dir: string, fileScanDepth: number): DirSignals {
   // reported primary. (At the root's depth 0 the skip is a no-op: the sweep
   // never enters subdirs there.)
   const langCounts: Record<string, number> = {};
-  countFilesByLang(dir, langCounts, fileScanDepth, SCAN_SOURCE_DIR_SET);
+  countFilesByLang(
+    dir,
+    langCounts,
+    fileScanDepth,
+    SCAN_SOURCE_DIR_SET,
+    nestedContainer
+  );
   for (const dirName of SCAN_SOURCE_DIRS) {
     if (entrySet.has(dirName)) {
       countFilesByLang(join(dir, dirName), langCounts, 6);
@@ -3616,14 +3646,6 @@ function scanSubmodules(projectDir: string): SubmoduleEntry[] {
 }
 
 export function detectWorkspace(projectDir: string): ScanResult {
-  let topEntries: string[] = [];
-  try {
-    topEntries = readdirSync(projectDir);
-  } catch {
-    // projectDir doesn't exist yet (caller should scaffold first)
-  }
-  const topSet = new Set(topEntries.filter((e) => !SCAN_EXCLUDE.has(e)));
-
   // Root scan (depth 0 for the top-level file sweep, byte-identical to the
   // base inline loop plus the SCAN_SOURCE_DIRS recurse, both inside scanSignals).
   const root = scanSignals(projectDir, 0);
@@ -3634,38 +3656,58 @@ export function detectWorkspace(projectDir: string): ScanResult {
   const nestedHits: string[] = [];
 
   // Nested-project fallback: only when the root itself shows NO brownfield
-  // signal. Scan each arbitrarily-named depth-1 subdirectory with the same
-  // signal set (source files one level in via scanSignals(.., 1)), skipping
-  // dot-dirs, NESTED_SCAN_EXCLUDE, the SCAN_SOURCE_DIRS entries already scanned
-  // at the root, symlinks, and non-dirs. Aggregate every hit: languages merged,
-  // frameworks unioned, first non-Unknown build system kept.
+  // signal. Walk candidate container directories in sorted order, bounded to
+  // three levels below the workspace root. Each visited directory gets the
+  // same nested signal evaluation; a Brownfield hit is aggregated once and is
+  // not descended into, preventing language counts from overlapping. Dot dirs,
+  // excluded names, known source dirs, symlinks, and non-dirs are never visited.
   if (!brownfield) {
-    for (const entry of [...topSet].sort()) {
-      if (entry.startsWith(".")) continue;
-      if (NESTED_SCAN_EXCLUDE.has(entry.toLowerCase())) continue;
-      if (SCAN_SOURCE_DIRS.includes(entry)) continue;
-      const full = join(projectDir, entry);
-      let st: import("node:fs").Stats;
+    const walkContainers = (
+      parentDir: string,
+      parentParts: string[],
+      parentDepth: number
+    ): void => {
+      let entries: string[];
       try {
-        st = lstatSync(full);
+        entries = readdirSync(parentDir).sort();
       } catch {
-        continue;
+        return;
       }
-      if (st.isSymbolicLink() || !st.isDirectory()) continue;
 
-      const sub = scanSignals(full, 1);
-      if (!sub.brownfield) continue;
+      for (const entry of entries) {
+        if (skipNestedScanDir(entry)) continue;
+        const full = join(parentDir, entry);
+        let st: import("node:fs").Stats;
+        try {
+          st = lstatSync(full);
+        } catch {
+          continue;
+        }
+        if (st.isSymbolicLink() || !st.isDirectory()) continue;
 
-      brownfield = true;
-      nestedHits.push(entry);
-      for (const [lang, n] of Object.entries(sub.langCounts)) {
-        langCounts[lang] = (langCounts[lang] || 0) + n;
+        const parts = [...parentParts, entry];
+        const depth = parentDepth + 1;
+        const sub = scanSignals(full, 1, true);
+        if (sub.brownfield) {
+          brownfield = true;
+          nestedHits.push(parts.join("/"));
+          for (const [lang, n] of Object.entries(sub.langCounts)) {
+            langCounts[lang] = (langCounts[lang] || 0) + n;
+          }
+          for (const fw of sub.frameworks) {
+            if (!frameworks.includes(fw)) frameworks.push(fw);
+          }
+          if (buildSystem === "Unknown") buildSystem = sub.buildSystem;
+          continue;
+        }
+
+        if (depth < NESTED_SCAN_MAX_DEPTH) {
+          walkContainers(full, parts, depth);
+        }
       }
-      for (const fw of sub.frameworks) {
-        if (!frameworks.includes(fw)) frameworks.push(fw);
-      }
-      if (buildSystem === "Unknown") buildSystem = sub.buildSystem;
-    }
+    };
+
+    walkContainers(projectDir, [], 0);
   }
 
   // Language list: primary = highest count; secondary = >= 20% of primary count.
@@ -4133,7 +4175,7 @@ function handleIntentCreateStateBuild(
         skipStages.push(`${reStage.number} (reverse-engineering — greenfield)`);
       }
       // Advisory: the incremental scopes presume existing code, so a greenfield
-      // scan is a likely misread (source nested past the depth-1 fallback, or a
+      // scan is a likely misread (source nested past the bounded fallback, or a
       // wrong scope). We do NOT override routing (an empty workspace genuinely
       // has nothing to reverse-engineer); we point the user at the fix.
       if (["bugfix", "refactor", "security-patch"].includes(scope)) {
@@ -4141,7 +4183,7 @@ function handleIntentCreateStateBuild(
           `Note: scope "${scope}" usually targets existing code, but the workspace scanned as Greenfield ` +
             `so Reverse Engineering will be skipped. If this project has a codebase the scanner missed, ` +
             `edit "Project Type" to Brownfield in the intent's aidlc-state.md, or move the source so it is ` +
-            `detected (top-level or one folder down), then re-run.\n`,
+            `detected (top-level or within three container levels), then re-run.\n`,
         );
       }
     }
