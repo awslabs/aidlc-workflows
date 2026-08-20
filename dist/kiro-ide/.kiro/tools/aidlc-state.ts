@@ -48,6 +48,7 @@ import {
   readAllAuditShards,
   readStateFile,
   recordDir,
+  relativeCodekbDir,
   relativeMemoryPath,
   relativeRecordDir,
   removeField,
@@ -1548,6 +1549,30 @@ function producesArtifactsExist(
   return false;
 }
 
+// For a codekb stage whose active intent records repositories, every recorded
+// repo must have at least one declared produces[] artifact in its canonical
+// space-level store. An empty recorded set intentionally returns no misses so
+// producesArtifactsExist keeps the legacy any-repo-dir fallback.
+function missingCodekbRepos(
+  pd: string,
+  stage: { slug: string; produces?: string[] },
+): Array<{ repo: string; dir: string }> {
+  if (!KNOWN_CODEKB_STAGES.has(stage.slug)) return [];
+  const repos = [...new Set(intentRepos(pd))];
+  if (repos.length === 0) return [];
+  const produces = stage.produces ?? [];
+  return repos
+    .filter((repo) =>
+      !produces.some((name) =>
+        isRegularFile(join(codekbDir(pd, repo), artifactFilename(name)))
+      )
+    )
+    .map((repo) => ({
+      repo,
+      dir: `${relativeCodekbDir(pd, repo)}/`,
+    }));
+}
+
 // True when any non-doc file exists in the workspace - a file outside the
 // aidlc/ workspace tree and the harness dirs. Bounded shallow walk (one level
 // into each top-level dir is enough to detect src/<file>); avoids a full
@@ -1704,6 +1729,17 @@ function verifyStageArtifacts(
     // No readable state file: not a swarm settle; stay strict.
   }
   if (settledSwarm) return;
+
+  const missingRepos = missingCodekbRepos(pd, stage);
+  if (missingRepos.length > 0) {
+    error(
+      `Refusing to complete "${stage.slug}": declared codekb artifacts are missing ` +
+        `for recorded repositories. Missing: ${missingRepos.map(({ repo, dir }) =>
+          `${repo}: ${dir} (resolve with \`aidlc-utility.ts codekb-path --repo ${repo}\`)`
+        ).join("; ")}. Write at least one declared artifact to every recorded ` +
+        `repository's canonical codekb directory before completing.`
+    );
+  }
 
   if (!producesArtifactsExist(pd, stage)) {
     error(

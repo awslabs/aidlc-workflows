@@ -158,11 +158,16 @@ runs a deterministic artifact check before completing it, so a stage cannot be
 marked complete without evidence of work on disk. A stage that declares
 `produces[]` must have at least one of those artifacts present (under the
 active intent's record dir, its per-unit Construction directories, or the
-active space's `codekb/<repo>/` for codekb stages); `workspace_requires: true`
-also requires source-work evidence outside `aidlc/` and the harness dir. A
-failure writes nothing. Optional outputs do not participate. For
-`produces_kinds`, units whose kind prunes the required set to zero owe no
-artifact; any applicable unit remains strict. Bypass with
+active space's `codekb/<repo>/` for codekb stages). When the active intent
+records repositories, a codekb stage requires at least one declared artifact
+under every recorded repository's canonical
+`aidlc/spaces/<space>/codekb/<repo>/` directory; an artifact under an
+unrecorded or misnamed directory does not satisfy the guard. Intents with no
+recorded repository set retain the legacy any-repo-directory fallback.
+`workspace_requires: true` also requires source-work evidence outside `aidlc/`
+and the harness dir. A failure writes nothing. Optional outputs do not
+participate. For `produces_kinds`, units whose kind prunes the required set to
+zero owe no artifact; any applicable unit remains strict. Bypass with
 `AIDLC_SKIP_ARTIFACT_GUARD=1`.
 
 **Ensemble evidence gate.** On a `mob` or `subagent`-with-supports stage, the

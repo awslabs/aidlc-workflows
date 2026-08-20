@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.20] - 2026-08-20
+
+Reverse Engineering approval now verifies every repository recorded by a multi-repo intent instead of accepting one codekb artifact anywhere under the active space. A missing or misplaced per-repository store refuses stage completion and identifies the canonical directory and resolver command needed to correct it. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* Completion refuses when any recorded repository lacks every declared Reverse Engineering artifact, naming each missing repository and its canonical `aidlc/spaces/<space>/codekb/<repo>/` directory.
+* The artifact guard keys codekb evidence to the active intent's recorded repository set, so files under an unrecorded or misnamed codekb directory no longer satisfy approval.
+* Intents with no recorded repository set retain the legacy any-repo-directory fallback; `AIDLC_SKIP_ARTIFACT_GUARD=1` remains the explicit bypass for synthetic recovery and tests.
+
 ## [2.6.18] - 2026-08-19
 
 Classic and Express are new scope options, and the implicit default scope is now Classic — a **declared behavior change**: invocations that name no scope and match no keyword now run the v1-style lifecycle without Ideation instead of the full-lifecycle Feature scope. Exactly two things control the implicit default: the `AWS_AIDLC_DEFAULT_SCOPE` env var (which overrides) and the framework's hard-coded `classic` fallback. Express has a deterministic requirements-to-conditional-deploy path, and conditional protocol modules reduce fixed context without dropping reviewer recovery behavior. **Upgrade:** refresh your `dist/<harness>/` shell; in-flight workflows keep their persisted scope and need no migration; set `AWS_AIDLC_DEFAULT_SCOPE=feature` (Claude: the `.claude/settings.json` `env` block, which now ships `classic`) to keep the previous full-lifecycle default.

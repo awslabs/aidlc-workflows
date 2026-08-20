@@ -1,4 +1,4 @@
-// covers: cli:aidlc-state(approve,advance,finalize,complete-workflow), function:handleApprove, function:handleAdvance, function:handleFinalize, function:handleCompleteWorkflow, function:verifyStageArtifacts, function:producesArtifactsExist, function:workspaceHasSourceFile
+// covers: cli:aidlc-state(approve,advance,finalize,complete-workflow), function:handleApprove, function:handleAdvance, function:handleFinalize, function:handleCompleteWorkflow, function:verifyStageArtifacts, function:missingCodekbRepos, function:producesArtifactsExist, function:workspaceHasSourceFile
 //
 // t185 - stage-completion artifact guard (issue #366).
 //
@@ -23,7 +23,9 @@
 //     1. producesArtifactsExist - a stage that declares produces[] must have at
 //        least one declared .md on disk under <record>/<phase>/<slug>/ (or
 //        <record>/construction/<unit>/<slug>/ for per-unit stages, or
-//        <space>/codekb/<repo>/ for codekb stages). Empty-produces stages
+//        <space>/codekb/<repo>/ for codekb stages). When the active intent
+//        records repos, every recorded repo needs at least one declared
+//        artifact in its canonical codekb dir. Empty-produces stages
 //        vacuously pass.
 //     2. workspace_requires - a code-producing stage (frontmatter flag, set on
 //        code-generation) must ALSO have a file outside the aidlc/ workspace
@@ -129,6 +131,22 @@ function writeRecordDoc(proj: string, rel: string): void {
   const full = join(seededRecordDir(proj), rel);
   mkdirSync(join(full, ".."), { recursive: true });
   writeFileSync(full, "# stub\n\n## A\n\n## B\n");
+}
+
+function rewriteIntentRepos(proj: string, repos: string[]): void {
+  const registryPath = join(
+    proj,
+    "aidlc",
+    "spaces",
+    "default",
+    "intents",
+    "intents.json",
+  );
+  const rows = JSON.parse(
+    readFileSync(registryPath, "utf-8"),
+  ) as Array<Record<string, unknown>>;
+  rows[0].repos = repos;
+  writeFileSync(registryPath, `${JSON.stringify(rows, null, 2)}\n`, "utf-8");
 }
 
 function writeSummaryQuestions(proj: string, answer = ""): string {
@@ -435,10 +453,11 @@ describe("t185: stage-completion artifact guard (#366)", () => {
   // real reverse-engineering approval. (The old flat-path design had no codekb
   // concept; this case did not exist in the reference t154.)
   describe("codekb placement (reverse-engineering)", () => {
-    function writeCodekbDoc(name: string): void {
+    function writeCodekbDoc(name: string, recordedRepo?: string): void {
       // basename(proj) is codekbRepoName's default when the intent records no
       // repos (the fixture records none) - the same key the tool resolves.
-      const repo = proj.split("/").filter(Boolean).pop() ?? "repo";
+      const repo = recordedRepo ??
+        proj.split("/").filter(Boolean).pop() ?? "repo";
       const dir = join(proj, "aidlc", "spaces", "default", "codekb", repo);
       mkdirSync(dir, { recursive: true });
       writeFileSync(join(dir, `${name}.md`), "# stub\n");
@@ -457,6 +476,44 @@ describe("t185: stage-completion artifact guard (#366)", () => {
       guarded(proj, ["set", "Current Stage=reverse-engineering"]);
       guarded(proj, ["checkbox", "reverse-engineering=in-progress"]);
       writeCodekbDoc("business-overview"); // a declared produces[] of RE
+      guarded(proj, ["gate-start", "reverse-engineering"]);
+      const r = guarded(proj, ["approve", "reverse-engineering", "--user-input", "ok"]);
+      expect(r.rc).toBe(0);
+    });
+
+    test("REFUSES reverse-engineering when a recorded repo store is missing", () => {
+      guarded(proj, ["set", "Current Stage=reverse-engineering"]);
+      guarded(proj, ["checkbox", "reverse-engineering=in-progress"]);
+      rewriteIntentRepos(proj, ["repo-a", "repo-b"]);
+      writeCodekbDoc("business-overview", "repo-a");
+      bypassed(proj, ["gate-start", "reverse-engineering"]);
+
+      const r = guarded(proj, ["approve", "reverse-engineering", "--user-input", "ok"]);
+      expect(r.rc).not.toBe(0);
+      expect(r.out).toContain("repo-b");
+      expect(r.out).toContain("aidlc/spaces/default/codekb/repo-b/");
+    });
+
+    test("REFUSES reverse-engineering when artifacts are only under an unrecorded repo dir", () => {
+      guarded(proj, ["set", "Current Stage=reverse-engineering"]);
+      guarded(proj, ["checkbox", "reverse-engineering=in-progress"]);
+      rewriteIntentRepos(proj, ["repo-a", "repo-b"]);
+      writeCodekbDoc("business-overview", "wrong-name");
+      bypassed(proj, ["gate-start", "reverse-engineering"]);
+
+      const r = guarded(proj, ["approve", "reverse-engineering", "--user-input", "ok"]);
+      expect(r.rc).not.toBe(0);
+      expect(r.out).toContain("repo-a");
+      expect(r.out).toContain("repo-b");
+    });
+
+    test("PASSES reverse-engineering when every recorded repo has a declared artifact", () => {
+      guarded(proj, ["set", "Current Stage=reverse-engineering"]);
+      guarded(proj, ["checkbox", "reverse-engineering=in-progress"]);
+      rewriteIntentRepos(proj, ["repo-a", "repo-b"]);
+      writeCodekbDoc("business-overview", "repo-a");
+      writeCodekbDoc("architecture", "repo-b");
+
       guarded(proj, ["gate-start", "reverse-engineering"]);
       const r = guarded(proj, ["approve", "reverse-engineering", "--user-input", "ok"]);
       expect(r.rc).toBe(0);
