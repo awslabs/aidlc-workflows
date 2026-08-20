@@ -58,6 +58,7 @@ interface Expected {
 // shipped JSON with no reference to the helper under test.
 function derive(stages: Record<string, "EXECUTE" | "SKIP">): Expected {
   const total = Object.keys(stages).length;
+  const hasUnitDag = stages["units-generation"] === "EXECUTE";
   let execute = 0;
   let gates = 0;
   let perUnitStages = 0;
@@ -67,7 +68,9 @@ function derive(stages: Record<string, "EXECUTE" | "SKIP">): Expected {
     const node = NODE.get(slug);
     if (!node) continue;
     if (node.phase !== "initialization") gates++;
-    if (node.for_each === "unit-of-work" || PER_UNIT.has(slug)) perUnitStages++;
+    if (hasUnitDag && (node.for_each === "unit-of-work" || PER_UNIT.has(slug))) {
+      perUnitStages++;
+    }
   }
   return { total, execute, skip: total - execute, gates, perUnitStages };
 }
@@ -80,6 +83,21 @@ describe("t213 scopeCostSummary matches an independent grid+graph derivation", (
       expect(got).toEqual(derive(GRID[name].stages));
     });
   }
+});
+
+describe("t213 per-unit fan-out requires units-generation", () => {
+  test("every scope follows the derived units-generation rule", () => {
+    for (const [name, definition] of Object.entries(GRID)) {
+      const got = scopeCostSummary(name);
+      const expected = derive(definition.stages);
+      expect(got?.perUnitStages).toBe(expected.perUnitStages);
+      if (definition.stages["units-generation"] === "EXECUTE") {
+        expect(expected.perUnitStages).toBeGreaterThan(0);
+      } else {
+        expect(expected.perUnitStages).toBe(0);
+      }
+    }
+  });
 });
 
 describe("t213 helper agrees with renderScopeTable's EXECUTE / Total cell", () => {

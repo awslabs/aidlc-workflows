@@ -12557,7 +12557,8 @@ export interface ScopeCostSummary {
   skip: number;          // total - execute
   gates: number;         // EXECUTE stages outside initialization; mirrors
                          // computeGate() in aidlc-orchestrate.ts - change together
-  perUnitStages: number; // EXECUTE stages that repeat per Unit of Work
+  perUnitStages: number; // EXECUTE stages that repeat per Unit of Work when
+                         // units-generation EXECUTEs; otherwise they run once
 }
 
 // Cost of an arbitrary EXECUTE/SKIP grid (the composer-proposal shape). Indexes
@@ -12573,6 +12574,7 @@ export function gridCostSummary(
   const byslug = new Map<string, StageEntry>();
   for (const s of loadStageGraph()) byslug.set(s.slug, s);
   const total = Object.keys(stages).length;
+  const hasUnitDag = stages["units-generation"] === "EXECUTE";
   let execute = 0;
   let gates = 0;
   let perUnitStages = 0;
@@ -12582,7 +12584,9 @@ export function gridCostSummary(
     const node = byslug.get(slug);
     if (!node) continue;
     if (node.phase !== "initialization") gates++;
-    if (isPerUnitStage(node)) perUnitStages++;
+    // Without units-generation there is no Unit DAG, so per-unit stages
+    // degrade to one stage-level pass (aidlc-orchestrate.ts).
+    if (hasUnitDag && isPerUnitStage(node)) perUnitStages++;
   }
   return { total, execute, skip: total - execute, gates, perUnitStages };
 }

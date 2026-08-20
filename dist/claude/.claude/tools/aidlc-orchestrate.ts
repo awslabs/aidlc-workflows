@@ -120,6 +120,7 @@ import {
   formatReceivedReply,
   freshReviewReceipts,
   getField,
+  gridCostSummary,
   intentRepos,
   inspectContinuationCursor,
   isPerUnitStage,
@@ -183,7 +184,7 @@ import {
 // detect-scope verb remains the conductor's separate recording move; the
 // import is safe (aidlc-utility.ts main() runs only under import.meta.main,
 // and utility never imports this module - no cycle).
-import { inferScopeFromText } from "./aidlc-utility.ts";
+import { detectWorkspace, inferScopeFromText } from "./aidlc-utility.ts";
 import { resolveHarnessPath, resolveHarnessRoot } from "./aidlc-runtime-paths.ts";
 import { appendAuditEntries } from "./aidlc-audit.ts";
 import { inspectStageValidity } from "./aidlc-validity.ts";
@@ -721,13 +722,46 @@ function parkedDirective(reason: string, stage: string): ParkedDirective {
   };
 }
 
-// The one-line ceremony preview for a scope, deterministic from the compiled
-// grid (scopeCostSummary in aidlc-lib.ts): "N of T stages, G approval gates"
-// plus a per-unit clause when Construction stages fan out per Unit of Work.
+// Workspace detection can serve several scope examples in one routing answer;
+// cache it so a process scans each project root at most once.
+const workspaceProjectType = new Map<string, string | null>();
+
+function detectedProjectType(projectDir: string): string | null {
+  if (workspaceProjectType.has(projectDir)) {
+    return workspaceProjectType.get(projectDir) ?? null;
+  }
+  let projectType: string | null = null;
+  try {
+    projectType = detectWorkspace(projectDir).projectType.toLowerCase();
+  } catch {
+    // Cost disclosure must never block routing; nominal counts remain useful.
+  }
+  workspaceProjectType.set(projectDir, projectType);
+  return projectType;
+}
+
+function effectiveScopeCostSummary(scope: string, projectDir: string) {
+  const nominal = scopeCostSummary(scope);
+  if (!nominal) return null;
+  const definition = loadScopeMapping()[scope];
+  if (
+    definition?.stages["reverse-engineering"] !== "EXECUTE" ||
+    detectedProjectType(projectDir) !== "greenfield"
+  ) {
+    return nominal;
+  }
+  const adjusted = { ...definition.stages, "reverse-engineering": "SKIP" as const };
+  return gridCostSummary(adjusted);
+}
+
+// The one-line ceremony preview for a scope, deterministic from the effective
+// compiled grid: "N of T stages, G approval gates" plus a per-unit clause when
+// Construction stages fan out per Unit of Work. Greenfield previews apply the
+// same reverse-engineering adjustment intent creation writes into state.
 // Returns "" for a scope that does not resolve (a fixture tree without it), so
 // callers can drop the whole clause rather than emit a broken preview.
-function costClause(scope: string): string {
-  const c = scopeCostSummary(scope);
+function costClause(scope: string, projectDir: string): string {
+  const c = effectiveScopeCostSummary(scope, projectDir);
   if (!c) return "";
   const perUnit = c.perUnitStages > 0
     ? `, ${c.perUnitStages} ${c.perUnitStages === 1 ? "stage repeats" : "stages repeat"} per unit of work in Construction`
@@ -935,7 +969,12 @@ const NEW_WORK_HINT =
 // Branch 9 (explicit --scope flag) so the explicit-naming shapes emit identical
 // directives. The harness dir is resolved through harnessDir() so the directive
 // names the right tree on every harness (.claude/.kiro/.codex).
-function createPrintDirective(scope: string, flags: ParsedFlags, description?: string): PrintDirective {
+function createPrintDirective(
+  scope: string,
+  flags: ParsedFlags,
+  projectDir: string,
+  description?: string,
+): PrintDirective {
   const cmd = [`intent-create --scope ${scope}`];
   let labelHint = "";
   if (description && description.length > 0) {
@@ -955,7 +994,7 @@ function createPrintDirective(scope: string, flags: ParsedFlags, description?: s
   // Disclose the ceremony on the print: an explicitly named scope births
   // directly (no confirm ask by design), so the stage/gate counts ride here.
   // Omit the parenthetical when the scope does not resolve (fixture trees).
-  const clause = costClause(scope);
+  const clause = costClause(scope, projectDir);
   const cost = clause ? ` (${clause})` : "";
   const runCmd = `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${cmd.join(" ")}\``;
   const directive = flags.newIntent
@@ -3157,7 +3196,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     // back to the resolved scope only when no flag was passed. Both were already
     // validated above (Branch 3b validates flags.scope; the unknown-scope check
     // validates the resolved scope).
-    emit(createPrintDirective(flags.scope ?? scope, flags, description));
+    emit(createPrintDirective(flags.scope ?? scope, flags, pd, description));
     return;
   }
 
@@ -3279,7 +3318,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       emit(pick);
       return;
     }
-    emit(createPrintDirective(flags.positionalScope, flags, flags.intent));
+    emit(createPrintDirective(flags.positionalScope, flags, pd, flags.intent));
     return;
   }
 
@@ -3313,7 +3352,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       // Preview the ceremony the user is confirming: stage/gate counts from the
       // compiled grid (never estimates). Drop the clause if the scope does not
       // resolve (a fixture tree without it) rather than emit a broken preview.
-      const clause = costClause(inferred.scope);
+      const clause = costClause(inferred.scope, pd);
       const cost = clause ? ` - ${clause}` : "";
       emit(askDirective(
         `This looks like "${inferred.scope}" work, so I'd run the "${inferred.scope}" plan for: "${flags.intent}"${cost}. ` +
@@ -3324,9 +3363,9 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     // Anchor the compose offer with the counts for the three named scopes so the
     // user calibrates the order-of-magnitude difference before deciding. Fall
     // back to bare names if any scope does not resolve.
-    const express = scopeCostSummary("express");
-    const classic = scopeCostSummary("classic");
-    const feat = scopeCostSummary("feature");
+    const express = effectiveScopeCostSummary("express", pd);
+    const classic = effectiveScopeCostSummary("classic", pd);
+    const feat = effectiveScopeCostSummary("feature", pd);
     const fallbackExamples = [...validScopes()].slice(0, 3).join(", ") || "an explicit scope";
     const examples = express && classic && feat
       ? `express = ${express.execute} of ${express.total} stages, classic = ${classic.execute}, feature = all ${feat.execute}`
@@ -3362,7 +3401,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     // flags.intent here is freeform feature text typed alongside an explicit
     // --scope (e.g. `/aidlc --scope feature "build the auth service"`) — thread
     // it as the born intent's description; a bare `--scope <s>` carries none.
-    emit(createPrintDirective(scope, flags, flags.intent));
+    emit(createPrintDirective(scope, flags, pd, flags.intent));
     return;
   }
   //

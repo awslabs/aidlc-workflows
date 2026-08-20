@@ -65,11 +65,12 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   cleanupTestProject,
   createTestProject,
+  seededAuditShard,
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
@@ -145,6 +146,26 @@ function deleteStateLines(p: string, pattern: RegExp): void {
   writeFileSync(f, kept);
 }
 
+function seedAudit(
+  p: string,
+  rows: Array<{
+    timestamp: string;
+    event: "STAGE_AWAITING_APPROVAL" | "GATE_APPROVED" | "GATE_REJECTED";
+    recovered?: boolean;
+  }>,
+): void {
+  const shard = seededAuditShard(p);
+  mkdirSync(join(shard, ".."), { recursive: true });
+  const body = rows.map((row) => [
+    "## Gate Event",
+    `**Timestamp**: ${row.timestamp}`,
+    `**Event**: ${row.event}`,
+    "**Stage**: feasibility",
+    ...(row.recovered ? ["**Recovered**: true"] : []),
+  ].join("\n")).join("\n\n---\n\n");
+  writeFileSync(shard, `${body}\n`, "utf-8");
+}
+
 describe("t38 aidlc-utility status — gate awareness (migrated from t38-utility-status-gate-awareness.sh, plan 5)", () => {
   // --- Test 1: [?] state -> "Awaiting your approval" phrase ---
   // state-mid-ideation has feasibility as [-]; flip it to [?].
@@ -156,6 +177,53 @@ describe("t38 aidlc-utility status — gate awareness (migrated from t38-utility
     // STRONGER: exact rendered phrase (display name from stage-graph) instead
     // of the .sh's case-insensitive substring grep.
     expect(r.out).toContain("Awaiting your approval on Feasibility & Constraints");
+    expect(r.out).not.toContain("waiting since");
+  });
+
+  test("1b: organic gate-open renders its ledger timestamp and pending duration", () => {
+    const p = seededProj();
+    sedState(p, /^- \[-\] feasibility/m, "- [?] feasibility");
+    const timestamp = "2026-08-19T08:30:00Z";
+    seedAudit(p, [{
+      timestamp,
+      event: "STAGE_AWAITING_APPROVAL",
+    }]);
+    const r = status(p);
+    expect(r.status).toBe(0);
+    expect(r.out).toContain(`waiting since ${timestamp}, ~`);
+  });
+
+  test("1c: a later gate resolution suppresses waiting-since", () => {
+    const p = seededProj();
+    sedState(p, /^- \[-\] feasibility/m, "- [?] feasibility");
+    seedAudit(p, [
+      {
+        timestamp: "2026-08-19T08:30:00Z",
+        event: "STAGE_AWAITING_APPROVAL",
+      },
+      {
+        timestamp: "2026-08-19T09:00:00Z",
+        event: "GATE_APPROVED",
+      },
+    ]);
+    const r = status(p);
+    expect(r.status).toBe(0);
+    expect(r.out).toContain("Awaiting your approval on Feasibility & Constraints");
+    expect(r.out).not.toContain("waiting since");
+  });
+
+  test("1d: a Recovered-only gate row does not supply waiting-since", () => {
+    const p = seededProj();
+    sedState(p, /^- \[-\] feasibility/m, "- [?] feasibility");
+    seedAudit(p, [{
+      timestamp: "2026-08-19T08:30:00Z",
+      event: "STAGE_AWAITING_APPROVAL",
+      recovered: true,
+    }]);
+    const r = status(p);
+    expect(r.status).toBe(0);
+    expect(r.out).toContain("Awaiting your approval on Feasibility & Constraints");
+    expect(r.out).not.toContain("waiting since");
   });
 
   // --- Test 2: [R] state -> "Revising" phrase ---
