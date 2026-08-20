@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.25] - 2026-08-20
+
+Kiro CLI `/aidlc` commands now dispatch deterministically on generations that deliver the raw typed prompt to `userPromptSubmit`: `/aidlc --status`, `space`, `space-create`, `intent`, and other routed invocations previously became a silent no-op when the hook expected only an expanded skill body. **Upgrade:** refresh your `dist/kiro/` shell to install the corrected verb interceptor.
+
+* Raw prompts beginning with `/aidlc` now recover their complete shell-normalized argument vector for terminal dispatch, engine pre-dispatch, or guarded forwarding.
+* Expanded skill bodies continue to recover arguments from the forwarding-loop anchor first, preserving existing behavior when both payload shapes are present.
+* Mid-sentence `/aidlc` mentions and `/aidlc-foo` text remain inert.
+
 ## [2.6.18] - 2026-08-19
 
 Classic and Express are new scope options, and the implicit default scope is now Classic — a **declared behavior change**: invocations that name no scope and match no keyword now run the v1-style lifecycle without Ideation instead of the full-lifecycle Feature scope. Exactly two things control the implicit default: the `AWS_AIDLC_DEFAULT_SCOPE` env var (which overrides) and the framework's hard-coded `classic` fallback. Express has a deterministic requirements-to-conditional-deploy path, and conditional protocol modules reduce fixed context without dropping reviewer recovery behavior. **Upgrade:** refresh your `dist/<harness>/` shell; in-flight workflows keep their persisted scope and need no migration; set `AWS_AIDLC_DEFAULT_SCOPE=feature` (Claude: the `.claude/settings.json` `env` block, which now ships `classic`) to keep the previous full-lifecycle default.
