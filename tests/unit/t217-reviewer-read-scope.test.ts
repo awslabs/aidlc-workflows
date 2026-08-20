@@ -1,4 +1,4 @@
-// covers: file:aidlc-common/protocols/stage-protocol.md §12a,
+// covers: file:aidlc-common/protocols/stage-protocol-reviewer.md §12a,
 // file:agents/aidlc-architecture-reviewer-agent.md,
 // file:knowledge/aidlc-architecture-reviewer-agent/reviewing.md,
 // file:skills/aidlc/SKILL.md reviewer bullet
@@ -17,13 +17,13 @@ import { join } from "node:path";
 import { AIDLC_SRC } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
-const PROTOCOL = "aidlc-common/protocols/stage-protocol.md";
+const PROTOCOL = "aidlc-common/protocols/stage-protocol-reviewer.md";
 const PERSONA = "agents/aidlc-architecture-reviewer-agent.md";
 const KNOWLEDGE = "knowledge/aidlc-architecture-reviewer-agent/reviewing.md";
 const SKILL = "skills/aidlc/SKILL.md";
 
 describe("t217 reviewer read-scope bound is stated on every surface", () => {
-  test("stage-protocol §12a step 1 names directive.consumes as a per-unit pass-list entry", () => {
+  test("stage-protocol-reviewer.md §12a step 1 names directive.consumes as a per-unit pass-list entry", () => {
     const body = readFileSync(join(AIDLC_SRC, PROTOCOL), "utf-8");
     // §12a section exists.
     expect(body).toContain("## 12a. Reviewer Invocation");
@@ -59,17 +59,13 @@ describe("t217 reviewer read-scope bound is stated on every surface", () => {
     expect(body).not.toMatch(/^- Cross-unit contract boundaries respected\?$/m);
   });
 
-  test("orchestrator SKILL.md reviewer bullet names directive.consumes and the read-scope bound", () => {
+  test("orchestrator SKILL.md points reviewer work at the conditional module", () => {
     for (const harness of HARNESS_MATRIX) {
       const path = join(harness.authoredRoot, SKILL);
       const body = readFileSync(path, "utf-8");
       const labelledBody = `harness ${harness.name}: ${path}\n${body}`;
-      // Reviewer step bullet exists and now carries both parts of the bound.
-      expect(labelledBody).toMatch(/Reviewer step \(§12a\)/);
-      expect(labelledBody).toMatch(/directive\.consumes/);
-      expect(labelledBody).toMatch(/must not read other units'? .*construction/i);
-      // The bound is tool-agnostic on every harness surface.
-      expect(labelledBody).toMatch(/grep, glob, and shell patterns/);
+      expect(labelledBody).toContain("stage-protocol-reviewer.md");
+      expect(labelledBody).toContain("directive.protocol_modules");
     }
   });
 
@@ -85,9 +81,7 @@ describe("t217 reviewer read-scope bound is stated on every surface", () => {
     for (const harness of HARNESS_MATRIX) {
       const body = readFileSync(join(harness.authoredRoot, SKILL), "utf-8");
       const labelled = `harness ${harness.name}`;
-      // The reviewer bullet no longer restricts consumes to per-unit stages.
-      expect(body.toLowerCase(), labelled).toContain("workflow-level");
-      expect(body, labelled).toMatch(/EVERY reviewer-bearing stage/i);
+      expect(body, labelled).toContain("stage-protocol-reviewer.md");
     }
   });
 });

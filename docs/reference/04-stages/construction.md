@@ -108,7 +108,7 @@ current batch until every applicable Unit has all of that evidence, then permits
 a dependent batch or the single stage gate. Waves never apply under
 `Construction Iteration: unit-major`; harnesses without a parallel dispatch
 primitive process the entries serially. See
-`stage-protocol.md` §3 "Per-unit batch waves" for the full contract.
+`stage-protocol-construction.md` § "Per-unit batch waves" for the full contract.
 
 **Parallel batches.** When two or more Bolts share dependency-satisfaction
 and don't depend on each other, the conductor dispatches their Code
@@ -121,7 +121,7 @@ recoverable from the log.
 of autonomy mode. Options are retry (re-run just the failed Bolt), skip
 (mark `[S]` and continue — dependent Bolts may also fail), or abort.
 Successful siblings in a parallel batch keep their `[x]` status and
-artifacts. See `stage-protocol.md` §1 "Construction Bolt gates" and
+artifacts. See `stage-protocol-construction.md` § "Construction Bolt gates" and
 SKILL.md §CONSTRUCTION Flow for the canonical specification.
 
 ---
@@ -941,29 +941,31 @@ with the aidlc-devsecops-agent providing security testing expertise.
     **Failure-escalation ladder:** On failure, if build or tests fail:
 
     1. **In-stage fix (max 2 attempts)** -- for root causes inside this
-       stage's own remit (test config, build scripts, environment setup,
-       small code defects): read the error output, identify the failing code,
-       apply the fix, re-run the failing step.
+       stage's own remit (test config, build scripts, environment setup):
+       read the error output, identify the failing configuration or
+       scaffolding, apply the fix, re-run the failing step.
     2. **Classify and estimate impact** -- when in-stage attempts are exhausted or the
-       diagnosis points upstream: decide whether the root cause lies in the
-       generated code or a code-generation approach choice (library/version,
-       container image, instance type, algorithm, flag); find a fix in a
-       swappable dimension and ESTIMATE ITS IMPACT (effort, financial cost, risk). Never declare
-       a feasible path out of scope on an impact-unestimated effort assumption.
+       diagnosis points upstream: decide whether the root cause lies in
+       generated source or test code -- regardless of defect size -- or a
+       code-generation approach choice (library/version, container image,
+       instance type, algorithm, flag); find a fix in a swappable dimension
+       and ESTIMATE ITS IMPACT (effort, financial cost, risk). Never declare a
+       feasible path out of scope on an impact-unestimated effort assumption.
     3. **Autonomous bounded loop-back** -- if `Construction Autonomy Mode:
        autonomous`, an impact-estimated fix exists, and fewer than 3 entries exist under
        `## Loop-Back Log`: record the diagnosis + impact-estimated fix, jump
        back to code-generation via the engine, and replay forward through its
-       settlement-aware route per
-       stage-protocol.md Section 1 "Build-and-Test failure loop-back". The
-       failed run's gate is not presented; its learnings ritual defers to the
-       eventual passing run.
+       settlement-aware route per the construction protocol module
+       (`aidlc-common/protocols/stage-protocol-construction.md`),
+       "Build-and-Test failure loop-back". The failed run's gate is not
+       presented; its learnings ritual defers to the eventual passing run.
     4. **Halt-and-ask** -- gated/unset mode, bound exhausted, or no
        identifiable fix: log the failure and present the halt-and-ask
-       question from stage-protocol.md Section 1 -- the impact-estimated 3-option
-       variant (Retry with fix [estimated impact] / Accept failure / Abort) when a
-       candidate fix exists, or the no-fix 2-option variant (Accept
-       failure / Abort) when rung 2 found none.
+       question from the construction protocol module
+       (`aidlc-common/protocols/stage-protocol-construction.md`) -- the
+       impact-estimated 3-option variant (Retry with fix [estimated impact] /
+       Accept failure / Abort) when a candidate fix exists, or the no-fix
+       2-option variant (Accept failure / Abort) when rung 2 found none.
 
     **Loop-back replay routing:** If Code Generation never used unit lifecycle
     receipts, preserved artifacts can take the all-covered `gate: true` fast
@@ -1031,10 +1033,11 @@ Strictly 2-option: Approve / Request Changes.
   approach choice, the stage classifies and estimates the impact of a fix, then either runs
   the bounded autonomous loop-back to code-generation (max 3, counted by the
   append-only `## Loop-Back Log` in test-results.md) or presents the impact-estimated
-  halt-and-ask question. See stage-protocol.md Section 1 "Build-and-Test
-  failure loop-back". Re-entry is settlement-aware, preserves the approved
-  plan, and cannot reach its gate until every applicable Code Generation Unit
-  has a fresh current-attempt review.
+  halt-and-ask question. See the construction protocol module
+  (`aidlc-common/protocols/stage-protocol-construction.md`),
+  "Build-and-Test failure loop-back". Re-entry is settlement-aware, preserves
+  the approved plan, and cannot reach its gate until every applicable Code
+  Generation Unit has a fresh current-attempt review.
 - **Conditional test types**: Performance tests, security tests, contract
   tests, E2E tests, and accessibility tests are only generated when relevant
   conditions are met (NFR requirements exist, microservice architecture,

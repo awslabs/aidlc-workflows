@@ -66,7 +66,7 @@ import { join } from "node:path";
 import { getField } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
-// The nine shipped stock scopes. A composed scope whose name is NOT one of
+// The ten shipped stock scopes. A composed scope whose name is NOT one of
 // these is a CUSTOM grid: the composer authors it fresh on the sanctioned path,
 // which is exactly the write the sandbox grant enables (a stock name reuses a
 // file that already ships).
@@ -79,7 +79,9 @@ const STOCK_SCOPES = new Set([
   "poc",
   "refactor",
   "security-patch",
+  "classic",
   "workshop",
+  "express",
 ]);
 
 const CODEX_DIST = join(REPO_ROOT, "dist", "codex");
@@ -298,7 +300,7 @@ describe("t-exec-codex-compose-front - interactive compose over exec + exec resu
           readFileSync(join(proj, ".codex", "tools", "data", "scope-grid.json"), "utf-8"),
         );
         expect(Object.keys(grid)).toContain(scope);
-        // A composed name outside the nine shipped scopes confirms the CUSTOM
+        // A composed name outside the ten shipped scopes confirms the CUSTOM
         // arc actually ran (not a stock match), so the two assertions above
         // exercised the composer's fresh sanctioned write, not a shipped file.
         if (!STOCK_SCOPES.has(scope)) {

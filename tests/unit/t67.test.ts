@@ -37,7 +37,7 @@
 // PARITY NOTES (every .sh `ok` line maps to an expect() below; STRONGER adds noted):
 //   §1 scope-table emission shape (5 asserts) -> Tests 1-5:
 //     - BEGIN marker / END marker / "| Scope" header / "| bugfix" row /
-//       "| workshop" row — all preserved as stdout .toContain() + STRONGER
+//       "| classic" row — all preserved as stdout .toContain() + STRONGER
 //       res.status===0 pin (the .sh discarded $? on the bare emission call).
 //   §2 deterministic + alphabetical (2 asserts) -> Tests 6-7:
 //     - two emissions byte-equal (Test 6); row names == alphabetical EXPECTED
@@ -61,7 +61,7 @@
 //       file -> res.status===1 AND stderr "missing scope-table markers"
 //       (the .sh AND'd rc==1 with the grep; both asserted here).
 //   §7 keyword matching (7 asserts) -> Tests 13-19: fix->bugfix, refactor,
-//       CVE->security-patch, workshop, spike->poc, mvp, infra — each asserts
+//       CVE->security-patch, classic, express, spike->poc, mvp, infra — each asserts
 //       JSON-ack "scope" AND audit **Detected scope** (STRONGER: the .sh only
 //       compared inferScopeFromText().scope; we also pin the audit side effect).
 //   §8 word-boundary guards (2 asserts) -> Tests 20-21: "debug this issue" and
@@ -282,7 +282,7 @@ function rowNames(tableOut: string): string[] {
 }
 
 const EXPECTED_ROW_ORDER =
-  "bugfix enterprise feature infra mvp poc refactor security-patch workshop";
+  "bugfix classic enterprise express feature infra mvp poc refactor security-patch workshop";
 
 // ============================================================
 // scope-table — emission shape (.sh §1)
@@ -308,8 +308,10 @@ describe("t67 scope-table emission (migrated from t67-scope-table.sh §1-3)", ()
     expect(scopeTable().out).toContain("| bugfix");
   });
 
-  test("5: scope-table output includes workshop row", () => {
+  test("5: scope-table output includes classic, workshop, and express rows", () => {
+    expect(scopeTable().out).toContain("| classic");
     expect(scopeTable().out).toContain("| workshop");
+    expect(scopeTable().out).toContain("| express");
   });
 
   // --- §2: deterministic + alphabetical ---
@@ -345,7 +347,7 @@ describe("t67 scope-table emission (migrated from t67-scope-table.sh §1-3)", ()
     expect(gridCount).toBe(mdCount);
     expect(rowCount).toBe(gridCount);
     // … and the concrete count is pinned.
-    expect(rowCount).toBe(9);
+    expect(rowCount).toBe(11);
   });
 });
 
@@ -422,6 +424,7 @@ describe("t67 detect-scope --from-text keyword inference (migrated from t67 §7)
   test('14: "refactor this code" -> refactor', keywordCase("refactor this code", "refactor"));
   test('15: "CVE patch" -> security-patch', keywordCase("CVE patch", "security-patch"));
   test('16: "run workshop today" -> workshop', keywordCase("run workshop today", "workshop"));
+  test('16b: "express" -> express', keywordCase("express", "express"));
   test('17: "spike prototype" -> poc', keywordCase("spike prototype", "poc"));
   test('18: "mvp" -> mvp', keywordCase("mvp", "mvp"));
   test('19: "infra deploy" -> infra', keywordCase("infra deploy", "infra"));
@@ -440,8 +443,8 @@ describe("t67 detect-scope --from-text boundary + fallback (migrated from t67 §
     );
   };
 
-  test('20: "debug this issue" -> feature (word-boundary, no bugfix)', fallbackCase("debug this issue", "feature"));
-  test('21: "fixture scope testing" -> feature (word-boundary, no bugfix)', fallbackCase("fixture scope testing", "feature"));
+  test('20: "debug this issue" -> classic (word-boundary, no bugfix)', fallbackCase("debug this issue", "classic"));
+  test('21: "fixture scope testing" -> classic (word-boundary, no bugfix)', fallbackCase("fixture scope testing", "classic"));
 
   // §8b multi-word keyword matches despite extra whitespace.
   test('22: "minimum  viable" (double-space) -> mvp', () => {
@@ -455,16 +458,16 @@ describe("t67 detect-scope --from-text boundary + fallback (migrated from t67 §
   });
 
   // §9 >5-word input with keywords -> feature default.
-  test('23: ">5-word input with keywords -> feature default"', fallbackCase("I want to fix the broken auth flow quickly today", "feature"));
+  test('23: ">5-word input with keywords -> classic default"', fallbackCase("I want to fix the broken auth flow quickly today", "classic"));
 
   // §10 empty input -> feature default (valid CLI path under --from-text).
-  test("24: empty input -> feature default", () => {
+  test("24: empty input -> classic default", () => {
     const p = proj();
     const r = detectFromText("", p);
     expect(r.status).toBe(0);
-    expect(ackScope(r)).toBe("feature");
+    expect(ackScope(r)).toBe("classic");
     expect(auditField(readAudit(p), "SCOPE_DETECTED", "Detected scope")).toBe(
-      "feature",
+      "classic",
     );
     // STRONGER: a keyword-less match also marks Source=freeform.
     expect(auditField(readAudit(p), "SCOPE_DETECTED", "Source")).toBe("freeform");

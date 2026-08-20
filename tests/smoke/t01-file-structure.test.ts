@@ -140,11 +140,15 @@ describe("t01 — shipped-tree file-structure invariant (mechanism: none)", () =
     expect(existsSync(at("skills", "aidlc", "SKILL.md"))).toBe(true);
   });
 
-  test("ships the 3 stage-protocol spine files [.sh L15-17]", () => {
+  test("ships the 7 stage-protocol files [.sh L15-17 + conditional modules]", () => {
     for (const f of [
       "stage-protocol.md",
       "stage-protocol-recovery.md",
       "stage-protocol-governance.md",
+      "stage-protocol-reviewer.md",
+      "stage-protocol-swarm.md",
+      "stage-protocol-ensemble.md",
+      "stage-protocol-construction.md",
     ]) {
       expect(existsSync(at("aidlc-common", "protocols", f))).toBe(true);
     }
@@ -265,26 +269,30 @@ describe("t01 — shipped-tree file-structure invariant (mechanism: none)", () =
   // producer to 72, then the plan-approval guard to 73. Re-drive the
   // data the loops drove and pin its length, so the migrated suite cannot
   // silently shrink the structural surface the .sh enforced.
-  test("asserts EXACTLY 74 shipped paths (TAP plan 63 + 2 reviewer agents + 7 hooks + the composer + contract-design) [.sh L9]", () => {
+  test("asserts EXACTLY 78 shipped paths (prior 74 + 4 conditional protocol modules) [.sh L9]", () => {
     const paths: string[] = [
       at("skills", "aidlc", "SKILL.md"), // 1
       at("aidlc-common", "protocols", "stage-protocol.md"), // 2
       at("aidlc-common", "protocols", "stage-protocol-recovery.md"), // 3
       at("aidlc-common", "protocols", "stage-protocol-governance.md"), // 4
-      ...HOOKS.map((h) => at("hooks", h)), // 5-21 (17)
-      ...AGENTS.map((a) => at("agents", `aidlc-${a}-agent.md`)), // 22-35 (14)
+      at("aidlc-common", "protocols", "stage-protocol-reviewer.md"), // 5
+      at("aidlc-common", "protocols", "stage-protocol-swarm.md"), // 6
+      at("aidlc-common", "protocols", "stage-protocol-ensemble.md"), // 7
+      at("aidlc-common", "protocols", "stage-protocol-construction.md"), // 8
+      ...HOOKS.map((h) => at("hooks", h)),
+      ...AGENTS.map((a) => at("agents", `aidlc-${a}-agent.md`)),
       ...Object.entries(STAGES).flatMap(([phase, stages]) =>
         stages.map((s) => at("aidlc-common", "stages", phase, `${s}.md`)),
-      ), // 36-68 (33)
-      at("settings.json"), // 69
-      at("settings.local.json.example"), // 70
-      at("knowledge", "aidlc-shared", "state-template.md"), // 71
-      mem("org.md"), // 72 — method relocated to aidlc/spaces/default/memory/
-      mem("project.md"), // 73
-      at("CLAUDE.md"), // 74
+      ),
+      at("settings.json"),
+      at("settings.local.json.example"),
+      at("knowledge", "aidlc-shared", "state-template.md"),
+      mem("org.md"),
+      mem("project.md"),
+      at("CLAUDE.md"),
     ];
-    expect(paths.length).toBe(74);
-    // Every one of the 74 must exist — the .sh's full TAP plan, re-proven as a
+    expect(paths.length).toBe(78);
+    // Every one of the 78 must exist — the .sh's full TAP plan, re-proven as a
     // single set so the count and the existence checks cannot drift apart.
     for (const p of paths) {
       expect(existsSync(p)).toBe(true);

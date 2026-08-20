@@ -1,9 +1,9 @@
 # Stage Protocol Reference
 
-Human-readable restructuring of the machine-oriented
-`dist/claude/.claude/aidlc-common/protocols/stage-protocol.md`. Preserves all
-rules, conditions, and behaviors while reorganizing for developer consumption.
-Section references (e.g., "Protocol Section 1") map to the source file.
+Human-readable restructuring of the machine-oriented protocol family under
+`dist/claude/.claude/aidlc-common/protocols/`. Preserves all rules, conditions,
+and behaviors while reorganizing for developer consumption. Section references
+map to the static protocol or the named conditional module.
 
 > For stage file *format* (YAML frontmatter, body conventions), see
 > [Stage Definition](15-stage-definition.md). This chapter covers runtime
@@ -21,14 +21,18 @@ Section references (e.g., "Protocol Section 1") map to the source file.
 
 ## Protocol File Structure
 
-The stage protocol is split across three files, loaded conditionally by the
+The stage protocol is split across seven files, loaded conditionally by the
 conductor based on workflow context:
 
 | File | Contents | When Loaded |
 |------|----------|-------------|
-| `stage-protocol.md` | Core protocol: approval gates, completion messages, question flow, state tracking, agent persona loading, depth guidance, terminology, content validation, subagent return formats, and the §13 Learnings Ritual | Every stage (mandatory) |
+| `stage-protocol.md` | Core protocol: approval gates, completion messages, question flow, state tracking, agent persona loading, depth guidance, terminology, content validation, and the §13 Learnings Ritual | Every stage (mandatory) |
 | `stage-protocol-recovery.md` | Error Recovery + Change Handling | On session resume, or when a change event is detected mid-stage |
 | `stage-protocol-governance.md` | Phase Boundary Verification (§13) | At phase boundaries (1.7->2.1, 2.9->3.1, 3.7->4.1) |
+| `stage-protocol-reviewer.md` | Reviewer dispatch, receipts, read scope, terminal ordering, and NOT-READY loop | When the directive names an effective reviewer |
+| `stage-protocol-ensemble.md` | Ensemble topology, subagent returns, contribution files, and objection triage | For subagent, pipeline, mob, or support-agent stages |
+| `stage-protocol-construction.md` | Bolt gates, the Build-and-Test failure loop-back, Construction questions, per-unit iteration, receipts, and waves | On the first Construction directive of the session and every invoke-swarm |
+| `stage-protocol-swarm.md` | Harness-specific autonomous fan-out, convergence, finalize, and reviewer boundary | Every invoke-swarm |
 
 ### Conditional Loading Logic (from SKILL.md Routing)
 
@@ -43,11 +47,22 @@ The conductor's Routing section defines the loading rules:
   (1.7->2.1, 2.9->3.1, 3.7->4.1) to run the Phase Boundary Verification
   traceability check. This limits governance overhead to the points where it
   is needed.
+- **`stage-protocol-reviewer.md`**: load when `protocol_modules` includes
+  `reviewer`, or when the directive carries a reviewer.
+- **`stage-protocol-ensemble.md`**: load when `protocol_modules` includes
+  `ensemble`; the fallback trigger is a dispatched topology or support agents.
+- **`stage-protocol-construction.md`**: load on the first Construction
+  directive of the session and every invoke-swarm.
+- **`stage-protocol-swarm.md`**: load for invoke-swarm.
 
-The split reduces context size during normal stage execution while ensuring
-recovery and governance rules are available when relevant. Capturing in-stage
-corrections as durable Rules is handled by the §13 Learnings Ritual in
-`stage-protocol.md` (loaded every stage), not by a separate governance flow.
+Before running the stage body, the conductor reads every module named by
+`directive.protocol_modules` and skips modules already loaded in the session.
+
+The split reduces fixed context during normal stage execution while ensuring
+rare-path reviewer, ensemble, Construction, swarm, recovery, and governance
+rules are loaded when relevant. Capturing in-stage corrections as durable Rules
+is handled by the §13 Learnings Ritual in `stage-protocol.md` (loaded every
+stage), not by a separate governance flow.
 
 ---
 
@@ -61,9 +76,9 @@ personas; the protocol stays independent of phase and agent, defining
 the structural rules that wrap around any stage's domain-specific work.
 
 The protocol covers: approval gates, completion messages, question flow, state
-tracking, agent persona loading, error recovery, change handling, depth
-guidance, content validation, subagent return formats, the §13 Learnings
-Ritual, and phase boundary verification.
+tracking, agent persona loading, conditional reviewer/ensemble/Construction/
+swarm behavior, error recovery, change handling, depth guidance, content
+validation, the §13 Learnings Ritual, and phase boundary verification.
 
 ### Critical Compliance Checklist
 
@@ -126,7 +141,8 @@ never guesses the next stage.
 **No Emergent Behavior Rule:** Construction and Operation stages (phases 3-4)
 must always use this 2-option format. They must never introduce additional
 navigation options. Two sanctioned carve-outs exist: the revision escape
-hatch (below) and the Build-and-Test failure loop-back (protocol Section 1,
+hatch (below) and the Build-and-Test failure loop-back in the construction
+protocol module (`aidlc-common/protocols/stage-protocol-construction.md`,
 "Build-and-Test failure loop-back" -- the bounded 3.6 to 3.5 repair loop with
 its impact-estimated halt-and-ask question).
 
@@ -568,7 +584,7 @@ Each stage specifies lead and optional support agents. Personas load through
 a 6-step knowledge order building from broad context to stage-specific
 artifacts.
 
-*(Protocol Section 5)*
+*(Static protocol: `stage-protocol.md`, Section 5)*
 
 ### 6-Step Knowledge Loading Order
 
@@ -600,6 +616,8 @@ dynamic per workflow position.
 
 ### Multi-Agent Stages (Ensemble Topologies)
 
+*(Conditional module: `stage-protocol-ensemble.md`, Section 5)*
+
 *How* the conductor brings support agents in follows `directive.mode` — the stage's
 communication topology: on an `inline` stage the support agents are personas the
 conductor loads into its own context (voices, not dispatches); on `subagent`
@@ -613,7 +631,7 @@ them complete. Who sees what differs per topology — spokes are mutually blind,
 links see all upstream work, mob objectors get one confirm-or-maintain round while
 judgment-call objections surface to the human mid-stage — but on every topology the
 conductor performs every delegation; agents never spawn subagents. See
-stage-protocol.md §5 "Multi-agent stages" for the full contract.
+`stage-protocol-ensemble.md` for the full contract.
 
 Example: Feasibility uses `aidlc-architect-agent` (lead) + `aidlc-aws-platform-agent` +
 `aidlc-compliance-agent`, all inline. The mob showcase is `user-stories`: the
@@ -801,20 +819,22 @@ and problem complexity.
 | refactor | Minimal | Minimal | 8 | Targeted |
 | infra | Standard | Standard | ~13 | Infra-focused |
 | security-patch | Minimal | Minimal | ~10 | Security-focused |
-| workshop | Standard | **Minimal** | 26 | Standard depth for learning; Nyquist testing for pace |
+| classic | Standard | Standard | 26 | Default v1-style lifecycle without Ideation |
+| workshop | Standard | Minimal | 26 | Facilitated lifecycle with teaching test floor |
+| express | Minimal | Minimal | 10 | Requirements to conditional deploy, reviewers disabled |
 
 User can override depth or test strategy at any approval gate.
 
 ### Three Depth Levels
 
-**Minimal** (poc, bugfix, refactor, security-patch) -- minimal artifacts,
+**Minimal** (poc, bugfix, refactor, security-patch, express) -- minimal artifacts,
 brief analysis, skip optional stages:
 - Requirements: 5-10 items, brief descriptions, minimal NFRs
 - App Design: single component diagram, basic data model, no ADRs
 - Functional Design: brief business rules, simple entities, skip
   `frontend-components.md`
 
-**Standard** (feature, mvp, infra) -- full artifacts at moderate detail:
+**Standard** (feature, mvp, infra, classic, workshop) -- full artifacts at moderate detail:
 - Requirements: 15-30 with acceptance criteria, moderate NFRs
 - App Design: component diagrams with interactions, relationships, 2-3 ADRs
 - Functional Design: detailed business logic, comprehensive rules, entity
@@ -839,7 +859,7 @@ brief analysis, skip optional stages:
 | **AI-DLC** | AI-Driven Development Life Cycle -- the methodology this system implements |
 | **Phase** | Top-level grouping: Initialization, Ideation, Inception, Construction, Operation |
 | **Stage** | A discrete step within a phase (e.g., Intent Capture, Code Generation) |
-| **Scope** | Controls which stages execute and at what depth (enterprise, feature, mvp, poc, bugfix, refactor, infra, security-patch, workshop) |
+| **Scope** | Controls which stages execute and at what depth (enterprise, feature, mvp, poc, bugfix, refactor, infra, security-patch, classic, workshop, express) |
 | **Depth** | Artifact detail scale: Minimal, Standard, or Comprehensive |
 | **Unit of Work** | An independently implementable package of features; the Construction iteration unit. One pass through stages 3.1-3.7. |
 | **Service** | A deployable process or container (API server, worker, frontend app) |
@@ -906,7 +926,7 @@ Reference patterns:
 When a subagent completes, it must return a structured summary to the
 conductor to ensure no context is lost.
 
-*(Protocol Section 11)*
+*(Conditional module: `stage-protocol-ensemble.md`, Section 11)*
 
 ### Required Format
 
@@ -952,7 +972,7 @@ artifacts and before the §13 Learnings Ritual and the approval gate. The stage
 ritual sequence in full: questions → artifact → reviewer (if declared) →
 learnings → gate.
 
-*(Protocol Section 12a)*
+*(Conditional module: `stage-protocol-reviewer.md`, Section 12a)*
 
 The directive's `review_class` field selects the contract, resolved by the
 engine from three inputs (low-wins): the stage's declared class, the active

@@ -92,6 +92,7 @@ import {
   type LoadSteeringDirective,
   type ParkedDirective,
   type PrintDirective,
+  type ProtocolModule,
   type RunStageDirective,
   type RunStageWave,
   type RunStageWaveEntry,
@@ -148,6 +149,7 @@ import {
   scopeCostSummary,
   selectionAwareDefaultScope,
   resolveDefaultScope,
+  DEFAULT_SCOPE,
   type StageEntry,
   stateFilePath,
   swarmConvergedUnits,
@@ -191,11 +193,12 @@ function loadStateFileIfPresent(projectDir: string): string | null {
 }
 
 // The default scope when neither the state file, a --scope flag, nor the
-// AWS_AIDLC_DEFAULT_SCOPE env var supplies one. Mirrors the prose
-// orchestrator's freeform-fallback default (SKILL.md detect-scope fallback).
-// selectionAwareDefaultScope() maps this to the sole enabled plugin's
-// nominated default on a plugin-only install where "feature" is deselected.
-const DEFAULT_SCOPE = "feature";
+// AWS_AIDLC_DEFAULT_SCOPE env var supplies one lives in aidlc-lib.ts
+// (DEFAULT_SCOPE, imported above) so exactly one constant plus the env var
+// control the implicit default everywhere. Mirrors the prose orchestrator's
+// freeform-fallback default (SKILL.md detect-scope fallback).
+// selectionAwareDefaultScope() maps it to the sole enabled plugin's
+// nominated default on a plugin-only install where it is deselected.
 
 // READ_ONLY_FLAGS (--status/--help/--doctor/--version) and the shared workspace
 // parser (space/space-create/intent) are the terminal-command sources of truth
@@ -1144,7 +1147,7 @@ type RunStageRoute = {
   stateAware: boolean;
   stateHash: string | null;
   codekbCtx: CodekbCtx;
-  unit: string;
+  unit: string | null;
   unitKind: string | null;
   forcePersona: boolean;
 };
@@ -1158,7 +1161,7 @@ type SteeringTokenPayload = {
   d: string;
   r: string;
   a: boolean;
-  u: string;
+  u: string | null;
   k: string | null;
   f: boolean;
   g: GateValue;
@@ -1166,6 +1169,7 @@ type SteeringTokenPayload = {
   x: boolean;
   p: boolean;
   w: boolean;
+  z?: boolean;
   h: string | null;
 };
 
@@ -1345,7 +1349,7 @@ function resolveBoltBatches(projectDir: string): BoltBatchesResolution {
 // Construction EXECUTE stage in scope (the start of Bolt 1). This is derived,
 // not hardcoded: firstInScopeStageOfPhase("construction", scope) walks the
 // scope's EXECUTE-only sub-DAG and returns its first construction stage (e.g.
-// functional-design for feature/enterprise/mvp/refactor/workshop, code-generation
+// functional-design for feature/enterprise/mvp/refactor/classic, code-generation
 // for poc/bugfix/security-patch, nfr-requirements for infra). A scope-mapping
 // edit that moves the first construction stage moves the skeleton gate with it,
 // no code change. Non-construction stages are never the skeleton gate.
@@ -1494,7 +1498,7 @@ function codekbCtxFor(pd: string): CodekbCtx {
 function resolveArtifactPath(
   name: string,
   owner: GraphStage,
-  unit: string,
+  unit: string | null,
   recordPrefix: string | null,
   codekbCtx?: CodekbCtx,
 ): string {
@@ -1510,7 +1514,7 @@ function resolveArtifactPath(
     return `${relativeCodekbDir(codekbCtx.projectDir, codekbCtx.codekbRepo, codekbCtx.space)}/${filename}`;
   }
   const prefix = recordPrefix ?? relativeSpaceRecordPrefix();
-  if (isPerUnit(owner)) {
+  if (isPerUnit(owner) && unit !== null) {
     return `${prefix}/construction/${unit}/${owner.slug}/${filename}`;
   }
   return `${prefix}/${owner.phase}/${owner.slug}/${filename}`;
@@ -1528,7 +1532,7 @@ function resolveArtifactPath(
 function resolveConsumePath(
   name: string,
   node: GraphStage,
-  unit: string,
+  unit: string | null,
   recordPrefix: string | null,
   codekbCtx?: CodekbCtx,
 ): string {
@@ -1568,7 +1572,7 @@ function resolveConsumes(
   consumes: Consume[],
   node: GraphStage,
   projectType: "brownfield" | "greenfield" | null,
-  unit: string,
+  unit: string | null,
   recordPrefix: string | null,
   codekbCtx?: CodekbCtx,
   unitKind: string | null = null,
@@ -1661,7 +1665,7 @@ function splitConsumesByPresence(
 // behaviour change off the kind path.
 function resolveProduces(
   node: GraphStage,
-  unit: string,
+  unit: string | null,
   recordPrefix: string | null,
   codekbCtx?: CodekbCtx,
   unitKind: string | null = null,
@@ -1960,14 +1964,16 @@ function boundedContextWarnings(warnings: string[]): string[] {
 // conductor never re-derives them) and drops conditional_on consumes-entries
 // against the workflow's Project Type. rules_in_context maps to the node's
 // resolved rule paths; sensors_applicable maps to the node's resolved sensor ids.
-// `unit` is the active Unit of Work for per-unit Construction stages; callers
-// without Bolt context omit it and the per-unit path keeps the {unit-name}
-// placeholder. `scope` + `stateContent` feed the gate computation (the skeleton
-// round-trip) and the first-run-stage persona delivery (decision D-E).
+// `unit` is the active Unit of Work for per-unit Construction stages. The
+// placeholder keeps the documented unresolved shape for isolated/ctx-less
+// callers; null is the explicit zero-Unit fallback and resolves artifacts at the
+// stage-level Construction directory. `scope` + `stateContent` feed the gate
+// computation (the skeleton round-trip) and the first-run-stage persona delivery
+// (decision D-E).
 function buildRunStageDirective(
   node: GraphStage,
   projectType: "brownfield" | "greenfield" | null = null,
-  unit: string = UNIT_NAME_PLACEHOLDER,
+  unit: string | null = UNIT_NAME_PLACEHOLDER,
   scope: string = resolveDefaultScope(DEFAULT_SCOPE),
   stateContent: string | null = null,
   recordPrefix: string | null = null,
@@ -1975,11 +1981,16 @@ function buildRunStageDirective(
   unitKind: string | null = null,
   forcePersona = false,
 ): RunStageDirective {
+  const artifactUnit =
+    unit === UNIT_NAME_PLACEHOLDER &&
+      usesStageLevelPerUnitArtifacts(scope, stateContent)
+      ? null
+      : unit;
   const resolvedConsumes = resolveConsumes(
     node.consumes ?? [],
     node,
     projectType,
-    unit,
+    artifactUnit,
     recordPrefix,
     codekbCtx,
     unitKind,
@@ -2004,7 +2015,13 @@ function buildRunStageDirective(
     gate: computeGate(node, scope, stateContent),
     memory_path: memoryPathFor(node.phase, node.slug, recordPrefix),
     consumes: present,
-    produces: resolveProduces(node, unit, recordPrefix, codekbCtx, unitKind),
+    produces: resolveProduces(
+      node,
+      artifactUnit,
+      recordPrefix,
+      codekbCtx,
+      unitKind,
+    ),
     rules_in_context:
       ruleEntries?.map((entry) => entry.rel) ??
       (node.rules_in_context ?? []).map((r) => r.path),
@@ -2045,6 +2062,24 @@ function buildRunStageDirective(
       directive.reviewer_max_iterations =
         reviewClass === "advisory" ? 1 : node.reviewer_max_iterations ?? 2;
     }
+  }
+  const protocolModules: ProtocolModule[] = [];
+  if (directive.reviewer && directive.review_class) {
+    protocolModules.push("reviewer");
+  }
+  if (
+    node.mode === "subagent" ||
+    node.mode === "pipeline" ||
+    node.mode === "mob" ||
+    (node.support_agents?.length ?? 0) > 0
+  ) {
+    protocolModules.push("ensemble");
+  }
+  if (node.phase === "construction") {
+    protocolModules.push("construction");
+  }
+  if (protocolModules.length > 0) {
+    directive.protocol_modules = protocolModules;
   }
   // Decision D-E: bake the conductor persona into the FIRST run-stage of the
   // workflow. The optional field is omitted on every later directive (the
@@ -2333,7 +2368,7 @@ function decodeSteeringToken(
       typeof p.d !== "string" ||
       typeof p.r !== "string" ||
       typeof p.a !== "boolean" ||
-      typeof p.u !== "string" ||
+      (p.u !== null && typeof p.u !== "string") ||
       (p.k !== null && typeof p.k !== "string") ||
       typeof p.f !== "boolean" ||
       (typeof p.g !== "boolean" && p.g !== GATE_UNRESOLVED) ||
@@ -2341,6 +2376,7 @@ function decodeSteeringToken(
       typeof p.x !== "boolean" ||
       typeof p.p !== "boolean" ||
       typeof p.w !== "boolean" ||
+      (p.z !== undefined && typeof p.z !== "boolean") ||
       (p.h !== null && typeof p.h !== "string")
     ) {
       return null;
@@ -2375,6 +2411,7 @@ function steeringTokenPayload(
     x: directive.single === true,
     p: directive.unit !== undefined,
     w: directive.wave !== undefined,
+    z: directive.swarm_settled === true,
     h: route.stateHash,
   };
 }
@@ -2483,6 +2520,17 @@ function effectivePlanAction(
     ? parseStateStageSuffixes(stateContent).get(slug)
     : undefined;
   return stateAction ?? loadScopeMapping()[scope]?.stages[slug];
+}
+
+// A per-unit stage falls back to one stage-level iteration only when the
+// effective plan excludes the Unit-DAG producer. This distinguishes an
+// intentional zero-Unit scope/composed plan from a normal workflow whose
+// Units Generation stage has not produced its artifact yet.
+function usesStageLevelPerUnitArtifacts(
+  scope: string,
+  stateContent: string | null,
+): boolean {
+  return effectivePlanAction("units-generation", scope, stateContent) !== "EXECUTE";
 }
 
 // The `next` handler reads workflow state and emits exactly one directive. Rule
@@ -3036,9 +3084,9 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // never calls AskUserQuestion itself. A bare KNOWN-SCOPE positional was
   // already handled by Branch 7b above, so only genuine prose reaches here.
   //
-  // Adaptive routing (replaces the old static feature-default confirm, which
-  // interpolated the precedence-ladder scope and silently defaulted rich prose
-  // to `feature`): keyword inference (inferScopeFromText, a pure read; the
+  // Adaptive routing (replaces the old static default confirm, which
+  // interpolated the precedence-ladder scope and silently defaulted rich prose):
+  // keyword inference (inferScopeFromText, a pure read; the
   // audit-emitting detect-scope verb remains the conductor's recording move)
   // now drives the ask.
   //   - CLEAR KEYWORD HIT (source "keyword": matched a scope's keywords and
@@ -3046,7 +3094,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   //     MATCHED scope, with "name another scope" and "compose" as outs.
   //   - NO HIT / RICH PROSE (source "freeform": no keyword matched, or the
   //     description is long enough that the match is likely incidental): the
-  //     COMPOSE OFFER, never a silent feature default. The conductor renders
+  //     COMPOSE OFFER, never a silent default. The conductor renders
   //     it; on "compose" it re-runs `next compose "<text>"` to reach the
   //     Branch 4c dispatch.
   if (
@@ -3071,12 +3119,12 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     // Anchor the compose offer with the counts for the three named scopes so the
     // user calibrates the order-of-magnitude difference before deciding. Fall
     // back to bare names if any scope does not resolve.
-    const bf = scopeCostSummary("bugfix");
-    const poc = scopeCostSummary("poc");
+    const express = scopeCostSummary("express");
+    const classic = scopeCostSummary("classic");
     const feat = scopeCostSummary("feature");
     const fallbackExamples = [...validScopes()].slice(0, 3).join(", ") || "an explicit scope";
-    const examples = bf && poc && feat
-      ? `bugfix = ${bf.execute} of ${bf.total} stages, poc = ${poc.execute}, feature = all ${feat.execute}`
+    const examples = express && classic && feat
+      ? `express = ${express.execute} of ${express.total} stages, classic = ${classic.execute}, feature = all ${feat.execute}`
       : fallbackExamples;
     emit(askDirective(
       `None of the ready-made plans is an obvious fit for: "${flags.intent}". ` +
@@ -3336,6 +3384,17 @@ function isSettledAutonomousSwarm(
   return units.every((unit) => converged.has(unit));
 }
 
+function applySettledSwarmShape(
+  directive: RunStageDirective,
+): RunStageDirective {
+  delete directive.reviewer;
+  delete directive.review_class;
+  delete directive.reviewer_max_iterations;
+  directive.protocol_modules = ["construction", "swarm"];
+  directive.swarm_settled = true;
+  return directive;
+}
+
 // Try to handle an eligible autonomous swarm stage, returning true (and emitting)
 // ONLY when every trigger condition holds:
 //   - the slug resolves to a Construction stage that is the per-unit build stage
@@ -3417,7 +3476,10 @@ function tryEmitSwarm(
       node, projectType, lastUnit, scope, stateContent, recordPrefix, codekbCtx,
     );
     directive.unit = lastUnit;
-    emit(directive);
+    // Gate-only resume surface: every Unit body and reviewer already converged
+    // inside the swarm. Keep that fact explicit across fresh sessions and remove
+    // the ordinary body/reviewer modules so settlement cannot repeat work.
+    emit(applySettledSwarmShape(directive));
     return true;
   }
 
@@ -3454,15 +3516,26 @@ function tryEmitSwarm(
             : node.reviewer_max_iterations ?? 2,
       }
     : {};
+  const protocolModules: ProtocolModule[] = [
+    ...(node.reviewer ? (["reviewer"] as const) : []),
+    "construction",
+    "swarm",
+  ];
   if (repos.length === 1) {
     emit({
       kind: "invoke-swarm",
       units: pendingUnits,
       ...reviewerFields,
+      protocol_modules: protocolModules,
       repo: repos[0],
     });
   } else {
-    emit({ kind: "invoke-swarm", units: pendingUnits, ...reviewerFields });
+    emit({
+      kind: "invoke-swarm",
+      units: pendingUnits,
+      ...reviewerFields,
+      protocol_modules: protocolModules,
+    });
   }
   return true;
 }
@@ -3900,25 +3973,58 @@ function emitPerUnitRunStage(
   resolution?: BoltBatchesResolution,
   allowWave = true,
 ): void {
+  const r = resolution ?? resolveBoltBatches(projectDir);
+
   // GATE precedence: never iterate per-unit until the walking-skeleton gate is
-  // RESOLVED. If this is the skeleton-gate stage and no stance is recorded yet,
+  // RESOLVED when a real Unit DAG exists. If this is the skeleton-gate stage,
+  // the DAG is present, and no stance is recorded yet,
   // buildRunStageDirective would emit gate:"unresolved" (the classify
   // round-trip). The conductor must classify the stance FIRST, there is no
   // per-unit work to do while the gate is undetermined, so emit the normal
   // single directive (with the {unit-name} placeholder + the unresolved gate)
   // and return. The follow-up `next` (after `report --skeleton-stance`) resolves
   // the gate and re-enters here to begin per-unit iteration.
-  if (isSkeletonGateStage(node, scope) && readSkeletonStance(stateContent) === null) {
+  const stageLevelFallback =
+    r.state === "none" && usesStageLevelPerUnitArtifacts(scope, stateContent);
+  if (
+    !stageLevelFallback &&
+    isSkeletonGateStage(node, scope) &&
+    readSkeletonStance(stateContent) === null
+  ) {
     emitRunStageForSlug(node.slug, projectType, scope, stateContent, recordPrefix, codekbCtx);
     return;
   }
 
-  const r = resolution ?? resolveBoltBatches(projectDir);
   switch (r.state) {
     case "none":
-      // No dependency artifact exists on disk: degrade to today's single
-      // {unit-name} directive for genuinely zero-unit scopes.
-      emitRunStageForSlug(node.slug, projectType, scope, stateContent, recordPrefix, codekbCtx);
+      if (!stageLevelFallback) {
+        emitRunStageForSlug(
+          node.slug,
+          projectType,
+          scope,
+          stateContent,
+          recordPrefix,
+          codekbCtx,
+        );
+        return;
+      }
+      // No dependency artifact exists on disk: run one stage-level iteration.
+      // There is no Bolt, Unit, skeleton classification, ladder, or swarm path,
+      // so paths omit the synthetic {unit-name} segment and the ordinary gated
+      // stage contract applies directly.
+      {
+        const directive = buildRunStageDirective(
+          node,
+          projectType,
+          null,
+          scope,
+          stateContent,
+          recordPrefix,
+          codekbCtx,
+        );
+        directive.gate = true;
+        emit(directive);
+      }
       return;
     case "malformed":
       emit({
@@ -4963,7 +5069,7 @@ function checkEnsembleEvidence(
       `Stage "${slug}" is mode: ${node.mode} - its ensemble must convene before approval, and the ` +
       `contribution files are the evidence. Missing or malformed: ${missing.join("; ")}. ` +
       `Dispatch each support agent to write ${contributionPath} ` +
-      `(first line: **Collaborator:** <agent-slug>) per stage-protocol.md §5, then re-report. ` +
+      `(first line: **Collaborator:** <agent-slug>) per stage-protocol-ensemble.md §5, then re-report. ` +
       `Set AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1 only to recover a legitimately-run stage whose files were lost.`,
   };
 }
@@ -5830,13 +5936,14 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
     payload.f,
   );
   directive.gate = payload.g;
-  if (payload.p) directive.unit = payload.u;
+  if (payload.p && payload.u !== null) directive.unit = payload.u;
   if (payload.n === undefined) {
     delete directive.next_stage;
   } else {
     directive.next_stage = payload.n;
   }
   if (payload.x) directive.single = true;
+  if (payload.z === true) applySettledSwarmShape(directive);
   if (payload.w) {
     const resolution = resolveBoltDag(pd);
     if (resolution.state === "ok") {

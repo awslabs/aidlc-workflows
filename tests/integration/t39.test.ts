@@ -2,8 +2,8 @@
 //
 // CLI-contract port of tests/integration/t39-per-scope-phase-sequence.sh (TAP
 // plan 27), mechanism = cli. Equal-or-stronger migration: the .sh is a
-// data-driven sweep over all 9 canonical scopes (enterprise, feature, mvp,
-// poc, bugfix, refactor, infra, security-patch, workshop), running `bun
+// data-driven sweep over all 10 canonical scopes (enterprise, feature, mvp,
+// poc, bugfix, refactor, infra, security-patch, classic, express), running `bun
 // aidlc-utility.ts init --scope <s> --project-dir <p>` once per
 // scope and asserting 3 observables per scope (27 total). Every one of those
 // observables is preserved here by SPAWNING the real CLI via
@@ -41,7 +41,7 @@
 //       completes every init stage before handing off; the .sh only checked
 //       the excluded set).
 //
-// 9 scopes × 3 .sh asserts = 27 -> 27 expect()-bearing test() cases here
+// 11 scopes × 3 assertions = 33 expect()-bearing test() cases here
 // (one describe per scope, 3 test()s each).
 //
 // FIXTURE DISCIPLINE (mirrors the .sh's create_test_project +
@@ -125,7 +125,7 @@ interface InitResult {
  * Mirrors the .sh's
  *   AIDLC_WORKFLOW_INTENT="phase sequence test" bun "$UTIL" init --scope ...
  * The .sh exported AIDLC_WORKFLOW_INTENT defensively (the tool does not read
- * it — grep-verified — but workshop's flow historically needed an intent), so
+ * it — grep-verified — but classic's flow historically needed an intent), so
  * we carry it through the env for byte-for-byte parity.
  */
 function runInit(scope: string, p: string): InitResult {
@@ -213,7 +213,9 @@ const EXPECTED_SKIPPED: Record<string, string[]> = {
   refactor: ["ideation", "operation"],
   infra: ["ideation"],
   "security-patch": ["ideation"],
+  classic: ["ideation"],
   workshop: ["ideation"],
+  express: ["ideation"],
 };
 
 const SCOPES = [
@@ -225,7 +227,9 @@ const SCOPES = [
   "refactor",
   "infra",
   "security-patch",
+  "classic",
   "workshop",
+  "express",
 ] as const;
 
 describe("t39 aidlc-utility init — per-scope phase sequence (migrated from t39-per-scope-phase-sequence.sh, plan 27)", () => {

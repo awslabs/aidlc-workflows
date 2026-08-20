@@ -22,7 +22,9 @@ All three stages run inside a single deterministic `bun .claude/tools/aidlc-util
 | refactor | All 0.1-0.3 |
 | infra | All 0.1-0.3 |
 | security-patch | All 0.1-0.3 |
+| classic | All 0.1-0.3 |
 | workshop | All 0.1-0.3 |
+| express | All 0.1-0.3 |
 
 ## Stage Summary
 
@@ -127,7 +129,7 @@ All three stages run inside a single deterministic `bun .claude/tools/aidlc-util
 
 ### Inputs
 - Workspace classification from workspace-detection (same tool call)
-- Scope configuration (from `--scope` flag or `poc` default)
+- Scope configuration (from `--scope` flag, `AWS_AIDLC_DEFAULT_SCOPE`, or the `classic` default)
 - Depth / test-strategy overrides if passed
 - State contract from `.claude/knowledge/aidlc-shared/state-template.md`
 - Compiled `tools/data/stage-graph.json` and `tools/data/scope-grid.json`
@@ -138,7 +140,7 @@ All three stages run inside a single deterministic `bun .claude/tools/aidlc-util
 
 ### Notes
 - Brownfield projects route to reverse-engineering (Stage 2.1)
-- Greenfield projects route to the first non-initialization stage (intent-capture for feature/poc; requirements-analysis for bugfix/refactor; practices-discovery for workshop, since workshop skips all of Ideation and reverse-engineering is downgraded to SKIP on greenfield)
+- Greenfield projects route to the first non-initialization stage (intent-capture for feature/poc; requirements-analysis for bugfix/refactor/express; practices-discovery for classic/workshop, since both skip all of Ideation and reverse-engineering is downgraded to SKIP on greenfield)
 - When invoked from `/aidlc-init` (the explicit birth packaging), the orchestrator stops after this stage
 - When invoked from workflow start (`/aidlc <scope>` or describing what to build), the orchestrator continues into the first post-init stage
 

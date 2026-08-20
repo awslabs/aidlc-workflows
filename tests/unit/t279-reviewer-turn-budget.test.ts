@@ -46,6 +46,12 @@
 //
 // Mechanism: none. Pure content checks over authored + shipped bytes
 // (dist trees beyond the asserted ones are byte-guarded by package.ts --check).
+//
+// Module note: the conditional-protocol-modules change carved §12a out of
+// stage-protocol.md into stage-protocol-reviewer.md, and the harness SKILL
+// reviewer bullets into a load-the-module pointer, so the §12a guard pins
+// below read the reviewer MODULE (authored + per-harness dist copies) and the
+// SKILL pins assert the module load line instead of inline prose.
 
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
@@ -59,7 +65,7 @@ const REVIEWERS = [
 ] as const;
 
 const CAP = "60";
-const PROTOCOL = "aidlc-common/protocols/stage-protocol.md";
+const REVIEWER_MODULE = "aidlc-common/protocols/stage-protocol-reviewer.md";
 const SKILL = join("skills", "aidlc", "SKILL.md");
 const MISSING_VERDICT_FINDING = "review did not complete within its turn budget";
 
@@ -198,7 +204,7 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
     }
   });
 
-  test("stage-protocol §12a step 1 DELETES any existing ## Review section before EVERY dispatch (core + dist/claude)", () => {
+  test("reviewer module §12a step 1 DELETES any existing ## Review section before EVERY dispatch (core + dist/claude)", () => {
     // The stale-READY hole: a stage passes review READY; the human rejects at
     // the gate; the builder revises a produces[] artifact; the re-review is
     // itself cut off before writing - and the artifact still carries the
@@ -207,7 +213,10 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
     // without leaving `## Review (superseded)` prose behind for the
     // claim-sources sensor (it skips only the exact `Review` H2) or letting
     // sections accumulate across iterations and revisions forever.
-    for (const path of [join(REPO_ROOT, "core", PROTOCOL), join(AIDLC_SRC, PROTOCOL)]) {
+    for (const path of [
+      join(REPO_ROOT, "core", REVIEWER_MODULE),
+      join(AIDLC_SRC, REVIEWER_MODULE),
+    ]) {
       const body = readFileSync(path, "utf-8");
       const labelled = `${path}\n${body}`;
       expect(labelled).toMatch(/Invoke reviewer sub-agent\.\*\* Before dispatching - on every dispatch, not only the first/);
@@ -222,8 +231,11 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
     }
   });
 
-  test("stage-protocol §12a step 3 validates one canonical verdict and routes incomplete attempts through --retry-pending to a terminal receipt (core + dist/claude)", () => {
-    for (const path of [join(REPO_ROOT, "core", PROTOCOL), join(AIDLC_SRC, PROTOCOL)]) {
+  test("reviewer module §12a step 3 validates one canonical verdict and routes incomplete attempts through --retry-pending to a terminal receipt (core + dist/claude)", () => {
+    for (const path of [
+      join(REPO_ROOT, "core", REVIEWER_MODULE),
+      join(AIDLC_SRC, REVIEWER_MODULE),
+    ]) {
       const body = readFileSync(path, "utf-8");
       const labelled = `${path}\n${body}`;
       // t221's ordering (read verdict AFTER deleting the dispatch record)
@@ -268,7 +280,10 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
     // aidlc-reviewer-scope.ts (harness/copilot/hooks/aidlc-copilot-adapter.ts),
     // so the protocol's dispatch-record roster must include it - it was
     // written before the Copilot harness landed and went stale.
-    for (const path of [join(REPO_ROOT, "core", PROTOCOL), join(AIDLC_SRC, PROTOCOL)]) {
+    for (const path of [
+      join(REPO_ROOT, "core", REVIEWER_MODULE),
+      join(AIDLC_SRC, REVIEWER_MODULE),
+    ]) {
       const body = readFileSync(path, "utf-8");
       expect(body).toContain(
         "(Claude Code, Kiro CLI, Codex CLI, opencode, Cursor, and GitHub Copilot today)",
@@ -276,42 +291,59 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
     }
   });
 
-  test("all seven harness SKILL.md reviewer bullets carry the delete rule, the canonical-verdict validation, and the retry contract (authored + dist)", () => {
+  test("all seven harness SKILL.md files load the reviewer module, and every shipped module copy carries the delete rule, the canonical-verdict validation, and the retry contract", () => {
     for (const harness of HARNESS_MATRIX) {
+      // The SKILL reviewer bullet is now a module pointer: it must name the
+      // module and keep the reviewer-field fallback trigger.
       for (const path of [
         join(harness.authoredRoot, SKILL),
         join(harness.skillsRoot, "aidlc", "SKILL.md"),
       ]) {
         const body = readFileSync(path, "utf-8");
         const labelled = `harness ${harness.name}: ${path}\n${body}`;
-        expect(labelled).toMatch(/Reviewer step \(§12a\)/);
-        // Delete-before-dispatch, on every dispatch.
-        expect(labelled).toContain("first delete any existing `## Review` section");
-        expect(labelled).toContain("on every dispatch, not only the first");
-        // Canonical-verdict validation.
-        expect(labelled).toContain(
-          "exactly ONE current `## Review` section with exactly one canonical verdict line",
-        );
-        // Incomplete attempt: one retry, then the terminal NOT-READY receipt.
-        expect(labelled).toContain(MISSING_VERDICT_FINDING);
-        expect(labelled).toContain("no current `## Review` section");
-        expect(labelled).toContain("`--retry-pending`");
-        expect(labelled).toContain("used at most once per request");
-        // The review-class contract is present on every harness - including
-        // Copilot, which shipped without it (its bullet predated #718 and the
-        // six-harness test lists never caught it).
-        expect(labelled).toContain("directive.review_class");
-        expect(labelled).toContain("On `advisory` both verdicts are terminal");
-        // Negative pin: the rename mechanism must not come back.
-        expect(labelled).not.toContain("## Review (superseded)");
+        expect(labelled).toContain("stage-protocol-reviewer.md");
+        expect(labelled).toMatch(/when the engine lists `reviewer` in `directive\.protocol_modules`/);
+        expect(labelled).toContain("when `directive.reviewer` is present");
       }
+      // The guard prose the bullet used to carry inline now ships in the
+      // harness's module copy.
+      const module = readFileSync(
+        join(harness.engineRoot, "aidlc-common", "protocols", "stage-protocol-reviewer.md"),
+        "utf-8",
+      );
+      const labelled = `harness ${harness.name} module\n${module}`;
+      // Delete-before-dispatch, on every dispatch.
+      expect(labelled).toContain("DELETE that section");
+      expect(labelled).toContain("on every dispatch, not only the first");
+      // Canonical-verdict validation.
+      expect(labelled).toContain("exactly ONE current `## Review` section");
+      expect(labelled).toMatch(/exactly one canonical token, READY or NOT-READY/);
+      // Incomplete attempt: one retry, then the terminal NOT-READY receipt.
+      expect(labelled).toContain(MISSING_VERDICT_FINDING);
+      expect(labelled).toMatch(/no\s+current `## Review` section/);
+      expect(labelled).toContain("`--retry-pending`");
+      expect(labelled).toContain("re-dispatch it exactly once");
+      // The review-class contract is present on every harness - including
+      // Copilot, which shipped without it (its bullet predated #718 and the
+      // six-harness test lists never caught it).
+      expect(labelled).toContain("`review_class`");
+      expect(labelled).toContain("on `advisory` it is terminal");
+      // Negative pin: the rename mechanism must not come back.
+      expect(labelled).not.toContain("## Review (superseded)");
     }
   });
 
-  test("kiro-ide SKILL stays free of any dispatch-record mention (t221's pin, re-asserted beside the new sentences)", () => {
+  test("kiro-ide SKILL stays free of any dispatch-record mention (t221's pin, re-asserted beside the module pointer)", () => {
     const body = readFileSync(join(REPO_ROOT, "harness", "kiro-ide", SKILL), "utf-8");
-    expect(body).toContain(MISSING_VERDICT_FINDING);
-    expect(body).toContain("first delete any existing `## Review` section");
+    expect(body).toContain("stage-protocol-reviewer.md");
     expect(body).not.toContain(".aidlc-reviewer-dispatch.json");
+    // The shared module keeps the guard prose and grants kiro-ide its
+    // no-dispatch-record carve-out explicitly.
+    const module = readFileSync(
+      join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "aidlc-common", "protocols", "stage-protocol-reviewer.md"),
+      "utf-8",
+    );
+    expect(module).toContain(MISSING_VERDICT_FINDING);
+    expect(module).toContain("(Kiro IDE today), do not write the record");
   });
 });
