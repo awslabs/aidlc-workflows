@@ -7,7 +7,7 @@ Workspace detection now follows nested container layouts far enough to find appl
 
 * `bugfix`, `refactor`, and `security-patch` workflows now detect codebases nested within up to three container levels instead of only checking top-level containers.
 * `Nested Root` audit data and `nestedRoot` detect output now use slash-joined workspace-relative paths such as `services/api`, comma-joining multiple detected roots in deterministic order.
-* Hidden, excluded, sample/documentation, known source, symlinked, and non-directory entries are skipped at every container level; source beyond the three-level cap remains Greenfield.
+* Hidden dirs, case-insensitive excluded and sample/documentation names, exact-case recognized source-directory names, symlinks, and non-directories are skipped at every container level; odd-case directories such as `SRC/` remain eligible containers, and source beyond the three-level cap remains Greenfield.
 * The Greenfield advisory now describes the three-container-level detection boundary; routing remains unchanged when no code is found.
 
 ## [2.6.18] - 2026-08-19

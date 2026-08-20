@@ -144,6 +144,15 @@ describe("t203 nested-project detection (bounded recursive fallback)", () => {
     expect(scan.languages).toBe("TypeScript");
   });
 
+  test("odd-case root SRC/main.py remains Brownfield via the fallback", () => {
+    const d = tmp();
+    put(d, ["SRC", "main.py"], "print(1)\n");
+    const scan = detectWorkspace(d);
+    expect(scan.projectType).toBe("Brownfield");
+    expect(scan.nestedRoot).toBe("SRC");
+    expect(scan.languages).toBe("Python");
+  });
+
   test("excluded-dirs-only (docs, examples, demo, fixtures, ...) -> Greenfield (no false positive)", () => {
     const d = tmp();
     for (const dir of [

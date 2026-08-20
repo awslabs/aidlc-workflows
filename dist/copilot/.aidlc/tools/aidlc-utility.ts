@@ -3344,9 +3344,6 @@ const NESTED_SCAN_MAX_DEPTH = 3;
 const SCAN_EXCLUDE_LOWER = new Set(
   [...SCAN_EXCLUDE].map((entry) => entry.toLowerCase())
 );
-const SCAN_SOURCE_DIRS_LOWER = new Set(
-  SCAN_SOURCE_DIRS.map((entry) => entry.toLowerCase())
-);
 
 function skipNestedScanDir(entry: string): boolean {
   const lower = entry.toLowerCase();
@@ -3354,7 +3351,7 @@ function skipNestedScanDir(entry: string): boolean {
     entry.startsWith(".") ||
     SCAN_EXCLUDE_LOWER.has(lower) ||
     NESTED_SCAN_EXCLUDE.has(lower) ||
-    SCAN_SOURCE_DIRS_LOWER.has(lower)
+    SCAN_SOURCE_DIR_SET.has(entry)
   );
 }
 
