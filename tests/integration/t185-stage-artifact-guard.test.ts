@@ -72,7 +72,10 @@ function reviewCodeGen(proj: string, unit?: string): void {
   ];
   if (unit) args.splice(4, 0, "--unit", unit);
   for (const suffix of [[], ["--verdict", "READY"]]) {
-    spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
+    const result = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
+    if ((result.status ?? -1) !== 0) {
+      throw new Error(`reviewCodeGen failed: ${result.stdout}${result.stderr}`);
+    }
   }
 }
 
@@ -406,7 +409,7 @@ describe("t185: stage-completion artifact guard (#366)", () => {
 
     test("REFUSES code-generation with planning docs but no source code", () => {
       stageCodeGenDocsOnly();
-      reviewCodeGen(proj, UNIT);
+      reviewCodeGen(proj);
       bypassed(proj, ["gate-start", "code-generation"]);
       const r = guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
       expect(r.rc).not.toBe(0);
@@ -416,7 +419,7 @@ describe("t185: stage-completion artifact guard (#366)", () => {
     test("PASSES code-generation once real source exists outside aidlc/", () => {
       stageCodeGenDocsOnly();
       writeWorkspaceFile(proj, "src/auth/login.ts"); // outside aidlc/ + harness
-      reviewCodeGen(proj, UNIT);
+      reviewCodeGen(proj);
       guarded(proj, ["gate-start", "code-generation"]);
       const r = guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
       expect(r.rc).toBe(0);
@@ -507,7 +510,7 @@ describe("t185: stage-completion artifact guard (#366)", () => {
       writeRecordDoc(proj, `construction/${UNIT}/code-generation/code-summary.md`);
     }
     function approveCodeGen(): { rc: number; out: string } {
-      reviewCodeGen(proj, UNIT);
+      reviewCodeGen(proj);
       bypassed(proj, ["gate-start", "code-generation"]);
       return guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
     }

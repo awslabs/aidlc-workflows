@@ -195,6 +195,34 @@ function logReviewReady(
   }
 }
 
+function logStageReviewReady(
+  proj: string,
+  stage = "functional-design",
+): void {
+  const args = [
+    LOG,
+    "review",
+    "--stage",
+    stage,
+    "--reviewer",
+    "aidlc-architecture-reviewer-agent",
+    "--iteration",
+    "1",
+    "--project-dir",
+    proj,
+  ];
+  for (const suffix of [[], ["--verdict", "READY"]]) {
+    const result = spawnSync(BUN, [...args, ...suffix], {
+      encoding: "utf-8",
+    });
+    if ((result.status ?? -1) !== 0) {
+      throw new Error(
+        `stage review log failed: ${result.stdout ?? ""}${result.stderr ?? ""}`,
+      );
+    }
+  }
+}
+
 function completeWave(proj: string, unit: string, stage: string): void {
   const result = spawnSync(
     BUN,
@@ -353,6 +381,23 @@ describe("t208 engine unit-kind pruning", () => {
       true,
     );
     expect(d.kind).toBe("done");
+  }, 30000);
+
+  test("5c2: a stage-level receipt cannot satisfy per-unit reviews when a DAG exists", () => {
+    const proj = seedProject("functional-design");
+    seedBoltDag(proj, ["alpha", "beta"]);
+    coverUnit(proj, "alpha", "functional-design", FD_PRODUCES);
+    coverUnit(proj, "beta", "functional-design", FD_PRODUCES);
+    logStageReviewReady(proj);
+
+    const refused = runReport(
+      proj,
+      ["--stage", "functional-design", "--result", "approved"],
+      true,
+    );
+    expect(refused.kind).toBe("error");
+    expect(refused.message).toContain("2 of 2 applicable units");
+    expect(refused.message).toContain("Never reviewed: alpha, beta");
   }, 30000);
 
   test("5d: stale DAG healing keeps per-unit review enforcement complete", () => {

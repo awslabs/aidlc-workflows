@@ -1,7 +1,7 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
-## [2.6.24] - 2026-08-20
+## [2.6.23] - 2026-08-20
 
 Reviewer-bearing approval gates and review receipts now prove that the configured reviewer inspected the current artifact before the gate is presented. **Upgrade:** re-copy your `dist/<harness>/` shell so every harness receives the strengthened state and review-log guards. Closes #551.
 
