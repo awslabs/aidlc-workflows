@@ -186,6 +186,16 @@ function projectTierFrontmatter(
   const m = s.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
   if (!m) throw new Error(`${srcPath}: agent .md has no closed frontmatter block.`);
   const fm = m[1];
+  const disallowedMatch = fm.match(/^disallowedTools:\s*(.*?)\s*$/m);
+  if (
+    harness === "kiro" &&
+    disallowedMatch &&
+    !/^task$/i.test(disallowedMatch[1].trim())
+  ) {
+    throw new Error(
+      `${srcPath}: kiro projection cannot project disallowedTools: ${disallowedMatch[1]}.`,
+    );
+  }
   const proj = projectTier(tier, harness, TIER_CAP); // throws on unknown tier
   const lines: string[] = [];
   if (proj.model !== null) lines.push(`model: ${proj.model}`);
@@ -199,7 +209,10 @@ function projectTierFrontmatter(
   // sits - first, last, or mid-frontmatter.
   const newFm = fm
     .split(/\r?\n/)
-    .flatMap((line) => (/^tier:/.test(line) ? lines : [line]))
+    .flatMap((line) => {
+      if (harness === "kiro" && /^disallowedTools:/.test(line)) return [];
+      return /^tier:/.test(line) ? lines : [line];
+    })
     .join("\n");
   // Function replacement: a literal `$&`/`$'` in frontmatter must not be
   // interpreted as a replacement pattern.

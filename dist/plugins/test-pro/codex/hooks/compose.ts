@@ -611,6 +611,35 @@ function projectCursorNativeAgent({ file, content }: CopyContext): string {
   return content.replace(m[0], () => `---\n${fm}\n---\n`);
 }
 
+function projectKiroNativeAgent({ file, content }: CopyContext): string {
+  const m = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
+  if (!m) throw new Error(`${file}: plugin agent has no closed frontmatter block`);
+  const fm = m[1]
+    .split(/\r?\n/)
+    .filter((line) => !/^disallowedTools:/.test(line))
+    .join("\n");
+  return content.replace(m[0], () => `---\n${fm}\n---\n`);
+}
+
+function kiroNativeAgentPrecheck(): CopyPrecheck {
+  return (ctx) => {
+    if (!ctx.content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n/)) {
+      recordDrop(
+        `plugin "${PLUGIN_NAME}" agent file "${ctx.rel}" has no closed frontmatter block; not copied to Kiro's agent roster`,
+      );
+      return false;
+    }
+    const disallowed = frontmatter(ctx.content).match(/^disallowedTools:\s*(.*?)\s*$/m);
+    if (disallowed && !/^\s*Task\s*$/i.test(disallowed[1])) {
+      recordDrop(
+        `plugin "${PLUGIN_NAME}" agent file "${ctx.rel}" cannot project disallowedTools "${disallowed[1]}" to Kiro; not copied`,
+      );
+      return false;
+    }
+    return true;
+  };
+}
+
 function opencodeNativeAgentPrecheck(dst: string): CopyPrecheck {
   const collision = installedNameCollisionPrecheck(dst, "agents");
   return (ctx) => {
@@ -1401,13 +1430,16 @@ try {
       "agents",
       combinePrechecks(
         kiroAgentPrechecks?.agent,
+        HARNESS_LEAF === ".kiro" ? kiroNativeAgentPrecheck() : undefined,
         installedNameCollisionPrecheck(agentsDir, "agents"),
       ),
       HARNESS_LEAF === ".aidlc"
         ? ({ content }) => projectOpencodeAgentMemory(content)
         : HARNESS_LEAF === ".cursor"
           ? projectCursorNativeAgent
-          : undefined,
+          : HARNESS_LEAF === ".kiro"
+            ? projectKiroNativeAgent
+            : undefined,
     ) || changed;
     if (IS_OPENCODE) {
       const rosterDir = nativeAgentsDir();

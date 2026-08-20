@@ -274,6 +274,33 @@ describe("t148 dist/kiro file structure", () => {
     }
   });
 
+  test("Kiro agent Markdown omits the Claude-only disallowedTools key", () => {
+    for (const harness of ["kiro", "kiro-ide"] as const) {
+      const agentsDir = join(REPO_ROOT, "dist", harness, ".kiro", "agents");
+      const files = readdirSync(agentsDir)
+        .filter((name) => name.endsWith("-agent.md"))
+        .sort();
+      expect(files.length).toBe(14);
+      for (const file of files) {
+        const projected = readFileSync(join(agentsDir, file), "utf-8");
+        const projectedFm =
+          projected.match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1] ?? "";
+        expect(projectedFm, `dist/${harness} ${file}`).not.toMatch(
+          /^disallowedTools:/m,
+        );
+
+        const core = readFileSync(
+          join(REPO_ROOT, "core", "agents", file),
+          "utf-8",
+        );
+        const coreFm = core.match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1] ?? "";
+        expect(coreFm, `core/agents/${file}`).toMatch(
+          /^disallowedTools:\s*Task\s*$/mi,
+        );
+      }
+    }
+  });
+
   test("IDE-native tools: frontmatter grant on delegation targets - kiro-ide ONLY", () => {
     // The Kiro IDE resolves a delegated subagent's tools from the agent .md
     // frontmatter, not from the agent-v1 JSON the CLI reads (field-proven:

@@ -1526,6 +1526,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       "name: syn-kiro-collaborator-agent",
       "display_name: Synthetic Kiro Collaborator",
       "plugin: syn-kiro",
+      "disallowedTools: Task",
       "---",
       "",
       "# Synthetic Kiro Collaborator",
@@ -1554,6 +1555,12 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       "agents",
       "syn-kiro-collaborator-agent.md",
     ))).toBe(true);
+    expect(readFileSync(join(
+      proj,
+      ".kiro",
+      "agents",
+      "syn-kiro-collaborator-agent.md",
+    ), "utf-8")).not.toMatch(/^disallowedTools:/m);
     expect(drops).toContain('stage "syn-kiro-ensemble"');
     expect(drops).toContain('agent "syn-kiro-collaborator-agent"');
     expect(drops).toContain("agent-v1 JSON");
@@ -1562,6 +1569,34 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     // The lead is a CORE persona: its shipped agent-v1 JSON is its dispatch
     // surface, so it must never be named as undispatchable.
     expect(drops).not.toContain('agent "aidlc-product-agent"');
+
+    const unsupportedAgent = [
+      "---",
+      "name: syn-kiro-unsupported-agent",
+      "display_name: Synthetic Kiro Unsupported Agent",
+      "plugin: syn-kiro-unsupported",
+      "disallowedTools: WebSearch",
+      "---",
+      "",
+      "# Synthetic Kiro Unsupported Agent",
+      "",
+    ].join("\n");
+    const unsupported = composeSynthetic(
+      "syn-kiro-unsupported",
+      {
+        "agents/syn-kiro-unsupported-agent.md": unsupportedAgent,
+      },
+      ".kiro",
+    );
+    expect(existsSync(join(
+      unsupported.proj,
+      ".kiro",
+      "agents",
+      "syn-kiro-unsupported-agent.md",
+    ))).toBe(false);
+    expect(unsupported.drops).toContain(
+      'cannot project disallowedTools "WebSearch" to Kiro; not copied',
+    );
   });
 
   test("Kiro rejects an agent JSON that is missing conductor trust registration", () => {
