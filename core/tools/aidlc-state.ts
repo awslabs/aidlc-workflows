@@ -1830,6 +1830,38 @@ function fireGateSensors(
   return failures;
 }
 
+function enforceBlockingGateSensors(
+  slug: string,
+  reportResult: "awaiting-approval" | "revised",
+  failures: BlockingSensorFailure[],
+  override: boolean,
+): void {
+  if (failures.length === 0 || override) return;
+  const sensorIds = [...new Set(failures.map((f) => f.sensorId))];
+  const detailPaths = failures.map((f) => f.detailPath);
+  error(
+    `Blocking gate sensor failure for "${slug}". Sensors: ${sensorIds.join(", ")}. ` +
+      `Detail paths: ${detailPaths.join(", ")}. Fix the findings and reopen the gate, ` +
+      `or explicitly override once with: bun ${harnessDir()}/tools/aidlc-orchestrate.ts ` +
+      `report --stage ${slug} --result ${reportResult} --override-blocking-sensors`,
+  );
+}
+
+function addBlockingSensorOverrideFields(
+  fields: Record<string, string>,
+  failures: BlockingSensorFailure[],
+  override: boolean,
+): void {
+  if (failures.length === 0 || !override) return;
+  fields["Blocking Sensor Override"] = "true";
+  fields["Blocking Sensor IDs"] = [
+    ...new Set(failures.map((f) => f.sensorId)),
+  ].join(",");
+  fields["Blocking Sensor Detail Paths"] = failures
+    .map((f) => f.detailPath)
+    .join(",");
+}
+
 // True when any non-doc file exists in the workspace - a file outside the
 // aidlc/ workspace tree and the harness dirs. Bounded shallow walk (one level
 // into each top-level dir is enough to detect src/<file>); avoids a full
@@ -3068,17 +3100,12 @@ function handleGateStart(args: string[]): void {
     preflightStage,
     artifacts,
   );
-  if (blockingFailures.length > 0 && !overrideBlockingSensors) {
-    const sensorIds = [...new Set(blockingFailures.map((f) => f.sensorId))];
-    const detailPaths = blockingFailures.map((f) => f.detailPath);
-    error(
-      `Blocking gate sensor failure for "${slug}". Sensors: ${sensorIds.join(", ")}. ` +
-        `Detail paths: ${detailPaths.join(", ")}. Fix the findings and reopen the gate, ` +
-        `or explicitly override once with: bun ${harnessDir()}/tools/aidlc-orchestrate.ts ` +
-        `report --stage ${slug} ` +
-        "--result awaiting-approval --override-blocking-sensors",
-    );
-  }
+  enforceBlockingGateSensors(
+    slug,
+    "awaiting-approval",
+    blockingFailures,
+    overrideBlockingSensors,
+  );
 
   // C2b lost-update safety: validate→transition→emit-audit→write under one
   // lock (the state-precondition check and the write see one snapshot).
@@ -3115,15 +3142,11 @@ function handleGateStart(args: string[]): void {
     const fields: Record<string, string> = { Stage: slug };
     if (artifacts) fields.Artifacts = artifacts;
     if (recovered) fields.Recovered = "true";
-    if (blockingFailures.length > 0 && overrideBlockingSensors) {
-      fields["Blocking Sensor Override"] = "true";
-      fields["Blocking Sensor IDs"] = [
-        ...new Set(blockingFailures.map((f) => f.sensorId)),
-      ].join(",");
-      fields["Blocking Sensor Detail Paths"] = blockingFailures
-        .map((f) => f.detailPath)
-        .join(",");
-    }
+    addBlockingSensorOverrideFields(
+      fields,
+      blockingFailures,
+      overrideBlockingSensors,
+    );
     emitAudit(pd, "STAGE_AWAITING_APPROVAL", fields);
   } catch (e) {
     error(`Audit emission failed: ${errorMessage(e)}`);
@@ -3539,12 +3562,38 @@ function handleReject(args: string[]): void {
   });
 }
 
-// revise <slug> — transition [R] → [?] (re-enter gate after revision work)
+// revise <slug> — fire gate-bound sensors, then transition [R] → [?]
+// (re-enter gate after revision work)
 function handleRevise(args: string[]): void {
-  if (args.length < 1) error("Usage: aidlc-state.ts revise <slug>");
+  if (args.length < 1) {
+    error(
+      "Usage: aidlc-state.ts revise <slug> [--override-blocking-sensors]",
+    );
+  }
   const slug = args[0];
+  const overrideBlockingSensors = args.includes("--override-blocking-sensors");
 
   const pd = resolveProjectDir(projectDir);
+  // Sensor dispatch MUST stay outside the state transaction: aidlc-sensor.ts
+  // takes the same audit lock around its FIRED and terminal rows.
+  const preflightContent = readStateFile(pd);
+  const preflightStage = findStageBySlug(slug);
+  if (!preflightStage) error(`Unknown stage: ${slug}`);
+  validateSlugInState(preflightContent, slug, "revising");
+  verifyStageArtifacts(pd, preflightStage);
+  verifySummaryConfirmationPrecondition(
+    pd,
+    preflightContent,
+    preflightStage,
+  );
+  const blockingFailures = fireGateSensors(pd, preflightStage);
+  enforceBlockingGateSensors(
+    slug,
+    "revised",
+    blockingFailures,
+    overrideBlockingSensors,
+  );
+
   // C2b lost-update safety: validate→transition→emit-audit→write under one lock.
   withAuditLock(pd, () => {
   let content = readStateFile(pd);
@@ -3563,10 +3612,16 @@ function handleRevise(args: string[]): void {
   content = setField(content, "Last Updated", timestamp);
 
   try {
-    emitAudit(pd, "STAGE_AWAITING_APPROVAL", {
+    const fields: Record<string, string> = {
       Stage: slug,
       Details: "Re-entering gate after revision",
-    });
+    };
+    addBlockingSensorOverrideFields(
+      fields,
+      blockingFailures,
+      overrideBlockingSensors,
+    );
+    emitAudit(pd, "STAGE_AWAITING_APPROVAL", fields);
   } catch (e) {
     error(`Audit emission failed: ${errorMessage(e)}`);
   }

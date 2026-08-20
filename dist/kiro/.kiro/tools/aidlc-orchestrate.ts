@@ -5951,6 +5951,9 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         return;
       }
       subArgs = ["revise", slug];
+      if (flags.overrideBlockingSensors) {
+        subArgs.push("--override-blocking-sensors");
+      }
     }
 
     const res = spawnState(pd, subArgs);

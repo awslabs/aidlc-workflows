@@ -27,6 +27,7 @@ import {
 
 const BUN = process.execPath;
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
+const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const projects: string[] = [];
 
 afterAll(() => {
@@ -120,6 +121,7 @@ function setupFixture(severity: "advisory" | "blocking"): Fixture {
       "# AI-DLC State Tracking",
       "",
       "- **Workflow**: bugfix",
+      "- **State Version**: 8",
       "- **Scope**: bugfix",
       "- **Phase**: inception",
       "- **Current Stage**: probe",
@@ -138,15 +140,16 @@ function setupFixture(severity: "advisory" | "blocking"): Fixture {
   return { project, graph, sensors, scripts };
 }
 
-function gate(
+function stateCommand(
   fixture: Fixture,
+  command: string,
   extra: string[] = [],
 ): { status: number; out: string } {
   const result = spawnSync(
     BUN,
     [
       STATE,
-      "gate-start",
+      command,
       "probe",
       ...extra,
       "--project-dir",
@@ -158,6 +161,49 @@ function gate(
       env: {
         ...process.env,
         AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+        AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
+        AIDLC_STAGE_GRAPH: fixture.graph,
+        AIDLC_SENSORS_DIR: fixture.sensors,
+        AIDLC_SENSOR_SCRIPT_DIR: fixture.scripts,
+      },
+    },
+  );
+  return {
+    status: result.status ?? -1,
+    out: `${result.stdout ?? ""}${result.stderr ?? ""}`,
+  };
+}
+
+function gate(
+  fixture: Fixture,
+  extra: string[] = [],
+): { status: number; out: string } {
+  return stateCommand(fixture, "gate-start", extra);
+}
+
+function reportRevised(
+  fixture: Fixture,
+  extra: string[] = [],
+): { status: number; out: string } {
+  const result = spawnSync(
+    BUN,
+    [
+      ORCHESTRATE,
+      "report",
+      "--stage",
+      "probe",
+      "--result",
+      "revised",
+      ...extra,
+      "--project-dir",
+      fixture.project,
+    ],
+    {
+      cwd: fixture.project,
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
         AIDLC_STAGE_GRAPH: fixture.graph,
         AIDLC_SENSORS_DIR: fixture.sensors,
         AIDLC_SENSOR_SCRIPT_DIR: fixture.scripts,
@@ -221,5 +267,55 @@ describe("t304 gate-bound sensor enforcement", () => {
     expect(eventCount(advisoryAudit, "SENSOR_FIRED")).toBe(2);
     expect(eventCount(advisoryAudit, "SENSOR_FAILED")).toBe(2);
     expect(advisoryAudit).not.toContain("**Blocking Sensor Override**:");
+  }, 30_000);
+
+  test("revise re-fires gate sensors, enforces blocking failures, and accepts the report override", () => {
+    const fixture = setupFixture("blocking");
+    expect(gate(fixture, ["--override-blocking-sensors"]).status).toBe(0);
+    expect(eventCount(audit(fixture.project), "SENSOR_FIRED")).toBe(2);
+
+    const rejected = stateCommand(
+      fixture,
+      "reject",
+      ["--feedback", "revise the deliverables"],
+    );
+    expect(rejected.status).toBe(0);
+    expect(readFileSync(seededStateFile(fixture.project), "utf-8")).toContain(
+      "- [R] probe",
+    );
+    // Reject backfill/decision paths never dispatch gate sensors.
+    expect(eventCount(audit(fixture.project), "SENSOR_FIRED")).toBe(2);
+
+    const refused = stateCommand(fixture, "revise");
+    const refusedAudit = audit(fixture.project);
+    expect(refused.status).toBe(1);
+    expect(eventCount(refusedAudit, "SENSOR_FIRED")).toBe(4);
+    expect(readFileSync(seededStateFile(fixture.project), "utf-8")).toContain(
+      "- [R] probe",
+    );
+    expect(refused.out).toContain("--result revised");
+    expect(refused.out).toContain("--override-blocking-sensors");
+
+    const overridden = reportRevised(
+      fixture,
+      ["--override-blocking-sensors"],
+    );
+    const overrideAudit = audit(fixture.project);
+    expect(overridden.status).toBe(0);
+    expect(overridden.out).toContain('"kind":"print"');
+    expect(eventCount(overrideAudit, "SENSOR_FIRED")).toBe(6);
+    expect(readFileSync(seededStateFile(fixture.project), "utf-8")).toContain(
+      "- [?] probe",
+    );
+    const gateRows = overrideAudit
+      .split("\n---\n")
+      .filter((block) =>
+        block.includes("**Event**: STAGE_AWAITING_APPROVAL")
+      );
+    const reviseRow = gateRows[gateRows.length - 1] ?? "";
+    expect(reviseRow).toContain("**Details**: Re-entering gate after revision");
+    expect(reviseRow).toContain("**Blocking Sensor Override**: true");
+    expect(reviseRow).toContain("**Blocking Sensor IDs**: gate-probe");
+    expect(reviseRow).toContain("**Blocking Sensor Detail Paths**:");
   }, 30_000);
 });

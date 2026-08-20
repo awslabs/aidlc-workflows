@@ -163,8 +163,8 @@ filename stem minus the `aidlc-` prefix. The compile resolver:
 5. Emits the per-stage resolved array on the canonical
    `data/stage-graph.json` (FIELD_ORDER pinned: after `rules_in_context`).
 
-The runtime PostToolUse hook and `gate-start` read `sensors_applicable` off the
-graph node — neither re-opens the manifest. Dispatch fields are
+The runtime PostToolUse hook, `gate-start`, and `revise` read
+`sensors_applicable` off the graph node — none re-opens the manifest. Dispatch fields are
 compile-snapshotted: a manifest edit during the workflow does NOT change what
 fires for the in-flight workflow (BGP-stability property — see
 [Plane Architecture](02-plane-architecture.md)).
@@ -209,10 +209,10 @@ at compile time.
 
 For `fire_on: write`, `matches` is the fire filter: the hook compares the path
 being written against the glob and an entry without a glob never fires. For
-`fire_on: gate`, `gate-start` enumerates every existing declared deliverable and
-the dispatcher applies `matches` to each path; an omitted glob accepts every
-deliverable. All six shipped manifests declare a glob. The compile resolver
-copies it into `sensors_applicable[]`.
+`fire_on: gate`, `gate-start` and `revise` enumerate every existing declared
+deliverable and the dispatcher applies `matches` to each path; an omitted glob
+accepts every deliverable. All six shipped manifests declare a glob. The
+compile resolver copies it into `sensors_applicable[]`.
 
 Empty string (`matches: ""`) is rejected at parse time. Write-fired sensors
 should declare a glob; gate-fired sensors may omit it to analyze every declared
@@ -231,8 +231,8 @@ before matching against the manifest `id`.
 ## `default_severity`
 
 `advisory` failures produce an audit row and detail file but do not block the
-stage gate. `blocking` failures stop `gate-start` before the state transition
-when the binding also declares `fire_on: gate`.
+stage gate. `blocking` failures stop `gate-start` or `revise` before the state
+transition when the binding also declares `fire_on: gate`.
 
 The operator can fix the findings and retry, or explicitly pass
 `--override-blocking-sensors` to the gate report. An override opens the gate and
@@ -246,14 +246,14 @@ records `Blocking Sensor Override`, the sensor ids, and detail paths on the
 
 `write` is the default and preserves incremental PostToolUse feedback. `gate`
 fires once per existing declared deliverable immediately before `gate-start`
-opens its audit/state transaction. Dispatch happens before the transaction
-because `aidlc-sensor.ts fire` takes the audit lock around both its
-`SENSOR_FIRED` and terminal rows.
+opens the first gate and again before `revise` re-enters the gate after revision
+work. Dispatch happens before either transaction because `aidlc-sensor.ts fire`
+takes the audit lock around both its `SENSOR_FIRED` and terminal rows.
 
 The dispatcher prints one compact JSON verdict after the terminal row:
 `fire_id`, `sensor_id`, `stage`, `output_path`, `result`, and `detail_path`.
-`gate-start` uses that line to enforce blocking failures without attempting to
-pair concurrently-written audit rows itself.
+`gate-start` and `revise` use that line to enforce blocking failures without
+attempting to pair concurrently-written audit rows themselves.
 
 ---
 
