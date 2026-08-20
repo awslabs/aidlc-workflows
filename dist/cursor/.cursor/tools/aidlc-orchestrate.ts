@@ -1604,12 +1604,11 @@ function codekbArtifactRepos(ctx: CodekbCtx): string[] {
 // that PRODUCES it. For produces[] the owner is trivially the directive's own
 // node (the node IS the producer). For consumes[] the owner is the OTHER stage
 // that produced the artifact (resolved via producersOf), because a consumed
-// artifact is "a canonical identifier declared by exactly one PRODUCING stage"
-// (docs/reference/16-artifact-vocabulary.md:20-24, 44-48) and lives in that
-// producer's directory, NOT the consuming stage's. The per-unit decision is
-// likewise the OWNER's — a consume of a per-unit-produced artifact resolves
-// under construction/{unit}/<producer>/, a consume of a non-per-unit artifact
-// under <producer-phase>/<producer-slug>/ with no construction prefix.
+// artifact has exactly one producing stage (enforced by graph compile) and
+// lives in that producer's directory, NOT the consuming stage's. The per-unit
+// decision is likewise the OWNER's — a consume of a per-unit-produced artifact
+// resolves under construction/{unit}/<producer>/, a consume of a non-per-unit
+// artifact under <producer-phase>/<producer-slug>/ with no construction prefix.
 function resolveArtifactPath(
   name: string,
   owner: GraphStage,
@@ -1652,9 +1651,11 @@ function resolveArtifactPaths(
   return [resolveArtifactPath(name, owner, unit, recordPrefix, codekbCtx)];
 }
 
-// Resolve a consumed artifact under its producer. Multi-repo codekb producers
-// expand to one path per registered repo; an orphan consume defensively falls
-// back to the consuming node so the directive remains well formed.
+// Resolve a consumed artifact under its producer. Compile enforces exactly one
+// producer for every consumed name; unconsumed shared names never reach here.
+// Multi-repo codekb producers expand to one path per registered repo; an orphan
+// consume defensively falls back to the consuming node so the directive remains
+// well formed.
 function resolveConsumePaths(
   name: string,
   node: GraphStage,

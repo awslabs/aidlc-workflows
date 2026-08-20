@@ -22,10 +22,12 @@ drift that parallel hand-maintained lists invite.
 
 ## What an artifact is here
 
-An artifact is a **canonical identifier** declared by exactly one
-producing stage in its YAML frontmatter. Other stages reference the same
-identifier in `consumes[]` to declare a read dependency. The identifier is
-a short kebab-case string — no file extension, no folder prefix, no slash.
+An artifact is a **canonical identifier** declared by a producing stage in its
+YAML frontmatter. Other stages reference the same identifier in `consumes[]` to
+declare a read dependency. Every consumed identifier has exactly one producer;
+unconsumed names may be shared by stages that write independent files under
+their own record directories. The identifier is a short kebab-case string — no
+file extension, no folder prefix, no slash.
 
 Concrete example from milestone 4's worked example in
 `dist/claude/.claude/aidlc-common/protocols/stage-definition.md`:
@@ -75,8 +77,8 @@ Things that are **not** artifacts in this registry:
 2. **The registry is computed, not written.** Run
    `bun dist/claude/.claude/tools/aidlc-graph.ts artifacts` to
    print the live registry — one name per line, sorted alphabetically.
-   The tool unions every stage's `produces[]` from the compiled
-   `stage-graph.json`.
+   The tool unions every stage's `produces[]` and `optional_produces[]` from the
+   compiled `stage-graph.json`.
 3. **No parallel list in this chapter.** If a reader wants the enumeration,
    they run the tool. This chapter never lists canonical names as a
    registry table.
@@ -120,10 +122,17 @@ agent slugs, scope names, stage slugs, phase names are all flat kebab.
 
 ## Collision policy
 
-Two stages **must not** declare the same canonical name in their
-`produces[]` lists. The registry is a set; names must be globally unique.
-When the same underlying concept is emitted by two stages, pick two
-distinct names that disambiguate.
+Two stages **must not** declare the same canonical name across `produces[]` and
+`optional_produces[]` when any stage consumes that name. `aidlc-graph compile`
+rejects the ambiguity because runtime consume resolution needs one owning
+producer; the error names all producing files and one consuming stage. When the
+same consumed concept is emitted by two stages, pick distinct names that
+disambiguate.
+
+Shared names are valid when no stage consumes them. The shipped `traceability`
+artifact follows this pattern: eight stages each write their own
+`traceability.md` under their own record directory, and no downstream stage
+resolves `traceability` through `producersOf()`.
 
 Today's one example: both `build-and-test` (Construction) and
 `performance-validation` (Operation) write a file called `test-results.md`.

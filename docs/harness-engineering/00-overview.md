@@ -101,10 +101,13 @@ author in `core/`.
 ## Naming rules and where they are enforced
 
 Stage filename stems must equal frontmatter `slug`; `aidlc-graph compile` rejects
-stem mismatches and duplicate stage slugs as hard errors. Sensor filename/id
-checks are compile-time hard errors. Scope and agent duplicate declared names are
-loader errors that name both files; scope/agent filename-to-name drift is reported
-by `/aidlc --doctor` as an advisory so authors can rename the file or fix `name`.
+stem mismatches, duplicate stage slugs, and multiple producers for any consumed
+artifact as hard errors. The duplicate-producer error names the producing stage
+files and one consumer; shared artifact names remain valid when no stage consumes
+them. Sensor filename/id checks are compile-time hard errors. Scope and agent
+duplicate declared names are loader errors that name both files; scope/agent
+filename-to-name drift is reported by `/aidlc --doctor` as an advisory so authors
+can rename the file or fix `name`.
 
 ---
 

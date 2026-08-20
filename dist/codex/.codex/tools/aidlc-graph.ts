@@ -1674,6 +1674,9 @@ export function compileStageGraph(): {
   const newByPrefix = new Map<number, NewStageSeed[]>();
   // Track slug-to-first-file so duplicate-slug errors name both files.
   const slugToFile = new Map<string, string>();
+  type StageDeclaration = { file: string; slug: string };
+  const artifactProducers = new Map<string, StageDeclaration[]>();
+  const artifactConsumers = new Map<string, StageDeclaration[]>();
 
   // Known agent slugs (the `name:` field of each .claude/agents/*.md), passed
   // to validateStageFrontmatter so a stage referencing a lead_agent or
@@ -1756,6 +1759,26 @@ export function compileStageGraph(): {
       }
       slugToFile.set(slug, filePath);
 
+      const declaration = { file: filePath, slug };
+      // Match producersOf(): required and optional outputs share one artifact
+      // producer namespace. Set semantics avoid counting one stage twice if an
+      // author repeats a name across both lists.
+      for (const artifact of new Set([
+        ...(validation.data.produces ?? []),
+        ...(validation.data.optional_produces ?? []),
+      ])) {
+        const producers = artifactProducers.get(artifact) ?? [];
+        producers.push(declaration);
+        artifactProducers.set(artifact, producers);
+      }
+      for (const artifact of new Set(
+        (validation.data.consumes ?? []).map((consume) => consume.artifact),
+      )) {
+        const consumers = artifactConsumers.get(artifact) ?? [];
+        consumers.push(declaration);
+        artifactConsumers.set(artifact, consumers);
+      }
+
       // Existing slug -> keep its pinned number + name (the "computed once,
       // stable thereafter" contract; a pinned row missing only its name
       // seeds the name inline). New slug -> DEFER numbering to the per-phase
@@ -1784,6 +1807,24 @@ export function compileStageGraph(): {
           newByPrefix.set(prefix, [{ data: validation.data, phase, prefix, name }]);
       }
     }
+  }
+
+  for (const [artifact, producers] of artifactProducers) {
+    if (producers.length < 2) continue;
+    const consumer = artifactConsumers.get(artifact)?.[0];
+    if (!consumer) continue;
+
+    // Shared artifact names are legal when unconsumed: traceability is
+    // produced by eight stages and consumed by none, so only consumed names
+    // require a unique producer.
+    const producerList = producers
+      .map(({ file, slug }) => `${file} (stage "${slug}")`)
+      .join(", ");
+    throw new Error(
+      `Duplicate producers for consumed artifact "${artifact}" in ${producerList} — ` +
+        `consumed by stage "${consumer.slug}" in ${consumer.file}. ` +
+        `Rename one produced artifact or update the consumer.`
+    );
   }
 
   // Per-phase topological seed for NEW slugs. Numbers are assigned by the
