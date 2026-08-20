@@ -5627,14 +5627,17 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     }
 
     let subArgs: string[];
+    let revalidatingOpenGate = false;
     if (flags.result === "awaiting-approval") {
       if (stageCheckbox.state === "awaiting-approval") {
-        emit(printDirective(`Stage "${slug}" is already awaiting approval.`));
-        return;
+        revalidatingOpenGate = true;
       }
-      if (stageCheckbox.state !== "in-progress") {
+      if (
+        stageCheckbox.state !== "in-progress" &&
+        stageCheckbox.state !== "awaiting-approval"
+      ) {
         emit(errorDirective(
-          `Stage "${slug}" is ${stageCheckbox.state}; only an in-progress stage can open a gate.`,
+          `Stage "${slug}" is ${stageCheckbox.state}; only an in-progress or already-open stage can validate a gate.`,
         ));
         return;
       }
@@ -5676,9 +5679,13 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       ));
       return;
     }
-    emit(printDirective(
-      `Recorded ${flags.result} for "${slug}".`,
-    ));
+    emit(
+      printDirective(
+        revalidatingOpenGate
+          ? `Stage "${slug}" is already awaiting approval; gate evidence revalidated.`
+          : `Recorded ${flags.result} for "${slug}".`,
+      ),
+    );
     return;
   }
 

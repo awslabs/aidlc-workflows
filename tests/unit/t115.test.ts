@@ -81,6 +81,8 @@ import { join } from "node:path";
 import {
   auditLockDir,
   readAllAuditShards,
+  reviewArtifactFingerprint,
+  resolveStage,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
@@ -1053,6 +1055,9 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     expect(auditBlocksFor(p, "REVIEW_COMPLETED")[0]).toMatch(
       /\*\*Artifact Fingerprint\*\*: sha256:[0-9a-f]{64}/,
     );
+    expect(auditBlocksFor(p, "REVIEW_REQUESTED")[0]).toMatch(
+      /\*\*Artifact Fingerprint\*\*: sha256:[0-9a-f]{64}/,
+    );
     expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
 
     const r = orchestrate(
@@ -1468,5 +1473,38 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     const result = state(["finalize", "code-generation"], p);
     expect(result.status).not.toBe(0);
     expect(result.out).toContain("declares a reviewer");
+  }, 30000);
+
+  test("R19: a legacy unit-scoped receipt cannot satisfy the no-DAG stage fallback", () => {
+    const p = projWithState("state-construction-with-worktree.md");
+    const stage = resolveStage("code-generation");
+    if (!stage) throw new Error("code-generation missing from stage graph");
+    const fingerprint = reviewArtifactFingerprint(p, stage, "ghost");
+    if (!fingerprint) throw new Error("could not fingerprint forged unit receipt");
+    const identity = {
+      Stage: "code-generation",
+      Reviewer: "aidlc-architecture-reviewer-agent",
+      Unit: "ghost",
+      Iteration: "1",
+      "Artifact Fingerprint": fingerprint,
+    };
+    appendAuditEntry("REVIEW_REQUESTED", identity, p);
+    appendAuditEntry(
+      "REVIEW_COMPLETED",
+      { ...identity, Verdict: "READY" },
+      p,
+    );
+
+    const refused = state(
+      ["gate-start", "code-generation"],
+      p,
+      {
+        AIDLC_SKIP_ARTIFACT_GUARD: "1",
+        AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+      },
+    );
+    expect(refused.status).not.toBe(0);
+    expect(refused.out).toContain("no fresh REVIEW_COMPLETED");
+    expect(countEvent(p, "STAGE_AWAITING_APPROVAL")).toBe(0);
   }, 30000);
 });

@@ -360,7 +360,7 @@ function reviewerReceiptError(
     return `claimed converged but worktree audit has no BOLT_STARTED boundary for unit "${unit}"`;
   }
 
-  const pendingRequests = new Set<string>();
+  const pendingRequests = new Map<string, string | null>();
   for (let i = boltStart + 1; i < events.length; i++) {
     const event = events[i];
     if (
@@ -377,10 +377,16 @@ function reviewerReceiptError(
     if (!iteration || !/^[1-9][0-9]*$/.test(iteration)) continue;
     const requestKey = `${unit}\u0000${iteration}`;
     if (event.event === "REVIEW_REQUESTED") {
-      pendingRequests.add(requestKey);
+      pendingRequests.set(
+        requestKey,
+        auditBlockField(event.block, "Artifact Fingerprint"),
+      );
       continue;
     }
-    if (!pendingRequests.delete(requestKey)) continue;
+    const requestedFingerprint = pendingRequests.get(requestKey);
+    if (requestedFingerprint === undefined || !pendingRequests.delete(requestKey)) {
+      continue;
+    }
     const verdict = terminalReviewVerdict(
       auditBlockField(event.block, "Verdict"),
       iteration,
@@ -400,7 +406,10 @@ function reviewerReceiptError(
     if (
       recordedFingerprint !== null &&
       /^sha256:[0-9a-f]{64}$/.test(recordedFingerprint) &&
+      requestedFingerprint !== null &&
+      /^sha256:[0-9a-f]{64}$/.test(requestedFingerprint) &&
       currentFingerprint !== null &&
+      recordedFingerprint === requestedFingerprint &&
       recordedFingerprint === currentFingerprint
     ) {
       return null;

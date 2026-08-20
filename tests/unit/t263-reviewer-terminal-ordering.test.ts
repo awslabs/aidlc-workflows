@@ -42,11 +42,13 @@ import {
   seededRecordDir,
   seedStateFile,
 } from "../harness/fixtures.ts";
+import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath;
 const TOOLS_DIR = join(REPO_ROOT, "dist", "claude", ".claude", "tools");
 const STATE_TOOL = join(TOOLS_DIR, "aidlc-state.ts");
 const LOG_TOOL = join(TOOLS_DIR, "aidlc-log.ts");
+const ORCHESTRATE_TOOL = join(TOOLS_DIR, "aidlc-orchestrate.ts");
 
 const CORE_PROTOCOL = join(
   REPO_ROOT,
@@ -120,6 +122,12 @@ function recordReview(
   expect(
     run(LOG_TOOL, [...base, "--verdict", verdict], p, TEST_ENV).status,
   ).toBe(0);
+}
+
+function eventCount(p: string, event: string): number {
+  return readAllAuditShards(p)
+    .split("\n")
+    .filter((line) => line === `**Event**: ${event}`).length;
 }
 
 describe("t263 reviewer terminal-receipt ordering (receipt-invalidation loop fix)", () => {
@@ -223,6 +231,99 @@ describe("t263 reviewer terminal-receipt ordering (receipt-invalidation loop fix
     );
     expect(accepted.status).toBe(0);
     expect(accepted.out).toContain('"new_state":"awaiting-approval"');
+  });
+
+  test("an already-open legacy gate is revalidated instead of trusted", () => {
+    const p = createTestProject();
+    tempDirs.push(p);
+    seedAidlcMemory(p);
+    seedStateFile(p, join(FIXTURES_DIR, "state-mid-inception.md"));
+
+    expect(
+      run(
+        STATE_TOOL,
+        ["gate-start", "requirements-analysis"],
+        p,
+        { ...TEST_ENV, AIDLC_SKIP_REVIEWER_GATE_GUARD: "1" },
+      ).status,
+    ).toBe(0);
+    expect(eventCount(p, "STAGE_AWAITING_APPROVAL")).toBe(1);
+
+    const refused = run(
+      ORCHESTRATE_TOOL,
+      [
+        "report",
+        "--stage",
+        "requirements-analysis",
+        "--result",
+        "awaiting-approval",
+      ],
+      p,
+      TEST_ENV,
+    );
+    expect(refused.out).toContain('"kind":"error"');
+    expect(refused.out).toContain("Refusing to present the approval gate");
+    expect(eventCount(p, "STAGE_AWAITING_APPROVAL")).toBe(1);
+  });
+
+  test("an already-open reviewed gate revalidates without a duplicate event", () => {
+    const p = createTestProject();
+    tempDirs.push(p);
+    seedAidlcMemory(p);
+    seedStateFile(p, join(FIXTURES_DIR, "state-mid-inception.md"));
+
+    recordReview(p, "READY");
+    expect(
+      run(
+        STATE_TOOL,
+        ["gate-start", "requirements-analysis"],
+        p,
+        TEST_ENV,
+      ).status,
+    ).toBe(0);
+    const revalidated = run(
+      ORCHESTRATE_TOOL,
+      [
+        "report",
+        "--stage",
+        "requirements-analysis",
+        "--result",
+        "awaiting-approval",
+      ],
+      p,
+      TEST_ENV,
+    );
+    expect(revalidated.out).toContain("gate evidence revalidated");
+    expect(eventCount(p, "STAGE_AWAITING_APPROVAL")).toBe(1);
+  });
+
+  test("rejecting directly from active records no approval gate", () => {
+    const p = createTestProject();
+    tempDirs.push(p);
+    seedAidlcMemory(p);
+    seedStateFile(p, join(FIXTURES_DIR, "state-mid-inception.md"));
+
+    const rejected = run(
+      ORCHESTRATE_TOOL,
+      [
+        "report",
+        "--stage",
+        "requirements-analysis",
+        "--result",
+        "rejected",
+        "--user-input",
+        "Revise the evidence",
+      ],
+      p,
+      TEST_ENV,
+    );
+    expect(rejected.out).toContain("Recorded rejected for");
+    expect(rejected.out).toContain("requirements-analysis");
+    expect(eventCount(p, "STAGE_AWAITING_APPROVAL")).toBe(0);
+    expect(eventCount(p, "GATE_REJECTED")).toBe(1);
+    expect(eventCount(p, "STAGE_REVISING")).toBe(1);
+    expect(readFileSync(join(seededRecordDir(p), "aidlc-state.md"), "utf-8"))
+      .toContain("- [R] requirements-analysis");
   });
 
   test("revise refuses without a fresh post-rejection reviewer receipt", () => {

@@ -308,7 +308,10 @@ function recordReview(proj: string, unit?: string, graphPath?: string): void {
     proj,
     "REVIEW_REQUESTED",
     "2026-07-19T00:00:00.000Z",
-    identity,
+    {
+      ...identity,
+      "Artifact Fingerprint": fingerprint,
+    },
   );
   appendAuditEvent(
     proj,

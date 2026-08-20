@@ -8,9 +8,10 @@
 // on-disk state under-records the revision (Revision Count stays 0, no
 // GATE_REJECTED/STAGE_REVISING pair). This backstop reconciles that at approve
 // time: if the ledger proves an unrecorded revision, approve backfills the
-// GATE_REJECTED + STAGE_REVISING pair (tagged Recovered=true) + a re-entry
-// STAGE_AWAITING_APPROVAL, bumps Revision Count, then completes the approval
-// normally - reconciliation, never refusal.
+// GATE_REJECTED + STAGE_REVISING pair (tagged Recovered=true) and bumps
+// Revision Count. A no-reviewer stage can re-enter and complete immediately;
+// a reviewer-bearing stage persists [R] until a fresh review passes through
+// the normal revise gate re-entry.
 //
 // The predicate (unrecordedRevisionSinceGateOpen), all four conjuncts required,
 // over one chronological interleave of six event types across every shard:
@@ -350,9 +351,25 @@ describe("t205: approve-time gate-revision backstop", () => {
     expect(eventCount(proj, "GATE_REJECTED")).toBe(1);
     expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
     expect(field(proj, "Revision Count")).toBe("1");
-    expect(stateContent(proj)).toContain(`- [?] ${slug}`);
+    expect(stateContent(proj)).toContain(`- [R] ${slug}`);
+    const recoveredGateRows = auditBlocks(proj).filter(
+      (b) =>
+        b.event === "STAGE_AWAITING_APPROVAL" &&
+        b.stage === slug &&
+        b.recovered,
+    );
+    expect(recoveredGateRows.length).toBe(0);
 
     recordReview(proj, slug, 1);
+    const stillRevising = guarded(
+      proj,
+      ["approve", slug, "--user-input", "looks good now"],
+    );
+    expect(stillRevising.rc).not.toBe(0);
+    expect(stateContent(proj)).toContain(`- [R] ${slug}`);
+    expect(guarded(proj, ["revise", slug]).rc).toBe(0);
+    expect(stateContent(proj)).toContain(`- [?] ${slug}`);
+    recordHumanTurn(proj);
     const accepted = guarded(proj, ["approve", slug, "--user-input", "looks good now"]);
     expect(accepted.rc).toBe(0);
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);

@@ -2502,6 +2502,9 @@ function validateSlugInState(
 }
 
 // gate-start <slug> — transition [-] → [?], emit STAGE_AWAITING_APPROVAL.
+// On an existing [?] gate, re-run every opening guard without emitting or
+// writing another transition. This lets report revalidate legacy/recovered
+// gates instead of treating their persisted checkbox as proof of validity.
 // --recovered marks a BACKFILLED gate row (the engine opening a gate the
 // conductor skipped, e.g. report's explicit-stage recovery) with
 // Recovered=true so audit consumers can tell backfills from organic opens.
@@ -2523,11 +2526,23 @@ function handleGateStart(args: string[]): void {
 
   const stage = findStageBySlug(slug);
   if (!stage) error(`Unknown stage: ${slug}`);
-  validateSlugInState(content, slug, "in-progress");
+  validateSlugInState(content, slug, ["in-progress", "awaiting-approval"]);
+  const alreadyAwaiting = getSlugState(content, slug) === "awaiting-approval";
   verifyStageArtifacts(pd, stage);
   verifySummaryConfirmationPrecondition(pd, content, stage);
   if (!reviewerGateGuardDisabled()) {
     verifyReviewerPrecondition(pd, content, stage, "present-approval-gate");
+  }
+  if (alreadyAwaiting) {
+    console.log(
+      JSON.stringify({
+        slug,
+        new_state: "awaiting-approval",
+        already_awaiting_approval: true,
+        revalidated: true,
+      }),
+    );
+    return;
   }
 
   content = setCheckbox(content, slug, "awaiting-approval");
@@ -2664,17 +2679,13 @@ function handleApprove(args: string[]): void {
   // open gate but never recorded (it skipped the `reject` verb). When the ledger
   // proves the human revised this stage's artifact at the open gate with no
   // recorded reject (unrecordedRevisionSinceGateOpen), backfill the missing
-  // GATE_REJECTED + STAGE_REVISING pair (tagged Recovered) and re-open the gate,
-  // then fall through to the normal approve below. RECONCILIATION, never refusal:
-  // a forced retroactive reject would consume the human-presence freshness
-  // boundary (the HUMAN_TURN this gate's approval depends on) and refuse the
-  // approval the human already gave, so we record the missing history and honour
-  // the approval unless another completion precondition refuses it. The
-  // intermediate [R] checkbox never hits disk; a reviewer refusal persists the
-  // incremented revision count while leaving the gate at its existing [?].
+  // GATE_REJECTED + STAGE_REVISING pair (tagged Recovered) and persist [R].
+  // A reviewer-bearing stage must then obtain a fresh post-rejection receipt
+  // before this command may emit the recovered gate re-entry. When that guard
+  // refuses, the durable [R] state routes the conductor through normal `revise`
+  // after review instead of leaving an invalid [?] gate open.
   // Skipped under the off-switch and in autonomous Construction (no human at the
   // gate, so no human-driven revision to reconcile).
-  let recoveredRevision = false;
   if (
     !revisionBackstopDisabled() &&
     !autonomousDecision &&
@@ -2684,6 +2695,8 @@ function handleApprove(args: string[]): void {
     const priorParsed = priorCount ? parseInt(priorCount, 10) : 0;
     const revCount = (Number.isFinite(priorParsed) ? priorParsed : 0) + 1;
     content = setField(content, "Revision Count", String(revCount));
+    content = setCheckbox(content, slug, "revising");
+    content = setField(content, "Last Updated", isoTimestamp());
     // Audit-first: a failed emission aborts before any state write (matches the
     // GATE_APPROVED/STAGE_COMPLETED try/catch below).
     try {
@@ -2699,22 +2712,28 @@ function handleApprove(args: string[]): void {
         "Revision count": String(revCount),
         Recovered: "true",
       });
+    } catch (e) {
+      error(`Audit emission failed: ${errorMessage(e)}`);
+    }
+    writeStateFile(pd, content);
+    verifySummaryConfirmationPrecondition(pd, content, stage);
+    if (!reviewerGateGuardDisabled()) {
+      verifyReviewerPrecondition(pd, content, stage, "present-approval-gate");
+    }
+    try {
       emitAudit(pd, "STAGE_AWAITING_APPROVAL", {
         Stage: slug,
         Recovered: "true",
         Details: "Re-entering gate after backfilled revision",
       });
-      recoveredRevision = true;
     } catch (e) {
       error(`Audit emission failed: ${errorMessage(e)}`);
     }
+    content = setCheckbox(content, slug, "awaiting-approval");
+    content = setField(content, "Last Updated", isoTimestamp());
+    writeStateFile(pd, content);
   }
 
-  // Run after the revision backstop: a recovered GATE_REJECTED invalidates the
-  // receipt that preceded the unrecorded artifact revision. The backfilled audit
-  // rows and revision count remain as the consistent reopened-gate state if
-  // this check refuses.
-  if (recoveredRevision) writeStateFile(pd, content);
   verifySummaryConfirmationPrecondition(pd, content, stage);
   verifyReviewerPrecondition(pd, content, stage);
 
@@ -2805,11 +2824,11 @@ function parseApproveFlags(args: string[]): { userInput?: string } {
   };
 }
 
-// reject <slug> [--feedback <text>] — transition [?] → [R], emit GATE_REJECTED + STAGE_REVISING, increment Revision Count.
-// Also accepts [-]: gate-start is optional before the human prompt, so a
-// rejection may arrive with no open gate. The reject self-heals by emitting
-// the missing STAGE_AWAITING_APPROVAL (tagged Recovered=true) ahead of the
-// rejection pair — mirroring report's approve-side gate backfill.
+// reject <slug> [--feedback <text>] — transition [?] or [-] → [R], emit
+// GATE_REJECTED + STAGE_REVISING, and increment Revision Count. The direct
+// Active → Revising path deliberately does not fabricate a recovered approval
+// gate: a persisted rejection is valid even when gate-start was skipped, while
+// STAGE_AWAITING_APPROVAL must only describe a gate that passed its guards.
 function handleReject(args: string[]): void {
   if (args.length < 1) error("Usage: aidlc-state.ts reject <slug> [--feedback <text>]");
   const slug = args[0];
@@ -2844,7 +2863,6 @@ function handleReject(args: string[]): void {
   if (!stage) error(`Unknown stage: ${slug}`);
   const autonomousDecision = isAutonomousConstructionDecision(content, stage.phase);
   validateSlugInState(content, slug, ["awaiting-approval", "in-progress"]);
-  const gateWasMissing = getSlugState(content, slug) === "in-progress";
 
   const autonomousMode = isAutonomousMode(content);
   const recoveryResetNeedsHuman =
@@ -2903,16 +2921,6 @@ function handleReject(args: string[]): void {
   content = setField(content, "Last Updated", timestamp);
 
   try {
-    if (gateWasMissing) {
-      // Backfill the gate row the optional gate-start would have written, so
-      // the audit trail keeps its STAGE_AWAITING_APPROVAL → GATE_REJECTED
-      // order. The intermediate [?] never needs to hit disk — one state write
-      // below lands the final [R].
-      emitAudit(pd, "STAGE_AWAITING_APPROVAL", {
-        Stage: slug,
-        Recovered: "true",
-      });
-    }
     const rejFields: Record<string, string> = {
       Stage: slug,
       Feedback: feedback,

@@ -1,12 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
-## [2.6.20] - 2026-08-20
+## [2.6.24] - 2026-08-20
 
-Reviewer-bearing stages can no longer present an approval gate before the configured reviewer has recorded a fresh terminal receipt, including gate re-entry after a human rejection. **Upgrade:** re-copy your `dist/<harness>/` shell so every harness receives the strengthened state transition guard. Closes #551.
+Reviewer-bearing approval gates and review receipts now prove that the configured reviewer inspected the current artifact before the gate is presented. **Upgrade:** re-copy your `dist/<harness>/` shell so every harness receives the strengthened state and review-log guards. Closes #551.
 
-* `report --result awaiting-approval` now refuses to present the approval gate when the stage's configured reviewer has no fresh terminal `REVIEW_COMPLETED` receipt, and the refusal names the reviewer and §12a ordering requirement.
-* `report --result revised` requires a fresh post-rejection terminal reviewer receipt before re-opening the approval gate; completion-path refusal text remains unchanged.
+* `report --result awaiting-approval` validates both new and already-open gates; direct rejection from an active stage records `Active → Revising` without fabricating an approval-gate event.
+* `report --result revised` and approve-time revision recovery persist `[R]` until a fresh post-rejection review passes and the normal gate re-entry is recorded.
+* `aidlc-log.ts review` fingerprints artifacts when dispatching and refuses a verdict if the bytes changed before completion; only `--retry-pending` may repeat an outstanding ordinal.
+* Per-unit reviews require membership in the authoritative Unit DAG, and Unit-scoped receipts can no longer satisfy a no-DAG stage-level fallback.
 
 ## [2.6.18] - 2026-08-19
 
