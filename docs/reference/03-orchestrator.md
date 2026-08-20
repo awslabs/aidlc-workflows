@@ -407,7 +407,9 @@ The 6-step process:
    the prompt.
 4. **Apply the topology.** Use blind spokes for subagent supports, ordered links
    for pipeline, and blind support contributions plus the bounded objection
-   round for mob.
+   round for mob. After each pipeline return, mint the current-attempt
+   `PIPELINE_LINK_COMPLETED` receipt before dispatching the next link; resume
+   from `directive.pipeline.completed`.
 5. **Collect durable output.** The lead owns `produces[]`; dispatched
    subagent/mob supports each write an identity-marked contribution file.
 6. **Complete through the engine.** Verify artifacts/evidence and present the
@@ -418,7 +420,7 @@ The 6-step process:
 Some stages involve multiple agents: a lead agent and one or more support agents. The coordination pattern follows `directive.mode` — the stage's communication topology — and is always orchestrator-mediated:
 
 1. Execute the lead agent's work first, producing primary artifacts.
-2. Bring in each support agent per the topology. On an `inline` stage the orchestrator reads every lead/support entry in `directive.inline_context_paths` and adopts those perspectives rather than dispatching them. On `mob`, it reads the lead-only roster and performs the lead work inline, while each support is a real dispatch. On `subagent` (hub-and-spoke) and `pipeline` (chain), the lead and supports are dispatched: mutually-blind spokes on subagent, ordered enrichment hops on pipeline, and parallel blind contributions plus a bounded objection round on mob (`stage-protocol-ensemble.md`).
+2. Bring in each support agent per the topology. On an `inline` stage the orchestrator reads every lead/support entry in `directive.inline_context_paths` and adopts those perspectives rather than dispatching them. On `mob`, it reads the lead-only roster and performs the lead work inline, while each support is a real dispatch. On `subagent` (hub-and-spoke) and `pipeline` (chain), the lead and supports are dispatched: mutually-blind spokes on subagent, ordered enrichment hops on pipeline, and parallel blind contributions plus a bounded objection round on mob (`stage-protocol-ensemble.md`). Every returned pipeline hop is recorded with `aidlc-log.ts link`; multi-repo chains include `--repo`.
 3. Synthesize all agent outputs into the final stage artifacts — dispatched support agents write contribution files (Contribution + Positions, `stage-protocol-ensemble.md` §11) that the lead integrates; the lead alone edits the `produces[]` artifacts (pipeline links advance them directly); unresolved mob judgment calls surface to the human mid-stage, and maintained dissent is quoted verbatim at the gate.
 4. Agents do NOT invoke each other -- only the orchestrator delegates. Enforced by `disallowedTools: Task` on all agent files.
 
@@ -441,6 +443,8 @@ Reverse Engineering checks each brownfield repository's shared codekb before
 scanning. A verified-current store may be reused by human choice; stale,
 unverified, legacy, or intent-mismatched coverage is rescanned. Multi-repo
 intents resolve every repository decision before the stage reports or advances.
+Each scanned repo has its own two-link receipt chain; artifacts without both
+current-attempt receipts cannot enter or complete approval.
 
 ### Construction Execution <a id="construction-execution"></a>
 

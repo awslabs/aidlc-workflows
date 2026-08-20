@@ -973,6 +973,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t290-code-gen-unit-test-instructions-coverage.test.ts",
     "unit/t291-review-receipt-recovery.test.ts",
     "unit/t302-protocol-modules.test.ts",
+    "unit/t304-pipeline-link-receipts.test.ts",
     "unit/t255-workspace-sync.test.ts",
     "unit/t27.test.ts",
     "unit/t29.test.ts",

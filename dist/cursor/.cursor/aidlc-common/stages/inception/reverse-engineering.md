@@ -46,8 +46,10 @@ This stage runs `mode: pipeline` (stage-protocol-ensemble.md §5): a two-link ch
 which each link advances the work product directly. The developer lead (link
 1) scans and returns structured results; the architect (link 2, the final
 link) synthesizes those results and writes the 9 artifacts. The final link
-leaving the `produces[]` artifacts complete is the pipeline contract working
-as designed — no contribution files on pipeline stages.
+leaving the `produces[]` artifacts complete plus both tool-owned link receipts
+is the pipeline contract — no contribution files on pipeline stages. On resume,
+read `directive.pipeline.completed` and dispatch only the first missing link;
+multi-repo entries are qualified as `<repo>:<agent>`.
 
 ## Steps
 
@@ -81,6 +83,10 @@ from the intent's registry row before making any reuse or scan decision:
 
 In the steps below, `<repo>` is the repository whose decision or scan is being
 processed.
+
+For each repo selected for scanning, Steps 2-3 are one independent receipt
+chain. Add `--repo <repo>` to both receipt commands when the intent registers
+multiple repos; omit it for a single/unrecorded repo.
 
 #### Rerun guard: check each existing store before scanning
 
@@ -176,6 +182,13 @@ Developer returns structured scan results following the Developer Code Scan
 Template in
 `.cursor/knowledge/aidlc-developer-agent/re-artifacts.md`.
 
+After the developer return has been read and preserved for the next link, mint
+link 1 before dispatching the architect:
+
+```
+bun .cursor/tools/aidlc-log.ts link --stage reverse-engineering --link aidlc-developer-agent [--repo <repo>]
+```
+
 ### Step 3: Architect Synthesis
 
 Delegate to Task tool with aidlc-architect-agent:
@@ -232,6 +245,15 @@ creating it if absent. This is the durable per-repo code knowledge base, a
 space-level store shared across every intent in the space. Never substitute
 the intent slug, the record dir, or a hand-composed path for what the tool
 prints.
+
+After the architect return has been read and all 9 artifacts for that repo are
+present, mint the final-link receipt:
+
+```
+bun .cursor/tools/aidlc-log.ts link --stage reverse-engineering --link aidlc-architect-agent [--repo <repo>]
+```
+
+Do not report completion until every selected repo's chain has both receipts.
 
 ### Step 4: Completion Handoff
 

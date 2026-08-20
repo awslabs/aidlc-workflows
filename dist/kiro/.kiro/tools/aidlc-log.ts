@@ -27,6 +27,8 @@ import {
   loadStageGraphAll,
   isNonAnswer,
   parseCheckboxes,
+  pipelineLinkEvidence,
+  pipelineLinks,
   readAllAuditShards,
   readStateFile,
   recordDir,
@@ -538,6 +540,104 @@ function handleAnswer(args: string[]): void {
       JSON.stringify({ emitted: "QUESTION_ANSWERED", stage: flags.stage })
     );
   });
+}
+
+// --- Subcommand: link ---
+// Usage:
+//   aidlc-log link --stage <slug> --link <agent> [--repo <repo>]
+//       → PIPELINE_LINK_COMPLETED
+//
+// The receipt is emitted only after a declared pipeline link returns. Ordering,
+// duplicate prevention, and attempt freshness are checked under the audit lock
+// so two concurrent conductors cannot advance the same chain.
+function handleLink(args: string[]): void {
+  const { flags } = parseFlags(args);
+  if (!flags.stage) error("Missing --stage <slug>");
+  if (!flags.link) error("Missing --link <agent>");
+  if (flags.intent || flags.space) {
+    error(
+      "The link command does not accept --intent/--space selectors. Switch to the target workspace first.",
+    );
+  }
+
+  const pd = resolveActiveProjectDir(projectDir);
+  const space = activeSpace(pd);
+  const intent = activeIntent(pd, space);
+  if (!intent) {
+    error("Cannot resolve the active intent for pipeline link logging.");
+  }
+
+  try {
+    withAuditLock(pd, () => {
+      const node = loadStageGraphAll().find((stage) => stage.slug === flags.stage);
+      if (node?.mode !== "pipeline") {
+        throw new Error(
+          `Cannot record pipeline link: stage "${flags.stage}" is not mode: pipeline.`,
+        );
+      }
+      const links = pipelineLinks(node);
+      const index = links.indexOf(flags.link);
+      if (index === -1) {
+        throw new Error(
+          `Cannot record pipeline link for "${flags.stage}": "${flags.link}" is not in its declared lead/support chain (${links.join(", ")}).`,
+        );
+      }
+
+      const evidence = pipelineLinkEvidence(pd, node);
+      if (evidence.repos.length > 0) {
+        if (!flags.repo) {
+          throw new Error(
+            `Cannot record pipeline link for "${flags.stage}": this intent has multiple repositories; pass --repo <repo>.`,
+          );
+        }
+        if (!evidence.repos.includes(flags.repo)) {
+          throw new Error(
+            `Cannot record pipeline link for "${flags.stage}": repo "${flags.repo}" is not registered for this intent (${evidence.repos.join(", ")}).`,
+          );
+        }
+      }
+
+      const repo = flags.repo ?? null;
+      if (evidence.receipts.some((receipt) =>
+        receipt.link === flags.link && receipt.repo === repo
+      )) {
+        throw new Error(
+          `Cannot record pipeline link for "${flags.stage}": link "${flags.link}"` +
+            `${repo ? ` for repo "${repo}"` : ""} already completed this attempt.`,
+        );
+      }
+      if (index > 0) {
+        const previous = links[index - 1];
+        const previousCompleted = evidence.receipts.some((receipt) =>
+          receipt.link === previous && receipt.repo === repo
+        );
+        if (!previousCompleted) {
+          throw new Error(
+            `Cannot record pipeline link for "${flags.stage}": "${flags.link}" is out of order; ` +
+              `position ${index + 1}/${links.length} requires current-attempt receipt for "${previous}"` +
+              `${repo ? ` in repo "${repo}"` : ""}.`,
+          );
+        }
+      }
+
+      const fields: Record<string, string> = {
+        Stage: flags.stage,
+        Link: flags.link,
+        Position: `${index + 1}/${links.length}`,
+      };
+      if (repo) fields.Repo = repo;
+      emitAudit(pd, "PIPELINE_LINK_COMPLETED", fields, intent, space);
+    }, intent, space);
+  } catch (e) {
+    error(errorMessage(e));
+  }
+
+  console.log(JSON.stringify({
+    emitted: "PIPELINE_LINK_COMPLETED",
+    stage: flags.stage,
+    link: flags.link,
+    ...(flags.repo ? { repo: flags.repo } : {}),
+  }));
 }
 
 // --- Subcommand: review ---
@@ -1070,11 +1170,14 @@ export function main(argv: string[]): void {
       case "answer":
         handleAnswer(filteredArgs.slice(1));
         break;
+      case "link":
+        handleLink(filteredArgs.slice(1));
+        break;
       case "review":
         handleReview(filteredArgs.slice(1));
         break;
       default:
-        error(`Unknown subcommand: ${subcommand}. Valid: decision, answer, review`);
+        error(`Unknown subcommand: ${subcommand}. Valid: decision, answer, link, review`);
     }
   } catch (e) {
     error(errorMessage(e));

@@ -7376,6 +7376,136 @@ export function latestMainWorkflowStageStarted(
   return since;
 }
 
+export interface PipelineLinkReceipt {
+  link: string;
+  repo: string | null;
+  position: string | null;
+  timestamp: string;
+}
+
+export interface PipelineLinkEvidence {
+  links: string[];
+  repos: string[];
+  receipts: PipelineLinkReceipt[];
+  completed: string[];
+  missing: Array<{ link: string; repo: string | null }>;
+}
+
+export function pipelineLinks(
+  stage: Pick<StageEntry, "lead_agent" | "support_agents">,
+): string[] {
+  return [stage.lead_agent, ...(stage.support_agents ?? [])];
+}
+
+// Current-attempt pipeline receipts are the PIPELINE_LINK_COMPLETED rows after
+// the latest main-workflow STAGE_STARTED for this slug. The all-event merge is
+// timestamp ordered with buffer position as the deterministic tie-break, so a
+// later stage start resets every earlier link even across audit shards.
+export function currentPipelineLinkReceipts(
+  projectDir: string,
+  stageSlug: string,
+): PipelineLinkReceipt[] {
+  const audit = readAllAuditShards(projectDir);
+  if (audit.length === 0) return [];
+  const events = audit
+    .replace(/\r\n/g, "\n")
+    .split(/\n---\n/)
+    .map((block, position) => ({
+      block,
+      position,
+      event: auditBlockField(block, "Event"),
+      timestamp: auditBlockField(block, "Timestamp") ?? "",
+    }))
+    .filter((entry) => entry.event !== null)
+    .sort((a, b) =>
+      a.timestamp !== b.timestamp
+        ? (a.timestamp < b.timestamp ? -1 : 1)
+        : a.position - b.position
+    );
+
+  let floor = -1;
+  for (let i = 0; i < events.length; i++) {
+    const entry = events[i];
+    if (
+      entry.event === "STAGE_STARTED" &&
+      auditBlockField(entry.block, "Stage") === stageSlug &&
+      !auditBlockField(entry.block, "Workflow")?.startsWith("single-stage:")
+    ) {
+      floor = i;
+    }
+  }
+
+  const receipts: PipelineLinkReceipt[] = [];
+  for (let i = floor + 1; i < events.length; i++) {
+    const entry = events[i];
+    if (
+      entry.event !== "PIPELINE_LINK_COMPLETED" ||
+      auditBlockField(entry.block, "Stage") !== stageSlug
+    ) {
+      continue;
+    }
+    const link = auditBlockField(entry.block, "Link");
+    if (!link) continue;
+    receipts.push({
+      link,
+      repo: auditBlockField(entry.block, "Repo"),
+      position: auditBlockField(entry.block, "Position"),
+      timestamp: entry.timestamp,
+    });
+  }
+  return receipts;
+}
+
+// Registered multi-repo intents run one independent receipt chain per repo.
+// Single/unrecorded intents retain one chain and may omit Repo on every row.
+export function pipelineLinkEvidence(
+  projectDir: string,
+  stage: Pick<StageEntry, "slug" | "lead_agent" | "support_agents">,
+): PipelineLinkEvidence {
+  const links = pipelineLinks(stage);
+  const registeredRepos = intentRepos(projectDir);
+  const repos = registeredRepos.length > 1 ? registeredRepos : [];
+  const receipts = currentPipelineLinkReceipts(projectDir, stage.slug);
+  const missing: Array<{ link: string; repo: string | null }> = [];
+
+  if (repos.length > 0) {
+    for (const repo of repos) {
+      for (const link of links) {
+        if (!receipts.some((receipt) =>
+          receipt.repo === repo && receipt.link === link
+        )) {
+          missing.push({ link, repo });
+        }
+      }
+    }
+  } else {
+    for (const link of links) {
+      if (!receipts.some((receipt) => receipt.link === link)) {
+        missing.push({ link, repo: null });
+      }
+    }
+  }
+
+  // The directive keeps the compact link-name form for a single chain. A
+  // multi-repo stage qualifies each completed entry so resume can distinguish
+  // independent chains without adding another wire field.
+  const completed = repos.length > 0
+    ? repos.flatMap((repo) =>
+        links
+          .filter((link) =>
+            receipts.some((receipt) =>
+              receipt.repo === repo && receipt.link === link
+            )
+          )
+          .map((link) => `${repo}:${link}`)
+      )
+    : links.filter((link) =>
+        receipts.some((receipt) => receipt.link === link)
+      );
+
+  return { links, repos, receipts, completed, missing };
+}
+
 // Exact identity for the current main-workflow attempt of one stage. The token
 // names the latest relevant boundary plus its matching-event ordinal, so two
 // boundaries emitted in the same second still receive different floors.

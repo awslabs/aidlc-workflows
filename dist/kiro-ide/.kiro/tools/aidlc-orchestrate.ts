@@ -127,6 +127,7 @@ import {
   loadScopeMapping,
   nextInScopeStage,
   parseCheckboxes,
+  pipelineLinkEvidence,
   type KnowledgeCommand,
   parseKnowledgeCommand,
   type PluginCommand,
@@ -1464,16 +1465,29 @@ function isCodekb(node: GraphStage): boolean {
 // codekbRepoName(projectDir); `space` is the active-space cursor. When absent
 // (a non-codekb caller, e.g. a test invoking buildRunStageDirective with
 // defaults) the codekb branch never fires and the record-dir path stands.
-type CodekbCtx = { projectDir: string; space: string; codekbRepo: string };
+type CodekbCtx = {
+  projectDir: string;
+  space: string;
+  codekbRepo: string;
+  repos: string[];
+};
 
 // Build the CodekbCtx for a live projectDir, resolving the active-space cursor
 // and the deterministic codekb repo name (both read-only). One place so the
 // `next` happy path, the jump paths, and the report-side per-unit coverage guard
 // share the same construction instead of repeating the object literal.
 function codekbCtxFor(pd: string): CodekbCtx {
-  return { projectDir: pd, space: activeSpace(pd), codekbRepo: codekbRepoName(pd) };
+  return {
+    projectDir: pd,
+    space: activeSpace(pd),
+    codekbRepo: codekbRepoName(pd),
+    repos: intentRepos(pd),
+  };
 }
 
+function codekbArtifactRepos(ctx: CodekbCtx): string[] {
+  return ctx.repos.length > 1 ? ctx.repos : [ctx.codekbRepo];
+}
 
 // Resolve a single artifact vocabulary name to its canonical aidlc-docs/... path
 // UNDER THE STAGE THAT OWNS THE FILE. Non-per-unit stages map to
@@ -1520,24 +1534,41 @@ function resolveArtifactPath(
   return `${prefix}/${owner.phase}/${owner.slug}/${filename}`;
 }
 
-// Resolve a CONSUMED artifact's path. A consumed artifact lives under the stage
-// that PRODUCES it (the 1:1 producer rule above), so we key the path on the
-// producer node — never on the consuming `node`. producersOf returns the
-// producing stages; the verified graph invariant is exactly one producer per
-// artifact (a clean 1:1 map), so producersOf(name)[0] is the owner. Defensive
-// fallback: if no producer is found (an orphan consume — a graph defect the
-// doctor surfaces, not expected in the shipped graph), resolve under the
-// consuming node's own directory rather than crash, so the engine still emits a
-// well-formed directive.
-function resolveConsumePath(
+function resolveArtifactPaths(
+  name: string,
+  owner: GraphStage,
+  unit: string | null,
+  recordPrefix: string | null,
+  codekbCtx?: CodekbCtx,
+): string[] {
+  if (isCodekb(owner) && codekbCtx && codekbCtx.repos.length > 1) {
+    const filename = artifactFilename(name);
+    return codekbArtifactRepos(codekbCtx).map(
+      (repo) =>
+        `${relativeCodekbDir(codekbCtx.projectDir, repo, codekbCtx.space)}/${filename}`,
+    );
+  }
+  return [resolveArtifactPath(name, owner, unit, recordPrefix, codekbCtx)];
+}
+
+// Resolve a consumed artifact under its producer. Multi-repo codekb producers
+// expand to one path per registered repo; an orphan consume defensively falls
+// back to the consuming node so the directive remains well formed.
+function resolveConsumePaths(
   name: string,
   node: GraphStage,
   unit: string | null,
   recordPrefix: string | null,
   codekbCtx?: CodekbCtx,
-): string {
+): string[] {
   const producer = producersOf(name)[0];
-  return resolveArtifactPath(name, producer ?? node, unit, recordPrefix, codekbCtx);
+  return resolveArtifactPaths(
+    name,
+    producer ?? node,
+    unit,
+    recordPrefix,
+    codekbCtx,
+  );
 }
 
 // Normalise the workflow's Project Type to the lowercase token the graph's
@@ -1598,11 +1629,19 @@ function resolveConsumes(
     ) {
       continue;
     }
-    resolved.push({
-      artifact: consume.artifact,
-      required: consume.required,
-      path: resolveConsumePath(consume.artifact, node, unit, recordPrefix, codekbCtx),
-    });
+    for (const path of resolveConsumePaths(
+      consume.artifact,
+      node,
+      unit,
+      recordPrefix,
+      codekbCtx,
+    )) {
+      resolved.push({
+        artifact: consume.artifact,
+        required: consume.required,
+        path,
+      });
+    }
   }
   return resolved;
 }
@@ -1671,7 +1710,9 @@ function resolveProduces(
   unitKind: string | null = null,
 ): string[] {
   return applicableProduceNames(node, unitKind, true)
-    .map((name) => resolveArtifactPath(name, node, unit, recordPrefix, codekbCtx));
+    .flatMap((name) =>
+      resolveArtifactPaths(name, node, unit, recordPrefix, codekbCtx)
+    );
 }
 
 // The one applicability rule for a stage's kind-aware produce set. Callers
@@ -2028,6 +2069,13 @@ function buildRunStageDirective(
     sensors_applicable: (node.sensors_applicable ?? []).map((s) => s.id),
     stage_file: stageFileFor(node.phase, node.slug),
   };
+  if (node.mode === "pipeline" && codekbCtx) {
+    const evidence = pipelineLinkEvidence(codekbCtx.projectDir, node);
+    directive.pipeline = {
+      links: evidence.links,
+      completed: evidence.completed,
+    };
+  }
   if (inlineContext.warnings.length > 0) {
     directive.context_warnings = inlineContext.warnings;
   }
@@ -5094,6 +5142,27 @@ function checkStageCompletionEvidence(
     pd,
     boltResolution ?? undefined,
   );
+
+  if (
+    node.mode === "pipeline" &&
+    process.env.AIDLC_DISABLE_ENSEMBLE_EVIDENCE !== "1"
+  ) {
+    const evidence = pipelineLinkEvidence(pd, node);
+    if (evidence.missing.length > 0) {
+      const missing = evidence.missing.map(({ link, repo }) =>
+        repo ? `${repo}:${link}` : link
+      );
+      return {
+        ok: false,
+        message:
+          `Stage "${slug}" is mode: pipeline and cannot enter or complete approval until every ` +
+          `declared link has a current-attempt PIPELINE_LINK_COMPLETED receipt. Missing: ${missing.join(", ")}. ` +
+          `After each link returns, run \`bun ${harnessDir()}/tools/aidlc-log.ts link --stage ${slug} ` +
+          `--link <agent>${evidence.repos.length > 0 ? " --repo <repo>" : ""}\`. ` +
+          `Set AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1 only to recover a legitimately-run in-flight pipeline.`,
+      };
+    }
+  }
 
   if (isPerUnit(node) && !settledSwarm) {
     const resolution = boltResolution ?? resolveBoltBatches(pd);

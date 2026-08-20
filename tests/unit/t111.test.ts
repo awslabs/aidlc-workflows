@@ -89,7 +89,7 @@ afterAll(() => {
   }
 });
 
-// The 85 canonical event types, mirrored from aidlc-audit.ts VALID_EVENT_TYPES.
+// The 86 canonical event types, mirrored from aidlc-audit.ts VALID_EVENT_TYPES.
 // Kept as an explicit literal (not re-derived from the source) so that a silent
 // addition/removal in the source surfaces here as a count mismatch worth a look.
 // The CLI_PROTECTED_EVENT_TYPES members are included: the suite runs with
@@ -125,6 +125,7 @@ const VALID_EVENT_TYPES = [
   "SUMMARY_CONFIRMATION_RECORDED",
   "REVIEW_REQUESTED",
   "REVIEW_COMPLETED",
+  "PIPELINE_LINK_COMPLETED",
   "UNIT_STARTED",
   "UNIT_PAUSED",
   "UNIT_RESUMED",
@@ -388,8 +389,8 @@ describe("appendAuditEntryUnlocked — escaping and append-not-overwrite", () =>
 
 describe("VALID_EVENT_TYPES — every canonical type is accepted", () => {
   test("the mirrored list has 85 entries with no duplicates", () => {
-    expect(VALID_EVENT_TYPES.length).toBe(85);
-    expect(new Set(VALID_EVENT_TYPES).size).toBe(85);
+    expect(VALID_EVENT_TYPES.length).toBe(86);
+    expect(new Set(VALID_EVENT_TYPES).size).toBe(86);
   });
 
   // Loop over ALL valid types: each must append a block whose **Event**

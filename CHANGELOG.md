@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.20] - 2026-08-20
+
+Pipeline stages now have durable, ordered link receipts, resume from the first missing link, and cannot enter or complete approval from conductor-written artifacts alone. Reverse Engineering also requires the complete declared artifact set for every registered repository and emits registry-resolved per-repo directive paths. **Upgrade:** refresh your `dist/<harness>/` shell; an in-flight pipeline started before this version can recover once with `AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1`, then future attempts should mint normal link receipts.
+
+* `aidlc-log.ts link --stage <slug> --link <agent> [--repo <repo>]` emits `PIPELINE_LINK_COMPLETED` only for declared, ordered, non-duplicate links in the current stage attempt.
+* Pipeline run-stage directives carry `pipeline.links` and `pipeline.completed`; gate entry, approval, direct completion transitions, and workflow completion require every current-attempt link receipt.
+* Multi-repo Reverse Engineering runs one receipt chain per registered repository, requires all nine codekb artifacts in every repo store, and resolves produced/consumed codekb paths across the full registry set.
+
 ## [2.6.18] - 2026-08-19
 
 Classic and Express are new scope options, and the implicit default scope is now Classic — a **declared behavior change**: invocations that name no scope and match no keyword now run the v1-style lifecycle without Ideation instead of the full-lifecycle Feature scope. Exactly two things control the implicit default: the `AWS_AIDLC_DEFAULT_SCOPE` env var (which overrides) and the framework's hard-coded `classic` fallback. Express has a deterministic requirements-to-conditional-deploy path, and conditional protocol modules reduce fixed context without dropping reviewer recovery behavior. **Upgrade:** refresh your `dist/<harness>/` shell; in-flight workflows keep their persisted scope and need no migration; set `AWS_AIDLC_DEFAULT_SCOPE=feature` (Claude: the `.claude/settings.json` `env` block, which now ships `classic`) to keep the previous full-lifecycle default.
