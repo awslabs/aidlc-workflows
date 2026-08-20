@@ -1561,6 +1561,7 @@ function missingCodekbRepos(
   const repos = [...new Set(intentRepos(pd))];
   if (repos.length === 0) return [];
   const produces = stage.produces ?? [];
+  if (produces.length === 0) return [];
   return repos
     .filter((repo) =>
       !produces.some((name) =>
