@@ -19,9 +19,11 @@
 //                   An OMITTED key inherits the session value, and a pinned
 //                   `effort:` overrides the session in both directions - a pin
 //                   is a cap, not a floor. So `judgment` writes `model:
-//                   inherit` and NO effort line; `balanced` writes `model:
-//                   sonnet` and NO effort line; only `templated` pins
-//                   `effort: medium`.
+//                   inherit` and NO effort line; `balanced` and `templated`
+//                   both write `model: sonnet` and pin `effort: medium`.
+//                   Those two tiers project IDENTICALLY in every harness
+//                   today - see the note on TIER_PROJECTIONS.balanced - so do
+//                   not read two tier names as two distinct projections.
 //   - Codex CLI     agent role .toml: `model` and `model_reasoning_effort`.
 //                   Omitted keys fall back to the shipped .codex/config.toml
 //                   session defaults (live-verified on codex-cli 0.139.0 and
