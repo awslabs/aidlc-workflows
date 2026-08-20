@@ -9,7 +9,7 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
 - **bun**: Required for the CLI tools and hook scripts (tracking progress, writing the decision log, deciding what runs next). Install via `curl -fsSL https://bun.sh/install | bash`. `bun` must be on your PATH for the shells Cursor spawns.
 - **Permissions**: the shipped `.cursor/cli.json` pre-approves `Shell(bun)` so the forwarding loop's engine calls do not prompt; every other shell command follows your Cursor approval settings. In headless `agent -p` runs, pass `--force` only if you accept auto-approval of the remaining prompts. Gated workflows need an interactive session regardless: Cursor fires the human-presence hook (`beforeSubmitPrompt`) only on an interactive submission, so a print-mode run records no human turn and an approval gate refuses by design. Headless mode suits the read-only utilities (`--status`, `--doctor`, `--version`) and autonomous Construction.
 - **Locking**: Audit log file locking is handled portably using mkdir-based locking in the system temp directory (no external dependencies).
-- **Hook permissions**: All 16 hooks are TypeScript (`.ts`) and run via `bun`. No executable bits required — works identically on macOS, Linux, and native Windows PowerShell.
+- **Hook permissions**: All 17 hooks are TypeScript (`.ts`) and run via `bun`. No executable bits required — works identically on macOS, Linux, and native Windows PowerShell.
 
 ## What AI-DLC does for you
 

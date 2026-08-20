@@ -9,7 +9,7 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
 - **Folder trust (hooks are silent without it)**: repo hooks run only when this project's absolute path is listed in `trustedFolders` in `~/.copilot/config.json` (the CLI prompts on first interactive run). Headless `copilot -p` runs ADDITIONALLY need `GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1` in the environment — without it every hook silently no-ops. `/aidlc --doctor` checks both.
 - **Model/provider**: no model is pinned anywhere in this install — agents inherit the session model on both surfaces. On the CLI, BYOK env vars select the provider (e.g. Amazon Bedrock's Anthropic-compatible endpoint via `COPILOT_PROVIDER_BASE_URL`/`COPILOT_PROVIDER_TYPE=anthropic`; `copilot help providers` documents the set); in VS Code, use the model picker or a Custom Endpoint provider.
 - **Locking**: Audit log file locking is handled portably using mkdir-based locking in the system temp directory (no external dependencies).
-- **Hook permissions**: All 16 hooks are TypeScript (`.ts`) and run via `bun`. No executable bits required — works identically on macOS, Linux, and native Windows PowerShell.
+- **Hook permissions**: All 17 hooks are TypeScript (`.ts`) and run via `bun`. No executable bits required — works identically on macOS, Linux, and native Windows PowerShell.
 
 ## What AI-DLC does for you
 
