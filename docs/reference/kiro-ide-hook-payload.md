@@ -53,8 +53,13 @@ Result prose is identical on both channels (`toolResult` on 0.12,
 1. **PostToolUse write/shell captures have empty tool inputs** on both
    channels. Their written path must therefore be parsed from the result prose,
    and the shell command is absent (only stdout + exit code is present). This is
-   not a universal IDE rule: later 1.x builds populate some PreToolUse inputs
-   and delegation inputs (#543).
+   not a universal IDE rule, and delivery is not uniform across generations:
+   later 1.x builds populate some PreToolUse and delegation inputs (#543).
+   Issue #763 reports that Kiro IDE 1.0.309 populated PreToolUse subagent
+   dispatch with `prompt` and `explanation`, shell/write matchers with
+   `command`, `cwd`, `run_in_background`, and `timeout`, and PostToolUse inputs
+   as well. That 1.0.309 observation was reported, not measured in this
+   repository; the measured base remains the 0.12 and 1.0.165 captures above.
 2. **1.x carries no success flag.** Only the 0.12 channel's explicit boolean
    `toolSuccess: false` drops a well-formed write from the audit (#417); a 1.x
    payload with the field absent falls through to the path check. Because that

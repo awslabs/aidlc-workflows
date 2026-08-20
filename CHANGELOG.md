@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.53] - 2026-08-21
+
+Kiro IDE hook guidance now reflects that tool-argument delivery varies across supported IDE generations instead of describing all payloads as empty. Hook registration and enforcement behavior are unchanged. **Upgrade:** refresh your `dist/<harness>/` shell to receive the corrected generated comments, Kiro IDE orchestrator guidance, and version metadata.
+
+* Reviewer-scope, stage-rule-delivery, and state-transition guidance now explain that Kiro IDE leaves the relevant PreToolUse hooks unregistered because tool arguments are not uniformly delivered and payloads lack a stable reviewer identity/target contract.
+* The empirical payload reference preserves the measured Kiro IDE 0.12 and 1.0.165 empty-input captures while recording issue #763's reported 1.0.309 populated PreToolUse, delegation, shell/write, and PostToolUse inputs as a non-universal later-build data point.
+
 ## [2.6.52] - 2026-08-21
 
 Reviewer-bearing approval gates and review receipts now prove that the configured reviewer inspected the current artifact before the gate is presented. **Upgrade:** re-copy your `dist/<harness>/` shell so every harness receives the strengthened state and review-log guards. Closes #551.
