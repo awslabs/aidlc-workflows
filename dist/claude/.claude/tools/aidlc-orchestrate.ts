@@ -947,6 +947,11 @@ function composeDispatchDirective(
     parts.push(
       `Dispatch the composer agent (${hd}/agents/aidlc-composer-agent.md) as a subagent to propose the workflow plan for: "${flags.intent ?? ""}".`,
     );
+    if (flags.intent) {
+      parts.push(
+        `On approval, the continue-into-birth run MUST carry the original task text verbatim as \`next --scope <scopeName> ${JSON.stringify(flags.intent)}\`; never use a bare \`next --scope <scopeName>\` when composition carried task text, so the born Project field and record-directory slug preserve the real description.`,
+      );
+    }
     if (flags.report) {
       parts.push(
         `First have it read and triage the scan report at "${flags.report}" (auto-fixable vs human-decision findings), then compose a compact fix-and-ship grid - this often routes to the stock bugfix or security-patch scope rather than minting a new one.`,

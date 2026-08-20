@@ -116,10 +116,13 @@ describe("t198 compose is NOT a terminal command (Kiro seam regression)", () => 
 describe("t198 cold-start compose surfaces -> composer dispatch", () => {
   test("leading compose verb + freeform text -> print naming the composer agent", () => {
     proj = createTestProject();
-    const d = directiveOf(runNext(proj, ["compose", "fix the token bug"]).out);
+    const task = "fix the token bug";
+    const d = directiveOf(runNext(proj, ["compose", task]).out);
     expect(d.kind).toBe("print");
     expect(String(d.message)).toContain("aidlc-composer-agent");
-    expect(String(d.message)).toContain("fix the token bug");
+    expect(String(d.message)).toContain(
+      `continue-into-birth run MUST carry the original task text verbatim as \`next --scope <scopeName> "${task}"\``,
+    );
     // Front mode, not in-flight: no state file exists.
     expect(String(d.message)).not.toContain("RUNNING workflow");
   });
@@ -132,6 +135,8 @@ describe("t198 cold-start compose surfaces -> composer dispatch", () => {
     // The spike-F leak shape was intent text "compose sonar.json" - the path
     // must ride the report slot, not the task-text slot.
     expect(String(d.message)).not.toContain('for: "sonar.json"');
+    expect(String(d.message)).not.toContain("original task text verbatim");
+    expect(String(d.message)).not.toContain('next --scope <scopeName> ""');
   });
 
   test("--new-scope forces synthesis wording and dispatches without the verb", () => {
