@@ -20,15 +20,6 @@ This chapter walks through a complete AI-DLC workflow run, explaining what you s
 
 At session start, Claude Code renders the AI-DLC welcome message via the `companyAnnouncements` entry in `settings.json`. It explains how AI-DLC works, and shows the stage map and scope options. (`companyAnnouncements` is a Claude Code setting with no equivalent on the other harnesses - there, no banner appears and the workflow begins directly with the initialization below.)
 
-### Starting from an existing document
-
-There is no mandatory location for an existing vision document, PRD, or brief.
-Reference the file in your initial request, for example
-`/aidlc Read ./vision.md and build what it describes`, or paste its content into
-the request. For durable, citable access across intents, place the file under
-`aidlc/spaces/<space>/knowledge/documents/` and run
-`/aidlc knowledge onboard`.
-
 ```
 # Welcome to AI-DLC
 
@@ -43,6 +34,15 @@ while keeping you in control at every decision point.
 - **Traceable artifacts.** Every stage produces versioned documents in the intent's record dir.
 - **11 domain experts.** Specialized agent personas guide each stage.
 ```
+
+### Starting from an existing document
+
+There is no mandatory location for an existing vision document, PRD, or brief.
+Reference the file in your initial request, for example
+`/aidlc Read ./vision.md and build what it describes`, or paste its content into
+the request. For durable, citable access across intents, place the file under
+`aidlc/spaces/<space>/knowledge/documents/` and run
+`/aidlc knowledge onboard`.
 
 ---
 
