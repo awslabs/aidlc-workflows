@@ -60,7 +60,7 @@ Two strategic pillars shape how the North Star reaches users and evolves:
 | 3 | Adaptiveness | Shipped | 2.2.0 composer, entropy-scored composition (#595), deterministic ARS (#644), unit-major Code Generation (#705), Classic/Express scopes and conditional protocol modules (#767) | Boundary changes remain human-approved by design |
 | 4 | Verifier as adversary | Shipped | 2.4.0 adversarial evidence contract (#566), completion-path enforcement (#569), reviewer-class cost dial (#718), turn/recovery backstops (#613, #758) | Blocking sensor severity is an adjacent follow-up (#431) |
 | 5 | Cyclic flows | Partial | Within-stage review/revision loops, bounded recovery mechanics, and explicit human-authorized forward/backward/redo stage jumps | Stage-triggered governed cross-stage feedback loops remain unbuilt; #616 is a narrower Build & Test loop-back |
-| 6 | Traceability | Partial | Artefact graph, upstream coverage, claim provenance (#647, #686), shared CodeKB safeguards (#670), domain/contract boundaries (#711), fingerprinted Testing Posture plan approval (#772) | Progressive in-place enrichment, stale-result propagation (#716), source-bound receipts (#646), per-stage enforcement (#401), cross-unit discovery |
+| 6 | Traceability | Partial | Artefact graph, upstream coverage, per-stage enforcement (#401), claim provenance (#647, #686), shared CodeKB safeguards (#670), domain/contract boundaries (#711), fingerprinted Testing Posture plan approval (#772) | Progressive in-place enrichment, stale-result propagation (#716), source-bound receipts (#646), cross-unit discovery |
 | 7 | Org repository | Shipped | 2.1.0 spaces/intents/org-KB, declared multi-repo manifest and sync (#674), clone-safe active-space cursor (#709), DocumentKB indexing and citations (#731) | Additional retrieval lifecycle and auditable supplemental-knowledge selection remain active extensions (#694, #714) |
 
 <!-- markdownlint-enable MD013 -->
@@ -91,6 +91,7 @@ Two strategic pillars shape how the North Star reaches users and evolves:
 | 2.5.60 | GitHub Copilot harness for Copilot CLI and VS Code agent mode | 1, 2 | #657 |
 | 2.5.63 | Cursor harness | 1, 2 | #661 |
 | 2.5.67 | Batch-parallel per-unit waves and foreground reviewers | 1, 4 | #617 |
+| 2.5.71 - 2.5.75 | Per-stage traceability enforcement, design-stage code boundaries, test-instruction ownership and first-class observability artifacts | 4, 6 | #401-#404 |
 | 2.6.1 - 2.6.2 | Domain/contract design restructuring, consolidated infrastructure design and follow-up guards | 1, 6 | #711, #751 |
 | 2.6.8 - 2.6.9 | Reviewer turn backstop and bounded stale-receipt recovery | 4 | #613, #758 |
 | 2.6.12 - 2.6.14 | Copilot continuation stability, gate authorship enforcement and audit timestamp normalization | 1, 4 | #749, #750, #759 |
@@ -122,7 +123,6 @@ frequently; each linked pull request is authoritative.
 | [#754](https://github.com/awslabs/aidlc-workflows/pull/754) | Reconcile planned Bolt terminology with the current Construction walk | Construction semantics |
 | [#788](https://github.com/awslabs/aidlc-workflows/pull/788) | Kiro agent-v1 hook matcher and adapter hardening | Harness reliability |
 | [#526](https://github.com/awslabs/aidlc-workflows/pull/526) | Product discovery in Ideation | Product discovery |
-| [#401](https://github.com/awslabs/aidlc-workflows/pull/401) | Per-stage traceability enforcement sensor | Traceability |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -133,9 +133,9 @@ but do not yet have committed release versions.
 
 ### Traceability and progressive enrichment
 
-- Enforce per-stage upstream traceability
-  ([#401](https://github.com/awslabs/aidlc-workflows/pull/401)), bind review
-  evidence to source state
+- Per-stage upstream traceability enforcement shipped in
+  [#401](https://github.com/awslabs/aidlc-workflows/pull/401). Bind review evidence
+  to source state
   ([#646](https://github.com/awslabs/aidlc-workflows/pull/646)), and propagate
   stale stage results
   ([#716](https://github.com/awslabs/aidlc-workflows/pull/716)).
@@ -162,7 +162,8 @@ but do not yet have committed release versions.
 ### Plugins and marketplace
 
 - The plugin mechanism, content projection, selection and plugin-contributed
-  scopes are shipped; the plugin test kit and authoring tiers shipped in #792.
+  scopes are shipped; the plugin test kit and authoring tiers shipped in
+  [#792](https://github.com/awslabs/aidlc-workflows/pull/792).
 - Remote discovery, trust, a first-party marketplace and a graduation path are
   proposed in [#723](https://github.com/awslabs/aidlc-workflows/issues/723).
   Product discovery
@@ -199,9 +200,9 @@ but do not yet have committed release versions.
 - [#722](https://github.com/awslabs/aidlc-workflows/issues/722) covers binary
   packaging, installers, release automation, rollback and post-install setup;
   its milestones 1-3 implementation is under review in
-  [#756](https://github.com/awslabs/aidlc-workflows/pull/756).
-  [#399](https://github.com/awslabs/aidlc-workflows/issues/399) tracks the hard
-  Bun dependency of the copy channel.
+  [#756](https://github.com/awslabs/aidlc-workflows/pull/756). The earlier Bun
+  dependency tracker [#399](https://github.com/awslabs/aidlc-workflows/issues/399)
+  is closed as superseded by #722.
 - [#636](https://github.com/awslabs/aidlc-workflows/issues/636) tracks a
   first-class upgrade contract. The earlier implementation PR
   [#535](https://github.com/awslabs/aidlc-workflows/pull/535) closed without
@@ -218,8 +219,10 @@ but do not yet have committed release versions.
 - Cursor support shipped in
   [#661](https://github.com/awslabs/aidlc-workflows/pull/661). A unified Kiro
   distribution is under review in
-  [#775](https://github.com/awslabs/aidlc-workflows/pull/775), while matcher and
-  adapter reliability continues in
+  [#775](https://github.com/awslabs/aidlc-workflows/pull/775); the existing
+  `dist/kiro-ide/` compatibility gap remains tracked separately in
+  [#555](https://github.com/awslabs/aidlc-workflows/issues/555), while matcher
+  and adapter reliability continues in
   [#788](https://github.com/awslabs/aidlc-workflows/pull/788).
 - Antigravity setup is proposed in
   [#690](https://github.com/awslabs/aidlc-workflows/issues/690).
@@ -227,9 +230,11 @@ but do not yet have committed release versions.
 ### Evaluation and operations
 
 - [#684](https://github.com/awslabs/aidlc-workflows/issues/684) proposes
-  repeatable benchmarks for measuring AI-DLC outcomes;
-  [#223](https://github.com/awslabs/aidlc-workflows/issues/223) tracks automated
-  harness evaluation, initially for Claude Code and Kiro.
+  repeatable benchmarks for measuring AI-DLC outcomes. Evaluator work is active
+  in [#753](https://github.com/awslabs/aidlc-workflows/pull/753); the earlier
+  harness-evaluation tracker
+  [#223](https://github.com/awslabs/aidlc-workflows/issues/223) closed as not
+  planned for v1.
 - Operations-phase steering remains a requested direction
   ([#221](https://github.com/awslabs/aidlc-workflows/issues/221),
   [#473](https://github.com/awslabs/aidlc-workflows/issues/473)), not an active
@@ -242,9 +247,9 @@ but do not yet have committed release versions.
 - Sensor failures are advisory; blocking severity remains open in #431.
 - General cross-stage cycles and progressive in-place artefact enrichment remain
   North Star gaps.
-- Kiro's remaining gaps are now concentrated in hook registration/payload drift,
-  plugin projection and argument forwarding (#763, #764, #776, #778, #779,
-  #783, #784).
+- Kiro's remaining gaps include the legacy `dist/kiro-ide/` compatibility issue
+  (#555), plus hook registration/payload drift, plugin projection and argument
+  forwarding (#763, #764, #776, #778, #779, #783, #784). The unified Kiro work
+  in #775 is a separate distribution and does not yet retire that legacy gap.
 - Several older community PRs remain open and need rebasing or disposition:
-  #401-#404, #526 and #553. PRs #432, #535, #552, #653 and #712 closed without
-  merging.
+  #526 and #553. PRs #432, #535, #552, #653 and #712 closed without merging.
