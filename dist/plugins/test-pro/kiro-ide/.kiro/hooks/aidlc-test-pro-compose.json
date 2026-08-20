@@ -7,7 +7,7 @@
       "description": "Composes the test-pro AIDLC plugin at session start.",
       "action": {
         "type": "command",
-        "command": "sh -c 'AIDLC=$(command -v aidlc 2>/dev/null || true); [ -n \"$AIDLC\" ] && { AIDLC_HARNESS_DIR=.kiro AIDLC_HARNESS_NAME=kiro-ide \"$AIDLC\" plugin sync && exit 0; }; BUN=$(command -v bun 2>/dev/null || true); [ -z \"$BUN\" ] && [ -x \"$HOME/.bun/bin/bun\" ] && BUN=\"$HOME/.bun/bin/bun\"; [ -z \"$BUN\" ] && { echo \"aidlc plugin compose: aidlc and bun not found, skipping\" >&2; exit 0; }; AIDLC_HARNESS_DIR=.kiro AIDLC_HARNESS_NAME=kiro-ide \"$BUN\" \"hooks/compose.ts\"'"
+        "command": "sh -c 'AIDLC=$(command -v aidlc 2>/dev/null || true); [ -n \"$AIDLC\" ] && { AIDLC_PLUGIN_ROOT=\"$PWD\" AIDLC_HARNESS_DIR=.kiro AIDLC_HARNESS_NAME=kiro-ide \"$AIDLC\" plugin sync && exit 0; }; BUN=$(command -v bun 2>/dev/null || true); [ -z \"$BUN\" ] && [ -x \"$HOME/.bun/bin/bun\" ] && BUN=\"$HOME/.bun/bin/bun\"; [ -z \"$BUN\" ] && { echo \"aidlc plugin compose: aidlc and bun not found, skipping\" >&2; exit 0; }; AIDLC_PLUGIN_ROOT=\"$PWD\" AIDLC_HARNESS_DIR=.kiro AIDLC_HARNESS_NAME=kiro-ide \"$BUN\" \"hooks/compose.ts\"'"
       }
     }
   ]

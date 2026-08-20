@@ -182,6 +182,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
           expect(hook?.trigger).toBe("SessionStart");
           expect(hook?.action?.type).toBe("command");
           const command = hook?.action?.command ?? "";
+          expect(command).toContain('AIDLC_PLUGIN_ROOT="$PWD"');
           expect(command).toContain("AIDLC_HARNESS_DIR=.kiro");
           expect(command).toContain("AIDLC_HARNESS_NAME=kiro-ide");
           expect(command).toContain('"hooks/compose.ts"');

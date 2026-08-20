@@ -1045,16 +1045,17 @@ function buildPluginProjection(pluginName: string, harnessName: string, outDir: 
   } else {
     const composePath =
       kind === "kiro-ide" ? "hooks/compose.ts" : `${rootExpr}/hooks/compose.ts`;
+    const pluginRootEnv = kind === "kiro-ide" ? 'AIDLC_PLUGIN_ROOT="$PWD" ' : "";
     // Probe aidlc on PATH first, then bun on PATH / ~/.bun/bin. If neither is
     // executable, exit 0 with a note rather than running a non-existent binary.
     const aidlcExpr =
       'AIDLC=$(command -v aidlc 2>/dev/null || true); ' +
-      `[ -n "$AIDLC" ] && { AIDLC_HARNESS_DIR=${harnessLeaf} AIDLC_HARNESS_NAME=${targetHarnessName} "$AIDLC" plugin sync && exit 0; }; `;
+      `[ -n "$AIDLC" ] && { ${pluginRootEnv}AIDLC_HARNESS_DIR=${harnessLeaf} AIDLC_HARNESS_NAME=${targetHarnessName} "$AIDLC" plugin sync && exit 0; }; `;
     const bunExpr =
       'BUN=$(command -v bun 2>/dev/null || true); ' +
       '[ -z "$BUN" ] && [ -x "$HOME/.bun/bin/bun" ] && BUN="$HOME/.bun/bin/bun"; ' +
       '[ -z "$BUN" ] && { echo "aidlc plugin compose: aidlc and bun not found, skipping" >&2; exit 0; }';
-    command = `sh -c '${aidlcExpr}${bunExpr}; AIDLC_HARNESS_DIR=${harnessLeaf} AIDLC_HARNESS_NAME=${targetHarnessName} "$BUN" "${composePath}"'`;
+    command = `sh -c '${aidlcExpr}${bunExpr}; ${pluginRootEnv}AIDLC_HARNESS_DIR=${harnessLeaf} AIDLC_HARNESS_NAME=${targetHarnessName} "$BUN" "${composePath}"'`;
   }
 
   if (kind === "kiro") {
