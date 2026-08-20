@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.20] - 2026-08-20
+
+Reviewer-bearing stages can no longer present an approval gate before the configured reviewer has recorded a fresh terminal receipt, including gate re-entry after a human rejection. **Upgrade:** re-copy your `dist/<harness>/` shell so every harness receives the strengthened state transition guard. Closes #551.
+
+* `report --result awaiting-approval` now refuses to present the approval gate when the stage's configured reviewer has no fresh terminal `REVIEW_COMPLETED` receipt, and the refusal names the reviewer and §12a ordering requirement.
+* `report --result revised` requires a fresh post-rejection terminal reviewer receipt before re-opening the approval gate; completion-path refusal text remains unchanged.
+
 ## [2.6.18] - 2026-08-19
 
 Classic and Express are new scope options, and the implicit default scope is now Classic — a **declared behavior change**: invocations that name no scope and match no keyword now run the v1-style lifecycle without Ideation instead of the full-lifecycle Feature scope. Exactly two things control the implicit default: the `AWS_AIDLC_DEFAULT_SCOPE` env var (which overrides) and the framework's hard-coded `classic` fallback. Express has a deterministic requirements-to-conditional-deploy path, and conditional protocol modules reduce fixed context without dropping reviewer recovery behavior. **Upgrade:** refresh your `dist/<harness>/` shell; in-flight workflows keep their persisted scope and need no migration; set `AWS_AIDLC_DEFAULT_SCOPE=feature` (Claude: the `.claude/settings.json` `env` block, which now ships `classic`) to keep the previous full-lifecycle default.

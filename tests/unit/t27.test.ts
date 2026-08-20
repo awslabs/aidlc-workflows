@@ -115,6 +115,7 @@ const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
 const STATE_TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-state.ts");
+const LOG_TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-log.ts");
 const STATE_FIXTURE = join(FIXTURES_DIR, "state-mid-ideation.md");
 
 const tempDirs: string[] = [];
@@ -409,6 +410,22 @@ describe("t27 aidlc-utility status", () => {
     state(["advance", "workspace-detection"], p);
     state(["advance", "state-init"], p);
     const current = state(["get", "Current Stage"], p).stdout.trim();
+    const reviewArgs = [
+      LOG_TOOL,
+      "review",
+      "--stage",
+      current,
+      "--reviewer",
+      "aidlc-product-lead-agent",
+      "--iteration",
+      "1",
+      "--project-dir",
+      p,
+    ];
+    spawnSync(BUN, reviewArgs, { encoding: "utf-8" });
+    spawnSync(BUN, [...reviewArgs, "--verdict", "READY"], {
+      encoding: "utf-8",
+    });
     state(["gate-start", current], p);
     const r = util(["status"], p);
     expect(r.stdout).toContain("Awaiting your approval");

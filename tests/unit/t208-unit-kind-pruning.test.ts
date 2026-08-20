@@ -145,11 +145,19 @@ function runNext(proj: string): Directive {
  * var deleted), while the human-presence guard stays disabled so only the
  * artifact-guard behaviour is under test (mirrors t185's per-guard isolation).
  */
-function runReport(proj: string, args: string[], enforceGuard = false): Directive {
+function runReport(
+  proj: string,
+  args: string[],
+  enforceGuard = false,
+  skipReviewerGateGuard = false,
+): Directive {
   const env = envNoScope();
   if (enforceGuard) {
     delete env.AIDLC_SKIP_ARTIFACT_GUARD;
     env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD = "1";
+  }
+  if (skipReviewerGateGuard) {
+    env.AIDLC_SKIP_REVIEWER_GATE_GUARD = "1";
   }
   const r = spawnSync(BUN, [ORCH, "report", ...args, "--project-dir", proj], { encoding: "utf-8", env });
   try {
@@ -308,7 +316,12 @@ describe("t208 engine unit-kind pruning", () => {
   test("5: an all-vacuous per-unit stage approves (guard's vacuous branch)", () => {
     const proj = seedProject("functional-design");
     seedBoltDag(proj, [{ name: "pack1", kind: "packaging" }, { name: "pack2", kind: "packaging" }]);
-    const d = runReport(proj, ["--stage", "functional-design", "--result", "approved"], true);
+    const d = runReport(
+      proj,
+      ["--stage", "functional-design", "--result", "approved"],
+      true,
+      true,
+    );
     expect(d.kind).toBe("done");
   }, 30000);
 

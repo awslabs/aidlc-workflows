@@ -129,6 +129,25 @@ function state(args: string[]): void {
   ).toBe(0);
 }
 
+function recordReview(): void {
+  const args = [
+    LOG,
+    "review",
+    "--stage",
+    SLUG,
+    "--reviewer",
+    "aidlc-product-lead-agent",
+    "--iteration",
+    "1",
+    "--project-dir",
+    proj,
+  ];
+  for (const suffix of [[], ["--verdict", "READY"]]) {
+    const r = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
+    expect(r.status, `review log failed: ${r.stdout}${r.stderr}`).toBe(0);
+  }
+}
+
 function readState(): string {
   return readFileSync(join(recordDirOf(proj), "aidlc-state.md"), "utf-8");
 }
@@ -178,6 +197,7 @@ beforeAll(() => {
   expect(init.status, `init stderr=${init.stderr ?? ""}`).toBe(0);
 
   // --- Cycle 1: gate-start -> reject ---
+  recordReview();
   state(["gate-start", SLUG]);
   state(["reject", SLUG, "--feedback", "needs more detail"]);
   const afterReject1 = readState();
@@ -185,23 +205,21 @@ beforeAll(() => {
   snap.cb1 = checkboxMarker(afterReject1);
 
   // --- Cycle 2: revise -> gate (from [R]) -> reject ---
+  recordReview();
   state(["revise", SLUG]);
   snap.cb2 = checkboxMarker(readState());
   state(["reject", SLUG, "--feedback", "still not enough"]);
   snap.rc2 = revisionCount(readState());
 
   // --- Cycle 3: revise -> reject ---
+  recordReview();
   state(["revise", SLUG]);
   state(["reject", SLUG, "--feedback", "one more round"]);
   snap.rc3 = revisionCount(readState());
 
   // --- Final: revise -> approve (lands [x]) ---
+  recordReview();
   state(["revise", SLUG]);
-  // requirements-analysis declares a reviewer; the §12a gate precondition needs
-  // a fresh terminal REVIEW_COMPLETED (after the last revise) before approve
-  // commits. This test targets the revision loop, not the reviewer gate.
-  spawnSync(BUN, [LOG, "review", "--stage", SLUG, "--reviewer", "aidlc-product-lead-agent", "--iteration", "1", "--project-dir", proj], { encoding: "utf-8" });
-  spawnSync(BUN, [LOG, "review", "--stage", SLUG, "--reviewer", "aidlc-product-lead-agent", "--iteration", "1", "--verdict", "READY", "--project-dir", proj], { encoding: "utf-8" });
   state(["approve", SLUG, "--user-input", "accept as-is"]);
   snap.cbFinal = checkboxMarker(readState());
 });

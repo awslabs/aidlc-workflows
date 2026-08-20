@@ -68,6 +68,7 @@ const TOOLS_DIR = join(
 );
 const TOOL = join(TOOLS_DIR, "aidlc-state.ts");
 const UTILITY = join(TOOLS_DIR, "aidlc-utility.ts");
+const LOG = join(TOOLS_DIR, "aidlc-log.ts");
 
 interface RunResult {
   rc: number;
@@ -111,6 +112,30 @@ function runInit(proj: string, scope: string): RunResult {
   const stdout = res.stdout ?? "";
   const stderr = res.stderr ?? "";
   return { rc: res.status ?? -1, stdout, stderr, combined: `${stdout}${stderr}` };
+}
+
+function recordRequirementsReview(proj: string): void {
+  const args = [
+    LOG,
+    "review",
+    "--stage",
+    "requirements-analysis",
+    "--reviewer",
+    "aidlc-product-lead-agent",
+    "--iteration",
+    "1",
+    "--project-dir",
+    proj,
+  ];
+  for (const suffix of [[], ["--verdict", "READY"]]) {
+    const res = spawnSync(BUN, [...args, ...suffix], {
+      encoding: "utf-8",
+      cwd: proj,
+    });
+    if ((res.status ?? -1) !== 0) {
+      throw new Error(`review log failed: ${res.stdout}${res.stderr}`);
+    }
+  }
 }
 
 // P4: intent-create (which runInit triggers) writes state into the born intent's
@@ -607,6 +632,7 @@ describe("t17 resume", () => {
   test("39: resume reports awaiting-approval gate_state", () => {
     proj = createTestProject();
     runInit(proj, "bugfix");
+    recordRequirementsReview(proj);
     runState(proj, ["gate-start", "requirements-analysis"]);
     expect(runState(proj, ["resume"]).combined).toContain('"gate_state":"awaiting-approval"');
   });
@@ -1034,6 +1060,7 @@ describe("t17 cross-phase advance idempotency", () => {
     runInit(proj, "bugfix");
     // After init, Current Stage is requirements-analysis. Walk it, then replay
     // advance and assert no double PHASE_COMPLETED / PHASE_VERIFIED / PHASE_STARTED.
+    recordRequirementsReview(proj);
     runState(proj, ["gate-start", "requirements-analysis"]);
     runState(proj, ["approve", "requirements-analysis"]);
     runState(proj, ["advance", "requirements-analysis"]);

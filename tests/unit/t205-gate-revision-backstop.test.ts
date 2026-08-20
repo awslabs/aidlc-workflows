@@ -330,8 +330,8 @@ describe("t205: approve-time gate-revision backstop", () => {
     seedStateFile(proj, "state-mid-inception.md");
     const slug = field(proj, "Current Stage");
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
-    guarded(proj, ["gate-start", slug]);
     recordReview(proj, slug, 1);
+    guarded(proj, ["gate-start", slug]);
     recordHumanTurn(proj);
     fireArtifact(
       proj,

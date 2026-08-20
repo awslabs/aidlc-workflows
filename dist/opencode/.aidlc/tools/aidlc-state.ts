@@ -56,6 +56,7 @@ import {
   selfAttributedDecisionMarker,
   resolveBoltDag,
   reviewArtifactFingerprint,
+  reviewerGateGuardDisabled,
   resolveReviewClass,
   resolveProjectDir,
   resolveStage,
@@ -1748,13 +1749,15 @@ function verifySummaryConfirmationPrecondition(
 
 // --- Reviewer precondition (§12a / RFC Track 1) -----------------------------
 //
-// A stage that declares a `reviewer` cannot be approved until the reviewer step
-// actually ran — proven by a terminal REVIEW_COMPLETED row (written by the tool
-// actor `aidlc-log.ts review --verdict`). Hard on the review HAVING HAPPENED,
-// soft on the verdict (a NOT-READY-after-cap still lets the human approve).
+// A stage that declares a `reviewer` cannot open its approval gate or complete
+// until the reviewer step actually ran — proven by a terminal REVIEW_COMPLETED
+// row (written by the tool actor `aidlc-log.ts review --verdict`). Hard on the
+// review HAVING HAPPENED, soft on the verdict (a NOT-READY-after-cap still lets
+// the human approve).
 //
-// This lives beside the artifact guard in all four completing handlers, not in
-// orchestrate's report: direct recovery calls must not bypass it (issue #366).
+// This lives beside the artifact guard in both gate-opening handlers and all
+// four completing handlers, not in orchestrate's report: direct recovery calls
+// must not bypass it (issues #366 and #551).
 //
 // The audit read is FLOORED (mirrors swarmConvergedUnits / hasStageAuditEvent):
 // only REVIEW_COMPLETED rows recorded AFTER the stage's latest STAGE_STARTED,
@@ -1768,6 +1771,17 @@ function verifySummaryConfirmationPrecondition(
 // stages (for_each: unit-of-work) one review per stage is not enough: the
 // Review accounting is per Unit, so EVERY unit must carry its own terminal review.
 //
+type ReviewerPreconditionAction = "complete" | "present-approval-gate";
+
+function reviewerPreconditionPrefix(
+  slug: string,
+  action: ReviewerPreconditionAction,
+): string {
+  return action === "present-approval-gate"
+    ? `Refusing to present the approval gate for "${slug}"`
+    : `Refusing to complete "${slug}"`;
+}
+
 function verifyReviewerPrecondition(
   pd: string,
   content: string,
@@ -1783,7 +1797,8 @@ function verifyReviewerPrecondition(
     produces?: string[];
     optional_produces?: string[];
     produces_kinds?: Record<string, string[]>;
-  }
+  },
+  action: ReviewerPreconditionAction = "complete",
 ): void {
   if (!stage.reviewer) return; // stage declares no reviewer — nothing to enforce
 
@@ -1807,7 +1822,7 @@ function verifyReviewerPrecondition(
 
   const reviewer = stage.reviewer;
   if (readAllAuditShards(pd).length === 0) {
-    reviewerPreconditionError(stage.slug, reviewer);
+    reviewerPreconditionError(stage.slug, reviewer, action);
   }
 
   // The fresh-receipt scan lives in aidlc-lib.ts (freshReviewReceipts) so the
@@ -1827,9 +1842,10 @@ function verifyReviewerPrecondition(
           stage.slug,
           reviewer,
           receipts.stageStaleProgress?.recoverySpent === true,
+          action,
         );
       }
-      reviewerPreconditionError(stage.slug, reviewer);
+      reviewerPreconditionError(stage.slug, reviewer, action);
     }
     return;
   }
@@ -1837,13 +1853,16 @@ function verifyReviewerPrecondition(
   const resolution = resolveBoltDag(pd);
   if (resolution.state === "malformed") {
     error(
-      `Refusing to complete "${stage.slug}": its per-unit review set cannot be ` +
+      `${reviewerPreconditionPrefix(stage.slug, action)}: its per-unit review set cannot be ` +
         `resolved because unit-of-work-dependency.md is ${resolution.reason} ` +
-        `(${resolution.detail}). Fix the fenced units block before completing.`,
+        `(${resolution.detail}). Fix the fenced units block before ` +
+        `${action === "complete" ? "completing" : "presenting the approval gate"}.`,
     );
   }
   if (resolution.state === "none" || resolution.units.length === 0) {
-    if (!sawStageReview) reviewerPreconditionError(stage.slug, reviewer);
+    if (!sawStageReview) {
+      reviewerPreconditionError(stage.slug, reviewer, action);
+    }
     return;
   }
 
@@ -1903,7 +1922,7 @@ function verifyReviewerPrecondition(
       );
     }
     error(
-      `Refusing to complete "${stage.slug}": it declares a reviewer (${reviewer}) but ` +
+      `${reviewerPreconditionPrefix(stage.slug, action)}: it declares a reviewer (${reviewer}) but ` +
         `${missing.length} of ${reviewUnits.length} applicable units have no fresh recorded ` +
         `review (${missing.join(", ")}). Invalidated receipts: ` +
         `${stale.length > 0 ? stale.join(", ") : "none"}. Never reviewed: ` +
@@ -1917,10 +1936,11 @@ function staleReviewPreconditionError(
   slug: string,
   reviewer: string,
   recoverySpent: boolean,
+  action: ReviewerPreconditionAction = "complete",
 ): never {
   if (recoverySpent) {
     error(
-      `Refusing to complete "${slug}": its stale-receipt recovery review from ` +
+      `${reviewerPreconditionPrefix(slug, action)}: its stale-receipt recovery review from ` +
         `${reviewer} was invalidated by another later write to a declared ` +
         `produces[] artifact. Present the situation to the human at the approval ` +
         `gate. Only a human Request Changes decision resets the review attempt; ` +
@@ -1928,7 +1948,7 @@ function staleReviewPreconditionError(
     );
   }
   error(
-    `Refusing to complete "${slug}": its terminal review receipt from ${reviewer} ` +
+    `${reviewerPreconditionPrefix(slug, action)}: its terminal review receipt from ${reviewer} ` +
       `was invalidated by a later write to a declared produces[] artifact. Run ` +
       `one recovery review pass with \`aidlc-log.ts review --stage ${slug} ` +
       `--reviewer ${reviewer} --iteration <next ordinal>\`, then record the verdict ` +
@@ -1940,7 +1960,25 @@ function staleReviewPreconditionError(
   );
 }
 
-function reviewerPreconditionError(slug: string, reviewer: string): never {
+function reviewerPreconditionError(
+  slug: string,
+  reviewer: string,
+  action: ReviewerPreconditionAction = "complete",
+): never {
+  if (action === "present-approval-gate") {
+    error(
+      `Refusing to present the approval gate for "${slug}": it declares a reviewer ` +
+        `(${reviewer}) but no fresh REVIEW_COMPLETED is recorded for it. Run the ` +
+        `reviewer first (stage-protocol-reviewer.md §12a); its findings are the ` +
+        `human's decision support at the gate. Record the verdict with ` +
+        `\`aidlc-log.ts review --stage ${slug} --reviewer ${reviewer} --verdict ` +
+        `<READY|NOT-READY>\` before presenting the gate. Terminal ordering: apply ` +
+        `any fixes FIRST, then run the reviewer, record the receipt, and stop editing ` +
+        `produces[] artifacts - a later write to one invalidates the receipt and ` +
+        `re-opens this refusal. Do not apply suggestions riding on a READY verdict; ` +
+        `surface them at the gate instead.`,
+    );
+  }
   error(
     `Refusing to complete "${slug}": it declares a reviewer (${reviewer}) but no ` +
       `fresh REVIEW_COMPLETED is recorded for it. Invoke the reviewer ` +
@@ -2488,6 +2526,9 @@ function handleGateStart(args: string[]): void {
   validateSlugInState(content, slug, "in-progress");
   verifyStageArtifacts(pd, stage);
   verifySummaryConfirmationPrecondition(pd, content, stage);
+  if (!reviewerGateGuardDisabled()) {
+    verifyReviewerPrecondition(pd, content, stage, "present-approval-gate");
+  }
 
   content = setCheckbox(content, slug, "awaiting-approval");
   const timestamp = isoTimestamp();
@@ -2906,6 +2947,9 @@ function handleRevise(args: string[]): void {
   validateSlugInState(content, slug, "revising");
   verifyStageArtifacts(pd, stage);
   verifySummaryConfirmationPrecondition(pd, content, stage);
+  if (!reviewerGateGuardDisabled()) {
+    verifyReviewerPrecondition(pd, content, stage, "present-approval-gate");
+  }
 
   content = setCheckbox(content, slug, "awaiting-approval");
   const timestamp = isoTimestamp();

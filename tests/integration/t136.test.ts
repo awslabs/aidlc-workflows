@@ -171,6 +171,25 @@ function state(p: string, ...args: string[]): CliResult {
   };
 }
 
+function recordReview(p: string): void {
+  const args = [
+    LOG_TS,
+    "review",
+    "--stage",
+    SLUG,
+    "--reviewer",
+    "aidlc-product-lead-agent",
+    "--iteration",
+    "1",
+    "--project-dir",
+    p,
+  ];
+  for (const suffix of [[], ["--verdict", "READY"]]) {
+    const r = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
+    expect(r.status, `review log failed: ${r.stdout}${r.stderr}`).toBe(0);
+  }
+}
+
 /**
  * Value of a `- **<field>**: <value>` line in aidlc-state.md. Mirrors the
  * .sh's `^- **Revision Count**: N` line grep, but returns the exact value
@@ -274,6 +293,7 @@ afterAll(() => {
 describe("t136 revision-loop — aidlc-state gate/reject/revise/approve cumulative trail (migrated from t122-revision-loop.sh, plan 10)", () => {
   // --- Cycle 1: gate-start -> reject (t122.sh:40-43) ---
   test("1: first reject increments Revision Count to 1", () => {
+    recordReview(proj);
     expect(state(proj, "gate-start", SLUG).status).toBe(0); // S1
     const r = state(proj, "reject", SLUG, "--feedback", "needs more detail");
     expect(r.status).toBe(0); // S1
@@ -288,6 +308,7 @@ describe("t136 revision-loop — aidlc-state gate/reject/revise/approve cumulati
 
   // --- Cycle 2: revise -> gate (from [R]) -> reject (t122.sh:46-49) ---
   test("3: checkbox flips back to [?] after revise", () => {
+    recordReview(proj);
     expect(state(proj, "revise", SLUG).status).toBe(0); // S1
     expect(checkboxGlyph(proj, SLUG)).toBe("?");
   });
@@ -300,6 +321,7 @@ describe("t136 revision-loop — aidlc-state gate/reject/revise/approve cumulati
 
   // --- Cycle 3: revise -> reject (t122.sh:52-54) ---
   test("5: third reject increments Revision Count to 3", () => {
+    recordReview(proj);
     expect(state(proj, "revise", SLUG).status).toBe(0); // S1
     const r = state(proj, "reject", SLUG, "--feedback", "one more round");
     expect(r.status).toBe(0); // S1
@@ -308,11 +330,8 @@ describe("t136 revision-loop — aidlc-state gate/reject/revise/approve cumulati
 
   // --- Final: revise -> approve lands [x] (t122.sh:57-59) ---
   test("6: final approve lands the stage at [x]", () => {
+    recordReview(proj);
     expect(state(proj, "revise", SLUG).status).toBe(0); // S1
-    // requirements-analysis declares a reviewer; record a fresh terminal review
-    // (after the revise) so the §12a gate precondition passes.
-    spawnSync(BUN, [LOG_TS, "review", "--stage", SLUG, "--reviewer", "aidlc-product-lead-agent", "--iteration", "1", "--project-dir", proj], { encoding: "utf-8" });
-    spawnSync(BUN, [LOG_TS, "review", "--stage", SLUG, "--reviewer", "aidlc-product-lead-agent", "--iteration", "1", "--verdict", "READY", "--project-dir", proj], { encoding: "utf-8" });
     expect(state(proj, "approve", SLUG, "--user-input", "accept as-is").status).toBe(0); // S1
     expect(checkboxGlyph(proj, SLUG)).toBe("x");
   });

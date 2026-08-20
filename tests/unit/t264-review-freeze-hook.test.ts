@@ -195,11 +195,15 @@ describe("t264 (a) judgeFreeze decision table", () => {
 // (b) The shipped hook as a subprocess over a real ledger
 // ---------------------------------------------------------------------------
 
-function projWithGate(): string {
+function projBeforeGate(): string {
   const p = createTestProject();
   tempDirs.push(p);
   seedAidlcMemory(p);
   seedStateFile(p, join(FIXTURES_DIR, "state-mid-inception.md"));
+  return p;
+}
+
+function openGate(p: string): void {
   const env = { ...process.env, AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" };
   const r = spawnSync(
     BUN,
@@ -207,7 +211,6 @@ function projWithGate(): string {
     { encoding: "utf-8", env },
   );
   if ((r.status ?? -1) !== 0) throw new Error(`gate-start failed: ${r.stdout}${r.stderr}`);
-  return p;
 }
 
 function recordReview(p: string, verdict: "READY" | "NOT-READY"): void {
@@ -264,7 +267,7 @@ function writePayload(file: string): Record<string, unknown> {
 
 describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
   test("allow before any receipt; block after READY; release on GATE_REJECTED; re-block after fresh READY", () => {
-    const p = projWithGate();
+    const p = projBeforeGate();
     const file = raArtifact(p);
 
     // No receipt yet: normal stage work proceeds.
@@ -273,6 +276,7 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
     // Fresh READY receipt: the same write is refused with the gate redirect,
     // and the refusal is auditable.
     recordReview(p, "READY");
+    openGate(p);
     const blocked = runHook(p, writePayload(file));
     expect(blocked.code).toBe(2);
     expect(blocked.stderr).toContain("review-freeze");
@@ -286,25 +290,39 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
 
     // The re-reviewed revision freezes again - same invariant, next attempt.
     recordReview(p, "READY");
+    const revise = spawnSync(
+      BUN,
+      [STATE_TOOL, "revise", "requirements-analysis", "--project-dir", p],
+      {
+        encoding: "utf-8",
+        env: { ...process.env, AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" },
+      },
+    );
+    if ((revise.status ?? -1) !== 0) {
+      throw new Error(`revise failed: ${revise.stdout}${revise.stderr}`);
+    }
     expect(runHook(p, writePayload(file)).code).toBe(2);
   });
 
   test("advisory NOT-READY is terminal and freezes until the human gate", () => {
-    const p = projWithGate();
+    const p = projBeforeGate();
     recordReview(p, "NOT-READY");
+    openGate(p);
     expect(runHook(p, writePayload(raArtifact(p))).code).toBe(2);
   });
 
   test("a non-produces write under a READY receipt is untouched", () => {
-    const p = projWithGate();
+    const p = projBeforeGate();
     recordReview(p, "READY");
+    openGate(p);
     const diary = join(seededRecordDir(p), "inception", "requirements-analysis", "memory.md");
     expect(runHook(p, writePayload(diary)).code).toBe(0);
   });
 
   test("Edit and MultiEdit block like Write; Read never blocks", () => {
-    const p = projWithGate();
+    const p = projBeforeGate();
     recordReview(p, "READY");
+    openGate(p);
     const file = raArtifact(p);
     for (const tool of ["Edit", "MultiEdit"]) {
       expect(
@@ -317,9 +335,10 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
   });
 
   test("shell redirections to produces[] block without false-positive read operands", () => {
-    const p = projWithGate();
+    const p = projBeforeGate();
     const file = raArtifact(p);
     recordReview(p, "READY");
+    openGate(p);
     const rel = relative(p, file).replace(/\\/g, "/");
     for (const command of [
       `printf "change" >> ${JSON.stringify(file)}`,
@@ -371,8 +390,9 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
     tempDirs.push(empty);
     expect(runHook(empty, writePayload("/x/requirements-analysis/requirements.md")).code).toBe(0);
 
-    const p = projWithGate();
+    const p = projBeforeGate();
     recordReview(p, "READY");
+    openGate(p);
     const r = spawnSync(BUN, [HOOK], {
       input: "not json",
       env: { ...process.env, CLAUDE_PROJECT_DIR: p },
@@ -389,8 +409,9 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
     // stages completed - a write to a completed reviewer-bearing stage's
     // produces path must pass even if a stale receipt existed. Use user-stories
     // marked [x] via approve after review to prove the filter end-to-end.
-    const p = projWithGate();
+    const p = projBeforeGate();
     recordReview(p, "READY");
+    openGate(p);
     const env = { ...process.env, AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" };
     const approve = spawnSync(
       BUN,

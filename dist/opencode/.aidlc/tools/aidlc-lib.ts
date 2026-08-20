@@ -4002,6 +4002,12 @@ export function summaryConfirmationGuardDisabled(): boolean {
   return process.env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD === "1";
 }
 
+// Test-only bypass for synthetic gate-transition fixtures that intentionally
+// omit reviewer evidence. Completion paths never honor this variable.
+export function reviewerGateGuardDisabled(): boolean {
+  return process.env.AIDLC_SKIP_REVIEWER_GATE_GUARD === "1";
+}
+
 type SummaryConfirmationStage = Pick<
   StageEntry,
   | "slug"
