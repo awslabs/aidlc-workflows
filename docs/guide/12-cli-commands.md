@@ -109,9 +109,12 @@ Start a new workflow with one of the enabled scopes. Core ships 11 named scopes;
 /aidlc refactor
 /aidlc infra
 /aidlc security-patch
+/aidlc classic
+/aidlc workshop
+/aidlc express
 ```
 
-**Behavior:** The framework recognizes the scope keyword, asks what you want to build, then runs the Initialization phase and begins the first domain stage. If a state file already exists, it offers resume options instead.
+**Behavior:** The framework recognizes the scope keyword, asks what you want to build, then runs the Initialization phase and begins the first domain stage. If a state file already exists, it offers resume options instead. See [Workflow Profiles](workflow-profiles.md) for a practical comparison of all 11 choices.
 
 **Example:**
 

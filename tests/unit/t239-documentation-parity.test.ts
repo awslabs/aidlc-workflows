@@ -52,6 +52,17 @@ function documentedDistNames(text: string): string[] {
     .sort();
 }
 
+function markdownCells(line: string): string[] {
+  return line.replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
+}
+
+function frontmatterScalar(text: string, field: string): string | null {
+  const frontmatter = /^---\n([\s\S]*?)\n---/.exec(text)?.[1];
+  if (frontmatter === undefined) return null;
+  const match = new RegExp(`^${field}:\\s*(\\S.*?)\\s*$`, "m").exec(frontmatter);
+  return match?.[1] ?? null;
+}
+
 function eventCountClaimPattern(value: number): RegExp {
   return new RegExp(
     String.raw`(?:\b${value}(?=-event\b|\s+events?\b|\s+event\s+(?:types?|taxonomy|audit(?:\s+trail)?))|\b(?:audit\s+)?event\s+types?\s*\|\s*${value}\b)`,
@@ -103,6 +114,13 @@ const agentNames = readdirSync(at("core", "agents"))
   .filter((name) => /^aidlc-.+-agent\.md$/.test(name))
   .map((name) => basename(name, ".md"))
   .sort();
+const scopeNames = readdirSync(at("core", "scopes"))
+  .filter((name) => /^aidlc-.+\.md$/.test(name))
+  .map((name) => name.replace(/^aidlc-/, "").replace(/\.md$/, ""))
+  .sort();
+const scopeGrid = JSON.parse(
+  read("dist", "claude", ".claude", "tools", "data", "scope-grid.json"),
+) as Record<string, { stages: Record<string, string> }>;
 const reviewerNames = [
   ...new Set(
     filesBelow(at("core", "aidlc-common", "stages"), ".md").flatMap((file) =>
@@ -417,6 +435,61 @@ describe("documentation parity derives current behavior from authored implementa
         normalized(read(...path)),
         `${path.join("/")} must list the complete engine command surface`,
       ).toContain(expected);
+    }
+  });
+
+  test("workflow profiles enumerate every shipped core scope", () => {
+    const profiles = read("docs", "guide", "workflow-profiles.md");
+    const documented = [...profiles.matchAll(/^## `([a-z][a-z-]+)`$/gm)]
+      .map((match) => match[1])
+      .sort();
+    expect(documented).toEqual(scopeNames);
+
+    const cliGuide = read("docs", "guide", "12-cli-commands.md");
+    for (const scope of scopeNames) {
+      expect(profiles).toContain(`/aidlc ${scope}`);
+      expect(cliGuide).toContain(`/aidlc ${scope}`);
+    }
+
+    const quickChooser = sliceBetween(
+      profiles,
+      "## Quick chooser",
+      "Stage counts describe the static route.",
+    );
+    const rows = quickChooser
+      .split("\n")
+      .filter((line) => /^\| \*\*/.test(line))
+      .map((line) => {
+        const cells = markdownCells(line);
+        expect(cells.length, line).toBe(6);
+        const command = cells[5].match(/^`\/aidlc ([a-z][a-z-]+)`$/);
+        expect(command, `invalid quick-chooser command: ${cells[5]}`).not.toBeNull();
+        return {
+          scope: command![1],
+          stages: cells[2],
+          depth: cells[3],
+          testStrategy: cells[4],
+        };
+      });
+    expect(rows).toHaveLength(scopeNames.length);
+    expect([...new Set(rows.map((row) => row.scope))].sort()).toEqual(scopeNames);
+
+    for (const row of rows) {
+      const stages = scopeGrid[row.scope]?.stages;
+      expect(stages, `missing compiled grid entry for ${row.scope}`).toBeDefined();
+      const total = Object.keys(stages).length;
+      const executed = Object.values(stages).filter((value) => value === "EXECUTE").length;
+      expect(row.stages, `${row.scope} stage count`).toBe(`${executed} / ${total}`);
+
+      const scopeFile = read("core", "scopes", `aidlc-${row.scope}.md`);
+      const depth = frontmatterScalar(scopeFile, "depth");
+      if (depth === null) {
+        throw new Error(`missing depth in core/scopes/aidlc-${row.scope}.md`);
+      }
+      expect(row.depth, `${row.scope} depth`).toBe(depth);
+      expect(row.testStrategy, `${row.scope} test strategy`).toBe(
+        frontmatterScalar(scopeFile, "testStrategy") ?? depth,
+      );
     }
   });
 

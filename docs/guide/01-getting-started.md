@@ -360,11 +360,15 @@ Once `--doctor` passes, you are ready to run:
 Or specify a scope directly:
 
 ```
+/aidlc classic
+/aidlc express
 /aidlc feature
 /aidlc bugfix Fix the login timeout issue
 ```
 
-See [Your First Workflow](02-your-first-workflow.md) for a step-by-step walkthrough of what happens next.
+See [Workflow Profiles](workflow-profiles.md) to choose the right lifecycle, then
+[Your First Workflow](02-your-first-workflow.md) for a step-by-step walkthrough
+of what happens next.
 
 ---
 
@@ -409,6 +413,7 @@ See [Customization](13-customization.md) for details on modifying tool permissio
 ## Next Steps
 
 - [Your First Workflow](02-your-first-workflow.md) — annotated walkthrough of a complete run
+- [Workflow Profiles](workflow-profiles.md) — compare Classic, Express, and every other workflow choice
 - [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md) — choosing the right scope for your task
 - [Troubleshooting](15-troubleshooting.md) — common issues and fixes
 - [Glossary](glossary.md) — terminology reference
