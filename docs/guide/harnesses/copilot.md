@@ -112,19 +112,16 @@ git checkout v2
   argv the shell will eventually produce. Direct-looking compounds are refused. An
   explicit `--project-dir` outside the current physical project is refused
   before current-project coordination is written.
-- **The engine owns continuation replay.** For an exact-context,
-  non-sessionless marker in a current installation whose authored
-  `tools/data/harness.json` names `copilot`, `continue` validates the native
-  token first, builds the successor, then atomically compares the full token
-  digest and publishes the successor before stdout. Concurrent uses have one
-  winner. Missing, malformed, v1, stale, and `sessionless:` markers retain the
-  existing stateless behavior. Replacing Copilot with another harness also
-  restores that harness's stateless behavior even if an old Copilot marker is
-  still present. On a stable non-Copilot installation, a contended marker
-  publication cannot deny a revalidated stateless continuation: the engine
-  returns the prepared directive and records the dropped best-effort marker
-  update instead. Replacing an installed harness while one of its commands is
-  executing is not a supported upgrade path.
+- **The engine owns continuation replay on every harness.** Copilot uses the
+  same record-local, atomic single-use cursor as Claude, Codex, Cursor, Kiro,
+  Kiro IDE, and opencode. Native token validation runs first; the engine then
+  compares the complete token SHA-256 and publishes the exact successor before
+  stdout under the active-directive lock. Copilot's session ownership and
+  delivery evidence enrich that marker but do not own replay. Missing,
+  malformed, v1, and pre-shared markers recover once inside the same
+  transaction; a fresh `next` resets the cursor. See the shared cursor contract
+  in the Developer Reference for crash, migration, rollback, and filesystem
+  limits.
 - **Stop preserves the current delivered Copilot directive.** An exact host
   `tool_use_id`, or the adapter ID carried through rewritten engine input and
   returned by PostToolUse, can settle delivery for session-scoped Stop and

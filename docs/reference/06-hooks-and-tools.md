@@ -170,6 +170,90 @@ See [Sensor System](07-sensor-system.md) for the manifest schema and the fire li
 
 Marker writers serialize through a record-local `.aidlc-active-directive.lock/` whose owner stamp follows the audit-lock dead-owner, unstamped-grace, live-over-age, CAS-reclaim, and exit-cleanup conventions. The canonical marker remains readable while a writer prepares a sibling candidate, and publish, clear, and release are fenced to the exact acquisition token. A waiter or `/aidlc --doctor` CAS-reclaims stamped dead owners, safely fenced over-age owners, and lock directories that remain unstamped beyond the acquisition grace window. Legacy `.aidlc-active-directive.json.transaction` debris still requires quiescent manual recovery because it has no owner identity to reverify.
 
+#### Atomic continuation cursor
+
+The active-directive marker is also the authoritative single-use steering
+continuation cursor for every shipped harness. Cursor identity is the canonical
+project, active space/record path, intent UUID, complete state SHA-256 plus
+presence, and the installed harness name from
+`tools/data/harness.json`. Harness directories alone are not identities: Kiro
+and Kiro IDE share `.kiro`, while Copilot and opencode share `.aidlc`.
+New marker publications record the harness as `cursor_harness`; existing v2
+markers without that field remain readable for migration.
+
+`continue` first performs the unchanged native token checks: decode, MAC,
+state, and route validation. It then takes the existing active-directive lock,
+revalidates the target and state, hashes every byte of the complete presented
+token, and compares that digest with the validated complete current token in
+the marker. While still holding that lock it atomically replaces the cursor
+with the exact prepared successor: another complete `load-steering` token, or a
+tokenless `run-stage`. Only after rename and lock release does the engine write
+stdout. Two processes racing the same current token therefore have exactly one
+winner; later contenders see the successor and receive a stale-token error.
+
+Fresh `next` uses the same lock and must publish its first work directive before
+stdout on all harnesses. It is an explicit reset. Because steering tokens are
+deterministic, a reset may reauthorize the same token bytes: if `next` commits
+before a concurrent `continue`, that continuation may consume the reset token;
+if `continue` commits first, the later `next` supersedes its successor and
+restores the first directive. Commit order, not process start time, is
+authoritative. Marker contention produces an error directive and no
+unrecorded work directive.
+
+Crash and retry behavior:
+
+| Boundary | Cursor and retry |
+| --- | --- |
+| Before marker rename | The old token remains current. A dead owner is reclaimed by the existing lock reaper; retry the same token. |
+| After rename, before stdout | The successor is current and the old token is stale across restart. Run fresh `next` to rehydrate; the cursor is at-most-once, not exactly-once delivery. |
+| After stdout begins or completes | The successor is current. If receipt of the complete directive is uncertain, run fresh `next`; never replay the old token. |
+| Final `run-stage` | The marker carries no continuation token, so the final steering token is stale on every retry. |
+
+Compatibility recovery remains atomic. Missing, malformed, oversized, and v1
+markers permit one natively validated continuation to bootstrap and publish its
+successor under the lock; concurrent recovery callers then see that successor
+and lose. A pre-change v2 marker without `cursor_harness`, or one written by a
+different installed harness, migrates only when its exact project, intent,
+state, and current-token digest match. A mismatch is stale. Fresh `next` is the
+universal reset. Hook marker reads remain fail-open for their advisory purpose,
+and Post/host hooks may read or enrich delivery evidence but never authorize
+replay.
+
+Upgrade and rollback must be quiescent: replace the engine, library, hooks, and
+generated harness tree together while no AI-DLC command or hook is running.
+Run fresh `next` after upgrade, rollback, or re-upgrade unless intentionally
+migrating a matching in-flight token. Older releases ignore
+`cursor_harness`, but rolling back restores their historical sessionless
+replay behavior until the fixed release is reinstalled. Mixed old/new tool
+files are unsupported.
+
+The exactly-one-winner claim requires one local filesystem with coherent
+cross-process visibility, exclusive directory creation, stable regular-file
+reads, and atomic same-filesystem rename for the marker and lock paths.
+NFS/SMB/FUSE/object-synchronized folders that do not honor those primitives
+are unsupported. The implementation does not `fsync` the candidate or parent
+directory, so sudden power-loss durability is outside the claim.
+
+Harness-specific residuals remain outside cursor authority. Pre-state
+continuations use the same cursor under the active space's `bare-space` bucket,
+with `state_present: false`, `intent_uuid: null`, and the SHA-256 of empty state.
+They therefore retain the same one-winner guarantee before an intent exists.
+
+| Harness | Residual host behavior |
+| --- | --- |
+| Claude | Stop retention, transcript reading, compaction, and session ownership remain hook-owned. |
+| Codex | Resume, compaction, and delivery behavior remain Codex-owned; the cursor creates no host correlation. |
+| Copilot | Adapter claims, Post settlement, Resume, ownership, conversation, delivery evidence, and Stop counts remain Copilot-only marker enrichment. |
+| Cursor | Hook correlation and subagent ledgers remain advisory and cannot authorize replay. |
+| Kiro CLI | Transcript-free Stop/conversation markers remain hook-owned. |
+| Kiro IDE | Modern and legacy IDE event/session differences remain adapter-owned. |
+| opencode | Plugin and session lifecycle evidence remains host-specific and read-only for replay. |
+
+The cursor guarantees one successful token consumption. It does not guarantee
+exactly-once `run-stage`, `report`, or `park` execution and does not change
+Cancel, prompt, compaction, TUI, Stop retention, Resume, ownership,
+conversation, or count semantics.
+
 ### PostToolUse: rebuild-stage-graph.ts
 
 **Source:** `.claude/hooks/aidlc-rebuild-stage-graph.ts`
