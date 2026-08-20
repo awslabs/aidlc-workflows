@@ -33,6 +33,19 @@ All audit events MUST use event types from `knowledge/aidlc-shared/audit-format.
 
 This is the orchestrator's whole control structure. Run it from the moment `/aidlc` is invoked.
 
+**Bare session re-entry on opencode.** The opencode plugin has no channel for
+the session-start hook's `additionalContext`. On the FIRST call for a user
+invocation whose `$ARGUMENTS` is empty, run
+`bun .aidlc/tools/aidlc-utility.ts status` as a read-only probe before entering
+the loop. If it reports no active workflow, enter the loop with bare `next`. If
+it reports an active workflow, present the standard numbered Resume / Redo /
+Jump / Start Fresh menu and STOP for the human's answer; report that answer with
+`report --result resumed --user-input "<answer>"`, act on the returned `print`,
+then continue as directed. This probe applies only to the first call of a bare
+user invocation, never to an internal bare `next` later in the forwarding loop.
+When `$ARGUMENTS` contains `--resume`, skip this probe and menu: pass `--resume`
+unchanged to the first `next`, which continues directly.
+
 ```
 Loop:
   1. directive = `bun .aidlc/tools/aidlc-orchestrate.ts next $ARGUMENTS`

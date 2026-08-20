@@ -3163,47 +3163,6 @@ export function advanceCopilotContinuation(
   });
 }
 
-export function markActiveDirectiveResumeWaiting(
-  projectDir: string,
-  stateContent: string,
-  stage: string,
-): boolean {
-  return transactActiveDirective(projectDir, (current, target) => {
-    const context = activeDirectiveContext(target, stateContent);
-    if (current?.version === 2 && !current.owner_session?.startsWith("sessionless:") &&
-      (current.active_attempt?.status !== "pending" || current.active_attempt?.resume_request !== true)) {
-      return { marker: current, result: false, preserve: true };
-    }
-    const marker = current?.version === 2 ? current : freshActiveDirectiveMarker(target, stateContent, stage);
-    const session = marker.active_attempt?.session_id ?? marker.owner_session ?? "sessionless";
-    return {
-      marker: {
-        ...marker,
-        revision: (marker.revision ?? 0) + 1,
-        kind: "ask",
-        stage,
-        unit: undefined,
-        part: undefined,
-        parts: undefined,
-        continue_token: undefined,
-        continue_token_sha256: undefined,
-        state_sha256: context.stateSha256,
-        state_present: true,
-        delivery: "issued",
-        needs_rehydrate: false,
-        resume: {
-          status: "waiting",
-          issuing_stage: stage,
-          issuing_state_sha256: context.stateSha256,
-          issuing_session: session,
-          issuing_intent_uuid: context.intentUuid,
-        },
-      },
-      result: true,
-    };
-  });
-}
-
 export function invalidateActiveDirectiveContext(
   projectDir: string,
   stateContent: string,
@@ -3459,15 +3418,7 @@ export function settleCopilotCommand(
     if (input.commandKind === "report" && attempt.resume_action && (!canSelectResume || directive.kind === "error")) {
       return { marker: { ...invalidateActiveDirectiveDelivery(base), active_attempt: { ...attempt, status: "failed" } }, result: "settled" as const };
     }
-    if (input.resumeRequest && directive.kind === "ask") {
-      resume = {
-        status: "waiting",
-        issuing_stage: directive.stage ?? marker.stage,
-        issuing_state_sha256: context.stateSha256,
-        issuing_session: input.sessionId,
-        issuing_intent_uuid: context.intentUuid,
-      };
-    } else if (canSelectResume) {
+    if (canSelectResume) {
       resume = {
         status: "selected",
         action: attempt.resume_action,

@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.43] - 2026-08-21
+
+Explicit resume now means continue immediately: `/aidlc --resume` no longer repeats the session re-entry Resume / Redo / Jump / Start Fresh menu before returning to the saved stage. Bare `/aidlc` still offers that menu when a harness session re-enters existing work. **Upgrade:** refresh your `dist/<harness>/` shell; existing workflow state needs no migration, and legacy Copilot resume markers are superseded by the next explicit resume.
+
+* `/aidlc --resume` falls through to the normal load-steering and stage-routing path after the existing parked-workflow and no-state guards.
+* Bare `/aidlc` session re-entry keeps the four-option menu and its `report --result resumed --user-input "<answer>"` routing for Resume, Redo, Jump, and Start Fresh; OpenCode performs a read-only status probe because its plugin cannot inject session-start context.
+* `/aidlc --resume --stage <slug>` honors the explicit target and uses the normal jump path.
+* Copilot treats `report --result resumed` as a plain report instead of requiring an engine-armed resume gate; legacy selected-marker skip recovery remains supported.
+
 ## [2.6.42] - 2026-08-21
 
 Front/report composition now carries one approved, nonblank `birthDescription` into same-turn intent creation without shell expansion or placeholder fallback. **Upgrade:** refresh your `dist/<harness>/` shell so the composer contract, conductor instructions, and birth command quoting stay aligned.

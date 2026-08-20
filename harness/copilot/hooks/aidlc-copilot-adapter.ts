@@ -386,19 +386,6 @@ export async function run(
     return typeof value === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(value) ? value : undefined;
   }
 
-  function resumeAction(args: string[]): CopilotCommandClaim["resumeAction"] {
-    const index = args.lastIndexOf("--user-input");
-    const raw = index >= 0 ? (args[index + 1] ?? "").trim().toLowerCase() : "";
-    const choices = { "1": "resume", "2": "redo", "3": "jump", "4": "start-fresh" } as const;
-    const choice = choices[raw as keyof typeof choices];
-    if (choice) return choice;
-    if (raw.includes("redo")) return "redo";
-    if (raw.includes("jump")) return "jump";
-    if (raw.includes("fresh") || raw.includes("start over")) return "start-fresh";
-    if (raw.includes("resume") || raw.includes("checkpoint") || raw.includes("continue")) return "resume";
-    return undefined;
-  }
-
   function orchestrationCommand(): ParsedOrchestration {
     const command = nativeToolInput?.command;
     if (typeof command !== "string" || command.length === 0 || Buffer.byteLength(command) > 64 * 1024) return { status: "unrelated" };
@@ -477,7 +464,6 @@ export async function run(
     const digest = createHash("sha256").update(JSON.stringify([commandKind, ...subArgs])).digest("hex");
     const flagValue = (name: string): string => subArgs[subArgs.lastIndexOf(name) + 1] ?? "";
     const reportResult = flagValue("--result");
-    const resumedReport = ["resume", "resumed"].includes(reportResult);
     const skipRecovery = reportResult === "skipped" && subArgs.length === 6 && subArgs[0] === "--stage" && subArgs[2] === "--result" && subArgs[4] === "--reason" && flagValue("--reason") === "stage is SKIP in the approved workflow plan";
     return {
       status: "recognized",
@@ -492,7 +478,6 @@ export async function run(
         ...(commandKind === "next" && (subArgs.includes("--stage") || subArgs.includes("--phase")) ? { jumpRequest: true } : {}),
         ...(commandKind === "next" && subArgs.includes("--new-intent") ? { startFreshRequest: true } : {}),
         ...(commandKind === "next" && subArgs.length === 0 ? { plainNext: true } : {}),
-        ...(commandKind === "report" && resumedReport ? { resumeAction: resumeAction(subArgs) } : {}),
         ...(commandKind === "report" && skipRecovery ? { skipRecovery: true, reportStage: flagValue("--stage") } : {}),
       },
     };
@@ -1027,7 +1012,7 @@ export async function run(
           }
           if (!claimed.allowed) {
             const reason = claimed.reason === "resume"
-              ? "A Resume choice is waiting or selected. The owner must report the human's choice; a foreign session may explicitly reissue it with `next --resume`. Bare `next` is denied."
+              ? "A legacy Resume marker is still waiting or selected. Re-run `next --resume` in the owning session to supersede it before continuing; bare `next` remains denied until then."
               : claimed.reason === "foreign"
                 ? "This continuation belongs to another Copilot session. Run a fresh `next` in this session to take ownership; do not execute the owner's current token."
                 : claimed.reason === "duplicate"

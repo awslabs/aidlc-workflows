@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 607,
+    "total": 606,
     "enumeratedByClass": {
-      "function": 345,
+      "function": 344,
       "audit": 86,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 170,
+      "function": 169,
       "audit": 44,
       "scope": 11,
       "stage": 11,
@@ -2672,18 +2672,6 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:markActiveDirectiveResumeWaiting",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t249-copilot-adapter.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
     },
     {
       "unitClass": "function",

@@ -173,6 +173,8 @@ Run with no arguments when a state file exists to resume.
 
 **Behavior:** Reads `aidlc-state.md`, checks `.aidlc-recovery.md` for corruption, then presents four resume options: resume from checkpoint, redo current stage, jump to stage, or start fresh. See [Session Management](11-session-management.md) for details.
 
+Use `/aidlc --resume` to skip the menu and continue directly from the saved checkpoint. Add `--stage <slug>` when the explicit target should win and route through the normal jump behavior.
+
 If no state file exists, the framework treats this as a new workflow and asks for scope/description.
 
 ---

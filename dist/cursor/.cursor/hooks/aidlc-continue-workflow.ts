@@ -1283,9 +1283,9 @@ if (kind === "parked") {
   }
 }
 
-// `ask` → the engine is explicitly waiting for human input (resume re-entry or
-// freeform scope confirmation; aidlc-orchestrate.ts:1040,1105). Allow the turn
-// to end so the user can respond, rather than re-feeding the loop.
+// `ask` → the engine is explicitly waiting for human input (for example,
+// freeform scope routing or a paused Unit). Allow the turn to end so the user
+// can respond, rather than re-feeding the loop.
 if (kind === "ask") {
   return allowStop();
 }

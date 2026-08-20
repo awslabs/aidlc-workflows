@@ -1,7 +1,7 @@
 // t249-copilot-adapter: the Copilot stdin shim normalizes live-captured
 // payloads into the core hooks' contract.
 //
-// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-write-audit-log.ts, file:hooks/aidlc-log-subagent.ts, file:hooks/aidlc-session-end.ts, file:hooks/aidlc-deliver-stage-rules.ts, file:hooks/aidlc-plan-approval-guard.ts, file:hooks/aidlc-review-freeze.ts, function:markActiveDirectiveResumeWaiting, function:invalidateActiveDirectiveContext, function:recordCopilotHumanSequence, function:claimCopilotCommand, function:settleCopilotCommand, function:copilotStopEvidence, function:consumeCopilotConversation, function:settleCopilotIntentBoundary, function:updateCopilotStopCount
+// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-write-audit-log.ts, file:hooks/aidlc-log-subagent.ts, file:hooks/aidlc-session-end.ts, file:hooks/aidlc-deliver-stage-rules.ts, file:hooks/aidlc-plan-approval-guard.ts, file:hooks/aidlc-review-freeze.ts, function:invalidateActiveDirectiveContext, function:recordCopilotHumanSequence, function:claimCopilotCommand, function:settleCopilotCommand, function:copilotStopEvidence, function:consumeCopilotConversation, function:settleCopilotIntentBoundary, function:updateCopilotStopCount
 //
 // WHAT. Each case pipes a fixture from tests/fixtures/copilot-hook-payloads/
 // (field-verbatim captures off Copilot CLI 1.0.74, sanitized for publication) into
@@ -313,22 +313,6 @@ function executeNoId(
   });
   expect(executed.status, executed.stderr).toBe(0);
   runAdapter(dir, "post-tool", commandPayload(dir, session, claim.updated, undefined, true, executed.stdout));
-  return executed;
-}
-
-function runRawLifecycle(
-  dir: string,
-  session: string,
-  command: string,
-  executable: string,
-  argv: string[],
-  attempt: string,
-) {
-  expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, command, attempt)).stdout).toBe("");
-  const executed = spawnSync(executable, argv, { cwd: dir, encoding: "utf-8", timeout: 30_000 });
-  runAdapter(dir, "post-tool", commandPayload(
-    dir, session, command, attempt, true, executed.status === 0 ? executed.stdout : undefined,
-  ));
   return executed;
 }
 
@@ -1147,7 +1131,8 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const dir = orchestrationProject();
     const session = "real-compiled-owner";
     const resumed = runLifecycle(dir, session, "compiled", ["--resume"], "compiled-resume");
-    expect(resumed.directive.kind).toBe("ask");
+    expect(resumed.directive.kind).toBe("load-steering");
+    expect(resumed.directive.stage).toBe("requirements-analysis");
 
     const routedDir = orchestrationProject();
     const first = runLifecycle(routedDir, session, "compiled", ["next"], "compiled-next");
@@ -1682,185 +1667,80 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       .toBe("");
   }, 30000);
 
-  test("23: Resume waiting, transfer, selection, retry, and all four action boundaries are session-scoped", () => {
-    for (const [choice, action] of [["1", "resume"], ["2", "redo"], ["3", "jump"], ["4", "start-fresh"]] as const) {
-      const dir = orchestrationProject();
-      const owner = `resume-${action}`;
-      runAdapter(dir, "session-start", { cwd: dir, session_id: owner, source: "new" });
-      const resume = runLifecycle(dir, owner, "direct", ["next", "--resume"], `${action}-ask`);
-      expect(resume.directive.kind).toBe("ask");
-      expect(marker(dir).resume).toMatchObject({ status: "waiting", issuing_session: owner });
-      for (const session of [owner, `${owner}-foreign`]) {
-        const bare = commandSpec(dir, "source", ["next"]);
-        expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, bare.text, `${action}-bare-${session}`)).stdout).toContain('"permissionDecision":"deny"');
-      }
-      expect(runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: owner }).stdout).toBe("");
-      const selected = runLifecycle(dir, owner, "source", ["report", "--result", "resumed", "--user-input", choice], `${action}-answer`);
-      expect(selected.directive.kind).toBe("print");
-      expect(marker(dir).resume).toMatchObject({ status: "selected", action });
-      runAdapter(dir, "validate-state", { cwd: dir, session_id: owner });
-      expect(marker(dir).resume).toMatchObject({ status: "selected", action });
-      const duplicate = commandSpec(dir, "source", ["report", "--result", "resumed", "--user-input", choice]);
-      expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, owner, duplicate.text, `${action}-duplicate`)).stdout).toContain('"permissionDecision":"deny"');
-      const ordinaryReport = commandSpec(dir, "direct", ["report", "--result", "completed"]);
-      expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, owner, ordinaryReport.text, `${action}-ordinary-report`)).stdout)
-        .toContain('"permissionDecision":"deny"');
-      const beforeStop = marker(dir).revision;
-      expect(runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: owner }).stdout).toBe("");
-      expect(marker(dir).revision).toBe(beforeStop);
-      const foreignSelected = commandSpec(dir, "direct", ["next"]);
-      expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, `${owner}-foreign`, foreignSelected.text, `${action}-foreign-selected`)).stdout).toContain('"permissionDecision":"deny"');
-      if (action !== "resume") {
-        expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, owner, foreignSelected.text, `${action}-owner-bare`)).stdout)
-          .toContain('"permissionDecision":"deny"');
-      }
-
-      if (action === "resume") {
-        runLifecycle(dir, owner, "direct", ["next"], `${action}-boundary`);
-        expect(marker(dir).resume).toMatchObject({ status: "superseded", action });
-      } else if (action === "jump") {
-        const failed = runLifecycle(dir, owner, "direct", ["next", "--stage", "not-a-stage"], `${action}-error`);
-        expect(failed.directive.kind).toBe("error");
-        expect(marker(dir).resume).toMatchObject({ status: "selected", action });
-        runLifecycle(dir, owner, "source", ["next", "--stage", "requirements-analysis"], `${action}-boundary`);
-        expect(marker(dir).resume).toMatchObject({ status: "selected", action });
-        const jump = join(dir, ".aidlc", "tools", "aidlc-jump.ts");
-        const wrong = runRawLifecycle(
-          dir, owner, "bun .aidlc/tools/aidlc-jump.ts execute --target user-stories --direction forward --scope feature",
-          process.execPath, [jump, "execute", "--target", "user-stories", "--direction", "forward", "--scope", "feature"], "jump-wrong-target",
-        );
-        expect(wrong.status, wrong.stderr).toBe(0);
-        expect((JSON.parse(runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: owner }).stdout) as { decision?: string }).decision).toBe("block");
-        expect(marker(dir).resume).toMatchObject({ status: "superseded", action });
-      } else if (action === "redo") {
-        const jump = join(dir, ".aidlc", "tools", "aidlc-jump.ts");
-        const invalid = runRawLifecycle(
-          dir, owner, "bun .aidlc/tools/aidlc-jump.ts execute --target not-a-stage --direction redo --scope feature",
-          process.execPath, [jump, "execute", "--target", "not-a-stage", "--direction", "redo", "--scope", "feature"], "redo-error",
-        );
-        expect(invalid.status).not.toBe(0);
-        expect(marker(dir).resume).toMatchObject({ status: "selected", action });
-        const executed = runRawLifecycle(
-          dir, owner, "bun .aidlc/tools/aidlc-jump.ts execute --target requirements-analysis --direction redo --scope feature",
-          process.execPath, [jump, "execute", "--target", "requirements-analysis", "--direction", "redo", "--scope", "feature"], "redo-writer",
-        );
-        expect(executed.status, executed.stderr).toBe(0);
-        expect((JSON.parse(runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: owner }).stdout) as { decision?: string }).decision).toBe("block");
-        expect(marker(dir).resume).toMatchObject({ status: "superseded", action });
-      } else {
-        runLifecycle(dir, owner, "direct", ["next", "--new-intent", "--scope", "feature", "new-work"], `${action}-intermediate`);
-        expect(marker(dir).resume).toMatchObject({ status: "selected", action });
-        const utility = join(dir, ".aidlc", "tools", "aidlc-utility.ts");
-        const created = runRawLifecycle(
-          dir, owner,
-          'bun .aidlc/tools/aidlc-utility.ts intent-create --scope feature --arguments "new work" --label fresh-boundary',
-          process.execPath, [utility, "intent-create", "--scope", "feature", "--arguments", "new work", "--label", "fresh-boundary"], "fresh-writer",
-        );
-        expect(created.status, created.stderr).toBe(0);
-        expect(marker(dir).resume).toMatchObject({ status: "superseded", action });
-        expect(readFileSync(join(intentsDirOf(dir), "active-intent"), "utf-8").trim()).not.toBe(DEFAULT_RECORD_DIR);
-      }
-    }
-
+  test("23: explicit Resume continues directly and does not arm a resume marker", () => {
     const dir = orchestrationProject();
-    runLifecycle(dir, "resume-original", "direct", ["next", "--resume"], "transfer-original");
-    runLifecycle(dir, "resume-new-owner", "source", ["--resume"], "transfer-new");
-    expect(marker(dir)).toMatchObject({ owner_session: "resume-new-owner", resume: { status: "waiting", issuing_session: "resume-new-owner" } });
-  }, 120000);
-
-  test("23a: selected Resume permits only its exact production skipped-report recovery", () => {
-    const dir = orchestrationProject();
-    const session = "resume-skip-owner";
-    writeFileSync(
-      seededStateFile(dir),
-      readFileSync(seededStateFile(dir), "utf-8").replace("- [-] requirements-analysis — EXECUTE", "- [-] requirements-analysis — SKIP"),
-    );
-    runLifecycle(dir, session, "direct", ["next", "--resume"], "skip-ask");
-    runLifecycle(dir, session, "source", ["report", "--result", "resumed", "--user-input", "1"], "skip-selected");
-    const exactArgs = ["report", "--stage", "requirements-analysis", "--result", "skipped", "--reason", "stage is SKIP in the approved workflow plan"];
-    const premature = commandSpec(dir, "source", exactArgs);
-    expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, premature.text, "skip-premature")).stdout)
-      .toContain('"permissionDecision":"deny"');
-    const recovery = runLifecycle(dir, session, "direct", ["next"], "skip-print");
-    expect(recovery.directive.kind).toBe("print");
-    expect(String(recovery.directive.message)).toContain("report --stage requirements-analysis --result skipped");
-    expect(marker(dir).resume).toMatchObject({ status: "selected", action: "resume" });
-    const arbitrary = commandSpec(dir, "source", ["report", "--stage", "requirements-analysis", "--result", "completed"]);
-    expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, arbitrary.text, "skip-arbitrary")).stdout)
-      .toContain('"permissionDecision":"deny"');
-    const skipped = runLifecycle(
-      dir, session, "source", exactArgs, "skip-exact",
-    );
-    expect(skipped.directive.kind).toBe("done");
-    expect(marker(dir)).toMatchObject({ kind: "done", delivery: "delivered", resume: { status: "superseded" } });
-    expect(runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session }).stdout).toBe("");
-    const fresh = runLifecycle(dir, session, "direct", ["next"], "skip-fresh-route");
-    expect(["load-steering", "run-stage"]).toContain(String(fresh.directive.kind));
+    const resumed = runLifecycle(dir, "resume-direct-owner", "direct", ["next", "--resume"], "resume-direct");
+    expect(resumed.directive.kind).toBe("load-steering");
+    expect(resumed.directive.stage).toBe("requirements-analysis");
+    expect(marker(dir).resume).toBeUndefined();
   }, 30000);
 
-  test("23b: Resume answers require a live waiting gate; transport uncertainty preserves that gate", () => {
-    const noQuestion = orchestrationProject();
-    driveToRunStage(noQuestion, "no-question-owner");
-    const unsolicited = commandSpec(noQuestion, "direct", ["report", "--result", "resumed", "--user-input", "1"]);
-    expect(runAdapter(noQuestion, "guard-tool-call", commandPayload(
-      noQuestion, "no-question-owner", unsolicited.text, "unsolicited-answer",
-    )).stdout).toContain('"permissionDecision":"deny"');
-    expect(marker(noQuestion).resume).toBeUndefined();
+  test("23a: bare next remains allowed after explicit Resume continuation", () => {
+    const dir = orchestrationProject();
+    const session = "resume-followup-owner";
+    runLifecycle(dir, session, "direct", ["next", "--resume"], "resume-first");
+    const followup = runLifecycle(dir, session, "source", ["next"], "resume-followup");
+    expect(["load-steering", "run-stage"]).toContain(String(followup.directive.kind));
+    expect(followup.directive.stage).toBe("requirements-analysis");
+    expect(marker(dir).resume).toBeUndefined();
+  }, 30000);
 
-    const retry = orchestrationProject();
-    const owner = "waiting-retry-owner";
-    runLifecycle(retry, owner, "direct", ["next", "--resume"], "waiting-ask");
-    runAdapter(retry, "validate-state", { cwd: retry, session_id: owner });
-    expect(marker(retry)).toMatchObject({ delivery: "superseded", resume: { status: "waiting" } });
-    const answer = commandSpec(retry, "source", ["report", "--result", "resumed", "--user-input", "1"]);
-    const answerCommand = rewrittenCommand(runAdapter(retry, "guard-tool-call", commandPayload(retry, owner, answer.text, "answer-malformed")));
-    const answered = spawnSync("/bin/sh", ["-c", answerCommand], { cwd: retry, encoding: "utf-8" });
-    runAdapter(retry, "post-tool", commandPayload(
-      retry, owner, answerCommand, "answer-malformed", true,
-      `${answered.stdout.trim()}\n{"kind":"done"}`,
-    ));
-    expect(marker(retry)).toMatchObject({ delivery: "superseded", resume: { status: "waiting" } });
-    runLifecycle(retry, owner, "source", ["report", "--result", "resumed", "--user-input", "1"], "answer-retry");
-    expect(marker(retry).resume).toMatchObject({ status: "selected", action: "resume" });
+  test("23b: session-menu Resume reports are plain reports and return per-choice prints", () => {
+    const cases = [
+      ["1", "Re-run `next`"],
+      ["2", "--direction redo"],
+      ["3", "next --stage"],
+      ["4", "--new-intent"],
+    ] as const;
+    for (const [choice, expected] of cases) {
+      const dir = orchestrationProject();
+      const session = `resume-report-${choice}`;
+      runLifecycle(dir, session, "direct", ["next", "--resume"], `resume-report-route-${choice}`);
+      const reported = runLifecycle(
+        dir,
+        session,
+        "source",
+        ["report", "--result", "resumed", "--user-input", choice],
+        `resume-report-choice-${choice}`,
+      );
+      expect(reported.directive.kind).toBe("print");
+      expect(String(reported.directive.message)).toContain(expected);
+      expect(marker(dir).resume).toBeUndefined();
+    }
+  }, 60000);
 
-    const followup = commandSpec(retry, "direct", ["next"]);
-    const followupCommand = rewrittenCommand(runAdapter(retry, "guard-tool-call", commandPayload(retry, owner, followup.text, "followup-missing")));
-    spawnSync("/bin/sh", ["-c", followupCommand], { cwd: retry, encoding: "utf-8" });
-    runAdapter(retry, "post-tool", commandPayload(retry, owner, followupCommand, "followup-missing", true));
-    expect(marker(retry).resume).toMatchObject({ status: "selected", action: "resume" });
-    runLifecycle(retry, owner, "direct", ["next"], "followup-retry");
-    expect(marker(retry).resume).toMatchObject({ status: "superseded", action: "resume" });
+  test("23c: explicit Resume supersedes legacy waiting and selected markers", () => {
+    for (const status of ["waiting", "selected"] as const) {
+      const dir = orchestrationProject();
+      const session = `legacy-resume-${status}`;
+      driveToRunStage(dir, session);
+      rewriteMarker(dir, (value) => {
+        value.kind = "ask";
+        value.delivery = "issued";
+        value.needs_rehydrate = false;
+        delete value.continue_token;
+        delete value.continue_token_sha256;
+        value.resume = {
+          status,
+          ...(status === "selected" ? { action: "resume" } : {}),
+          issuing_stage: "requirements-analysis",
+          issuing_state_sha256: value.state_sha256,
+          issuing_session: session,
+          issuing_intent_uuid: value.intent_uuid,
+        };
+      });
 
-    const selectedDrift = orchestrationProject();
-    const selectedOwner = "selected-drift-owner";
-    runLifecycle(selectedDrift, selectedOwner, "direct", ["next", "--resume"], "selected-drift-ask");
-    runLifecycle(selectedDrift, selectedOwner, "source", ["report", "--result", "resumed", "--user-input", "1"], "selected-drift-answer");
-    const selectedJump = join(selectedDrift, ".aidlc", "tools", "aidlc-jump.ts");
-    runRawLifecycle(
-      selectedDrift, selectedOwner,
-      "bun .aidlc/tools/aidlc-jump.ts execute --target requirements-analysis --direction redo --scope feature",
-      process.execPath, [selectedJump, "execute", "--target", "requirements-analysis", "--direction", "redo", "--scope", "feature"], "selected-drift-writer",
-    );
-    runAdapter(selectedDrift, "continue-workflow", { ...FIXTURES.stop, cwd: selectedDrift, session_id: selectedOwner });
-    expect(marker(selectedDrift).resume).toMatchObject({ status: "superseded", action: "resume" });
-
-    const stale = orchestrationProject();
-    const staleOwner = "stale-answer-owner";
-    runLifecycle(stale, staleOwner, "direct", ["next", "--resume"], "stale-ask");
-    const staleAnswer = commandSpec(stale, "direct", ["report", "--result", "resumed", "--user-input", "1"]);
-    const staleCommand = rewrittenCommand(runAdapter(stale, "guard-tool-call", commandPayload(stale, staleOwner, staleAnswer.text, "stale-answer")));
-    const jump = join(stale, ".aidlc", "tools", "aidlc-jump.ts");
-    const drifted = runRawLifecycle(
-      stale, staleOwner,
-      "bun .aidlc/tools/aidlc-jump.ts execute --target requirements-analysis --direction redo --scope feature",
-      process.execPath, [jump, "execute", "--target", "requirements-analysis", "--direction", "redo", "--scope", "feature"], "stale-drift",
-    );
-    expect(drifted.status, drifted.stderr).toBe(0);
-    const late = spawnSync("/bin/sh", ["-c", staleCommand], { cwd: stale, encoding: "utf-8" });
-    runAdapter(stale, "post-tool", commandPayload(stale, staleOwner, staleCommand, "stale-answer", true, late.stdout));
-    expect(marker(stale).resume).toMatchObject({ status: "superseded" });
-    expect(runAdapter(stale, "guard-tool-call", commandPayload(stale, staleOwner, staleAnswer.text, "stale-retry")).stdout)
-      .toContain('"permissionDecision":"deny"');
+      const resumed = runLifecycle(
+        dir,
+        session,
+        "direct",
+        ["next", "--resume"],
+        `legacy-${status}-resume`,
+      );
+      expect(resumed.directive.kind).toBe("load-steering");
+      expect(resumed.directive.stage).toBe("requirements-analysis");
+      expect(marker(dir).resume).toMatchObject({ status: "superseded" });
+    }
   }, 60000);
 
   test("24: Copilot conversational ordering, concurrent Stop count, unit fingerprint, and marker recovery are bounded", async () => {

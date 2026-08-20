@@ -140,7 +140,6 @@ import {
   readAllAuditShards,
   recordHookDrop,
   markEngineTouch,
-  markActiveDirectiveResumeWaiting,
   relativeCodekbDir,
   relativeRecordDir,
   relativeSpaceRecordPrefix,
@@ -697,7 +696,7 @@ interface ParsedFlags {
   review?: string; // --review <adversarial|advisory|none>: per-run review-class override
   readOnly?: string; // the matched read-only flag, if any
   readOnlyArgs?: string[]; // allowlisted trailing args for the read-only flag (e.g. --doctor --export --output <dir>)
-  resume?: boolean; // --resume: re-enter an existing workflow (resume choice)
+  resume?: boolean; // --resume: continue an existing workflow directly
   single?: boolean; // --single: run ONE stage under a synthetic workflow id, never touching the main pointer
   newIntent?: boolean; // --new-intent: the conductor confirmed new-work alongside an active intent → emit the SAME birth directive (with the --label seam) the fresh-start path uses, instead of constructing intent-create from SKILL.md prose
   intent?: string; // freeform request text (no leading --flag)
@@ -2872,8 +2871,8 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // workflow must CLEAR the marker before continuing, else the next plain `next`
   // would re-park. Clearing is a MUTATION, so `next` NAMES the move (a
   // run-then-continue print) and the conductor runs the tool; `next` itself
-  // writes nothing. Fires before Branch 6 (the resume-choice ask) so the marker
-  // is cleared first.
+  // writes nothing. Fires before normal continuation routing so the marker is
+  // cleared first.
   if (
     stateContent &&
     flags.resume &&
@@ -3085,30 +3084,6 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     }
   }
 
-  // Branch 6 — resume (SKILL.md:292). When the conductor re-enters an existing
-  // workflow (`/aidlc --resume`), the prose presents a resume-choice
-  // AskUserQuestion. The engine NEVER calls AskUserQuestion (it is a Bash tool
-  // the conductor owns); it emits an `ask` directive carrying the question and
-  // STOPS, and the conductor renders it and feeds the answer back via report.
-  // No state file → there is nothing to resume, so fall through to the
-  // no-state error below.
-  if (flags.resume && stateContent) {
-    const currentSlug = getField(stateContent, "Current Stage") ?? "";
-    const where = currentSlug.length > 0 ? ` (currently at "${currentSlug}")` : "";
-    if (currentSlug) {
-      try {
-        markActiveDirectiveResumeWaiting(pd, stateContent, currentSlug);
-      } catch (e) {
-        recordHookDrop(pd, "active-directive", errorMessage(e));
-      }
-    }
-    emit(askDirective(
-      `An existing workflow was found${where}. How would you like to proceed? ` +
-        "Resume from last checkpoint, redo the current stage, jump to a stage, or start fresh.",
-    ));
-    return;
-  }
-
   // Branch 7 — explicit --phase / --stage jump. The conductor relays the
   // human's jump target; the engine SUPPLIES the resolved direction by shelling
   // out to `aidlc-jump.ts resolve` (a pure read) rather than re-deriving the
@@ -3117,7 +3092,8 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // relayed as its VERBATIM `Stage "..." is skipped for scope "...".` error.
   // On success we surface the run-stage directive for the resolved target,
   // carrying resolved artifact paths (projectType feeds the conditional_on
-  // filter for the jumped-to stage).
+  // filter for the jumped-to stage). An explicit target also wins when combined
+  // with --resume: `next --resume --stage <slug>` reaches this jump branch.
   if (flags.phase || flags.stage) {
     emitJumpDirective(flags, scope, pd, projectType);
     return;
@@ -3128,7 +3104,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // leading valid token into positionalScope and leaves any trailing prose in
   // flags.intent. Birth the positional scope and preserve that prose as the
   // intent-create --arguments value. An explicit --scope outranks this branch
-  // and reaches Branch 9a; --resume never births.
+  // and reaches Branch 9a; a no-state --resume never births.
   if (
     !stateContent &&
     flags.positionalScope &&
@@ -3210,10 +3186,10 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // flag already died at Branch 3b). Naming a scope on a fresh workspace is a
   // request to START a workflow — the same birth move as Branch 7b's
   // valid-scope positional, reached here because the flag passes Branch 3b
-  // validation and no jump/init/resume branch fired. Scaffolding is a
+  // validation and no jump/init branch fired. Scaffolding is a
   // mutation, so the engine names the init move (run-then-continue print)
-  // rather than performing it. `--resume` never births: resuming claims a
-  // workflow already exists, so with no state it falls to the 9b error.
+  // rather than performing it. A no-state `--resume` never births: resuming
+  // claims a workflow already exists, so it falls to the 9b error.
   if (!stateContent && source === "flag" && !flags.resume) {
     // Same fresh-clone guard as Branch 7b: if intents already exist in the
     // active space with no cursor set, prompt to pick one instead of birthing a
@@ -3257,8 +3233,8 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // routing flag, a workflow is active), so the engine surfaces the question
   // and stops - the classification stays with the human, the same split as
   // every other ask. Explicit forms are untouched: --scope'd prose, positional
-  // scopes, jumps, compose, --new-intent, --single and --resume all returned
-  // in earlier branches or are excluded here.
+  // scopes, jumps, compose, --new-intent, and --single returned in earlier
+  // branches; --resume is excluded here and continues the current workflow.
   if (flags.intent && !flags.scope && !flags.positionalScope && !flags.resume) {
     const activeLabel =
       (getField(stateContent, "Project") ?? "").trim() ||
