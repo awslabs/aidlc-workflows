@@ -462,6 +462,10 @@ function walk(dir: string): string[] {
 type CopyContext = { file: string; rel: string; content: string };
 type CopyPrecheck = (ctx: CopyContext & { dest: string }) => boolean;
 type CopyTransform = (ctx: CopyContext) => string;
+type ExistingCopyAction = "compare" | "handled" | "written";
+type ExistingCopyHandler = (
+  ctx: CopyContext & { dest: string; installed: Buffer },
+) => ExistingCopyAction;
 
 function frontmatterName(content: string): string | null {
   return frontmatterScalar(content, "name");
@@ -611,9 +615,22 @@ function projectCursorNativeAgent({ file, content }: CopyContext): string {
   return content.replace(m[0], () => `---\n${fm}\n---\n`);
 }
 
+function disallowedToolsValues(content: string): string[] {
+  return [
+    ...frontmatter(content).matchAll(/^disallowedTools:\s*(.*?)\s*$/gm),
+  ].map((match) => match[1].trim());
+}
+
 function projectKiroNativeAgent({ file, content }: CopyContext): string {
   const m = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
   if (!m) throw new Error(`${file}: plugin agent has no closed frontmatter block`);
+  const disallowed = disallowedToolsValues(content);
+  if (
+    disallowed.length > 1 ||
+    (disallowed.length === 1 && !/^Task$/i.test(disallowed[0]))
+  ) {
+    throw new Error(`${file}: Kiro cannot project this disallowedTools declaration`);
+  }
   const fm = m[1]
     .split(/\r?\n/)
     .filter((line) => !/^disallowedTools:/.test(line))
@@ -629,15 +646,56 @@ function kiroNativeAgentPrecheck(): CopyPrecheck {
       );
       return false;
     }
-    const disallowed = frontmatter(ctx.content).match(/^disallowedTools:\s*(.*?)\s*$/m);
-    if (disallowed && !/^\s*Task\s*$/i.test(disallowed[1])) {
+    const disallowed = disallowedToolsValues(ctx.content);
+    if (disallowed.length > 1) {
       recordDrop(
-        `plugin "${PLUGIN_NAME}" agent file "${ctx.rel}" cannot project disallowedTools "${disallowed[1]}" to Kiro; not copied`,
+        `plugin "${PLUGIN_NAME}" agent file "${ctx.rel}" declares multiple disallowedTools lines; Kiro accepts at most one disallowedTools: Task line; not copied`,
+      );
+      return false;
+    }
+    if (disallowed.length === 1 && !/^Task$/i.test(disallowed[0])) {
+      recordDrop(
+        `plugin "${PLUGIN_NAME}" agent file "${ctx.rel}" cannot project disallowedTools "${disallowed[0]}" to Kiro; not copied`,
       );
       return false;
     }
     return true;
   };
+}
+
+function migrateExistingKiroAgent(
+  ctx: CopyContext & { dest: string; installed: Buffer },
+): ExistingCopyAction {
+  if (!ctx.file.endsWith(".md")) return "compare";
+  const installed = ctx.installed.toString("utf-8");
+  // This migration is deliberately narrower than ordinary plugin upgrades:
+  // only an unchanged pre-projection copy owned by this plugin is rewritten.
+  // User edits, core files, and another plugin's files stay under no-clobber.
+  if (
+    installed !== ctx.content ||
+    frontmatterScalar(ctx.content, "plugin") !== PLUGIN_NAME ||
+    frontmatterScalar(installed, "plugin") !== PLUGIN_NAME
+  ) {
+    return "compare";
+  }
+  const disallowed = disallowedToolsValues(ctx.content);
+  if (disallowed.length === 0) return "compare";
+  if (disallowed.length > 1) {
+    const installedRel = relative(PROJECT_DIR, ctx.dest).replace(/\\/g, "/");
+    recordDrop(
+      `plugin "${PLUGIN_NAME}" agent file "${ctx.rel}" is already composed with multiple disallowedTools lines; fix the plugin source, remove "${installedRel}", and re-run compose`,
+    );
+    return "handled";
+  }
+  if (!/^Task$/i.test(disallowed[0])) {
+    const installedRel = relative(PROJECT_DIR, ctx.dest).replace(/\\/g, "/");
+    recordDrop(
+      `plugin "${PLUGIN_NAME}" agent file "${ctx.rel}" is already composed with unsupported disallowedTools "${disallowed[0]}"; fix the plugin source, remove "${installedRel}", and re-run compose`,
+    );
+    return "handled";
+  }
+  writeComposeFile(ctx.dest, projectKiroNativeAgent(ctx));
+  return "written";
 }
 
 function opencodeNativeAgentPrecheck(dst: string): CopyPrecheck {
@@ -1124,6 +1182,7 @@ function copyTreeNoClobber(
   kind: string,
   precheck?: CopyPrecheck,
   transform?: CopyTransform,
+  existingHandler?: ExistingCopyHandler,
 ): boolean {
   if (!existsSync(src)) return false;
   let wrote = false;
@@ -1139,6 +1198,19 @@ function copyTreeNoClobber(
       // content collision, not an identical idempotent re-copy. The installed
       // copy was written transformed, so transform before comparing; a source
       // the transform rejects cannot equal any installed copy.
+      const installed = readFileSync(dest);
+      const existingAction = existingHandler?.({
+        file,
+        rel,
+        dest,
+        content: buf.toString("utf-8"),
+        installed,
+      }) ?? "compare";
+      if (existingAction === "written") {
+        wrote = true;
+        continue;
+      }
+      if (existingAction === "handled") continue;
       let current: Buffer | null = buf;
       if (transform) {
         try {
@@ -1147,7 +1219,7 @@ function copyTreeNoClobber(
           current = null;
         }
       }
-      if (current === null || !readFileSync(dest).equals(current)) {
+      if (current === null || !installed.equals(current)) {
         recordDrop(`${kind} "${rel}" collides with an existing file (core or another plugin); not overwritten — rename it to a plugin-namespaced path`);
       }
       continue;
@@ -1440,6 +1512,7 @@ try {
           : HARNESS_LEAF === ".kiro"
             ? projectKiroNativeAgent
             : undefined,
+      HARNESS_LEAF === ".kiro" ? migrateExistingKiroAgent : undefined,
     ) || changed;
     if (IS_OPENCODE) {
       const rosterDir = nativeAgentsDir();

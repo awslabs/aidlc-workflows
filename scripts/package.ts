@@ -186,14 +186,16 @@ function projectTierFrontmatter(
   const m = s.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
   if (!m) throw new Error(`${srcPath}: agent .md has no closed frontmatter block.`);
   const fm = m[1];
-  const disallowedMatch = fm.match(/^disallowedTools:\s*(.*?)\s*$/m);
+  const disallowedMatches = [
+    ...fm.matchAll(/^disallowedTools:\s*(.*?)\s*$/gm),
+  ];
   if (
     harness === "kiro" &&
-    disallowedMatch &&
-    !/^task$/i.test(disallowedMatch[1].trim())
+    (disallowedMatches.length !== 1 ||
+      !/^task$/i.test(disallowedMatches[0][1].trim()))
   ) {
     throw new Error(
-      `${srcPath}: kiro projection cannot project disallowedTools: ${disallowedMatch[1]}.`,
+      `${srcPath}: kiro projection requires exactly one disallowedTools: Task line.`,
     );
   }
   const proj = projectTier(tier, harness, TIER_CAP); // throws on unknown tier

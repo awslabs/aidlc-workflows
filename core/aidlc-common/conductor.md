@@ -17,10 +17,11 @@ it for the whole run.
 For an `inline` stage, load the lead agent's flat file (e.g.
 `agents/aidlc-architect-agent.md`) and adopt its voice for the stage body — you
 are speaking as that domain expert. Load knowledge per `stage-protocol.md` §5
-knowledge-loading order. For a `subagent` stage, the `Task` boundary loads the
-persona and enforces the agent's `disallowedTools`/`model` - pass
-context in the prompt (subagents cannot see conversation history), never inject
-the persona text yourself.
+knowledge-loading order. For a `subagent` stage, the harness's native dispatch
+boundary loads the persona and enforces its projected model/tool policy
+(`disallowedTools: Task` on Claude; delegate allowlists without `subagent` on
+Kiro). Pass context in the prompt (subagents cannot see conversation history);
+never inject the persona text yourself.
 
 For a multi-agent stage, load `stage-protocol-ensemble.md` when the directive
 names that module. It is the single contract for topology behavior,
