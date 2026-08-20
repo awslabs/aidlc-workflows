@@ -131,7 +131,7 @@ disambiguate.
 
 Shared names are valid when no stage consumes them. The shipped `traceability`
 artifact follows this pattern: eight stages each write their own
-`traceability.md` under their own record directory, and no downstream stage
+`traceability.json` under their own record directory, and no downstream stage
 resolves `traceability` through `producersOf()`.
 
 Today's one example: both `build-and-test` (Construction) and
