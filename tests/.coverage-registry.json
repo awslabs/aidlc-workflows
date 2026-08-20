@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 165,
+      "function": 166,
       "audit": 43,
       "scope": 11,
       "stage": 11,
@@ -2413,8 +2413,13 @@
       "unitClass": "function",
       "unitId": "function:listField",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t304-listfield-flow-sequence.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",

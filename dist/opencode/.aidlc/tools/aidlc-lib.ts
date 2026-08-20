@@ -8395,11 +8395,12 @@ export function scalarField(fm: string, key: string): string {
   return raw;
 }
 
-// List field parser. Bounds list items strictly to indented `- ` lines so
-// a following `description: >` folded block cannot leak its continuation
-// lines into this list. Requires at least one space after the dash — YAML
-// syntax demands it, and accepting `-foo` silently as `foo` masks user
-// error when adding new agents.
+// List field parser. Accepts block sequences and single-line flow sequences.
+// Bounds block list items strictly to indented `- ` lines so a following
+// `description: >` folded block cannot leak its continuation lines into this
+// list. Requires at least one space after the dash — YAML syntax demands it,
+// and accepting `-foo` silently as `foo` masks user error when adding new
+// agents.
 //
 // Exported so aidlc-rule-schema.ts can reuse the zero-dep YAML primitive
 // (rule frontmatter's `paths:` is a YAML list of strings).
@@ -8409,14 +8410,22 @@ export function listField(fm: string, key: string): string[] {
     "m"
   );
   const m = fm.match(re);
-  if (!m) return [];
-  return m[1]
-    .split(/\r?\n/)
-    .map((l) => {
-      const match = l.match(/^\s*-[ \t]+(.+?)\s*$/);
-      return match ? match[1].replace(/^["']|["']$/g, "") : "";
-    })
-    .filter(Boolean);
+  if (m) {
+    return m[1]
+      .split(/\r?\n/)
+      .map((l) => {
+        const match = l.match(/^\s*-[ \t]+(.+?)\s*$/);
+        return match ? match[1].replace(/^["']|["']$/g, "") : "";
+      })
+      .filter(Boolean);
+  }
+
+  const flowRe = new RegExp(
+    `^${key}:[ \\t]*(\\[[^\\r\\n]*\\])[ \\t]*$`,
+    "m"
+  );
+  const flow = fm.match(flowRe);
+  return flow ? parseInlineDepsList(flow[1]) : [];
 }
 
 // --- Stage frontmatter parse / emit ---
