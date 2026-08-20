@@ -155,21 +155,49 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       };
       expect(hostManifest.name, harness.name).toBe(`aidlc-${PLUGIN}`);
       expect(existsSync(join(built, "hooks", "compose.ts"))).toBe(true);
-      const wiring = readFileSync(
-        join(built, harness.capabilities.plugin.wiringFile),
-        "utf-8",
-      );
-      if (harness.name === "cursor") {
-        expect(wiring, `${harness.name}: harness dir argument`).toContain(
-          `aidlc-plugin-compose.ts ${harness.manifest.harnessDir}`,
-        );
+      const inventory = fileInventory(built);
+      if (harness.name === "kiro") {
+        expect(harness.capabilities.plugin.wiringFile).toBeNull();
+        expect(inventory.some((file) => file.endsWith(".kiro.hook"))).toBe(false);
+        expect(existsSync(join(built, "hooks", "hooks.json"))).toBe(false);
+        expect(existsSync(join(built, ".kiro", "hooks"))).toBe(false);
       } else {
-        expect(wiring, `${harness.name}: harness dir wiring`).toContain(
-          `AIDLC_HARNESS_DIR=${harness.manifest.harnessDir}`,
-        );
-        expect(wiring, `${harness.name}: harness name wiring`).toContain(
-          `AIDLC_HARNESS_NAME=${harness.name}`,
-        );
+        const wiringFile = harness.capabilities.plugin.wiringFile;
+        expect(wiringFile, `${harness.name}: wiring file`).not.toBeNull();
+        const wiring = readFileSync(join(built, wiringFile!), "utf-8");
+        if (harness.name === "kiro-ide") {
+          expect(inventory.some((file) => file.endsWith(".kiro.hook"))).toBe(false);
+          const registration = JSON.parse(wiring) as {
+            version?: string;
+            hooks?: Array<{
+              name?: string;
+              trigger?: string;
+              action?: { type?: string; command?: string };
+            }>;
+          };
+          expect(registration.version).toBe("v1");
+          expect(registration.hooks).toHaveLength(1);
+          const hook = registration.hooks?.[0];
+          expect(hook?.name).toBe(`aidlc-${PLUGIN}-compose`);
+          expect(hook?.trigger).toBe("SessionStart");
+          expect(hook?.action?.type).toBe("command");
+          const command = hook?.action?.command ?? "";
+          expect(command).toContain("AIDLC_HARNESS_DIR=.kiro");
+          expect(command).toContain("AIDLC_HARNESS_NAME=kiro-ide");
+          expect(command).toContain('"hooks/compose.ts"');
+          expect(command).not.toContain(`\${PLUGIN_ROOT}`);
+        } else if (harness.name === "cursor") {
+          expect(wiring, `${harness.name}: harness dir argument`).toContain(
+            `aidlc-plugin-compose.ts ${harness.manifest.harnessDir}`,
+          );
+        } else {
+          expect(wiring, `${harness.name}: harness dir wiring`).toContain(
+            `AIDLC_HARNESS_DIR=${harness.manifest.harnessDir}`,
+          );
+          expect(wiring, `${harness.name}: harness name wiring`).toContain(
+            `AIDLC_HARNESS_NAME=${harness.name}`,
+          );
+        }
       }
       expect(existsSync(join(built, "stages", "construction", "test-pro-integration.md"))).toBe(
         true,

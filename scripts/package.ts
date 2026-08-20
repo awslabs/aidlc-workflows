@@ -958,7 +958,7 @@ type PluginTarget = {
   harnessName: string;
   manifestDir: string;
   harnessLeaf: string;
-  kind: "store" | "kiro" | "cursor";
+  kind: "store" | "kiro" | "kiro-ide" | "cursor";
 };
 function pluginTargetFor(harnessName: string): PluginTarget | null {
   if (!existsSync(join(HARNESS_ROOT, harnessName, "manifest.ts"))) return null;
@@ -1021,12 +1021,13 @@ function buildPluginProjection(pluginName: string, harnessName: string, outDir: 
     }, null, 2) + "\n"
   );
 
-  // 3. The compose hook + per-harness wiring. Prefer an installed aidlc binary
-  //    so the host hook can front the fold through `aidlc plugin sync`; fall back
-  //    to the direct bun compose.ts path for source/tree installs. Claude
-  //    populates CLAUDE_PLUGIN_ROOT, Codex PLUGIN_ROOT, and Cursor resolves
-  //    relative commands from the plugin root; AIDLC_HARNESS_DIR targets the
-  //    right harness tree.
+  // 3. The composer + per-harness wiring. Prefer an installed aidlc binary so
+  //    supported host hooks can front the fold through `aidlc plugin sync`;
+  //    fall back to the direct bun compose.ts path for source/tree installs.
+  //    Kiro CLI emits no registration and uses the explicit composer. Claude
+  //    populates CLAUDE_PLUGIN_ROOT, Codex PLUGIN_ROOT, Cursor resolves relative
+  //    commands from the plugin root, and Kiro IDE runs from the workspace root.
+  //    AIDLC_HARNESS_DIR targets the right harness tree.
   const hooksDir = join(outDir, "hooks");
   mkdirSync(hooksDir, { recursive: true });
   for (const f of readdirSync(templateHooks)) {
@@ -1042,7 +1043,8 @@ function buildPluginProjection(pluginName: string, harnessName: string, outDir: 
     // without relying on sh, command -v, or POSIX parameter expansion.
     command = `bun ./hooks/aidlc-plugin-compose.ts ${harnessLeaf}`;
   } else {
-    const composePath = `${rootExpr}/hooks/compose.ts`;
+    const composePath =
+      kind === "kiro-ide" ? "hooks/compose.ts" : `${rootExpr}/hooks/compose.ts`;
     // Probe aidlc on PATH first, then bun on PATH / ~/.bun/bin. If neither is
     // executable, exit 0 with a note rather than running a non-existent binary.
     const aidlcExpr =
@@ -1056,16 +1058,21 @@ function buildPluginProjection(pluginName: string, harnessName: string, outDir: 
   }
 
   if (kind === "kiro") {
+    // Kiro CLI 2.x registers hooks only in its agent configuration. Folder-drop
+    // plugins keep hooks/compose.ts for explicit composition, with no manifest.
+  } else if (kind === "kiro-ide") {
+    const kiroHooksDir = join(outDir, harnessLeaf, "hooks");
+    mkdirSync(kiroHooksDir, { recursive: true });
     writeFileSync(
-      join(hooksDir, "aidlc-plugin-compose.kiro.hook"),
+      join(kiroHooksDir, `aidlc-${pluginName}-compose.json`),
       JSON.stringify({
-        version: "1.0.0",
-        enabled: true,
-        name: `aidlc-${pluginName}-compose`,
-        description: `Composes the ${pluginName} AIDLC plugin on first interaction.`,
-        when: { type: "promptSubmit" },
-        // biome-ignore lint/suspicious/noThenProperty: required Kiro hook schema field
-        then: { type: "runCommand", command },
+        version: "v1",
+        hooks: [{
+          name: `aidlc-${pluginName}-compose`,
+          trigger: "SessionStart",
+          description: `Composes the ${pluginName} AIDLC plugin at session start.`,
+          action: { type: "command", command },
+        }],
       }, null, 2) + "\n"
     );
   } else if (kind === "cursor") {
