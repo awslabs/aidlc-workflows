@@ -232,6 +232,49 @@ describe("t231 plugin list and sync handlers", () => {
     expect(result.stdout).toBe("no installed plugins; nothing to sync\n");
   });
 
+  test("plugin sync fails when a configured root has no compose hook", () => {
+    const project = emptyProject();
+    const pluginRoot = tempDir("aidlc-t231-plugin-no-compose-");
+    const result = utility(["plugin-sync"], project, {
+      AIDLC_PLUGIN_ROOT: pluginRoot,
+      CLAUDE_PLUGIN_ROOT: "",
+      PLUGIN_ROOT: "",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(pluginRoot);
+    expect(result.stderr).toContain("missing hooks/compose.ts");
+  });
+
+  test("plugin sync warns about compose-less roots while composing valid roots", () => {
+    const project = emptyProject();
+    const pluginRoot = tempDir("aidlc-t231-plugin-valid-");
+    const skippedRoot = tempDir("aidlc-t231-plugin-no-compose-");
+    mkdirSync(join(pluginRoot, "hooks"), { recursive: true });
+    writeFileSync(
+      join(pluginRoot, "hooks", "compose.ts"),
+      [
+        "import { writeFileSync } from \"node:fs\";",
+        "import { join } from \"node:path\";",
+        "const project = process.env.AIDLC_PROJECT_DIR || process.cwd();",
+        "writeFileSync(join(project, \"plugin-sync-mixed-marker.txt\"), \"composed\");",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const result = utility(["plugin-sync"], project, {
+      AIDLC_PLUGIN_ROOT: pluginRoot,
+      CLAUDE_PLUGIN_ROOT: skippedRoot,
+      PLUGIN_ROOT: "",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("plugin sync complete: 1 plugin(s)\n");
+    expect(result.stderr).toContain(skippedRoot);
+    expect(result.stderr).toContain("missing hooks/compose.ts");
+    expect(readFileSync(join(project, "plugin-sync-mixed-marker.txt"), "utf-8")).toBe("composed");
+  });
+
   test("plugin sync runs a discovered compose.ts with harness dir and name", () => {
     const project = emptyProject();
     const pluginRoot = tempDir("aidlc-t231-plugin-");

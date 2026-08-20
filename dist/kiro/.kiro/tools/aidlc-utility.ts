@@ -998,13 +998,39 @@ function pluginRootCandidatesFromEnv(): string[] {
 
 async function handlePluginSync(projectDir: string): Promise<void> {
   const roots = pluginRootCandidatesFromEnv();
-  const composePaths = roots
-    .map((root) => ({ root, compose: join(root, "hooks", "compose.ts") }))
-    .filter((item) => existsSync(item.compose));
-
-  if (composePaths.length === 0) {
+  if (roots.length === 0) {
     process.stdout.write("no installed plugins; nothing to sync\n");
     return;
+  }
+
+  const pluginRoots = roots.map((root) => {
+    const compose = join(root, "hooks", "compose.ts");
+    return {
+      root,
+      compose,
+      reason: existsSync(compose)
+        ? null
+        : existsSync(root)
+          ? "missing hooks/compose.ts"
+          : "root directory does not exist",
+    };
+  });
+  const composePaths = pluginRoots.filter((item) => item.reason === null);
+  const skippedRoots = pluginRoots.filter((item) => item.reason !== null);
+  const skippedDetails = skippedRoots
+    .map((item) => `- ${item.root}: ${item.reason}`)
+    .join("\n");
+
+  if (composePaths.length === 0) {
+    die(
+      `plugin-sync: no compose hook found in ${roots.length} configured plugin root(s):\n${skippedDetails}`,
+    );
+  }
+
+  if (skippedRoots.length > 0) {
+    process.stderr.write(
+      `plugin-sync warning: skipped ${skippedRoots.length} configured plugin root(s):\n${skippedDetails}\n`,
+    );
   }
 
   for (const item of composePaths) {

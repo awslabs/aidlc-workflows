@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.78] - 2026-08-24
+
+`aidlc plugin sync` now distinguishes a clean no-plugin setup from configured plugin roots that cannot be composed. **Upgrade:** refresh your `dist/<harness>/` shell and update automation to treat exit 1 as an incomplete plugin installation when every configured root is unusable.
+
+* **Behavior change:** when plugin-root environment variables are configured but none points to a root containing `hooks/compose.ts`, `aidlc plugin sync` exits 1 and names every unusable root.
+* Failures and mixed-root warnings distinguish a missing `hooks/compose.ts` from a root directory that does not exist.
+* With no configured plugin roots, the command retains the exact `no installed plugins; nothing to sync` exit-0 no-op; mixed sets warn for each skipped root, compose valid roots, and retain the existing success line.
+
 ## [2.6.77] - 2026-08-24
 
 Stage validity now fingerprints zero-Unit Construction outputs at the same stage-level paths the engine emits, and fresh workspace births expose an inspectable CodeKB parent without changing per-repository storage semantics. **Upgrade:** re-copy your `dist/<harness>/` shell into the project; existing workflows need no migration.
