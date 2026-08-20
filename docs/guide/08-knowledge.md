@@ -90,8 +90,11 @@ aidlc/knowledge/                  # empty at bootstrap; create the subdirs you n
 ## Document Knowledge (DocumentKB)
 
 Team knowledge files are curated reference material. DocumentKB is the companion
-catalog for documents the team already owns: policies, contracts, PDFs, Word
-files, Markdown, and plain text.
+catalog for documents the team already owns: vision documents, PRDs,
+requirements briefs, policies, contracts, PDFs, Word files, Markdown, and plain
+text. See
+[Starting from an existing document](02-your-first-workflow.md#starting-from-an-existing-document)
+for ways to use one as workflow input.
 
 The ownership split is deliberate:
 
