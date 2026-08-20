@@ -500,6 +500,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t304-gate-sensor-enforcement.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t92.test.ts",
           "mechanism": "cli"
         }
@@ -514,6 +518,10 @@
         {
           "file": "tests/e2e/t-tui-custom-harness.serial.test.ts",
           "mechanism": "tui"
+        },
+        {
+          "file": "tests/integration/t304-gate-sensor-enforcement.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -6580,6 +6588,10 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
+          "file": "tests/integration/t304-gate-sensor-enforcement.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t92.test.ts",
           "mechanism": "cli"
         }
@@ -6755,6 +6767,10 @@
       "unitId": "aidlc-state gate-start",
       "minMechanism": "cli",
       "coveredBy": [
+        {
+          "file": "tests/integration/t304-gate-sensor-enforcement.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/integration/t47-failure-injection.test.ts",
           "mechanism": "cli"

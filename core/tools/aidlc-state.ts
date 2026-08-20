@@ -1,7 +1,14 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve as resolvePath,
+} from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
@@ -27,6 +34,7 @@ import {
   formatReceivedReply,
   freshReviewReceipts,
   getField,
+  harnessDir,
   hasUnsafeSingleLineCharacter,
   holdsAuditLock,
   humanActedSinceGate,
@@ -1677,6 +1685,151 @@ function producesArtifactsExist(
   return false;
 }
 
+interface SensorFireVerdict {
+  fire_id: string;
+  sensor_id: string;
+  stage: string;
+  output_path: string;
+  result: "passed" | "failed" | "budget-override";
+  detail_path: string | null;
+}
+
+interface BlockingSensorFailure {
+  sensorId: string;
+  outputPath: string;
+  detailPath: string;
+}
+
+// Resolve every existing declared deliverable, reusing the same stage directory
+// placement as producesArtifactsExist. --artifacts may name resolved paths or
+// filenames; it supplements the graph walk for optional/custom emitters but
+// cannot introduce an undeclared deliverable.
+function existingDeclaredArtifactPaths(
+  pd: string,
+  stage: {
+    slug: string;
+    phase: string;
+    for_each?: string;
+    produces?: string[];
+    optional_produces?: string[];
+  },
+  artifacts?: string,
+): string[] {
+  const names = [
+    ...(stage.produces ?? []),
+    ...(stage.optional_produces ?? []),
+  ];
+  const declaredFilenames = new Set(names.map(artifactFilename));
+  const dirs = producesDirsForStage(pd, stage);
+  const found = new Set<string>();
+  const addIfDeclaredFile = (candidate: string): void => {
+    if (
+      declaredFilenames.has(basename(candidate)) &&
+      isRegularFile(candidate)
+    ) {
+      found.add(candidate);
+    }
+  };
+
+  for (const dir of dirs) {
+    for (const filename of declaredFilenames) {
+      addIfDeclaredFile(join(dir, filename));
+    }
+  }
+
+  for (const token of (artifacts ?? "").split(",")) {
+    const value = token.trim();
+    if (!value) continue;
+    const variants = declaredFilenames.has(basename(value))
+      ? [value]
+      : [value, artifactFilename(value)];
+    for (const variant of variants) {
+      addIfDeclaredFile(
+        isAbsolute(variant) ? variant : resolvePath(pd, variant),
+      );
+      for (const dir of dirs) addIfDeclaredFile(join(dir, variant));
+    }
+  }
+
+  return [...found];
+}
+
+function parseSensorFireVerdict(stdout: string): SensorFireVerdict | null {
+  const lines = stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try {
+      const value = JSON.parse(lines[i]) as Partial<SensorFireVerdict>;
+      if (
+        typeof value.fire_id === "string" &&
+        typeof value.sensor_id === "string" &&
+        typeof value.stage === "string" &&
+        typeof value.output_path === "string" &&
+        (value.result === "passed" ||
+          value.result === "failed" ||
+          value.result === "budget-override") &&
+        (value.detail_path === null || typeof value.detail_path === "string")
+      ) {
+        return value as SensorFireVerdict;
+      }
+    } catch {
+      // Keep scanning in case a wrapper wrote a banner before the JSON verdict.
+    }
+  }
+  return null;
+}
+
+function fireGateSensors(
+  pd: string,
+  stage: NonNullable<ReturnType<typeof findStageBySlug>>,
+  artifacts?: string,
+): BlockingSensorFailure[] {
+  const paths = existingDeclaredArtifactPaths(pd, stage, artifacts);
+  if (paths.length === 0) return [];
+
+  const failures: BlockingSensorFailure[] = [];
+  const executable = compiledExecutable();
+  const sensorTool = fileURLToPath(new URL("./aidlc-sensor.ts", import.meta.url));
+  for (const sensor of stage.sensors_applicable ?? []) {
+    if (sensor.fire_on !== "gate") continue;
+    for (const outputPath of paths) {
+      const args = [
+        "fire",
+        sensor.id,
+        "--stage",
+        stage.slug,
+        "--output-path",
+        outputPath,
+      ];
+      const command = executable
+        ? [executable, "sensor", ...args]
+        : [process.execPath, sensorTool, ...args];
+      const result = spawnSync(command[0], command.slice(1), {
+        cwd: pd,
+        encoding: "utf-8",
+        env: {
+          ...process.env,
+          AIDLC_PROJECT_DIR: pd,
+          CLAUDE_PROJECT_DIR: pd,
+        },
+      });
+      if (result.status !== 0) continue;
+      const verdict = parseSensorFireVerdict(result.stdout ?? "");
+      if (
+        sensor.default_severity === "blocking" &&
+        verdict?.result === "failed" &&
+        verdict.detail_path !== null
+      ) {
+        failures.push({
+          sensorId: sensor.id,
+          outputPath: verdict.output_path,
+          detailPath: verdict.detail_path,
+        });
+      }
+    }
+  }
+  return failures;
+}
+
 // True when any non-doc file exists in the workspace - a file outside the
 // aidlc/ workspace tree and the harness dirs. Bounded shallow walk (one level
 // into each top-level dir is enough to detect src/<file>); avoids a full
@@ -2873,7 +3026,8 @@ function validateSlugInState(
   }
 }
 
-// gate-start <slug> — transition [-] → [?], emit STAGE_AWAITING_APPROVAL.
+// gate-start <slug> — fire gate-bound sensors, then transition [-] → [?] and
+// emit STAGE_AWAITING_APPROVAL.
 // On an existing [?] gate, re-run every opening guard without emitting or
 // writing another transition. This lets report revalidate legacy/recovered
 // gates instead of treating their persisted checkbox as proof of validity.
@@ -2881,7 +3035,12 @@ function validateSlugInState(
 // conductor skipped, e.g. report's explicit-stage recovery) with
 // Recovered=true so audit consumers can tell backfills from organic opens.
 function handleGateStart(args: string[]): void {
-  if (args.length < 1) error("Usage: aidlc-state.ts gate-start <slug> [--artifacts <csv>] [--recovered]");
+  if (args.length < 1) {
+    error(
+      "Usage: aidlc-state.ts gate-start <slug> [--artifacts <csv>] " +
+        "[--recovered] [--override-blocking-sensors]",
+    );
+  }
   const slug = args[0];
   let artifacts: string | undefined;
   const artifactsIdx = args.indexOf("--artifacts");
@@ -2889,8 +3048,38 @@ function handleGateStart(args: string[]): void {
     artifacts = args[artifactsIdx + 1];
   }
   const recovered = args.includes("--recovered");
+  const overrideBlockingSensors = args.includes("--override-blocking-sensors");
 
   const pd = resolveProjectDir(projectDir);
+  // Sensor dispatch MUST stay outside the state transaction: aidlc-sensor.ts
+  // takes the same audit lock around its FIRED and terminal rows.
+  const preflightContent = readStateFile(pd);
+  const preflightStage = findStageBySlug(slug);
+  if (!preflightStage) error(`Unknown stage: ${slug}`);
+  validateSlugInState(preflightContent, slug, "in-progress");
+  verifyStageArtifacts(pd, preflightStage);
+  verifySummaryConfirmationPrecondition(
+    pd,
+    preflightContent,
+    preflightStage,
+  );
+  const blockingFailures = fireGateSensors(
+    pd,
+    preflightStage,
+    artifacts,
+  );
+  if (blockingFailures.length > 0 && !overrideBlockingSensors) {
+    const sensorIds = [...new Set(blockingFailures.map((f) => f.sensorId))];
+    const detailPaths = blockingFailures.map((f) => f.detailPath);
+    error(
+      `Blocking gate sensor failure for "${slug}". Sensors: ${sensorIds.join(", ")}. ` +
+        `Detail paths: ${detailPaths.join(", ")}. Fix the findings and reopen the gate, ` +
+        `or explicitly override once with: bun ${harnessDir()}/tools/aidlc-orchestrate.ts ` +
+        `report --stage ${slug} ` +
+        "--result awaiting-approval --override-blocking-sensors",
+    );
+  }
+
   // C2b lost-update safety: validate→transition→emit-audit→write under one
   // lock (the state-precondition check and the write see one snapshot).
   withAuditLock(pd, () => {
@@ -2926,6 +3115,15 @@ function handleGateStart(args: string[]): void {
     const fields: Record<string, string> = { Stage: slug };
     if (artifacts) fields.Artifacts = artifacts;
     if (recovered) fields.Recovered = "true";
+    if (blockingFailures.length > 0 && overrideBlockingSensors) {
+      fields["Blocking Sensor Override"] = "true";
+      fields["Blocking Sensor IDs"] = [
+        ...new Set(blockingFailures.map((f) => f.sensorId)),
+      ].join(",");
+      fields["Blocking Sensor Detail Paths"] = blockingFailures
+        .map((f) => f.detailPath)
+        .join(",");
+    }
     emitAudit(pd, "STAGE_AWAITING_APPROVAL", fields);
   } catch (e) {
     error(`Audit emission failed: ${errorMessage(e)}`);

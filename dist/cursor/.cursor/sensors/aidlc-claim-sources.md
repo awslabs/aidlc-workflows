@@ -3,6 +3,7 @@ id: claim-sources
 kind: deterministic
 command: bun .cursor/tools/aidlc-sensor-claim-sources.ts
 default_severity: advisory
+fire_on: gate
 description: Checks Intent Capture claims carry source tags that resolve to the stage's confirmed source register and answers
 category: document-provenance
 matches: "**/{aidlc-docs,intents}/**"
@@ -21,8 +22,8 @@ timeout_seconds: 5
 
 # claim-sources sensor
 
-Checks the existing Intent Capture deliverables as a set whenever any stage
-file is written. Scaffolding writes pass until a deliverable exists.
+Checks the existing Intent Capture deliverables as a set when the stage enters
+its approval gate.
 
 For each deliverable, the sensor verifies:
 

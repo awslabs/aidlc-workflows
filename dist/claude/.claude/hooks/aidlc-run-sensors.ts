@@ -200,6 +200,9 @@ if (applicableSensors.length === 0) return 0;
 // Bun.Glob accepts both — both engines agree on the relaxed form.
 const sensorTs = join(projectDir, harnessDir(), "tools", "aidlc-sensor.ts");
 for (const entry of applicableSensors) {
+  // Gate-fired sensors run once per existing deliverable at gate-start. Older
+  // compiled graphs omit fire_on, which preserves the historical write default.
+  if (entry.fire_on === "gate") continue;
   if (!entry.matches) continue;
   const glob = new Bun.Glob(entry.matches);
   if (!glob.match(filePath)) continue;

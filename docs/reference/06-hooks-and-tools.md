@@ -723,7 +723,7 @@ decision used by the dispatch guard and autonomous swarm `prepare`.
 
 ### `aidlc-sensor.ts` — Sensor dispatcher
 
-Routes a Sensor invocation: it validates inputs, resolves the manifest and stage off the graph, emits `SENSOR_FIRED` under the audit lock, spawns the per-Sensor script (no lock held), then emits the paired terminal row. See [Sensor System](07-sensor-system.md) for the manifest schema, the fire lifecycle, and the outcome truth table.
+Routes a Sensor invocation: it validates inputs, resolves the manifest and stage off the graph, emits `SENSOR_FIRED` under the audit lock, spawns the per-Sensor script (no lock held), then emits the paired terminal row and one compact JSON verdict line. See [Sensor System](07-sensor-system.md) for the manifest schema, write/gate firing model, and outcome truth table.
 
 | Subcommand | Purpose | Emits |
 |------------|---------|-------|
@@ -731,7 +731,7 @@ Routes a Sensor invocation: it validates inputs, resolves the manifest and stage
 | `describe <id>` | Print one Sensor's manifest fields (command, default severity, `matches` glob, optional timeout, manifest path) | — |
 | `fire <id> --stage <slug> --output-path <path>` | Fire a Sensor against an output file | `SENSOR_FIRED` then one of `SENSOR_PASSED` / `SENSOR_FAILED` / `SENSOR_BUDGET_OVERRIDE` |
 
-The dispatcher exits non-zero only on its own invocation errors (unknown id, missing flag, `matches` mismatch). A Sensor *outcome* — pass, fail, timeout, or any script error — is advisory: the CLI still exits 0 and always closes the `SENSOR_FIRED` row with a paired terminal row. Failures write a detail file to `<record>/.aidlc-sensors/<stage>/<id>-<fire-id>.md` (in the intent's record dir) race-free (`wx`-flag write + rename). The same dispatcher is driven by the `aidlc-run-sensors.ts` PostToolUse hook on every matching `Write` / `Edit`.
+The dispatcher exits non-zero only on its own invocation errors (unknown id, missing flag, `matches` mismatch). A Sensor outcome still exits 0 and always closes the `SENSOR_FIRED` row with a paired terminal row. Failures write a detail file to `<record>/.aidlc-sensors/<stage>/<id>-<fire-id>.md` race-free (`wx`-flag write + rename). `aidlc-run-sensors.ts` drives write-fired bindings after matching Write/Edit calls; `aidlc-state.ts gate-start` drives gate-fired bindings once per existing deliverable and enforces `blocking` failures. `--override-blocking-sensors` proceeds and records the override on `STAGE_AWAITING_APPROVAL`.
 
 ### `aidlc-learnings.ts` — Learning-gate tool
 

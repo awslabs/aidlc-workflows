@@ -121,13 +121,15 @@ export interface RuleResolution {
 // Per-sensor resolution row baked into each stage's sensors_applicable.
 // Pull authoring: the stage's frontmatter `sensors: [<id>]` declares the
 // import; the resolver looks the manifest up by id and copies its
-// capability filter (matches) verbatim. matches is omitted when the
-// manifest declares no path filter (e.g., required-sections,
-// upstream-coverage). The PostToolUse hook reads the snapshotted matches
-// off the graph node — never re-opens the manifest at fire time.
+// dispatch policy and capability metadata verbatim. matches is omitted when
+// the manifest declares no path filter. Runtime dispatchers read this
+// snapshotted binding off the graph node — never re-open the manifest.
 export interface SensorResolution {
   id: string;
   path: string;
+  fire_on: "write" | "gate";
+  default_severity: "advisory" | "blocking";
+  category?: string;
   matches?: string;
 }
 
@@ -780,7 +782,15 @@ export function resolveSensorsForStage(
           `Known ids: ${known}`,
       );
     }
-    const entry: SensorResolution = { id: sensor.id, path: sensor.path };
+    const entry: SensorResolution = {
+      id: sensor.id,
+      path: sensor.path,
+      fire_on: sensor.manifest.fire_on,
+      default_severity: sensor.manifest.default_severity,
+    };
+    if (sensor.manifest.category !== undefined) {
+      entry.category = sensor.manifest.category;
+    }
     if (sensor.manifest.matches !== undefined) {
       entry.matches = sensor.manifest.matches;
     }
@@ -1908,8 +1918,9 @@ export function compileStageGraph(): {
   }
 
   // Resolve per-stage sensor imports. Pull authoring: each stage's
-  // sensors[] list is looked up against the manifest registry; matches
-  // is copied verbatim into the resolved entry. Unknown ids throw —
+  // sensors[] list is looked up against the manifest registry; dispatch
+  // policy, severity, category, and matches are copied into the resolved
+  // entry. Unknown ids throw —
   // authoring errors fail loud at compile, not at fire time.
   const sensorsById = loadSensors();
   for (const stage of stages) {

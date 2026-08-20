@@ -14,7 +14,8 @@
 //   4. Decide outcome via the truth table below (no lock held).
 //   5. If FAILED: write detail file via `wx`-flag + rename (race-free).
 //   6. Acquire lock → emit terminal row → release.
-//   7. Exit 0. (Sensor failure ≠ CLI failure.)
+//   7. Print one compact JSON verdict line for deterministic callers.
+//   8. Exit 0. (Sensor failure ≠ CLI failure.)
 //
 // Truth-table branch ordering — locked, branch a precedes branch 0:
 //   a) signal === "SIGTERM" AND elapsed ≥ timeout - GRACE  → BUDGET_OVERRIDE
@@ -100,6 +101,15 @@ interface FireContext {
 	scriptArgs: string[]; // CLI args appended to the script invocation
 	scriptAbsPath: string; // sibling-resolved absolute path
 	timeoutMs: number;
+}
+
+interface FireVerdict {
+	fire_id: string;
+	sensor_id: string;
+	stage: string;
+	output_path: string;
+	result: FireOutcome["kind"];
+	detail_path: string | null;
 }
 
 // --- Argv helpers ---
@@ -549,7 +559,21 @@ function handleFire(args: string[]): void {
 		emitTerminal(ctx, finalOutcome, projectDir);
 	});
 
-	// --- 9. Process exit 0 ---
+	// --- 9. Machine-readable verdict for gate-boundary enforcement ---
+	const verdict: FireVerdict = {
+		fire_id: fireId,
+		sensor_id: id,
+		stage: stageSlug,
+		output_path: relativizePath(outputPath, projectDir),
+		result: finalOutcome.kind,
+		detail_path:
+			finalOutcome.kind === "failed"
+				? relativizePath(detailPath, projectDir)
+				: null,
+	};
+	process.stdout.write(`${JSON.stringify(verdict)}\n`);
+
+	// --- 10. Process exit 0 ---
 	process.exit(0);
 }
 

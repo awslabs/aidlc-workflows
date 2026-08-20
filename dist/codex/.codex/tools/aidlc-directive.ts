@@ -183,6 +183,7 @@ export interface RunStageDirective {
   // bundle. On dispatched topologies the conductor passes the already-loaded
   // rule text to every agent brief.
   rules_in_context: string[];
+  // Presentation projection only: detailed fire policy remains on stage-graph.
   sensors_applicable: string[];
   stage_file: string;
   // reviewer — the agent to invoke as a separate sub-agent for quality review
@@ -278,6 +279,7 @@ export interface DispatchSubagentDirective {
   consumes: string[];
   produces: string[];
   rules_in_context: string[];
+  // Presentation projection only: detailed fire policy remains on stage-graph.
   sensors_applicable: string[];
   stage_file: string;
   worker: string;

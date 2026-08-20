@@ -5009,6 +5009,7 @@ interface ReportFlags {
   skeletonStance?: string; // the classify round-trip's classified stance
   single?: boolean; // --single: commit a synthetic-id STAGE_STARTED/COMPLETED pair, never the main pointer
   stage?: string; // --stage <slug>: the acted stage (required under --single; preferred for main workflow reports)
+  overrideBlockingSensors?: boolean;
 }
 
 // Extract report's flags. --result is the verdict; --user-input carries the
@@ -5038,6 +5039,8 @@ function parseReportFlags(args: string[]): ReportFlags {
       i++;
     } else if (a === "--single") {
       flags.single = true;
+    } else if (a === "--override-blocking-sensors") {
+      flags.overrideBlockingSensors = true;
     }
   }
   return flags;
@@ -5918,6 +5921,9 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         return;
       }
       subArgs = ["gate-start", slug];
+      if (flags.overrideBlockingSensors) {
+        subArgs.push("--override-blocking-sensors");
+      }
     } else if (flags.result === "rejected") {
       if (
         stageCheckbox.state !== "in-progress" &&
@@ -6076,6 +6082,9 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       // Backfilled gate — tag the row Recovered=true so audit consumers can
       // tell the engine-opened gate from an organic gate-start.
       sequence.push(["gate-start", slug, "--recovered"]);
+      if (flags.overrideBlockingSensors) {
+        sequence[sequence.length - 1].push("--override-blocking-sensors");
+      }
     }
     // Reviewer precondition (§12a / RFC Track 1) is NOT enforced here. Like the
     // artifact, human-presence, and revision guards, it lives in

@@ -553,7 +553,7 @@ The orchestration engine owns every transition above. The conductor reports outc
 
 1. **Run completion verification** - check artifacts exist on disk, guardrails respected. This is a correctness check, not a state transition. This is also enforced deterministically: `approve` refuses a gated stage whose declared `produces` artifacts are missing (unless `AIDLC_SKIP_ARTIFACT_GUARD=1`), so a stage cannot be marked complete without its outputs (#366). Per-unit Construction stages are verified by the swarm referee instead.
 
-2. **Enter the gate**: `bun .claude/tools/aidlc-orchestrate.ts report --stage <slug> --result awaiting-approval`. The engine marks `[-]` → `[?]`, emits `STAGE_AWAITING_APPROVAL`, and makes `/aidlc --status` show "Awaiting your approval on \<stage\>".
+2. **Enter the gate**: `bun .claude/tools/aidlc-orchestrate.ts report --stage <slug> --result awaiting-approval`. Before the state transaction opens, the engine fires each gate-bound sensor once per existing declared deliverable. A failed blocking sensor refuses the transition with its detail paths; after review, `--override-blocking-sensors` opens the gate and records the override. Otherwise the engine marks `[-]` → `[?]`, emits `STAGE_AWAITING_APPROVAL`, and makes `/aidlc --status` show "Awaiting your approval on \<stage\>".
 
 3. **Present the approval gate** (AskUserQuestion).
 

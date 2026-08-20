@@ -66,8 +66,8 @@ Everything else a harness engineer configures hangs off these two:
   9 of 33 stages; an enterprise feature runs all of them).
 - **Rules** are standing decisions that travel into every workflow — your
   team's "always do it this way."
-- **Sensors** are deterministic checks bound to stages — an advisory second
-  opinion that fires on every file write.
+- **Sensors** are deterministic checks bound to stages — they run on matching
+  writes or at the approval gate, where a binding may be advisory or blocking.
 - **Knowledge** is the domain context agents load before they work.
 
 ---

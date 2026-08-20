@@ -71,6 +71,7 @@ id: required-sections                       # required
 kind: deterministic                          # required
 command: bun .claude/tools/aidlc-sensor-required-sections.ts   # required
 default_severity: advisory                   # required
+fire_on: gate                               # optional; write (default) | gate
 description: Checks that stage output ...    # required
 category: document-shape                     # optional
 matches: "**/{aidlc-docs,intents}/**"                  # optional capability filter
@@ -93,10 +94,11 @@ timeout_seconds: 5                           # optional
 | `id` | ✓ | kebab-case string | Equals filename stem minus `aidlc-` prefix; cross-referenced from rule files' `pairing:` field (see [Rule System](08-rule-system.md)). |
 | `kind` | ✓ | enum | Only `deterministic` is accepted today; `llm` reserved for the v0.11.0 LLM-dispatch chapter. See [`kind` enum](#kind-enum) below. |
 | `command` | ✓ | string | Canonical invocation prefix — each shipped sensor names its own per-sensor script (e.g. `bun .claude/tools/aidlc-sensor-required-sections.ts`). The dispatcher (`aidlc-sensor.ts`) appends `--stage <slug>` plus the file flag matching the sensor's input shape: `--output-path <path>` for document sensors, `--file-path <path>` for the code sensors (`linter`, `type-check`). |
-| `default_severity` | ✓ | enum | Only `advisory` is accepted today; `blocking` reserved for the future ralph-driver work. |
+| `default_severity` | ✓ | enum | `advisory` or `blocking`. Blocking is enforced for `fire_on: gate`; write-fired blocking declarations remain advisory in this release. |
 | `description` | ✓ | string | One-line human description. |
 | `category` | optional | string | Free-form descriptive label (the shipped manifests use `document-provenance`, `document-shape`, and `code-quality`; not a closed enum). |
-| `matches` | optional | glob string | Capability filter consumed by the PostToolUse hook at fire time. See [`matches` filter](#matches-filter) below. |
+| `fire_on` | optional | enum | `write` or `gate`; defaults to `write`. |
+| `matches` | optional | glob string | Capability filter consumed at dispatch. See [`matches` filter](#matches-filter) below. |
 | `input_schema` | optional | object | Advisory today; future LLM dispatch will use it as a templating contract. |
 | `output_schema` | optional | object | Advisory today; future LLM dispatch will use it as a parsing contract. |
 | `timeout_seconds` | optional | int | Per-fire wall-clock cap. |
@@ -156,17 +158,16 @@ filename stem minus the `aidlc-` prefix. The compile resolver:
 2. Indexes manifests by id for O(1) lookup at resolution time.
 3. For each stage, looks each declared import id up; throws on unknown
    (loud failure at compile, not silent at fire time).
-4. Copies the manifest's `matches` filter verbatim into the resolved
-   `sensors_applicable[]` entry.
+4. Copies `fire_on`, `default_severity`, `category`, and `matches` into the
+   resolved `sensors_applicable[]` entry.
 5. Emits the per-stage resolved array on the canonical
    `data/stage-graph.json` (FIELD_ORDER pinned: after `rules_in_context`).
 
-The runtime PostToolUse hook (`aidlc-run-sensors.ts`) reads
-`sensors_applicable` off the graph node — never re-opens the manifest.
-`matches` is
-compile-snapshotted: a manifest edit during the workflow does NOT
-change what fires for the in-flight workflow's writes (BGP-stability
-property — see [Plane Architecture](02-plane-architecture.md)).
+The runtime PostToolUse hook and `gate-start` read `sensors_applicable` off the
+graph node — neither re-opens the manifest. Dispatch fields are
+compile-snapshotted: a manifest edit during the workflow does NOT change what
+fires for the in-flight workflow (BGP-stability property — see
+[Plane Architecture](02-plane-architecture.md)).
 
 ### Per-stage sensor matrix (33 framework stages)
 
@@ -192,10 +193,10 @@ not, it omits it. There is no override layer to reason about.
 
 ## `matches` filter
 
-`matches` is an optional top-level capability descriptor on the
-manifest. It declares the glob shape of files the sensor can analyse —
-*"this sensor analyses files matching this glob"* — and is consumed by
-the PostToolUse hook at fire time, not by the resolver at compile time.
+`matches` is an optional top-level capability descriptor on the manifest. It
+declares the glob shape of files the sensor can analyse — *"this sensor analyses
+files matching this glob"* — and is consumed at dispatch, not by the resolver
+at compile time.
 
 | Manifest | `matches` |
 |---|---|
@@ -206,19 +207,16 @@ the PostToolUse hook at fire time, not by the resolver at compile time.
 | `aidlc-linter.md` | `**/*.{ts,js}` |
 | `aidlc-type-check.md` | `**/*.{ts,tsx}` |
 
-`matches` **is** the fire filter — it is not optional in practice. The hook
-compares the path being written against the glob and fires only on a match;
-an entry **without** a `matches` glob never fires at all (`aidlc-run-sensors.ts`:
-`if (!entry.matches) continue`). All six shipped manifests therefore declare
-one — the provenance and two document-shape sensors scope to the artifact tree,
-traceability scopes to its JSON artifact, and the two code-quality sensors to
-their language globs. The compile resolver copies
-`matches` verbatim into the per-stage `sensors_applicable[]` entry; the hook
-reads the snapshotted value off the graph node.
+For `fire_on: write`, `matches` is the fire filter: the hook compares the path
+being written against the glob and an entry without a glob never fires. For
+`fire_on: gate`, `gate-start` enumerates every existing declared deliverable and
+the dispatcher applies `matches` to each path; an omitted glob accepts every
+deliverable. All six shipped manifests declare a glob. The compile resolver
+copies it into `sensors_applicable[]`.
 
-Empty string (`matches: ""`) is rejected at parse time. Because an absent glob
-means the sensor never fires, a manifest must declare the glob shape it applies
-to — there is no "fires on everything" mode.
+Empty string (`matches: ""`) is rejected at parse time. Write-fired sensors
+should declare a glob; gate-fired sensors may omit it to analyze every declared
+deliverable.
 
 ### Cross-references between rules and sensors
 
@@ -232,13 +230,30 @@ before matching against the manifest `id`.
 
 ## `default_severity`
 
-`advisory` is the only valid value in v0.5.0. An advisory sensor
-failure produces an audit row + a detail file but does NOT block the
-stage's gate or the user's workflow.
+`advisory` failures produce an audit row and detail file but do not block the
+stage gate. `blocking` failures stop `gate-start` before the state transition
+when the binding also declares `fire_on: gate`.
 
-`blocking` is reserved for the future ralph driver. Until
-the driver lands, the field is structurally present but semantically
-single-valued.
+The operator can fix the findings and retry, or explicitly pass
+`--override-blocking-sensors` to the gate report. An override opens the gate and
+records `Blocking Sensor Override`, the sensor ids, and detail paths on the
+`STAGE_AWAITING_APPROVAL` row. In this release, a write-fired sensor may declare
+`blocking`, but PostToolUse dispatch remains advisory.
+
+---
+
+## `fire_on`
+
+`write` is the default and preserves incremental PostToolUse feedback. `gate`
+fires once per existing declared deliverable immediately before `gate-start`
+opens its audit/state transaction. Dispatch happens before the transaction
+because `aidlc-sensor.ts fire` takes the audit lock around both its
+`SENSOR_FIRED` and terminal rows.
+
+The dispatcher prints one compact JSON verdict after the terminal row:
+`fire_id`, `sensor_id`, `stage`, `output_path`, `result`, and `detail_path`.
+`gate-start` uses that line to enforce blocking failures without attempting to
+pair concurrently-written audit rows itself.
 
 ---
 
@@ -341,10 +356,11 @@ framework-distribution paths are rejected). Fields default to:
 | `id` | derived from user free-text (kebab-case it) | |
 | `kind` | `deterministic` | sole accepted value today |
 | `command` | `bun .claude/tools/aidlc-sensor-<id>.ts` | placeholder per-sensor script; user updates to the script that implements the check |
-| `default_severity` | `advisory` | sole accepted value today |
+| `default_severity` | `advisory` | non-blocking default |
+| `fire_on` | `write` | incremental write dispatch |
 | `description` | from user free-text | |
 | `category` | `""` | user fills if desired |
-| `matches` | a glob is required to fire | scaffold prompts for the glob shape the sensor applies to (an artifact-tree glob or a code glob like `**/*.ts`); an entry with no `matches` never fires |
+| `matches` | write-path glob | scaffold prompts for the glob shape the sensor applies to (an artifact-tree glob or a code glob like `**/*.ts`); a write-fired entry with no `matches` never fires |
 | `input_schema` | `{ output_path: string, stage_slug: string }` | matches the dispatcher-appended flags |
 | `output_schema` | `{ pass: boolean }` | minimum structure dispatcher relies on |
 | `timeout_seconds` | `30` | conservative default; tune for slower dispatchers |
@@ -357,7 +373,7 @@ is the one sanctioned stage-frontmatter edit: it grows the import list
 (immutable in shape, not in contents), never the `## Steps` / `## Sensors`
 / `## Learn` body.
 
-The five shipped manifests illustrate the variation these defaults
+The six shipped manifests illustrate the variation these defaults
 later evolve into: `aidlc-claim-sources.md`, `aidlc-required-sections.md`, and
 `aidlc-upstream-coverage.md` use `timeout_seconds: 5` with their
 artifact-tree `matches` glob (the value shown in the `matches` table above);
@@ -378,7 +394,7 @@ workspaces.
 Forward-compat does NOT apply to unknown values for known keys. As
 documented in [`kind` enum](#kind-enum) above, an unknown value for
 `kind` is rejected at parse time. The same principle applies to the
-other enum-shaped fields (`default_severity`).
+other enum-shaped fields (`default_severity`, `fire_on`).
 
 ---
 
@@ -390,9 +406,8 @@ active, so the field shape is stable when they land:
 - **`kind: llm` dispatch** — LLM-evaluated sensors (v0.11.0). The
   schema accepts `kind` today but rejects any value other than
   `deterministic` at parse time.
-- **`blocking` severity** — a sensor failure that halts the gate
-  rather than logging advisory telemetry (v0.10.0 ralph driver). Today
-  `advisory` is the sole accepted value.
+- **Write-time blocking** — `blocking` is accepted on write-fired manifests,
+  but only gate-fired failures are enforced in this release.
 
 Both are enforced at write time: shipping a manifest that uses them now
 is an author error that the parser rejects.
