@@ -167,9 +167,9 @@ Use this exact format:
 
 | ID | Severity | Location | Finding | Required action | Status |
 |---|---|---|---|---|---|
-| R-01 | Critical | aidlc/spaces/\<space\>/intents/\<intent-record\>/inception/domain-design/components.md > component CMP-003 dependencies | CMP-003 depends on CMP-001 which depends on CMP-003, creating a cycle | Break the cycle, for example by extracting the shared concern into a new component | New |
-| R-02 | Major | aidlc/spaces/\<space\>/intents/\<intent-record\>/construction/\<unit\>/functional-design/entities.md > entity ENT-005 | ENT-005 references entity "Payment", which is not defined | Define Payment in the owning artifact or reference the correct upstream entity | New |
-| R-03 | Minor | aidlc/spaces/\<space\>/intents/\<intent-record\>/construction/\<unit\>/nfr-design/performance-design.md > Caching layer cost | No cost estimate exists for the caching layer | Add a cost estimate or explicitly record it as TBD with an owner | New |
+| R-01 | Critical | aidlc/spaces/<space>/intents/<intent-record>/inception/domain-design/components.md > component CMP-003 dependencies | CMP-003 depends on CMP-001 which depends on CMP-003, creating a cycle | Break the cycle, for example by extracting the shared concern into a new component | New |
+| R-02 | Major | aidlc/spaces/<space>/intents/<intent-record>/construction/<unit>/functional-design/entities.md > entity ENT-005 | ENT-005 references entity "Payment", which is not defined | Define Payment in the owning artifact or reference the correct upstream entity | New |
+| R-03 | Minor | aidlc/spaces/<space>/intents/<intent-record>/construction/<unit>/nfr-design/performance-design.md > Caching layer cost | No cost estimate exists for the caching layer | Add a cost estimate or explicitly record it as TBD with an owner | New |
 
 ### Validation Tool Results
 

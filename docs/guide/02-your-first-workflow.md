@@ -117,7 +117,7 @@ After the agent completes its work, you see a completion summary and an approval
 
 | Artifact | Contents |
 |----------|----------|
-| intent-capture.md | Problem statement, target users, success criteria |
+| intent-statement.md | Problem statement, target users, success criteria |
 | intent-capture-questions.md | 5 questions, all answered |
 
 **Stage:** Intent Capture & Framing

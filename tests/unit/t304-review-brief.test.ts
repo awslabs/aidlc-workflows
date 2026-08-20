@@ -158,7 +158,7 @@ describe("t304 finding identity and disposition survive re-review", () => {
         "`Unresolved`, `Resolved`, `Rejected: <reason>`, or `Accepted risk`",
       );
       expect(body).toContain("next unused `R-NN` ID");
-      expect(body).toContain("aidlc/spaces/\\<space\\>/intents/");
+      expect(body).toContain("aidlc/spaces/<space>/intents/");
     });
   }
 
