@@ -5,8 +5,9 @@ All notable changes to this project will be documented in this file.
 
 Pipeline stages now have durable, ordered link receipts, resume from the first missing link, and cannot enter or complete approval from conductor-written artifacts alone. Reverse Engineering also requires the complete declared artifact set for every registered repository and emits registry-resolved per-repo directive paths. **Upgrade:** refresh your `dist/<harness>/` shell; an in-flight pipeline started before this version can recover once with `AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1`, then future attempts should mint normal link receipts.
 
-* `aidlc-log.ts link --stage <slug> --link <agent> [--repo <repo>]` emits `PIPELINE_LINK_COMPLETED` only for declared, ordered, non-duplicate links in the current stage attempt.
-* Pipeline run-stage directives carry `pipeline.links` and `pipeline.completed`; gate entry, approval, direct completion transitions, and workflow completion require every current-attempt link receipt.
+* `aidlc-log.ts link --stage <slug> --link <agent> [--repo <repo>] [--single]` emits `PIPELINE_LINK_COMPLETED` only for declared, ordered, non-duplicate links in the matching main or isolated stage attempt.
+* `aidlc-state.ts reuse-artifact ... [--repo <repo>]` records repo-scoped reuse evidence; pipeline directives and completion guards exempt reused repos while still requiring full receipts for every scanned repo.
+* Pipeline run-stage directives carry `pipeline.links` and `pipeline.completed`; gate entry, approval, direct completion transitions, and workflow completion require every current-attempt scanned-repo link receipt.
 * Multi-repo Reverse Engineering runs one receipt chain per registered repository, requires all nine codekb artifacts in every repo store, and resolves produced/consumed codekb paths across the full registry set.
 
 ## [2.6.18] - 2026-08-19

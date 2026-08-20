@@ -156,6 +156,7 @@ describe("t261 public audit CLI refuses authority-bearing receipts", () => {
     "REVIEW_REQUESTED",
     "REVIEW_COMPLETED",
     "PIPELINE_LINK_COMPLETED",
+    "ARTIFACT_REUSED",
     "SWARM_STARTED",
     "SWARM_UNIT_CONVERGED",
     "AUTONOMY_MODE_SET",

@@ -19,7 +19,10 @@ import {
   seedStateFile,
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
-import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  pipelineLinkEvidence,
+  readAllAuditShards,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath;
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
@@ -64,6 +67,7 @@ function runLog(
   proj: string,
   link: string,
   repo?: string,
+  single = false,
 ): { rc: number; out: string } {
   const args = [
     LOG,
@@ -76,6 +80,7 @@ function runLog(
     proj,
   ];
   if (repo) args.splice(args.length - 2, 0, "--repo", repo);
+  if (single) args.splice(args.length - 2, 0, "--single");
   const result = spawnSync(BUN, args, {
     encoding: "utf-8",
     env: childEnv(),
@@ -233,5 +238,73 @@ describe("t304 pipeline link receipts", () => {
     const audit = readAllAuditShards(proj);
     expect(audit).toContain("**Repo**: repo-a");
     expect(audit).toContain("**Repo**: repo-b");
+  });
+
+  test("a reused repo is exempt while the scanned repo still requires its full chain", () => {
+    const proj = pipelineProject();
+    const repos = ["repo-a", "repo-b"];
+    rewriteIntentRepos(proj, repos);
+    writeAllCodekbArtifacts(proj, "repo-a");
+    writeAllCodekbArtifacts(proj, "repo-b");
+    appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, proj);
+
+    const reused = state(proj, [
+      "reuse-artifact",
+      RE_STAGE,
+      "--decision",
+      "keep",
+      "--artifacts",
+      `aidlc/spaces/${DEFAULT_SPACE}/codekb/repo-a/`,
+      "--repo",
+      "repo-a",
+    ]);
+    expect(reused.rc).toBe(0);
+    expect(reused.out).toContain('"repo":"repo-a"');
+    expect(runLog(proj, LEAD, "repo-b").rc).toBe(0);
+    expect(runLog(proj, FINAL, "repo-b").rc).toBe(0);
+
+    const evidence = pipelineLinkEvidence(proj, {
+      slug: RE_STAGE,
+      lead_agent: LEAD,
+      support_agents: [FINAL],
+    });
+    expect(evidence.reusedRepos).toEqual(["repo-a"]);
+    expect(evidence.missing).toEqual([]);
+    expect(evidence.completed).toEqual([
+      `repo-a:${LEAD}`,
+      `repo-a:${FINAL}`,
+      `repo-b:${LEAD}`,
+      `repo-b:${FINAL}`,
+    ]);
+
+    const next = runOrchestrateNext(ORCH, proj, [], { env: childEnv() });
+    expect(next.directive?.pipeline).toEqual({
+      links: [LEAD, FINAL],
+      completed: evidence.completed,
+    });
+    expect(state(proj, ["gate-start", RE_STAGE]).rc).toBe(0);
+  });
+
+  test("--single receipts stay isolated and do not duplicate or satisfy the main chain", () => {
+    const proj = pipelineProject();
+    appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, proj);
+
+    expect(runLog(proj, LEAD, undefined, true).rc).toBe(0);
+    expect(runLog(proj, FINAL, undefined, true).rc).toBe(0);
+    const mainBefore = pipelineLinkEvidence(proj, {
+      slug: RE_STAGE,
+      lead_agent: LEAD,
+      support_agents: [FINAL],
+    });
+    expect(mainBefore.receipts).toEqual([]);
+    expect(mainBefore.missing).toEqual([
+      { link: LEAD, repo: null },
+      { link: FINAL, repo: null },
+    ]);
+
+    expect(runLog(proj, LEAD).rc).toBe(0);
+    expect(runLog(proj, FINAL).rc).toBe(0);
+    const audit = readAllAuditShards(proj);
+    expect(audit).toContain(`**Workflow**: single-stage:${RE_STAGE}`);
   });
 });

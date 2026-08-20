@@ -143,6 +143,17 @@ still need scanning. On a scan choice, also record its breadth; that choice
 sets the developer brief, and Step 3's scope block records what the scan
 actually covered.
 
+On an ordinary workflow run, immediately after each human reuse decision,
+record that repo's current-attempt exemption:
+
+```
+bun .claude/tools/aidlc-state.ts reuse-artifact reverse-engineering --decision keep --artifacts "<codekb-path output>" --repo <repo>
+```
+
+Use one row per reused registered repo. For an unrecorded single-repo workspace,
+omit `--repo`; for an isolated run, do not mint this main-workflow reuse row.
+The all-reuse routing below is unchanged.
+
 Only after every repository decision has been resolved:
 
 - If every repo is reused on an ordinary workflow run, report the stage as
@@ -154,6 +165,7 @@ Only after every repository decision has been resolved:
   single `report --single --stage "reverse-engineering" --result completed`.
 - If any repo needs scanning, do not report a skip. Proceed to Steps 2-3 for
   only the full/focused scan repos; leave each reused repo's store unchanged.
+  On an isolated run, add `--single` to every link receipt command below.
 
 ### Step 2: Developer Code Scan
 
@@ -186,7 +198,7 @@ After the developer return has been read and preserved for the next link, mint
 link 1 before dispatching the architect:
 
 ```
-bun .claude/tools/aidlc-log.ts link --stage reverse-engineering --link aidlc-developer-agent [--repo <repo>]
+bun .claude/tools/aidlc-log.ts link --stage reverse-engineering --link aidlc-developer-agent [--repo <repo>] [--single]
 ```
 
 ### Step 3: Architect Synthesis
@@ -250,7 +262,7 @@ After the architect return has been read and all 9 artifacts for that repo are
 present, mint the final-link receipt:
 
 ```
-bun .claude/tools/aidlc-log.ts link --stage reverse-engineering --link aidlc-architect-agent [--repo <repo>]
+bun .claude/tools/aidlc-log.ts link --stage reverse-engineering --link aidlc-architect-agent [--repo <repo>] [--single]
 ```
 
 Do not report completion until every selected repo's chain has both receipts.

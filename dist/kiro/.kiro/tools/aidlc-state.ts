@@ -3697,13 +3697,15 @@ function handlePracticesPromote(args: string[]): void {
 }
 
 // reuse-artifact <slug> --decision <keep|modify|redo> --artifacts <csv>
+//   [--repo <repo>]
 function handleReuseArtifact(args: string[]): void {
   if (args.length < 1)
-    error("Usage: aidlc-state.ts reuse-artifact <slug> --decision <keep|modify|redo> --artifacts <csv>");
+    error("Usage: aidlc-state.ts reuse-artifact <slug> --decision <keep|modify|redo> --artifacts <csv> [--repo <repo>]");
   const slug = args[0];
   const rest = args.slice(1);
   const decision = getFlagValue(rest, "--decision");
   const artifacts = getFlagValue(rest, "--artifacts");
+  const repo = getFlagValue(rest, "--repo");
   if (!decision) error("Missing --decision <keep|modify|redo>");
   if (!artifacts) error("Missing --artifacts <csv>");
 
@@ -3720,16 +3722,24 @@ function handleReuseArtifact(args: string[]): void {
   const pd = resolveProjectDir(projectDir);
 
   try {
-    emitAudit(pd, "ARTIFACT_REUSED", {
+    const fields: Record<string, string> = {
       Stage: slug,
       Decision: decision,
       Artifacts: artifacts,
-    });
+    };
+    if (repo) fields.Repo = repo;
+    emitAudit(pd, "ARTIFACT_REUSED", fields);
   } catch (e) {
     error(`Audit emission failed: ${errorMessage(e)}`);
   }
 
-  console.log(JSON.stringify({ slug, decision, artifacts, emitted: "ARTIFACT_REUSED" }));
+  console.log(JSON.stringify({
+    slug,
+    decision,
+    artifacts,
+    ...(repo ? { repo } : {}),
+    emitted: "ARTIFACT_REUSED",
+  }));
 }
 
 function handleLookup(args: string[]): void {

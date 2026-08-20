@@ -7387,6 +7387,7 @@ export interface PipelineLinkEvidence {
   links: string[];
   repos: string[];
   receipts: PipelineLinkReceipt[];
+  reusedRepos: string[];
   completed: string[];
   missing: Array<{ link: string; repo: string | null }>;
 }
@@ -7397,50 +7398,89 @@ export function pipelineLinks(
   return [stage.lead_agent, ...(stage.support_agents ?? [])];
 }
 
-// Current-attempt pipeline receipts are the PIPELINE_LINK_COMPLETED rows after
-// the latest main-workflow STAGE_STARTED for this slug. The all-event merge is
-// timestamp ordered with buffer position as the deterministic tie-break, so a
-// later stage start resets every earlier link even across audit shards.
-export function currentPipelineLinkReceipts(
+interface OrderedPipelineEvidenceEvent {
+  block: string;
+  position: number;
+  event: string;
+  timestamp: string;
+}
+
+function orderedPipelineEvidenceEvents(
   projectDir: string,
-  stageSlug: string,
-): PipelineLinkReceipt[] {
+): OrderedPipelineEvidenceEvent[] {
   const audit = readAllAuditShards(projectDir);
   if (audit.length === 0) return [];
-  const events = audit
+  return audit
     .replace(/\r\n/g, "\n")
     .split(/\n---\n/)
-    .map((block, position) => ({
-      block,
-      position,
-      event: auditBlockField(block, "Event"),
-      timestamp: auditBlockField(block, "Timestamp") ?? "",
-    }))
-    .filter((entry) => entry.event !== null)
+    .map((block, position): OrderedPipelineEvidenceEvent | null => {
+      const event = auditBlockField(block, "Event");
+      if (!event) return null;
+      return {
+        block,
+        position,
+        event,
+        timestamp: auditBlockField(block, "Timestamp") ?? "",
+      };
+    })
+    .filter((entry): entry is OrderedPipelineEvidenceEvent => entry !== null)
     .sort((a, b) =>
       a.timestamp !== b.timestamp
         ? (a.timestamp < b.timestamp ? -1 : 1)
         : a.position - b.position
     );
+}
 
+function pipelineAttemptFloor(
+  events: OrderedPipelineEvidenceEvent[],
+  stageSlug: string,
+  singleRun: boolean,
+): number {
+  const workflow = `single-stage:${stageSlug}`;
   let floor = -1;
   for (let i = 0; i < events.length; i++) {
     const entry = events[i];
+    const eventWorkflow = auditBlockField(entry.block, "Workflow");
     if (
       entry.event === "STAGE_STARTED" &&
       auditBlockField(entry.block, "Stage") === stageSlug &&
-      !auditBlockField(entry.block, "Workflow")?.startsWith("single-stage:")
+      (
+        singleRun
+          ? eventWorkflow === workflow
+          : !eventWorkflow?.startsWith("single-stage:")
+      )
     ) {
       floor = i;
     }
   }
+  return floor;
+}
 
+// Current-attempt pipeline receipts are scoped to either the main workflow or
+// one isolated `--single` stream. A later matching STAGE_STARTED resets that
+// scope; rows from the other scope never participate in order or duplicate
+// checks and can never satisfy its completion guard.
+export function currentPipelineLinkReceipts(
+  projectDir: string,
+  stageSlug: string,
+  options: { singleRun?: boolean } = {},
+): PipelineLinkReceipt[] {
+  const events = orderedPipelineEvidenceEvents(projectDir);
+  const singleRun = options.singleRun === true;
+  const workflow = `single-stage:${stageSlug}`;
+  const floor = pipelineAttemptFloor(events, stageSlug, singleRun);
   const receipts: PipelineLinkReceipt[] = [];
   for (let i = floor + 1; i < events.length; i++) {
     const entry = events[i];
+    const eventWorkflow = auditBlockField(entry.block, "Workflow");
     if (
       entry.event !== "PIPELINE_LINK_COMPLETED" ||
-      auditBlockField(entry.block, "Stage") !== stageSlug
+      auditBlockField(entry.block, "Stage") !== stageSlug ||
+      (
+        singleRun
+          ? eventWorkflow !== workflow
+          : eventWorkflow?.startsWith("single-stage:") === true
+      )
     ) {
       continue;
     }
@@ -7456,20 +7496,54 @@ export function currentPipelineLinkReceipts(
   return receipts;
 }
 
+function currentPipelineReusedRepos(
+  projectDir: string,
+  stageSlug: string,
+): string[] {
+  const events = orderedPipelineEvidenceEvents(projectDir);
+  const floor = pipelineAttemptFloor(events, stageSlug, false);
+  const reused = new Set<string>();
+  for (let i = floor + 1; i < events.length; i++) {
+    const entry = events[i];
+    if (
+      entry.event !== "ARTIFACT_REUSED" ||
+      auditBlockField(entry.block, "Stage") !== stageSlug ||
+      auditBlockField(entry.block, "Workflow")?.startsWith("single-stage:")
+    ) {
+      continue;
+    }
+    const repo = auditBlockField(entry.block, "Repo");
+    if (repo) reused.add(repo);
+  }
+  return [...reused];
+}
+
 // Registered multi-repo intents run one independent receipt chain per repo.
+// A current-attempt per-repo reuse row satisfies that repo without dispatch.
 // Single/unrecorded intents retain one chain and may omit Repo on every row.
 export function pipelineLinkEvidence(
   projectDir: string,
   stage: Pick<StageEntry, "slug" | "lead_agent" | "support_agents">,
+  options: { singleRun?: boolean } = {},
 ): PipelineLinkEvidence {
   const links = pipelineLinks(stage);
   const registeredRepos = intentRepos(projectDir);
   const repos = registeredRepos.length > 1 ? registeredRepos : [];
-  const receipts = currentPipelineLinkReceipts(projectDir, stage.slug);
+  const singleRun = options.singleRun === true;
+  const receipts = currentPipelineLinkReceipts(
+    projectDir,
+    stage.slug,
+    { singleRun },
+  );
+  const reusedRepos = singleRun
+    ? []
+    : currentPipelineReusedRepos(projectDir, stage.slug)
+      .filter((repo) => repos.includes(repo));
   const missing: Array<{ link: string; repo: string | null }> = [];
 
   if (repos.length > 0) {
     for (const repo of repos) {
+      if (reusedRepos.includes(repo)) continue;
       for (const link of links) {
         if (!receipts.some((receipt) =>
           receipt.repo === repo && receipt.link === link
@@ -7491,19 +7565,21 @@ export function pipelineLinkEvidence(
   // independent chains without adding another wire field.
   const completed = repos.length > 0
     ? repos.flatMap((repo) =>
-        links
-          .filter((link) =>
-            receipts.some((receipt) =>
-              receipt.repo === repo && receipt.link === link
+        reusedRepos.includes(repo)
+          ? links.map((link) => `${repo}:${link}`)
+          : links
+            .filter((link) =>
+              receipts.some((receipt) =>
+                receipt.repo === repo && receipt.link === link
+              )
             )
-          )
-          .map((link) => `${repo}:${link}`)
+            .map((link) => `${repo}:${link}`)
       )
     : links.filter((link) =>
         receipts.some((receipt) => receipt.link === link)
       );
 
-  return { links, repos, receipts, completed, missing };
+  return { links, repos, receipts, reusedRepos, completed, missing };
 }
 
 // Exact identity for the current main-workflow attempt of one stage. The token

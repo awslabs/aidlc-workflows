@@ -544,7 +544,7 @@ function handleAnswer(args: string[]): void {
 
 // --- Subcommand: link ---
 // Usage:
-//   aidlc-log link --stage <slug> --link <agent> [--repo <repo>]
+//   aidlc-log link --stage <slug> --link <agent> [--repo <repo>] [--single]
 //       → PIPELINE_LINK_COMPLETED
 //
 // The receipt is emitted only after a declared pipeline link returns. Ordering,
@@ -566,6 +566,7 @@ function handleLink(args: string[]): void {
   if (!intent) {
     error("Cannot resolve the active intent for pipeline link logging.");
   }
+  const singleRun = flags.single === "true";
 
   try {
     withAuditLock(pd, () => {
@@ -583,7 +584,7 @@ function handleLink(args: string[]): void {
         );
       }
 
-      const evidence = pipelineLinkEvidence(pd, node);
+      const evidence = pipelineLinkEvidence(pd, node, { singleRun });
       if (evidence.repos.length > 0) {
         if (!flags.repo) {
           throw new Error(
@@ -626,6 +627,7 @@ function handleLink(args: string[]): void {
         Position: `${index + 1}/${links.length}`,
       };
       if (repo) fields.Repo = repo;
+      if (singleRun) fields.Workflow = `single-stage:${flags.stage}`;
       emitAudit(pd, "PIPELINE_LINK_COMPLETED", fields, intent, space);
     }, intent, space);
   } catch (e) {
@@ -637,6 +639,7 @@ function handleLink(args: string[]): void {
     stage: flags.stage,
     link: flags.link,
     ...(flags.repo ? { repo: flags.repo } : {}),
+    ...(singleRun ? { single: true } : {}),
   }));
 }
 

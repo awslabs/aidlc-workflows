@@ -259,7 +259,7 @@ function writeCodekbSet(
 }
 
 function completePipelineReceipts(proj: string, repos: string[] = []): void {
-  const chains = repos.length > 1 ? repos : [undefined];
+  const chains = repos.length > 0 ? repos : [undefined];
   for (const repo of chains) {
     for (const link of ["aidlc-developer-agent", "aidlc-architect-agent"]) {
       const args = [
@@ -548,6 +548,30 @@ describe("t185: stage-completion artifact guard (#366)", () => {
       writeCodekbSet(proj, "repo-a");
       writeCodekbSet(proj, "repo-b");
       completePipelineReceipts(proj, repos);
+
+      const r = guarded(proj, ["gate-start", "reverse-engineering"]);
+      expect(r.rc).toBe(0);
+    });
+
+    test("PASSES mixed reuse and scan with receipts only for the scanned repo", () => {
+      const repos = ["repo-a", "repo-b"];
+      rewriteIntentRepos(proj, repos);
+      guarded(proj, ["set", "Current Stage=reverse-engineering"]);
+      guarded(proj, ["checkbox", "reverse-engineering=in-progress"]);
+      writeCodekbSet(proj, "repo-a");
+      writeCodekbSet(proj, "repo-b");
+      const reused = guarded(proj, [
+        "reuse-artifact",
+        "reverse-engineering",
+        "--decision",
+        "keep",
+        "--artifacts",
+        "aidlc/spaces/default/codekb/repo-a/",
+        "--repo",
+        "repo-a",
+      ]);
+      expect(reused.rc).toBe(0);
+      completePipelineReceipts(proj, ["repo-b"]);
 
       const r = guarded(proj, ["gate-start", "reverse-engineering"]);
       expect(r.rc).toBe(0);
