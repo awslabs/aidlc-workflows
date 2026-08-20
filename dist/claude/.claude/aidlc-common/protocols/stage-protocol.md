@@ -243,6 +243,10 @@ Structured bullet-point summary of what was produced:
   Ask me to change either one at any approval gate."
 
 ### Part 3: Review + Approval (mandatory)
+When the directive carried a reviewer, present the Review brief required by
+`stage-protocol-reviewer.md` §12a before the artifact path and approval
+question.
+
 ```markdown
 **Review:** `<record>/[path to artifacts]`
 ```

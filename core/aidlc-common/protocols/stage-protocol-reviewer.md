@@ -46,12 +46,21 @@ Everything else in this section is silent. Nothing is said about invoking, handi
 
    After the request succeeds, if the primary artifact already carries a
    `## Review` section (from a prior iteration, or predating a Part 0 revision),
-   DELETE that section, then delegate to the reviewer agent named in
-   `directive.reviewer`. The review history lives in the audit ledger, so
-   nothing is lost - and this makes step 3's missing-section check mean the same
-   thing on every path: a fresh review that is cut off before writing leaves no
-   old verdict to misread as covering new work. The request remains unmatched
-   while the reviewer runs, so the approval gate and completion stay blocked.
+   handle it in this order:
+   1. On a re-dispatch (adversarial iteration greater than 1, a Part 0 revision
+      re-review, or stale-receipt recovery), extract the complete prior
+      `### Findings` table before deleting the section. Retain it as
+      `Prior findings (carry IDs forward)` for the dispatch brief.
+   2. DELETE the existing `## Review` section. This makes step 3's
+      missing-section check mean the same thing on every path: a fresh review
+      that is cut off before writing leaves no old verdict to misread as
+      covering new work. Receipt history remains in the audit ledger; the
+      extracted table carries finding identity and disposition into the next
+      review.
+
+   Then delegate to the reviewer agent named in `directive.reviewer`. The
+   request remains unmatched while the reviewer runs, so the approval gate and
+   completion stay blocked.
    Any deletion or replacement of the Review section changes the request
    fingerprint; after the reviewer finishes writing, rerun the same request
    with `--retry-pending` to bind that pending request to the current reviewed
@@ -64,6 +73,7 @@ Everything else in this section is silent. Nothing is said about invoking, handi
    - The stage definition file path (`directive.stage_file`)
    - The Q&A file path (e.g., `<record>/<phase>/<stage>/<stage>-questions.md`)
    - All artifact file paths produced by the stage (the `produces` artifacts)
+   - On every re-dispatch named above, `Prior findings (carry IDs forward):` followed by the extracted findings table verbatim. The reviewer MUST preserve those IDs and update their statuses rather than replacing or renumbering the prior list.
    - The resolved paths in `directive.consumes` — all upstream artifacts the stage declares — paths only, per the context-budget rule. This applies to **every** reviewer-bearing stage, not only per-unit ones:
      - For a **per-unit** stage (`directive.unit` present) these include the shared inception contracts that pin cross-unit boundaries (`components.md`, `contract-summary.md`, `unit-of-work.md`).
      - For a **workflow-level** stage with no `directive.unit` (e.g. `contract-design`), these are the upstream artifacts that justify the produced output — the unit DAG (`unit-of-work.md`, `unit-of-work-dependency.md`), the component catalogue (`components.md`), and `requirements.md` — so the reviewer can verify the contracts against the boundaries, entities, and NFRs they formalise rather than reviewing the summary in isolation.
@@ -109,12 +119,6 @@ Everything else in this section is silent. Nothing is said about invoking, handi
    being re-dispatched, and does not consume another review iteration. Never
    use `--retry-pending` after a verdict; a receipt-invalidating write creates
    a new recovery request at the next ordinal, not a retry of the completed one.
-   retry in the audit, and does not consume another review iteration. This use
-   is a **re-dispatch preparation**; fingerprint rebinds do not consume the one
-   allowed re-dispatch. Never use `--retry-pending` after a verdict; a
-   receipt-invalidating write creates a new recovery request at the next
-   ordinal, not a retry of the completed one.
-
 2. **Reviewer executes.** An `adversarial` review runs under the **adversarial review contract**:
 
    - **Refute, don't confirm.** The reviewer's job is to refute the artifact, not to confirm it. It assumes defects exist and hunts for them; READY is the verdict it fails to reach after trying to break the artifact, not the default it starts from.
@@ -135,7 +139,27 @@ Everything else in this section is silent. Nothing is said about invoking, handi
 
 3. **Read verdict.** After the reviewer returns, delete `<record>/.aidlc-reviewer-dispatch.json` if one was written (the enforcement window closes with the review; a leftover record would keep refusing sibling access for later, unrelated work), then read the `## Review` section from the primary artifact and validate it. The review is complete only when the artifact carries exactly ONE current `## Review` section whose verdict is exactly one canonical token, READY or NOT-READY. Anything else is an INCOMPLETE attempt, not a verdict: no section at all (the reviewer has a hard turn cap and may have been stopped before writing it - step 1 deletes any prior section before every dispatch, so a missing section means an incomplete review on every path, first entry or revision alike), a section with no canonical verdict line (a reviewer cut off mid-write), or more than one `## Review` section or verdict line (conflicting - never guess which was meant).
 
-   **On an incomplete attempt:** no verdict exists to record, so the step-1 request is still unmatched. Count reviewer dispatches, not fingerprint rebind rows. If this request has been dispatched only once, re-dispatch it exactly once: rerun the same request command with `--retry-pending` to bind any partial/current bytes, then return to step 1 (whose delete rule clears any partial section). A prior fingerprint rebind does not consume this re-dispatch allowance, and neither use consumes a review iteration. If the second reviewer dispatch is ALSO incomplete, stop re-dispatching: record the terminal receipt with `--verdict NOT-READY` and the finding "review did not complete within its turn budget", then proceed as that NOT-READY verdict directs for the effective review class - on `advisory` it is terminal (present the gate with the finding quoted as decision support); on `adversarial` with iterations remaining, skip the lead re-invoke (the artifact itself was never reviewed, so there is nothing for the builder to act on) and go directly back to step 1 with a fresh iteration and a fresh request; on `adversarial` with iterations exhausted, proceed to the gate with the finding noted. Recording the receipt is what keeps the engine's gate and completion precondition satisfiable: the gate is never presented on (or deadlocked by) a silently missing verdict.
+   **On an incomplete attempt:** no verdict exists to record, so the step-1
+   request is still unmatched. Count reviewer dispatches, not fingerprint
+   rebind rows. If this request has been dispatched only once, re-dispatch it
+   exactly once: rerun the same request command with `--retry-pending` to bind
+   any partial/current bytes, then return to step 1 (whose delete rule clears
+   any partial section). A prior fingerprint rebind does not consume this
+   re-dispatch allowance, and neither use consumes a review iteration. If the
+   second reviewer dispatch is ALSO incomplete, stop re-dispatching: record the
+   terminal receipt with `--verdict NOT-READY` and the finding "review did not
+   complete within its turn budget", then proceed as that NOT-READY verdict
+   directs for the effective review class - on `advisory` it is terminal
+   (present the gate using the required Review brief below, with the recorded
+   finding rendered in the same table shape because no valid `## Review` table
+   exists); on `adversarial` with iterations remaining, skip the lead re-invoke
+   (the artifact itself was never reviewed, so there is nothing for the builder
+   to act on) and go directly back to step 1 with a fresh iteration and a fresh
+   request; on `adversarial` with iterations exhausted, proceed to the gate
+   using the required Review brief below with that recorded finding. Recording
+   the receipt is what keeps the engine's gate and completion precondition
+   satisfiable: the gate is never presented on (or deadlocked by) a silently
+   missing verdict.
 
    **On a complete review**, if the reviewer wrote or replaced the `## Review`
    section after the request, first rerun the same request with
@@ -146,21 +170,46 @@ Everything else in this section is silent. Nothing is said about invoking, handi
    the normal terminal-review freeze.
 
    The recorded receipt is TERMINAL whenever no further review pass follows it: do not write to any `produces[]` artifact between recording it and gate approval; for a per-unit `workspace_requires` stage, also do not write the unit's `source-manifest.json` or any claimed source path (a later write is deterministically invalidated at completion and the engine refuses the gate). A verdict may arrive with optional suggestions riding along; do NOT apply them - quote them verbatim in the completion summary for the human to weigh at the gate. A suggestion is gate input, not a defect (step 2: it is not grounds for NOT-READY, so it is not grounds for editing past the terminal receipt either). Riding suggestions also never change the gate itself: keep the §1 approval question's standard option order (Approve first, Request Changes second) - do not present Request Changes as the recommended or first option because a suggestion exists. On harnesses with PreToolUse enforcement the review-freeze hook refuses declared `produces[]`/`optional_produces[]` writes (`REVIEW_FREEZE_BLOCKED`); manifest and claimed-source writes are caught by the completion guard rather than the hook. A recorded gate rejection lifts the freeze for the revision path.
-   The recorded receipt is TERMINAL whenever no further review pass follows it: do not write to any `produces[]` artifact between recording it and gate approval (a later write invalidates the receipt and the engine refuses the gate). A verdict may arrive with optional suggestions riding along; do NOT apply them - quote them verbatim in the completion summary for the human to weigh at the gate. A suggestion is gate input, not a defect (step 2: it is not grounds for NOT-READY, so it is not grounds for editing past the terminal receipt either). Riding suggestions also never change the gate itself: keep the §1 approval question's standard option order (Approve first, Request Changes second) - do not present Request Changes as the recommended or first option because a suggestion exists. On harnesses with PreToolUse enforcement the review-freeze hook refuses such a write deterministically (`REVIEW_FREEZE_BLOCKED`). If the document genuinely needs changes while the stage is active or awaiting approval, obtain the human's feedback and record Request Changes; this works before the gate opens. A stage already in `[R]` restarts through `/aidlc --stage <slug>`, while an already completed stage requires restoring the reviewed source state or jumping back to redo it.
+   If a write still invalidates the receipt, the first request after that stale
+   terminal evidence is exactly one recovery review at the next ordinal, even
+   when an adversarial stage had unused normal iterations. The logger marks it
+   `Recovery: stale-receipt`; record either verdict as terminal, then stop
+   editing `produces[]` artifacts, `source-manifest.json`, and claimed source
+   paths. Any human gate after that recovery verdict uses the required Review
+   brief below with `Why now: Re-check after the artifact changed.` If that
+   recovery receipt is invalidated again, request no further review. On an
+   interactive stage, present the recovery-spent refusal to the human; only
+   Request Changes (`GATE_REJECTED`) resets the attempt.
 
-   If a write still invalidates the receipt, the first request after that stale terminal evidence is exactly one recovery review at the next ordinal, even when an adversarial stage had unused normal iterations. The logger marks it `Recovery: stale-receipt`; record either verdict as terminal, then stop editing `produces[]` artifacts, `source-manifest.json`, and claimed source paths. If that recovery receipt is invalidated again, request no further review. On an interactive stage, present the recovery-spent refusal to the human; only Request Changes (`GATE_REJECTED`) resets the attempt.
+   **Review brief (required at every reviewer-backed human gate).** Before the structured approval question, present one compact brief in this exact order:
+   1. `**Stage:** [stage display name]`
+   2. `**Review outcome:** [plain-language outcome]`. State the result in ordinary words, such as "No blocking concerns were found" or "Concerns remain for your decision"; never print the raw `READY` or `NOT-READY` token in user-facing prose.
+   3. Exactly one `**Why now:**` line selected by the path: `First review completed.`, `Revision re-checked.`, or `Re-check after the artifact changed.`
+   4. The complete findings table quoted verbatim from the current artifact's `## Review` section. It MUST expose, at minimum, each stable finding ID, workspace-relative artifact path plus section or element, required action in plain language, and status. For the terminal incomplete-attempt fallback, where no valid table exists, render the single recorded finding in the same columns instead of inventing a reviewer result.
+   5. `**Decision options:**`, followed in the §1 option order by:
+      - `**Approve** - continue with the open findings accepted.`
+      - `**Request Changes** - return to the listed artifacts so the required actions can be addressed.`
 
-   **On an `advisory` review, both verdicts are terminal here.** Do not re-invoke the lead or the reviewer during normal flow; proceed to section 13, then present the approval gate with the reviewer's findings quoted verbatim - severity, location, and recommendation - as decision support: "The reviewer flagged N findings for your review before approving." The human triages; a Request Changes at the gate is how an advisory finding becomes a revision. If a `produces[]` artifact, `source-manifest.json`, or claimed source path was written after the terminal receipt and voided it, the engine permits exactly one recovery request at the next ordinal; record its verdict, then stop editing those same surfaces.
+   This brief is the opening of the reviewer-backed gate presentation; the `**Review:**` artifact-path line and structured approval question follow it. Do not replace the brief with a finding count, a generic request to review, or an internal verdict token.
+
+   **On an `advisory` review, both verdicts are terminal here.** Do not
+   re-invoke the lead or the reviewer during normal flow; proceed to section
+   13, then present the approval gate using the required Review brief above.
+   The human triages; a Request Changes at the gate is how an advisory finding
+   becomes a revision. If a `produces[]` artifact, `source-manifest.json`, or
+   claimed source path was written after the terminal receipt and voided it,
+   the engine permits exactly one recovery request at the next ordinal; record
+   its verdict, stop editing those same surfaces, and present the gate using
+   the Review brief with `Why now: Re-check after the artifact changed.`
 
    **On an `adversarial` review**, branch on the verdict:
-   - **READY** → the receipt is terminal (above); proceed to §13 learnings ritual then the approval gate
+   - **READY** → the receipt is terminal (above); proceed to §13 learnings ritual, then present the approval gate using the required Review brief above
    - **NOT-READY** and `reviewIterations < reviewer_max_iterations` (default 2):
      - Increment review iteration counter
      - Re-invoke the stage's lead agent ALONE, dispatched per `directive.mode` (inline in your context, or as a subagent on the dispatched modes). On an ensemble stage (pipeline/mob) the room or chain is NOT re-convened - review findings are artifact defects and the lead owns the artifacts; the repair loop is lead-reviewer ping-pong (`stage-protocol-ensemble.md` §5). The builder addresses the findings and updates the artifact.
      - Return to step 1 (re-invoke reviewer)
    - **NOT-READY** and iterations exhausted:
-     - Proceed to approval gate with unresolved findings noted:
-       "I had this reviewed N times and some concerns are still open. Here they are, so you can decide whether they matter."
+     - Proceed to the approval gate using the required Review brief above, with the unresolved findings table and `Why now: Revision re-checked.` The separate SAY sentence for exhausted rounds remains the only narration before that gate.
 
 The reviewer also re-runs on the Part 0 revision path: when a human rejection
 leads to a revision that changes a `produces[]` artifact, re-run this step
@@ -169,7 +218,8 @@ before reporting `revised` - step 1's request-first delete rule removes the stal
 it for coverage of the revision. An `adversarial` review re-enters with
 the same lead-alone loop and iteration budget as at first entry; an
 `advisory` review re-runs as one fresh advisory pass (its findings ride the
-re-presented gate).
+re-presented gate using the required Review brief with `Why now: Revision
+re-checked.`).
 
 > **Gate and completion precondition (enforced by the engine).** Every gate
 > opening (`gate-start` and `revise`) and completion path (`approve`, `advance`,
