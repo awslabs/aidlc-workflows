@@ -7,7 +7,7 @@ A new deterministic drift gate links hook registration matchers to captured payl
 
 * Matcher-bearing registrations must select at least one tool name observed for that harness, while fixture vocabularies and registration discovery have anti-rot assertions.
 * Codex's live-verified `spawn_agent` registration is tracked as an explicit fixture gap that must be removed when a delegation capture lands.
-* Kiro CLI remains covered by its glob-and-alias matcher contract in `t148`; Claude remains excluded until a captured hook payload fixture exists.
+* Kiro CLI is excluded here: its agent-v1 matchers use glob and canonical-name/alias semantics whose live-captured evidence is tracked with issue #778, and `t148` pins its registration matcher list; Claude remains excluded until a captured hook payload fixture exists.
 
 ## [2.6.18] - 2026-08-19
 
