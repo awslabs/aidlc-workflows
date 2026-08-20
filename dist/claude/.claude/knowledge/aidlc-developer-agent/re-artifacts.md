@@ -14,7 +14,7 @@ All RE artifacts are created under `aidlc/spaces/<active-space>/codekb/<repo>/` 
 6. **technology-stack.md** — Languages, frameworks, libraries with versions
 7. **dependencies.md** — External dependencies, internal cross-package dependencies
 8. **code-quality-assessment.md** — Test coverage, linting, CI/CD, documentation quality, tech debt
-9. **reverse-engineering-timestamp.md** - Records when reverse engineering was performed (date, commit hash if available) plus the structured Scope of Analysis block (template below). The scope block is machine-read by `codekb-scope-diff` on the next rerun, so its accuracy decides whether a future intent is warned before overwriting this run's knowledge.
+9. **reverse-engineering-timestamp.md** - Records when reverse engineering was performed (date, commit hash if available) plus the structured Scope of Analysis block (template below). The scope block is machine-read by `codekb-scope-diff` on the next rerun, so its accuracy decides whether a future intent can reuse the verified coverage or must merge/replace it.
 
 ### Developer Code Scan Template
 
@@ -104,5 +104,12 @@ shallow:
 
 Rules:
 - `kind: full` only when the scan genuinely covered the whole repo deeply; `analyzed.paths` MUST include the repo root (`./`). Anything less is `kind: partial`.
+- `kind: partial` MUST NOT include `./` in `analyzed.paths`.
 - `analyzed.paths` entries are repo-relative, directories end with `/`, no glob characters.
 - Component names must match `component-inventory.md` headings verbatim - the rerun guard compares them literally.
+- A full rescan wholesale replaces all 9 artifacts and builds this block only from the new run.
+- For a focused scan of an existing store, read all 9 existing artifacts and the prior Scope of Analysis block first. Update or extend prose for the newly analyzed area and preserve prior prose outside it.
+- With a CURRENT store, merge `analyzed.paths` and `analyzed.components` as the union of the store and this run. A CURRENT `kind: full` store remains full and retains `./`; otherwise the merged block is partial and cannot claim `./`.
+- With a STALE or UNVERIFIED store, record only this run in `analyzed.paths` and `analyzed.components`, preserve the prior prose, and demote the store's prior analyzed paths into `shallow.paths`.
+- With an UNKNOWN_SCOPE legacy store, merge the prior prose best-effort but record only this run in the new scope block.
+- Mint `fingerprint` over the final `analyzed.paths` in the merged or replaced block.

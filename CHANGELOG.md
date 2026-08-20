@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.117] - 2026-08-27
+
+Focused Reverse Engineering rescans now merge their newly analyzed area into the shared CodeKB instead of replacing unrelated knowledge, with generation-checked all-artifact publication so concurrent intents cannot silently lose each other's scans or label preserved stale prose as current. Full rescans still replace all nine artifacts; stale or unverified prior coverage is preserved as prose and demoted to shallow when it cannot be reverified. **Upgrade:** re-copy your `dist/<harness>/` shell so the updated utility, stage, and artifact guidance are installed.
+
+* A focused rescan reads the existing nine artifacts before synthesis, extends sections for the new area, and preserves prior sections outside it.
+* Verified-current focused merges record the union of prior and new analyzed paths/components; stale or unverified merges record the new verified area and demote prior analyzed paths to `shallow.paths`.
+* `codekb-snapshot` binds a scan to the exact shared-store generation and source bytes; `codekb-publish` validates a complete nine-file candidate under a space+repo lock and refuses `CODEKB_STORE_CHANGED`, `CODEKB_SOURCE_CHANGED`, or `CODEKB_CANDIDATE_STALE` instead of overwriting. Crash recovery validates every transaction and store path component from the real project root and refuses redirected ancestors before any rename or recursive cleanup.
+* The scope comparison remains the deterministic backstop: `COVERS` confirms retained verified coverage, while `NARROWER` identifies paths/components no longer claimed as verified deep coverage even though focused-merge prose was preserved.
+
 ## [2.6.116] - 2026-08-27
 
 The question protocol now reuses answers already captured in the current record, closing a top field-feedback gap where teams saw the same question resurface after they had answered it, sometimes after stating that the answer was final. **Upgrade:** refresh your `dist/<harness>/` shell.

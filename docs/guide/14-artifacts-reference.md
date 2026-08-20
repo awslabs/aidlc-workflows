@@ -84,7 +84,10 @@ level up, in the space-level per-repo CodeKB —
 per intent. On each applicable brownfield intent, the stage checks the store's
 recorded scope and working-tree fingerprint first. A verified-current store
 whose coverage fits the intent may be reused by human choice; otherwise a full
-or focused scan overwrites those nine files
+rescan replaces those nine files, while a focused scan merges the newly
+analyzed area into them and preserves prior prose outside it. Verified-current
+coverage is accumulated as a union; stale or unverifiable prior deep coverage
+is retained as prose and demoted to shallow
 (`reverse-engineering-timestamp.md` records when the last scan ran and what
 it covered). Intents therefore read the newest scan of the repo, not the one
 taken when their own record dir was created. What the record dir does get is
@@ -180,7 +183,7 @@ The welcome message is rendered at session start via `companyAnnouncements` in `
 
 | Stage | Key Artifacts | Condition |
 |-------|--------------|-----------|
-| 2.1 Reverse Engineering | 9 files including `architecture.md`, `code-structure.md`, `technology-stack.md` (written to the space-level `aidlc/spaces/<active-space>/codekb/<repo>/` — one shared store per repo, reused when verified current or replaced by a human-selected rescan; only the stage's `memory.md` diary lands in the intent record) | Brownfield only |
+| 2.1 Reverse Engineering | 9 files including `architecture.md`, `code-structure.md`, `technology-stack.md` (written to the space-level `aidlc/spaces/<active-space>/codekb/<repo>/` — one shared store per repo, reused when verified current, replaced by a full rescan, or cumulatively extended by a focused scan; only the stage's `memory.md` diary lands in the intent record) | Brownfield only |
 | 2.2 Practices Discovery | `team-practices.md`, `discovered-rules.md`, `evidence.md`, `practices-discovery-timestamp.md`, plus quality/developer/devsecops contribution files (promoted to `aidlc/spaces/<active-space>/memory/team.md` and `project.md` after approval) | Conditional |
 | 2.3 Requirements Analysis | `requirements.md` | Always |
 | 2.4 User Stories | `stories.md`, `personas.md` | User-facing features |

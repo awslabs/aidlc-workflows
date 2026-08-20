@@ -922,7 +922,8 @@ bun .claude/tools/aidlc-utility.ts codekb-scope-diff --repo <repo> --mint --path
 ```
 
 The reverse-engineering rerun guard. The codekb store is space-level and
-shared across intents; a rerun replaces it, so the stage checks first:
+shared across intents; a full rescan replaces it, while a focused scan merges
+new knowledge into it cumulatively, so the stage checks first:
 
 - **Status mode** (default) reads the store's
   `reverse-engineering-timestamp.md` Scope of Analysis block and recomputes a
@@ -932,9 +933,12 @@ shared across intents; a rerun replaces it, so the stage checks first:
   not a git work tree), `UNKNOWN_SCOPE` (store predates scope tracking).
 - **Compare mode** (`--compare <incoming timestamp.md>`) answers whether the
   incoming run's scope covers the store's: `COVERS`, or `NARROWER` plus the
-  exact paths and components an overwrite discards. A `kind: full` scope must
-  include repository root (`./`), and only another full scope can replace a
-  full store without a `NARROWER` warning.
+  exact paths and components no longer claimed as deep coverage. `COVERS` is
+  the focused-merge backstop: it means the merged scope preserved the store's
+  verified coverage. A `kind: full` scope must include repository root (`./`),
+  and only another full scope can cover a full store without a `NARROWER`
+  warning. On a stale or unverified focused merge, prior prose is preserved
+  while unverifiable analyzed paths are demoted to `shallow.paths`.
 - **Mint mode** (`--mint --paths <a,b,...>`) prints the fingerprint the
   architect pastes into the scope block at synthesis time (`unknown` outside
   a git work tree or when a pathspec is invalid).

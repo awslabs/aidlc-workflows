@@ -42,7 +42,8 @@ Stage 2.2, and the User Stories mob at Stage 2.4.
 - Stage 2.1 uses a two-link pipeline: aidlc-developer-agent scans the code,
   then aidlc-architect-agent synthesizes the scan into 9 structured artifacts. It
   checks each brownfield repository's existing store before the human chooses
-  reuse, a full rescan, or a focused scan.
+  reuse, a replacing full rescan, or a focused scan that cumulatively merges
+  knowledge into the shared store.
 - Stage 2.2 runs the same topology on greenfield and brownfield work:
   pipeline-deploy lead draft, mutually blind quality/developer/devsecops
   spokes, human interview, then lead integration. On affirmation, content is promoted from
@@ -120,8 +121,10 @@ stages build upon.
 **Rerun guard:** Reverse Engineering checks each repository's recorded scope
 and working-tree fingerprint before scanning. The human may reuse a
 verified-current store whose coverage fits the intent; stale, unverified,
-legacy, or mismatched stores require a full or focused rescan. For multi-repo
-intents, all decisions are resolved before one stage-level lifecycle report.
+legacy, or mismatched stores require a full or focused rescan. Full rescans
+replace the store; focused rescans merge newly analyzed areas into it while
+preserving prior prose. For multi-repo intents, all decisions are resolved
+before one stage-level lifecycle report.
 
 ### Inputs
 

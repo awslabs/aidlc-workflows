@@ -90,8 +90,10 @@ multiple repos; omit it for a single/unrecorded repo.
 
 #### Rerun guard: check each existing store before scanning
 
-The codekb is a space-level store shared across intents; a rerun REPLACES it.
-For every repo in the resolved set, run the read-only check:
+The codekb is a space-level store shared across intents. A full rescan REPLACES
+all 9 artifacts; a focused scan MERGES into the existing store so knowledge
+accumulates across intents. For every repo in the resolved set, run the
+read-only check:
 
 ```
 bun .cursor/tools/aidlc-utility.ts codekb-scope-diff --repo <repo>
@@ -120,21 +122,21 @@ options:
   - label: "Full rescan"
     description: "Rebuild the store covering the whole repo (replaces all 9 artifacts)"
   - label: "Focused scan"
-    description: "Scan only this intent's area - the store will describe ONLY that area afterward"
+    description: "Scan this intent's area and extend the store; preserve prior prose outside it, demoting unverifiable deep coverage to shallow"
 ```
 
 Rescan question (STALE / UNVERIFIED / UNKNOWN_SCOPE, or CURRENT with coverage
 that does not fit) - include the verdict line in the prompt:
 
 ```question
-prompt: "A code knowledge base exists for <repo> but <verdict summary - e.g. its analyzed paths have changed since it was built / it does not cover this intent's area>. Rescanning replaces it. How should the scan run?"
+prompt: "A code knowledge base exists for <repo> but <verdict summary - e.g. its analyzed paths have changed since it was built / it does not cover this intent's area>. A full rescan replaces it; a focused scan merges into it. How should the scan run?"
 header: "Code KB"
 multiSelect: false
 options:
   - label: "Full rescan"
     description: "Rebuild the store covering the whole repo (replaces all 9 artifacts)"
   - label: "Focused scan"
-    description: "Scan only this intent's area - prior deep knowledge outside it is discarded (recoverable from git history)"
+    description: "Scan this intent's area and extend the store; preserve prior prose outside it, demoting unverifiable deep coverage to shallow"
 ```
 
 Record one decision per repo: reuse, full rescan, or focused scan. A reuse
@@ -218,7 +220,35 @@ Architect synthesizes scan results into 9 artifacts:
 6. **technology-stack.md** — Languages, frameworks, libraries with versions
 7. **dependencies.md** — External dependencies, internal cross-package dependencies
 8. **code-quality-assessment.md** — Test coverage, linting, CI/CD, documentation quality, tech debt
-9. **reverse-engineering-timestamp.md** - Records when reverse engineering was performed (date, commit hash if available) and MUST end with the structured `## Scope of Analysis` block from the re-artifacts.md template, filled from the developer's Scan Coverage - what the run ACTUALLY analyzed deeply, not what was aspired to. This is the freshness/staleness marker the Step 1 rerun guard reads. For the block's `fingerprint:` line, run the mint command with the analyzed paths (comma-separated) and paste its output verbatim:
+9. **reverse-engineering-timestamp.md** - Records when reverse engineering was performed (date, commit hash if available) and MUST end with the structured `## Scope of Analysis` block from the re-artifacts.md template. Fill it from the developer's Scan Coverage and, for a focused merge, the existing store according to the rules below - it records what is ACTUALLY verified deeply, not what was aspired to. This is the freshness/staleness marker the Step 1 rerun guard reads.
+
+Choose the write behavior recorded in Step 1:
+
+- **Focused scan with an existing store (any verdict except NO_STORE):** before
+  synthesis, read the existing 9 artifacts and the store's Scope of Analysis
+  block. Update or extend sections that cover the newly analyzed area and
+  preserve prior sections outside it; do not rebuild the artifacts solely from
+  this run's focused results.
+  - **CURRENT:** set `analyzed.paths` and `analyzed.components` to the union of
+    the store and this run. A CURRENT `kind: full` store stays `kind: full` and
+    keeps `./` in `analyzed.paths`; otherwise use `kind: partial` and never put
+    `./` in a partial block.
+  - **STALE / UNVERIFIED:** set `analyzed.paths` and `analyzed.components` from
+    this run only. Preserve the prior prose, but demote the store's prior
+    `analyzed.paths` into `shallow.paths` alongside the existing and newly
+    reported shallow paths because that deep coverage could not be re-verified.
+  - **UNKNOWN_SCOPE:** the legacy store has no usable prior scope block to
+    union. Merge its prose best-effort, but record only this run in the new
+    block.
+- **Full rescan:** wholesale replace all 9 artifacts and build the scope block
+  only from this run, unchanged from the existing full-rescan behavior.
+- **NO_STORE:** create all 9 artifacts from this run. A focused first scan is
+  `kind: partial`; `kind: full` is valid only when `analyzed.paths` includes
+  `./`.
+
+For the block's `fingerprint:` line, run the mint command with the final
+`analyzed.paths` from the merged or replaced block (comma-separated) and paste
+its output verbatim:
 
    ```
    bun .cursor/tools/aidlc-utility.ts codekb-scope-diff --repo <repo> --mint --paths <analyzed paths>
@@ -234,9 +264,9 @@ bun .cursor/tools/aidlc-utility.ts codekb-path --repo <repo>
 (omit `--repo` for a single/unrecorded repo — the engine resolves the repo name).
 It prints ONE line: the exact directory, e.g. `aidlc/spaces/<active-space>/codekb/<repo>/`.
 
-**Overwrite backstop - run BEFORE writing (the compare needs the store still
-un-replaced).** When the Step 1 guard found an existing store (any verdict but
-NO_STORE), write the new timestamp content to
+**Coverage backstop - run BEFORE writing (the compare needs the prior store
+unchanged).** When the Step 1 guard found an existing store (any verdict but
+NO_STORE), write the new or merged timestamp content to
 `<record>/inception/reverse-engineering/scope-draft-<repo>.md` (one draft per
 repo; NOT the timestamp filename - record-dir placement checks key on the
 artifact stems) and run
@@ -246,11 +276,12 @@ bun .cursor/tools/aidlc-utility.ts codekb-scope-diff --repo <repo> --compare <re
 ```
 
 Keep the output keyed by `<repo>` for Step 5's completion summary. This is the
-deterministic check that the scan delivered the breadth chosen at Step 1 - a
-focused run after a "Full rescan" choice surfaces here as NARROWER, before
-approval. Delete that repo's `scope-draft-<repo>.md` immediately after
-preserving the compare output; scope drafts are temporary and MUST NOT remain
-in the intent record.
+deterministic backstop for the requested breadth and the focused-merge rules:
+COVERS means the incoming block preserved the prior verified coverage;
+NARROWER identifies coverage that was demoted or lost. A focused run after a
+"Full rescan" choice also surfaces here as NARROWER, before approval. Delete
+that repo's `scope-draft-<repo>.md` immediately after preserving the compare
+output; scope drafts are temporary and MUST NOT remain in the intent record.
 
 Write all 9 artifacts into the directory `codekb-path` printed - verbatim,
 creating it if absent. This is the durable per-repo code knowledge base, a
@@ -284,18 +315,20 @@ Use stage-protocol.md completion template:
   existing stores were left unchanged
 - **For every repo whose Step 3 compare returned NARROWER**, the summary MUST
   carry a repo-labeled warning before the question, quoting that repo's tool
-  discard list verbatim:
+  coverage list verbatim:
 
   ```
-  WARNING for <repo>: this scan covered less than the store it replaced. Deep
-  knowledge of the following was discarded (recoverable from git history):
-  <discarded paths and components from the compare output>
+  WARNING for <repo>: this scan's verified scope is narrower than the previous
+  store. On a focused merge, prior prose is preserved, but deep coverage for
+  the following paths and components was demoted (affected paths remain
+  recorded as shallow):
+  <paths and components from the compare output>
   Choose Request Changes to widen the scan instead.
   ```
 
   (COVERS, or no prior store, needs no warning line.)
 - Review path: `aidlc/spaces/<active-space>/codekb/<repo>/` for each repo in the set
-- Structured approval question with options: Approve (continue to Requirements Analysis) / Request Changes. If any repo returned NARROWER, the Approve option's description must say which stores were replaced by narrower scans (e.g. "Accept the narrower stores for <repos>; continue to Requirements Analysis").
+- Structured approval question with options: Approve (continue to Requirements Analysis) / Request Changes. If any repo returned NARROWER, the Approve option's description must say which stores now have narrower verified coverage (e.g. "Accept the narrower verified coverage for <repos>; continue to Requirements Analysis").
 
 ## Sensors
 
