@@ -123,6 +123,8 @@ import {
   setStageSuffix,
   scopeGridPath,
   scopesDir,
+  subagentInflightMarkerPath,
+  SUBAGENT_INFLIGHT_TTL_MS,
   harnessDataPath,
   pluginsEnabled,
   selectionAwareDefaultScope,
@@ -3071,6 +3073,30 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
     }
   } catch {
     // Gate-pending probe failure is non-fatal for the doctor report.
+  }
+
+  // Orphaned background-subagent marker probe. A fresh marker is expected
+  // while an Agent/Task dispatched with run_in_background is still running, so
+  // it is an advisory pass. A stale marker means the dispatch never reached a
+  // clearing SubagentStop event; report it as a fault with manual remediation.
+  // Read-only: doctor never deletes it (the Stop hook is the stale-marker
+  // janitor).
+  try {
+    const subagentMarker = subagentInflightMarkerPath(projectDir);
+    if (existsSync(subagentMarker)) {
+      const ageMs = Date.now() - statSync(subagentMarker).mtimeMs;
+      const ageHours = Math.floor(ageMs / (60 * 60 * 1000));
+      const ageLabel = ageHours >= 1 ? `${ageHours}h old` : "under 1h old";
+      const stale = ageMs > SUBAGENT_INFLIGHT_TTL_MS;
+      const staleLabel = stale ? ", stale" : ", fresh";
+      results.push({
+        pass: !stale,
+        label: `Background-subagent marker present (aidlc/.aidlc-subagent-inflight, ${ageLabel}${staleLabel})`,
+        fix: "if no background subagent is actually running, delete it ('rm aidlc/.aidlc-subagent-inflight'). A stale marker no longer disables the Stop hook, but it should not linger.",
+      });
+    }
+  } catch {
+    // Background-subagent marker probe failure is non-fatal for doctor.
   }
 
   // ===========================================================================

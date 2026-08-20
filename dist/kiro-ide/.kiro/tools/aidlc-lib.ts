@@ -9501,6 +9501,22 @@ export function composeMarkerPath(projectDir: string): string {
 // open gate while still catching a stranded marker.
 export const COMPOSE_MARKER_TTL_MS = 24 * 60 * 60 * 1000;
 
+// `<projectDir>/aidlc/.aidlc-subagent-inflight`: the workspace-level marker
+// written before a background subagent dispatch and deleted when any subagent
+// completes. The Stop hook honours a fresh marker as a turn-stop signal while
+// the conductor waits for the background result; doctor reports an orphaned
+// one. Hoisted here so every writer, reader, and test shares one spelling.
+export function subagentInflightMarkerPath(projectDir: string): string {
+  return join(projectDir, "aidlc", ".aidlc-subagent-inflight");
+}
+
+// Freshness window for the background-subagent marker. The Stop hook honours
+// the carve-out only while the marker's mtime is younger than this; an older
+// marker is an orphan (a dispatch that never reached SubagentStop) and is
+// ignored plus best-effort cleaned up. 2h covers long-running agents while
+// bounding how long a crashed dispatch can relax forwarding-loop enforcement.
+export const SUBAGENT_INFLIGHT_TTL_MS = 2 * 60 * 60 * 1000;
+
 // `<baseDir>/.aidlc-sensors` — the sensor detail-output / tsbuildinfo directory.
 // `baseDir` is the project dir for current dispatcher and type-check callers;
 // callers append a stage slug as needed. Before 2.6.94, type-check passed a

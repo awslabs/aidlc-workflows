@@ -11,12 +11,13 @@
 // workspace steering with live file references.
 
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import {
   agentsDir,
   getField,
   stateFilePath,
+  subagentInflightMarkerPath,
 } from "../tools/aidlc-lib.ts";
 import {
   type GraphStage,
@@ -278,6 +279,23 @@ export async function run(input: string): Promise<number> {
   const projectDir = isAbsolute(rawProjectDir)
     ? rawProjectDir
     : resolve(process.cwd(), rawProjectDir);
+  try {
+    const toolName = (parsed.tool_name ?? "").toLowerCase();
+    if (
+      DISPATCH_TOOLS.has(toolName) &&
+      parsed.tool_input?.run_in_background === true &&
+      existsSync(stateFilePath(projectDir))
+    ) {
+      writeFileSync(
+        subagentInflightMarkerPath(projectDir),
+        "in-flight\n",
+        "utf-8",
+      );
+    }
+  } catch {
+    // The marker is advisory Stop-hook evidence. Its write must never alter
+    // rule delivery, dispatch output, or the hook's established exit codes.
+  }
   const result = dispatchHookOutput(parsed, projectDir);
   if (result.error) {
     process.stderr.write(`${result.error}\n`);

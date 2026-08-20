@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.97] - 2026-08-26
+
+The Stop hook now recognizes background Agent/Task work per session, so a conductor can end its turn to await a still-running worker without weakening another session's forwarding loop. **Upgrade:** refresh your `dist/<harness>/` shell so dispatch, completion, Stop, and doctor hooks share the new in-flight ledger.
+
+* Accepted background dispatches with `run_in_background: true` add a session-scoped in-flight entry only after rule delivery passes validation; rejected and oversized dispatches leave no entry.
+* Subagent completion removes one entry for its own session, preserving overlapping workers in the same session and isolating concurrent sessions.
+* A fresh matching entry lets an interactive Stop end cleanly. Autonomous Construction remains enforced, while entries older than two hours are ignored and cleaned up before pending-step enforcement resumes.
+* `/aidlc --doctor` reports fresh background-subagent entries as advisory and stale entries as failures with `rm aidlc/.aidlc-subagent-inflight` remediation.
+
 ## [2.6.96] - 2026-08-26
 
 Type-check sensor incremental state now stays in the project record and uses a distinct cache per tsconfig, preventing package-local `aidlc/` trees in monorepos. **Upgrade:** refresh your `dist/<harness>/` shell and drop any user-side workaround ignore rules; legacy package-local cache directories may be removed individually after confirming they contain only sensor cache data.
@@ -477,7 +486,6 @@ Bounded Build & Test → Code Generation failure loop-back. When Build and Test 
 * Single-stage runs (`/aidlc --stage build-and-test --single`) stop at classification because they have no main-workflow position to move; impact-estimated options appear in the isolated-run summary.
 * The stage-ritual exception is present in all seven shipped conductor SKILLs, including Cursor and GitHub Copilot, and generated distributions remain byte-aligned with their authored sources.
 * Deterministic integration coverage (`t304-loopback-review-receipt-replay`) proves the replayed Code Generation gate refuses stale per-Unit reviews after `STAGE_JUMPED` and succeeds only after fresh receipts are recorded.
-
 ## [2.6.18] - 2026-08-19
 
 Classic and Express are new scope options, and the implicit default scope is now Classic — a **declared behavior change**: invocations that name no scope and match no keyword now run the v1-style lifecycle without Ideation instead of the full-lifecycle Feature scope. Exactly two things control the implicit default: the `AWS_AIDLC_DEFAULT_SCOPE` env var (which overrides) and the framework's hard-coded `classic` fallback. Express has a deterministic requirements-to-conditional-deploy path, and conditional protocol modules reduce fixed context without dropping reviewer recovery behavior. **Upgrade:** refresh your `dist/<harness>/` shell; in-flight workflows keep their persisted scope and need no migration; set `AWS_AIDLC_DEFAULT_SCOPE=feature` (Claude: the `.claude/settings.json` `env` block, which now ships `classic`) to keep the previous full-lifecycle default.
