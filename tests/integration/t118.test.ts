@@ -92,6 +92,7 @@ import {
   runOrchestrateNext,
   seedAidlcMemory,
   seededAuditDir,
+  seededRecordDir,
   seededStateFile,
   seedStateFile,
   resetAidlcEnv,
@@ -313,6 +314,21 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     const r = run(ORCHESTRATE, ["next", "--resume", "--project-dir", p]);
     expect(directive(r).kind).toBe("ask");
     expect(r.out).toContain("existing workflow was found");
+    const marker = JSON.parse(
+      readFileSync(
+        join(seededRecordDir(p), ".aidlc-active-directive.json"),
+        "utf-8",
+      ),
+    ) as {
+      version?: number;
+      owner_session?: string;
+      kind?: string;
+      resume?: { status?: string };
+    };
+    expect(marker.version).toBe(2);
+    expect(marker.owner_session?.startsWith("sessionless:")).toBe(true);
+    expect(marker.kind).toBe("ask");
+    expect(marker.resume?.status).toBe("waiting");
   });
 
   test("SP4b: resume answer -> read-only print that continues through next", () => {

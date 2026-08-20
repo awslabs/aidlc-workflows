@@ -32,19 +32,20 @@
 //      itself the product of a prior Stop-hook block. We read it as a signal
 //      that we are already inside a blocked sequence.
 //   2. A NO-PROGRESS counter — consecutive blocks with no intervening workflow
-//      advance (no `report` ran, so the position signature is unchanged). It is
-//      persisted across the rapid-fire blocks in a transient file under
-//      aidlc-docs/.aidlc-stop-hook/. Under a no-progress ceiling exposed as
-//      CLAUDE_CODE_STOP_HOOK_BLOCK_CAP, once the count reaches the cap we LET GO
-//      (allow the stop). The default ceiling is run-mode aware: an unattended
-//      autonomous Construction run keeps the long ceiling (8, the loop must run
-//      to completion with no human to release it), while an INTERACTIVE run uses
-//      a low ceiling (2, issue #365 itself recommends BLOCK_CAP=2 as the
-//      workaround) so a human who just wants to pause/chat is released after one
-//      nudge, not eight. When the workflow advances, the signature changes and
-//      the counter resets to 0, so a healthy loop is never throttled.
+//      advance (the state digest and pending-directive fingerprint are both
+//      unchanged). It is persisted across the rapid-fire blocks in a transient
+//      file under aidlc-docs/.aidlc-stop-hook/. Under a no-progress ceiling
+//      exposed as CLAUDE_CODE_STOP_HOOK_BLOCK_CAP, once the count reaches the cap
+//      we LET GO (allow the stop). The default ceiling is run-mode aware: an
+//      unattended autonomous Construction run keeps the long ceiling (8, the
+//      loop must run to completion with no human to release it), while an
+//      INTERACTIVE run uses a low ceiling (2, issue #365 itself recommends
+//      BLOCK_CAP=2 as the workaround) so a human who just wants to pause/chat is
+//      released after one nudge, not eight. When workflow state or the pending
+//      directive advances, the signature changes and the counter resets to 0,
+//      so a healthy loop is never throttled.
 //
-// Five human-wait carve-outs keep the hook from punishing a turn that ended
+// Six human-wait carve-outs keep the hook from punishing a turn that ended
 // *because* it is waiting on the human (or is simply conversational):
 //   1. The Esc interrupt is FREE: Stop hooks do not fire on user interrupt, so
 //      an Esc can never be trapped — no code needed for that case.
@@ -98,6 +99,12 @@
 //        marker. A conductor that jumps the pointer and then quits is released
 //        here and blocked on Claude. Narrow but real; see the coverage-gap note
 //        on markEngineTouch in aidlc-lib.ts.
+//   6. A RESUME CHOICE has a state-bound active-directive marker with kind
+//      `ask` and resume status `waiting`. On the shared non-Copilot path we must
+//      read this latch BEFORE probing `next`, because the probe publishes its
+//      own sessionless directive and can overwrite the `ask` kind. We ALLOW the
+//      stop while the human chooses how to resume. Autonomous Construction is
+//      guarded and falls through to the cap-bounded block.
 //
 // No-op outside AIDLC. The frontmatter Stop matcher scopes this to the `aidlc`
 // skill, but we defend here too: with no active workflow (no aidlc-state.md
@@ -105,12 +112,12 @@
 // blocked. Any unexpected error also falls through to allow the stop — failing
 // open is the only safe failure mode for a hook that can otherwise trap a turn.
 
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   ActiveDirectiveLockContendedError,
   activeIntentUuid,
-  auditFilePath,
   clearSessionIntentHandoff,
   composeMarkerPath,
   consumeCopilotConversation,
@@ -202,12 +209,13 @@ function blockStop(reason: string): number {
 // --- Recursion guard: a durable no-progress counter ---------------------------
 //
 // We persist a tiny JSON record keyed on the workflow's PROGRESS SIGNATURE: the
-// Current Stage slug plus the audit-tail length (line count of audit.md). A
-// `report` that advances the workflow pivots the stage and/or appends audit
-// rows, so the signature changes — that is how we detect "progress was made
-// since the last block". When the signature is unchanged across two blocks, no
-// report ran in between (no progress) and we increment the counter; when it
-// changes, the loop is healthy and we reset to 0.
+// Current Stage slug, the complete workflow-state digest, and the pending
+// directive position (kind, stage, Unit, and load-steering part). A `report` or
+// directive transition changes one of those components — that is how we detect
+// "progress was made since the last block". Audit-only appends do not manufacture
+// progress. When the signature is unchanged across two blocks, workflow state
+// and the pending directive did not advance, so we increment the counter; when
+// it changes, the loop is healthy and we reset to 0.
 //
 // The file lives under the gitignored aidlc-docs/.aidlc-stop-hook/ alongside
 // the other transient framework state. It is keyed off the project dir, so it
@@ -232,22 +240,19 @@ function currentStageSlug(stateContent: string): string {
   return (stageMatch?.[1] ?? "").trim();
 }
 
-// The current workflow position signature. Cheap, deterministic, and changes
-// exactly when a report advances the workflow. We read the state file's
-// Current Stage line and the audit length without importing the heavier state
-// parser — a substring + line-count is enough and cannot throw on odd content.
-function progressSignature(projectDir: string, stateContent: string): string {
+// The current workflow position signature. It changes when workflow state or
+// the pending directive advances, while ignoring unrelated audit-only traffic.
+function progressSignature(stateContent: string, directive: EngineDirective): string {
   const stage = currentStageSlug(stateContent);
-  let auditLen = 0;
-  try {
-    const auditPath = auditFilePath(projectDir);
-    if (existsSync(auditPath)) {
-      auditLen = readFileSync(auditPath, "utf-8").split("\n").length;
-    }
-  } catch {
-    // Unreadable audit — treat as length 0; the stage component still varies.
-  }
-  return `${stage}::${auditLen}`;
+  const stateSha256 = createHash("sha256").update(stateContent, "utf-8").digest("hex");
+  const directiveFingerprint = [
+    directive.kind,
+    directive.stage ?? "",
+    directive.unit ?? "",
+    directive.part ?? "",
+    directive.parts ?? "",
+  ].join("|");
+  return `${stage}::${stateSha256}::${directiveFingerprint}`;
 }
 
 function readGuard(projectDir: string): GuardRecord | null {
@@ -289,12 +294,14 @@ function writeGuard(projectDir: string, record: GuardRecord): void {
 // RELEASE (let go — the ceiling is hit, so a stuck loop cannot trap the turn).
 //
 // PROGRESS is authoritative. The workflow position signature (Current Stage +
-// audit-tail length) changes exactly when a `report` advances the workflow, so:
+// state digest + pending-directive fingerprint) changes when workflow state or
+// the pending directive advances, so:
 //   - signature CHANGED since the prior block  → progress was made; RESET the
 //     streak to 1. A healthy loop that keeps advancing is never throttled, even
 //     if the conductor forgets to consult the engine on every single turn.
-//   - signature UNCHANGED from the prior block → no progress (no report ran);
-//     INCREMENT the streak. This is the genuinely-stuck case the cap bounds.
+//   - signature UNCHANGED from the prior block → no workflow or directive
+//     progress; INCREMENT the streak. Audit-only appends leave it unchanged.
+//     This is the genuinely-stuck case the cap bounds.
 // stop_hook_active is a secondary signal used ONLY to seed the streak when
 // there is no prior record yet but Claude Code already reports this stop as the
 // product of a prior block (so a sequence we are joining mid-flight starts at 2,
@@ -302,9 +309,14 @@ function writeGuard(projectDir: string, record: GuardRecord): void {
 // wins, so the counter can only climb on real no-progress and can therefore
 // only ever make us release SOONER under a true hang, never trap a live loop.
 // Once the streak reaches the cap we RELEASE: a stuck loop must always let go.
-function decideBlock(projectDir: string, stateContent: string, stopHookActive: boolean): boolean {
+function decideBlock(
+  projectDir: string,
+  stateContent: string,
+  directive: EngineDirective,
+  stopHookActive: boolean,
+): boolean {
   const cap = blockCap(stateContent);
-  const signature = progressSignature(projectDir, stateContent);
+  const signature = progressSignature(stateContent, directive);
   const prior = readGuard(projectDir);
 
   const sameSignature = prior !== null && prior.signature === signature;
@@ -1130,6 +1142,21 @@ if (copilotEvidence?.status === "contended") {
   return allowStop();
 }
 if (copilotEvidence?.status === "foreign" || copilotEvidence?.status === "resume") return allowStop();
+if (!copilotSession) {
+  const resumeMarker = readActiveDirectiveMarker(projectDir, stateContent);
+  if (
+    resumeMarker?.kind === "ask" &&
+    resumeMarker.resume?.status === "waiting" &&
+    getField(stateContent, "Construction Autonomy Mode")?.trim() !== "autonomous"
+  ) {
+    recordHookDrop(
+      projectDir,
+      HOOK_NAME,
+      "active resume choice is waiting on the human; allowing the stop before the shared next probe",
+    );
+    return allowStop();
+  }
+}
 const retainedDirective = copilotEvidence?.status === "directive" ? copilotEvidence.directive : undefined;
 const directive: EngineDirective | null = copilotEvidence
   ? retainedDirective
@@ -1297,7 +1324,7 @@ if (copilotSession && copilotEvidence &&
 }
 const shouldBlock = copilotSession
   ? markerCount?.shouldBlock ?? false
-  : decideBlock(projectDir, stateContent, stopHookActive);
+  : decideBlock(projectDir, stateContent, directive, stopHookActive);
 if (!shouldBlock) {
   recordHookDrop(
     projectDir,

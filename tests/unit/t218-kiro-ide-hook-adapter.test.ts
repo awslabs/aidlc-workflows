@@ -1067,15 +1067,17 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
     // Restores the coverage deleted with 12b. The live IDE agentStop shape is a
     // ZERO-LENGTH USER_PROMPT plus an open-but-never-written stdin, which hung
     // stop and session-end forever. Each variant is asserted on its own effect
-    // so one cannot silently no-op behind the other.
-    const dir = scratchProject(true);
-    try {
+    // so one cannot silently no-op behind the other. Use a fresh project per
+    // variant: SESSION_ENDED is audit-only traffic and intentionally no longer
+    // resets the shared Stop-hook no-progress streak.
+    for (const userPrompt of ["", null] as const) {
+      const dir = scratchProject(true);
       // The payload-free legacy agentStop path uses one synthetic session id.
       // Seed its ownership through the matching legacy SessionStart first;
       // UUID-backed SessionEnd intentionally refuses an unstamped cursor
       // fallback because another concurrent session may own that cursor.
-      expect(runIde(dir, "session-start", null).code).toBe(0);
-      for (const userPrompt of ["", null] as const) {
+      try {
+        expect(runIde(dir, "session-start", null).code).toBe(0);
         const label = userPrompt === null ? "absent" : "empty";
         const stop = await runIdeOpenStdin(dir, "continue-workflow", userPrompt, 30_000);
         expect(`stop/${label}:timedOut=${stop.timedOut}`).toBe(`stop/${label}:timedOut=false`);
@@ -1089,9 +1091,9 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
         expect(`end/${label}:code=${end.code}`).toBe(`end/${label}:code=0`);
         const after = readAudit(dir).split("SESSION_ENDED").length - 1;
         expect(`end/${label}:delta=${after - before}`).toBe(`end/${label}:delta=1`);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
       }
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
     }
   }, 90_000);
 
