@@ -28,6 +28,7 @@ import {
   type TestStrategy,
   type TestingMethodology,
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
+import { extractMarkdownSection } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
 const STAGE_REL = "core/aidlc-common/stages/construction/code-generation.md";
@@ -39,6 +40,8 @@ const SWARM_PROTOCOL_REL =
   "core/aidlc-common/protocols/stage-protocol-swarm.md";
 const AGENT_REL = "core/agents/aidlc-developer-agent.md";
 const ORG_REL = "core/memory/org.md";
+const TEAM_REL = "core/memory/team.md";
+const PROJECT_REL = "core/memory/project.md";
 
 function read(rel: string): string {
   return readFileSync(join(REPO_ROOT, rel), "utf-8");
@@ -78,6 +81,54 @@ function resolve(
 }
 
 describe("t299 (1) additive methodology resolution", () => {
+  test("shipped commented examples fall through to the org default", () => {
+    const sections = {
+      org: extractMarkdownSection(read(ORG_REL), "## Testing Posture"),
+      team: extractMarkdownSection(read(TEAM_REL), "## Testing Posture"),
+      project: extractMarkdownSection(read(PROJECT_REL), "## Testing Posture"),
+    };
+    const contract = resolve(sections);
+
+    expect(contract.methodology).toBe("test-after");
+    expect(contract.source).toBe("org");
+    expect(contract.applicable_notes.map((note) => note.layer)).toEqual([
+      "org",
+    ]);
+  });
+
+  test("visible structured fields remain authoritative beside comments", () => {
+    const contract = resolve({
+      org: ORG,
+      team: [
+        "<!-- Example: Methodology: bdd -->",
+        "- **Methodology**: tdd",
+        "- **Ordering**: tests first, then implementation.",
+      ].join("\n"),
+    });
+
+    expect(contract.methodology).toBe("tdd");
+    expect(contract.source).toBe("team");
+    expect(contract.ordering).toBe("tests first, then implementation.");
+  });
+
+  test("multi-line comments cannot affirm a methodology", () => {
+    const contract = resolve({
+      org: ORG,
+      team: [
+        "<!-- Example posture:",
+        "We use BDD scenarios before implementation.",
+        "Unit tests use TDD.",
+        "-->",
+      ].join("\n"),
+    });
+
+    expect(contract.methodology).toBe("test-after");
+    expect(contract.source).toBe("org");
+    expect(contract.applicable_notes.map((note) => note.layer)).toEqual([
+      "org",
+    ]);
+  });
+
   test("a project coverage note does not erase team TDD", () => {
     const contract = resolve({
       org: ORG,

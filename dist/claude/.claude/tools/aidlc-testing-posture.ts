@@ -205,8 +205,12 @@ function structuredField(section: string, field: string): string | null {
   return match?.[1].trim() || null;
 }
 
+function visiblePostureText(section: string): string {
+  return visibleMarkdownLines(section).join("\n").trim();
+}
+
 function classifyPosture(section: string): ClassifiedPosture | null {
-  const body = section.trim();
+  const body = visiblePostureText(section);
   if (!body) return null;
 
   const structuredMethod = structuredField(body, "Methodology");
@@ -459,7 +463,10 @@ export function resolveTestingPostureFromSections(
               },
             };
   const applicableNotes = (["org", "team", "project"] as const)
-    .map((layer) => ({ layer, text: (sections[layer] ?? "").trim() }))
+    .map((layer) => ({
+      layer,
+      text: visiblePostureText(sections[layer] ?? ""),
+    }))
     .filter((entry) => entry.text.length > 0);
   const input = {
     sections: {
