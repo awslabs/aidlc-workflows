@@ -2998,6 +2998,29 @@ export function readActiveDirectiveMarker(
   }
 }
 
+// Read the shared/sessionless resume wait under the active-directive lock. The
+// marker is read before state while refreshActiveDirectiveMarker uses the same
+// lock after writing state, so a concurrent state transition either linearizes
+// after this evidence or makes the marker/state digest mismatch and fails closed.
+export function hasCurrentSharedResumeWait(projectDir: string): boolean {
+  return transactActiveDirective(projectDir, (marker, target) => {
+    let stateContent: string;
+    try {
+      stateContent = readFileSync(target.statePath, "utf-8");
+    } catch {
+      return { marker, result: false, preserve: true };
+    }
+    const waiting =
+      marker?.version === 2 &&
+      marker.owner_session?.startsWith("sessionless:") === true &&
+      marker.state_sha256 === stateContentSha256(stateContent) &&
+      marker.kind === "ask" &&
+      marker.resume?.status === "waiting" &&
+      getField(stateContent, "Construction Autonomy Mode")?.trim() !== "autonomous";
+    return { marker, result: waiting, preserve: true };
+  });
+}
+
 export interface CopilotContinuationSnapshot {
   target: ActiveDirectiveTarget;
   authority: "stateless" | "current" | "superseded";

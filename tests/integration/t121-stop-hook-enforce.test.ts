@@ -1,4 +1,4 @@
-// covers: hook:aidlc-continue-workflow, function:refreshActiveDirectiveMarker, function:hasPendingDecision
+// covers: hook:aidlc-continue-workflow, function:refreshActiveDirectiveMarker, function:hasCurrentSharedResumeWait, function:hasPendingDecision
 //
 // Behavioural contract for the Stop hook `aidlc-continue-workflow.ts` — the framework's
 // FIRST flow-altering hook. Migrated from tests/integration/t121-stop-hook-enforce.sh
@@ -319,6 +319,11 @@ try {
 const kind = process.env.MOCK_KIND ?? "run-stage";
 const stage = process.env.MOCK_STAGE ?? "requirements-analysis";
 const unit = process.env.MOCK_UNIT ?? "";
+const part = Number(process.env.MOCK_PART ?? "1");
+const parts = Number(process.env.MOCK_PARTS ?? "2");
+const continueToken = process.env.MOCK_CONTINUE_TOKEN ?? "steering-token-495";
+const units = (process.env.MOCK_UNITS ?? "auth,billing").split(",").filter(Boolean);
+const wave = process.env.MOCK_WAVE ? JSON.parse(process.env.MOCK_WAVE) : undefined;
 if (process.env.MOCK_REWRITE_MARKER === "1") {
   try {
     const { readFileSync, writeFileSync } = require("node:fs");
@@ -343,16 +348,20 @@ if (kind === "done") {
   console.log(JSON.stringify({
     kind,
     stage,
+    part,
+    parts,
     rules_content: [
       {
         path: "aidlc/spaces/default/memory/org.md",
         text: "# Org Rules\\n\\nALWAYS preserve this exact stop-recovered policy.\\n",
       },
     ],
-    continue_token: "steering-token-495",
+    continue_token: continueToken,
   }));
+} else if (kind === "invoke-swarm") {
+  console.log(JSON.stringify({ kind, stage, units }));
 } else {
-  console.log(JSON.stringify({ kind, stage, ...(unit ? { unit } : {}) }));
+  console.log(JSON.stringify({ kind, stage, ...(unit ? { unit } : {}), ...(wave ? { wave } : {}) }));
 }
 process.exit(0);
 `;
@@ -795,6 +804,7 @@ function runHook(
   stage = "requirements-analysis",
   copilotSession = "",
   rewriteMarker = false,
+  extraEnv: Record<string, string> = {},
 ): HookResult {
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
@@ -804,6 +814,7 @@ function runHook(
     MOCK_UNIT: unit,
     MOCK_STAGE: stage,
     MOCK_MARKER_PATH: join(seededRecordDir(proj), ".aidlc-active-directive.json"),
+    ...extraEnv,
   };
   if (rewriteMarker) env.MOCK_REWRITE_MARKER = "1";
   else delete env.MOCK_REWRITE_MARKER;
@@ -865,19 +876,40 @@ function progressSig(
     unit?: string;
     part?: number;
     parts?: number;
+    continueToken?: string;
+    rulesContent?: Array<{ path: string; text: string }>;
+    units?: string[];
+    worker?: string;
+    repo?: string;
+    wave?: unknown;
   } = {},
 ): string {
   const s = readFileSync(seededStateFile(proj), "utf-8");
   const m = s.match(/Current Stage\*{0,2}:?\s*`?([^\n`]*)`?/);
   const stage = (m?.[1] ?? "").trim();
-  const stateSha256 = createHash("sha256").update(s, "utf-8").digest("hex");
-  const directiveFingerprint = [
-    directive.kind ?? "run-stage",
-    directive.stage ?? "requirements-analysis",
-    directive.unit ?? "",
-    directive.part ?? "",
-    directive.parts ?? "",
-  ].join("|");
+  const stableState = s.replace(/^- \*\*Last Updated\*\*:[^\n]*(?:\n|$)/gm, "");
+  const stateSha256 = createHash("sha256").update(stableState, "utf-8").digest("hex");
+  const directiveFingerprint = createHash("sha256")
+    .update(JSON.stringify({
+      kind: directive.kind ?? "run-stage",
+      stage: directive.stage ?? "requirements-analysis",
+      unit: directive.unit ?? "",
+      part: directive.part ?? null,
+      parts: directive.parts ?? null,
+      continue_token_sha256: directive.continueToken
+        ? createHash("sha256").update(directive.continueToken).digest("hex")
+        : "",
+      rules_content_sha256: directive.rulesContent
+        ? createHash("sha256").update(JSON.stringify(directive.rulesContent)).digest("hex")
+        : "",
+      units: directive.units ?? [],
+      worker: directive.worker ?? "",
+      repo: directive.repo ?? "",
+      wave_sha256: directive.wave === undefined
+        ? ""
+        : createHash("sha256").update(JSON.stringify(directive.wave)).digest("hex"),
+    }))
+    .digest("hex");
   return `${stage}::${stateSha256}::${directiveFingerprint}`;
 }
 
@@ -1053,6 +1085,18 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
   }, 30000);
 
+  test("(b3) a non-sessionless resume marker does not release the shared stop", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    seedSessionlessResumeMarker(proj);
+    rewriteCopilotMarker(proj, (marker) => {
+      marker.owner_session = "another-host-session";
+    });
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, 30000);
+
   test("(b3) state mutation invalidates the sessionless resume-waiting marker", () => {
     const proj = makeProject();
     seedActive(proj, "requirements-analysis");
@@ -1159,6 +1203,112 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect((JSON.parse(b2.out) as { decision?: string }).decision).toBe("block");
     expect(b3.out).toBe("");
     expect(guardCount(proj)).toBe(3);
+  }, 30000);
+
+  test("(c2) advancing load-steering part/token resets the no-progress streak", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    const first = runHook(
+      proj,
+      '{"stop_hook_active":false}',
+      "load-steering",
+      "2",
+      "",
+      "requirements-analysis",
+      "",
+      false,
+      { MOCK_PART: "1", MOCK_PARTS: "2", MOCK_CONTINUE_TOKEN: "token-one" },
+    );
+    const second = runHook(
+      proj,
+      '{"stop_hook_active":false}',
+      "load-steering",
+      "2",
+      "",
+      "requirements-analysis",
+      "",
+      false,
+      { MOCK_PART: "2", MOCK_PARTS: "2", MOCK_CONTINUE_TOKEN: "token-two" },
+    );
+    expect((JSON.parse(first.out) as { decision?: string }).decision).toBe("block");
+    expect((JSON.parse(second.out) as { decision?: string }).decision).toBe("block");
+    expect(guardCount(proj)).toBe(1);
+  }, 30000);
+
+  test("(c2) advancing invoke-swarm units resets the no-progress streak", () => {
+    const proj = makeProject();
+    seedActive(proj, "code-generation");
+    const first = runHook(
+      proj,
+      '{"stop_hook_active":false}',
+      "invoke-swarm",
+      "2",
+      "",
+      "code-generation",
+      "",
+      false,
+      { MOCK_UNITS: "auth,billing" },
+    );
+    const second = runHook(
+      proj,
+      '{"stop_hook_active":false}',
+      "invoke-swarm",
+      "2",
+      "",
+      "code-generation",
+      "",
+      false,
+      { MOCK_UNITS: "notifications" },
+    );
+    expect((JSON.parse(first.out) as { decision?: string }).decision).toBe("block");
+    expect((JSON.parse(second.out) as { decision?: string }).decision).toBe("block");
+    expect(guardCount(proj)).toBe(1);
+  }, 30000);
+
+  test("(c2) advancing run-stage wave resets the no-progress streak", () => {
+    const proj = makeProject();
+    seedActive(proj, "functional-design");
+    const first = runHook(
+      proj,
+      '{"stop_hook_active":false}',
+      "run-stage",
+      "2",
+      "",
+      "functional-design",
+      "",
+      false,
+      { MOCK_WAVE: JSON.stringify({ batch_index: 0, entries: [{ unit: "auth" }] }) },
+    );
+    const second = runHook(
+      proj,
+      '{"stop_hook_active":false}',
+      "run-stage",
+      "2",
+      "",
+      "functional-design",
+      "",
+      false,
+      { MOCK_WAVE: JSON.stringify({ batch_index: 1, entries: [{ unit: "billing" }] }) },
+    );
+    expect((JSON.parse(first.out) as { decision?: string }).decision).toBe("block");
+    expect((JSON.parse(second.out) as { decision?: string }).decision).toBe("block");
+    expect(guardCount(proj)).toBe(1);
+  }, 30000);
+
+  test("(c2) Last Updated-only state traffic does not reset the streak", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    const first = runHook(proj, '{"stop_hook_active":false}', "run-stage", "2");
+    const statePath = seededStateFile(proj);
+    writeFileSync(
+      statePath,
+      `${readFileSync(statePath, "utf-8")}- **Last Updated**: 2026-08-21T12:00:00Z\n`,
+      "utf-8",
+    );
+    const second = runHook(proj, '{"stop_hook_active":false}', "run-stage", "2");
+    expect((JSON.parse(first.out) as { decision?: string }).decision).toBe("block");
+    expect(second.out).toBe("");
+    expect(guardCount(proj)).toBe(2);
   }, 30000);
 
   // (c3) PROGRESS resets the streak — a healthy loop is never throttled even

@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.40] - 2026-08-21
+
+The shared Stop hook now preserves state-bound Resume waits before probing `next`, and its no-progress cap distinguishes real directive transitions from audit or timestamp noise. **Upgrade:** refresh your `dist/<harness>/` shell so the shared Stop hook and active-directive evidence reader are updated; Copilot's session-owned Stop path remains unchanged.
+
+* A sessionless Resume choice with an exact state-bound `ask` marker now allows the turn under the active-directive lock before the Stop hook can overwrite it with a fresh probe. Foreign-session, stale-state, autonomous, or contended evidence fails safely.
+* Shared directive fingerprints now include load-steering part/token/content, run-stage wave, `invoke-swarm` units, and dispatched worker/repo identity, so advancing chunks, waves, and batches reset the streak even when progress is audit-backed.
+* The state component excludes `Last Updated`, preventing status-only timestamp writes from resetting a genuinely stuck loop; semantic state changes still reset the counter.
+
 ## [2.6.39] - 2026-08-21
 
 Reverse Engineering now requires complete, current-attempt Code Knowledge Base evidence for every registered repository before approval or completion. **Upgrade:** refresh your `dist/<harness>/` shell so the complete artifact guard, ordered pipeline receipts, repo-scoped reuse evidence, and resume directives are installed.

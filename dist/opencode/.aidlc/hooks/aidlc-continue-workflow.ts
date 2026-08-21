@@ -32,7 +32,7 @@
 //      itself the product of a prior Stop-hook block. We read it as a signal
 //      that we are already inside a blocked sequence.
 //   2. A NO-PROGRESS counter — consecutive blocks with no intervening workflow
-//      advance (the state digest and pending-directive fingerprint are both
+//      advance (the stable state digest and pending-directive fingerprint are both
 //      unchanged). It is persisted across the rapid-fire blocks in a transient
 //      file under aidlc-docs/.aidlc-stop-hook/. Under a no-progress ceiling
 //      exposed as CLAUDE_CODE_STOP_HOOK_BLOCK_CAP, once the count reaches the cap
@@ -126,6 +126,7 @@ import {
   docsRoot,
   errorMessage,
   getField,
+  hasCurrentSharedResumeWait,
   hasPendingDecision,
   isEngineToolCall,
   hooksHealthDir,
@@ -209,8 +210,9 @@ function blockStop(reason: string): number {
 // --- Recursion guard: a durable no-progress counter ---------------------------
 //
 // We persist a tiny JSON record keyed on the workflow's PROGRESS SIGNATURE: the
-// Current Stage slug, the complete workflow-state digest, and the pending
-// directive position (kind, stage, Unit, and load-steering part). A `report` or
+// Current Stage slug, the workflow-state digest with volatile Last Updated
+// metadata removed, and the pending directive identity (including steering
+// token/part, run-stage wave, swarm units, and dispatched worker/repo). A `report` or
 // directive transition changes one of those components — that is how we detect
 // "progress was made since the last block". Audit-only appends do not manufacture
 // progress. When the signature is unchanged across two blocks, workflow state
@@ -244,14 +246,40 @@ function currentStageSlug(stateContent: string): string {
 // the pending directive advances, while ignoring unrelated audit-only traffic.
 function progressSignature(stateContent: string, directive: EngineDirective): string {
   const stage = currentStageSlug(stateContent);
-  const stateSha256 = createHash("sha256").update(stateContent, "utf-8").digest("hex");
-  const directiveFingerprint = [
-    directive.kind,
-    directive.stage ?? "",
-    directive.unit ?? "",
-    directive.part ?? "",
-    directive.parts ?? "",
-  ].join("|");
+  const stableState = stateContent.replace(
+    /^- \*\*Last Updated\*\*:[^\n]*(?:\n|$)/gm,
+    "",
+  );
+  const stateSha256 = createHash("sha256").update(stableState, "utf-8").digest("hex");
+  const directiveFingerprint = createHash("sha256")
+    .update(
+      JSON.stringify({
+        kind: directive.kind,
+        stage: directive.stage ?? "",
+        unit: directive.unit ?? "",
+        part: directive.part ?? null,
+        parts: directive.parts ?? null,
+        continue_token_sha256: directive.continueToken
+          ? createHash("sha256").update(directive.continueToken, "utf-8").digest("hex")
+          : "",
+        rules_content_sha256: directive.rulesContent
+          ? createHash("sha256")
+              .update(JSON.stringify(directive.rulesContent), "utf-8")
+              .digest("hex")
+          : "",
+        units: directive.units ?? [],
+        worker: directive.worker ?? "",
+        repo: directive.repo ?? "",
+        wave_sha256:
+          directive.wave === undefined
+            ? ""
+            : createHash("sha256")
+                .update(JSON.stringify(directive.wave), "utf-8")
+                .digest("hex"),
+      }),
+      "utf-8",
+    )
+    .digest("hex");
   return `${stage}::${stateSha256}::${directiveFingerprint}`;
 }
 
@@ -294,7 +322,7 @@ function writeGuard(projectDir: string, record: GuardRecord): void {
 // RELEASE (let go — the ceiling is hit, so a stuck loop cannot trap the turn).
 //
 // PROGRESS is authoritative. The workflow position signature (Current Stage +
-// state digest + pending-directive fingerprint) changes when workflow state or
+// stable state digest + pending-directive fingerprint) changes when workflow state or
 // the pending directive advances, so:
 //   - signature CHANGED since the prior block  → progress was made; RESET the
 //     streak to 1. A healthy loop that keeps advancing is never throttled, even
@@ -870,6 +898,10 @@ interface EngineDirective {
   continueToken?: string;
   part?: number;
   parts?: number;
+  units?: string[];
+  worker?: string;
+  repo?: string;
+  wave?: unknown;
   retained?: boolean;
   rulesContent?: Array<{ path: string; text: string }>;
 }
@@ -931,6 +963,32 @@ function runEngineNextDirective(projectDir: string): EngineDirective | null {
           typeof (parsed as { continue_token?: unknown }).continue_token === "string"
           ? (parsed as { continue_token: string }).continue_token.trim()
           : "";
+      const part =
+        "part" in parsed &&
+        typeof (parsed as { part?: unknown }).part === "number" &&
+        Number.isInteger((parsed as { part: number }).part)
+          ? (parsed as { part: number }).part
+          : undefined;
+      const parts =
+        "parts" in parsed &&
+        typeof (parsed as { parts?: unknown }).parts === "number" &&
+        Number.isInteger((parsed as { parts: number }).parts)
+          ? (parsed as { parts: number }).parts
+          : undefined;
+      const rawUnits = "units" in parsed ? (parsed as { units?: unknown }).units : undefined;
+      const units =
+        Array.isArray(rawUnits) && rawUnits.every((entry) => typeof entry === "string")
+          ? rawUnits.map((entry) => entry.trim()).filter((entry) => entry.length > 0)
+          : undefined;
+      const worker =
+        "worker" in parsed && typeof (parsed as { worker?: unknown }).worker === "string"
+          ? (parsed as { worker: string }).worker.trim()
+          : "";
+      const repo =
+        "repo" in parsed && typeof (parsed as { repo?: unknown }).repo === "string"
+          ? (parsed as { repo: string }).repo.trim()
+          : "";
+      const wave = "wave" in parsed ? (parsed as { wave?: unknown }).wave : undefined;
       const rawRulesContent =
         "rules_content" in parsed
           ? (parsed as { rules_content?: unknown }).rules_content
@@ -953,6 +1011,12 @@ function runEngineNextDirective(projectDir: string): EngineDirective | null {
         ...(stage.length > 0 ? { stage } : {}),
         ...(unit.length > 0 ? { unit } : {}),
         ...(continueToken.length > 0 ? { continueToken } : {}),
+        ...(part !== undefined ? { part } : {}),
+        ...(parts !== undefined ? { parts } : {}),
+        ...(units ? { units } : {}),
+        ...(worker.length > 0 ? { worker } : {}),
+        ...(repo.length > 0 ? { repo } : {}),
+        ...(wave !== undefined ? { wave } : {}),
         ...(rulesContent ? { rulesContent } : {}),
       };
     }
@@ -1143,12 +1207,18 @@ if (copilotEvidence?.status === "contended") {
 }
 if (copilotEvidence?.status === "foreign" || copilotEvidence?.status === "resume") return allowStop();
 if (!copilotSession) {
-  const resumeMarker = readActiveDirectiveMarker(projectDir, stateContent);
-  if (
-    resumeMarker?.kind === "ask" &&
-    resumeMarker.resume?.status === "waiting" &&
-    getField(stateContent, "Construction Autonomy Mode")?.trim() !== "autonomous"
-  ) {
+  let resumeWaiting = false;
+  try {
+    resumeWaiting = hasCurrentSharedResumeWait(projectDir);
+  } catch (error) {
+    recordHookDrop(
+      projectDir,
+      HOOK_NAME,
+      `active-directive evidence unavailable while reading shared resume wait: ${errorMessage(error)}; allowing stop`,
+    );
+    return allowStop();
+  }
+  if (resumeWaiting) {
     recordHookDrop(
       projectDir,
       HOOK_NAME,

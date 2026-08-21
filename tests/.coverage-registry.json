@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 606,
+    "total": 607,
     "enumeratedByClass": {
-      "function": 344,
+      "function": 345,
       "audit": 86,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 169,
+      "function": 170,
       "audit": 44,
       "scope": 11,
       "stage": 11,
@@ -2028,6 +2028,18 @@
         {
           "file": "tests/unit/t153-engine-directive-harness-seam.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:hasCurrentSharedResumeWait",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t121-stop-hook-enforce.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
