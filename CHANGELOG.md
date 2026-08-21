@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.44] - 2026-08-21
+
+Codex structured `request_user_input` selections now mint the same `HUMAN_TURN` evidence as typed prompts, without treating empty, cancelled, timed-out, auto-resolved, error, or malformed responses as human judgment. **Upgrade:** refresh `dist/codex/`, then re-run `bun scripts/package.ts codex trust --project "/absolute/project/path"` and replace the existing hook trust tables before starting a fresh Codex session.
+
+* The new PostToolUse registration routes `request_user_input` through the existing record-human-turn target only when `tool_response` is the Codex JSON-encoded `answers: Record<questionId,{answers:string[]}>` contract and every selected value is explicit, nonblank, and passes the shared cancellation-boilerplate floor.
+* Completed-looking `{}` payloads and cancellation metadata fail closed; substantive selections remain valid, and values such as `Abort` count when they exactly match an option the question actually presented.
+* Codex duplicate delivery replays the first response and emits exactly one `HUMAN_TURN`; projects without active workflow state remain untouched.
+
 ## [2.6.43] - 2026-08-21
 
 Explicit resume now means continue immediately: `/aidlc --resume` no longer repeats the session re-entry Resume / Redo / Jump / Start Fresh menu before returning to the saved stage. Bare `/aidlc` still offers that menu when a harness session re-enters existing work. **Upgrade:** refresh your `dist/<harness>/` shell; existing workflow state needs no migration, and legacy Copilot resume markers are superseded by the next explicit resume.

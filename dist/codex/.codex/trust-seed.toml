@@ -33,12 +33,15 @@ trusted_hash = "sha256:d13218ffc38c72b1fa91ea723d27e2037f30d350ffb018dd2bc31ed84
 trusted_hash = "sha256:e8e8844666c05ec69c7c8caea02ca0b071cecbf7fe53b127372c95e2c107245a"
 
 [hooks.state."<PROJECT_DIR>/.codex/hooks.json:post_tool_use:0:0"]
-trusted_hash = "sha256:3fbffd723a990f1569dd1cf9746bf05167c78d4e1681f48c552afb20a9213cdf"
+trusted_hash = "sha256:7d73fd0b92d376b5624f4c902d65c565e34944904f96ea5799ce2b546df883c1"
 
 [hooks.state."<PROJECT_DIR>/.codex/hooks.json:post_tool_use:1:0"]
-trusted_hash = "sha256:0f4f003fcf25c782c5e5759f3d383efe85337b6bd946735eeead020a2db8d2fe"
+trusted_hash = "sha256:3fbffd723a990f1569dd1cf9746bf05167c78d4e1681f48c552afb20a9213cdf"
 
 [hooks.state."<PROJECT_DIR>/.codex/hooks.json:post_tool_use:2:0"]
+trusted_hash = "sha256:0f4f003fcf25c782c5e5759f3d383efe85337b6bd946735eeead020a2db8d2fe"
+
+[hooks.state."<PROJECT_DIR>/.codex/hooks.json:post_tool_use:3:0"]
 trusted_hash = "sha256:a9c69375b8c0b1dab5db89087062be0ea85af428b2187e9d07b1095cac44ecd9"
 
 [hooks.state."<PROJECT_DIR>/.codex/hooks.json:pre_compact:0:0"]
