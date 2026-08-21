@@ -1886,7 +1886,10 @@ export function codekbScopeFingerprint(
       .map((p) => p.replaceAll("\\", "/").replace(/^\.?\//, "").replace(/\/+$/, ""))
       .filter((p) => p !== "")
       .map((p) => `:(exclude,literal)${p}`);
-    const add = spawnSync("git", ["add", "-A", "--", ...paths, ...exclusions], {
+    const positives = paths
+      .map((p) => p.replaceAll("\\", "/").replace(/^\.?\//, "").replace(/\/+$/, ""))
+      .filter((p) => p !== "");
+    const add = spawnSync("git", ["add", "-A", "--", ...positives, ...exclusions], {
       cwd: repoDir,
       env,
       encoding: "utf-8",
