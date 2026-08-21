@@ -1,6 +1,12 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.49] - 2026-08-21
+
+Frontmatter string-list fields now accept single-line YAML flow sequences as well as block sequences, preventing valid inline lists from silently parsing as empty. **Upgrade:** refresh your `dist/<harness>/` shell to install the corrected parser.
+
+* Flow-style YAML lists now parse for scope keywords, agent examples, and stage list fields, including empty sequences, quoted commas, and trailing YAML comments.
+
 ## [2.6.48] - 2026-08-21
 
 opencode and GitHub Copilot installations now ship mutable persona memory references on the `default` space seed, matching Cursor, so `/aidlc space default` no longer rewrites unchanged framework files while later space switches still repoint every managed persona. **Upgrade:** refresh your `dist/<harness>/` shell to replace placeholder-bearing persona copies with the concrete default-space seed.

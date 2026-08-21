@@ -14,6 +14,25 @@ describe("listField YAML sequence styles", () => {
       .toEqual(["design review", "architecture"]);
   });
 
+  test("does not split commas inside quoted items", () => {
+    expect(listField(`keywords: ["design, review", 'build, test']\n`, "keywords"))
+      .toEqual(["design, review", "build, test"]);
+  });
+
+  test("accepts a YAML comment after the flow sequence", () => {
+    expect(listField("keywords: [design, architecture] # routing hints\n", "keywords"))
+      .toEqual(["design", "architecture"]);
+  });
+
+  test("distinguishes quoted brackets from the closing bracket", () => {
+    expect(listField(`keywords: ["design] review", architecture] # ] hint\n`, "keywords"))
+      .toEqual(["design] review", "architecture"]);
+  });
+
+  test("rejects an unterminated quoted item", () => {
+    expect(listField(`keywords: ["design, review]\n`, "keywords")).toEqual([]);
+  });
+
   test("parses an empty flow sequence as an empty list", () => {
     expect(listField("keywords: []\n", "keywords")).toEqual([]);
   });

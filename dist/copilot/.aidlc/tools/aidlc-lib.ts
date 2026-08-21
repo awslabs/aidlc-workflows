@@ -9044,7 +9044,7 @@ export function listField(fm: string, key: string): string[] {
   }
 
   const flowRe = new RegExp(
-    `^${key}:[ \\t]*(\\[[^\\r\\n]*\\])[ \\t]*$`,
+    `^${key}:[ \\t]*(\\[[^\\r\\n]*)$`,
     "m"
   );
   const flow = fm.match(flowRe);
@@ -10238,12 +10238,49 @@ function unquoteScalar(s: string): string {
 function parseInlineDepsList(raw: string): string[] {
   const t = raw.trim();
   if (t === "" || t === "[]") return [];
-  if (t.startsWith("[") && t.endsWith("]")) {
-    return t
-      .slice(1, -1)
-      .split(",")
-      .map((s) => unquoteScalar(s))
-      .filter((s) => s !== "");
+  if (t.startsWith("[")) {
+    let close = -1;
+    let quote: "\"" | "'" | null = null;
+    for (let i = 1; i < t.length; i++) {
+      const char = t[i];
+      if (quote !== null) {
+        if (quote === "\"" && char === "\\") {
+          i++;
+        } else if (char === quote) {
+          quote = null;
+        }
+      } else if (char === "\"" || char === "'") {
+        quote = char;
+      } else if (char === "]") {
+        close = i;
+        break;
+      }
+    }
+    if (quote !== null || close === -1) return [];
+    if (!/^[ \t]*(?:#[^\r\n]*)?$/.test(t.slice(close + 1))) return [];
+
+    const body = t.slice(1, close);
+    const items: string[] = [];
+    let start = 0;
+    quote = null;
+    for (let i = 0; i < body.length; i++) {
+      const char = body[i];
+      if (quote !== null) {
+        if (quote === "\"" && char === "\\") {
+          i++;
+        } else if (char === quote) {
+          quote = null;
+        }
+      } else if (char === "\"" || char === "'") {
+        quote = char;
+      } else if (char === ",") {
+        items.push(body.slice(start, i));
+        start = i + 1;
+      }
+    }
+    if (quote !== null) return [];
+    items.push(body.slice(start));
+    return items.map((item) => unquoteScalar(item)).filter((item) => item !== "");
   }
   // Bare scalar (rare) — treat as a one-item list.
   return [unquoteScalar(t)];
