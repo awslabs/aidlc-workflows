@@ -23,17 +23,14 @@ the build if the JSON diverges from the YAML.
 
 # [Stage Title]
 
-MANDATORY: Follow stage-protocol.md for approval gates, question format,
-and completion messages.
-
 ## Steps
 # prose body — required, always populated
 
 ## Sensors
-# reserved — parser tolerates absence; populated when the sensor subsystem ships
+# compact Imports/Upstream-targets summary; stage-specific exceptions stay local
 
 ## Learn
-# reserved — parser tolerates absence; populated when the loop-driver subsystem ships
+# compact pointer to stage-protocol.md section 13; bootstrap stages keep the no-gate exception
 ```
 
 ---
