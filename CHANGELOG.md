@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.46] - 2026-08-21
+
+Kiro CLI `/aidlc` commands now dispatch deterministically on generations that deliver the raw typed prompt to `userPromptSubmit`: `/aidlc --status`, `space`, `space-create`, `intent`, and other routed invocations previously became a silent no-op when the hook expected only an expanded skill body. **Upgrade:** refresh your `dist/kiro/` shell to install the corrected verb interceptor.
+
+* Raw prompts beginning with `/aidlc` now recover their complete shell-normalized argument vector for terminal dispatch, engine pre-dispatch, or guarded forwarding.
+* Expanded skill bodies continue to recover arguments from the forwarding-loop anchor first, preserving existing behavior when both payload shapes are present.
+* Mid-sentence `/aidlc` mentions and `/aidlc-foo` text remain inert.
+
 ## [2.6.45] - 2026-08-21
 
 Diagnostic exports now read Kiro's turn-scoped markers from their canonical project-level location, so exported evidence accurately reflects the active latch and counter. **Upgrade:** refresh your `dist/<harness>/` shell to install the corrected diagnostic exporter; existing workflow state needs no migration.
