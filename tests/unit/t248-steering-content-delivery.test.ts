@@ -25,6 +25,11 @@ import {
   absorbReviewerKnowledge,
   reviewerAgentSet,
 } from "../../scripts/agent-knowledge.ts";
+import { appendAuditEntry } from "../../core/tools/aidlc-audit.ts";
+import {
+  stageValidationAuditFields,
+  type StageValidityNode,
+} from "../../core/tools/aidlc-validity.ts";
 import {
   cleanupTestProject,
   REPO_ROOT,
@@ -54,6 +59,9 @@ type WireDirective = {
   rules_in_context?: string[];
   inline_context_paths?: string[];
   context_warnings?: string[];
+  stage_validity?: {
+    state?: string;
+  };
   message?: string;
 };
 
@@ -401,6 +409,66 @@ describe("t248 deterministic steering delivery", () => {
     ) as { cursor_harness?: string; owner_session?: string };
     expect(marker.cursor_harness).toBe("claude");
     expect(marker.owner_session).toStartWith("sessionless:");
+  });
+
+  test("stage validity advisory survives every steering continuation", () => {
+    const proj = setupIntegrationProject({ withState: "state-operation.md" });
+    projects.push(proj);
+    const state = readFileSync(seededStateFile(proj), "utf-8");
+    const graphRaw = JSON.parse(
+      readFileSync(
+        join(proj, ".claude", "tools", "data", "stage-graph.json"),
+        "utf-8",
+      ),
+    ) as StageValidityNode[] | { stages: StageValidityNode[] };
+    const stages = Array.isArray(graphRaw) ? graphRaw : graphRaw.stages;
+    const requirements = stages.find(
+      (stage) => stage.slug === "requirements-analysis",
+    );
+    expect(requirements).toBeDefined();
+    const artifactDir = join(
+      seededRecordDir(proj),
+      "inception",
+      "requirements-analysis",
+    );
+    mkdirSync(artifactDir, { recursive: true });
+    const artifactPath = join(artifactDir, "requirements.md");
+    writeFileSync(artifactPath, "requirements-v1\n", "utf-8");
+    appendAuditEntry(
+      "STAGE_COMPLETED",
+      {
+        Stage: "requirements-analysis",
+        ...stageValidationAuditFields(
+          proj,
+          requirements!,
+          state,
+          stages,
+        ),
+      },
+      proj,
+    );
+    writeFileSync(artifactPath, "requirements-v2\n", "utf-8");
+    writeFileSync(
+      join(proj, "aidlc", "spaces", "default", "memory", "org.md"),
+      Array.from(
+        { length: 180 },
+        (_, i) => `## Validity ${i}\n\n${"x".repeat(320)}\n\n`,
+      ).join(""),
+      "utf-8",
+    );
+
+    let directive = invoke(proj, "next", []).directive;
+    expect(directive.kind).toBe("load-steering");
+    while (directive.kind === "load-steering") {
+      expect(directive.stage_validity?.state).toBe("drifted");
+      directive = invoke(
+        proj,
+        "continue",
+        [directive.continue_token ?? ""],
+      ).directive;
+    }
+    expect(directive.kind).toBe("run-stage");
+    expect(directive.stage_validity?.state).toBe("drifted");
   });
 
   test("the old public-path MAC cannot forge a continuation that skips chunks", () => {

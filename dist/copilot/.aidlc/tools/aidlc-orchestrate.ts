@@ -230,6 +230,49 @@ interface PreparedEmission {
 let engineInvocation: { attemptId?: string; commandKind: "next" | "continue" | "report" | "park"; commandSha256: string } | null = null;
 let activeStageValidityAdvisory: StageValidityAdvisory | undefined;
 
+function projectStageValidityAdvisory(
+  projectDir: string,
+  stateContent: string,
+): StageValidityAdvisory | undefined {
+  try {
+    const validity = inspectStageValidity(projectDir, stateContent);
+    if (validity.issues.length === 0 && validity.warnings.length === 0) {
+      return undefined;
+    }
+    const direct = validity.issues
+      .filter((issue) => issue.direct)
+      .map((issue) => issue.stage);
+    const downstream = validity.issues
+      .filter((issue) => !issue.direct)
+      .map((issue) => issue.stage);
+    const earliest = direct[0] ?? validity.issues[0]?.stage ?? null;
+    const state = validity.warnings.length > 0 ? "unavailable" : "drifted";
+    const warning = state === "drifted"
+      ? `Completed stage results have drifted; routing is continuing in advisory mode` +
+        (earliest ? `. Suggested redo: /aidlc --stage ${earliest}.` : ".")
+      : `Stage-validity inspection is partly unavailable; routing is continuing in advisory mode. ${validity.warnings.join(" ")}`;
+    return {
+      state,
+      directly_stale: direct,
+      needs_revalidation: downstream,
+      untracked: validity.untracked,
+      earliest_affected_stage: earliest,
+      warning,
+    };
+  } catch (error) {
+    return {
+      state: "unavailable",
+      directly_stale: [],
+      needs_revalidation: [],
+      untracked: [],
+      earliest_affected_stage: null,
+      warning:
+        `Stage-validity inspection failed; routing is continuing in advisory mode: ` +
+        errorMessage(error),
+    };
+  }
+}
+
 // Print exactly one directive as JSON to stdout, after validating it against
 // the frozen contract. A malformed directive is a hard error (clean
 // boundaries), never a silent miss — we exit non-zero so a wiring bug surfaces
@@ -3231,42 +3274,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // Untracked-only history stays in /aidlc --status because redoing work only
   // to mint a receipt is make-work. Drift and unavailable inspection stay
   // per-turn because they are actionable.
-  try {
-    const validity = inspectStageValidity(pd, stateContent);
-    if (validity.issues.length > 0 || validity.warnings.length > 0) {
-      const direct = validity.issues
-        .filter((issue) => issue.direct)
-        .map((issue) => issue.stage);
-      const downstream = validity.issues
-        .filter((issue) => !issue.direct)
-        .map((issue) => issue.stage);
-      const earliest = direct[0] ?? validity.issues[0]?.stage ?? null;
-      const state = validity.warnings.length > 0 ? "unavailable" : "drifted";
-      const warning = state === "drifted"
-        ? `Completed stage results have drifted; routing is continuing in advisory mode` +
-          (earliest ? `. Suggested redo: /aidlc --stage ${earliest}.` : ".")
-        : `Stage-validity inspection is partly unavailable; routing is continuing in advisory mode. ${validity.warnings.join(" ")}`;
-      activeStageValidityAdvisory = {
-        state,
-        directly_stale: direct,
-        needs_revalidation: downstream,
-        untracked: validity.untracked,
-        earliest_affected_stage: earliest,
-        warning,
-      };
-    }
-  } catch (error) {
-    activeStageValidityAdvisory = {
-      state: "unavailable",
-      directly_stale: [],
-      needs_revalidation: [],
-      untracked: [],
-      earliest_affected_stage: null,
-      warning:
-        `Stage-validity inspection failed; routing is continuing in advisory mode: ` +
-        errorMessage(error),
-    };
-  }
+  activeStageValidityAdvisory = projectStageValidityAdvisory(pd, stateContent);
 
   // Branch 9c - freeform prose while a workflow is ACTIVE. Branch 8 gives
   // fresh-start prose a routing ask; mid-flow prose used to fall through to
@@ -6052,6 +6060,10 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
     ));
     return;
   }
+  activeStageValidityAdvisory =
+    payload.a && liveState !== null
+      ? projectStageValidityAdvisory(pd, liveState)
+      : undefined;
   const cursor = inspectContinuationCursor(pd, liveState);
 
   const directive = buildRunStageDirective(
