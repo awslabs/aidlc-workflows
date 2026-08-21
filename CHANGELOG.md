@@ -1,6 +1,23 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.19] - 2026-08-20
+
+AI-DLC now ships the installable `pdlc` product-discovery plugin, providing a
+Working Backwards discovery workflow from use-case intake through a developer
+handoff pack. **Upgrade:** re-copy your `dist/<harness>/` shell, install the
+matching `dist/plugins/pdlc/<harness>/` projection, and start a fresh session
+so the plugin composes.
+
+* New `pdlc-discovery` scope and ten product-discovery stages cover intake,
+  PR/FAQ and solution analysis, prioritization, prototype work, strategy,
+  go-to-market, and the `pdlc-context-pack` handoff to core Inception.
+* The `pdlc-evidence` advisory sensor checks source-tag grounding in PR/FAQ and
+  prioritization-scoring artifacts; plugin-owned scope and stage runners are
+  available as `/pdlc-discovery` and `/pdlc-<stage>`.
+* PDLc projections for Claude Code, Codex CLI, Cursor, Kiro CLI, Kiro IDE,
+  opencode, and GitHub Copilot are emitted under `dist/plugins/pdlc/`.
+
 ## [2.6.18] - 2026-08-19
 
 Classic and Express are new scope options, and the implicit default scope is now Classic — a **declared behavior change**: invocations that name no scope and match no keyword now run the v1-style lifecycle without Ideation instead of the full-lifecycle Feature scope. Exactly two things control the implicit default: the `AWS_AIDLC_DEFAULT_SCOPE` env var (which overrides) and the framework's hard-coded `classic` fallback. Express has a deterministic requirements-to-conditional-deploy path, and conditional protocol modules reduce fixed context without dropping reviewer recovery behavior. **Upgrade:** refresh your `dist/<harness>/` shell; in-flight workflows keep their persisted scope and need no migration; set `AWS_AIDLC_DEFAULT_SCOPE=feature` (Claude: the `.claude/settings.json` `env` block, which now ships `classic`) to keep the previous full-lifecycle default.
