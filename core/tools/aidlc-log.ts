@@ -14,6 +14,7 @@ import {
   activeIntent,
   activeSpace,
   auditBlockField,
+  boltSlugForUnit,
   emitError,
   errorMessage,
   extractMarkdownSection,
@@ -578,7 +579,6 @@ function reviewAttemptSummary(
   reviewer: string,
   unit: string | undefined,
   workflow: string | undefined,
-  trackBoltLifecycle: boolean,
 ): ReviewAttemptSummary {
   const relevant = new Set([
     "WORKFLOW_STARTED",
@@ -615,6 +615,7 @@ function reviewAttemptSummary(
   let boltStarted = false;
   let boltBatch: string | null = null;
   let boltSlug: string | null = null;
+  const expectedBoltSlug = unit === undefined ? null : boltSlugForUnit(unit);
   for (let i = 0; i < events.length; i++) {
     const entry = events[i];
     if (workflow !== undefined) {
@@ -636,9 +637,9 @@ function reviewAttemptSummary(
     }
     if (
       entry.event === "BOLT_STARTED" &&
-      trackBoltLifecycle &&
       unit !== undefined &&
-      auditBlockField(entry.block, "Bolt slug") === unit
+      auditBlockField(entry.block, "Bolt names") === unit &&
+      auditBlockField(entry.block, "Bolt slug") === expectedBoltSlug
     ) {
       floor = i;
       boltStarted = true;
@@ -647,10 +648,9 @@ function reviewAttemptSummary(
       continue;
     }
     if (
-      trackBoltLifecycle &&
       (entry.event === "BOLT_COMPLETED" || entry.event === "BOLT_FAILED") &&
-      unit !== undefined &&
-      auditBlockField(entry.block, "Bolt slug") === unit
+      expectedBoltSlug !== null &&
+      auditBlockField(entry.block, "Bolt slug") === expectedBoltSlug
     ) {
       floor = i;
       boltStarted = false;
@@ -661,18 +661,12 @@ function reviewAttemptSummary(
     if (auditBlockField(entry.block, "Stage") !== stage.slug) continue;
     if (entry.event === "GATE_REJECTED") {
       floor = i;
-      boltStarted = false;
-      boltBatch = null;
-      boltSlug = null;
     } else if (
       entry.event === "STAGE_STARTED" &&
       !unitMajor &&
       !auditBlockField(entry.block, "Workflow")?.startsWith("single-stage:")
     ) {
       floor = i;
-      boltStarted = false;
-      boltBatch = null;
-      boltSlug = null;
     }
   }
 
@@ -840,28 +834,6 @@ function handleReview(args: string[]): void {
     if (flags.unit && node.for_each !== "unit-of-work") {
       refuseReview(`Stage "${flags.stage}" is not per-unit; remove --unit.`);
     }
-    if (flags.unit) {
-      const resolution = resolveBoltDag(pd);
-      if (resolution.state === "malformed") {
-        refuseReview(
-          `Cannot record review for "${flags.stage}" unit "${flags.unit}": the authoritative ` +
-            `unit DAG is ${resolution.reason} (${resolution.detail}). Fix ` +
-            "unit-of-work-dependency.md before recording a per-unit review.",
-        );
-      }
-      if (resolution.state === "none") {
-        refuseReview(
-          `Cannot record review for "${flags.stage}" unit "${flags.unit}": no authoritative ` +
-            "unit DAG exists. Remove --unit for a stage-level no-DAG review.",
-        );
-      }
-      if (!resolution.units.includes(flags.unit)) {
-        refuseReview(
-          `Cannot record review for "${flags.stage}" unit "${flags.unit}": it is not present ` +
-            `in the authoritative unit DAG (${resolution.units.join(", ")}).`,
-        );
-      }
-    }
     const autonomousCandidate =
       flags.unit !== undefined && isAutonomousSwarmStage(pd, state, node);
     const attempt = reviewAttemptSummary(
@@ -871,8 +843,31 @@ function handleReview(args: string[]): void {
       flags.reviewer,
       flags.unit,
       fields.Workflow,
-      autonomousCandidate,
     );
+    if (flags.unit) {
+      const resolution = resolveBoltDag(pd);
+      if (resolution.state === "malformed") {
+        refuseReview(
+          `Cannot record review for "${flags.stage}" unit "${flags.unit}": the authoritative ` +
+            `unit DAG is ${resolution.reason} (${resolution.detail}). Fix ` +
+            "unit-of-work-dependency.md before recording a per-unit review.",
+        );
+      }
+      if (resolution.state === "none" && !attempt.boltStarted) {
+        refuseReview(
+          `Cannot record review for "${flags.stage}" unit "${flags.unit}": no authoritative ` +
+            "unit DAG exists and no matching active Bolt attempt was found. Remove --unit " +
+            "for a stage-level no-DAG review, or run swarm prepare before recording the " +
+            "per-unit review.",
+        );
+      }
+      if (resolution.state === "ok" && !resolution.units.includes(flags.unit)) {
+        refuseReview(
+          `Cannot record review for "${flags.stage}" unit "${flags.unit}": it is not present ` +
+            `in the authoritative unit DAG (${resolution.units.join(", ")}).`,
+        );
+      }
+    }
     const declared = node.review_class ?? "adversarial";
     let reviewClass: ReviewClass | null = null;
     let budget: number | null = null;

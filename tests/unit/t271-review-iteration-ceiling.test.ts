@@ -33,7 +33,10 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
-import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  boltSlugForUnit,
+  readAllAuditShards,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const LOG_TOOL = join(
   import.meta.dir,
@@ -674,6 +677,50 @@ describe("t271 review iteration ceiling", () => {
     expect(absent.status).not.toBe(0);
     expect(absent.stderr).toContain("no authoritative unit DAG exists");
     expect(readAllAuditShards(noDag)).not.toContain("**Event**: REVIEW_REQUESTED");
+
+    const boltBacked = createTestProject();
+    seedStateFile(boltBacked, "state-mid-inception.md");
+    seedAuditFile(boltBacked);
+    appendAuditEntry("BOLT_STARTED", {
+      "Bolt names": "2fa",
+      "Batch number": "1",
+      "Walking skeleton": "false",
+      "Bolt slug": boltSlugForUnit("2fa"),
+    }, boltBacked);
+    appendAuditEntry("STAGE_STARTED", {
+      Stage: "code-generation",
+    }, boltBacked);
+    expect(runReview(boltBacked, [...base, "--unit", "2fa"]).status).toBe(0);
+
+    const mismatchedBolt = createTestProject();
+    seedStateFile(mismatchedBolt, "state-mid-inception.md");
+    seedAuditFile(mismatchedBolt);
+    appendAuditEntry("BOLT_STARTED", {
+      "Bolt names": "unit-alpha",
+      "Batch number": "1",
+      "Walking skeleton": "false",
+      "Bolt slug": "unit-alpha",
+    }, mismatchedBolt);
+    const mismatched = runReview(mismatchedBolt, [...base, "--unit", "ghost"]);
+    expect(mismatched.status).not.toBe(0);
+    expect(mismatched.stderr).toContain("no matching active Bolt attempt");
+
+    const closedBolt = createTestProject();
+    seedStateFile(closedBolt, "state-mid-inception.md");
+    seedAuditFile(closedBolt);
+    appendAuditEntry("BOLT_STARTED", {
+      "Bolt names": "unit-alpha",
+      "Batch number": "1",
+      "Walking skeleton": "false",
+      "Bolt slug": "unit-alpha",
+    }, closedBolt);
+    appendAuditEntry("BOLT_FAILED", {
+      "Bolt slug": "unit-alpha",
+      Reason: "review-failed",
+    }, closedBolt);
+    const closed = runReview(closedBolt, [...base, "--unit", "unit-alpha"]);
+    expect(closed.status).not.toBe(0);
+    expect(closed.stderr).toContain("no matching active Bolt attempt");
 
     const proj = seedProject("feature");
     const unknown = runReview(proj, [...base, "--unit", "ghost"]);

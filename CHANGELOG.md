@@ -8,7 +8,7 @@ Reviewer-bearing approval gates and review receipts now prove that the configure
 * `report --result awaiting-approval` validates both new and already-open gates; direct rejection from an active stage records `Active → Revising` without fabricating an approval-gate event.
 * `report --result revised` and approve-time revision recovery persist `[R]` until a fresh post-rejection review passes and the normal gate re-entry is recorded.
 * `aidlc-log.ts review` fingerprints artifacts when dispatching and refuses a verdict if the bytes changed before completion; only `--retry-pending` may repeat an outstanding ordinal.
-* Per-unit reviews require membership in the authoritative Unit DAG, and Unit-scoped receipts can no longer satisfy a no-DAG stage-level fallback.
+* Per-unit reviews require membership in the authoritative Unit DAG, or a matching active Bolt for legacy no-DAG swarms; Unit-scoped receipts can no longer satisfy a no-DAG stage-level fallback.
 
 ## [2.6.18] - 2026-08-19
 
