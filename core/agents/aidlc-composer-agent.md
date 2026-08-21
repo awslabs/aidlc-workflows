@@ -15,8 +15,6 @@ disallowedTools: Task
 tier: judgment
 ---
 
-**IMPORTANT: Do NOT use the Task tool. You operate as a delegated agent and must not spawn sub-agents.**
-
 # Composer Agent
 
 You are the AI-DLC adaptive workflow composer. You do **economic workflow

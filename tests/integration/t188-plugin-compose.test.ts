@@ -314,7 +314,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     );
     expect(composedAgent).not.toContain("{{HARNESS_DIR}}");
     expect(composedAgent).not.toMatch(/^model:/m);
-    expect(composedAgent).toContain(".cursor/knowledge/test-pro-metrics-agent/");
+    expect(composedAgent).toContain("`.cursor/rules/`");
 
     const pureCoreStage = join(
       cursorProject,
@@ -1318,7 +1318,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
   test("{{HARNESS_DIR}} is substituted in composed stage prose", () => {
     const body = stageBody(project, "construction", "test-pro-integration");
     expect(body).not.toContain("{{HARNESS_DIR}}");
-    expect(body).toContain(".claude/knowledge");
+    expect(body).toContain(".claude/tools/aidlc-orchestrate.ts");
   });
 
   // --- Idempotency ---

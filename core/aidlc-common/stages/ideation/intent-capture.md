@@ -36,19 +36,14 @@ MANDATORY: Follow stage-protocol.md for approval gates, question format, and com
 
 ## Steps
 
-### Step 1: Load Agent Personas
-
-Load aidlc-product-agent persona from `agents/aidlc-product-agent.md` and knowledge from `{{HARNESS_DIR}}/knowledge/aidlc-product-agent/`.
-Load aidlc-architect-agent persona from `agents/aidlc-architect-agent.md` for technical context perspective.
-
-### Step 2: Load Prior Context
+### Step 1: Load Prior Context
 
 - Read user's project description from $ARGUMENTS or `<record>/audit/<host>-<clone>.md`
 - Check for existing `<record>/` artifacts from prior sessions
 - Load guardrails from
   `aidlc/spaces/<active-space>/memory/{org,team,project}.md`
 
-### Step 3: Generate Clarifying Questions
+### Step 2: Generate Clarifying Questions
 
 Create `<record>/ideation/intent-capture/intent-capture-questions.md`.
 
@@ -91,14 +86,14 @@ numbering so their source ids remain stable.
 
 Then follow the unified question flow from stage-protocol.md section 3: offer Guide Me / Edit File / Chat modes.
 
-### Step 4: Collect and Analyze Answers
+### Step 3: Collect and Analyze Answers
 
 After all answers collected:
 1. Confirm ALL [Answer]: tags are filled in
 2. Run ambiguity detection and contradiction analysis
 3. Create follow-up questions if needed
 
-### Step 5: Generate Artifacts
+### Step 4: Generate Artifacts
 
 Apply this grounding contract to both artifacts:
 
@@ -134,7 +129,7 @@ column. Never invent a stakeholder role, interest, authority, or communication
 requirement. For required but unresolved fields, write
 `Unknown (open question) [assumption]`; omit optional fields.
 
-### Step 6: Resolve Assumptions
+### Step 5: Resolve Assumptions
 
 If both `## Assumptions & Open Questions` sections contain `None.`, continue.
 Otherwise:
@@ -161,13 +156,13 @@ Otherwise:
 Do not invoke the reviewer or proceed to completion while an assumption
 confirmation `[Answer]:` is blank.
 
-### Step 7: Completion Handoff
+### Step 6: Completion Handoff
 
 Hand completion to `stage-protocol.md` via
 `bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage intent-capture --result <outcome>`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
-### Step 8: Present Completion & Request Approval
+### Step 7: Present Completion & Request Approval
 
 Use stage-protocol.md completion template with completion emoji: :bulb:
 - Summary of intent statement and stakeholder map

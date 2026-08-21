@@ -1148,13 +1148,10 @@ leads with no support agents.
 
 ### Steps
 
-1. **Load Agent Personas** -- Load aidlc-pipeline-deploy-agent persona and
-   knowledge.
-
-2. **Load Prior Context** -- Read build/test results, infrastructure design
+1. **Load Prior Context** -- Read build/test results, infrastructure design
    (if exists), and workspace profile for existing CI configuration.
 
-3. **Generate Clarifying Questions** -- Create
+2. **Generate Clarifying Questions** -- Create
    `<record>/construction/ci-pipeline/ci-pipeline-questions.md` with
    questions:
    - What CI tool is in use (CodePipeline, CodeBuild, GitHub Actions,
@@ -1165,24 +1162,24 @@ leads with no support agents.
 
    Follow stage-protocol.md question flow.
 
-4. **Collect and Analyze Answers** -- Validate CI choices against existing
+3. **Collect and Analyze Answers** -- Validate CI choices against existing
    infrastructure and team capabilities.
 
-5. **Generate Artifacts** -- Create CI pipeline configuration (buildspec.yml,
+4. **Generate Artifacts** -- Create CI pipeline configuration (buildspec.yml,
    workflow YAML, or equivalent), quality gate definitions, and artifact
    repository configuration.
 
-6. **Phase Boundary Verification** -- Run Construction-to-Operation
+5. **Phase Boundary Verification** -- Run Construction-to-Operation
    verification check:
    - Architecture-to-code-to-tests alignment
    - All code traces to design
    - Test coverage against acceptance criteria
    - Write results to `<record>/verification/phase-check-construction.md`
 
-7. **Prepare Completion** -- Verify the CI and boundary artifacts. Do not
+6. **Prepare Completion** -- Verify the CI and boundary artifacts. Do not
    edit stage or phase state; the reported gate outcome owns the transition.
 
-8. **Completion** -- Present completion message and approval gate.
+7. **Completion** -- Present completion message and approval gate.
 
 ### Outputs
 

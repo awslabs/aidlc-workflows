@@ -168,7 +168,7 @@ Mirroring the reference recipe, here is the workflow end to end.
    agents ship it today (see the reviewer personas' `## Turn Budget` section
    for the pairing convention).
    Write the body to match the shipped files' structure (Core Responsibilities,
-   Stages Owned, Collaboration, Knowledge Loading, Key Principles).
+   Collaboration, optional Memory Focus, Key Principles).
 2. **Add knowledge files** under `core/knowledge/aidlc-<slug>-agent/` for the
    methodology the persona should load on activation.
 3. **Wire it into stages** — add the slug to the `lead_agent` /

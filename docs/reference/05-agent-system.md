@@ -44,10 +44,9 @@ Below the frontmatter, the markdown body defines:
 
 | Section | Purpose |
 |---------|---------|
-| **Core Responsibilities** | What the agent does in each of its owned stages |
-| **Stages Owned** | Lead and supporting stage assignments |
+| **Core Responsibilities** | What the agent does |
 | **Collaboration** | Receives from / Works with / Hands off to |
-| **Knowledge Loading** | The 6-step loading order (see [Knowledge System](10-knowledge-system.md)) |
+| **Memory Focus** | Agent-specific memory topics to consult when relevant |
 | **Key Principles** | Behavioral guidelines for the agent |
 
 ---
@@ -193,7 +192,7 @@ Agent display names and example knowledge files are authoritative in each agent'
 - **Change tools**: Add or edit a `tools:` allowlist in frontmatter to narrow the agent; omit it to inherit the full session toolset. A `tools:` list drops inherited MCP tools unless the `mcp__<server>__<tool>` ids are also listed.
 - **Change tier**: Edit `tier:` to `judgment`, `balanced`, or `templated` and regenerate (`bun scripts/package.ts`). To force a specific model on ONE agent in an installed copy instead, edit the projected `model:` in your `dist/<harness>/` agent file (Claude Code accepts aliases, full ids, and `inherit`).
 - **Change behavior**: Edit the markdown body sections (responsibilities, principles).
-- **Change stage assignments**: Edit both the agent file (Stages Owned section) and the relevant stage files (`core/aidlc-common/stages/`), then regenerate with `bun scripts/package.ts` — the compiled stage graph is derived from stage frontmatter, never hand-edited.
+- **Change stage assignments**: Edit `lead_agent` / `support_agents` in the relevant stage files (`core/aidlc-common/stages/`), then regenerate with `bun scripts/package.ts` — the compiled stage graph is derived from stage frontmatter, never hand-edited.
 
 ---
 

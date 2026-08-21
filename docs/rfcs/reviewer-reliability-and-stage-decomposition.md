@@ -64,8 +64,8 @@ stages (`functional-design`, `nfr-design`, `nfr-requirements`,
 `infrastructure-design`), and `code-generation`. Two reviewer personas ship:
 `aidlc-product-lead-agent` (product/requirements stages) and
 `aidlc-architecture-reviewer-agent` (design/technical stages). Both persona
-files carry `IMPORTANT: Do NOT use the Task tool` — a reviewer is a leaf; it
-must not spawn its own sub-agents.
+files declare `disallowedTools: Task` — a reviewer is a leaf and cannot spawn
+its own sub-agents.
 
 ### 2.2 Layer 2 — Compile (validation + bake onto the node)
 

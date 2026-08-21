@@ -90,15 +90,14 @@ as seed context so the stage does not re-ask "what do you want to build?"
 
 ### Steps
 
-1. **Load Agent Personas** -- Load aidlc-product-agent persona and knowledge. Load aidlc-architect-agent persona for technical context perspective.
-2. **Load Prior Context** -- Read user's project description. Check for existing artifacts. Load guardrails.
-3. **Generate Clarifying Questions** -- Create `<record>/ideation/intent-capture/intent-capture-questions.md` with a `## Sources` register for the initial description, workflow-selected scope, and any active-memory rules used. Ask about the business problem, customer, success metrics, initiative trigger, stakeholders, decision authority, communication needs, and whether the workflow-selected scope matches the intended product boundary. Uses `[Answer]:` tag format with A-E options plus X (Other). Offers tri-mode question flow.
-4. **Collect and Analyze Answers** -- Confirm all tags filled. Run ambiguity/contradiction analysis.
-5. **Generate Grounded Artifacts** -- Produce the intent statement and stakeholder map. Every substantive paragraph, list item, and table data row carries an inline `[desc]`, `[scope]`, `[Q<n>]`, `[memory:<id>]`, or `[assumption]` tag. Both files include `## Assumptions & Open Questions`.
-6. **Resolve Assumptions** -- If either artifact retains an assumption, ask the user to accept it or convert it into follow-up questions. Acceptance preserves the assumption label; it does not promote the claim to fact.
-7. **Prepare Completion** -- Run Product Lead review, verify both artifacts, and report
+1. **Load Prior Context** -- Read user's project description. Check for existing artifacts. Load guardrails.
+2. **Generate Clarifying Questions** -- Create `<record>/ideation/intent-capture/intent-capture-questions.md` with a `## Sources` register for the initial description, workflow-selected scope, and any active-memory rules used. Ask about the business problem, customer, success metrics, initiative trigger, stakeholders, decision authority, communication needs, and whether the workflow-selected scope matches the intended product boundary. Uses `[Answer]:` tag format with A-E options plus X (Other). Offers tri-mode question flow.
+3. **Collect and Analyze Answers** -- Confirm all tags filled. Run ambiguity/contradiction analysis.
+4. **Generate Grounded Artifacts** -- Produce the intent statement and stakeholder map. Every substantive paragraph, list item, and table data row carries an inline `[desc]`, `[scope]`, `[Q<n>]`, `[memory:<id>]`, or `[assumption]` tag. Both files include `## Assumptions & Open Questions`.
+5. **Resolve Assumptions** -- If either artifact retains an assumption, ask the user to accept it or convert it into follow-up questions. Acceptance preserves the assumption label; it does not promote the claim to fact.
+6. **Prepare Completion** -- Run Product Lead review, verify both artifacts, and report
    the gate outcome through `aidlc-orchestrate.ts`.
-8. **Present Completion & Request Approval** -- Standard 2-option gate.
+7. **Present Completion & Request Approval** -- Standard 2-option gate.
 
 ### Outputs
 
