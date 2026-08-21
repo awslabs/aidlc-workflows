@@ -3361,8 +3361,7 @@ function countFilesByLang(
   dir: string,
   counts: Record<string, number>,
   maxDepth: number,
-  skipDirs?: ReadonlySet<string>,
-  skipNestedContainers = false
+  skipDirs?: ReadonlySet<string>
 ): void {
   if (maxDepth < 0) return;
   let entries: string[];
@@ -3384,7 +3383,6 @@ function countFilesByLang(
     if (st.isSymbolicLink()) continue;
     if (st.isDirectory()) {
       if (skipDirs?.has(entry)) continue;
-      if (skipNestedContainers && skipNestedScanDir(entry)) continue;
       countFilesByLang(full, counts, maxDepth - 1);
     } else if (st.isFile()) {
       const dot = entry.lastIndexOf(".");
@@ -3511,11 +3509,10 @@ function hasNonDevDeps(projectDir: string): boolean {
 //       countFilesByLang(dir, counts, 0), same SCAN_EXCLUDE filter + symlink
 //       skip, files only) PLUS a depth-6 recurse into each present
 //       SCAN_SOURCE_DIRS entry.
-//     - a nested container: 1, sweeping the container's own files plus one
-//       level of arbitrary candidate subdirs so a project under `wordbook/**`
-//       or `backend/server/**` is seen. Excluded/container source directories
-//       are skipped by that sweep. A present SCAN_SOURCE_DIRS entry is counted
-//       only by the depth-6 recurse below, so files are never counted twice.
+//     - a nested container: 0, sweeping files directly under the visited
+//       directory. Arbitrary child containers are evaluated independently by
+//       the bounded walker. A present SCAN_SOURCE_DIRS entry is counted only by
+//       the depth-6 recurse below, so files are never counted twice.
 interface DirSignals {
   brownfield: boolean;
   langCounts: Record<string, number>;
@@ -3523,11 +3520,7 @@ interface DirSignals {
   buildSystem: string;
 }
 
-function scanSignals(
-  dir: string,
-  fileScanDepth: number,
-  nestedContainer = false
-): DirSignals {
+function scanSignals(dir: string, fileScanDepth: number): DirSignals {
   let entries: string[] = [];
   try {
     entries = readdirSync(dir);
@@ -3540,19 +3533,9 @@ function scanSignals(
   // under dir (its recursion guard returns immediately at depth -1), matching
   // the base top-level file sweep. Any present known source dir is then
   // recursed at the base depth cap. The sweep itself never enters a
-  // SCAN_SOURCE_DIRS entry: at depth 1 (the nested-container scan) it would
-  // count the files directly under <dir>/src etc. that the depth-6 recurse
-  // below counts again, inflating that language and potentially flipping the
-  // reported primary. (At the root's depth 0 the skip is a no-op: the sweep
-  // never enters subdirs there.)
+  // SCAN_SOURCE_DIRS entry, which the depth-6 recurse below counts separately.
   const langCounts: Record<string, number> = {};
-  countFilesByLang(
-    dir,
-    langCounts,
-    fileScanDepth,
-    SCAN_SOURCE_DIR_SET,
-    nestedContainer
-  );
+  countFilesByLang(dir, langCounts, fileScanDepth, SCAN_SOURCE_DIR_SET);
   for (const dirName of SCAN_SOURCE_DIRS) {
     if (entrySet.has(dirName)) {
       countFilesByLang(join(dir, dirName), langCounts, 6);
@@ -3684,7 +3667,7 @@ export function detectWorkspace(projectDir: string): ScanResult {
 
         const parts = [...parentParts, entry];
         const depth = parentDepth + 1;
-        const sub = scanSignals(full, 1, true);
+        const sub = scanSignals(full, 0);
         if (sub.brownfield) {
           brownfield = true;
           nestedHits.push(parts.join("/"));

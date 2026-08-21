@@ -130,6 +130,7 @@ export function withEnvAndFreshCaches<T>(
  */
 export function resetAidlcEnv(): void {
   delete process.env.AWS_AIDLC_DEFAULT_SCOPE;
+  delete process.env.AIDLC_SKIP_SOURCE_FRESHNESS;
 }
 
 /**

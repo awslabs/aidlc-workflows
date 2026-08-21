@@ -115,7 +115,7 @@ describe("t203 nested-project detection (bounded recursive fallback)", () => {
     put(d, ["backend", "server", "main.go"], "package main\n");
     const scan = detectWorkspace(d);
     expect(scan.projectType).toBe("Brownfield");
-    expect(scan.nestedRoot).toBe("backend");
+    expect(scan.nestedRoot).toBe("backend/server");
     expect(scan.languages).toBe("Go");
   });
 
@@ -222,6 +222,37 @@ describe("t203 nested-project detection (bounded recursive fallback)", () => {
     expect(scan.projectType).toBe("Greenfield");
     expect(scan.nestedRoot).toBeUndefined();
     expect(scan.languages).toBe("Unknown");
+  });
+
+  test("direct source file in a fourth arbitrary container stays Greenfield", () => {
+    const d = tmp();
+    put(d, ["one", "two", "three", "four", "main.py"], "print(1)\n");
+    const scan = detectWorkspace(d);
+    expect(scan.projectType).toBe("Greenfield");
+    expect(scan.nestedRoot).toBeUndefined();
+    expect(scan.languages).toBe("Unknown");
+  });
+
+  test("manifest in a fourth arbitrary container stays Greenfield", () => {
+    const d = tmp();
+    put(d, ["one", "two", "three", "four", "go.mod"], "module x\n");
+    const scan = detectWorkspace(d);
+    expect(scan.projectType).toBe("Greenfield");
+    expect(scan.nestedRoot).toBeUndefined();
+    expect(scan.buildSystem).toBe("Unknown");
+  });
+
+  test("sibling projects aggregate independently without a premature parent hit", () => {
+    const d = tmp();
+    put(d, ["services", "api", "main.py"], "print(1)\n");
+    put(d, ["services", "web", "package.json"], PKG_REACT);
+    put(d, ["services", "web", "src", "app.ts"], "export const app = 1;\n");
+    const scan = detectWorkspace(d);
+    expect(scan.projectType).toBe("Brownfield");
+    expect(scan.nestedRoot).toBe("services/api, services/web");
+    expect(scan.languages).toBe("Python, TypeScript");
+    expect(scan.frameworks).toBe("React");
+    expect(scan.buildSystem).toBe("npm (package.json)");
   });
 
   test("source under an excluded name at depth 2 stays Greenfield", () => {

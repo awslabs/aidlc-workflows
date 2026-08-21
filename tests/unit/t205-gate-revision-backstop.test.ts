@@ -83,6 +83,7 @@ function guarded(proj: string, args: string[]): { rc: number; out: string } {
   env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD = "1";
   env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS = "1";
   delete env.AIDLC_SKIP_REVISION_BACKSTOP;
+  delete env.AIDLC_DISABLE_ENSEMBLE_EVIDENCE;
   const r = spawnSync(BUN, [STATE, ...args, "--project-dir", proj], {
     encoding: "utf-8",
     env,
@@ -97,6 +98,7 @@ function guardedReport(proj: string, args: string[]): { rc: number; out: string 
   env.AIDLC_SKIP_ARTIFACT_GUARD = "1";
   env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD = "1";
   delete env.AIDLC_SKIP_REVISION_BACKSTOP;
+  delete env.AIDLC_DISABLE_ENSEMBLE_EVIDENCE;
   const r = spawnSync(BUN, [ORCHESTRATE, "report", ...args, "--project-dir", proj], {
     encoding: "utf-8",
     env,
@@ -154,6 +156,34 @@ function recordReview(proj: string, slug: string, iteration: number): void {
     const r = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8", env: process.env });
     if ((r.status ?? -1) !== 0) {
       throw new Error(`recordReview failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
+    }
+  }
+}
+
+function recordPipelineLinks(proj: string, repos: string[] = []): void {
+  const chains = repos.length > 1 ? repos : [undefined];
+  for (const repo of chains) {
+    for (const link of ["aidlc-developer-agent", "aidlc-architect-agent"]) {
+      const args = [
+        LOG,
+        "link",
+        "--stage",
+        "reverse-engineering",
+        "--link",
+        link,
+        "--project-dir",
+        proj,
+      ];
+      if (repo) args.splice(args.length - 2, 0, "--repo", repo);
+      const result = spawnSync(BUN, args, {
+        encoding: "utf-8",
+        env: process.env,
+      });
+      if ((result.status ?? -1) !== 0) {
+        throw new Error(
+          `recordPipelineLinks failed: ${result.stdout ?? ""}${result.stderr ?? ""}`,
+        );
+      }
     }
   }
 }
@@ -563,8 +593,10 @@ describe("t205: approve-time gate-revision backstop", () => {
   // Revision Count 0 with no GATE_REJECTED row. Bug flow on the RE gate:
   // gate-start; HUMAN_TURN (request changes); codekb ARTIFACT_UPDATED (the
   // conversational revision); HUMAN_TURN (approve); report -> approve ->
-  // backfill. The repo-b write proves that any member of a multi-repo intent's
-  // recorded set can supply the revision evidence.
+  // backfill. The recovered rejection invalidates the original pipeline
+  // receipts, so approval must refuse until both repo chains run again. The
+  // repo-b write proves that any member of a multi-repo intent's recorded set
+  // can supply the revision evidence.
   test("12: codekb revision in a multi-repo intent backfills through report", () => {
     // Re-seed with the brownfield fixture whose Current Stage is
     // reverse-engineering (the default seed's mid-ideation fixture has RE
@@ -576,6 +608,7 @@ describe("t205: approve-time gate-revision backstop", () => {
     const slug = field(proj, "Current Stage");
     expect(slug).toBe("reverse-engineering");
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    recordPipelineLinks(proj, ["repo-a", "repo-b"]);
     guarded(proj, ["gate-start", slug]); // anchor
     recordHumanTurn(proj); // human requests changes at the RE gate (the pivot)
     // The conductor revises a codekb artifact in place - the production path
@@ -585,14 +618,15 @@ describe("t205: approve-time gate-revision backstop", () => {
       join(proj, "aidlc", "spaces", DEFAULT_SPACE, "codekb", "repo-b", "architecture.md"),
     );
     recordHumanTurn(proj); // human approves
-    const r = guardedReport(proj, [
+    const staleApproval = guardedReport(proj, [
       "--result",
       "approved",
       "--user-input",
       "looks good now",
     ]);
-    expect(r.rc).toBe(0);
-    expect(r.out).toContain('"kind":"done"');
+    expect(staleApproval.rc).toBe(0);
+    expect(staleApproval.out).toContain('"kind":"error"');
+    expect(staleApproval.out).toContain("PIPELINE_LINK_COMPLETED");
 
     expect(field(proj, "Revision Count")).toBe("1");
     const rejected = auditBlocks(proj).filter(
@@ -600,9 +634,20 @@ describe("t205: approve-time gate-revision backstop", () => {
     );
     expect(rejected.length).toBe(1);
     expect(rejected[0].recovered).toBe(true);
-    expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
     // The hook actually logged the codekb write (the other half of the fix).
     expect(eventCount(proj, "ARTIFACT_UPDATED")).toBeGreaterThanOrEqual(1);
+
+    recordPipelineLinks(proj, ["repo-a", "repo-b"]);
+    const freshApproval = guardedReport(proj, [
+      "--result",
+      "approved",
+      "--user-input",
+      "looks good now",
+    ]);
+    expect(freshApproval.rc).toBe(0);
+    expect(freshApproval.out).toContain('"kind":"done"');
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
   });
 
   // --- Scenario 13: codekb remains space-level and fully audited, but revision
@@ -617,6 +662,7 @@ describe("t205: approve-time gate-revision backstop", () => {
     const slug = field(proj, "Current Stage");
     expect(slug).toBe("reverse-engineering");
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    recordPipelineLinks(proj);
     guarded(proj, ["gate-start", slug]);
     recordHumanTurn(proj);
     const revisionCountBefore = field(proj, "Revision Count");

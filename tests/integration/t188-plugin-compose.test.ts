@@ -15,7 +15,7 @@
 // in-tree generators (aidlc-graph compile); running them as children mirrors how
 // a host's SessionStart hook invokes them and isolates their temp builds.
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -39,6 +39,7 @@ import {
 const PACKAGE_TS = join(REPO_ROOT, "scripts", "package.ts");
 const BUN = process.execPath; // the bun running this test — robust for hooks
 const TIMEOUT_MS = 60_000;
+setDefaultTimeout(TIMEOUT_MS);
 
 const PLUGIN = "test-pro";
 const CLAUDE_DIST = join(REPO_ROOT, "dist", "claude", ".claude");
