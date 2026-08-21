@@ -88,6 +88,7 @@ function run(
   const env = { ...process.env, ...extraEnv };
   if (tool === STATE) {
     env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS = "1";
+    env.AIDLC_SKIP_SOURCE_FRESHNESS = "1";
   }
   const res = spawnSync(
     process.execPath,

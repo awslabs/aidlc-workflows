@@ -13,6 +13,7 @@ import {
   type CheckboxState,
   checkSummaryConfirmationEvidence,
   codekbDir,
+  codekbRepoName,
   countCheckboxes,
   emitError,
   errorMessage,
@@ -44,6 +45,7 @@ import {
   parseMemoryEntries,
   parseRefsList,
   parseStateStageSuffixes,
+  pipelineLinkEvidence,
   producesArtifactFile,
   readAllAuditShards,
   readStateFile,
@@ -1400,9 +1402,12 @@ function artifactGuardDisabled(): boolean {
   return process.env.AIDLC_SKIP_ARTIFACT_GUARD === "1";
 }
 
-// Mirrors aidlc-orchestrate.ts isAutonomousSwarmCandidate for the lifecycle
-// writer. A missing scope fails closed for a subagent stage: without it, this
-// tool cannot prove that the stage is the non-swarm skeleton gate.
+// Mirrors both aidlc-orchestrate.ts isAutonomousSwarmCandidate and the
+// unit-major suppression at eligibleAutonomousSwarmBatches. Under unit-major
+// the WALK owns per-unit work inline and needs the interactive lifecycle
+// ledger, so its `unit start` must not be refused as swarm-owned. A missing
+// scope fails closed for a subagent stage: without it, this tool cannot prove
+// that the stage is the non-swarm skeleton gate.
 function autonomousSwarmOwnsStage(
   stage: { slug: string; phase: string; for_each?: string; mode?: string },
   stateContent: string,
@@ -1410,6 +1415,9 @@ function autonomousSwarmOwnsStage(
   if (stage.phase !== "construction") return false;
   if (stage.for_each !== "unit-of-work" || stage.mode !== "subagent") return false;
   if (!isAutonomousMode(stateContent)) return false;
+  if (getField(stateContent, "Construction Iteration")?.trim() === "unit-major") {
+    return false;
+  }
   const scope = getField(stateContent, "Scope");
   if (!scope) return true;
   const first = firstInScopeStageOfPhase("construction", scope);
@@ -1453,9 +1461,9 @@ function revisionBackstopDisabled(): boolean {
 // Resolve the directories a stage's produces[] artifacts would live under,
 // mirroring aidlc-orchestrate.ts's resolveArtifactPath against the v2 per-intent
 // seams. Three placement classes:
-//   - codekb (reverse-engineering): the produces live DIRECTLY under each repo
-//     dir beneath the space-level codekb root (no <slug> subdir - see the codekb
-//     arm of resolveArtifactPath). We glob every repo dir under the codekb root.
+//   - codekb (reverse-engineering): the produces live DIRECTLY under each
+//     registered repo dir beneath the space-level codekb root (no <slug> subdir
+//     - see the codekb arm of resolveArtifactPath).
 //   - per-unit Construction (for_each: unit-of-work): the {unit} segment is
 //     unknown at approve/advance time, so we glob every
 //     <record>/construction/<unit>/<slug>/ instead of resolving one.
@@ -1468,21 +1476,9 @@ function producesDirsForStage(
   stage: { slug: string; phase: string; for_each?: string }
 ): string[] {
   if (KNOWN_CODEKB_STAGES.has(stage.slug)) {
-    // codekbDir(pd, "<repo>") is `<pd>/aidlc/spaces/<space>/codekb/<repo>`; its
-    // parent is the codekb root we glob. Built off the seam so the path is not
-    // re-hardcoded here.
-    const codekbRoot = join(codekbDir(pd, "_"), "..");
-    if (!existsSync(codekbRoot)) return [];
-    const dirs: string[] = [];
-    for (const repo of readdirSync(codekbRoot)) {
-      const d = join(codekbRoot, repo);
-      try {
-        if (statSync(d).isDirectory()) dirs.push(d);
-      } catch {
-        /* unreadable entry - skip */
-      }
-    }
-    return dirs;
+    const repos = intentRepos(pd);
+    const resolved = repos.length > 0 ? repos : [codekbRepoName(pd)];
+    return resolved.map((repo) => codekbDir(pd, repo));
   }
   const rec = recordDir(pd);
   if (rec === null) return [];
@@ -1540,7 +1536,15 @@ function producesArtifactsExist(
       if (allVacuous) return true;
     }
   }
-  for (const dir of producesDirsForStage(pd, stage)) {
+  const dirs = producesDirsForStage(pd, stage);
+  if (KNOWN_CODEKB_STAGES.has(stage.slug)) {
+    return dirs.length > 0 && dirs.every((dir) =>
+      produces.every((name) =>
+        isRegularFile(join(dir, artifactFilename(name)))
+      )
+    );
+  }
+  for (const dir of dirs) {
     for (const name of produces) {
       if (isRegularFile(join(dir, artifactFilename(name)))) return true;
     }
@@ -1780,10 +1784,12 @@ function verifyReviewerPrecondition(
     reviewer?: string;
     reviewer_max_iterations?: number;
     review_class?: "adversarial" | "advisory";
+    workspace_requires?: boolean;
     produces?: string[];
     optional_produces?: string[];
     produces_kinds?: Record<string, string[]>;
-  }
+  },
+  requireReceiptExistence = true,
 ): void {
   if (!stage.reviewer) return; // stage declares no reviewer — nothing to enforce
 
@@ -1806,9 +1812,6 @@ function verifyReviewerPrecondition(
   }
 
   const reviewer = stage.reviewer;
-  if (readAllAuditShards(pd).length === 0) {
-    reviewerPreconditionError(stage.slug, reviewer);
-  }
 
   // The fresh-receipt scan lives in aidlc-lib.ts (freshReviewReceipts) so the
   // review-freeze PreToolUse hook and this precondition read the SAME window:
@@ -1817,6 +1820,33 @@ function verifyReviewerPrecondition(
   // and per-unit write invalidation are all documented there.
   const receipts = freshReviewReceipts(pd, content, stage, { reviewClass });
   const perUnit = stage.for_each === "unit-of-work";
+
+  // Source-state equality composes with v2's bounded stale-receipt recovery:
+  // the newest modern binding is reconciled once for the workspace. A mismatch
+  // blocks every completion route and exposes one Recovery: stale-receipt pass,
+  // even when the normal iteration budget is exhausted. One fresh receipt
+  // against the current tree restores the collected per-unit receipts. This is
+  // deliberately not per-unit attribution; see RFC #662.
+  const sourceFreshnessOff =
+    process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1";
+  const settledSwarm = isSettledSwarmForArtifactGuard(pd, stage, content);
+  const staleSource =
+    stage.workspace_requires === true &&
+    !sourceFreshnessOff &&
+    !settledSwarm &&
+    receipts.sourceStale;
+  if (staleSource) {
+    staleSourcePreconditionError(
+      stage.slug,
+      reviewer,
+      receipts.sourceStaleProgress?.recoverySpent === true,
+    );
+  }
+
+  // Already-[x] recovery skips only existence/cardinality. A modern binding was
+  // still compared above, so crash-window recovery cannot ship changed source.
+  if (!requireReceiptExistence) return;
+
   const sawStageReview = receipts.stageVerdict !== null;
   const reviewedUnits = new Set(receipts.unitVerdicts.keys());
 
@@ -1913,6 +1943,59 @@ function verifyReviewerPrecondition(
   }
 }
 
+function staleSourcePreconditionError(
+  slug: string,
+  reviewer: string,
+  recoverySpent: boolean,
+): never {
+  if (recoverySpent) {
+    error(
+      `Refusing to complete "${slug}": the workspace source no longer matches ` +
+        `the stale-receipt recovery review (source-fingerprint mismatch). ` +
+        `Present this at the approval gate. Only a human Request Changes decision ` +
+        `resets the review attempt; do not record it on the human's behalf.`,
+    );
+  }
+  error(
+    `Refusing to complete "${slug}": the workspace source no longer matches the ` +
+      `state of the most recent recorded review (source-fingerprint mismatch). ` +
+      `Re-invoke ${reviewer} against the current source, record the one bounded ` +
+      `stale-receipt recovery REVIEW_REQUESTED/REVIEW_COMPLETED pair, or revert ` +
+      `the source edit. The recovery pass remains available after the normal ` +
+      `review iteration budget is exhausted.`,
+  );
+}
+
+function verifyPipelineLinkPrecondition(
+  pd: string,
+  stage: {
+    slug: string;
+    name: string;
+    mode?: string;
+    lead_agent: string;
+    support_agents: string[];
+  },
+): void {
+  if (
+    stage.mode !== "pipeline" ||
+    process.env.AIDLC_DISABLE_ENSEMBLE_EVIDENCE === "1"
+  ) {
+    return;
+  }
+  const evidence = pipelineLinkEvidence(pd, stage);
+  if (evidence.missing.length === 0) return;
+  const missing = evidence.missing.map(({ link, repo }) =>
+    repo ? `${repo}:${link}` : link
+  );
+  error(
+    `Refusing to complete "${stage.slug}": mode: pipeline requires a current-attempt ` +
+      `PIPELINE_LINK_COMPLETED receipt for every declared link. Missing: ${missing.join(", ")}. ` +
+      `Run aidlc-log.ts link after each link returns` +
+      `${evidence.repos.length > 0 ? " with --repo <repo>" : ""}, or set ` +
+      `AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1 only to recover a legitimately-run in-flight pipeline.`,
+  );
+}
+
 function staleReviewPreconditionError(
   slug: string,
   reviewer: string,
@@ -1969,6 +2052,8 @@ function reviewRecoverySpentInCurrentAttempt(
       );
   if (reviewClass === "none") return false;
   const receipts = freshReviewReceipts(pd, content, stage, { reviewClass });
+  if (receipts.sourceRecoverySpent) return true;
+  if (receipts.sourceStaleProgress?.recoverySpent === true) return true;
   if (receipts.stageStaleProgress?.recoverySpent === true) return true;
   for (const progress of receipts.unitStaleProgress.values()) {
     if (progress.recoverySpent) return true;
@@ -2110,16 +2195,22 @@ function handleAdvance(args: string[]): void {
     return;
   }
 
+  // A true replay above is already fully applied and remains idempotent. A
+  // crash-window partial approval does not satisfy all replay predicates, so it
+  // still reaches the source comparison. Already-[x] recovery may lack review
+  // receipts, but any modern source binding still has to match.
+  verifyReviewerPrecondition(
+    pd,
+    content,
+    completedStage,
+    !alreadyMarkedCompleted,
+  );
+
   // Artifact guard (issue #366). Only enforce when THIS advance is the
-  // transition that completes the stage - i.e. it was not already [x]. When
-  // approve delegates here the slug is already [x] and approve ran the guard
-  // itself, so skip to avoid a double check. A direct `advance <active-slug>`
-  // (the gate-skipping attack path) is NOT alreadyMarkedCompleted, so it is
-  // guarded. Runs before any mutation; error() exits leaving state untouched.
   if (!alreadyMarkedCompleted) {
     verifyStageArtifacts(pd, completedStage);
     verifySummaryConfirmationPrecondition(pd, content, completedStage);
-    verifyReviewerPrecondition(pd, content, completedStage);
+    verifyPipelineLinkPrecondition(pd, completedStage);
   }
 
   // Detect phase boundary (for PHASE_COMPLETED/VERIFIED/STARTED emissions)
@@ -2232,10 +2323,16 @@ function handleFinalize(args: string[]): void {
   const alreadyMarkedCompleted =
     parseCheckboxes(content).find((c) => c.slug === completedSlug)?.state ===
     "completed";
+  verifyReviewerPrecondition(
+    pd,
+    content,
+    completedStage,
+    !alreadyMarkedCompleted,
+  );
   if (!alreadyMarkedCompleted) {
     verifyStageArtifacts(pd, completedStage);
     verifySummaryConfirmationPrecondition(pd, content, completedStage);
-    verifyReviewerPrecondition(pd, content, completedStage);
+    verifyPipelineLinkPrecondition(pd, completedStage);
   }
 
   // 1. Mark completed
@@ -2352,10 +2449,16 @@ function handleCompleteWorkflow(args: string[]): void {
   // itself, so this skips the double-check on that path while still refusing a
   // direct `complete-workflow <active-slug>` that never produced artifacts. Runs
   // before any mutation so a refusal leaves state untouched.
+  verifyReviewerPrecondition(
+    pd,
+    content,
+    completedStage,
+    !alreadyMarkedCompleted,
+  );
   if (!alreadyMarkedCompleted) {
     verifyStageArtifacts(pd, completedStage);
     verifySummaryConfirmationPrecondition(pd, content, completedStage);
-    verifyReviewerPrecondition(pd, content, completedStage);
+    verifyPipelineLinkPrecondition(pd, completedStage);
   }
 
   // 1. Mark completed
@@ -2488,6 +2591,7 @@ function handleGateStart(args: string[]): void {
   validateSlugInState(content, slug, "in-progress");
   verifyStageArtifacts(pd, stage);
   verifySummaryConfirmationPrecondition(pd, content, stage);
+  verifyPipelineLinkPrecondition(pd, stage);
 
   content = setCheckbox(content, slug, "awaiting-approval");
   const timestamp = isoTimestamp();
@@ -2675,7 +2779,23 @@ function handleApprove(args: string[]): void {
   // this check refuses.
   if (recoveredRevision) writeStateFile(pd, content);
   verifySummaryConfirmationPrecondition(pd, content, stage);
+  verifyPipelineLinkPrecondition(pd, stage);
   verifyReviewerPrecondition(pd, content, stage);
+
+  // Scope is required for next-stage derivation. Validate it before persisting
+  // approval: a post-write routing failure would otherwise leave `[x]` as a
+  // durable but incomplete approval and make crash recovery security-sensitive.
+  const scope = getField(content, "Scope");
+  if (!scope) {
+    error(
+      `State file has no Scope field. Refusing to advance after approve — fix the state file first.`,
+    );
+  }
+  if (!validScopes().has(scope)) {
+    error(
+      `State file has invalid Scope "${scope}". Valid scopes: ${[...validScopes()].join(", ")}.`,
+    );
+  }
 
   const timestamp = isoTimestamp();
 
@@ -2704,20 +2824,6 @@ function handleApprove(args: string[]): void {
   }
 
   writeStateFile(pd, content);
-
-  // Auto-advance or complete-workflow. Scope is required for next-stage
-  // derivation; refuse silent fallback (matches handleAdvance/handleCompleteWorkflow).
-  const scope = getField(content, "Scope");
-  if (!scope) {
-    error(
-      `State file has no Scope field. Refusing to advance after approve — fix the state file first.`
-    );
-  }
-  if (!validScopes().has(scope)) {
-    error(
-      `State file has invalid Scope "${scope}". Valid scopes: ${[...validScopes()].join(", ")}.`
-    );
-  }
 
   // No explicit consume step (ledger-event design): the GATE_APPROVED
   // emitted by this commit IS the freshness boundary for the next gate. A second
@@ -3664,13 +3770,15 @@ function handlePracticesPromote(args: string[]): void {
 }
 
 // reuse-artifact <slug> --decision <keep|modify|redo> --artifacts <csv>
+//   [--repo <repo>]
 function handleReuseArtifact(args: string[]): void {
   if (args.length < 1)
-    error("Usage: aidlc-state.ts reuse-artifact <slug> --decision <keep|modify|redo> --artifacts <csv>");
+    error("Usage: aidlc-state.ts reuse-artifact <slug> --decision <keep|modify|redo> --artifacts <csv> [--repo <repo>]");
   const slug = args[0];
   const rest = args.slice(1);
   const decision = getFlagValue(rest, "--decision");
   const artifacts = getFlagValue(rest, "--artifacts");
+  const repo = getFlagValue(rest, "--repo");
   if (!decision) error("Missing --decision <keep|modify|redo>");
   if (!artifacts) error("Missing --artifacts <csv>");
 
@@ -3687,16 +3795,24 @@ function handleReuseArtifact(args: string[]): void {
   const pd = resolveProjectDir(projectDir);
 
   try {
-    emitAudit(pd, "ARTIFACT_REUSED", {
+    const fields: Record<string, string> = {
       Stage: slug,
       Decision: decision,
       Artifacts: artifacts,
-    });
+    };
+    if (repo) fields.Repo = repo;
+    emitAudit(pd, "ARTIFACT_REUSED", fields);
   } catch (e) {
     error(`Audit emission failed: ${errorMessage(e)}`);
   }
 
-  console.log(JSON.stringify({ slug, decision, artifacts, emitted: "ARTIFACT_REUSED" }));
+  console.log(JSON.stringify({
+    slug,
+    decision,
+    artifacts,
+    ...(repo ? { repo } : {}),
+    emitted: "ARTIFACT_REUSED",
+  }));
 }
 
 function handleLookup(args: string[]): void {

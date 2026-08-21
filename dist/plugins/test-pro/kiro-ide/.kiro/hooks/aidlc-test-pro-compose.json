@@ -1,0 +1,14 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "aidlc-test-pro-compose",
+      "trigger": "SessionStart",
+      "description": "Composes the test-pro AIDLC plugin at session start.",
+      "action": {
+        "type": "command",
+        "command": "bun ./hooks/aidlc-plugin-compose.ts .kiro kiro-ide"
+      }
+    }
+  ]
+}

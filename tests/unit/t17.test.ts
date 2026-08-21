@@ -980,7 +980,7 @@ describe("t17 skip", () => {
 });
 
 // ===========================================================================
-// reuse-artifact — Tests 61-63
+// reuse-artifact — Tests 61-64
 // ===========================================================================
 
 describe("t17 reuse-artifact", () => {
@@ -1021,6 +1021,23 @@ describe("t17 reuse-artifact", () => {
       runState(proj, ["reuse-artifact", "feasibility", "--decision", "bogus", "--artifacts", "x"])
         .rc,
     ).toBe(1);
+  });
+
+  test("64: reuse-artifact records optional Repo", () => {
+    proj = createTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    seedAuditFile(proj);
+    runState(proj, [
+      "reuse-artifact",
+      "reverse-engineering",
+      "--decision",
+      "keep",
+      "--artifacts",
+      "aidlc/spaces/default/codekb/repo-a/",
+      "--repo",
+      "repo-a",
+    ]);
+    expect(readAudit(proj)).toContain("**Repo**: repo-a");
   });
 });
 

@@ -68,6 +68,15 @@
         "hooks": [
           {
             "type": "command",
+            "command": "bun .codex/hooks/aidlc-codex-adapter.ts record-human-turn"
+          }
+        ],
+        "matcher": "request_user_input"
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
             "command": "bun .codex/hooks/aidlc-codex-adapter.ts audit-and-sensors"
           }
         ],
