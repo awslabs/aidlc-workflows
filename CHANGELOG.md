@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.39] - 2026-08-21
+
+Reverse Engineering now requires complete, current-attempt Code Knowledge Base evidence for every registered repository before approval or completion. **Upgrade:** refresh your `dist/<harness>/` shell so the complete artifact guard, ordered pipeline receipts, repo-scoped reuse evidence, and resume directives are installed.
+
+* Every registered repository must contain all nine declared Reverse Engineering artifacts; a partial pre-existing Code Knowledge Base no longer satisfies the completion guard.
+* Pipeline stages record ordered `PIPELINE_LINK_COMPLETED` receipts for every declared link, and gate entry plus every completion route require receipts from the current main or isolated attempt.
+* Multi-repository Reverse Engineering maintains an independent receipt chain per scanned repository. A current-attempt, repo-scoped `ARTIFACT_REUSED` receipt with `Decision=keep` exempts only that reused repository; rejection, jump, and later stage-start boundaries invalidate older evidence.
+* Pipeline directives expose completed links so an interrupted run resumes from the first missing link without accepting stale receipts from an earlier attempt or a different workflow mode.
+
 ## [2.6.38] - 2026-08-21
 
 Testing Posture resolution now ignores HTML-commented examples while preserving visible prose, structured fields, and fenced notes. **Upgrade:** refresh your `dist/<harness>/` shell; contracts whose Testing Posture sections contain comments will re-resolve, so re-approve affected Code Generation plans.
@@ -54,7 +63,6 @@ Bounded Build & Test → Code Generation failure loop-back. When Build and Test 
 * Single-stage runs (`/aidlc --stage build-and-test --single`) stop at classification because they have no main-workflow position to move; impact-estimated options appear in the isolated-run summary.
 * The stage-ritual exception is present in all seven shipped conductor SKILLs, including Cursor and GitHub Copilot, and generated distributions remain byte-aligned with their authored sources.
 * Deterministic integration coverage (`t304-loopback-review-receipt-replay`) proves the replayed Code Generation gate refuses stale per-Unit reviews after `STAGE_JUMPED` and succeeds only after fresh receipts are recorded.
-
 ## [2.6.18] - 2026-08-19
 
 Classic and Express are new scope options, and the implicit default scope is now Classic — a **declared behavior change**: invocations that name no scope and match no keyword now run the v1-style lifecycle without Ideation instead of the full-lifecycle Feature scope. Exactly two things control the implicit default: the `AWS_AIDLC_DEFAULT_SCOPE` env var (which overrides) and the framework's hard-coded `classic` fallback. Express has a deterministic requirements-to-conditional-deploy path, and conditional protocol modules reduce fixed context without dropping reviewer recovery behavior. **Upgrade:** refresh your `dist/<harness>/` shell; in-flight workflows keep their persisted scope and need no migration; set `AWS_AIDLC_DEFAULT_SCOPE=feature` (Claude: the `.claude/settings.json` `env` block, which now ships `classic`) to keep the previous full-lifecycle default.

@@ -158,6 +158,34 @@ function recordReview(proj: string, slug: string, iteration: number): void {
   }
 }
 
+function recordPipelineLinks(proj: string, repos: string[] = []): void {
+  const chains = repos.length > 1 ? repos : [undefined];
+  for (const repo of chains) {
+    for (const link of ["aidlc-developer-agent", "aidlc-architect-agent"]) {
+      const args = [
+        LOG,
+        "link",
+        "--stage",
+        "reverse-engineering",
+        "--link",
+        link,
+        "--project-dir",
+        proj,
+      ];
+      if (repo) args.splice(args.length - 2, 0, "--repo", repo);
+      const result = spawnSync(BUN, args, {
+        encoding: "utf-8",
+        env: process.env,
+      });
+      if ((result.status ?? -1) !== 0) {
+        throw new Error(
+          `recordPipelineLinks failed: ${result.stdout ?? ""}${result.stderr ?? ""}`,
+        );
+      }
+    }
+  }
+}
+
 // Fire the real audit-logger hook with an Edit PostToolUse over stdin (Edit
 // always emits ARTIFACT_UPDATED - aidlc-write-audit-log.ts). The File is an
 // absolute path under the active-intent record, matching production. The shard
@@ -576,6 +604,7 @@ describe("t205: approve-time gate-revision backstop", () => {
     const slug = field(proj, "Current Stage");
     expect(slug).toBe("reverse-engineering");
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    recordPipelineLinks(proj, ["repo-a", "repo-b"]);
     guarded(proj, ["gate-start", slug]); // anchor
     recordHumanTurn(proj); // human requests changes at the RE gate (the pivot)
     // The conductor revises a codekb artifact in place - the production path
@@ -617,6 +646,7 @@ describe("t205: approve-time gate-revision backstop", () => {
     const slug = field(proj, "Current Stage");
     expect(slug).toBe("reverse-engineering");
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    recordPipelineLinks(proj);
     guarded(proj, ["gate-start", slug]);
     recordHumanTurn(proj);
     const revisionCountBefore = field(proj, "Revision Count");

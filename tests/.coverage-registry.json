@@ -20,23 +20,23 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 601,
+    "total": 606,
     "enumeratedByClass": {
-      "function": 341,
-      "audit": 85,
+      "function": 344,
+      "audit": 86,
       "scope": 11,
       "stage": 33,
       "hook": 17,
-      "subcommand": 107,
+      "subcommand": 108,
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 166,
-      "audit": 43,
+      "function": 169,
+      "audit": 44,
       "scope": 11,
       "stage": 11,
       "hook": 17,
-      "subcommand": 95,
+      "subcommand": 96,
       "render-surface": 7
     }
   },
@@ -304,6 +304,18 @@
       "coveredBy": [
         {
           "file": "tests/e2e/t113.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "PIPELINE_LINK_COMPLETED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t304-pipeline-link-receipts.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -1610,6 +1622,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:currentPipelineLinkReceipts",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t304-pipeline-link-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -3022,6 +3046,30 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:pipelineLinkEvidence",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t304-pipeline-link-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:pipelineLinks",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t304-pipeline-link-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -6001,6 +6049,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t31.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-log link",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t304-pipeline-link-receipts.test.ts",
           "mechanism": "cli"
         }
       ],
