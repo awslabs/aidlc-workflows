@@ -101,7 +101,7 @@ import {
 import {
   activeSpace,
   ActiveDirectiveLockContendedError,
-  advanceCopilotContinuation,
+  advanceContinuationCursor,
   activeUnitCheckpoint,
   artifactFilename,
   auditBlockField,
@@ -109,7 +109,6 @@ import {
   checkSummaryConfirmationEvidence,
   clearActiveDirectiveMarker,
   codekbRepoName,
-  copilotDirectiveCommitRequired,
   currentUnitLifecycleMode,
   errorMessage,
   filterProducesByKind,
@@ -118,7 +117,7 @@ import {
   freshReviewReceipts,
   getField,
   intentRepos,
-  inspectCopilotContinuation,
+  inspectContinuationCursor,
   isPerUnitStage,
   isRegularFile,
   listIntents,
@@ -276,23 +275,21 @@ function prepareEmission(directive: Directive): PreparedEmission {
         directive.kind === "run-stage" && directive.single === true &&
           existsSync(stateFilePath(route.codekbCtx.projectDir))
           ? sha256(readFileSync(stateFilePath(route.codekbCtx.projectDir), "utf-8"))
-          : null
+          : sha256("")
       );
-    if (markerStateHash) {
-      marker = {
-        kind: transported.kind,
-        stage: transported.stage,
-        ...(directive.kind === "run-stage" && directive.unit ? { unit: directive.unit } : {}),
-        ...(transported.kind === "load-steering"
-          ? {
-              part: transported.part,
-              parts: transported.parts,
-              continue_token: transported.continue_token,
-            }
-          : {}),
-        state_sha256: markerStateHash,
-      };
-    }
+    marker = {
+      kind: transported.kind,
+      stage: transported.stage,
+      ...(directive.kind === "run-stage" && directive.unit ? { unit: directive.unit } : {}),
+      ...(transported.kind === "load-steering"
+        ? {
+            part: transported.part,
+            parts: transported.parts,
+            continue_token: transported.continue_token,
+          }
+        : {}),
+      state_sha256: markerStateHash,
+    };
   }
   return {
     transported,
@@ -304,15 +301,13 @@ function prepareEmission(directive: Directive): PreparedEmission {
 }
 
 function writePrepared(prepared: PreparedEmission): void {
-  process.stdout.write(`${prepared.serialized}\n`);
+  writeFileSync(1, `${prepared.serialized}\n`, "utf-8");
 }
 
 function emit(directive: Directive): void {
   const prepared = prepareEmission(directive);
   if (prepared.marker) {
     const projectDir = prepared.projectDir;
-    let requireCopilotCommit = !!projectDir && engineInvocation?.commandKind === "next" &&
-      copilotDirectiveCommitRequired(projectDir, prepared.marker.state_sha256);
     try {
       if (projectDir) {
         const publication = writeActiveDirectiveMarker(projectDir, prepared.marker, {
@@ -320,7 +315,6 @@ function emit(directive: Directive): void {
           ...(engineInvocation ? { commandKind: engineInvocation.commandKind } : {}),
           ...(engineInvocation ? { commandSha256: engineInvocation.commandSha256 } : {}),
           resultSha256: prepared.resultSha256,
-          requireCopilotCommit,
         });
         if (publication === "stale-attempt") {
           recordHookDrop(projectDir, "active-directive", "tracked fresh next attempt was superseded before publication");
@@ -329,26 +323,22 @@ function emit(directive: Directive): void {
           )));
           return;
         }
-        if (requireCopilotCommit && publication !== "copilot-committed") {
-          recordHookDrop(projectDir, "active-directive", "fresh Copilot next did not commit its directive");
+        if (publication !== "copilot-committed" && publication !== "generic-committed") {
+          recordHookDrop(projectDir, "active-directive", "fresh next did not commit its directive");
           writePrepared(prepareEmission(errorDirective(
-            "The fresh Copilot directive could not be published, so no work directive was issued. Retry `next`; if coordination remains busy, run `/aidlc --doctor`.",
+            "The directive could not be published, so no work directive was issued. Retry the command; if coordination remains busy, run `/aidlc --doctor`.",
           )));
           return;
         }
       }
     } catch (e) {
       if (projectDir) {
-        requireCopilotCommit ||= engineInvocation?.commandKind === "next" &&
-          copilotDirectiveCommitRequired(projectDir, prepared.marker.state_sha256);
         recordHookDrop(projectDir, "active-directive", errorMessage(e));
       }
-      if (requireCopilotCommit) {
-        writePrepared(prepareEmission(errorDirective(
-          "The fresh Copilot directive could not be published, so no work directive was issued. Retry `next`; if coordination remains busy, run `/aidlc --doctor`.",
-        )));
-        return;
-      }
+      writePrepared(prepareEmission(errorDirective(
+        "The directive could not be published, so no work directive was issued. Retry the command; if coordination remains busy, run `/aidlc --doctor`.",
+      )));
+      return;
     }
   }
   writePrepared(prepared);
@@ -6031,7 +6021,7 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
     ));
     return;
   }
-  const cursor = inspectCopilotContinuation(pd, liveState, token);
+  const cursor = inspectContinuationCursor(pd, liveState);
 
   const directive = buildRunStageDirective(
     node,
@@ -6083,50 +6073,23 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
     return;
   }
   try {
-    const advanced = advanceCopilotContinuation(
+    const advanced = advanceContinuationCursor(
       cursor,
       token,
       prepared.marker,
       prepared.resultSha256,
       engineInvocation?.attemptId,
     );
-    if (advanced === "advanced" || advanced === "stateless") {
+    if (advanced === "advanced") {
       writePrepared(prepared);
       return;
     }
     const message = advanced === "superseded"
-      ? "This continuation token is no longer current for this Copilot workflow. Run a fresh `next`; do not reuse an earlier token."
+      ? "This continuation token is no longer current for this workflow. Run a fresh `next`; do not reuse an earlier token."
       : "The active workflow context changed while this continuation was prepared. Run a fresh `next`; do not use the prepared result.";
     writePrepared(prepareEmission(errorDirective(message)));
   } catch (error) {
     if (!(error instanceof ActiveDirectiveLockContendedError)) throw error;
-    if (cursor.authority === "stateless" && !cursor.copilotInstalled) {
-      try {
-        const latest = inspectCopilotContinuation(
-          pd,
-          loadStateFileIfPresent(pd),
-          token,
-        );
-        if (
-          latest.authority === "stateless" &&
-          !latest.copilotInstalled &&
-          latest.target.markerPath === cursor.target.markerPath &&
-          latest.target.intentUuid === cursor.target.intentUuid &&
-          latest.stateSha256 === cursor.stateSha256 &&
-          latest.statePresent === cursor.statePresent
-        ) {
-          recordHookDrop(
-            pd,
-            "active-directive",
-            "stateless continuation marker publication contended; delivered without updating the marker",
-          );
-          writePrepared(prepared);
-          return;
-        }
-      } catch {
-        // Keep the coordination-busy refusal when authority cannot be rechecked.
-      }
-    }
     writePrepared(prepareEmission(errorDirective(
       "Continuation coordination is busy. This call did not commit a cursor change. Retry the current token; if it is reported superseded, run a fresh `next`.",
     )));

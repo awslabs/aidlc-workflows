@@ -1,7 +1,7 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
-## [2.6.51] - 2026-08-21
+## [2.6.52] - 2026-08-21
 
 Reviewer-bearing approval gates and review receipts now prove that the configured reviewer inspected the current artifact before the gate is presented. **Upgrade:** re-copy your `dist/<harness>/` shell so every harness receives the strengthened state and review-log guards. Closes #551.
 
@@ -9,6 +9,16 @@ Reviewer-bearing approval gates and review receipts now prove that the configure
 * `report --result revised` and approve-time revision recovery persist `[R]` until a fresh post-rejection review passes and the normal gate re-entry is recorded.
 * `aidlc-log.ts review` fingerprints artifacts when dispatching and refuses a verdict if the bytes changed before completion; only `--retry-pending` may repeat an outstanding ordinal.
 * Per-unit reviews require membership in the authoritative Unit DAG, or a matching active Bolt for legacy no-DAG swarms; Unit-scoped receipts can no longer satisfy a no-DAG stage-level fallback.
+
+## [2.6.51] - 2026-08-21
+
+Steering continuation tokens are now single-use on every harness: Claude, Codex, Copilot, Cursor, Kiro CLI, Kiro IDE, and opencode share one engine-owned, crash-safe continuation cursor in the active-directive marker, closing the sessionless same-token replay carve-out accepted in PR #749 (issue #762). **Upgrade:** replace the whole `dist/<harness>/` shell in one quiescent swap (no AI-DLC command or hook running) - mixed old/new tool files are unsupported - then run a fresh `next`; a matching in-flight token instead migrates atomically. Rolling back to an older release restores its sessionless replay behavior until re-upgraded.
+
+* **Behavior change:** presenting the same continuation token twice now returns an error directive ("This continuation token is no longer current for this workflow. Run a fresh `next`; do not reuse an earlier token.") instead of repeating the successor. Concurrent uses of one token have exactly one winner on every harness; recovery is always a fresh `next`.
+* `continue` keeps all native token validation, then compares the SHA-256 of the complete presented token with the persisted current token inside the active-directive transaction and atomically publishes the exact successor - or a tokenless `run-stage` - before stdout. New marker publications record the installed harness as `cursor_harness` (marker v2, optional on read); pre-upgrade markers migrate on the first matching `continue` or fresh `next`.
+* Fresh `next` must now commit its first directive before emitting on every harness. Publication failure or contention yields "The directive could not be published, so no work directive was issued. Retry the command; if coordination remains busy, run `/aidlc --doctor`." - replacing the previous Copilot-only wording and the non-Copilot fail-open delivery.
+* Missing, malformed, oversized, v1, cross-harness, and pre-state bare-space markers permit one natively validated recovery continuation under the same transaction; a mismatched token is stale, not a bootstrap opportunity.
+* The exactly-one-winner guarantee requires the marker and lock paths on one local filesystem (atomic rename, exclusive directory creation, coherent cross-process visibility); NFS/SMB/FUSE-style shares are unsupported, and sudden power-loss durability is outside the claim. See the new "Atomic continuation cursor" section in the Developer Reference for the crash/retry matrix, migration, rollback, and per-harness residual limits.
 
 ## [2.6.50] - 2026-08-21
 
