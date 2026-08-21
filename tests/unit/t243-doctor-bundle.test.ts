@@ -272,6 +272,31 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(event.Source).toBeUndefined();
   }, 30000);
 
+  test("2c: normalized evidence reads Kiro turn markers from the project aidlc dir", () => {
+    const proj = freshProject();
+    const aidlcDir = join(proj, "aidlc");
+    mkdirSync(aidlcDir, { recursive: true });
+    writeFileSync(join(aidlcDir, ".aidlc-turn-counter"), "7\n", "utf-8");
+    writeFileSync(
+      join(aidlcDir, ".aidlc-readonly-latch"),
+      `${JSON.stringify({
+        turn: 7,
+        flag: "status",
+        source: "read-only-flag",
+        ts: Date.now(),
+      })}\n`,
+      "utf-8",
+    );
+
+    const { bundleDir } = runExport(proj);
+    expect(bundleDir).not.toBeNull();
+    const normalized = JSON.parse(
+      readFileSync(join(bundleDir!, "evidence", "normalized.json"), "utf-8"),
+    );
+    expect(normalized.markers.turnCounter).toBe("7");
+    expect(normalized.markers.readonlyLatch).toBe(true);
+  }, 30000);
+
   test("3: report.json exposes findings + timeline.stages and the gate-unresolved error", () => {
     const proj = freshProject();
     seedCanaryIntent(proj);

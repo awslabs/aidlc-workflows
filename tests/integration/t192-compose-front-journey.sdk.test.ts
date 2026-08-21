@@ -126,6 +126,10 @@ describe("t192 front composer journey (/aidlc compose -> approve -> write -> bir
         const rec = readFileSync(join(intentsDir, "active-intent"), "utf-8").trim();
         const state = readFileSync(join(intentsDir, rec, "aidlc-state.md"), "utf-8");
         expect(state).toContain(`- **Scope**: ${composedName}`);
+        const projectLine = state
+          .split("\n")
+          .find((line) => line.startsWith("- **Project**:"));
+        expect(projectLine).toBe(`- **Project**: ${TASK}`);
 
         // (e) keyword hygiene: the composed .md ships keywords: [] (no
         // keyword entries - inferability is an explicit gate choice).

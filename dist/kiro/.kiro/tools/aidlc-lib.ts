@@ -2998,6 +2998,29 @@ export function readActiveDirectiveMarker(
   }
 }
 
+// Read the shared/sessionless resume wait under the active-directive lock. The
+// marker is read before state while refreshActiveDirectiveMarker uses the same
+// lock after writing state, so a concurrent state transition either linearizes
+// after this evidence or makes the marker/state digest mismatch and fails closed.
+export function hasCurrentSharedResumeWait(projectDir: string): boolean {
+  return transactActiveDirective(projectDir, (marker, target) => {
+    let stateContent: string;
+    try {
+      stateContent = readFileSync(target.statePath, "utf-8");
+    } catch {
+      return { marker, result: false, preserve: true };
+    }
+    const waiting =
+      marker?.version === 2 &&
+      marker.owner_session?.startsWith("sessionless:") === true &&
+      marker.state_sha256 === stateContentSha256(stateContent) &&
+      marker.kind === "ask" &&
+      marker.resume?.status === "waiting" &&
+      getField(stateContent, "Construction Autonomy Mode")?.trim() !== "autonomous";
+    return { marker, result: waiting, preserve: true };
+  });
+}
+
 export interface CopilotContinuationSnapshot {
   target: ActiveDirectiveTarget;
   authority: "stateless" | "current" | "superseded";
@@ -3137,47 +3160,6 @@ export function advanceCopilotContinuation(
         : pending.status === "pending" ? { ...pending, status: "failed" } : pending } : {}),
     };
     return { marker: next, result: "advanced" as const };
-  });
-}
-
-export function markActiveDirectiveResumeWaiting(
-  projectDir: string,
-  stateContent: string,
-  stage: string,
-): boolean {
-  return transactActiveDirective(projectDir, (current, target) => {
-    const context = activeDirectiveContext(target, stateContent);
-    if (current?.version === 2 && !current.owner_session?.startsWith("sessionless:") &&
-      (current.active_attempt?.status !== "pending" || current.active_attempt?.resume_request !== true)) {
-      return { marker: current, result: false, preserve: true };
-    }
-    const marker = current?.version === 2 ? current : freshActiveDirectiveMarker(target, stateContent, stage);
-    const session = marker.active_attempt?.session_id ?? marker.owner_session ?? "sessionless";
-    return {
-      marker: {
-        ...marker,
-        revision: (marker.revision ?? 0) + 1,
-        kind: "ask",
-        stage,
-        unit: undefined,
-        part: undefined,
-        parts: undefined,
-        continue_token: undefined,
-        continue_token_sha256: undefined,
-        state_sha256: context.stateSha256,
-        state_present: true,
-        delivery: "issued",
-        needs_rehydrate: false,
-        resume: {
-          status: "waiting",
-          issuing_stage: stage,
-          issuing_state_sha256: context.stateSha256,
-          issuing_session: session,
-          issuing_intent_uuid: context.intentUuid,
-        },
-      },
-      result: true,
-    };
   });
 }
 
@@ -3436,15 +3418,7 @@ export function settleCopilotCommand(
     if (input.commandKind === "report" && attempt.resume_action && (!canSelectResume || directive.kind === "error")) {
       return { marker: { ...invalidateActiveDirectiveDelivery(base), active_attempt: { ...attempt, status: "failed" } }, result: "settled" as const };
     }
-    if (input.resumeRequest && directive.kind === "ask") {
-      resume = {
-        status: "waiting",
-        issuing_stage: directive.stage ?? marker.stage,
-        issuing_state_sha256: context.stateSha256,
-        issuing_session: input.sessionId,
-        issuing_intent_uuid: context.intentUuid,
-      };
-    } else if (canSelectResume) {
+    if (canSelectResume) {
       resume = {
         status: "selected",
         action: attempt.resume_action,
@@ -4778,6 +4752,20 @@ export interface FreshReviewReceipts {
    *  artifacts deletes the entry; an ambiguous matching path fails closed by
    *  clearing every unit entry. */
   unitVerdicts: Map<string, ReviewVerdict>;
+  /** Newest Source Fingerprint carried by a receipt with a syntactically valid
+   *  Artifact Fingerprint. Current artifact equality still controls verdict
+   *  freshness independently; fieldless migration receipts do not erase an
+   *  earlier fingerprinted receipt. */
+  newestSourceFingerprint: string | null;
+  /** Unit on the newest terminal source-bound receipt, or null for stage-level. */
+  newestSourceUnit: string | null;
+  /** The newest modern source binding no longer proves the current workspace. */
+  sourceStale: boolean;
+  /** Recovery ordinal/budget state associated with the newest source binding. */
+  sourceStaleProgress: StaleReviewProgress | null;
+  /** A workspace-global source-staleness recovery request has been emitted in
+   *  this attempt. Source binding is global even when receipts are per-unit. */
+  sourceRecoverySpent: boolean;
   /** Units whose terminal receipt was invalidated in the current attempt. */
   unitStale: Set<string>;
   /** Next request ordinal and recovery availability for a stale stage receipt. */
@@ -4974,6 +4962,7 @@ export function freshReviewReceipts(
     reviewer?: string;
     reviewer_max_iterations?: number;
     review_class?: "adversarial" | "advisory";
+    workspace_requires?: boolean;
     produces?: string[];
     optional_produces?: string[];
     produces_kinds?: Record<string, string[]>;
@@ -4987,6 +4976,11 @@ export function freshReviewReceipts(
     stageVerdict: null,
     stageStale: false,
     unitVerdicts: new Map(),
+    newestSourceFingerprint: null,
+    newestSourceUnit: null,
+    sourceStale: false,
+    sourceStaleProgress: null,
+    sourceRecoverySpent: false,
     unitStale: new Set(),
     stageStaleProgress: null,
     unitStaleProgress: new Map(),
@@ -5059,6 +5053,10 @@ export function freshReviewReceipts(
     { unit: string | undefined; iteration: number; recovery: boolean }
   >();
   let stageVerdict: ReviewVerdict | null = null;
+  let newestSourceFingerprint: string | null = null;
+  let newestSourceUnit: string | null = null;
+  let newestSourceProgress: StaleReviewProgress | null = null;
+  let sourceRecoverySpent = false;
   let stageStale = false;
   let stageStaleProgress: StaleReviewProgress | null = null;
   let stageIteration: number | null = null;
@@ -5122,12 +5120,14 @@ export function freshReviewReceipts(
     const requestKey = `${unit ?? ""}\u0000${iterationField}`;
     if (e.event === "REVIEW_REQUESTED") {
       const previous = pendingRequests.get(requestKey);
+      const recovery =
+        previous?.recovery === true ||
+        auditBlockField(e.block, "Recovery") === "stale-receipt";
+      if (recovery) sourceRecoverySpent = true;
       pendingRequests.set(requestKey, {
         unit,
         iteration,
-        recovery:
-          previous?.recovery === true ||
-          auditBlockField(e.block, "Recovery") === "stale-receipt",
+        recovery,
       });
       continue;
     }
@@ -5136,6 +5136,9 @@ export function freshReviewReceipts(
     const request = pendingRequests.get(requestKey);
     if (!request || !pendingRequests.delete(requestKey)) continue;
     const recordedFingerprint = auditBlockField(e.block, "Artifact Fingerprint");
+    const artifactFingerprintUsable =
+      recordedFingerprint !== null &&
+      /^sha256:[0-9a-f]{64}$/.test(recordedFingerprint);
     const currentFingerprint = reviewArtifactFingerprint(
       projectDir,
       stage,
@@ -5143,9 +5146,7 @@ export function freshReviewReceipts(
       { boltDag: options.boltDag },
     );
     const fingerprintUsable =
-      recordedFingerprint !== null &&
-      /^sha256:[0-9a-f]{64}$/.test(recordedFingerprint) &&
-      currentFingerprint !== null;
+      artifactFingerprintUsable && currentFingerprint !== null;
     const fingerprintMatches =
       fingerprintUsable && recordedFingerprint === currentFingerprint;
     const terminalVerdict = request.recovery
@@ -5156,6 +5157,21 @@ export function freshReviewReceipts(
           reviewClass,
           maxIterations,
         );
+    if (artifactFingerprintUsable && terminalVerdict !== null) {
+      // A syntactically valid artifact binding on a TERMINAL receipt makes this
+      // real post-migration source evidence, even if artifacts later changed.
+      // A below-cap NOT-READY is repair progress, not a freshness boundary;
+      // otherwise the expected repair edit would consume recovery prematurely.
+      const sourceFingerprint = auditBlockField(e.block, "Source Fingerprint");
+      if (sourceFingerprint) {
+        newestSourceFingerprint = sourceFingerprint;
+        newestSourceUnit = unit ?? null;
+        newestSourceProgress = {
+          nextIteration: iteration + 1,
+          recoverySpent: request.recovery,
+        };
+      }
+    }
     if (terminalVerdict === null) {
       if (verdict !== "NOT-READY" || !fingerprintUsable) continue;
       const pending: PendingReviewProgress = fingerprintMatches
@@ -5221,10 +5237,32 @@ export function freshReviewReceipts(
     }
   }
 
+  const currentSourceFingerprint =
+    stage.workspace_requires === true && newestSourceFingerprint !== null
+      ? workspaceSourceFingerprint(projectDir)
+      : null;
+  const sourceStale =
+    newestSourceFingerprint !== null &&
+    (newestSourceFingerprint === UNBINDABLE_FINGERPRINT ||
+      currentSourceFingerprint === null ||
+      currentSourceFingerprint !== newestSourceFingerprint);
+
   return {
     stageVerdict,
     stageStale,
     unitVerdicts,
+    newestSourceFingerprint,
+    newestSourceUnit,
+    sourceStale,
+    sourceStaleProgress: sourceStale
+      ? newestSourceProgress === null
+        ? null
+        : {
+            ...newestSourceProgress,
+            recoverySpent: sourceRecoverySpent,
+          }
+      : null,
+    sourceRecoverySpent,
     unitStale,
     stageStaleProgress,
     unitStaleProgress,
@@ -5233,6 +5271,17 @@ export function freshReviewReceipts(
     stagePending,
     unitPending,
   };
+}
+
+// Private refs keep reviewed-source commits reachable until the Bolt is merged
+// or discarded. The commit suffix matters: a later finalize retry must not move
+// the only ref away from an earlier commit already named by an audit row.
+export function reviewedSourceRefPrefix(boltSlug: string): string {
+  return `refs/aidlc/reviewed-source/${boltSlug}/`;
+}
+
+export function reviewedSourceRef(boltSlug: string, commit: string): string {
+  return `${reviewedSourceRefPrefix(boltSlug)}${commit}`;
 }
 
 // --- Multi-repo: repos are siblings of the workspace ----------------------------
@@ -5261,6 +5310,358 @@ export function isValidRepoName(name: string): boolean {
 export function repoDir(projectDir: string, repoName: string): string {
   return join(projectDir, repoName);
 }
+
+// --- Workspace source fingerprint (#629) -----------------------------------
+//
+// A reviewer receipt for a `workspace_requires` stage (code-generation) must be
+// bound to the SOURCE STATE the reviewer actually inspected: workspace writes
+// deliberately emit no audit events (aidlc-audit-logger.ts excludes them), so
+// without a binding a post-review source edit leaves the receipt satisfying the
+// completion guard for code nobody re-reviewed. The binding is a git-native
+// content fingerprint: per repo, a `git write-tree` over a TEMPORARY index
+// seeded from HEAD with `git add -A` applied — the exact tracked + untracked
+// (gitignore-respecting) content state, computed without touching the real
+// index or worktree. Reverting an edit restores the original fingerprint
+// (content-addressed), so an undone change does not strand a receipt.
+//
+// Multi-repo: the intent's recorded repo set (intentRepos), each resolved via
+// repoDir(); no recorded repos = the legacy single-repo default (projectDir).
+// Returns null when ANY target dir is not a usable git checkout. New receipts
+// record that explicitly as `unbindable` and completion fails closed; only a
+// legacy receipt with no fingerprint field keeps the migration fail-open.
+
+// The record tree and the CLI/IDE workspace shell are anchored at the top level
+// of the dir that CARRIES the shell: the workspace roof, or a Bolt worktree
+// (which holds its own record mirror). For a multi-repo intent `aidlc/` is a
+// SIBLING of the repo dirs (resolveConstructionRepo / repoDir) and
+// `.aidlc/worktrees/` (worktreePath) hangs off the roof - neither is ever
+// legitimately inside a fingerprinted repo or submodule, where a directory of
+// those names is application source (#646 review). The trailing slash keeps the
+// pathspec a directory match, so a root FILE named `aidlc` stays in the walk.
+const AIDLC_SHELL_DIR_NAMES = ["aidlc/", ".aidlc/"];
+
+// The sensor cache is the one member of the family that is NOT root-anchored:
+// the type-check sensor anchors `.aidlc-sensors/.tsbuildinfo` at the tsconfig
+// dir (core/tools/aidlc-sensor-type-check.ts's `sensorsDir`), which a
+// monorepo's per-package tsconfig can put anywhere under repoDir. So this one
+// needs a depth-tolerant pathspec while the shell names stay root-anchored.
+//
+// #646 review - the shell/any-depth split is deliberate, not an oversight: an
+// earlier fix applied `**/<name>/**` to ALL four names to close a *reported*
+// nested-.aidlc-sensors leak, but that pathspec matches the literal directory
+// name at ANY depth - including a directory that is genuinely part of the
+// application, coincidentally named `aidlc`/`.aidlc` for reasons unrelated to
+// this framework's own shell (e.g. `src/aidlc/parser.ts`, a real feature named
+// after the methodology). That silently dropped real source from the
+// fingerprint - reproduced: `workspaceSourceFingerprint` was unchanged after
+// adding tracked content under `src/aidlc/`.
+//
+// Depth tolerance is NOT permission to match the leaf name alone (#646 review,
+// later round): a bare `**/.aidlc-sensors/**` excludes ANY directory of that
+// name, so an application tracking source under a dot-prefixed,
+// framework-named directory (`src/.aidlc-sensors/shipped.ts`) could be edited
+// or deleted without moving the fingerprint. Match the cache by the path the
+// engine actually writes instead of by its leaf. Every writer resolves through
+// `sensorsDir()` -> `docsRoot()` -> `intentsDir()` -> `workspaceRoot()`, so the
+// cache is always `<anchor>/aidlc/spaces/<space>/intents[/<record>]/
+// .aidlc-sensors/` - the `<anchor>` is what varies (roof, Bolt worktree, or a
+// monorepo package's tsconfig dir), which is exactly what the leading `**/`
+// absorbs. The inner `/**/` also matches zero directories, covering the flat
+// (no active record) form the type-check anchor produces.
+const AIDLC_SENSOR_CACHE_GLOBS = [
+  ":(glob)**/aidlc/spaces/*/intents/**/.aidlc-sensors/**",
+];
+
+// Git runs a configured `clean` filter as content enters the index, so the tree
+// written below hashes the FILTERED bytes - not the bytes sitting in the
+// worktree. A lossy filter therefore maps two different worktrees onto one
+// fingerprint (#646 review, reproduced: two `app.ts` contents, one tree), and
+// the stage executes against the bytes the reviewer read, so those are what the
+// receipt has to bind. Fold a raw (`--no-filters`) hash of exactly the paths a
+// clean driver touches into the fingerprint.
+//
+// Scoped by attribute AND configured driver, because both are required for a
+// filter to run at all: a `.gitattributes` naming `filter=tidy` is inert unless
+// `filter.tidy.clean` exists in the reader's own config (probed - the trees
+// differ once the driver is removed). That is also why this is not injectable
+// by someone pushing to the repository, and why the scan costs one `check-attr`
+// on a repo that filters nothing. `hash-object` runs WITHOUT `-w`: the oid is
+// computed, never written into the caller's object store.
+//
+// Not covered, deliberately: end-of-line conversion (`core.autocrlf`, `text`,
+// `eol`). It is the one lossy transform that is ubiquitous, and the bytes it
+// hides are line terminators - a semantically null delta - so paying a raw hash
+// for every text file in the tree to bind it is not a trade worth making here.
+function cleanFilteredRawLines(
+  repoDir: string,
+  env: NodeJS.ProcessEnv,
+  paths: string[],
+): { lines: string[]; entries: { path: string; sha: string }[] } | null {
+  if (paths.length === 0) return { lines: [], entries: [] };
+  // Ask Git directly for the effective attributes of every indexed path. A
+  // filesystem pre-scan cannot be authoritative: `.gitattributes` may itself
+  // be ignored while still affecting the worktree, and info/global attributes
+  // live outside the indexed path list. The large buffer matches `ls-files`
+  // below; failure is unbindable, never "no filtered paths".
+  const attr = spawnSync(
+    "git",
+    ["-C", repoDir, "check-attr", "-z", "--stdin", "filter", "ident"],
+    {
+      env,
+      input: paths.join("\0"),
+      encoding: "utf-8",
+      maxBuffer: 512 * 1024 * 1024,
+    },
+  );
+  if (attr.status !== 0) return null;
+  // `-z` output is a flat NUL-separated stream of <path> <attr> <value> triples.
+  const fields = attr.stdout.split("\0");
+  const driverRuns = new Map<string, boolean>();
+  const converted = new Set<string>();
+  for (let i = 0; i + 2 < fields.length; i += 3) {
+    const path = fields[i];
+    const name = fields[i + 1];
+    const value = fields[i + 2];
+    if (!path) continue;
+    if (name === "ident") {
+      // Git's built-in `$Id$` conversion. There is no driver to configure, so
+      // `set` alone means two worktree values collapse onto one indexed blob.
+      if (value === "set") converted.add(path);
+      continue;
+    }
+    // `unspecified`/`unset` mean no driver; `set` is `filter` with no name, so
+    // it names no driver either. Anything else is a driver name.
+    if (value === "unspecified" || value === "unset" || value === "set") continue;
+    let runs = driverRuns.get(value);
+    if (runs === undefined) {
+      const configured = (key: "clean" | "process"): boolean | null => {
+        const cfg = spawnSync(
+          "git",
+          ["-C", repoDir, "config", "--get", `filter.${value}.${key}`],
+          { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+        );
+        if (cfg.status === 0) return cfg.stdout.trim().length > 0;
+        if (cfg.status === 1) return false; // key is simply absent
+        return null;
+      };
+      const clean = configured("clean");
+      const processDriver = configured("process");
+      if (clean === null || processDriver === null) return null;
+      runs = clean || processDriver;
+      driverRuns.set(value, runs);
+    }
+    if (runs) converted.add(path);
+  }
+  const filtered = [...converted];
+  if (filtered.length === 0) return { lines: [], entries: [] };
+  // `--stdin-paths` is newline-delimited with no `-z` counterpart, so a path
+  // containing a newline cannot go through the batch. Those hash one at a time
+  // rather than being dropped - dropping one would restore the very blind spot
+  // this closes.
+  const batch = filtered.filter((p) => !p.includes("\n"));
+  const lines: string[] = [];
+  const entries: { path: string; sha: string }[] = [];
+  if (batch.length > 0) {
+    const raw = spawnSync(
+      "git",
+      ["-C", repoDir, "hash-object", "--no-filters", "--stdin-paths"],
+      {
+        env,
+        input: `${batch.join("\n")}\n`,
+        encoding: "utf-8",
+        maxBuffer: 512 * 1024 * 1024,
+      },
+    );
+    if (raw.status !== 0) return null;
+    const shas = raw.stdout.split("\n").filter((l) => l.length > 0);
+    // A short read means the pairing is ambiguous; binding the wrong sha to a
+    // path is worse than the mismatch a null fingerprint produces.
+    if (shas.length !== batch.length) return null;
+    for (let i = 0; i < batch.length; i++) {
+      lines.push(`raw:${batch[i]}=${shas[i]}`);
+      entries.push({ path: batch[i], sha: shas[i] });
+    }
+  }
+  for (const p of filtered) {
+    if (!p.includes("\n")) continue;
+    const one = spawnSync(
+      "git",
+      ["-C", repoDir, "hash-object", "--no-filters", "--", p],
+      { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+    );
+    if (one.status !== 0) return null;
+    const sha = one.stdout.trim();
+    if (sha.length === 0) return null;
+    lines.push(`raw:${p}=${sha}`);
+    entries.push({ path: p, sha });
+  }
+  return { lines, entries };
+}
+
+// Return the effective filtered paths and their raw worktree blob ids for a
+// caller-owned temporary index. The swarm snapshot uses this to replace the
+// filtered index blobs with the exact bytes the reviewer saw before creating
+// its immutable Source Commit.
+export function filteredRawIndexEntries(
+  repoDir: string,
+  indexFile: string,
+): { path: string; sha: string }[] | null {
+  const env = { ...process.env, GIT_INDEX_FILE: indexFile };
+  const listed = spawnSync("git", ["-C", repoDir, "ls-files", "-s", "-z"], {
+    env,
+    encoding: "utf-8",
+    maxBuffer: 512 * 1024 * 1024,
+  });
+  if (listed.status !== 0) return null;
+  const paths: string[] = [];
+  for (const record of listed.stdout.split("\0")) {
+    const tab = record.indexOf("\t");
+    // Clean/process filters transform regular file content only. Passing a
+    // symlink through `hash-object --no-filters -- <path>` follows its target,
+    // replacing Git's mode-120000 link-text blob with the target file's bytes.
+    // Leave symlinks (and gitlinks) exactly as `git add -A` staged them.
+    if (tab === -1 || !/^100(?:644|755) /.test(record)) continue;
+    const path = record.slice(tab + 1);
+    if (path) paths.push(path);
+  }
+  return cleanFilteredRawLines(repoDir, env, paths)?.entries ?? null;
+}
+
+// `carriesWorkspaceShell` is REQUIRED, never defaulted: a new call site must
+// decide, so the shell exclusion cannot leak into a derived dir by omission.
+function gitTreeFingerprint(repoDir: string, carriesWorkspaceShell: boolean): string | null {
+  if (!isGitRepoDir(repoDir)) return null;
+  const idx = join(
+    tmpdir(),
+    `aidlc-src-fp-${process.pid}-${randomUUID().slice(0, 8)}`,
+  );
+  const env = { ...process.env, GIT_INDEX_FILE: idx };
+  try {
+    // Seed from HEAD so deletions of tracked files change the tree. An unborn
+    // HEAD (fresh init) fails read-tree; the empty temp index is then correct.
+    spawnSync("git", ["-C", repoDir, "read-tree", "HEAD"], { env, encoding: "utf-8" });
+    const add = spawnSync("git", ["-C", repoDir, "add", "-A"], { env, encoding: "utf-8" });
+    if (add.status !== 0) return null;
+    // Drop the aidlc workspace family from the fingerprint, at ANY depth: the
+    // record tree is COMMITTED by design and mutates on every engine action
+    // (the very REVIEW_COMPLETED append this fingerprint is stamped into,
+    // gate rows, state updates), so including it would make every receipt
+    // stale by the time the completion guard recomputes. Record-artifact
+    // freshness is already covered by the audit-event invalidation; this
+    // fingerprint is the APPLICATION SOURCE binding. --ignore-unmatch keeps
+    // this a no-op when nothing matches (sibling repos with no aidlc tree).
+    const excluded = [
+      ...(carriesWorkspaceShell ? AIDLC_SHELL_DIR_NAMES : []),
+      ...AIDLC_SENSOR_CACHE_GLOBS,
+    ];
+    if (excluded.length > 0) {
+      spawnSync(
+        "git",
+        ["-C", repoDir, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", ...excluded],
+        { env, encoding: "utf-8" },
+      );
+    }
+    const wt = spawnSync("git", ["-C", repoDir, "write-tree"], { env, encoding: "utf-8" });
+    if (wt.status !== 0) return null;
+    const sha = wt.stdout.trim();
+    if (sha.length === 0) return null;
+
+    // A submodule is recorded in the tree above as a gitlink (its checked-out
+    // commit sha), so editing its tracked source WITHOUT committing inside the
+    // submodule leaves the gitlink - and therefore `sha` above - unchanged,
+    // shipping a reviewed-then-edited submodule as if nothing had changed.
+    // Fold each INITIALIZED submodule's own fingerprint (recursive - a
+    // submodule can itself nest submodules) into the parent's. An
+    // uninitialized submodule has no materialized content in the workspace,
+    // so it contributes nothing to bind. Gitlinks are read straight off the
+    // temp index (mode 160000 in `ls-files -s`) rather than via `git submodule
+    // status`, which spawns the submodule subsystem and measured 1s+ per call
+    // on Windows - a cost this fingerprint (recomputed on every completion
+    // route) cannot afford.
+    //
+    // `-z` is required, not cosmetic (#646 review): without
+    // it, git's default `core.quotePath` wraps a path containing a non-ASCII
+    // byte or other "unusual" character in double quotes and C-escapes it
+    // (e.g. `"vendor/caf\303\251"` for `vendor/café`) - parsed as a literal
+    // string, that quoted-and-escaped text never resolves to the real
+    // on-disk path, so `isGitRepoDir` silently reports "not a submodule" and
+    // the fingerprint drops it entirely (a reviewed-then-edited submodule at
+    // such a path would ship unreviewed). `-z` disables quoting and
+    // NUL-terminates each record instead of newline-terminating it, so the
+    // path bytes come back exactly as they are on disk.
+    // A large index overruns the default buffer: the call then fails with
+    // ENOBUFS, and every submodule and clean-filtered path drops out of the
+    // fingerprint while the bare tree sha is still returned as if the repo had
+    // neither (#646 review - reproduced at 8,000 tracked paths / 1.68 MB of
+    // listing). Sized well past any index this is expected to meet.
+    const lsFiles = spawnSync("git", ["-C", repoDir, "ls-files", "-s", "-z"], { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 });
+    // Fail closed. A listing that could not be read is not evidence that the
+    // repository has no submodules and no filtered paths, and the caller reads
+    // null as "cannot bind this workspace" rather than as a clean tree.
+    if (lsFiles.status !== 0) return null;
+    const subLines: string[] = [];
+    // The same listing feeds the clean-filter scan below, so binding raw bytes
+    // costs no extra walk of the index.
+    const blobPaths: string[] = [];
+    for (const record of lsFiles.stdout.split("\0")) {
+      const tabIdx = record.indexOf("\t");
+      if (tabIdx === -1) continue;
+      const entryPath = record.slice(tabIdx + 1);
+      if (!entryPath) continue;
+      if (!record.startsWith("160000 ")) {
+        // Attribute filters apply to regular blobs, not mode-120000 symlinks.
+        // Hashing a symlink path with `hash-object --no-filters` follows its
+        // destination, making external target bytes part of the fingerprint.
+        if (/^100(?:644|755) /.test(record)) blobPaths.push(entryPath);
+        continue;
+      }
+      const subDir = join(repoDir, entryPath);
+      if (!isGitRepoDir(subDir)) continue;
+      // A submodule's own `aidlc/` is the submodule's application source.
+      const subFp = gitTreeFingerprint(subDir, false);
+      if (subFp === null) return null;
+      subLines.push(`${entryPath}=${subFp}`);
+    }
+    const raw = cleanFilteredRawLines(repoDir, env, blobPaths);
+    if (raw === null) return null;
+    const rawLines = raw.lines;
+    // A repo with neither submodules nor clean-filtered paths keeps returning
+    // the bare tree sha, so the common workspace's fingerprint is unchanged by
+    // this and receipts stamped before it stay comparable.
+    if (subLines.length === 0 && rawLines.length === 0) return sha;
+    subLines.sort();
+    rawLines.sort();
+    // `raw:` prefixes the filtered-content rows so they cannot be confused with
+    // a submodule row whose path and sha happen to line up.
+    return createHash("sha256")
+      .update([sha, ...subLines, ...rawLines].join("\n"))
+      .digest("hex");
+  } finally {
+    rmSync(idx, { force: true });
+  }
+}
+
+// Recorded in place of a fingerprint when one cannot be computed, so a receipt
+// written against an unbindable workspace stays distinguishable from a
+// pre-#629 receipt that carries no field at all (#646 review).
+export const UNBINDABLE_FINGERPRINT = "unbindable";
+
+export function workspaceSourceFingerprint(projectDir: string): string | null {
+  const repos = intentRepos(projectDir);
+  // No recorded repos: projectDir IS the checkout (legacy single-repo, or a Bolt
+  // worktree - see aidlc-swarm.ts finalize) and carries the shell at its top.
+  if (repos.length === 0) return gitTreeFingerprint(projectDir, true);
+  const lines: string[] = [];
+  for (const name of [...repos].sort()) {
+    // A sibling repo is a child of the roof; the shell is its SIBLING, never
+    // nested inside it, so nothing there belongs to the framework.
+    const sha = gitTreeFingerprint(repoDir(projectDir, name), false);
+    if (sha === null) return null;
+    lines.push(`${name}=${sha}`);
+  }
+  return createHash("sha256").update(lines.join("\n")).digest("hex");
+}
+
 
 // True iff `dir` looks like a git checkout: it holds a `.git` (a directory for a
 // normal clone, OR a file for a submodule / linked worktree). Workspace-internal
@@ -7376,6 +7777,228 @@ export function latestMainWorkflowStageStarted(
   return since;
 }
 
+export interface PipelineLinkReceipt {
+  link: string;
+  repo: string | null;
+  position: string | null;
+  timestamp: string;
+}
+
+export interface PipelineLinkEvidence {
+  links: string[];
+  repos: string[];
+  receipts: PipelineLinkReceipt[];
+  reusedRepos: string[];
+  completed: string[];
+  missing: Array<{ link: string; repo: string | null }>;
+}
+
+export function pipelineLinks(
+  stage: Pick<StageEntry, "lead_agent" | "support_agents">,
+): string[] {
+  return [stage.lead_agent, ...(stage.support_agents ?? [])];
+}
+
+interface OrderedPipelineEvidenceEvent {
+  block: string;
+  position: number;
+  event: string;
+  timestamp: string;
+}
+
+function orderedPipelineEvidenceEvents(
+  projectDir: string,
+): OrderedPipelineEvidenceEvent[] {
+  const audit = readAllAuditShards(projectDir);
+  if (audit.length === 0) return [];
+  return audit
+    .replace(/\r\n/g, "\n")
+    .split(/\n---\n/)
+    .map((block, position): OrderedPipelineEvidenceEvent | null => {
+      const event = auditBlockField(block, "Event");
+      if (!event) return null;
+      return {
+        block,
+        position,
+        event,
+        timestamp: auditBlockField(block, "Timestamp") ?? "",
+      };
+    })
+    .filter((entry): entry is OrderedPipelineEvidenceEvent => entry !== null)
+    .sort((a, b) =>
+      a.timestamp !== b.timestamp
+        ? (a.timestamp < b.timestamp ? -1 : 1)
+        : a.position - b.position
+    );
+}
+
+function pipelineAttemptFloor(
+  events: OrderedPipelineEvidenceEvent[],
+  stageSlug: string,
+  singleRun: boolean,
+): number {
+  const workflow = `single-stage:${stageSlug}`;
+  let floor = -1;
+  for (let i = 0; i < events.length; i++) {
+    const entry = events[i];
+    const eventWorkflow = auditBlockField(entry.block, "Workflow");
+    if (
+      !singleRun &&
+      (
+        entry.event === "WORKFLOW_STARTED" ||
+        entry.event === "STAGE_JUMPED" ||
+        (
+          entry.event === "GATE_REJECTED" &&
+          auditBlockField(entry.block, "Stage") === stageSlug
+        )
+      ) &&
+      !eventWorkflow?.startsWith("single-stage:")
+    ) {
+      floor = i;
+      continue;
+    }
+    if (
+      entry.event === "STAGE_STARTED" &&
+      auditBlockField(entry.block, "Stage") === stageSlug &&
+      (
+        singleRun
+          ? eventWorkflow === workflow
+          : !eventWorkflow?.startsWith("single-stage:")
+      )
+    ) {
+      floor = i;
+    }
+  }
+  return floor;
+}
+
+// Current-attempt pipeline receipts are scoped to either the main workflow or
+// one isolated `--single` stream. A later matching STAGE_STARTED resets that
+// scope; rows from the other scope never participate in order or duplicate
+// checks and can never satisfy its completion guard.
+export function currentPipelineLinkReceipts(
+  projectDir: string,
+  stageSlug: string,
+  options: { singleRun?: boolean } = {},
+): PipelineLinkReceipt[] {
+  const events = orderedPipelineEvidenceEvents(projectDir);
+  const singleRun = options.singleRun === true;
+  const workflow = `single-stage:${stageSlug}`;
+  const floor = pipelineAttemptFloor(events, stageSlug, singleRun);
+  const receipts: PipelineLinkReceipt[] = [];
+  for (let i = floor + 1; i < events.length; i++) {
+    const entry = events[i];
+    const eventWorkflow = auditBlockField(entry.block, "Workflow");
+    if (
+      entry.event !== "PIPELINE_LINK_COMPLETED" ||
+      auditBlockField(entry.block, "Stage") !== stageSlug ||
+      (
+        singleRun
+          ? eventWorkflow !== workflow
+          : eventWorkflow?.startsWith("single-stage:") === true
+      )
+    ) {
+      continue;
+    }
+    const link = auditBlockField(entry.block, "Link");
+    if (!link) continue;
+    receipts.push({
+      link,
+      repo: auditBlockField(entry.block, "Repo"),
+      position: auditBlockField(entry.block, "Position"),
+      timestamp: entry.timestamp,
+    });
+  }
+  return receipts;
+}
+
+function currentPipelineReusedRepos(
+  projectDir: string,
+  stageSlug: string,
+): string[] {
+  const events = orderedPipelineEvidenceEvents(projectDir);
+  const floor = pipelineAttemptFloor(events, stageSlug, false);
+  const reused = new Set<string>();
+  for (let i = floor + 1; i < events.length; i++) {
+    const entry = events[i];
+    if (
+      entry.event !== "ARTIFACT_REUSED" ||
+      auditBlockField(entry.block, "Stage") !== stageSlug ||
+      auditBlockField(entry.block, "Decision") !== "keep" ||
+      auditBlockField(entry.block, "Workflow")?.startsWith("single-stage:")
+    ) {
+      continue;
+    }
+    const repo = auditBlockField(entry.block, "Repo");
+    if (repo) reused.add(repo);
+  }
+  return [...reused];
+}
+
+// Registered multi-repo intents run one independent receipt chain per repo.
+// A current-attempt per-repo reuse row satisfies that repo without dispatch.
+// Single/unrecorded intents retain one chain and may omit Repo on every row.
+export function pipelineLinkEvidence(
+  projectDir: string,
+  stage: Pick<StageEntry, "slug" | "lead_agent" | "support_agents">,
+  options: { singleRun?: boolean } = {},
+): PipelineLinkEvidence {
+  const links = pipelineLinks(stage);
+  const registeredRepos = intentRepos(projectDir);
+  const repos = registeredRepos.length > 1 ? registeredRepos : [];
+  const singleRun = options.singleRun === true;
+  const receipts = currentPipelineLinkReceipts(
+    projectDir,
+    stage.slug,
+    { singleRun },
+  );
+  const reusedRepos = singleRun
+    ? []
+    : currentPipelineReusedRepos(projectDir, stage.slug)
+      .filter((repo) => repos.includes(repo));
+  const missing: Array<{ link: string; repo: string | null }> = [];
+
+  if (repos.length > 0) {
+    for (const repo of repos) {
+      if (reusedRepos.includes(repo)) continue;
+      for (const link of links) {
+        if (!receipts.some((receipt) =>
+          receipt.repo === repo && receipt.link === link
+        )) {
+          missing.push({ link, repo });
+        }
+      }
+    }
+  } else {
+    for (const link of links) {
+      if (!receipts.some((receipt) => receipt.link === link)) {
+        missing.push({ link, repo: null });
+      }
+    }
+  }
+
+  // The directive keeps the compact link-name form for a single chain. A
+  // multi-repo stage qualifies each completed entry so resume can distinguish
+  // independent chains without adding another wire field.
+  const completed = repos.length > 0
+    ? repos.flatMap((repo) =>
+        reusedRepos.includes(repo)
+          ? links.map((link) => `${repo}:${link}`)
+          : links
+            .filter((link) =>
+              receipts.some((receipt) =>
+                receipt.repo === repo && receipt.link === link
+              )
+            )
+            .map((link) => `${repo}:${link}`)
+      )
+    : links.filter((link) =>
+        receipts.some((receipt) => receipt.link === link)
+      );
+
+  return { links, repos, receipts, reusedRepos, completed, missing };
+}
+
 // Exact identity for the current main-workflow attempt of one stage. The token
 // names the latest relevant boundary plus its matching-event ordinal, so two
 // boundaries emitted in the same second still receive different floors.
@@ -9382,7 +10005,17 @@ export function parseArgs(args: string[]): {
   let i = 0;
   while (i < args.length) {
     if (args[i].startsWith("--")) {
-      const key = args[i].slice(2);
+      const token = args[i].slice(2);
+      const equals = token.indexOf("=");
+      if (equals >= 0) {
+        const key = token.slice(0, equals);
+        const value = token.slice(equals + 1);
+        flags[key] = value;
+        if (value.trim().length === 0) blankFlags.add(key);
+        i++;
+        continue;
+      }
+      const key = token;
       if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
         flags[key] = args[i + 1];
         if (args[i + 1].trim().length === 0) blankFlags.add(key);
@@ -9802,14 +10435,19 @@ function boltDagMatches(a: ResolvedBoltDag, b: ResolvedBoltDag): boolean {
   return true;
 }
 
-// Resolve the active intent's unit DAG. The authored dependency artifact is
-// authoritative whenever it exists: a valid cache is accepted only when its
-// batches and unit kinds still match that artifact. Callers must keep the three
-// states distinct: "none" is a real no-DAG workflow, while "malformed" means
-// the unit set is unknowable and must fail closed.
-export function resolveBoltDag(projectDir: string): BoltDagResolution {
+// Resolve the selected intent's unit DAG (the active intent when no selectors
+// are supplied). The authored dependency artifact is authoritative whenever it
+// exists: a valid cache is accepted only when its batches and unit kinds still
+// match that artifact. Callers must keep the three states distinct: "none" is a
+// real no-DAG workflow, while "malformed" means the unit set is unknowable and
+// must fail closed.
+export function resolveBoltDag(
+  projectDir: string,
+  intent?: string,
+  space?: string,
+): BoltDagResolution {
   let cached: ResolvedBoltDag | null = null;
-  const graphPath = runtimeGraphPath(projectDir);
+  const graphPath = runtimeGraphPath(projectDir, intent, space);
   if (existsSync(graphPath)) {
     try {
       const graph: unknown = JSON.parse(readFileSync(graphPath, "utf-8"));
@@ -9863,7 +10501,7 @@ export function resolveBoltDag(projectDir: string): BoltDagResolution {
     }
   }
 
-  const dependencyPath = unitDependencyPath(projectDir);
+  const dependencyPath = unitDependencyPath(projectDir, intent, space);
   if (!existsSync(dependencyPath)) return cached ?? { state: "none" };
 
   let body: string;

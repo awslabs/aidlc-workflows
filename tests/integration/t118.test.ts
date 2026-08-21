@@ -37,7 +37,7 @@
 //   SP2 jump backward (2): mirror of SP1 with feasibility / "backward".
 //   SP3 jump redo   (2): --stage == current; run-stage(code-generation) +
 //       resolve `.direction` === "redo".
-//   SP4 resume (2): kind==="ask"; out contains "existing workflow was found".
+//   SP4 resume (2): direct routing reaches run-stage(code-generation).
 //   SP5 birth (P4: --init retired, engine names intent-create):
 //     - (a) named scope on a clean workspace -> kind==="print" naming
 //       intent-create + NO aidlc-state.md created by next (read-only — mutation
@@ -306,13 +306,13 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
   });
 
   // ============================================================
-  // Special path 4: RESUME — engine emits ask + stops (never calls AskUserQuestion).
+  // Special path 4: RESUME — explicit intent continues through normal routing.
   // ============================================================
-  test("SP4: resume -> ask directive carrying the resume-choice question", () => {
+  test("SP4: resume -> run-stage(code-generation) through steering-aware routing", () => {
     const p = projWithState("state-jumped.md");
-    const r = run(ORCHESTRATE, ["next", "--resume", "--project-dir", p]);
-    expect(directive(r).kind).toBe("ask");
-    expect(r.out).toContain("existing workflow was found");
+    const d = nextDirective(p, ["--resume"]);
+    expect(d.kind).toBe("run-stage");
+    expect(d.stage).toBe("code-generation");
   });
 
   test("SP4b: resume answer -> read-only print that continues through next", () => {
@@ -429,7 +429,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(d.kind).toBe("print");
     expect(d.message).toContain("intent-create --scope bugfix");
     expect(d.message).toContain(
-      '--arguments "Fix duplicate todo persistence"',
+      "--arguments='Fix duplicate todo persistence'",
     );
     expect(d.kind).not.toBe("ask");
     expect(existsSync(statePath(p))).toBe(false);

@@ -203,6 +203,21 @@ let missingArtifactsStatus = -1;
 let missingArtifactsOut = "";
 let missingArtifactsAudit = "";
 
+function identityFreeGitEnv(proj: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    HOME: proj,
+    XDG_CONFIG_HOME: join(proj, ".identity-free-git"),
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+  };
+  delete env.GIT_AUTHOR_NAME;
+  delete env.GIT_AUTHOR_EMAIL;
+  delete env.GIT_COMMITTER_NAME;
+  delete env.GIT_COMMITTER_EMAIL;
+  return env;
+}
+
 function seedRefereeProject(): string {
   const proj = setupWorktreeFixture();
   // The fixture already seeded the per-intent workspace shell + default record +
@@ -384,7 +399,7 @@ function finalizeWithNotReady(iteration: number): {
       "--check-cmd",
       "true",
     ],
-    { encoding: "utf-8" },
+    { encoding: "utf-8", env: identityFreeGitEnv(proj) },
   );
   return {
     status: result.status ?? -1,
@@ -421,7 +436,7 @@ function setupReferee(): void {
       "--batch", "1", "--units", "win,lose", "--claimed", "win,lose",
       "--check-cmd", "test -f win.txt",
     ],
-    { encoding: "utf-8" },
+    { encoding: "utf-8", env: identityFreeGitEnv(proj) },
   );
   finalizeStatus = fin.status ?? -1;
   finalizeOut = fin.stdout ?? "";
@@ -643,6 +658,12 @@ describe("t135 referee — batch-level swarm audit taxonomy + baton return (the 
     expect(review).toContain("**Stage**: code-generation");
     expect(review).toContain("**Unit**: win");
     expect(review).toContain("**Reviewer**: aidlc-architecture-reviewer-agent");
+  }, 60000);
+
+  test("6c: the immutable reviewed-source commit needs no user Git identity", () => {
+    setupReferee();
+    expect(finalizeOut).not.toContain("cannot create the immutable reviewed-source commit");
+    expect(finalizeOut).toContain('"converged": 1');
   }, 60000);
 });
 

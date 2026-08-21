@@ -45,6 +45,7 @@ const HOOK_WIRING: Array<{ event: string; matcher?: string; target: string }> = 
   // No matcher: the plan-approval-guard target self-filters (spawn_agent
   // naming the developer agent; everything else exits 0 instantly).
   { event: "PreToolUse", target: "plan-approval-guard" },
+  { event: "PostToolUse", matcher: "request_user_input", target: "record-human-turn" },
   { event: "PostToolUse", matcher: "apply_patch", target: "audit-and-sensors" },
   { event: "PostToolUse", matcher: "update_plan", target: "sync-workflow-state" },
   { event: "PostToolUse", matcher: "Bash", target: "rebuild-stage-graph" },
