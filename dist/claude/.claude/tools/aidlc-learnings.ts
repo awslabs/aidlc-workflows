@@ -28,7 +28,7 @@
 //
 // --- Provenance binding + content-addressed dedup (#735 follow-up, PR #747
 //     review) ---
-// Eight findings from PR #747's four review rounds, fixed here:
+// Twelve findings from PR #747's five review rounds, fixed here:
 //   1. Candidate ids restart at c1 on EVERY surface() call, so a later run
 //      of the same stage in the SAME intent reused c1 for a completely
 //      different learning and the old (intent, stage, candidate-id) marker
@@ -42,10 +42,10 @@
 //      audit write, and lock identity — never re-resolved from the live
 //      cursor inside persist.
 //   3. The (intent, stage, candidate-id) marker/row shape this file has
-//      shipped before (and the original pre-#735 (stage, candidate-id)
-//      shape) are recognized as legacy-compatible dedup matches so a
-//      post-upgrade retry of an already-persisted learning does not
-//      duplicate it under the new content-hash marker.
+//      shipped before, the original pre-#735 (stage, candidate-id) shape,
+//      and the earlier PR revision's truncated content hash are recognized
+//      as legacy-compatible dedup matches so a post-upgrade retry does not
+//      duplicate an already-persisted learning under the full-hash marker.
 //   4. Ambiguous intent resolution (multiple intent records, no valid
 //      cursor) must fail closed rather than silently degrading to the same
 //      shared "unscoped" identity finding #1 exists to avoid — see
@@ -82,6 +82,17 @@
 //      Fixed by failing closed inside the lock when an unscoped selections
 //      file is replayed after any intent record appears; the user must
 //      re-run surface and regenerate the selections file.
+//   9. Truncating SHA-256 to 8 hex characters made collisions practical for
+//      a persisted correctness identity, silently dropping different text.
+//      Fixed by retaining the full digest.
+//  10. The audit snapshot is intentionally read once inside the lock, but
+//      rows emitted earlier in the same selections batch were not reflected
+//      in it. Fixed by tracking hashes emitted during the transaction.
+//  11. Provenance validation checked only path-safe syntax, so a valid-looking
+//      missing space or intent could create a partial record. Fixed by
+//      requiring the pinned records to still exist inside the lock.
+//  12. A caller-provided --slug could override selections.stage_slug and
+//      misattribute the marker and audit row. Fixed by rejecting a mismatch.
 //
 // The conflict COMPARISON is the orchestrator-LLM's job (the "single-line
 // variant" of the §5 gate model); persist receives only conflict-clear or
@@ -94,7 +105,7 @@
 // judgement (user). No LLM call lives in this tool.
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import { memoryDirFor } from "./aidlc-graph.ts";
@@ -106,12 +117,14 @@ import {
   findAllEvents,
   getField,
   isoTimestamp,
+  intentsDir,
   listIntentDirs,
   parseMemoryEntries,
   readAllAuditShards,
   readStateFile,
   resolveProjectDir,
   runtimeGraphPath,
+  spacesRoot,
   validSpaceFlag,
   withAuditLock,
   writeFileAtomic,
@@ -144,6 +157,22 @@ function fail(message: string, code: 1 | 2): never {
 // alone kept reading whatever space happened to be active when persist ran.
 function practiceFilePath(projectDir: string, scope: "project" | "team", space: string): string {
   return join(memoryDirFor(projectDir, space), `${scope}.md`);
+}
+
+function isRealDirectory(path: string): boolean {
+  try {
+    return lstatSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function isRealFile(path: string): boolean {
+  try {
+    return lstatSync(path).isFile();
+  } catch {
+    return false;
+  }
 }
 
 // Project-tier sensor manifest path. The learning loop scaffolds to the
@@ -532,6 +561,13 @@ function priorAuditRowByHash(auditContent: string, slug: string, hash: string): 
   return rows.some((r) => stageRe.test(r.block) && hashRe.test(r.block));
 }
 
+// Compatibility for PR revisions that persisted only the first 8 hex chars
+// of SHA-256. Require the exact short hash field and a text-gated marker match
+// at the call site so a 32-bit collision cannot suppress different content.
+function priorTruncatedHashAuditRow(auditContent: string, slug: string, hash: string): boolean {
+  return priorAuditRowByHash(auditContent, slug, hash.slice(0, 8));
+}
+
 // Legacy-compat match ONLY: a row written before this fix ever shipped
 // (Candidate-ID present, Content-Hash ABSENT). The Content-Hash absence
 // check is load-bearing, not decorative — without it, a row the NEW code
@@ -607,11 +643,11 @@ function cidMarker(intentSlug: string, slug: string, hash: string): string {
   return `<!-- cid:${intentSlug}:${slug}:${hash} -->`;
 }
 
-// Short, deterministic content hash — dedup key material, not a security
-// boundary. Matches this codebase's existing shortHash convention
-// (aidlc-doctor-bundle.ts).
+// Full SHA-256 content hash. This is a persisted correctness identity, not a
+// display token: truncating it to 8 hex characters admits practical birthday
+// collisions that silently drop a different learning as an idempotent retry.
 function contentHash(text: string): string {
-  return createHash("sha256").update(text, "utf-8").digest("hex").slice(0, 8);
+  return createHash("sha256").update(text, "utf-8").digest("hex");
 }
 
 // Legacy marker shapes this tool has ever written. Kept ONLY so a
@@ -654,7 +690,13 @@ function handlePersist(args: string[], projectDir: string): void {
   }
 
   const selFile = parseSelectionsFile(selectionsJson);
-  const stageSlug = slug ?? selFile.stage_slug;
+  if (slug !== undefined && slug !== selFile.stage_slug) {
+    fail(
+      `slug mismatch: selections were surfaced for "${selFile.stage_slug}" but persist requested "${slug}"`,
+      1
+    );
+  }
+  const stageSlug = selFile.stage_slug;
   // LOCAL FIX (#747 review): bound at surface() time (selFile.space/.intent),
   // NOT re-resolved here against the live active-intent cursor. Re-resolving
   // live let a surface-under-A / switch-to-B / persist sequence write under
@@ -673,7 +715,15 @@ function handlePersist(args: string[], projectDir: string): void {
   let lockResult: { rule_learned: number; sensor_proposed: number; bound_stages: string[] };
   try {
     lockResult = withAuditLock(projectDir, () => {
-      if (selFile.intent === null && listIntentDirs(projectDir, pinnedSpace).length > 0) {
+      if (!isRealDirectory(join(spacesRoot(projectDir), pinnedSpace))) {
+        fail(
+          `cannot persist selections for missing space "${pinnedSpace}". ` +
+            "Re-run the stage's surface step and regenerate the selections file, then retry.",
+          1
+        );
+      }
+      const intentDirs = listIntentDirs(projectDir, pinnedSpace);
+      if (selFile.intent === null && intentDirs.length > 0) {
         fail(
           `cannot persist an unscoped selections replay in space "${pinnedSpace}": the selections ` +
             "file was surfaced when the space had no intent records, but intent records now exist. " +
@@ -681,9 +731,26 @@ function handlePersist(args: string[], projectDir: string): void {
           1
         );
       }
+      const pinnedIntentDir =
+        selFile.intent === null ? null : join(intentsDir(projectDir, pinnedSpace), selFile.intent);
+      if (
+        selFile.intent !== null &&
+        (!intentDirs.includes(selFile.intent) ||
+          pinnedIntentDir === null ||
+          !isRealDirectory(pinnedIntentDir) ||
+          !isRealFile(join(pinnedIntentDir, "aidlc-state.md")))
+      ) {
+        fail(
+          `cannot persist selections for missing intent record "${selFile.intent}" in space ` +
+            `"${pinnedSpace}". Re-run the stage's surface step and regenerate the selections ` +
+            "file, then retry.",
+          1
+        );
+      }
       // Read across every per-clone audit shard of the PINNED intent (single
       // shard in the common case).
       const auditContent = readAllAuditShards(projectDir, pinnedIntent, pinnedSpace);
+      const batchRuleHashes = new Set<string>();
 
       let ruleLearned = 0;
       let sensorProposed = 0;
@@ -716,11 +783,14 @@ function handlePersist(args: string[], projectDir: string): void {
       };
 
       for (const sel of learnings) {
+        const hash = contentHash(sel.text);
+        if (batchRuleHashes.has(hash)) continue;
+
         const bucket = ensureFile(sel.scope);
         const path = bucket.path;
         let content = bucket.content;
-        const hash = contentHash(sel.text);
         const marker = cidMarker(intentSlug, stageSlug, hash);
+        const truncatedHashMarker = cidMarker(intentSlug, stageSlug, hash.slice(0, 8));
         const today = isoTimestamp().slice(0, 10);
         const source = sel.source ?? "orchestrator";
         // The orchestrator routes the learning to the fitting practice heading
@@ -741,13 +811,22 @@ function handlePersist(args: string[], projectDir: string): void {
             legacyMarkerCandidateIdScoped(intentSlug, stageSlug, sel.candidate_id),
             sel.text
           ) || legacyLineMatchesText(content, legacyMarkerPreIntentScope(stageSlug, sel.candidate_id), sel.text);
+        const truncatedHashLineMatch = legacyLineMatchesText(
+          content,
+          truncatedHashMarker,
+          sel.text
+        );
         const hasRow =
           priorAuditRowByHash(auditContent, stageSlug, hash) ||
+          (truncatedHashLineMatch && priorTruncatedHashAuditRow(auditContent, stageSlug, hash)) ||
           (legacyLineMatch && priorLegacyAuditRow(auditContent, stageSlug, sel.candidate_id));
-        const hasLine = content.includes(marker) || legacyLineMatch;
+        const hasLine = content.includes(marker) || truncatedHashLineMatch || legacyLineMatch;
 
         // no-op: audit row AND line both present.
-        if (hasRow && hasLine) continue;
+        if (hasRow && hasLine) {
+          batchRuleHashes.add(hash);
+          continue;
+        }
 
         // Write the line unless it is already present (recovery: row exists,
         // line missing → write only; fresh: neither → write + emit). Create the
@@ -780,6 +859,7 @@ function handlePersist(args: string[], projectDir: string): void {
           );
           ruleLearned++;
         }
+        batchRuleHashes.add(hash);
       }
 
       // Flush each method file once (atomic).

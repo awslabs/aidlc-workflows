@@ -312,17 +312,19 @@ step between them:
    (gitignored) and calls `bun .claude/tools/aidlc-learnings.ts persist
    --slug <slug> --selections-json <path>`. The tool is the deterministic
    writer — it never judges conflicts; it routes each learning as a practice to
-   `aidlc/spaces/<active-space>/memory/{project,team}.md` and, for a sensor selection, does the
+   `aidlc/spaces/<surface-time-space>/memory/{project,team}.md` and, for a sensor selection, does the
    two-write install (manifest + originating stage `sensors:` frontmatter)
    inside one `withAuditLock`, then emits `RULE_LEARNED` / `SENSOR_PROPOSED`.
 
 The selections-file is the replay artefact: a crashed persist replays the
 same JSON without re-prompting the human (content-presence idempotency via a
 `<!-- cid:<intent-slug>:<slug>:<content-hash> -->` marker per written line —
-a hash of the learning's own text, not its positional candidate id). The
+    the full SHA-256 hash of the learning's own text, not its positional candidate id). The
 selections-file also carries `space`/`intent`, bound once when the
 candidates were surfaced; `persist` uses those, never re-resolving the live
-active-intent cursor itself.
+    active-intent cursor itself. Before writing, it verifies that this space
+    and any non-null intent record still exist and that the requested slug
+    matches the surface-time `stage_slug`.
 
 ---
 

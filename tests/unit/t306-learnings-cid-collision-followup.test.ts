@@ -13,7 +13,7 @@
 // legacyLineMatchesText) are not exported, so the contract is exercised
 // behaviourally through the process boundary exactly as t112/t199 do.
 //
-// EIGHT findings fixed here, one test group each:
+// TWELVE findings fixed here, one test group each:
 //   1. Same-intent repeat-stage collision (P1) — candidate ids restart at
 //      c1 on every surface() call, so two DIFFERENT learnings landing on
 //      the same positional c1 within the SAME intent must both persist,
@@ -22,8 +22,8 @@
 //      must use the space/intent PINNED in the selections-json (surface
 //      time), never the live active-intent cursor at execution time.
 //   3. Existing markers duplicated after upgrade (P1) — a retry of an
-//      already-persisted (pre-fix-format) learning must not duplicate it
-//      under the new marker.
+//      already-persisted candidate-id or truncated-hash learning must not
+//      duplicate it under the new full-hash marker.
 //   4. Ambiguous intent resolution must fail closed (P2) — multiple intent
 //      records with no valid cursor must fail, not silently degrade to a
 //      shared "unscoped" identity.
@@ -39,23 +39,32 @@
 //   8. An unscoped selections replay must fail closed if an intent is born
 //      after surface time — `intent: null` must never resolve to that later
 //      live/lone intent for the audit write.
+//   9. A truncated 32-bit content hash can collide for different learning
+//      texts and silently discard the second write.
+//  10. Repeated content in one selections batch must emit one audit row, not
+//      one row per duplicate candidate from the stale audit snapshot.
+//  11. Pinned space/intent provenance must still name existing records when
+//      persist runs; syntactically valid ghost records must fail closed.
+//  12. The optional CLI slug must not override the stage bound into the
+//      selections file at surface time.
 //
 // Source under test (dist/claude/.claude/tools/aidlc-learnings.ts):
 //   cidMarker(intentSlug, slug, hash) => `<!-- cid:${intentSlug}:${slug}:${hash} -->`
-//   contentHash(text) => sha256(text) truncated to 8 hex chars.
+//   contentHash(text) => full sha256(text) hex digest.
 //   SelectionsFile now REQUIRES { space, intent } — bound at surface() time,
 //   read (never re-resolved) by handlePersist.
 //   resolveSurfaceIntent() fails closed on genuine multi-intent ambiguity.
 //   practiceFilePath(projectDir, scope, space) threads the pinned space into
 //   memoryDirFor(projectDir, space).
-//   priorSensorProposedRow(auditContent, sensorId) dedups SENSOR_PROPOSED by
+//   priorSensorProposedRow(auditContent, stage, sensorId) dedups SENSOR_PROPOSED by
 //   the sensor's own stable id, not (stage, candidate_id).
 //   legacyLineMatchesText(content, marker, text) gates a legacy-marker match
 //   on the marked line's own text equalling the current selection's text.
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -73,7 +82,7 @@ const STAGE_SLUG = "user-stories";
 const CANDIDATE_ID = "c1";
 const SECOND_RECORD_DIR = "fixture-b2222222";
 const THIRD_RECORD_DIR = "fixture-c3333333";
-const HASH_RE = /[0-9a-f]{8}/;
+const HASH_RE = /[0-9a-f]{64}/;
 
 const projects: string[] = [];
 afterEach(() => {
@@ -202,13 +211,13 @@ function sensorSelectionsFile(
   pd: string,
   name: string,
   sensorId: string,
-  opts: { originStage?: string; candidateId?: string; intent?: string | null; space?: string } = {},
+  opts: { originStage?: string; stageSlug?: string; candidateId?: string; intent?: string | null; space?: string } = {},
 ): string {
   const p = join(pd, `${name}.json`);
   writeFileSync(
     p,
     JSON.stringify({
-      stage_slug: STAGE_SLUG,
+      stage_slug: opts.stageSlug ?? STAGE_SLUG,
       space: opts.space ?? DEFAULT_SPACE,
       intent: opts.intent === undefined ? DEFAULT_RECORD_DIR : opts.intent,
       selections: [
@@ -407,6 +416,31 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       const content = projectMd(pd);
       const occurrences = content.split(text).length - 1;
       expect(occurrences).toBe(1);
+    }, 30000);
+
+    test("the earlier truncated content-hash marker is recognized; retry upgrades without duplicating", () => {
+      const pd = mkProject();
+      const text = "Learning persisted by an earlier PR revision";
+      const fullHash = createHash("sha256").update(text, "utf-8").digest("hex");
+      const shortHash = fullHash.slice(0, 8);
+      const priorMarker = `<!-- cid:${DEFAULT_RECORD_DIR}:${STAGE_SLUG}:${shortHash} -->`;
+      writeFileSync(
+        join(pd, "aidlc", "spaces", DEFAULT_SPACE, "memory", "project.md"),
+        `# Project-Level Rules\n\n## Corrections\n\n- ${text} (learned 2026-08-20) ${priorMarker}\n`,
+        "utf-8",
+      );
+      const auditDir = join(intentsDirOf(pd, DEFAULT_SPACE), DEFAULT_RECORD_DIR, "audit");
+      mkdirSync(auditDir, { recursive: true });
+      writeFileSync(
+        join(auditDir, "short-hash-host.md"),
+        `**Timestamp**: 2026-08-20T00:00:00Z\n**Event**: RULE_LEARNED\n**Stage**: ${STAGE_SLUG}\n**Candidate-ID**: ${CANDIDATE_ID}\n**Content-Hash**: ${shortHash}\n**Destination**: project.md\n**Heading**: ## Corrections\n**Source**: orchestrator\n---\n`,
+        "utf-8",
+      );
+
+      const result = runPersist(pd, selectionsFile(pd, "short-hash-retry", text));
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.out).rule_learned).toBe(0);
+      expect(projectMd(pd).split(text).length - 1).toBe(1);
     }, 30000);
   });
 
@@ -634,6 +668,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       // been bound, and must still end up with the id in its own frontmatter.
       const sel2 = sensorSelectionsFile(pd, "sensor-stage-b", "acceptance-format", {
         originStage: "requirements-analysis",
+        stageSlug: "requirements-analysis",
       });
       const res2 = runPersist(pd, sel2, { slug: "requirements-analysis", env });
       expect(res2.status).toBe(0);
@@ -712,6 +747,133 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       for (const path of projectFiles) {
         expect(readFileSync(path, "utf-8")).not.toContain(text);
       }
+    }, 30000);
+  });
+
+  describe("finding #9 (P1, round 5) — content identity must not truncate SHA-256", () => {
+    test("different texts sharing the same first 8 SHA-256 hex characters both persist", () => {
+      const pd = mkProject();
+      const firstText = "learning-70806";
+      const secondText = "learning-102811";
+
+      const first = runPersist(pd, selectionsFile(pd, "hash-collision-a", firstText));
+      const second = runPersist(pd, selectionsFile(pd, "hash-collision-b", secondText));
+
+      expect(first.status).toBe(0);
+      expect(second.status).toBe(0);
+      expect(JSON.parse(first.out).rule_learned).toBe(1);
+      expect(JSON.parse(second.out).rule_learned).toBe(1);
+      const content = projectMd(pd);
+      expect(content).toContain(firstText);
+      expect(content).toContain(secondText);
+    }, 30000);
+  });
+
+  describe("finding #10 (P1, round 5) — dedup must include rows emitted earlier in the same batch", () => {
+    test("duplicate content in one selections file emits one line and one RULE_LEARNED row", () => {
+      const pd = mkProject();
+      const path = join(pd, "duplicate-content.json");
+      writeFileSync(
+        path,
+        JSON.stringify({
+          stage_slug: STAGE_SLUG,
+          space: DEFAULT_SPACE,
+          intent: DEFAULT_RECORD_DIR,
+          selections: [
+            { candidate_id: "c1", type: "learning", scope: "project", heading: "Corrections", text: "Same learning" },
+            { candidate_id: "c2", type: "learning", scope: "project", heading: "Corrections", text: "Same learning" },
+            { candidate_id: "c3", type: "learning", scope: "team", heading: "Corrections", text: "Same learning" },
+          ],
+        }),
+        "utf-8",
+      );
+
+      const result = runPersist(pd, path);
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.out).rule_learned).toBe(1);
+      expect(projectMd(pd).split("Same learning").length - 1).toBe(1);
+      const teamPath = join(pd, "aidlc", "spaces", DEFAULT_SPACE, "memory", "team.md");
+      const teamContent = existsSync(teamPath) ? readFileSync(teamPath, "utf-8") : "";
+      expect(teamContent).not.toContain("Same learning");
+      const audit = readAllAuditShards(pd, DEFAULT_RECORD_DIR, DEFAULT_SPACE);
+      expect(audit.split("**Event**: RULE_LEARNED").length - 1).toBe(1);
+
+      const replay = runPersist(pd, path);
+      expect(replay.status).toBe(0);
+      expect(JSON.parse(replay.out).rule_learned).toBe(0);
+      expect(projectMd(pd).split("Same learning").length - 1).toBe(1);
+      const replayAudit = readAllAuditShards(pd, DEFAULT_RECORD_DIR, DEFAULT_SPACE);
+      expect(replayAudit.split("**Event**: RULE_LEARNED").length - 1).toBe(1);
+    }, 30000);
+  });
+
+  describe("finding #11 (P1, round 5) — pinned provenance must still exist at persist time", () => {
+    test("a syntactically valid but nonexistent intent record fails without writing", () => {
+      const pd = mkProject();
+      const text = "Must not land under a ghost intent";
+      const selection = selectionsFile(pd, "ghost-intent", text, { intent: "ghost-a1234567" });
+
+      const result = runPersist(pd, selection);
+      expect(result.status).not.toBe(0);
+      expect(result.out).toContain("missing intent record");
+      const practicePath = join(pd, "aidlc", "spaces", DEFAULT_SPACE, "memory", "project.md");
+      const practice = existsSync(practicePath) ? readFileSync(practicePath, "utf-8") : "";
+      expect(practice).not.toContain(text);
+      expect(existsSync(join(intentsDirOf(pd, DEFAULT_SPACE), "ghost-a1234567"))).toBe(false);
+    }, 30000);
+
+    test("a syntactically valid but nonexistent non-default space fails without creating it", () => {
+      const pd = mkProject();
+      const text = "Must not land under a ghost space";
+      const selection = selectionsFile(pd, "ghost-space", text, { space: "ghost", intent: null });
+
+      const result = runPersist(pd, selection);
+      expect(result.status).not.toBe(0);
+      expect(result.out).toContain("missing space");
+      expect(existsSync(join(pd, "aidlc", "spaces", "ghost"))).toBe(false);
+    }, 30000);
+
+    test("a deleted default space fails instead of being synthesized and partially recreated", () => {
+      const pd = mkProject();
+      const selection = selectionsFile(pd, "deleted-default", "Must not recreate default");
+      const defaultDir = join(pd, "aidlc", "spaces", DEFAULT_SPACE);
+      rmSync(defaultDir, { recursive: true, force: true });
+
+      const result = runPersist(pd, selection);
+      expect(result.status).not.toBe(0);
+      expect(result.out).toContain("missing space");
+      expect(existsSync(defaultDir)).toBe(false);
+    }, 30000);
+
+    test("a symlinked space fails without writing through the link", () => {
+      const pd = mkProject();
+      const external = join(pd, "external-space");
+      mkdirSync(external, { recursive: true });
+      symlinkSync(external, join(pd, "aidlc", "spaces", "redirect"));
+      const selection = selectionsFile(pd, "symlink-space", "Must not follow space links", {
+        space: "redirect",
+        intent: null,
+      });
+
+      const result = runPersist(pd, selection);
+      expect(result.status).not.toBe(0);
+      expect(result.out).toContain("missing space");
+      expect(existsSync(join(external, "memory", "project.md"))).toBe(false);
+    }, 30000);
+  });
+
+  describe("finding #12 (P2, round 5) — CLI slug must match surface-time stage provenance", () => {
+    test("persist rejects a CLI slug different from selections.stage_slug", () => {
+      const pd = mkProject();
+      const text = "Must retain stage provenance";
+      const selection = selectionsFile(pd, "wrong-stage", text);
+
+      const result = runPersist(pd, selection, { slug: "requirements-analysis" });
+      expect(result.status).not.toBe(0);
+      expect(result.out).toContain("slug mismatch");
+      const practicePath = join(pd, "aidlc", "spaces", DEFAULT_SPACE, "memory", "project.md");
+      const practice = existsSync(practicePath) ? readFileSync(practicePath, "utf-8") : "";
+      expect(practice).not.toContain(text);
     }, 30000);
   });
 });

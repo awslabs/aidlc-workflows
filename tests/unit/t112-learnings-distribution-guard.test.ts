@@ -81,6 +81,7 @@ afterEach(() => {
  * plain project — the only difference that drives the guard.
  */
 function seedProject(root: string): void {
+  mkdirSync(join(root, "aidlc", "spaces", "default"), { recursive: true });
   mkdirSync(join(root, "aidlc-docs", "inception", "user-stories"), { recursive: true });
   mkdirSync(join(root, ".claude", "rules"), { recursive: true });
   mkdirSync(join(root, ".claude", "aidlc-common", "stages", "inception"), { recursive: true });
