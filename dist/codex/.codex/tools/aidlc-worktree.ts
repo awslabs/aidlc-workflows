@@ -324,8 +324,13 @@ type ConvergedSourceRecord =
   | BoundConvergedSourceRecord
   | BypassedConvergedSourceRecord;
 
-function convergedUnitName(pd: string, slug: string): string {
-  const resolution = resolveBoltDag(pd);
+function convergedUnitName(
+  pd: string,
+  slug: string,
+  intent?: string,
+  space?: string,
+): string {
+  const resolution = resolveBoltDag(pd, intent, space);
   if (resolution.state !== "ok") return slug;
   const match = resolution.units.find((unit) => boltSlugForUnit(unit) === slug);
   return match ?? slug;
@@ -339,7 +344,7 @@ function convergedSourceRecord(
 ): ConvergedSourceRecord | null {
   let latestBlock: string | undefined;
   try {
-    const unitName = convergedUnitName(pd, slug);
+    const unitName = convergedUnitName(pd, slug, intent, space);
     for (const e of findAllEvents(readAllAuditShards(pd, intent, space), "SWARM_UNIT_CONVERGED")) {
       if (auditBlockField(e.block, "Unit name") !== unitName) continue;
       latestBlock = e.block;

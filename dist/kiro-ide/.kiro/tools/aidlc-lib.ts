@@ -10229,14 +10229,19 @@ function boltDagMatches(a: ResolvedBoltDag, b: ResolvedBoltDag): boolean {
   return true;
 }
 
-// Resolve the active intent's unit DAG. The authored dependency artifact is
-// authoritative whenever it exists: a valid cache is accepted only when its
-// batches and unit kinds still match that artifact. Callers must keep the three
-// states distinct: "none" is a real no-DAG workflow, while "malformed" means
-// the unit set is unknowable and must fail closed.
-export function resolveBoltDag(projectDir: string): BoltDagResolution {
+// Resolve the selected intent's unit DAG (the active intent when no selectors
+// are supplied). The authored dependency artifact is authoritative whenever it
+// exists: a valid cache is accepted only when its batches and unit kinds still
+// match that artifact. Callers must keep the three states distinct: "none" is a
+// real no-DAG workflow, while "malformed" means the unit set is unknowable and
+// must fail closed.
+export function resolveBoltDag(
+  projectDir: string,
+  intent?: string,
+  space?: string,
+): BoltDagResolution {
   let cached: ResolvedBoltDag | null = null;
-  const graphPath = runtimeGraphPath(projectDir);
+  const graphPath = runtimeGraphPath(projectDir, intent, space);
   if (existsSync(graphPath)) {
     try {
       const graph: unknown = JSON.parse(readFileSync(graphPath, "utf-8"));
@@ -10290,7 +10295,7 @@ export function resolveBoltDag(projectDir: string): BoltDagResolution {
     }
   }
 
-  const dependencyPath = unitDependencyPath(projectDir);
+  const dependencyPath = unitDependencyPath(projectDir, intent, space);
   if (!existsSync(dependencyPath)) return cached ?? { state: "none" };
 
   let body: string;

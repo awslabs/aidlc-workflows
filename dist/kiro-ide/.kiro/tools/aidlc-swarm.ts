@@ -477,7 +477,17 @@ function bindReviewedSource(
 ): { binding?: SourceBinding; error?: string } {
   const wt = worktreePath(projectDir, unit);
   const idx = join(tmpdir(), `aidlc-swarm-source-${process.pid}-${randomUUID().slice(0, 8)}`);
-  const env = { ...process.env, GIT_INDEX_FILE: idx };
+  // commit-tree is an internal snapshot operation, not a user-authored commit.
+  // Give it a framework-owned identity so finalize does not depend on ambient
+  // user.name/user.email configuration (CI and fresh automation often have none).
+  const env = {
+    ...process.env,
+    GIT_INDEX_FILE: idx,
+    GIT_AUTHOR_NAME: "AI-DLC",
+    GIT_AUTHOR_EMAIL: "aidlc@localhost",
+    GIT_COMMITTER_NAME: "AI-DLC",
+    GIT_COMMITTER_EMAIL: "aidlc@localhost",
+  };
   const git = (args: string[]) => spawnSync("git", ["-C", wt, ...args], {
     env,
     encoding: "utf-8",

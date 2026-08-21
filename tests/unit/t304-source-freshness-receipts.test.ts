@@ -55,6 +55,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  boltSlugForUnit,
   readAllAuditShards,
   workspaceSourceFingerprint,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -65,6 +66,7 @@ import {
   cleanupWorktreeFixture,
   createTestProject,
   resetAidlcEnv,
+  seedBoltDag,
   seededAuditDir,
   seededAuditShard,
   seededRecordDir,
@@ -1281,6 +1283,8 @@ describe("t304 swarm finalize source-fingerprint check (#646 review P1#3)", () =
   function makeFixture(): string {
     const proj = setupWorktreeFixture();
     fixtures.push(proj);
+    git(proj, ["config", "user.email", "t@test"]);
+    git(proj, ["config", "user.name", "t"]);
     // The fixture ships with a pre-populated `Bolt Refs: [foo]` for its own
     // (unrelated) milestone-11 worktree-lifecycle purpose - clear it so a
     // fresh `prepare` for any unit name here doesn't collide with a stale ref.
@@ -1742,6 +1746,52 @@ describe("t304 swarm finalize source-fingerprint check (#646 review P1#3)", () =
       .toBe("export const bar = 1;   \n");
     const afterMerge = spawnSync("git", ["-C", proj, "show-ref", "--verify", "--quiet", retainedRef]);
     expect(afterMerge.status).toBe(1);
+  }, 120000);
+
+  test("an explicit intent binds a normalized legacy Unit to that intent's convergence", () => {
+    const proj = makeFixture();
+    const unit = "2fa";
+    const slug = boltSlugForUnit(unit);
+    seedBoltDag(proj, [unit]);
+
+    const prepared = runSwarm(proj, [
+      "prepare", "--batch", "1", "--units", unit, "--base", "main",
+    ]);
+    expect(prepared.rc, prepared.out).toBe(0);
+    const wt = wtPath(proj, slug);
+    writeFileSync(join(wt, "reviewed.ts"), "export const reviewed = true;\n", "utf-8");
+    recordReview(wt, "code-generation", REVIEWER, unit);
+    const finalized = runSwarm(proj, [
+      "finalize", "--batch", "1", "--units", unit, "--claimed", unit,
+      "--check-cmd", `"${process.execPath}" -e "require('fs').accessSync('reviewed.ts')"`,
+    ]);
+    expect(finalized.rc, finalized.out).toBe(0);
+
+    writeFileSync(join(wt, "unreviewed.ts"), "export const unreviewed = true;\n", "utf-8");
+    git(wt, ["add", "--", "reviewed.ts", "unreviewed.ts"]);
+    git(wt, ["commit", "-qm", "source advanced after convergence"]);
+
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    const originalIntent = readFileSync(join(intents, "active-intent"), "utf-8").trim();
+    const decoyIntent = join(intents, "decoy-intent");
+    mkdirSync(decoyIntent, { recursive: true });
+    writeFileSync(
+      join(decoyIntent, "aidlc-state.md"),
+      readFileSync(join(intents, originalIntent, "aidlc-state.md"), "utf-8"),
+      "utf-8",
+    );
+    writeFileSync(join(intents, "active-intent"), "decoy-intent\n", "utf-8");
+
+    const merge = spawnSync(BUN, [
+      WORKTREE_TOOL, "merge", "--slug", slug, "--target", "main",
+      "--strategy", "squash", "--intent", originalIntent, "--project-dir", proj,
+    ], { cwd: proj, encoding: "utf-8" });
+    const output = `${merge.stdout}${merge.stderr}`;
+    expect(merge.status).not.toBe(0);
+    expect(output).toContain("source-fingerprint mismatch");
+    expect(output).not.toContain("[merge-succeeded:");
+    expect(existsSync(join(proj, "reviewed.ts"))).toBe(false);
+    expect(existsSync(join(proj, "unreviewed.ts"))).toBe(false);
   }, 120000);
 
   test("discard removes the retained reviewed-source refs for that Bolt", () => {
