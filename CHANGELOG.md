@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.119] - 2026-08-27
+
+Stage definitions now carry compact Learn and Sensors compartments while their shared behavior lives once in the always-loaded stage protocol, reducing repeated prompt context without changing approval gates, learning capture, or sensor enforcement. **Upgrade:** refresh your `dist/<harness>/` shell so every generated stage and the shared protocol are updated together.
+
+* All gated stages point their Learn compartment to the §13 engine-created, output-only diary, question, and persistence contract; bootstrap initialization stages retain their no-gate exception.
+* Sensors compartments now mirror frontmatter through concise `Imports:` and `Upstream targets:` summaries while preserving stage-specific validation and intentional-omission notes.
+* `stage-protocol.md` §14 defines shared fire timing, advisory and blocking severity, failure reporting, required-section defaults, and upstream-coverage behavior, and redundant per-stage protocol reminders are removed.
+
 ## [2.6.118] - 2026-08-27
 
 Zero-Unit Code Generation now uses its documented stage-level record as a first-class Plan Approval authority, and inline generation cannot bypass the approval enforced on delegated workers. Workspace aliases retain the same trusted planning operations without weakening child-symlink rejection. **Upgrade:** refresh your `dist/<harness>/` shell so the updated stage, testing-posture tool, plan-approval hook, and mutation-surface registrations are installed together.

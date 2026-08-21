@@ -87,8 +87,11 @@ fields that carry the structural weight:
 | `summary_confirmation` | Optional — `required` for stages that always collect file-backed answers, `if-present` for conditional question flows |
 
 The body opens with `## Steps` — the imperative prose the lead agent follows.
-The `## Sensors` and `## Learn` compartments come after it. For the complete
-field table, types, and constraints, see
+The `## Sensors` compartment then summarizes output location, exact frontmatter
+imports, and upstream targets; preserve any stage-specific sensor exception.
+The final `## Learn` compartment points to `stage-protocol.md` §13, with the
+bootstrap no-gate exception where applicable. For the complete field table,
+types, and constraints, see
 [Field reference — when to use](../reference/15-stage-definition.md#field-reference-when-to-use).
 
 ### 3. Wire the dependency edges so the graph places it

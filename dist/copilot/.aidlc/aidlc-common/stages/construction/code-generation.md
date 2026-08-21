@@ -62,8 +62,6 @@ outputs: application code + code-generation-plan.md, code-generation-questions.m
 
 # Code Generation
 
-MANDATORY: Follow stage-protocol.md for approval gates, question format, and completion messages.
-
 ## Steps
 
 ### Critical Rules
@@ -406,60 +404,22 @@ the record dir); the planning, plan-approval, and summary artefacts
 `unit-test-instructions.md`, `code-summary.md`) live under
 `<code-generation-record>/`.
 
-The imported sensors check the code outputs and per-unit markdown artefacts.
-`source-manifest.json` is engine-validated against its strict schema and source
-binding; like `traceability.json`, it is not subject to the markdown
-`required-sections` floor:
+Imports: `required-sections`, `linter`, `type-check`, `traceability`.
 
-- **`required-sections`** verifies each markdown artefact has the generic
-  document-shape floor (at least 2 H2 headings), including the per-unit unit
-  test instructions.
-- **`linter`** wraps the project's configured linter (eslint by default).
-  Fires on every Write/Edit matching its `matches: "**/*.{ts,js}"` filter.
-  Failure mode: lint violations land as `SENSOR_FAILED` audit rows with
-  detail at `<record>/.aidlc-sensors/code-generation/linter-<iso>.md`.
-- **`type-check`** wraps the project's configured type-checker (tsc by
-  default). Fires on `**/*.{ts,tsx}`. Failure mode: type errors emit
-  `SENSOR_FAILED` with similar detail.
-- **`traceability`** validates the per-Unit coverage table and verifies every
-  `OK` target is an existing workspace-relative file.
+`required-sections` checks each planning and summary artefact for at least two
+H2 headings. `linter` and `type-check` run against matching generated code,
+and `traceability` verifies the per-Unit coverage table and every `OK` target.
 
-`upstream-coverage` is intentionally NOT imported here. The stage consumes a
-broad, scope-dependent design set, while its load-bearing validation is the
-shape of the planning artefacts plus the lint, type, and traceability checks
-on generated code. The `required-sections` floor does not apply to the
-structured `traceability.json` file, which the `traceability` sensor owns.
+`upstream-coverage` is intentionally NOT imported because the stage consumes a
+broad, scope-dependent design set. The `required-sections` floor does not
+apply to structured `source-manifest.json` or `traceability.json`; the engine
+and `traceability` sensor own those files respectively.
 
 ## Learn
 
-While running this stage, record observations in the engine-created
-`<record>/<phase>/<stage>/memory.md`. Treat it as an output-only target:
-never read, probe, create, or initialize it. Follow the active harness's
-diary-write discipline when inserting entries under four standard headings:
-
-- **Interpretations** — choices made where the stage prose was ambiguous
-- **Deviations** — places you intentionally departed from the stage prose, and why
-- **Tradeoffs** — alternatives considered and why you picked what you did
-- **Open questions** — anything to confirm before next run, or uncertain context
-
-Format each entry with an ISO 8601 timestamp:
-`- 2026-05-20T10:14:32Z — <summary>; <context>`
-
-Before the approval gate, run the `stage-protocol.md` §13
-`aidlc-learnings.ts surface --slug <stage-slug>` command; that tool, not the
-model, reads memory.md and returns the candidates for the structured question.
-For each entry the user keeps, write to the appropriate
-harness destination per `stage-protocol.md` §13 — never to this stage file:
-
-- Prescriptive rule → a practice line under the routed heading in
-  `aidlc/spaces/<active-space>/memory/project.md` (default) or `team.md` (promoted)
-- Verification check → new manifest at `.aidlc/sensors/aidlc-<id>.md`
-  (capability descriptor only — no `applies_to`); add the new id to
-  the relevant stage's `sensors: [...]` frontmatter list to wire it
-
-Even when nothing surfaces, still ask the mandatory "Anything to add for next time?" question from stage-protocol.md section 13. Do not infer "Nothing to add." Only after the human answers that question may you proceed to the gate. The memory.md
-file stays in the artefact directory as part of the stage's permanent record.
-
-Stage files are immutable framework artefacts — the ritual writes into the
-harness, not into this file. Next time this stage runs, the new rules and
-sensors load automatically.
+Follow stage-protocol.md §13: maintain `<record>/<phase>/<stage>/memory.md`
+under the four standard headings while working; before the approval gate,
+surface candidates with `aidlc-learnings.ts`;
+still ask the mandatory "Anything to add for next time?" question, and persist confirmed selections
+with the tool. The memory file stays in the artefact directory, and the stage
+file remains immutable.
