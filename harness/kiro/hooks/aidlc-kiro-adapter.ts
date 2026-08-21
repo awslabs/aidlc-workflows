@@ -105,6 +105,14 @@ function kiroDispatch(input: KiroHookInput): KiroDispatch | null {
   // Kiro emits this auxiliary response shell after a delegate completes. It
   // is not a dispatch and must never produce a completion or steering event.
   if (tool === "subagent_response") return null;
+  const directAgent = firstNonBlank([
+    toolInput.name,
+    toolInput.subagent_type,
+    toolInput.agent,
+    toolInput.agent_name,
+    toolInput.role,
+  ]).trim();
+  const directPrompt = firstNonBlank([toolInput.prompt, toolInput.task]);
   if (tool === "subagent") {
     // The alias is used for both legacy crew payloads and direct dispatches.
     // Only a non-empty set of valid crew stages identifies the former; an
@@ -124,8 +132,10 @@ function kiroDispatch(input: KiroHookInput): KiroDispatch | null {
         const role = typeof stage.role === "string" ? stage.role.trim() : "";
         return role || "unknown";
       });
+      if (directAgent) agents.push(directAgent);
       const prompt = [
         firstNonBlank([toolInput.task]),
+        firstNonBlank([toolInput.prompt]),
         ...stages
           .filter((stage) =>
             typeof stage.role === "string" && stage.role.trim() === "aidlc-developer-agent"
@@ -139,14 +149,8 @@ function kiroDispatch(input: KiroHookInput): KiroDispatch | null {
   const named = /^subagent_(.+)$/.exec(tool);
   if (tool !== "subagent" && tool !== "invoke_sub_agent" && named === null) return null;
   const namedAgent = named?.[1]?.trim() ?? "";
-  const agent = namedAgent || firstNonBlank([
-    toolInput.name,
-    toolInput.subagent_type,
-    toolInput.agent,
-    toolInput.agent_name,
-    toolInput.role,
-  ]).trim();
-  const prompt = firstNonBlank([toolInput.prompt, toolInput.task]);
+  const agent = namedAgent || directAgent;
+  const prompt = directPrompt;
   return {
     coreTool: "Task",
     coreInput: {

@@ -372,7 +372,32 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
-  test("1e: response shells stay inert for pre-dispatch hooks", () => {
+  test("1e: mixed alias payloads preserve a direct developer identity for plan approval", () => {
+    const dir = scratchProject(true);
+    try {
+      seedUnapprovedCodeGeneration(dir, "todo-core");
+      const r = runAdapter(dir, "plan-approval-guard", {
+        hook_event_name: "preToolUse",
+        cwd: dir,
+        tool_name: "subagent",
+        tool_input: {
+          name: "aidlc-developer-agent",
+          prompt: "AIDLC-UNIT: todo-core\nImplement todo-core",
+          task: "",
+          stages: [{
+            role: "aidlc-quality-agent",
+            prompt_template: "Review todo-core",
+          }],
+        },
+      });
+      expect(r.code).toBe(2);
+      expect(r.stderr).toContain("plan-approval guard");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("1f: response shells stay inert for pre-dispatch hooks", () => {
     const dir = scratchProject(true);
     try {
       seedUnapprovedCodeGeneration(dir, "todo-core");
