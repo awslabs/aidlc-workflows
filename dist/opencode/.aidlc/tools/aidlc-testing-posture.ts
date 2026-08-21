@@ -13,7 +13,6 @@ import { join } from "node:path";
 import {
   activeSpace,
   docsRoot,
-  extractMarkdownSection,
   getField,
   resolveProjectDir,
   stateFilePath,
@@ -205,12 +204,207 @@ function structuredField(section: string, field: string): string | null {
   return match?.[1].trim() || null;
 }
 
+type MarkdownFence = { marker: "`" | "~"; length: number };
+
+function isEscaped(line: string, offset: number): boolean {
+  let backslashes = 0;
+  for (let index = offset - 1; index >= 0 && line[index] === "\\"; index--) {
+    backslashes++;
+  }
+  return backslashes % 2 === 1;
+}
+
+function hasMatchingTickRun(
+  line: string,
+  from: number,
+  ticks: number,
+): boolean {
+  for (let cursor = from; cursor < line.length; cursor++) {
+    if (line[cursor] !== "`" || isEscaped(line, cursor)) continue;
+    let end = cursor + 1;
+    while (line[end] === "`") end++;
+    if (end - cursor === ticks) return true;
+    cursor = end - 1;
+  }
+  return false;
+}
+
+function stripHtmlCommentsFromLine(
+  rawLine: string,
+  state: { inComment: boolean; inlineCodeTicks: number },
+): string {
+  let line = "";
+  let cursor = 0;
+  while (cursor < rawLine.length) {
+    if (state.inComment) {
+      const end = rawLine.indexOf("-->", cursor);
+      if (end < 0) break;
+      state.inComment = false;
+      cursor = end + 3;
+      continue;
+    }
+    if (
+      rawLine[cursor] === "`" &&
+      (state.inlineCodeTicks > 0 || !isEscaped(rawLine, cursor))
+    ) {
+      let end = cursor + 1;
+      while (rawLine[end] === "`") end++;
+      const ticks = end - cursor;
+      if (
+        state.inlineCodeTicks === 0 &&
+        hasMatchingTickRun(rawLine, end, ticks)
+      ) {
+        state.inlineCodeTicks = ticks;
+      } else if (state.inlineCodeTicks === ticks) state.inlineCodeTicks = 0;
+      line += rawLine.slice(cursor, end);
+      cursor = end;
+      continue;
+    }
+    if (
+      state.inlineCodeTicks === 0 &&
+      !isEscaped(rawLine, cursor) &&
+      rawLine.startsWith("<!--", cursor)
+    ) {
+      state.inComment = true;
+      cursor += 4;
+      continue;
+    }
+    line += rawLine[cursor];
+    cursor++;
+  }
+  return line;
+}
+
+function fenceOpening(line: string): MarkdownFence | null {
+  const opening = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+  if (opening?.[1][0] === "`" && opening[2].includes("`")) return null;
+  return opening
+    ? {
+        marker: opening[1][0] as "`" | "~",
+        length: opening[1].length,
+      }
+    : null;
+}
+
+function closesFence(line: string, fence: MarkdownFence): boolean {
+  const closing = /^ {0,3}([`~]+)[ \t]*$/.exec(line);
+  return Boolean(
+    closing &&
+      closing[1][0] === fence.marker &&
+      Array.from(closing[1]).every((marker) => marker === fence.marker) &&
+      closing[1].length >= fence.length,
+  );
+}
+
+// Remove only rendered HTML comments. Fenced Markdown remains visible content,
+// including literal <!-- tokens inside a fence.
+function markdownWithoutHtmlComments(body: string): string {
+  const lines = body.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").split("\n");
+  const state = { inComment: false, inlineCodeTicks: 0 };
+  let fence: MarkdownFence | null = null;
+  return lines
+    .map((rawLine) => {
+      if (fence) {
+        if (closesFence(rawLine, fence)) fence = null;
+        return rawLine;
+      }
+      const startedInComment = state.inComment;
+      const line = stripHtmlCommentsFromLine(rawLine, state);
+      const commentStart = rawLine.indexOf("<!--");
+      const structuralPrefix =
+        startedInComment || (line !== rawLine && commentStart < 0)
+          ? ""
+          : commentStart < 0
+            ? rawLine
+            : rawLine.slice(0, commentStart);
+      const opening = fenceOpening(structuralPrefix);
+      if (opening) {
+        state.inComment = false;
+        state.inlineCodeTicks = 0;
+      }
+      fence = opening;
+      return opening ? rawLine : line;
+    })
+    .join("\n");
+}
+
+function structuralMarkdownLines(body: string): string[] {
+  const rawLines = body.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").split("\n");
+  const visibleLines = markdownWithoutHtmlComments(body).split("\n");
+  return visibleLines.map((line, index) => {
+    const rawLine = rawLines[index];
+    if (line === rawLine) return line;
+    const opening = rawLine.indexOf("<!--");
+    const closing = rawLine.indexOf("-->");
+    return opening >= 0 && (closing < 0 || opening < closing)
+      ? rawLine.slice(0, opening)
+      : "";
+  });
+}
+
 function visiblePostureText(section: string): string {
-  return visibleMarkdownLines(section).join("\n").trim();
+  return markdownWithoutHtmlComments(section).trim();
+}
+
+function classifiablePostureText(section: string): string {
+  const lines = markdownWithoutHtmlComments(section).split("\n");
+  const structuralLines = structuralMarkdownLines(section);
+  let fence: MarkdownFence | null = null;
+  return lines
+    .map((line, index) => {
+      const structuralLine = structuralLines[index];
+      if (fence) {
+        if (closesFence(structuralLine, fence)) fence = null;
+        return "";
+      }
+      const opening = fenceOpening(structuralLine);
+      if (opening) {
+        fence = opening;
+        return "";
+      }
+      return line;
+    })
+    .join("\n")
+    .trim();
+}
+
+// Find the real Testing Posture section while ignoring headings hidden inside
+// HTML comments or fenced examples. Return the original raw lines so comments
+// and fences remain part of input_sha256 even though classification uses the
+// visible projection above.
+function extractTestingPostureSection(content: string): string {
+  const rawLines = content.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").split("\n");
+  const visibleLines = structuralMarkdownLines(content);
+  let fence: MarkdownFence | null = null;
+  let bodyStart = -1;
+  let bodyEnd = rawLines.length;
+
+  for (let index = 0; index < visibleLines.length; index++) {
+    const line = visibleLines[index];
+    if (fence) {
+      if (closesFence(line, fence)) fence = null;
+      continue;
+    }
+    const opening = fenceOpening(line);
+    if (opening) {
+      fence = opening;
+      continue;
+    }
+    if (bodyStart < 0) {
+      if (line.trimEnd() === TESTING_HEADING) bodyStart = index + 1;
+      continue;
+    }
+    if (/^## [^\n]*$/.test(line)) {
+      bodyEnd = index;
+      break;
+    }
+  }
+
+  return bodyStart < 0 ? "" : rawLines.slice(bodyStart, bodyEnd).join("\n");
 }
 
 function classifyPosture(section: string): ClassifiedPosture | null {
-  const body = visiblePostureText(section);
+  const body = classifiablePostureText(section);
   if (!body) return null;
 
   const structuredMethod = structuredField(body, "Methodology");
@@ -507,10 +701,7 @@ export function resolveTestingPosture(
   for (const layer of ["org", "team", "project"] as const) {
     const file = join(memoryDir, `${layer}.md`);
     if (!existsSync(file)) continue;
-    sections[layer] = extractMarkdownSection(
-      readFileSync(file, "utf-8"),
-      TESTING_HEADING,
-    );
+    sections[layer] = extractTestingPostureSection(readFileSync(file, "utf-8"));
   }
   let state = "";
   try {

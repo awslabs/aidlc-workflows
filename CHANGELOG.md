@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.38] - 2026-08-21
+
+Testing Posture resolution now ignores HTML-commented examples while preserving visible prose, structured fields, and fenced notes. **Upgrade:** refresh your `dist/<harness>/` shell; contracts whose Testing Posture sections contain comments will re-resolve, so re-approve affected Code Generation plans.
+
+* Commented headings and comment-only `Testing Posture` sections no longer select, truncate, or affirm a methodology; the resolver falls through to the real visible section or next visible memory layer.
+* Visible `Methodology` and `Ordering` fields remain authoritative beside comments, and visible prose and fenced content remain in `applicable_notes`.
+* Testing Contract input fingerprints retain each raw resolved section, including comments and fenced content, so comment-only changes still invalidate stale approvals.
+
 ## [2.6.37] - 2026-08-21
 
 Code-generation review receipts are now bound to the workspace source state the reviewer inspected, and every completion route refuses when that state is stale. The same binding follows autonomous swarm work from finalize through source merge. **Upgrade:** refresh your `dist/<harness>/` shell so the source-fingerprint tools, guards, audit schema, and generated harness files are installed.
