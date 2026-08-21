@@ -621,6 +621,7 @@ one SHORT line per stage (≤15 words), not a paragraph.
 {
   "mode": "matched | custom | in-flight",
   "scopeName": "<stock name, custom kebab name, or current running scope>",
+  "birthDescription": "<front/report only: nonblank description for intent birth>",
   "ars": {
     "total": 52,
     "iae": 0.35,
@@ -642,6 +643,13 @@ one SHORT line per stage (≤15 words), not a paragraph.
 `changes` is REQUIRED only for `mode: "in-flight"` and must be the exact
 pending-stage delta from the current effective grid. It is omitted for
 front/report proposals.
+
+`birthDescription` is REQUIRED and nonblank for `mode: "matched"` and
+`mode: "custom"`, and omitted for `mode: "in-flight"`. When the dispatch
+contains task text, copy the dispatch's task text exactly without paraphrasing. For report-only
+composition, derive a concise description from the report's actual findings;
+for a task-less front composition, derive it from the proposed work the human
+will approve. Never return a front/report proposal that can only birth by scope.
 
 The `ars.total` composite is an ADVISORY heuristic index: the weights in Step
 2.3 are uncalibrated priors, and nothing deterministic routes on the number.

@@ -10054,7 +10054,17 @@ export function parseArgs(args: string[]): {
   let i = 0;
   while (i < args.length) {
     if (args[i].startsWith("--")) {
-      const key = args[i].slice(2);
+      const token = args[i].slice(2);
+      const equals = token.indexOf("=");
+      if (equals >= 0) {
+        const key = token.slice(0, equals);
+        const value = token.slice(equals + 1);
+        flags[key] = value;
+        if (value.trim().length === 0) blankFlags.add(key);
+        i++;
+        continue;
+      }
+      const key = token;
       if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
         flags[key] = args[i + 1];
         if (args[i + 1].trim().length === 0) blankFlags.add(key);

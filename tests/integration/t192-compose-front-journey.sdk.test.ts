@@ -129,8 +129,7 @@ describe("t192 front composer journey (/aidlc compose -> approve -> write -> bir
         const projectLine = state
           .split("\n")
           .find((line) => line.startsWith("- **Project**:"));
-        expect(projectLine).toBeDefined();
-        expect(projectLine).not.toBe("- **Project**: [Project description]");
+        expect(projectLine).toBe(`- **Project**: ${TASK}`);
 
         // (e) keyword hygiene: the composed .md ships keywords: [] (no
         // keyword entries - inferability is an explicit gate choice).

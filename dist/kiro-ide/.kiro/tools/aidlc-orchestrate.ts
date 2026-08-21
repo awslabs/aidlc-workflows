@@ -742,8 +742,17 @@ function parseNextFlags(args: string[]): ParsedFlags {
   }
   const flags: ParsedFlags = {};
   const intentWords: string[] = [];
+  let literalIntent = false;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
+    if (literalIntent) {
+      intentWords.push(a);
+      continue;
+    }
+    if (a === "--") {
+      literalIntent = true;
+      continue;
+    }
     if (READ_ONLY_FLAGS.has(a)) {
       flags.readOnly = a;
       continue;
@@ -815,7 +824,10 @@ function parseNextFlags(args: string[]): ParsedFlags {
       // into the freeform intent text (the path would read as intent words).
       flags.report = args[i + 1];
       i++;
-    } else if (!a.startsWith("--")) {
+    } else {
+      // Unknown flag-looking tokens are task text, not disposable noise. Use
+      // the standard `--` delimiter when a task must contain a token that is
+      // otherwise a recognized AIDLC flag (for example `compose -- --scope`).
       intentWords.push(a);
     }
   }
@@ -878,7 +890,7 @@ function createPrintDirective(scope: string, flags: ParsedFlags, description?: s
   let labelHint = "";
   if (description && description.length > 0) {
     // Shell-quote the freeform description so multi-word intents survive intact.
-    cmd.push(`--arguments ${JSON.stringify(description)}`);
+    cmd.push(`--arguments=${shellArg(description)}`);
     // The conductor (LLM) condenses the description into the short dir-name label
     // — the engine can't summarize. Name the missing --label in the directive so
     // the conductor adds it; the dir name becomes `<YYMMDD>-<label>`. (A bare run
@@ -949,7 +961,11 @@ function composeDispatchDirective(
     );
     if (flags.intent) {
       parts.push(
-        `On approval, the continue-into-birth run MUST carry the original task text verbatim as \`next --scope <scopeName> ${JSON.stringify(flags.intent)}\`; never use a bare \`next --scope <scopeName>\` when composition carried task text, so the born Project field and record-directory slug preserve the real description.`,
+        `The proposal's required \`birthDescription\` MUST equal the original task text verbatim: ${JSON.stringify(flags.intent)}. On approval, pass it after the literal \`--\` delimiter as one shell-safe argv value; for this exact task the command is \`next --scope <scopeName> -- ${shellArg(flags.intent)}\`. Never use double quotes around untrusted task text and never use a bare \`next --scope <scopeName>\`, so shell metacharacters and flag-like descriptions stay literal and the born Project field preserves the real description.`,
+      );
+    } else {
+      parts.push(
+        "The proposal MUST include a nonblank `birthDescription` grounded in the approved work. For report-driven composition, derive it from the report's actual findings; for a task-less front composition, derive it from the approved proposal. Never approve a proposal that would continue into a scope-only birth.",
       );
     }
     if (flags.report) {
@@ -965,7 +981,7 @@ function composeDispatchDirective(
   }
   const proposalShape = inFlight
     ? "mode in-flight, the current scopeName, an ars block (the five component scores with method codekb|fallback), an arsRationale, the preserved full effective grid, exact changes.skip and changes.add arrays, a per-change rationale, a summary the strict validator computed, and two pre-rendered markdown tables (ARS scores with bands; per-stage decisions with reasoning)"
-    : "mode matched|custom, scopeName, an ars block (the five component scores with method codekb|fallback), an arsRationale, the per-stage EXECUTE/SKIP grid, a per-SKIP rationale, a summary the validator computed, and two pre-rendered markdown tables (ARS scores with bands; per-stage decisions with reasoning)";
+    : "mode matched|custom, scopeName, a nonblank birthDescription, an ars block (the five component scores with method codekb|fallback), an arsRationale, the per-stage EXECUTE/SKIP grid, a per-SKIP rationale, a summary the validator computed, and two pre-rendered markdown tables (ARS scores with bands; per-stage decisions with reasoning)";
   const modeContract = inFlight
     ? "the composer's mode is IN-FLIGHT and FINAL for the returned delta: nearest_stock is advisory, the running scope and frozen actions stay unchanged, and approval uses only changes.skip/changes.add through recompose; neither presentation nor comparison with stock grids may alter that delta"
     : "the composer's mode is FINAL for the grid it returned: it routed matched-vs-custom solely on the final proposal validator's nearest_stock distance, a matched proposal already carries the revalidated stock grid verbatim, and neither presentation nor your own comparison of grids ever changes the verdict - never re-derive it, and a MATCHED proposal writes no scope file; if the human edits that stock grid, re-dispatch the composer, which must convert it to CUSTOM and revalidate before re-presenting";
@@ -6108,11 +6124,15 @@ export function main(argv: string[]): void {
   let attemptId: string | undefined;
   let conflictingAttemptId = false;
   const filteredArgs: string[] = [];
+  let literalArgs = false;
   for (let i = 0; i < rawArgs.length; i++) {
-    if (rawArgs[i] === "--project-dir" && i + 1 < rawArgs.length) {
+    if (rawArgs[i] === "--") {
+      literalArgs = true;
+      filteredArgs.push(rawArgs[i]);
+    } else if (!literalArgs && rawArgs[i] === "--project-dir" && i + 1 < rawArgs.length) {
       projectDir = rawArgs[i + 1];
       i++;
-    } else if (rawArgs[i] === "--aidlc-attempt-id" && i + 1 < rawArgs.length) {
+    } else if (!literalArgs && rawArgs[i] === "--aidlc-attempt-id" && i + 1 < rawArgs.length) {
       const candidate = rawArgs[i + 1];
       if (/^[A-Za-z0-9._:-]{1,128}$/.test(candidate)) {
         if (attemptId !== undefined && attemptId !== candidate) conflictingAttemptId = true;

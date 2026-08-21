@@ -445,7 +445,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(d.kind).toBe("print");
     expect(d.message).toContain("intent-create --scope bugfix");
     expect(d.message).toContain(
-      '--arguments "Fix duplicate todo persistence"',
+      "--arguments='Fix duplicate todo persistence'",
     );
     expect(d.kind).not.toBe("ask");
     expect(existsSync(statePath(p))).toBe(false);

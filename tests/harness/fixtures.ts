@@ -207,7 +207,7 @@ export function runOrchestrateNext(
     env?: Record<string, string | undefined>;
   } = {},
 ): OrchestrateTestResult {
-  let command = ["next", ...args, "--project-dir", proj];
+  let command = ["next", "--project-dir", proj, ...args];
   let stderr = "";
   const steering: Record<string, unknown>[] = [];
 

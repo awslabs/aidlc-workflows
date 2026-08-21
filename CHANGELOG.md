@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.42] - 2026-08-21
+
+Front/report composition now carries one approved, nonblank `birthDescription` into same-turn intent creation without shell expansion or placeholder fallback. **Upgrade:** refresh your `dist/<harness>/` shell so the composer contract, conductor instructions, and birth command quoting stay aligned.
+
+* Task-backed proposals preserve the original task text exactly; report-only and task-less proposals derive a grounded description from the approved report/plan before birth.
+* Compose and scope-routed descriptions that begin with `--` are retained as task text instead of being discarded as unknown flags.
+* Engine-generated `next` commands place the description after the literal `--` delimiter, and `intent-create` uses `--arguments=<value>` with POSIX-safe single-argument quoting, so leading flags, `$()`, backticks, variables, quotes, and newlines remain literal input.
+
 ## [2.6.41] - 2026-08-21
 
 Workspace detection now follows nested container layouts far enough to find application roots such as `services/api/src/main.py`, preventing incremental scopes from misclassifying existing code as Greenfield and skipping Reverse Engineering. The deterministic fallback evaluates eligible container directories independently up to three levels below the workspace root, aggregates every Brownfield hit without double-counting source files, and reports each hit's relative path. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
