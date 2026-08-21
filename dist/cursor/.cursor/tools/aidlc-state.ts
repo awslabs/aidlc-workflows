@@ -1400,9 +1400,12 @@ function artifactGuardDisabled(): boolean {
   return process.env.AIDLC_SKIP_ARTIFACT_GUARD === "1";
 }
 
-// Mirrors aidlc-orchestrate.ts isAutonomousSwarmCandidate for the lifecycle
-// writer. A missing scope fails closed for a subagent stage: without it, this
-// tool cannot prove that the stage is the non-swarm skeleton gate.
+// Mirrors both aidlc-orchestrate.ts isAutonomousSwarmCandidate and the
+// unit-major suppression at eligibleAutonomousSwarmBatches. Under unit-major
+// the WALK owns per-unit work inline and needs the interactive lifecycle
+// ledger, so its `unit start` must not be refused as swarm-owned. A missing
+// scope fails closed for a subagent stage: without it, this tool cannot prove
+// that the stage is the non-swarm skeleton gate.
 function autonomousSwarmOwnsStage(
   stage: { slug: string; phase: string; for_each?: string; mode?: string },
   stateContent: string,
@@ -1410,6 +1413,9 @@ function autonomousSwarmOwnsStage(
   if (stage.phase !== "construction") return false;
   if (stage.for_each !== "unit-of-work" || stage.mode !== "subagent") return false;
   if (!isAutonomousMode(stateContent)) return false;
+  if (getField(stateContent, "Construction Iteration")?.trim() === "unit-major") {
+    return false;
+  }
   const scope = getField(stateContent, "Scope");
   if (!scope) return true;
   const first = firstInScopeStageOfPhase("construction", scope);
@@ -1780,10 +1786,12 @@ function verifyReviewerPrecondition(
     reviewer?: string;
     reviewer_max_iterations?: number;
     review_class?: "adversarial" | "advisory";
+    workspace_requires?: boolean;
     produces?: string[];
     optional_produces?: string[];
     produces_kinds?: Record<string, string[]>;
-  }
+  },
+  requireReceiptExistence = true,
 ): void {
   if (!stage.reviewer) return; // stage declares no reviewer — nothing to enforce
 
@@ -1806,9 +1814,6 @@ function verifyReviewerPrecondition(
   }
 
   const reviewer = stage.reviewer;
-  if (readAllAuditShards(pd).length === 0) {
-    reviewerPreconditionError(stage.slug, reviewer);
-  }
 
   // The fresh-receipt scan lives in aidlc-lib.ts (freshReviewReceipts) so the
   // review-freeze PreToolUse hook and this precondition read the SAME window:
@@ -1817,6 +1822,33 @@ function verifyReviewerPrecondition(
   // and per-unit write invalidation are all documented there.
   const receipts = freshReviewReceipts(pd, content, stage, { reviewClass });
   const perUnit = stage.for_each === "unit-of-work";
+
+  // Source-state equality composes with v2's bounded stale-receipt recovery:
+  // the newest modern binding is reconciled once for the workspace. A mismatch
+  // blocks every completion route and exposes one Recovery: stale-receipt pass,
+  // even when the normal iteration budget is exhausted. One fresh receipt
+  // against the current tree restores the collected per-unit receipts. This is
+  // deliberately not per-unit attribution; see RFC #662.
+  const sourceFreshnessOff =
+    process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1";
+  const settledSwarm = isSettledSwarmForArtifactGuard(pd, stage, content);
+  const staleSource =
+    stage.workspace_requires === true &&
+    !sourceFreshnessOff &&
+    !settledSwarm &&
+    receipts.sourceStale;
+  if (staleSource) {
+    staleSourcePreconditionError(
+      stage.slug,
+      reviewer,
+      receipts.sourceStaleProgress?.recoverySpent === true,
+    );
+  }
+
+  // Already-[x] recovery skips only existence/cardinality. A modern binding was
+  // still compared above, so crash-window recovery cannot ship changed source.
+  if (!requireReceiptExistence) return;
+
   const sawStageReview = receipts.stageVerdict !== null;
   const reviewedUnits = new Set(receipts.unitVerdicts.keys());
 
@@ -1913,6 +1945,29 @@ function verifyReviewerPrecondition(
   }
 }
 
+function staleSourcePreconditionError(
+  slug: string,
+  reviewer: string,
+  recoverySpent: boolean,
+): never {
+  if (recoverySpent) {
+    error(
+      `Refusing to complete "${slug}": the workspace source no longer matches ` +
+        `the stale-receipt recovery review (source-fingerprint mismatch). ` +
+        `Present this at the approval gate. Only a human Request Changes decision ` +
+        `resets the review attempt; do not record it on the human's behalf.`,
+    );
+  }
+  error(
+    `Refusing to complete "${slug}": the workspace source no longer matches the ` +
+      `state of the most recent recorded review (source-fingerprint mismatch). ` +
+      `Re-invoke ${reviewer} against the current source, record the one bounded ` +
+      `stale-receipt recovery REVIEW_REQUESTED/REVIEW_COMPLETED pair, or revert ` +
+      `the source edit. The recovery pass remains available after the normal ` +
+      `review iteration budget is exhausted.`,
+  );
+}
+
 function staleReviewPreconditionError(
   slug: string,
   reviewer: string,
@@ -1969,6 +2024,8 @@ function reviewRecoverySpentInCurrentAttempt(
       );
   if (reviewClass === "none") return false;
   const receipts = freshReviewReceipts(pd, content, stage, { reviewClass });
+  if (receipts.sourceRecoverySpent) return true;
+  if (receipts.sourceStaleProgress?.recoverySpent === true) return true;
   if (receipts.stageStaleProgress?.recoverySpent === true) return true;
   for (const progress of receipts.unitStaleProgress.values()) {
     if (progress.recoverySpent) return true;
@@ -2110,16 +2167,21 @@ function handleAdvance(args: string[]): void {
     return;
   }
 
+  // A true replay above is already fully applied and remains idempotent. A
+  // crash-window partial approval does not satisfy all replay predicates, so it
+  // still reaches the source comparison. Already-[x] recovery may lack review
+  // receipts, but any modern source binding still has to match.
+  verifyReviewerPrecondition(
+    pd,
+    content,
+    completedStage,
+    !alreadyMarkedCompleted,
+  );
+
   // Artifact guard (issue #366). Only enforce when THIS advance is the
-  // transition that completes the stage - i.e. it was not already [x]. When
-  // approve delegates here the slug is already [x] and approve ran the guard
-  // itself, so skip to avoid a double check. A direct `advance <active-slug>`
-  // (the gate-skipping attack path) is NOT alreadyMarkedCompleted, so it is
-  // guarded. Runs before any mutation; error() exits leaving state untouched.
   if (!alreadyMarkedCompleted) {
     verifyStageArtifacts(pd, completedStage);
     verifySummaryConfirmationPrecondition(pd, content, completedStage);
-    verifyReviewerPrecondition(pd, content, completedStage);
   }
 
   // Detect phase boundary (for PHASE_COMPLETED/VERIFIED/STARTED emissions)
@@ -2232,10 +2294,15 @@ function handleFinalize(args: string[]): void {
   const alreadyMarkedCompleted =
     parseCheckboxes(content).find((c) => c.slug === completedSlug)?.state ===
     "completed";
+  verifyReviewerPrecondition(
+    pd,
+    content,
+    completedStage,
+    !alreadyMarkedCompleted,
+  );
   if (!alreadyMarkedCompleted) {
     verifyStageArtifacts(pd, completedStage);
     verifySummaryConfirmationPrecondition(pd, content, completedStage);
-    verifyReviewerPrecondition(pd, content, completedStage);
   }
 
   // 1. Mark completed
@@ -2352,10 +2419,15 @@ function handleCompleteWorkflow(args: string[]): void {
   // itself, so this skips the double-check on that path while still refusing a
   // direct `complete-workflow <active-slug>` that never produced artifacts. Runs
   // before any mutation so a refusal leaves state untouched.
+  verifyReviewerPrecondition(
+    pd,
+    content,
+    completedStage,
+    !alreadyMarkedCompleted,
+  );
   if (!alreadyMarkedCompleted) {
     verifyStageArtifacts(pd, completedStage);
     verifySummaryConfirmationPrecondition(pd, content, completedStage);
-    verifyReviewerPrecondition(pd, content, completedStage);
   }
 
   // 1. Mark completed
@@ -2677,6 +2749,21 @@ function handleApprove(args: string[]): void {
   verifySummaryConfirmationPrecondition(pd, content, stage);
   verifyReviewerPrecondition(pd, content, stage);
 
+  // Scope is required for next-stage derivation. Validate it before persisting
+  // approval: a post-write routing failure would otherwise leave `[x]` as a
+  // durable but incomplete approval and make crash recovery security-sensitive.
+  const scope = getField(content, "Scope");
+  if (!scope) {
+    error(
+      `State file has no Scope field. Refusing to advance after approve — fix the state file first.`,
+    );
+  }
+  if (!validScopes().has(scope)) {
+    error(
+      `State file has invalid Scope "${scope}". Valid scopes: ${[...validScopes()].join(", ")}.`,
+    );
+  }
+
   const timestamp = isoTimestamp();
 
   content = setCheckbox(content, slug, "completed");
@@ -2704,20 +2791,6 @@ function handleApprove(args: string[]): void {
   }
 
   writeStateFile(pd, content);
-
-  // Auto-advance or complete-workflow. Scope is required for next-stage
-  // derivation; refuse silent fallback (matches handleAdvance/handleCompleteWorkflow).
-  const scope = getField(content, "Scope");
-  if (!scope) {
-    error(
-      `State file has no Scope field. Refusing to advance after approve — fix the state file first.`
-    );
-  }
-  if (!validScopes().has(scope)) {
-    error(
-      `State file has invalid Scope "${scope}". Valid scopes: ${[...validScopes()].join(", ")}.`
-    );
-  }
 
   // No explicit consume step (ledger-event design): the GATE_APPROVED
   // emitted by this commit IS the freshness boundary for the next gate. A second

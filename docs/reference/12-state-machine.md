@@ -175,6 +175,27 @@ convergence ledger is the evidence); `report --single` checks stage-level
 evidence only. Bypass with `AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1`, intended only
 for recovering a legitimately-run stage whose contribution files were lost.
 
+**Source-freshness binding (#629/#646).** On a `workspace_requires` stage, each
+terminal review receipt carries a `Source Fingerprint` for the source tree the
+reviewer inspected. `approve`, `advance`, `finalize`, and `complete-workflow`
+reconcile the chronologically newest modern binding against the current tree.
+A mismatch invalidates the collected receipts as one workspace-global set and
+enters the same bounded `stale-receipt` recovery flow as a post-review artifact
+write: one recovery request/verdict is available even after the ordinary
+iteration budget is exhausted. Reverting the edit also restores the binding
+because it is content-addressed. Already-`[x]` recovery skips receipt
+existence/cardinality only; a recorded modern binding is still compared.
+
+The workspace-global hash proves that the current source equals the tree seen by
+the newest review; it does **not** prove per-unit attribution. Source changed
+before that newest review can be revalidated by one later unit receipt. That
+explicit policy is the accepted limitation until RFC #662 adds a machine-readable
+per-unit source-path manifest. New `unbindable` receipts fail closed; only
+pre-#629 receipts with no field retain migration behavior.
+`AIDLC_SKIP_SOURCE_FRESHNESS=1` disables the check. Swarm finalization records an
+immutable reviewed `Source Commit`; a bypassed finalize records
+`Source Freshness Bypass: true`, and merge must repeat the same switch.
+
 **Gate-revision backstop.** If the conductor revises an artifact at an open
 gate without first reporting rejection, the `approved` report reconciles the
 missing `GATE_REJECTED` + `STAGE_REVISING` pair before completion when audit
@@ -273,7 +294,7 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 | `QUESTION_ANSWERED` | `tools/aidlc-log.ts` | Fires after a non-gate question response; approval choices are lifecycle events owned by `report` |
 | `SUMMARY_CONFIRMATION_RECORDED` | `tools/aidlc-log.ts` | Human-backed consolidated-summary receipt; bound to the questions-file digest and reserved from public audit append |
 | `REVIEW_REQUESTED` | `tools/aidlc-log.ts` | Fires when the conductor dispatches the reviewer defined by `stage-protocol-reviewer.md` §12a |
-| `REVIEW_COMPLETED` | `tools/aidlc-log.ts` | Fires only after a matching positive-iteration `REVIEW_REQUESTED` and records an `Artifact Fingerprint` over the declared output paths and bytes. `READY` is terminal immediately; advisory `NOT-READY` is terminal after its normal-flow pass; adversarial `NOT-READY` is terminal only at `reviewer_max_iterations` (earlier rows expose repair/retry progress to a wave). A terminal receipt invalidated by a later declared-output write gets one distinct recovery request at the next ordinal; either recovery verdict is terminal, and a second invalidation requires human reset. All completing state transitions (`approve`, `advance`, `finalize`, and `complete-workflow`) require a matching terminal receipt from the current workflow attempt whose fingerprint still matches; per-unit stages require one per applicable unit and scope invalidation to that unit. Autonomous swarm finalization additionally requires each configured unit's paired terminal receipt after its Bolt started and every applicable required artifact to exist as a file in that Bolt worktree; absent optional outputs remain valid fingerprint entries. |
+| `REVIEW_COMPLETED` | `tools/aidlc-log.ts` | Fires only after a matching positive-iteration `REVIEW_REQUESTED` and records an `Artifact Fingerprint` over the declared output paths and bytes. `READY` is terminal immediately; advisory `NOT-READY` is terminal after its normal-flow pass; adversarial `NOT-READY` is terminal only at `reviewer_max_iterations` (earlier rows expose repair/retry progress to a wave). A terminal receipt invalidated by a later declared-output or source write gets one distinct recovery request at the next ordinal; either recovery verdict is terminal, and a second invalidation requires human reset. `workspace_requires` stages also record `Source Fingerprint` (a git-native source hash, or `unbindable`); modern unbindable receipts fail closed, while fieldless pre-#629 rows retain migration behavior. All four completion routes enforce current-attempt artifact evidence and the newest source binding. |
 
 ### Unit lifecycle (inline per-unit Construction stages)
 
@@ -438,7 +459,7 @@ Pre-registered for v0.6.0 in milestone 2. All six swarm events now emit from the
 | Event | Emitter | Trigger |
 |---|---|---|
 | `SWARM_STARTED` | `tools/aidlc-swarm.ts` | Swarm referee `prepare` captured the exact attempt and forked a batch of dependency-linked Units |
-| `SWARM_UNIT_CONVERGED` | `tools/aidlc-swarm.ts` | A swarm Unit re-verified green and untampered, with its configured post-Bolt reviewer receipt present, then merged back (a converged unit whose merge-back failed gets no row until a finalize retry merges it) |
+| `SWARM_UNIT_CONVERGED` | `tools/aidlc-swarm.ts` | A swarm Unit re-verified green and untampered, with its configured post-Bolt reviewer receipt present, then merged AIDLC metadata back. For a source-bound stage it records the validated `Source Fingerprint` and immutable `Source Commit`; the later source merge rechecks and consumes that exact object rather than the movable Bolt branch. A bypass row is explicit and requires `AIDLC_SKIP_SOURCE_FRESHNESS=1` again at merge. |
 | `SWARM_UNIT_FAILED` | `tools/aidlc-swarm.ts` | A swarm Unit failed the `finalize` re-verify (not claimed, claimed-but-red, tampered, or missing its configured reviewer receipt) |
 | `SWARM_BATON_RETURNED` | `tools/aidlc-swarm.ts` | A swarm Unit returned the baton to the conductor for orchestrator-mediated coordination |
 | `SWARM_COMPLETED` | `tools/aidlc-swarm.ts` | All Units in the batch finished (converged or failed); batch closed |

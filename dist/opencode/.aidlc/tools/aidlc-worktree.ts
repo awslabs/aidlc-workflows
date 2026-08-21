@@ -16,13 +16,19 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import {
+  auditBlockField,
+  boltSlugForUnit,
   emitError,
   errorMessage,
   findAllEvents,
   getField,
   readAllAuditShards,
+  reviewedSourceRefPrefix,
+  resolveBoltDag,
   resolveConstructionRepo,
   resolveProjectDir,
+  UNBINDABLE_FINGERPRINT,
+  workspaceSourceFingerprint,
   worktreePath,
   worktreeStateFilePath,
 } from "./aidlc-lib.js";
@@ -94,6 +100,43 @@ function runGit(args: string[], cwd?: string): GitResult {
     stderr: (r.stderr ?? "").toString(),
     code: r.status ?? 1,
   };
+}
+
+interface RetainedSourceRef {
+  ref: string;
+  oid: string;
+}
+
+function retainedSourceRefs(repoCwd: string, slug: string): RetainedSourceRef[] | null {
+  const prefix = reviewedSourceRefPrefix(slug);
+  const listed = runGit(
+    ["for-each-ref", "--format=%(refname)%09%(objectname)", prefix],
+    repoCwd,
+  );
+  if (!listed.ok) return null;
+  const refs: RetainedSourceRef[] = [];
+  for (const line of listed.stdout.split(/\r?\n/)) {
+    if (!line) continue;
+    const tab = line.indexOf("\t");
+    if (tab === -1) return null;
+    const ref = line.slice(0, tab);
+    const oid = line.slice(tab + 1);
+    if (!ref.startsWith(prefix) || !/^[0-9a-f]{40,64}$/.test(oid)) return null;
+    refs.push({ ref, oid });
+  }
+  return refs;
+}
+
+// Compare-and-delete each ref: if another process moved one after enumeration,
+// preserve it and report a cleanup failure instead of deleting newer evidence.
+function deleteRetainedSourceRefs(repoCwd: string, refs: RetainedSourceRef[]): string | null {
+  for (const retained of refs) {
+    const deleted = runGit(["update-ref", "-d", retained.ref, retained.oid], repoCwd);
+    if (!deleted.ok) {
+      return deleted.stderr.trim() || deleted.stdout.trim() || `cannot delete ${retained.ref}`;
+    }
+  }
+  return null;
 }
 
 // --- Sibling-worktree detection ---
@@ -262,6 +305,107 @@ function handleCreate(args: string[]): void {
 //                        [--message <msg>] [--repo <name>] [--intent <dir>] [--space <name>]
 //
 // --repo (P7): the sibling repo the merge lands in — same resolution as `create`.
+// Refuse a source merge whose worktree no longer holds the bytes that
+// converged. Reads the newest SWARM_UNIT_CONVERGED for this unit; a Bolt that
+// never went through the swarm has none and passes straight through, and a
+// convergence row from before this field existed carries no fingerprint and
+// keeps the pre-existing behaviour. Off-switch: AIDLC_SKIP_SOURCE_FRESHNESS=1.
+interface BoundConvergedSourceRecord {
+  kind: "bound";
+  fingerprint: string;
+  commit: string;
+}
+
+interface BypassedConvergedSourceRecord {
+  kind: "bypass";
+}
+
+type ConvergedSourceRecord =
+  | BoundConvergedSourceRecord
+  | BypassedConvergedSourceRecord;
+
+function convergedUnitName(
+  pd: string,
+  slug: string,
+  intent?: string,
+  space?: string,
+): string {
+  const resolution = resolveBoltDag(pd, intent, space);
+  if (resolution.state !== "ok") return slug;
+  const match = resolution.units.find((unit) => boltSlugForUnit(unit) === slug);
+  return match ?? slug;
+}
+
+function convergedSourceRecord(
+  pd: string,
+  slug: string,
+  intent?: string,
+  space?: string,
+): ConvergedSourceRecord | null {
+  let latestBlock: string | undefined;
+  try {
+    const unitName = convergedUnitName(pd, slug, intent, space);
+    for (const e of findAllEvents(readAllAuditShards(pd, intent, space), "SWARM_UNIT_CONVERGED")) {
+      if (auditBlockField(e.block, "Unit name") !== unitName) continue;
+      latestBlock = e.block;
+    }
+  } catch {
+    return null; // unreadable audit is not evidence of a source-bound convergence
+  }
+  const bypass = latestBlock
+    ? auditBlockField(latestBlock, "Source Freshness Bypass") ?? undefined
+    : undefined;
+  if (bypass !== undefined) {
+    if (bypass !== "true") {
+      errorWithSlug(slug, `refusing to merge: invalid Source Freshness Bypass marker "${bypass}"`);
+    }
+    if (process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1") return { kind: "bypass" };
+    errorWithSlug(
+      slug,
+      `refusing to merge: this convergence was finalized with source freshness bypassed; ` +
+        `retry this merge with AIDLC_SKIP_SOURCE_FRESHNESS=1, or run ` +
+        `'aidlc-worktree discard --slug ${slug}' and redo the unit from prepare through review/finalize`,
+    );
+  }
+  if (process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1") return null;
+  const fingerprint = latestBlock
+    ? auditBlockField(latestBlock, "Source Fingerprint") ?? undefined
+    : undefined;
+  const commit = latestBlock
+    ? auditBlockField(latestBlock, "Source Commit") ?? undefined
+    : undefined;
+  if (!fingerprint) return null; // pre-binding convergence row
+  if (fingerprint === UNBINDABLE_FINGERPRINT) {
+    errorWithSlug(slug, "refusing to merge: this convergence receipt is unbindable; re-run review and finalize with Git available");
+  }
+  if (!commit) {
+    errorWithSlug(slug, "refusing to merge: the source-bound convergence row has no immutable Source Commit; re-run finalize");
+  }
+  return { kind: "bound", fingerprint, commit };
+}
+
+function assertConvergedSourceUnchanged(
+  slug: string,
+  wtPath: string,
+  record: ConvergedSourceRecord | null,
+): string | null {
+  if (!record || record.kind === "bypass") return null;
+  const current = workspaceSourceFingerprint(wtPath);
+  if (current === null || current !== record.fingerprint) {
+    errorWithSlug(
+      slug,
+      `refusing to merge: the worktree source no longer matches the state this unit ` +
+        `converged with (source-fingerprint mismatch). Re-run the swarm's convergence ` +
+        `check for "${slug}" against the current worktree, or discard the worktree.`,
+    );
+  }
+  const object = runGit(["cat-file", "-e", `${record.commit}^{commit}`], wtPath);
+  if (!object.ok) {
+    errorWithSlug(slug, `refusing to merge: reviewed Source Commit ${record.commit} is unavailable`);
+  }
+  return record.commit;
+}
+
 function handleMerge(args: string[]): void {
   const flags = parseFlags(args);
   const slug = validateSlug(flags.slug);
@@ -297,6 +441,45 @@ function handleMerge(args: string[]): void {
 
   const wtPath = worktreePath(pd, slug);
   const branchName = `bolt-${slug}`;
+  const sourceRecord = convergedSourceRecord(pd, slug, flags.intent, flags.space);
+  if (sourceRecord?.kind === "bound" && strategy === "rebase") {
+    errorWithSlug(
+      slug,
+      "refusing to rebase a source-bound convergence: rebase before review/finalize, then merge the immutable reviewed commit",
+    );
+  }
+  if (sourceRecord?.kind === "bypass") {
+    const applicationStatus = runGit([
+      "status",
+      "--porcelain=v1",
+      "--untracked-files=all",
+      "--ignored=matching",
+    ], wtPath);
+    if (!applicationStatus.ok) {
+      errorWithSlug(
+        slug,
+        `cannot inspect bypassed application source: ${applicationStatus.stderr.trim() || `exit ${applicationStatus.code}`}`,
+      );
+    }
+    const applicationLines = applicationStatus.stdout
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .filter((line) => {
+        const path = line.slice(3);
+        if (path.startsWith("aidlc/")) return false;
+        if (path.startsWith(".aidlc/")) return false;
+        return !/(?:^|\/)aidlc\/spaces\/[^/]+\/intents\/.*\/\.aidlc-sensors(?:\/|$)/.test(
+          path,
+        );
+      });
+    if (applicationLines.length > 0) {
+      const detail = applicationLines.join(", ");
+      errorWithSlug(
+        slug,
+        `refusing to merge: the bypassed Bolt has uncommitted or ignored application paths not represented by its branch (${detail}); commit, remove, or discard those paths before retrying`,
+      );
+    }
+  }
 
   // Rebase requires a remote for <target>. The remote-existence check is
   // a pre-audit guard (no state change). The actual `git fetch` is post-
@@ -339,6 +522,20 @@ function handleMerge(args: string[]): void {
     }
   }
 
+  // This is the last guard before source mutation. The convergence selector is
+  // the requested intent/space, and the returned target is an immutable commit
+  // object rather than the movable bolt-<slug> branch.
+  let mergeTarget = assertConvergedSourceUnchanged(slug, wtPath, sourceRecord) ?? branchName;
+  let bypassBranchOid = "";
+  if (sourceRecord?.kind === "bypass" && strategy !== "rebase") {
+    const branchOid = runGit(["rev-parse", `${branchName}^{commit}`], repoCwd);
+    if (!branchOid.ok || !branchOid.stdout.trim()) {
+      errorWithSlug(slug, "cannot resolve the bypassed Bolt branch commit");
+    }
+    bypassBranchOid = branchOid.stdout.trim();
+    mergeTarget = bypassBranchOid;
+  }
+
   let commitSha = "";
   // conflictCwd records which checkout the conflicting state lives in:
   // squash/merge run in the target repo's main checkout (cwd = repoCwd), rebase
@@ -350,7 +547,7 @@ function handleMerge(args: string[]): void {
   let conflictHit = false;
   switch (strategy) {
     case "squash": {
-      const m = runGit(["merge", "--squash", branchName], repoCwd);
+      const m = runGit(["merge", "--squash", mergeTarget], repoCwd);
       if (!m.ok) {
         if (isConflict(m)) {
           conflictHit = true;
@@ -378,7 +575,7 @@ function handleMerge(args: string[]): void {
         "--no-edit",
         "-m",
         `Merge bolt ${slug}`,
-        branchName,
+        mergeTarget,
       ], repoCwd);
       if (!m.ok) {
         if (isConflict(m)) {
@@ -406,7 +603,12 @@ function handleMerge(args: string[]): void {
           `git rebase failed: ${r.stderr.trim() || `exit ${r.code}`}`
         );
       }
-      const ff = runGit(["merge", "--ff-only", branchName], repoCwd);
+      const ffTarget =
+        sourceRecord?.kind === "bypass"
+          ? currentSha(wtPath)
+          : mergeTarget;
+      if (sourceRecord?.kind === "bypass") bypassBranchOid = ffTarget;
+      const ff = runGit(["merge", "--ff-only", ffTarget], repoCwd);
       if (!ff.ok) {
         errorWithSlug(
           slug,
@@ -440,19 +642,134 @@ function handleMerge(args: string[]): void {
   // "merge failed entirely" from "merge landed, cleanup orphan remains"
   // — these need different recovery actions.
   const cleanupTag = `[merge-succeeded:${commitSha}]`;
-  const rm = runGit(["worktree", "remove", wtPath], repoCwd);
+  if (sourceRecord?.kind === "bypass") {
+    const currentBranchOid = runGit(["rev-parse", `${branchName}^{commit}`], repoCwd);
+    if (
+      !bypassBranchOid ||
+      !currentBranchOid.ok ||
+      currentBranchOid.stdout.trim() !== bypassBranchOid
+    ) {
+      errorWithSlug(
+        slug,
+        `${cleanupTag} bypassed Bolt branch changed during the merge; worktree and branch preserved`,
+      );
+    }
+  }
+  // A swarm snapshot does not move the Bolt branch, so reviewed application
+  // files may still be modified/untracked in this disposable checkout. Once
+  // that immutable source has landed, align the checkout to it before forced
+  // removal.
+  if (sourceRecord?.kind === "bound") {
+    const align = runGit(["reset", "--hard", mergeTarget], wtPath);
+    if (!align.ok) {
+      errorWithSlug(
+        slug,
+        `${cleanupTag} reviewed-source cleanup reset failed: ${align.stderr.trim() || `exit ${align.code}`}`,
+      );
+    }
+  } else if (sourceRecord?.kind === "bypass") {
+    // Finalization writes framework metadata into the Bolt even when source
+    // freshness is bypassed. Remove only that known residue so ordinary
+    // worktree removal can still protect uncommitted application source.
+    const frameworkPaths = [
+      ":(top)aidlc/",
+      ":(top).aidlc/",
+      ":(glob)**/aidlc/spaces/*/intents/**/.aidlc-sensors/**",
+    ];
+    for (const frameworkPath of frameworkPaths) {
+      const tracked = runGit(["ls-files", "-z", "--", frameworkPath], wtPath);
+      if (!tracked.ok) {
+        errorWithSlug(
+          slug,
+          `${cleanupTag} bypass cleanup path enumeration failed: ${tracked.stderr.trim() || `exit ${tracked.code}`}`,
+        );
+      }
+      if (tracked.stdout.length === 0) continue;
+      const restore = runGit(
+        ["checkout", "--force", "HEAD", "--", frameworkPath],
+        wtPath,
+      );
+      if (!restore.ok) {
+        errorWithSlug(
+          slug,
+          `${cleanupTag} bypass cleanup reset failed: ${restore.stderr.trim() || `exit ${restore.code}`}`,
+        );
+      }
+    }
+    const clean = runGit(["clean", "-ffdx", "--", ...frameworkPaths], wtPath);
+    if (!clean.ok) {
+      errorWithSlug(
+        slug,
+        `${cleanupTag} bypass cleanup failed: ${clean.stderr.trim() || `exit ${clean.code}`}`,
+      );
+    }
+    const remainingApplicationStatus = runGit([
+      "status",
+      "--porcelain=v1",
+      "--untracked-files=all",
+      "--ignored=matching",
+    ], wtPath);
+    if (!remainingApplicationStatus.ok) {
+      errorWithSlug(
+        slug,
+        `${cleanupTag} cannot recheck bypassed application source: ${remainingApplicationStatus.stderr.trim() || `exit ${remainingApplicationStatus.code}`}`,
+      );
+    }
+    const remainingApplicationLines = remainingApplicationStatus.stdout
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .filter((line) => {
+        const path = line.slice(3);
+        if (path.startsWith("aidlc/")) return false;
+        if (path.startsWith(".aidlc/")) return false;
+        return !/(?:^|\/)aidlc\/spaces\/[^/]+\/intents\/.*\/\.aidlc-sensors(?:\/|$)/.test(
+          path,
+        );
+      });
+    if (remainingApplicationLines.length > 0) {
+      errorWithSlug(
+        slug,
+        `${cleanupTag} application source changed during the bypassed merge; worktree preserved`,
+      );
+    }
+  }
+  // A raw-byte snapshot can remain permanently "modified" under its own lossy
+  // clean filter even after reset (Git re-cleans the raw index blob for status).
+  // The successful hard reset to the immutable source above authorizes forced
+  // removal of that bound checkout. Bypassed and ordinary Bolt cleanup remains
+  // non-forced so application source cannot be discarded silently.
+  const rm = runGit(
+    sourceRecord?.kind === "bound"
+      ? ["worktree", "remove", "--force", wtPath]
+      : ["worktree", "remove", wtPath],
+    repoCwd,
+  );
   if (!rm.ok) {
     errorWithSlug(
       slug,
       `${cleanupTag} worktree remove failed: ${rm.stderr.trim() || `exit ${rm.code}`}`
     );
   }
-  const del = runGit(["branch", "-D", branchName], repoCwd);
+  const del =
+    sourceRecord?.kind === "bypass"
+      ? runGit(
+          ["update-ref", "-d", `refs/heads/${branchName}`, bypassBranchOid],
+          repoCwd,
+        )
+      : runGit(["branch", "-D", branchName], repoCwd);
   if (!del.ok) {
     errorWithSlug(
       slug,
       `${cleanupTag} branch -D ${branchName} failed: ${del.stderr.trim() || `exit ${del.code}`}`
     );
+  }
+  const retained = retainedSourceRefs(repoCwd, slug);
+  if (retained === null) {
+    errorWithSlug(slug, `${cleanupTag} reviewed-source ref enumeration failed`);
+  }
+  const refCleanupError = deleteRetainedSourceRefs(repoCwd, retained);
+  if (refCleanupError) {
+    errorWithSlug(slug, `${cleanupTag} reviewed-source ref cleanup failed: ${refCleanupError}`);
   }
 
   console.log(
@@ -519,8 +836,12 @@ function handleDiscard(args: string[]): void {
     "--verify",
     `refs/heads/${branchName}`,
   ], repoCwd).ok;
+  const retained = retainedSourceRefs(repoCwd, slug);
+  if (retained === null) {
+    errorWithSlug(slug, "reviewed-source ref enumeration failed");
+  }
 
-  if (!dirExists && !branchExists) {
+  if (!dirExists && !branchExists && retained.length === 0) {
     console.log(
       JSON.stringify({
         emitted: null,
@@ -560,6 +881,10 @@ function handleDiscard(args: string[]): void {
         `branch -D ${branchName} failed: ${del.stderr.trim() || `exit ${del.code}`}`
       );
     }
+  }
+  const refCleanupError = deleteRetainedSourceRefs(repoCwd, retained);
+  if (refCleanupError) {
+    errorWithSlug(slug, `reviewed-source ref cleanup failed: ${refCleanupError}`);
   }
 
   console.log(

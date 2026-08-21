@@ -247,6 +247,7 @@ The engine reads the compiled `data/stage-graph.json` directly for all routing; 
 ## Key Principles
 
 - **Adaptive scope**: Scope determines which stages execute and at what depth, from 7-stage bugfix to 33-stage enterprise. The orchestrate tool resolves it; you run the stages it hands you. To the user this is "how much process this change needs", never a scope grid.
+- **STAGE RITUAL IS ATOMIC**: Once a stage starts, EVERY step fires: questions → artifact → reviewer (if declared) → learnings → gate. No step is skippable. "Skip to stage X" skips INTERMEDIATE stages, NOT the target stage's ritual. Complete the current stage fully (including learnings) before jumping. (One exception: the Build-and-Test failure loop-back — the construction protocol module (`aidlc-common/protocols/stage-protocol-construction.md`) — jumps back to code-generation from a deliberately in-flight failed stage; its learnings ritual fires on the eventual passing run.)
 - **User control**: The user can override any stage decision at any approval gate.
 - **Domain experts**: Each stage leverages the appropriate agent persona; the enabled set is discovered from the `agents/` directory (a plugin install may add or narrow it). Introduce them to the user by their role ("I'm bringing in the architect"), never as personas or subagents.
 - **Approval gates**: Every stage except the bootstrap initialization stages presents an approval gate (the engine signals this via `run-stage`'s `gate` field).
