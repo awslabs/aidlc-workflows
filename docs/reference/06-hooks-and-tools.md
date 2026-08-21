@@ -298,9 +298,9 @@ See [Runtime Graph](13-runtime-graph.md) for the compile lifecycle and the locke
 **Processing steps:**
 
 1. **Project directory resolution:** Same multi-fallback pattern as write-audit-log.ts.
-2. **Health heartbeat:** Writes to `.aidlc-hooks-health/log-subagent.last`.
-3. **JSON parsing:** Extracts `agent_type` (defaults to `"unknown"`), `agent_id`, and `last_assistant_message` (truncated to 200 characters).
-4. **Audit file guard:** Exits silently if the `audit/` shard does not exist.
+2. **Workflow-state guard:** Exits silently unless the active intent's `aidlc-state.md` has `Status: Running`.
+3. **Health heartbeat:** Writes to `.aidlc-hooks-health/log-subagent.last`.
+4. **JSON parsing:** Extracts `agent_type` (defaults to `"unknown"`), `agent_id`, and `last_assistant_message` (truncated to 200 characters).
 5. **Entry assembly:** Emits canonical `SUBAGENT_COMPLETED` event via `appendAuditEntry`. Fields: Timestamp, Event, Agent Type, and optionally Agent ID and truncated Message.
 6. **Atomic locking:** Same `mkdir`-based pattern as write-audit-log.ts (unified in `lib.ts`) but with a separate lock name to avoid contention.
 
@@ -610,7 +610,7 @@ A stage reported as skipped emits `STAGE_SKIPPED` instead of
 | Source | Events | When |
 |--------|--------|------|
 | `write-audit-log.ts` | `ARTIFACT_CREATED` / `ARTIFACT_UPDATED` | Every Write/Edit to the intent's record dir (except the `audit/` shards) |
-| `log-subagent.ts` | `SUBAGENT_COMPLETED` | Any subagent stop |
+| `log-subagent.ts` | `SUBAGENT_COMPLETED` | Any subagent stop while the active workflow has `Status: Running` |
 | `reviewer-scope.ts` | `REVIEWER_SCOPE_BLOCKED` | A per-unit reviewer's tool call refused for sibling-unit access (PreToolUse) |
 | `review-freeze.ts` | `REVIEW_FREEZE_BLOCKED` | A `produces[]` write refused for voiding a fresh terminal review receipt before the gate (PreToolUse) |
 | `plan-approval-guard.ts` | `PLAN_APPROVAL_BLOCKED` | A code-generation developer dispatch refused before the plan is approved (PreToolUse) |

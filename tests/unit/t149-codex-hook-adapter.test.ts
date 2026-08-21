@@ -72,7 +72,7 @@ const FIXTURES = JSON.parse(
 // and the audit trail via auditFilePath() — under the active intent's record. So
 // the scratch project seeds the per-intent shell + the state fixture into the
 // default record (so the cursor resolves) + the resolved audit SHARD (pinned
-// clone-id so the log-subagent shard gate passes and reads are deterministic).
+// clone-id so audit reads are deterministic).
 // The Codex adapter's session heartbeat lives with the core session stamps at
 // aidlc/.aidlc-sessions/, independent of the active-intent cursor. That lets a
 // new session reconcile its predecessor after a second intent became active.

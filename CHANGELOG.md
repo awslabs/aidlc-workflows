@@ -1,6 +1,12 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.54] - 2026-08-21
+
+Subagent completion auditing now runs only while the active workflow state is explicitly `Running`, instead of writing whenever a state file or audit shard remains from an earlier workflow. **Upgrade:** refresh your `dist/<harness>/` shell so project-wide SubagentStop hooks no longer write audit entries or health heartbeats during non-AI-DLC sessions or after workflow completion.
+
+* SubagentStop exits when active intent state is absent, unreadable, or does not declare `Status: Running`; a running workflow still records `SUBAGENT_COMPLETED` and creates the clone's audit shard if needed.
+
 ## [2.6.53] - 2026-08-21
 
 Kiro IDE hook guidance now reflects that tool-argument delivery varies across supported IDE generations instead of describing all payloads as empty. Hook registration and enforcement behavior are unchanged. **Upgrade:** refresh your `dist/<harness>/` shell to receive the corrected generated comments, Kiro IDE orchestrator guidance, and version metadata.
