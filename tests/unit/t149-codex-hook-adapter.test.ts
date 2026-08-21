@@ -704,7 +704,7 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       );
 
       // Codex starts before a workflow exists. The adapter must retain both its
-      // heartbeat and current-session marker so the first birth can bind it.
+      // heartbeat and current-session marker so the first creation can bind it.
       expect(runAdapter(dir, "session-start", priorPayload).code).toBe(0);
       expect(
         JSON.parse(readFileSync(join(health, "codex-session.json"), "utf-8")).session_id,
@@ -823,20 +823,20 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
   test("13: session-start FORWARDS session_id — core hook stamps the per-session→intent record (M3 rebind wiring)", () => {
     // The genuine M3 fix: Codex now forwards session_id alongside its real
     // `source`, so the core hook's P8 stamp/rebind path is reachable. Proof:
-    // birth an intent (so the live cursor resolves a uuid), fire startup with
+    // create an intent (so the live cursor resolves a uuid), fire startup with
     // the fixture session_id, and assert the per-session stamp file
     // aidlc/.aidlc-sessions/<session_id> was WRITTEN with that uuid. Without
     // the forwarded session_id the core hook's `if (sessionId)` block is inert
     // and no stamp file appears.
     const dir = scratchProject(true);
     try {
-      const born = createIntent(dir, "codex-rebind", "default");
+      const created = createIntent(dir, "codex-rebind", "default");
       const sid = String(FIXTURES.sessionStart.session_id);
       const r = runAdapter(dir, "session-start", withCwd(FIXTURES.sessionStart, dir));
       expect(r.code).toBe(0);
       const stampPath = join(dir, "aidlc", ".aidlc-sessions", sid);
       expect(existsSync(stampPath)).toBe(true);
-      expect(readFileSync(stampPath, "utf-8").trim()).toBe(born.uuid);
+      expect(readFileSync(stampPath, "utf-8").trim()).toBe(created.uuid);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

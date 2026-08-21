@@ -118,8 +118,8 @@ describe("t-tui-workshop (answering AUQ gates advances disk state)", () => {
       // setupTuiProject copies the distributable AND the sibling aidlc/ memory
       // shell (the rule layers live there post-P5) and seeds the per-intent
       // workspace shell; noAidlcDocs strips the seeded record so the live
-      // `/aidlc --scope classic` auto-births its own intent (the `ready`
-      // baseline below holds because no intent resolves until birth).
+      // `/aidlc --scope classic` auto-creates its own intent (the `ready`
+      // baseline below holds because no intent resolves until creation).
       const sandbox = setupTuiProject({ noAidlcDocs: true });
       // The render value-add: we tail the grid during the run to prove the
       // multi-tab strip + footer painted at least once (the SDK path can't see it).

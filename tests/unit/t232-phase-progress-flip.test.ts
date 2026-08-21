@@ -10,7 +10,7 @@
 // state file, not routing.
 //
 // The contract under test (setPhaseProgress in aidlc-lib.ts + its call sites):
-//   - intent-create seeds Initialization=Verified (birth completes every init
+//   - intent-create seeds Initialization=Verified (creation completes every init
 //     stage), the first post-init stage's phase Active, later phases
 //     Pending/Skipped by EXECUTE presence.
 //   - advance: non-boundary leaves the section byte-identical; a boundary
@@ -29,8 +29,8 @@
 // spawnSync, asserting exit code + the on-disk aidlc-state.md, the same
 // process boundary t17/t39 pin. Deterministic: no LLM, no live driver.
 //
-// FIXTURE DISCIPLINE: live-birth cases use a fresh createTestProject() temp
-// dir per describe (birth populates state itself, as in t39); the seeded
+// FIXTURE DISCIPLINE: live creation cases use a fresh createTestProject() temp
+// dir per describe (creation populates state itself, as in t39); the seeded
 // cases copy fixtures via seedStateFile + sedReplaceInFile. Cleanup in
 // afterAll. Nothing is written under tests/fixtures/**.
 
@@ -87,7 +87,7 @@ function run(tool: string, proj: string, args: string[]): RunResult {
   };
 }
 
-// Resolve the live state file: the born intent's record when a birth ran,
+// Resolve the live state file: the created intent's record when a creation ran,
 // else the seeded default record (both under aidlc/spaces/...). Mirrors
 // t17's recordDirOf, trimmed to the two shapes this file produces.
 function statePath(proj: string): string {
@@ -96,7 +96,7 @@ function statePath(proj: string): string {
     const rec = readFileSync(join(intentsDir, "active-intent"), "utf-8").trim();
     if (rec) return join(intentsDir, rec, "aidlc-state.md");
   } catch {
-    // no birth ran - fall through to the seeded record
+    // no creation ran - fall through to the seeded record
   }
   return seededStateFile(proj);
 }
@@ -119,7 +119,7 @@ function phaseProgressSection(proj: string): string {
   return m ? m[0] : "(no section)";
 }
 
-function birth(proj: string, scope: string): RunResult {
+function runIntentCreate(proj: string, scope: string): RunResult {
   return run(UTILITY_TOOL, proj, ["intent-create", "--scope", scope]);
 }
 
@@ -147,7 +147,7 @@ function advance(proj: string, slug: string): RunResult {
   return run(STATE_TOOL, proj, ["advance", slug]);
 }
 
-// Feature scope, greenfield: birth lands on intent-capture; the whole
+// Feature scope, greenfield: creation lands on intent-capture; the whole
 // Ideation ladder then approval-handoff -> practices-discovery crosses the
 // ideation->inception boundary (greenfield SKIPs reverse-engineering).
 const IDEATION_LADDER = [
@@ -159,11 +159,11 @@ const IDEATION_LADDER = [
   "rough-mockups",
 ] as const;
 
-describe("t232 Phase Progress - birth seed", () => {
+describe("t232 Phase Progress - creation seed", () => {
   test("feature scope: Verified init, Active first post-init phase, Pending rest", () => {
     const proj = createTestProject();
     tempDirs.push(proj);
-    expect(birth(proj, "feature").rc).toBe(0);
+    expect(runIntentCreate(proj, "feature").rc).toBe(0);
     expect(rowStatus(proj, "Initialization")).toBe("Verified");
     expect(rowStatus(proj, "Ideation")).toBe("Active");
     expect(rowStatus(proj, "Inception")).toBe("Pending");
@@ -174,7 +174,7 @@ describe("t232 Phase Progress - birth seed", () => {
   test("bugfix scope: excluded Ideation Skipped, first post-init phase Active", () => {
     const proj = createTestProject();
     tempDirs.push(proj);
-    expect(birth(proj, "bugfix").rc).toBe(0);
+    expect(runIntentCreate(proj, "bugfix").rc).toBe(0);
     expect(rowStatus(proj, "Initialization")).toBe("Verified");
     expect(rowStatus(proj, "Ideation")).toBe("Skipped");
     expect(rowStatus(proj, "Inception")).toBe("Active");
@@ -185,10 +185,10 @@ describe("t232 Phase Progress - birth seed", () => {
 describe("t232 Phase Progress - advance", () => {
   const proj = createTestProject();
   tempDirs.push(proj);
-  const born = birth(proj, "feature");
+  const created = runIntentCreate(proj, "feature");
 
   test("non-boundary advance leaves the section byte-identical", () => {
-    expect(born.rc).toBe(0);
+    expect(created.rc).toBe(0);
     const before = phaseProgressSection(proj);
     expect(advance(proj, "intent-capture").rc).toBe(0);
     expect(phaseProgressSection(proj)).toBe(before);
@@ -212,7 +212,7 @@ describe("t232 Phase Progress - finalize", () => {
   test("boundary finalize flips completed->Verified, entered->Active", () => {
     const proj = createTestProject();
     tempDirs.push(proj);
-    expect(birth(proj, "feature").rc).toBe(0);
+    expect(runIntentCreate(proj, "feature").rc).toBe(0);
     for (const slug of IDEATION_LADDER) {
       expect(advance(proj, slug).rc).toBe(0);
     }
@@ -240,10 +240,10 @@ describe("t232 Phase Progress - finalize", () => {
 describe("t232 Phase Progress - jump + complete-workflow", () => {
   const proj = createTestProject();
   tempDirs.push(proj);
-  const born = birth(proj, "feature");
+  const created = runIntentCreate(proj, "feature");
 
   test("forward jump: source Verified, jumped-over Skipped, target Active", () => {
-    expect(born.rc).toBe(0);
+    expect(created.rc).toBe(0);
     const res = run(JUMP_TOOL, proj, [
       "execute", "--target", "deployment-pipeline", "--direction", "forward",
     ]);
@@ -283,7 +283,7 @@ describe("t232 Phase Progress - plan re-shaping re-derives unreached rows", () =
   test("scope-change: included Operation stays Pending, history untouched", () => {
     const proj = createTestProject();
     tempDirs.push(proj);
-    expect(birth(proj, "feature").rc).toBe(0);
+    expect(runIntentCreate(proj, "feature").rc).toBe(0);
     expect(run(UTILITY_TOOL, proj, ["scope-change", "--scope", "bugfix"]).rc).toBe(0);
     expect(rowStatus(proj, "Operation")).toBe("Pending");
     // The Active/Verified rows record history the plan change cannot rewrite.
@@ -294,7 +294,7 @@ describe("t232 Phase Progress - plan re-shaping re-derives unreached rows", () =
   test("recompose: skip-all empties a phase -> Skipped; add-back -> Pending", () => {
     const proj = createTestProject();
     tempDirs.push(proj);
-    expect(birth(proj, "feature").rc).toBe(0);
+    expect(runIntentCreate(proj, "feature").rc).toBe(0);
     const allOperation =
       "deployment-pipeline,environment-provisioning,deployment-execution," +
       "observability-setup,incident-response,performance-validation," +

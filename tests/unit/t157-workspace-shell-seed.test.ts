@@ -33,7 +33,7 @@
 //
 // SCOPE BOUNDARY. SEED ships the SHELL only. The lazy per-space skeleton
 // (intents/codekb/knowledge ensure-exists) + the workspace-scaffold→ensure-
-// exists rename is P4's auto-birth territory; the audit-shard WRITER/READER
+// exists rename is P4's auto-create territory; the audit-shard WRITER/READER
 // mechanism is P1 Step B's. This test asserts ONLY what SEED ships: the shell
 // resolves + the gitignore split is correct. It must NOT assert a .migrated
 // marker or a dummy intents/*/aidlc-state.md (that would defeat P1's

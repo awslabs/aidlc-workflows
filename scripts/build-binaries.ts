@@ -661,7 +661,7 @@ function textFilesUnder(root: string): string {
 function sensorFireGate(artifact: string): GateResult {
   const project = installedProject("aidlc-binary-sensor-");
   try {
-    const birth = run(
+    const createResult = run(
       artifact,
       ["intent", "create", "--scope", "poc", "--label", "sensor-gate", "--project-dir", project],
       { cwd: project, env: pathlessEnv(project), timeoutMs: 30_000 },
@@ -696,7 +696,7 @@ function sensorFireGate(artifact: string): GateResult {
     return commandGate(
       "run-sensors",
       result,
-      birth.status === 0 &&
+      createResult.status === 0 &&
         result.status === 0 &&
         /SENSOR_(PASSED|FAILED)/.test(audit) &&
         !audit.includes("script-error") &&
@@ -734,7 +734,7 @@ function boltReentryGate(artifact: string): GateResult {
     const invocationCwd = dirname(project);
     const projectArg = relative(invocationCwd, project);
     const env = { ...pathlessEnv(), PATH: dirname(git) };
-    const birth = run(
+    const createResult = run(
       artifact,
       ["intent", "create", "--scope", "poc", "--label", "bolt-gate", "--project-dir", projectArg],
       { cwd: invocationCwd, env, timeoutMs: 30_000 },
@@ -765,7 +765,7 @@ function boltReentryGate(artifact: string): GateResult {
     return commandGate(
       "bolt-reentry",
       result,
-      birth.status === 0 &&
+      createResult.status === 0 &&
         worktree.status === 0 &&
         result.status === 0 &&
         result.stdout.includes("RUNTIME_GRAPH_FORKED") &&
@@ -792,7 +792,7 @@ function swarmReentryGate(artifact: string): GateResult {
     const invocationCwd = dirname(project);
     const projectArg = relative(invocationCwd, project);
     const env = { ...pathlessEnv(), PATH: dirname(git) };
-    const birth = run(
+    const createResult = run(
       artifact,
       ["intent", "create", "--scope", "poc", "--label", "swarm-gate", "--project-dir", projectArg],
       { cwd: invocationCwd, env, timeoutMs: 30_000 },
@@ -840,7 +840,7 @@ function swarmReentryGate(artifact: string): GateResult {
     return commandGate(
       "swarm-reentry",
       result,
-      birth.status === 0 && result.status === 0 && prepared && !runtimeCrash(output),
+      createResult.status === 0 && result.status === 0 && prepared && !runtimeCrash(output),
       { expected: "Swarm prepare composes worktree and Bolt through the binary", actual: output.trim() },
     );
   } catch (error) {
@@ -1289,7 +1289,7 @@ function routedProjectDirGate(artifact: string): GateResult {
       "validate-state.last",
     );
 
-    const birth = run(
+    const createResult = run(
       artifact,
       [
         "intent",
@@ -1356,8 +1356,8 @@ function routedProjectDirGate(artifact: string): GateResult {
     const output = [
       hook.stdout,
       hook.stderr,
-      birth.stdout,
-      birth.stderr,
+      createResult.stdout,
+      createResult.stderr,
       statusline.stdout,
       statusline.stderr,
       adapter.stdout,
@@ -1369,7 +1369,7 @@ function routedProjectDirGate(artifact: string): GateResult {
       hook.status === 0 &&
         existsSync(targetGenericHeartbeat) &&
         !existsSync(cwdGenericHeartbeat) &&
-        birth.status === 0 &&
+        createResult.status === 0 &&
         statusline.status === 0 &&
         statusline.stdout.includes("Intent Capture") &&
         adapter.status === 0 &&
@@ -1378,7 +1378,7 @@ function routedProjectDirGate(artifact: string): GateResult {
       {
         expected: "hook, statusline, and adapter honor explicit --project-dir",
         actual:
-          `hook=${hook.status}; birth=${birth.status}; statusline=${statusline.status}; ` +
+          `hook=${hook.status}; createResult=${createResult.status}; statusline=${statusline.status}; ` +
           `adapter=${adapter.status}; targetHeartbeat=${existsSync(adapterHeartbeat)}`,
       },
     );

@@ -255,7 +255,7 @@ describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override
     // sibling test's transcription of it). bolt-plan-marker-conflict reuses
     // PRACTICES_OVERRIDE (discriminator-field disambiguation) and registers no
     // new event. The framework total is 86: the v0.6.0 Wave 4 milestone 16
-    // baseline of 67 (SWARM_DEGRADED was the last event born then), plus
+    // baseline of 67 (SWARM_DEGRADED was the last event created then), plus
     // WORKFLOW_PARKED + WORKFLOW_UNPARKED (the park/unpark lifecycle, +2),
     // less TEST_RUN_MODE_ENABLED (removed, -1), plus HUMAN_TURN (+1), plus
     // RECOMPOSED (the adaptive composer's in-flight re-shape, +1), plus

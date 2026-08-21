@@ -2,7 +2,7 @@
 
 ## Phase Overview
 
-The Initialization phase is the first of five phases in the AI-DLC workflow. It runs stages 0.1 through 0.3, **birthing the intent**, minting its record dir at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (written `<record>/` below) with state files, one directory per in-scope phase, workspace classification, and routing configuration. There is no separate scaffold command: the workspace shell ships pre-built in `dist/<harness>/`, and the engine auto-births the first intent on the first `/aidlc` (or when you describe what to build).
+The Initialization phase is the first of five phases in the AI-DLC workflow. It runs stages 0.1 through 0.3, **creating the intent**, minting its record dir at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (written `<record>/` below) with state files, one directory per in-scope phase, workspace classification, and routing configuration. There is no separate scaffold command: the workspace shell ships pre-built in `dist/<harness>/`, and the engine auto-creates the first intent on the first `/aidlc` (or when you describe what to build).
 
 All 3 stages in this phase execute for EVERY scope — there are no conditional stages. All stages auto-proceed with no approval gates.
 
@@ -104,7 +104,7 @@ All three stages run inside a single deterministic `bun .claude/tools/aidlc-util
 - Symbolic links are not followed (cycle protection via `lstatSync`)
 - Excludes `.claude/`, `<record>/`, `node_modules/`, `.git/`, `dist/`, `build/`, `.next/`, `target/`, `vendor/`
 - `package.json` with only `devDependencies` is treated as tooling/scaffolding and does not alone cause brownfield classification
-- A parseable `.gitmodules` with at least one submodule path entry is a brownfield signal (repo metadata declares code even when the submodule dirs are uninitialized). When submodule paths are uninitialized, the scan warns and names `git submodule update --init --recursive` - surfaced in the `WORKSPACE_SCANNED` event (`Submodules` field + `Details` remedy) and on birth stdout so the conductor can relay it; languages stay as scanned
+- A parseable `.gitmodules` with at least one submodule path entry is a brownfield signal (repo metadata declares code even when the submodule dirs are uninitialized). When submodule paths are uninitialized, the scan warns and names `git submodule update --init --recursive` - surfaced in the `WORKSPACE_SCANNED` event (`Submodules` field + `Details` remedy) and on creation stdout so the conductor can relay it; languages stay as scanned
 
 ---
 
@@ -141,18 +141,18 @@ All three stages run inside a single deterministic `bun .claude/tools/aidlc-util
 ### Notes
 - Brownfield projects route to reverse-engineering (Stage 2.1)
 - Greenfield projects route to the first non-initialization stage (intent-capture for feature/poc; requirements-analysis for bugfix/refactor/express; practices-discovery for classic/workshop, since both skip all of Ideation and reverse-engineering is downgraded to SKIP on greenfield)
-- When invoked from `/aidlc-init` (the explicit birth packaging), the orchestrator stops after this stage
+- When invoked from `/aidlc-init` (the explicit creation packaging), the orchestrator stops after this stage
 - When invoked from workflow start (`/aidlc <scope>` or describing what to build), the orchestrator continues into the first post-init stage
 
 ---
 
 ## Re-initialization
 
-There is no re-init flag. Birthing the first intent runs once per intent; the
+There is no re-init flag. Creating the first intent runs once per intent; the
 workspace shell itself ships pre-built and is never re-scaffolded. To start over,
-birth a new intent (each gets its own `<record>/`), or — for a clean slate —
+create a new intent (each gets its own `<record>/`), or - for a clean slate -
 archive the active intent's record dir under `aidlc/spaces/<space>/intents/` and
-let the engine birth a fresh one. A second `/aidlc` over an existing intent
+let the engine create a fresh one. A second `/aidlc` over an existing intent
 resumes it rather than re-initialising.
 
 ## Notes

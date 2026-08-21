@@ -45,12 +45,12 @@ afterEach(() => {
 });
 
 /**
- * A workspace with a BORN intent: the record dir plus the state file and the
+ * A workspace with a CREATED intent: the record dir plus the state file and the
  * space/intent cursors the marker family's docsRoot resolution walks. Both
  * writers self-gate on the state file existing, so without it every call is a
  * no-op and the tests below would be vacuous for the wrong reason.
  */
-function makeBornProject(): string {
+function makeCreatedProject(): string {
   const proj = mkdtempSync(join(tmpdir(), "aidlc-t259-"));
   tempDirs.push(proj);
   const intents = join(proj, "aidlc", "spaces", "default", "intents");
@@ -66,9 +66,9 @@ function makeBornProject(): string {
   return proj;
 }
 
-/** A workspace with the harness shell but NO born intent (pre-birth). */
-function makeUnbornProject(): string {
-  const proj = mkdtempSync(join(tmpdir(), "aidlc-t259-unborn-"));
+/** A workspace with the harness shell but NO created intent (pre-creation). */
+function makeUncreatedProject(): string {
+  const proj = mkdtempSync(join(tmpdir(), "aidlc-t259-uncreated-"));
   tempDirs.push(proj);
   mkdirSync(join(proj, "aidlc", "spaces", "default", "intents"), { recursive: true });
   return proj;
@@ -83,20 +83,20 @@ describe("t259 turn-shape markers — the transcript-free tier-3 predicate", () 
   // and never fire. markEngineTouch must therefore honour the probe env var.
   // =========================================================================
   test("markEngineTouch is a NO-OP when the probe env var is set (the hook's own consultation)", () => {
-    const proj = makeBornProject();
+    const proj = makeCreatedProject();
     process.env[STOP_HOOK_PROBE_ENV] = "1";
     markEngineTouch(proj);
     expect(() => statSync(engineTouchMarkerPath(proj))).toThrow(); // never created
   });
 
   test("markEngineTouch DOES write when the probe env var is absent (a real advance)", () => {
-    const proj = makeBornProject();
+    const proj = makeCreatedProject();
     markEngineTouch(proj);
     expect(statSync(engineTouchMarkerPath(proj)).isFile()).toBe(true);
   });
 
   test("a probe-marked call does not REFRESH an existing marker either", () => {
-    const proj = makeBornProject();
+    const proj = makeCreatedProject();
     markEngineTouch(proj); // a real advance lays the marker down
     const path = engineTouchMarkerPath(proj);
     const before = Math.floor(Date.now() / 1000) - 300;
@@ -109,7 +109,7 @@ describe("t259 turn-shape markers — the transcript-free tier-3 predicate", () 
   });
 
   test("only the literal \"1\" suppresses the touch (an unset-looking value must not disable marking)", () => {
-    const proj = makeBornProject();
+    const proj = makeCreatedProject();
     process.env[STOP_HOOK_PROBE_ENV] = "0";
     markEngineTouch(proj);
     expect(statSync(engineTouchMarkerPath(proj)).isFile()).toBe(true);
@@ -119,7 +119,7 @@ describe("t259 turn-shape markers — the transcript-free tier-3 predicate", () 
   // The predicate itself.
   // =========================================================================
   test("human turn NEWER than the engine touch reads as conversational", () => {
-    const proj = makeBornProject();
+    const proj = makeCreatedProject();
     const base = Math.floor(Date.now() / 1000) - 600;
     markEngineTouch(proj);
     markHumanTurn(proj);
@@ -129,7 +129,7 @@ describe("t259 turn-shape markers — the transcript-free tier-3 predicate", () 
   });
 
   test("engine touch NEWER than the human turn does NOT read as conversational", () => {
-    const proj = makeBornProject();
+    const proj = makeCreatedProject();
     const base = Math.floor(Date.now() / 1000) - 600;
     markEngineTouch(proj);
     markHumanTurn(proj);
@@ -139,39 +139,39 @@ describe("t259 turn-shape markers — the transcript-free tier-3 predicate", () 
   });
 
   test("FAIL-CLOSED: a missing engine marker is 'no evidence', not 'the engine was never touched'", () => {
-    const proj = makeBornProject();
+    const proj = makeCreatedProject();
     markHumanTurn(proj); // human marker only — a pre-upgrade workspace
     expect(turnMarkersShowConversational(proj)).toBe(false);
   });
 
   test("FAIL-CLOSED: a missing human marker also reads false", () => {
-    const proj = makeBornProject();
+    const proj = makeCreatedProject();
     markEngineTouch(proj);
     expect(turnMarkersShowConversational(proj)).toBe(false);
   });
 
   test("FAIL-CLOSED: both markers missing reads false", () => {
-    const proj = makeBornProject();
+    const proj = makeCreatedProject();
     expect(turnMarkersShowConversational(proj)).toBe(false);
   });
 
   // =========================================================================
-  // The birth self-gate. Without it a marker write on a pre-birth workspace
+  // The creation self-gate. Without it a marker write on a pre-creation workspace
   // would scaffold the record tree as a side effect (touchTurnMarker mkdir -p's
   // its parent, and docsRoot falls back to the bare space record root before
-  // birth), breaking the invariant that `aidlc-orchestrate next` is a PURE READ
-  // that births nothing — pinned end-to-end by t165/t171.
+  // creation), breaking the invariant that `aidlc-orchestrate next` is a PURE READ
+  // that creates nothing - pinned end-to-end by t165/t171.
   // =========================================================================
-  test("neither writer touches disk before an intent is born", () => {
-    const proj = makeUnbornProject();
+  test("neither writer touches disk before an intent is created", () => {
+    const proj = makeUncreatedProject();
     markHumanTurn(proj);
     markEngineTouch(proj);
     expect(() => statSync(humanTurnMarkerPath(proj))).toThrow();
     expect(() => statSync(engineTouchMarkerPath(proj))).toThrow();
   });
 
-  test("the predicate reads false on an unborn workspace rather than throwing", () => {
-    expect(turnMarkersShowConversational(makeUnbornProject())).toBe(false);
+  test("the predicate reads false on an uncreated workspace rather than throwing", () => {
+    expect(turnMarkersShowConversational(makeUncreatedProject())).toBe(false);
   });
 
   // =========================================================================
@@ -188,7 +188,7 @@ describe("t259 turn-shape markers — the transcript-free tier-3 predicate", () 
   // (EISDIR) exactly as EACCES would, and the recovery must clear the path.
   // =========================================================================
   test("a failed engine-marker write clears the path instead of leaving a stale mtime", () => {
-    const proj = makeBornProject();
+    const proj = makeCreatedProject();
     markEngineTouch(proj); // a real advance lays a marker down
     const path = engineTouchMarkerPath(proj);
     const stale = Math.floor(Date.now() / 1000) - 3600;
@@ -206,7 +206,7 @@ describe("t259 turn-shape markers — the transcript-free tier-3 predicate", () 
   });
 
   test("a marker write failure never throws to the caller", () => {
-    const proj = makeBornProject();
+    const proj = makeCreatedProject();
     const path = humanTurnMarkerPath(proj);
     mkdirSync(path, { recursive: true }); // writeFileSync will fail EISDIR
     expect(() => markHumanTurn(proj)).not.toThrow();

@@ -51,7 +51,7 @@
 //   10 multiple audit events       -> the parsed auditEvents length > 2 (the .sh's
 //                                     `grep -ciE '**Event**:'` assert_gt 2).
 //   4 (per-event tag): DROPPED, the field is gone from the engine (see header).
-//   + WORKFLOW_STARTED fired (the birth event, the audit's reason to exist):
+//   + WORKFLOW_STARTED fired (the creation event, the audit's reason to exist):
 //       -> assertAuditEvent(r,"WORKFLOW_STARTED").
 //
 // Known-answer literals (read from the SHIPPED tool, not guessed):
@@ -110,7 +110,7 @@ describe("t54 /aidlc --init --scope bugfix audit completeness (sdk)", () => {
 
         // P4: audit is SHARDED per clone under <record>/audit/ (the active
         // intent's record dir), NOT the flat aidlc-docs/audit.md. readAuditText
-        // resolves the born intent and concatenates its shards.
+        // resolves the created intent and concatenates its shards.
         const auditRaw = readAuditText(proj);
 
         // .sh test 1: audit exists (the merged shard text is non-empty).
@@ -143,7 +143,7 @@ describe("t54 /aidlc --init --scope bugfix audit completeness (sdk)", () => {
         // .sh test 6: no duplicate SESSION_STARTED (the .sh's <= 1 bound).
         expect(countEvent(events, "SESSION_STARTED")).toBeLessThanOrEqual(1);
 
-        // The audit's reason to exist: the WORKFLOW_STARTED birth event fired.
+        // The audit's reason to exist: the WORKFLOW_STARTED creation event fired.
         assertAuditEvent(r, "WORKFLOW_STARTED");
       } finally {
         cleanupTestProject(proj);

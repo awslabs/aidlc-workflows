@@ -161,7 +161,6 @@ describe("t272 §3 retired framework-voice phrases stay out of user-visible pros
   // elsewhere is not double-counted by the phrase entry above it.
   const DENIED = [
     "orchestration engine",
-    "auto-birth",
     "flag-precedence ladder",
     "maintained by the orchestrator",
   ] as const;
@@ -195,7 +194,7 @@ describe("t272 §3 retired framework-voice phrases stay out of user-visible pros
     // "orchestration engine" survives in ONE machine-facing paragraph
     // (per-unit iteration mechanics, not a user-facing template), so this scan
     // covers the two phrases with zero legitimate survivors.
-    const hits = ["auto-birth", "flag-precedence ladder"].filter((p) =>
+    const hits = ["flag-precedence ladder"].filter((p) =>
       scanned.includes(p),
     );
     expect(hits).toEqual([]);

@@ -4,7 +4,7 @@
 
 Contributions to this implementation are welcome. This guide covers prerequisites, development workflow, testing, and how to submit changes.
 
-> **Path convention.** `<record>/` below = a born intent's record dir,
+> **Path convention.** `<record>/` below = a created intent's record dir,
 > `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` — where per-intent state, audit
 > shards, knowledge, and artifacts live.
 
@@ -241,7 +241,7 @@ Agent metadata (display name, example knowledge files) is read from each agent's
 
 2. **Verify the agent is discovered** — `bun -e "import { loadAgents } from 'core/tools/aidlc-lib.ts'; console.log(loadAgents().find(a => a.slug === '<slug>-agent'));"` should print the new agent's metadata.
 
-3. **Verify intent birth creates the space knowledge dir** — `bun core/tools/aidlc-utility.ts intent-create --scope poc --project-dir /tmp/agent-smoke` should create the empty space-level `aidlc/knowledge/` directory (a sibling of the space's `intents/`). Birth does not seed per-agent subdirectories or READMEs — the team creates `aidlc/knowledge/<slug>-agent/` itself when it has content.
+3. **Verify intent creation creates the space knowledge dir** - `bun core/tools/aidlc-utility.ts intent-create --scope poc --project-dir /tmp/agent-smoke` should create the empty space-level `aidlc/knowledge/` directory (a sibling of the space's `intents/`). Creation does not seed per-agent subdirectories or READMEs - the team creates `aidlc/knowledge/<slug>-agent/` itself when it has content.
 
 4. **Verify the statusline renders** — seed a state file with `Active Agent: <slug>-agent` and invoke the statusline hook; the output should include the display name after the `--` separator.
 
@@ -252,7 +252,7 @@ Agent metadata (display name, example knowledge files) is read from each agent's
 - `loadAgents()` discovers any new `.md` file in `.claude/agents/` on next invocation — no code edit.
 - The parser throws if `name` or `display_name` is missing, naming the file and the missing field.
 - Agents are returned alphabetically sorted by slug, so `readdirSync` order on any platform produces the same output.
-- Intent birth creates the empty space-level `aidlc/knowledge/` directory (it does not seed per-agent subdirectories or READMEs).
+- Intent creation creates the empty space-level `aidlc/knowledge/` directory (it does not seed per-agent subdirectories or READMEs).
 - Statusline rendering derives the display name from the same metadata source.
 - `tests/unit/t61.test.ts` asserts all five properties end-to-end against a fixture agent.
 

@@ -18,7 +18,7 @@ Every command this implementation ships is a skill under `.claude/skills/`. They
 - **`/aidlc`** — the full orchestrator. No flags baked in; it detects your scope (or you describe what you want), then drives every stage in your scope to completion. This is the one you reach for most.
 - **Scope-runners** — `/aidlc-bugfix`, `/aidlc-feature`, `/aidlc-mvp`, `/aidlc-security-patch`. Same full workflow, with a scope fixed and scope detection skipped.
 - **Stage-runners** — `/aidlc-domain-design`, `/aidlc-code-generation`, and 27 more. Run one stage in isolation, never touching your main workflow. Plugin-owned stages use their bare plugin-prefixed command name, such as `/test-pro-integration`.
-- **`/aidlc-init`** — birth the first intent (run the whole Initialization phase) in one step; opt-in packaging over the engine's auto-birth.
+- **`/aidlc-init`** - create the first intent (run the whole Initialization phase) in one step; opt-in packaging over the engine's auto-create.
 - **Session skills** — `/aidlc-session-cost`, `/aidlc-replay`, `/aidlc-outcomes-pack`. Read-only views over a workflow; covered in [Session Management](11-session-management.md).
 - **`/aidlc-knowledge`** — the DocumentKB: index the team's own documents (PDFs, Word files, Markdown, plain text) into a per-space catalog agents can cite. Standalone like the session skills, but read-write: it changes the catalog and emits document audit events (never workflow state). Same surface as `/aidlc knowledge <verb>`; see [CLI Commands](12-cli-commands.md) for the verbs.
 
@@ -90,10 +90,10 @@ Each one packages `/aidlc --stage <slug> --single`:
 
 The `--single` invariant is tool-enforced. A single-stage run records its work under a synthetic workflow id and refuses to write your main workflow's `Current Stage`. If a runner ever tried to advance the main pointer, the engine returns an error instead. The engine guarantees this, so the safety holds even if the docs were wrong.
 
-The three bootstrap **initialization** stages ship no stage-runner — birthing half an intent has no standalone meaning. Instead the whole initialization phase is packaged as one command:
+The three bootstrap **initialization** stages ship no stage-runner - creating half an intent has no standalone meaning. Instead the whole initialization phase is packaged as one command:
 
 ```
-/aidlc-init [--scope <name>] [description]   birth the first intent (== running /aidlc on a fresh workspace)
+/aidlc-init [--scope <name>] [description]   create the first intent (== running /aidlc on a fresh workspace)
 ```
 
 ---
@@ -105,7 +105,7 @@ The three bootstrap **initialization** stages ship no stage-runner — birthing 
 | Orchestrator | `/aidlc` | Full workflow, scope detected | — |
 | Scope-runner | `/aidlc-bugfix`, `/aidlc-express`, `/aidlc-feature`, `/aidlc-mvp`, `/aidlc-security-patch` | Full workflow, scope fixed, no detection | `/aidlc --scope <name>` |
 | Stage-runner | `/aidlc-domain-design`, `/aidlc-code-generation`, … (29 total) | One stage in isolation, never advances your workflow | `/aidlc --stage <slug> --single` |
-| Init wrapper | `/aidlc-init` | Birth the first intent (run Initialization) | `/aidlc` on a fresh workspace |
+| Init wrapper | `/aidlc-init` | Create the first intent (run Initialization) | `/aidlc` on a fresh workspace |
 | Session views | `/aidlc-session-cost`, `/aidlc-replay`, `/aidlc-outcomes-pack` | Read-only workflow reports | see [Session Management](11-session-management.md) |
 | Document knowledge | `/aidlc-knowledge` | Index and read the team's own documents (per-space DocumentKB) | `/aidlc knowledge <verb>` |
 
@@ -159,7 +159,7 @@ For the mechanics of writing a stage file, see [Customization](13-customization.
 # One stage, isolated (never advances your workflow)
 /aidlc-code-generation              == /aidlc --stage code-generation --single
 
-# Birth the first intent (Initialization phase)
+# Create the first intent (Initialization phase)
 /aidlc-init [--scope <name>]        == /aidlc on a fresh workspace
 
 # Add your own: write a stage/scope file, then

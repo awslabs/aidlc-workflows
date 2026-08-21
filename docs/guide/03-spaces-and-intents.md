@@ -104,7 +104,7 @@ trail, and artifacts. The `uuid` (a UUIDv7) is the canonical, collision-proof
 identity; `dirName` records the human-readable record-dir name verbatim.
 
 You never create an intent with a special command. The first time you describe
-work, the engine **auto-births** an intent for you:
+work, the engine **auto-creates** an intent for you:
 
 ```
 /aidlc Build a REST API for inventory management
@@ -134,12 +134,12 @@ second intent alongside the first:
   (2) No — this continues the inventory-api work
 ```
 
-- Choose **Yes** and AI-DLC births a second intent (here, a `bugfix`), switches to
+- Choose **Yes** and AI-DLC creates a second intent (here, a `bugfix`), switches to
   it, and begins its first stage. Your inventory-api intent is untouched — its
   record dir, state, and progress are all preserved exactly where you left them.
 - Choose **No** and AI-DLC treats your message as part of the active intent.
 
-AI-DLC never births a second intent without asking. If a prompt is genuinely a
+AI-DLC never creates a second intent without asking. If a prompt is genuinely a
 follow-up to the current work — answering a gate, correcting a requirement — it
 stays in the active intent; the offer only appears when the work is clearly
 distinct.
@@ -276,7 +276,7 @@ An intent isn't limited to a single repository. Because your code repos are
 siblings of the workspace (not nested inside any one of them), an intent can span
 as many as it needs.
 
-The repo set is captured **when the intent is born** — you don't type anything
+The repo set is captured **when the intent is created** — you don't type anything
 extra. By default AI-DLC auto-discovers every sibling repo (each immediate child
 of the workspace root that has its own `.git`) and records the set in the intent's
 `intents.json` row. During Construction, each git operation is then anchored to
@@ -321,7 +321,7 @@ missing repos, keep the gitignore block current, and generate a VSCode
 multi-root workspace.
 
 The manifest is a convenience, not a second source of truth. **Disk wins at
-runtime**: intent birth still auto-discovers whatever siblings are actually
+runtime**: intent creation still auto-discovers whatever siblings are actually
 present, so a repo works the moment it is cloned whether or not it is declared,
 and a declared repo that was never cloned simply is not part of the set. The
 manifest only drives the sync tool and the advisory `--doctor` rows that flag
@@ -338,7 +338,7 @@ repo. Two kinds of file are deliberately **gitignored** instead:
 
 | Gitignored (per-user, machine-local) | Why |
 |---|---|
-| `aidlc/active-space`, `…/intents/active-intent` | Cursors — "where am I right now." Committing them would turn per-user navigation into shared repository state and have teammates fight over intent births and cursor switches. |
+| `aidlc/active-space`, `…/intents/active-intent` | Cursors — "where am I right now." Committing them would turn per-user navigation into shared repository state and have teammates fight over intent creates and cursor switches. |
 | `.../intents/<id>/runtime-graph.json`, `.aidlc-*`, `aidlc/.aidlc-sessions/`, `aidlc/.aidlc-active-space-*.tmp` | Derived, machine-local runtime state, including per-session bindings and PID ancestry entries. |
 | `…/knowledge/documentkb/.journal/` | One directory per in-flight document transaction. Transient and per-clone; a committed journal would be a merge conflict on every concurrent `sync`. |
 | `…/knowledge/.sources.local.json` | Where *this machine* resolves documents linked from outside the repo. The path is machine-specific by definition, so committing it would break every teammate's checkout. |

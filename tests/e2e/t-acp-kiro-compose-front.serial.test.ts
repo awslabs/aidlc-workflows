@@ -17,13 +17,13 @@
 //           allows the turn-end).
 //   turn 2: "1" (Approve). The conductor re-dispatches the composer to write
 //           the two scope files (INSIDE the composer agent - the sandbox
-//           grant), then continues into intent-create - stop at the birth
+//           grant), then continues into intent-create - stop at the creation
 //           tool title.
 //
 // Disk assertions (the same P2 contract as t192/SDK + t-tui):
 //   - .kiro/scopes/ gained a 10th aidlc-*.md AND scope-grid.json a 10th key
 //     (the write landed THROUGH the Kiro sandbox);
-//   - the born aidlc-state.md carries the composed (non-stock) scope.
+//   - the created aidlc-state.md carries the composed (non-stock) scope.
 //
 // KNOWN RISK (plan §7): Kiro-ACP conductor forwarding is fragile (prior live
 // runs dropped $ARGUMENTS / ran the wrong tool). If this leg proves flaky the
@@ -47,7 +47,7 @@ import { AcpSession, driveKiroAcp } from "../harness/kiro-acp-drive.ts";
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "1800", 10);
 const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 1800) * 1000;
 // Turn 1 carries the composer dispatch (detect + read scopes + propose);
-// turn 2 carries the write + birth. Split the budget.
+// turn 2 carries the write + creation. Split the budget.
 const TURN_MS = Math.max(300_000, Math.floor((TEST_TIMEOUT_MS - 60_000) / 2));
 
 const TASK =
@@ -75,7 +75,7 @@ const SKIP_REASON = skipReason();
 
 describe("t-acp-kiro compose front journey (live Kiro ACP)", () => {
   test.skipIf(SKIP_REASON !== null)(
-    `compose dispatches the composer on Kiro; approve lands the sandbox-granted write + birth${SKIP_REASON ? ` - SKIP: ${SKIP_REASON}` : ""}`,
+    `compose dispatches the composer on Kiro; approve lands the sandbox-granted write + creation${SKIP_REASON ? ` - SKIP: ${SKIP_REASON}` : ""}`,
     async () => {
       const root = setupTuiProject({
         harness: "kiro",
@@ -96,10 +96,10 @@ describe("t-acp-kiro compose front journey (live Kiro ACP)", () => {
           timeoutMs: TURN_MS,
           keepAlive: true,
         });
-        // No write and no birth before approval (P0's no-write contract).
+        // No write and no creation before approval (P0's no-write contract).
         expect(readdirSync(scopesDir).filter((f) => f.endsWith(".md")).length).toBe(11);
 
-        // --- turn 2: approve -> composer writes -> same-turn birth ----------
+        // --- turn 2: approve -> composer writes -> same-turn creation ----------
         const r2 = await driveKiroAcp({
           projectDir: root,
           session,
@@ -110,11 +110,11 @@ describe("t-acp-kiro compose front journey (live Kiro ACP)", () => {
           keepAlive: true,
         });
         expect([...r1.toolCallIssues, ...r2.toolCallIssues]).toEqual([]);
-        const birthOut = r2.toolCalls
+        const creationOutput = r2.toolCalls
           .filter((t) => t.title.includes("intent-create"))
           .map((t) => t.output.join(""))
           .join("");
-        expect(birthOut).toContain("State initialized:");
+        expect(creationOutput).toContain("State initialized:");
 
         // The two-file write landed THROUGH the Kiro sandbox.
         const scopeFiles = readdirSync(scopesDir).filter(
@@ -126,7 +126,7 @@ describe("t-acp-kiro compose front journey (live Kiro ACP)", () => {
         const composed = Object.keys(grid).find((k) => !STOCK_SCOPES.has(k));
         expect(composed).toBeDefined();
 
-        // The born state froze the composed scope.
+        // The created state froze the composed scope.
         const spaceCursor = join(root, "aidlc", "active-space");
         const space = existsSync(spaceCursor)
           ? readFileSync(spaceCursor, "utf-8").trim() || "default"

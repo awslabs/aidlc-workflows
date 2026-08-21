@@ -9,7 +9,7 @@
 // gate that ends beat 1 is answered by a scripted beat 2, the same capability
 // the front-compose twin uses).
 //
-//   seed:   a BORN-shape feature workflow (the state-initialization-done
+//   seed:   a created feature workflow (the state-initialization-done
 //           fixture: cursor at intent-capture, market-research + team-formation
 //           pending grid-EXECUTE ahead of it). Seeded from a fixture rather than
 //           a subprocess intent-create so the deterministic tier stays
@@ -102,7 +102,7 @@ const SKIP_REASON = skipReason();
 
 // Same scratch-install shape as the front-compose twin (dist/codex verbatim,
 // git-initialized, Bedrock provider + project trust + hook trust pre-seed), plus
-// the sibling aidlc/ workspace shell and a fixture-seeded BORN feature record
+// the sibling aidlc/ workspace shell and a fixture-seeded created feature record
 // (the running workflow this journey re-shapes). Seeding from a fixture keeps
 // the deterministic tier fixture-driven - no subprocess intent-create.
 function setupCodexProject(): { proj: string; home: string; root: string } {
@@ -117,8 +117,8 @@ function setupCodexProject(): { proj: string; home: string; root: string } {
   // rule-layer resolver finds it (same copy setupWorkspaceJourney does).
   cpSync(join(CODEX_DIST, "aidlc"), join(proj, "aidlc"), { recursive: true });
 
-  // Seed a BORN feature record: the default intent record + cursors + registry +
-  // pinned clone-id + the born-shape state fixture. Mirrors the per-intent shell
+  // Seed a created feature record: the default intent record + cursors + registry +
+  // pinned clone-id + the post-creation state fixture. Mirrors the per-intent shell
   // the tui/sdk fixtures seed (seedWorkspaceShell), inlined here because the
   // codex project is scaffolded from the dist tree rather than a fixture helper.
   const intentsDir = join(proj, "aidlc", "spaces", "default", "intents");

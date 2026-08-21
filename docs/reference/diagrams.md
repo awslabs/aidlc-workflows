@@ -375,7 +375,7 @@ flowchart LR
 
 ## 8. Session Resume Flow
 
-When the user invokes `/aidlc`, the orchestrator checks for an active intent's `aidlc-state.md`. If found, it offers four resume options. If not found, it births the first intent. The orchestrator also checks for `.aidlc-recovery.md` to detect possible state corruption from context compaction.
+When the user invokes `/aidlc`, the orchestrator checks for an active intent's `aidlc-state.md`. If found, it offers four resume options. If not found, it creates the first intent. The orchestrator also checks for `.aidlc-recovery.md` to detect possible state corruption from context compaction.
 
 ```mermaid
 flowchart TD
@@ -398,7 +398,7 @@ flowchart TD
     KNOWN_SCOPE["Use explicit scope"]
     FREEFORM["Auto-detect scope\nfrom keywords"]
     CONFIRM_SCOPE["Confirm scope\nwith user"]
-    BIRTH["Birth the intent:\nmint record dir,\nstate + audit, begin\nfirst stage"]
+    CREATE["Create the intent:\nmint record dir,\nstate + audit, begin\nfirst stage"]
 
     START --> ARG_CHECK
     ARG_CHECK -->|Yes| STATUS_CHECK
@@ -420,15 +420,15 @@ flowchart TD
     RESUME_MENU --> OPT_JUMP
     RESUME_MENU --> OPT_FRESH
 
-    OPT_FRESH -->|"archive + confirm"| BIRTH
+    OPT_FRESH -->|"archive + confirm"| CREATE
 
     SCOPE_DETECT -->|"Known scope"| KNOWN_SCOPE --> CONFIRM_SCOPE
     SCOPE_DETECT -->|"Freeform text"| FREEFORM --> CONFIRM_SCOPE
-    CONFIRM_SCOPE --> BIRTH
+    CONFIRM_SCOPE --> CREATE
 
     style START fill:#e1bee7,stroke:#7b1fa2
     style RESUME_MENU fill:#bbdefb,stroke:#1565c0
-    style BIRTH fill:#c8e6c9,stroke:#388e3c
+    style CREATE fill:#c8e6c9,stroke:#388e3c
     style WARN fill:#ffcdd2,stroke:#c62828
 ```
 

@@ -108,7 +108,7 @@ import {
   resolveWorkflowSelection,
   readStateFile,
   refreshActiveDirectiveMarker,
-  resolveBirthRepoSet,
+  resolveIntentRepoSet,
   resolveProjectDir,
   setActiveIntentCursor,
   setActiveSpaceCursor,
@@ -291,10 +291,10 @@ function validateIntentCreateFlagValues(
 
 // Thin wrapper around the canonical appendAuditEntry. All events must be in
 // aidlc-audit.ts VALID_EVENT_TYPES. Throws on invalid event or audit failure —
-// caller is expected to let that propagate (birth failures should stop birth).
+// caller is expected to let that propagate (creation failures should stop creation).
 //
 // Lock-aware (mirrors aidlc-state.ts emitAudit): handleIntentCreate wraps the
-// whole birth transaction in withAuditLock on the WORKSPACE sentinel bucket, so
+// whole creation transaction in withAuditLock on the WORKSPACE sentinel bucket, so
 // this process already owns that OS lock. Routing through appendAuditEntry
 // (which calls the NON-reentrant acquireAuditLock keyed on the same sentinel
 // when intent is omitted) would self-deadlock and burn the 5s retry budget
@@ -2577,11 +2577,11 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
     });
   }
 
-  // 5. Workspace shell ready (P4: no --init artifact to check). With auto-birth
+  // 5. Workspace shell ready (P4: no --init artifact to check). With auto-create
   // there is no scaffolded aidlc-docs/ to verify; readiness is the SHIPPED SHELL
   // the user copies from dist/: the harness engine dir (.claude/.kiro/.codex)
   // present AND the default space's memory dir present (the source of truth the
-  // native include resolves). When both are present the first /aidlc auto-births
+  // native include resolves). When both are present the first /aidlc auto-creates
   // with no ceremony; a missing piece means the dist/ copy was incomplete.
   const harnessEngineDir = join(projectDir, harnessDir());
   // Pin to the DEFAULT space explicitly: readiness is "did the dist/ shell copy
@@ -3878,8 +3878,8 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
   // already exists (cold-safe, see auditExists below); appendAuditEntry
   // self-creates the audit shard/dir, so an unconditional emit on a pristine
   // project would create a record as a side effect, making --doctor NOT
-  // read-only. Doctor runs on a fresh checkout before any workflow is born, so
-  // it must create nothing. On a project with a born intent the emit fires
+  // read-only. Doctor runs on a fresh checkout before any workflow is created, so
+  // it must create nothing. On a project with a created intent the emit fires
   // exactly as before (BARE appendAuditEvent — the only throw is a real write
   // failure, which the rest of the codebase lets propagate).
   let pairedRuleCount: number | null = null;
@@ -4691,7 +4691,7 @@ function gitRmFlatTree(projectDir: string, flatTree: string): void {
 // The phases a scope actually runs: those holding at least one EXECUTE stage.
 // This is the SINGLE derivation behind two decisions that must never disagree:
 // which per-phase dirs a new record gets (ensureWorkspaceDirs) and which phases
-// report PHASE_SKIPPED at birth. Both read the compiled scope grid via
+// report PHASE_SKIPPED at creation. Both read the compiled scope grid via
 // stagesInScope, so the folders on disk and the audit trail always tell the same
 // story, with no LLM input in the path. A phase whose stage set is empty under
 // the enabled bundle (plugin selection can empty one) has nothing to write and
@@ -4720,7 +4720,7 @@ function phasesWithExecuteStages(scope: string): Set<string> {
 function ensureWorkspaceDirs(projectDir: string, scope: string): void {
   // docsDir() default-resolves the active intent's record dir (or the flat
   // fallback when no intent resolves) — the cursor set by createIntent/migration
-  // points it at the born intent.
+  // points it at the created intent.
   const record = docsDir(projectDir);
   mkdirSync(record, { recursive: true });
   // Lazy per-phase artifact dirs, in-scope phases only (stages write reports here).
@@ -4767,22 +4767,22 @@ function ensureWorkspaceDirs(projectDir: string, scope: string): void {
   repointHarnessIncludes(projectDir, activeSpace(projectDir));
 }
 
-// intent-create — the deterministic mutation behind the engine's birth
+// intent-create - the deterministic mutation behind the engine's creation
 // directive (the engine NAMES the move read-only; this tool performs it).
-// Births the FIRST intent into the active space on a fresh workspace, OR a new
+// Creates the FIRST intent in the active space on a fresh workspace, OR a new
 // intent for new work alongside an active one. Crash-safe + concurrent-safe:
 // the WHOLE transaction (migration probe, intent mint, registry append,
 // active-intent cursor, state-build, audit emits) runs inside ONE withAuditLock
 // on the WORKSPACE sentinel bucket — every intents.json mutation takes that
 // bucket (invariant 2), so two concurrent first-runs are serialized and BOTH
-// births land distinct uuids/dirs/rows with no lost update.
+// creation attempts land distinct uuids/dirs/rows with no lost update.
 //
 // The directory-tree copy + knowledge READMEs that the old `--init` shipped are
 // gone: the workspace shell (spaces/default/memory, native includes) ships in
-// dist/ (SEED), and lazy workspace dirs are ensure-exists at birth or first
+// dist/ (SEED), and lazy workspace dirs are ensure-exists at creation or first
 // use. What stays is the scope→stage state-build that routes
 // the workflow to its first post-init stage — relocated here, now writing into
-// the BORN intent's record (the active-intent cursor set first makes the
+// the CREATED intent's record (the active-intent cursor set first makes the
 // default-resolving state/audit helpers resolve there).
 function handleIntentCreate(projectDir: string, flags: Record<string, string>): void {
   // Creation mutates the registry and active cursor. Refuse an invocation that
@@ -4831,13 +4831,13 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   // construction path. Validated up front so a bad name fails before any mutation.
   let repos: string[];
   try {
-    repos = resolveBirthRepoSet(projectDir, flags.repos);
+    repos = resolveIntentRepoSet(projectDir, flags.repos);
   } catch (e) {
     die(errorMessage(e));
   }
 
   // The whole mutation runs under the WORKSPACE lock so a concurrent first-run
-  // is serialized — both births append distinct rows to intents.json without a
+  // is serialized - both creation attempts append distinct rows to intents.json without a
   // lost update. The migration probe + the registry append are the reads/writes
   // the hazard box demands be in ONE critical section on the sentinel bucket.
   withAuditLock(projectDir, () => {
@@ -4905,7 +4905,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     //   • DETERMINISM→TOOL: --label is slugified (cap 24), the date prefix + collision
     //     counter are appended, the dirName is stored in the registry row.
     // Fallback chain so a NON-LLM caller (direct tool invocation, scripts, or a
-    // conductor that omits --label) still births a sane name: --label, else the
+    // conductor that omits --label) still creates a sane name: --label, else the
     // freeform --arguments (truncated — may cut mid-phrase, the pre-LLM behaviour),
     // else the scope token. The full --arguments text still flows to the audit
     // Request + state Project fields below (verbose prose belongs there, not the dir).
@@ -4933,11 +4933,11 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
 
     const ts = isoTimestamp();
 
-    // ---- Audit bootstrap + birth events (relocated from the old --init) ----
+    // ---- Audit bootstrap + creation events (relocated from the old --init) ----
 
-    // audit.md: header-only bootstrap if absent. WORKFLOW_STARTED is the birth
+    // audit.md: header-only bootstrap if absent. WORKFLOW_STARTED is the creation
     // event; SESSION_STARTED is owned by the SessionStart hook. This resolves to
-    // the born intent's per-clone audit shard (cursor set above).
+    // the created intent's per-clone audit shard (cursor set above).
     const auditPath = auditFilePath(projectDir);
     if (!existsSync(auditPath)) {
       mkdirSync(dirname(auditPath), { recursive: true });
@@ -4945,8 +4945,8 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     }
 
     // WORKFLOW_STARTED — mandatory first event of any new workflow. Captures the
-    // birth timestamp so "when did this feature begin?" is answerable from the
-    // audit alone. Lands in the born intent's audit (relocated from --init).
+    // creation timestamp so "when did this feature begin?" is answerable from the
+    // audit alone. Lands in the created intent's audit (relocated from --init).
     appendAuditEvent(projectDir, "WORKFLOW_STARTED", {
       Scope: scope,
       Request: `/aidlc ${flags.arguments || scope}`,
@@ -4957,7 +4957,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
               storedReviewOverride(reviewOverride) || "adversarial (stage defaults)",
           }
         : {}),
-      // Record the intent's repo span at birth (P7). Omitted when no repos were
+      // Record the intent's repo span at creation (P7). Omitted when no repos were
       // captured (legacy single-repo / fresh greenfield → the lone repo is inferred).
       ...(repos.length > 0 ? { Repos: repos.join(", ") } : {}),
     });
@@ -4975,7 +4975,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     });
 
     // PHASE_SKIPPED — one per phase the scope excludes entirely (no EXECUTE
-    // stages in that phase). Captures the scope decision at workflow birth so
+    // stages in that phase). Captures the scope decision at workflow creation so
     // you don't have to derive it later by diffing the stage list. Shares
     // phasesWithExecuteStages with the folder creation below, so a phase that
     // reports skipped here is exactly a phase that gets no folder.
@@ -4999,7 +4999,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
 
     // ---- Ensure-exists record dirs (lazy; SEED ships the shell) ----
     // The shipped shell already carries spaces/default/memory + native includes.
-    // Birth only ensures the dirs this workflow will write into: an artifact dir
+    // Intent creation only ensures the dirs this workflow will write into: an artifact dir
     // per IN-SCOPE phase (a scope-excluded phase gets none), verification/, and
     // the space-level knowledge/ dir. All idempotent: skip any dir that already
     // exists, and never remove one.
@@ -5027,10 +5027,10 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
 }
 
-// The scope→stage state-build half of birth: the workspace detection + state
+// The scope→stage state-build half of creation: the workspace detection + state
 // file authoring + routing audit emits the old --init ran after scaffolding.
 // Split out only so handleIntentCreate's lock body stays readable; it is called
-// from inside that lock (every write here resolves the born intent's record).
+// from inside that lock (every write here resolves the created intent's record).
 function handleIntentCreateStateBuild(
   projectDir: string,
   flags: Record<string, string>,
@@ -5187,7 +5187,7 @@ function handleIntentCreateStateBuild(
 
   const projectDesc = flags.arguments || "[Project description]";
 
-  // Phase Progress - per-phase status. Birth completes every initialization
+  // Phase Progress - per-phase status. Creation completes every initialization
   // stage ([x]) and hands off to the first post-init stage ([-]), emitting the
   // PHASE_COMPLETED/VERIFIED/STARTED trio for that boundary below - so the
   // seed mirrors it: Initialization is Verified and the first post-init
@@ -5308,9 +5308,9 @@ ${stageProgress}
     });
   }
 
-  // Combined stdout summary (intent born + state-build). The active-intent
+  // Combined stdout summary (intent created + state-build). The active-intent
   // cursor + the record dir were set by createIntent above; the state file lives
-  // under the born intent's record (resolved by writeStateFile's default).
+  // under the created intent's record (resolved by writeStateFile's default).
   const submoduleWarningLine =
     uninitSubmodules.length > 0
       ? `Warning: ${uninitSubmodules.length} uninitialized git submodule path(s) (${enumerateSubmodulePaths(uninitSubmodules)}) - run '${SUBMODULE_INIT_REMEDY}' before proceeding so reverse-engineering can read the code.\n`
@@ -5352,7 +5352,7 @@ function handleUpgrade(): void {
 // Print an intent listing (the query layer's human OR --json mode). Both modes
 // read the SAME listSpaces/listIntents source so they never diverge. --json
 // shape: {active, spaces:[...], intents:[{uuid,slug,status,repos}]} — consumed
-// by the birth gate, resume-rebind, and statusline; human text is the bare
+// by the creation gate, resume-rebind, and statusline; human text is the bare
 // `/aidlc intent` rendering. Pure read.
 function printIntentListing(
   projectDir: string,
@@ -5475,7 +5475,7 @@ function handleIntent(
   }
   if (!match || match.dirName === null) {
     // Deliberately NOT "describe what to build to start a new one": a conductor
-    // recovering from a failed switch read that as an instruction and birthed an
+    // recovering from a failed switch read that as an instruction and created an
     // unwanted intent. Point at the read-only listing only; starting new work
     // stays a separate, human-confirmed move.
     die(
@@ -6247,7 +6247,7 @@ function handleRecompose(projectDir: string, flags: Record<string, string>): voi
 
     // --- Build the proposed effective grid and validate STRICT --------------
     // Strictness is a DIFF against the pre-flip baseline: a stock scope may be
-    // BORN with structural advisories (e.g. bugfix's code-generation consumes
+    // CREATED with structural advisories (e.g. bugfix's code-generation consumes
     // unit-of-work from the skipped units-generation - the scope author owns
     // that upstream work), and those must not veto an unrelated flip. What the
     // recompose validator hard-rejects is NEW starvation the flips introduce:
@@ -6297,7 +6297,7 @@ function handleRecompose(projectDir: string, flags: Record<string, string>): voi
       const v = postSuffixes.get(slug) ?? scopeDef.stages[slug];
       return v === "EXECUTE" ? "EXECUTE" : "SKIP";
     };
-    // The Stages to Skip row carries birth/scope-change annotations (entry
+    // The Stages to Skip row carries creation/scope-change annotations (entry
     // shape "<number> (<slug>)", e.g. "2.1 (reverse-engineering — greenfield)")
     // that a bare-slug rebuild would destroy. Preserve each existing entry
     // VERBATIM, in its existing position, when its stage is still skipped;

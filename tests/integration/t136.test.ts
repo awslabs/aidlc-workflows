@@ -107,13 +107,13 @@ const LOG_TS = join(
 
 const SLUG = "requirements-analysis";
 
-// P4: intent-create writes state into the born intent's per-intent record dir
+// P4: intent-create writes state into the created intent's per-intent record dir
 // (aidlc/spaces/<space>/intents/<slug>-<id8>/), not the flat aidlc-docs/. After
-// the init in beforeAll the active-intent cursor points at the born record, so
+// the init in beforeAll the active-intent cursor points at the created record, so
 // every later gate-start/reject/revise/approve (which default-resolve the active
 // intent) reads/writes THAT record — recordDirOf follows the cursor and resolves
 // it for both the init output and the state-machine writes. Falls back to the
-// flat layout for a not-yet-born / seeded-flat project.
+// flat layout for a not-yet-created / seeded-flat project.
 function recordDirOf(p: string): string {
   const spaceCursor = join(p, "aidlc", "active-space");
   const space = existsSync(spaceCursor)

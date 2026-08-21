@@ -357,7 +357,7 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
   // The active intent's RELATIVE record-dir prefix (aidlc/spaces/<sp>/intents/
   // <slug>-<id8>), so each row's memory_path resolves under the active intent
   // rather than the bare space prefix. null -> the bare space record prefix (a
-  // pre-birth shell with no intent). Resolved once: the active intent is stable
+  // pre-creation shell with no intent). Resolved once: the active intent is stable
   // across a single compile.
   const recordPrefix = relativeRecordDir(projectDir);
 

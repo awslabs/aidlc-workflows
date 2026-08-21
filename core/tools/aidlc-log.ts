@@ -59,7 +59,7 @@ import type { ReviewClass } from "./aidlc-lib.js";
 // Resolve the project dir AND assert that an active workflow exists before any
 // audit emit. WHY: aidlc-log is orchestrator-called per-question and threads no
 // --intent/--space, so it relies on default intent resolution. On a fresh shell
-// (pre-birth) or a >1-intent workspace with no active-intent cursor, that
+// (pre-creation) or a >1-intent workspace with no active-intent cursor, that
 // resolution yields null and stateFilePath()/auditFilePath() collapse to the
 // BARE space record root (aidlc/spaces/<space>/intents/). Emitting there would
 // drop an audit shard DIRECTLY into the bare intents root and break the "no

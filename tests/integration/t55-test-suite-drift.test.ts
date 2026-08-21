@@ -7,7 +7,7 @@
 // so this twin now carries 9 test() cases.
 // Mechanism: none (pure file reads/parsing over tests/, tests/README.md, and
 // docs/ — readFileSync/readdirSync only; zero spawn, zero LLM, zero tokens).
-// Born suffix-free.
+// Starts suffix-free.
 //
 // This is a META-TEST over the test suite + docs. It instruments the harness
 // itself rather than any framework unit (function/audit/scope/stage/hook/
@@ -527,7 +527,7 @@ describe("t55 — test-suite metadata drift (migrated from t55-test-suite-drift.
   // 3 interaction modes) and ordinal "fourth" uses (fourth phase, fourth audit
   // stream) never match — they are not the harness count.
   //
-  // This guard is born RED on the pre-Wave-1 corpus (the framing reframe turns it
+  // This guard is created RED on the pre-Wave-1 corpus (the framing reframe turns it
   // green); after Wave 1 it stays green and pins the open-set framing against rot.
   // ───────────────────────────────────────────────────────────────────────────
   test("8: no closed 'three harnesses' framing in authored docs (open-set guard) [du/unit-7]", () => {

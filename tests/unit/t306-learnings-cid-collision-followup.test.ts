@@ -36,7 +36,7 @@
 //   7. Legacy-marker match not gated on text equality (P2, round 2) — a
 //      legacy-format marker sharing a candidate id with a DIFFERENT
 //      learning's text must not be mistaken for a retry of that learning.
-//   8. An unscoped selections replay must fail closed if an intent is born
+//   8. An unscoped selections replay must fail closed if an intent is created
 //      after surface time — `intent: null` must never resolve to that later
 //      live/lone intent for the audit write.
 //   9. A truncated 32-bit content hash can collide for different learning
@@ -717,12 +717,12 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
     }, 30000);
   });
 
-  describe("finding #8 (P1, round 4) — an unscoped replay must not resolve to an intent born after surface", () => {
+  describe("finding #8 (P1, round 4) — an unscoped replay must not resolve to an intent created after surface", () => {
     test("intent:null fails closed after a new intent record appears", () => {
       const pd = createTestProject();
       projects.push(pd);
       const text = "Surfaced before any intent existed";
-      const sel = selectionsFile(pd, "unscoped-before-birth", text, { intent: null });
+      const sel = selectionsFile(pd, "unscoped-before-creation", text, { intent: null });
 
       seedIntent(pd, SECOND_RECORD_DIR);
       switchActiveIntentTo(pd, SECOND_RECORD_DIR);

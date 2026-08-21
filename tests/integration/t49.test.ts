@@ -94,11 +94,11 @@ const STATE = join(TOOLS, "aidlc-state.ts");
 const UTIL = join(TOOLS, "aidlc-utility.ts");
 const LOG = join(TOOLS, "aidlc-log.ts");
 
-// P4: init births a per-intent record (aidlc/spaces/<space>/intents/<slug>-<id8>/);
+// P4: init creates a per-intent record (aidlc/spaces/<space>/intents/<slug>-<id8>/);
 // state lands at <record>/aidlc-state.md and audit in per-clone shards under
 // <record>/audit/<host>-<pid>.md, NOT the flat aidlc-docs/. The active-intent
-// cursor follows the born record, so every subsequent gate-start/reject/revise/
-// approve/advance default-resolves to it. Fall back to flat for a not-yet-born
+// cursor follows the created record, so every subsequent gate-start/reject/revise/
+// approve/advance default-resolves to it. Fall back to flat for a not-yet-created
 // project. The checkbox markers + audit event stream are unchanged — only the
 // LOCATION moved.
 function recordDirOf(p: string): string {
@@ -119,7 +119,7 @@ function recordDirOf(p: string): string {
 const statePath = (p: string): string =>
   join(recordDirOf(p), "aidlc-state.md");
 // Audit is sharded under <record>/audit/<host>-<pid>.md; concat every shard for
-// a content read, falling back to the flat audit.md for a not-yet-born project.
+// a content read, falling back to the flat audit.md for a not-yet-created project.
 function readAudit(p: string): string {
   const auditDir = join(recordDirOf(p), "audit");
   if (existsSync(auditDir)) {
@@ -284,10 +284,10 @@ beforeAll(() => {
   // init --scope bugfix (the .sh's `bun "$UTIL" init --scope bugfix`).
   const init = run(UTIL, ["intent-create", "--scope", "bugfix"], proj);
   expect(init.status).toBe(0);
-  // P4: resolve the state path only AFTER init — birth creates the per-intent
+  // P4: resolve the state path only AFTER init - creation creates the per-intent
   // record + active-intent cursor that statePath/recordDirOf follow. Computing
   // it pre-init would resolve the flat aidlc-docs/ fallback (which never exists
-  // for a born project).
+  // for a created project).
   const sp = statePath(proj);
   stateAfterInit = readFileSync(sp, "utf-8");
 

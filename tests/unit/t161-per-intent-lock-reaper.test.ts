@@ -7,7 +7,7 @@
 // The audit lock is now keyed PER INTENT (composite projectDir+space+intent), so
 // two intents lock independently; an intent-OMITTED call hashes a RESERVED
 // __workspace__ sentinel bucket distinct from every per-intent bucket (P4's
-// auto-birth + every intents.json write depend on this). The reaper stamps owner
+// auto-create + every intents.json write depend on this). The reaper stamps owner
 // PID+start-time on acquire and reclaims a provably-dead (ESRCH) or over-age lock
 // — a live, under-threshold holder is NEVER robbed.
 //
@@ -92,7 +92,7 @@ describe("t161 keying invariants", () => {
 
   test("intent-omitted does NOT resolve activeIntent() (stable even with intents on disk)", () => {
     // auditLockIdentity for the omitted case is a pure sentinel — it must not
-    // read the project's active-intent (at birth there is no active intent).
+    // read the project's active-intent (during intent creation there is no active intent).
     // Calling it against a bogus pd that has no aidlc/ dir must not throw and must
     // return the sentinel bucket.
     expect(() => auditLockIdentity("/nonexistent/path/xyz")).not.toThrow();

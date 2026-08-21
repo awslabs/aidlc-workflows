@@ -110,7 +110,7 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
 
     if (manifestNames) {
       // W2 - Manifest vs disk drift. discoverSiblingRepos scans the disk for
-      // .git siblings - the SAME set the runtime uses at intent birth - so a
+      // .git siblings - the SAME set the runtime uses at intent creation - so a
       // mismatch is exactly what the agent would (in)visibly see. Disk wins at
       // runtime; the manifest only drives sync, so this row nudges, never fails.
       const declared = new Set(manifestNames);

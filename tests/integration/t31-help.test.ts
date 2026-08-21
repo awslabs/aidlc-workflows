@@ -135,7 +135,7 @@ describe("t31 aidlc-utility help — CLI contract (migrated from t31-help-text-c
   // The .sh asserted --status/--init/--doctor/--help (Utilities block) and
   // --stage/--phase/--scope (jump utilities) and --force. S4 added
   // --test-strategy/--version. P4 RETIRED the user-facing --init/--force (the
-  // engine auto-births; the workspace shell ships in dist/) and added the
+  // engine auto-creates; the workspace shell ships in dist/) and added the
   // intent/space verb families — so the help text drops --init/--force and lists
   // the verbs instead.
   const UTILITIES = [

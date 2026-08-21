@@ -170,10 +170,10 @@ function stripScope(overrides?: Record<string, string>): Record<string, string> 
   return { ...base, ...(overrides ?? {}) };
 }
 
-// P4: intent-create writes state into the born intent's per-intent record dir
+// P4: intent-create writes state into the created intent's per-intent record dir
 // (aidlc/spaces/<space>/intents/<slug>-<id8>/), not the flat aidlc-docs/. Resolve
 // the record dir from the active-space + active-intent cursors, falling back to
-// the flat layout for a not-yet-born / seeded-flat project (the many state-seeding
+// the flat layout for a not-yet-created / seeded-flat project (the many state-seeding
 // cases below never call init, so they stay flat).
 function recordDirOf(p: string): string {
   const spaceCursor = join(p, "aidlc", "active-space");
@@ -583,7 +583,7 @@ describe("t27 aidlc-utility init", () => {
   test("14: init creates state, audit, codekb, and knowledge directories", () => {
     const p = emptyDir();
     util(["intent-create", "--scope", "poc"], p);
-    // P4: birth writes a per-intent record (state + audit shards), not the flat
+    // P4: creation writes a per-intent record (state + audit shards), not the flat
     // aidlc-docs/ trio. (Domain knowledge is SPACE-level, asserted below.)
     expect(existsSync(statePath(p))).toBe(true);
     // Audit is now a SHARD DIR (<record>/audit/<host>-<pid>.md), not a single file.
@@ -598,19 +598,19 @@ describe("t27 aidlc-utility init", () => {
     expect(readdirSync(spaceCodekbOf(p))).toEqual([]);
   });
 
-  test("15: init output contains birth + state-init summary", () => {
+  test("15: init output contains creation + state-init summary", () => {
     const p = emptyDir();
     const r = util(["intent-create", "--scope", "poc"], p);
     // P4: init is a back-compat alias for intent-create; the stdout now reports the
-    // born intent + state init, not the old "Workspace scaffolded" scaffold line.
+    // created intent + state init, not the old "Workspace scaffolded" scaffold line.
     expect(r.stdout).toContain("Intent created:");
     expect(r.stdout).toContain("State initialized:");
   });
 
-  // P4 retires the --init re-init guard: init/intent-create births a per-intent
-  // record, so a SECOND init is not an error — it simply births a second intent
+  // P4 retires the --init re-init guard: init/intent-create creates a per-intent
+  // record, so a SECOND init is not an error - it simply creates a second intent
   // in the workspace. There is no "already exists" / --force path anymore.
-  test("second init births a second intent (no re-init guard): exit 0, no 'already exists'", () => {
+  test("second init creates a second intent (no re-init guard): exit 0, no 'already exists'", () => {
     const p = emptyDir();
     const first = util(["intent-create", "--scope", "poc"], p);
     expect(first.status).toBe(0);
@@ -647,7 +647,7 @@ describe("t27 aidlc-utility init", () => {
   test("69: init emits WORKFLOW_STARTED as the first audit event", () => {
     const p = bareProj();
     util(["intent-create", "--scope", "bugfix"], p);
-    // P4: audit is sharded under the born record's audit/ dir; read via readAudit.
+    // P4: audit is sharded under the created record's audit/ dir; read via readAudit.
     // First **Event**: line after the `# AI-DLC Audit Log` header.
     const firstEvent = readAudit(p)
       .split("\n")
@@ -916,9 +916,9 @@ describe("t27 aidlc-utility detect-scope", () => {
       ["detect-scope", "--scope", "feature", "--input", "build a todo app", "--source", "freeform"],
       p,
     );
-    // P4: after init births the per-intent record, detect-scope's audit lands in
-    // the born record's shard dir — read via readAudit (which also falls back to
-    // flat audit.md for a not-yet-born project).
+    // P4: after init creates the per-intent record, detect-scope's audit lands in
+    // the created record's shard dir - read via readAudit (which also falls back to
+    // flat audit.md for a not-yet-created project).
     const audit = readAudit(p);
     expect(auditEventCountIn(audit, "SCOPE_DETECTED")).toBe(1);
     // STRONGER: the .sh only grepped the event; assert the JSON ack + field.

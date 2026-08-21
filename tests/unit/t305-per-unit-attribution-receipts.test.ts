@@ -682,9 +682,9 @@ describe("t305 content-addressed source review evidence", () => {
     expect(workspaceSourceState(project)).toBeNull();
   });
 
-  test("no-Git workflow birth and jump both emit empty modern unit-major baselines", () => {
-    const born = createTestProject();
-    dirs.push(born);
+  test("no-Git workflow creation and jump both emit empty modern unit-major baselines", () => {
+    const created = createTestProject();
+    dirs.push(created);
     const created = spawnSync(
       process.execPath,
       [
@@ -695,31 +695,31 @@ describe("t305 content-addressed source review evidence", () => {
         "--label",
         "empty-baseline",
         "--project-dir",
-        born,
+        created,
       ],
       {
         encoding: "utf-8",
         env: {
           ...process.env,
-          AIDLC_WORKFLOW_INTENT: "empty baseline birth",
+          AIDLC_WORKFLOW_INTENT: "empty baseline creation",
         },
       },
     );
     expect(created.status, `${created.stdout ?? ""}${created.stderr ?? ""}`)
       .toBe(0);
-    const birthAudit = readAllAuditShards(born);
+    const birthAudit = readAllAuditShards(created);
     const birthField = /\*\*Event\*\*: WORKFLOW_STARTED[\s\S]*?\*\*Source Baseline\*\*: (sha256:[0-9a-f]{64})/
       .exec(birthAudit)?.[1];
     expect(birthField).toMatch(/^sha256:[0-9a-f]{64}$/);
     expect(
       readBaselineSourceSnapshot(
-        born,
+        created,
         "code-generation",
         birthField as string,
       )?.size,
     ).toBe(0);
     const bornBaseline = currentStageSourceBaseline(
-      born,
+      created,
       "code-generation",
       true,
     );

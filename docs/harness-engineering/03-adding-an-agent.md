@@ -200,7 +200,7 @@ one, see [Agent System: How to Modify an Agent](../reference/05-agent-system.md#
   the missing field.
 - Agents are returned alphabetically sorted by slug, so discovery order is
   identical on every platform.
-- Intent birth creates the empty space-level `aidlc/knowledge/` directory; it
+- Intent creation creates the empty space-level `aidlc/knowledge/` directory; it
   does not seed per-agent subdirectories or READMEs.
 - The statusline renders the display name from the derived metadata.
 

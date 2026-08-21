@@ -8,7 +8,7 @@
 // The engine reads workflow state (aidlc-docs/aidlc-state.md) and the compiled
 // stage graph (data/stage-graph.json), then emits EXACTLY ONE typed Directive
 // (JSON) to stdout. `next` mutates no workflow state itself (state md5 is
-// unchanged across a `next` call) — including birth: on a fresh workspace it
+// unchanged across a `next` call) - including creation: on a fresh workspace it
 // NAMES the deterministic `intent-create` move via a print directive (the
 // read-only-engine invariant), and the conductor runs that separate tool. The
 // directive's `kind` tells the conductor the single move to make next; the
@@ -824,7 +824,7 @@ interface ParsedFlags {
   readOnlyArgs?: string[]; // allowlisted trailing args for the read-only flag (e.g. --doctor --export --output <dir>)
   resume?: boolean; // --resume: continue an existing workflow directly
   single?: boolean; // --single: run ONE stage under a synthetic workflow id, never touching the main pointer
-  newIntent?: boolean; // --new-intent: the conductor confirmed new-work alongside an active intent → emit the SAME birth directive (with the --label seam) the fresh-start path uses, instead of constructing intent-create from SKILL.md prose
+  newIntent?: boolean; // --new-intent: the conductor confirmed new-work alongside an active intent → emit the SAME creation directive (with the --label seam) the fresh-start path uses, instead of constructing intent-create from SKILL.md prose
   intent?: string; // freeform request text (no leading --flag)
   workspaceCommand?: WorkspaceCommand; // leading workspace command (space/space-create/intent)
   pluginCommand?: Exclude<PluginCommand, { kind: "not-plugin" }>; // leading plugin noun: terminal list/sync/select/help/error
@@ -845,7 +845,7 @@ interface ParsedFlags {
 function parseNextFlags(args: string[]): ParsedFlags {
   // A SOLE bare `help` / `-h` token is a help REQUEST, not intent text. Without
   // this, the token falls into intentWords and the freeform funnel offers to
-  // birth an intent literally named "help" (fresh workspace) or silently
+  // create an intent literally named "help" (fresh workspace) or silently
   // advances the active stage (live workflow). Sole-token only: `help` inside a
   // longer description ("help me build auth") stays freeform intent text.
   // PARITY: classifyTerminalCommand (aidlc-lib.ts) mirrors this rule - the Kiro
@@ -985,19 +985,19 @@ function parseNextFlags(args: string[]): ParsedFlags {
 // loop ("repeat until done") dead-ends here with no cue that new, unrelated
 // work has an escape hatch. This is a HINT to the conductor, not an instruction
 // to act: starting a second intent is still gated on the SKILL's
-// recognise-vs-continue judgement plus the human "yes" offer (never auto-birth).
+// recognise-vs-continue judgement plus the human "yes" offer (never auto-create).
 // The leading space lets callers concatenate it onto their own reason text.
 const NEW_WORK_HINT =
   " If this input is genuinely NEW, unrelated work (not a follow-up to the " +
   "completed intent), don't stop here: offer to start a second intent, and on " +
   "the human's yes run `next --new-intent --scope <scope> \"<text>\"` (see the " +
-  "SKILL's new-work offer, never auto-birth).";
+  "SKILL's new-work offer, never auto-create).";
 
-// The workflow-birth print for a resolved scope on a fresh workspace (no intent
+// The workflow creation print for a resolved scope on a fresh workspace (no intent
 // record yet). A user who described what to build — `/aidlc "build the auth
 // service"`, the bare positional `next bugfix`, or `next --scope bugfix` — asked
-// to START a workflow; there is nothing to run until an intent is born, and
-// birth is a mutation, so `next` (read-only) NAMES the move as a
+// to START a workflow; there is nothing to run until an intent is created, and
+// creation is a mutation, so `next` (read-only) NAMES the move as a
 // run-then-continue print and the conductor runs it, then re-runs `next` to land
 // on the first stage. The named move is the deterministic `intent-create` handler
 // (mint UUIDv7, create the intent dir, append intents.json, set active-intent,
@@ -1005,7 +1005,7 @@ const NEW_WORK_HINT =
 // read-only-engine invariant is preserved: the routing tool names, a separate
 // deterministic tool mutates, the human's "start a new intent?" judgement gated
 // the get-here. Threads the freeform feature description (--arguments) so the
-// born intent's slug + state Project field carry it, plus --depth /
+// created intent's slug + state Project field carry it, plus --depth /
 // --test-strategy / --review. Shared by Branch 7b (valid-scope positional) and
 // Branch 9 (explicit --scope flag) so the explicit-naming shapes emit identical
 // directives. The harness dir is resolved through harnessDir() so the directive
@@ -1024,7 +1024,7 @@ function createPrintDirective(
     // The conductor (LLM) condenses the description into the short dir-name label
     // — the engine can't summarize. Name the missing --label in the directive so
     // the conductor adds it; the dir name becomes `<YYMMDD>-<label>`. (A bare run
-    // without --label still births a sane name by truncating --arguments.)
+    // without --label still creates a sane name by truncating --arguments.)
     cmd.push(`--label "<2-3 word kebab essence>"`);
     labelHint =
       ` Replace \`--label\` with a 2-3 word kebab essence of the description (e.g. "simple calc"), which becomes the readable folder name for this piece of work.`;
@@ -1032,7 +1032,7 @@ function createPrintDirective(
   if (flags.depth) cmd.push(`--depth ${flags.depth}`);
   if (flags.testStrategy) cmd.push(`--test-strategy ${flags.testStrategy}`);
   if (flags.review) cmd.push(`--review ${flags.review}`);
-  // Disclose the ceremony on the print: an explicitly named scope births
+  // Disclose the ceremony on the print: an explicitly named scope creates
   // directly (no confirm ask by design), so the stage/gate counts ride here.
   // Omit the parenthetical when the scope does not resolve (fixture trees).
   const clause = costClause(scope, projectDir);
@@ -1062,7 +1062,7 @@ function createPrintDirective(
 // conductor Tasks the composer agent, renders the proposal, and holds the
 // approve/edit/reject gate); it never dispatches or writes itself. Two modes:
 //   - front (no state file): compose a scope from the prompt (or a scan
-//     report) BEFORE birth. The composer proposes; on approval the conductor
+//     report) BEFORE creation. The composer proposes; on approval the conductor
 //     continues into the normal intent-create with the chosen scope.
 //   - in-flight (state file present): re-shape the RUNNING workflow's pending
 //     stages (SKIP / un-SKIP), which lands as suffix flips via the recompose
@@ -1091,11 +1091,11 @@ function composeDispatchDirective(
     );
     if (flags.intent) {
       parts.push(
-        `The proposal's required \`birthDescription\` MUST equal the original task text verbatim: ${JSON.stringify(flags.intent)}. On approval, pass it after the literal \`--\` delimiter as one shell-safe argv value; for this exact task the command is \`next --scope <scopeName> -- ${shellArg(flags.intent)}\`. Never use double quotes around untrusted task text and never use a bare \`next --scope <scopeName>\`, so shell metacharacters and flag-like descriptions stay literal and the born Project field preserves the real description.`,
+        `The proposal's required \`creationDescription\` MUST equal the original task text verbatim: ${JSON.stringify(flags.intent)}. On approval, pass it after the literal \`--\` delimiter as one shell-safe argv value; for this exact task the command is \`next --scope <scopeName> -- ${shellArg(flags.intent)}\`. Never use double quotes around untrusted task text and never use a bare \`next --scope <scopeName>\`, so shell metacharacters and flag-like descriptions stay literal and the created Project field preserves the real description.`,
       );
     } else {
       parts.push(
-        "The proposal MUST include a nonblank `birthDescription` grounded in the approved work. For report-driven composition, derive it from the report's actual findings; for a task-less front composition, derive it from the approved proposal. Never approve a proposal that would continue into a scope-only birth.",
+        "The proposal MUST include a nonblank `creationDescription` grounded in the approved work. For report-driven composition, derive it from the report's actual findings; for a task-less front composition, derive it from the approved proposal. Never approve a proposal that would continue into a scope-only creation.",
       );
     }
     if (flags.report) {
@@ -1111,7 +1111,7 @@ function composeDispatchDirective(
   }
   const proposalShape = inFlight
     ? "mode in-flight, the current scopeName, an ars block (the five component scores with method codekb|fallback), an arsRationale, the preserved full effective grid, exact changes.skip and changes.add arrays, a per-change rationale, a summary the strict validator computed, and two pre-rendered markdown tables (ARS scores with bands; per-stage decisions with reasoning)"
-    : "mode matched|custom, scopeName, a nonblank birthDescription, an ars block (the five component scores with method codekb|fallback), an arsRationale, the per-stage EXECUTE/SKIP grid, a per-SKIP rationale, a summary the validator computed, and two pre-rendered markdown tables (ARS scores with bands; per-stage decisions with reasoning)";
+    : "mode matched|custom, scopeName, a nonblank creationDescription, an ars block (the five component scores with method codekb|fallback), an arsRationale, the per-stage EXECUTE/SKIP grid, a per-SKIP rationale, a summary the validator computed, and two pre-rendered markdown tables (ARS scores with bands; per-stage decisions with reasoning)";
   const modeContract = inFlight
     ? "the composer's mode is IN-FLIGHT and FINAL for the returned delta: nearest_stock is advisory, the running scope and frozen actions stay unchanged, and approval uses only changes.skip/changes.add through recompose; neither presentation nor comparison with stock grids may alter that delta"
     : "the composer's mode is FINAL for the grid it returned: it routed matched-vs-custom solely on the final proposal validator's nearest_stock distance, a matched proposal already carries the revalidated stock grid verbatim, and neither presentation nor your own comparison of grids ever changes the verdict - never re-derive it, and a MATCHED proposal writes no scope file; if the human edits that stock grid, re-dispatch the composer, which must convert it to CUSTOM and revalidate before re-presenting";
@@ -1130,22 +1130,22 @@ function composeDispatchDirective(
   return directive;
 }
 
-// Guard the birth gate against a DUPLICATE intent on a fresh clone of a
-// multi-intent workspace. A no-state birth arm (Branch 7b / 9a) fires purely on
+// Guard the creation gate against a DUPLICATE intent on a fresh clone of a
+// multi-intent workspace. A no-state creation arm (Branch 7b / 9a) fires purely on
 // `!stateContent`, but stateContent is empty in TWO different worlds: a truly
-// empty workspace (zero intents → birth is correct), AND a workspace that
+// empty workspace (zero intents → creation is correct), AND a workspace that
 // already holds intents whose active-intent CURSOR is unset. The cursor
 // (`aidlc/spaces/<sp>/intents/active-intent`) is gitignored per-user state, so a
 // fresh clone of a >1-intent workspace lands with records on disk but no cursor
 // → activeIntent() returns null (lib:357-361) → stateContent is empty → the
-// birth gate would mint a SECOND intent over the top of the existing ones
-// (violates the P4 hazard "auto-birth fires only on ZERO intents").
+// creation gate would mint a SECOND intent over the top of the existing ones
+// (violates the P4 hazard "auto-create fires only on ZERO intents").
 //
 // This consults the deterministic query layer (listIntents over the active
 // space) and, when intents EXIST but none is flagged active, NAMES the
 // disambiguation move as an `ask` directive that lists the existing intents and
-// asks the human to pick one via `/aidlc intent <slug>` — instead of birthing.
-// Returns null when birth should proceed unchanged (zero intents in the space,
+// asks the human to pick one via `/aidlc intent <slug>` - instead of creating.
+// Returns null when creation should proceed unchanged (zero intents in the space,
 // or one already resolved active — the latter only when this is reached with an
 // explicit scope/intent that didn't load a cursor'd state). The engine stays
 // read-only: it emits a directive, it does not touch the cursor.
@@ -1155,11 +1155,11 @@ function intentPickPromptIfRecordsExist(
   const selection = engineSelection(projectDir);
   const space = selection.space;
   const intents = listIntents(projectDir, space, selection.intent);
-  if (intents.length === 0) return null; // zero intents → birth is correct
-  if (intents.some((i) => i.active)) return null; // a cursor already resolves → not a birth path
+  if (intents.length === 0) return null; // zero intents → creation is correct
+  if (intents.some((i) => i.active)) return null; // a cursor already resolves → not a creation path
   // Records exist but no cursor is set (the fresh-clone / >1-no-cursor case).
   // NAME the existing intents and ask the human to select one rather than
-  // birthing a duplicate. Order follows listIntents (registry order).
+  // creating a duplicate. Order follows listIntents (registry order).
   const slugs = intents.map((i) => i.slug);
   const list = slugs.map((s) => `\`${s}\``).join(", ");
   const spaceLabel = space === "default" ? "" : ` in space "${space}"`;
@@ -1229,7 +1229,7 @@ function resolveScope(
 // <record>/<phase>/<stage>/memory.md diary). `recordPrefix` is the RELATIVE
 // per-intent record dir (aidlc/spaces/<space>/intents/<slug>-<id8>) the engine
 // threads in from the active intent (relativeRecordDir), or null → the bare space
-// record prefix (relativeSpaceRecordPrefix — a pre-birth shell with no intent
+// record prefix (relativeSpaceRecordPrefix - a pre-creation shell with no intent
 // yet). These are agent-consumed RELATIVE paths the conductor resolves against
 // the workspace root; the engine only joins them to projectDir for deterministic
 // diary bootstrap. Re-rooting remains a pure prefix swap, not a route through
@@ -2956,7 +2956,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // resolveProjectDir/loadState: a switch works whether or not a workflow is
   // active, and placing it later would let e.g. `space teamB` fall into the
   // happy-path branch and advance the WRONG intent. The shared parser decides
-  // list/switch/create/birth/error semantics, then this adapter renders the
+  // list/switch/create/creation/error semantics, then this adapter renders the
   // deterministic utility argv. Leading-token precedence is deliberate: a
   // `--status` after a workspace noun is that command's token, not a mode
   // switch. The harness dir is resolved through harnessDir() so the directive
@@ -3047,7 +3047,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // The active intent's RELATIVE record-dir prefix (aidlc/spaces/<sp>/intents/
   // <slug>-<id8>), threaded into every run-stage directive so the conductor's
   // artifact/diary paths resolve under the active intent. null → the flat legacy
-  // `aidlc-docs` prefix (a pre-workspace project not yet migrated/born). Resolved
+  // `aidlc-docs` prefix (a pre-workspace project not yet migrated/created). Resolved
   // once here where projectDir is known; the resolvers themselves take no pd.
   const recordPrefix = engineRelativeRecordDir(pd);
   // The space-level codekb context, resolved on the SAME live projectDir as
@@ -3112,7 +3112,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
 
   // (Branch 3 — the legacy `--init` flag — retired in P4. There is no longer a
   // user-facing `/aidlc --init`: the workspace shell ships in dist/ (SEED) and
-  // the first intent is BORN, not scaffolded. Birth flows through the
+  // the first intent is CREATED, not scaffolded. Creation flows through the
   // createPrintDirective seam below — Branch 7b/9a name the `intent-create` move
   // for a resolved scope on a fresh workspace; Branch 8 surfaces the freeform
   // scope-confirm `ask` first. No `--init`/`--force` flag reaches the engine.)
@@ -3174,7 +3174,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // verb-intercept hook run `compose` off-band as a terminal aidlc-utility
   // subcommand and arm the roll-forward latch - compose is workflow work the
   // conductor dispatches). Two modes split on the state file: no state = the
-  // FRONT composer (propose a scope before birth); state present = the
+  // FRONT composer (propose a scope before creation); state present = the
   // IN-FLIGHT composer (propose pending-stage flips over the running
   // workflow), which is what keeps a bare mid-flow `compose` from falling
   // through to Branch 10 and silently advancing the current stage. Precedes
@@ -3197,14 +3197,15 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // from SKILL.md prose — a weak signal the live model dropped the --label seam on
   // (the 2nd/3rd intents truncated where the 1st, driven by this directive, got a
   // clean LLM label) — the engine emits the SAME createPrintDirective the fresh-
-  // start path (Branch 7b/9a) uses, so BOTH births carry the --label placeholder
-  // identically. The human-yes gate already happened conductor-side; this is the
-  // birth print that performs it. Unlike the fresh-start tail, the new-intent
-  // directive tells the conductor to STOP after birth and hand off to a fresh
-  // session (birthPrintDirective branches on flags.newIntent): a second, unrelated
+  // start path (Branch 7b/9a) uses, so BOTH creation directives carry the --label
+  // placeholder identically. The human-yes gate already happened conductor-side;
+  // this is the
+  // creation print that performs it. Unlike the fresh-start tail, the new-intent
+  // directive tells the conductor to STOP after creation and hand off to a fresh
+  // session (createPrintDirective branches on flags.newIntent): a second, unrelated
   // intent should not inherit the completed intent's session context. Precedes
-  // every continuation branch so an active intent's state never routes the
-  // new-work birth into "advance the current stage". The freeform new-work text
+  // every continuation branch so an active intent's state never routes new-work
+  // intent creation to "advance the current stage". The freeform new-work text
   // rides in flags.intent (the same slot Branch 9a threads as the description).
   if (flags.newIntent) {
     const description = flags.intent?.trim();
@@ -3325,18 +3326,18 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // Branch 7b — positional scope with no workflow yet. `/aidlc bugfix` and
   // `/aidlc bugfix Fix duplicate todos` both name a scope; the parser peels the
   // leading valid token into positionalScope and leaves any trailing prose in
-  // flags.intent. Birth the positional scope and preserve that prose as the
+  // flags.intent. Create an intent with the positional scope and preserve that prose as the
   // intent-create --arguments value. An explicit --scope outranks this branch
-  // and reaches Branch 9a; a no-state --resume never births.
+  // and reaches Branch 9a; a no-state --resume never creates.
   if (
     !stateContent &&
     flags.positionalScope &&
     !flags.scope &&
     !flags.resume
   ) {
-    // Don't birth a duplicate over a multi-intent workspace whose cursor is
+    // Don't create a duplicate over a multi-intent workspace whose cursor is
     // unset (fresh clone) — prompt the human to pick an existing intent. null →
-    // zero intents → birth as before.
+    // zero intents → creation as before.
     const pick = intentPickPromptIfRecordsExist(pd);
     if (pick) {
       emit(pick);
@@ -3407,16 +3408,16 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   //
   // 9a — an explicit `--scope <valid>` flag (source === "flag"; an invalid
   // flag already died at Branch 3b). Naming a scope on a fresh workspace is a
-  // request to START a workflow — the same birth move as Branch 7b's
+  // request to START a workflow - the same creation move as Branch 7b's
   // valid-scope positional, reached here because the flag passes Branch 3b
   // validation and no jump/init branch fired. Scaffolding is a
   // mutation, so the engine names the init move (run-then-continue print)
-  // rather than performing it. A no-state `--resume` never births: resuming
+  // rather than performing it. A no-state `--resume` never creates: resuming
   // claims a workflow already exists, so it falls to the 9b error.
   if (!stateContent && source === "flag" && !flags.resume) {
     // Same fresh-clone guard as Branch 7b: if intents already exist in the
-    // active space with no cursor set, prompt to pick one instead of birthing a
-    // duplicate. null → zero intents → birth as before.
+    // active space with no cursor set, prompt to pick one instead of creating a
+    // duplicate. null → zero intents → creation as before.
     const pick = intentPickPromptIfRecordsExist(pd);
     if (pick) {
       emit(pick);
@@ -3424,19 +3425,19 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     }
     // flags.intent here is freeform feature text typed alongside an explicit
     // --scope (e.g. `/aidlc --scope feature "build the auth service"`) — thread
-    // it as the born intent's description; a bare `--scope <s>` carries none.
+    // it as the created intent's description; a bare `--scope <s>` carries none.
     emit(createPrintDirective(scope, flags, pd, flags.intent));
     return;
   }
   //
   // 9b — no state and NO explicitly named scope (the resolved scope came from
-  // env or the default — never a birth signal on its own). The engine cannot
+  // env or the default - never a creation signal on its own). The engine cannot
   // read a position to advance from, and creating one is a mutation (init's
   // job). Emit a clear error rather than guessing — pure read. The message
   // names the two explicit moves that DO start a workflow; it must not imply
   // the user already made one (the pre-hardening wording told a user who had
   // just typed `/aidlc <scope>` to type exactly that — circular now that a
-  // named scope births).
+  // named scope creates).
   if (!stateContent) {
     emit(errorDirective(
       "No workflow state found (no active intent). " +

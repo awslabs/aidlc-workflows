@@ -11,7 +11,7 @@
 //     gates" for the MATCHED scope,
 //   - the compose offer carries the express/classic/feature example trio,
 //     computed from the grid, and still avoids the t198 `"feature" workflow` trap,
-//   - the explicit-scope birth print carries the cost parenthetical, and
+//   - the explicit-scope creation print carries the cost parenthetical, and
 //   - scope-change stdout carries the "Approval gates:" line (greenfield
 //     reverse-engineering adjustment applied, matching the handler).
 //
@@ -165,10 +165,10 @@ describe("t214 compose offer carries the example counts (no feature-workflow tra
   });
 });
 
-describe("t214 birth print carries the cost parenthetical", () => {
+describe("t214 creation print carries the cost parenthetical", () => {
   test("next bugfix prints intent-create AND the computed cost", () => {
     proj = createTestProject();
-    // A genuinely empty workspace births instead of prompting to pick (t198:208).
+    // A genuinely empty workspace creates instead of prompting to pick (t198:208).
     removeWorkspaceRecord(proj);
     const d = directiveOf(runNext(proj, ["bugfix"]).out);
     expect(d.kind).toBe("print");

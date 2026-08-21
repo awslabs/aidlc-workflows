@@ -100,24 +100,24 @@ function countCompletedCheckboxes(stateText: string): number {
   return stateText.split("\n").filter((l) => /^- \[x\]/.test(l)).length;
 }
 
-describe("t70 /aidlc birth on a greenfield stub (sdk)", () => {
+describe("t70 /aidlc creation on a greenfield stub (sdk)", () => {
   // -------------------------------------------------------------------------
   // P4: the user-facing --init is retired; naming a scope on a fresh workspace
-  // BIRTHS the first intent (the engine NAMES intent-create, the conductor runs
-  // it). The deterministic birth tool classifies the greenfield-todo stub and
-  // writes aidlc-state.md into the BORN intent's record. Every .sh state-grep is
+  // CREATES the first intent (the engine NAMES intent-create, the conductor runs
+  // it). The deterministic creation tool classifies the greenfield-todo stub and
+  // writes aidlc-state.md into the CREATED intent's record. Every .sh state-grep is
   // re-expressed against the on-disk per-intent state fields / the typed audit
-  // event / the verbatim tool stdout. No seeded state (a clean greenfield birth,
+  // event / the verbatim tool stdout. No seeded state (a clean greenfield creation,
   // not a migration).
   // -------------------------------------------------------------------------
   test(
-    "greenfield classification writes Project Type=Greenfield to the born intent's state; WORKSPACE_SCANNED fires; no gate",
+    "greenfield classification writes Project Type=Greenfield to the created intent's state; WORKSPACE_SCANNED fires; no gate",
     async () => {
       // A fresh greenfield-todo stub on a CLEAN workspace — noAidlcDocs strips
-      // the default seeded intent record so the engine AUTO-BIRTHS a new intent
+      // the default seeded intent record so the engine AUTO-CREATES a new intent
       // over the stub and the scan fires (a pre-seeded record would make the
       // engine resolve the existing intent and ask to pick one, skipping the
-      // scan — same fix as t71-brownfield). The birth path has no
+      // scan - same fix as t71-brownfield). The creation path has no
       // gate (it prints state and STOPs).
       const proj = setupIntegrationProject({
         withGreenfieldStub: true,

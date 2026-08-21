@@ -138,7 +138,7 @@ function recordRequirementsReview(proj: string): void {
   }
 }
 
-// P4: intent-create (which runInit triggers) writes state into the born intent's
+// P4: intent-create (which runInit triggers) writes state into the created intent's
 // per-intent record dir (aidlc/spaces/<space>/intents/<slug>-<id8>/), not the flat
 // aidlc-docs/. Resolve the record dir from the active-space + active-intent
 // cursors, falling back to the flat layout for a seeded-flat project (the many
@@ -159,11 +159,11 @@ function recordDirOf(proj: string): string {
   return join(proj, "aidlc-docs");
 }
 const stateMd = (proj: string) => join(recordDirOf(proj), "aidlc-state.md");
-// Audit path for appending: a born record has per-clone shards under
+// Audit path for appending: a created record has per-clone shards under
 // <record>/audit/<host>-<clone-id>.md. The fixture pins a stable clone-id, so a
 // spawned tool resolves the DETERMINISTIC shard seededAuditShard() returns — a
 // test that pre-seeds a shard header must target that same path so the tool's
-// own append lands in it. Prefer an already-present shard (a born record may
+// own append lands in it. Prefer an already-present shard (a created record may
 // carry one) but default to the deterministic fixture shard.
 function auditMd(proj: string): string {
   const auditDir = join(recordDirOf(proj), "audit");
@@ -177,7 +177,7 @@ function auditMd(proj: string): string {
   return seededAuditShard(proj);
 }
 const readState = (proj: string) => readFileSync(stateMd(proj), "utf-8");
-// Concatenate every audit shard under the born record's audit/ dir (Stage B);
+// Concatenate every audit shard under the created record's audit/ dir (Stage B);
 // fall back to the flat aidlc-docs/audit.md for a seeded-flat / pre-migration
 // project. Matches the tool's own readAllAuditShards resolution.
 function readAudit(proj: string): string {

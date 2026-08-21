@@ -255,7 +255,7 @@ function buildRightSide(
 //     (listSpaces() always reports at least the always-present "default", so a
 //     single-team user — exactly one space — never sees the word "space");
 //   - the intent slug renders whenever a per-intent record is active. On the
-//     flat-legacy / pre-auto-birth layout activeIntent() returns null, so the
+//     flat-legacy / pre-auto-create layout activeIntent() returns null, so the
 //     prefix is empty and the line reads exactly as it did before the workspace
 //     move (a flat project is unchanged).
 // The intent SLUG comes from the registry (rename-stable) when the active

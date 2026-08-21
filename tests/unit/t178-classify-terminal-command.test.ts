@@ -18,7 +18,7 @@
 //     source: "read-only-flag" } — NO `arg` field.
 //   - A WORKSPACE_VERBS token matches ONLY at index 0 (the `i === 0` guard).
 //     A leading verb returns { subcommand: verb, source: "workspace-verb" },
-//     with the shared workspace parser deciding list/switch/create/birth forms.
+//     with the shared workspace parser deciding list/switch/create/creation forms.
 //   - A leading workspace command wins over a later read-only-looking token;
 //     that token belongs to the workspace command argv, not global mode
 //     selection.
@@ -161,7 +161,7 @@ describe("classifyTerminalCommand() — workspace verbs (leading token only)", (
   test("intent help / space help classify as the help subcommand, not a switch", () => {
     // "help" after a nav verb is a help REQUEST: no per-verb help exists, and
     // treating it as a record name dies with an error that historically steered
-    // the conductor into birthing an intent. Both route to global help. Same
+    // the conductor into creating an intent. Both route to global help. Same
     // for the -h spelling.
     expect(classifyTerminalCommand(["intent", "help"])).toEqual({
       subcommand: "help",
@@ -205,7 +205,7 @@ describe("classifyTerminalCommand() - sole bare help tokens are terminal", () =>
   test("a sole bare `help` or `-h` classifies as the help subcommand", () => {
     // Neither is in READ_ONLY_FLAGS (only --help is); without the sole-token
     // special case they would read as freeform intent text and the funnel
-    // would offer to birth an intent literally named "help".
+    // would offer to create an intent literally named "help".
     expect(classifyTerminalCommand(["help"])).toEqual({
       subcommand: "help",
       source: "read-only-flag",
@@ -312,7 +312,7 @@ describe("classifyTerminalCommand() - knowledge (DocumentKB) verbs", () => {
     }
     // The whole point of the noun: an unrecognized verb must NOT become prompt
     // text. A null here would silently hand `knowledge remove` to the conductor
-    // as a request to birth an intent.
+    // as a request to create an intent.
     for (const form of [["knowledge"], ["knowledge", "remove"], ["knowledge", "delete"]]) {
       expect(classifyTerminalCommand(form), form.join(" ")).toMatchObject({
         subcommand: "error",
@@ -349,7 +349,7 @@ describe("classifyTerminalCommand() - marker-led shapes stay freeform", () => {
   // ("/aidlc space out the rollout plan" became a switch to space "out"), so
   // marker-stripping belongs to the SKILL.md forwarding prose. Anything that
   // still arrives marker-led lands in the freeform ask funnel - a safe human
-  // gate, never a birth.
+  // gate, never a creation.
   test("a marker-led blob or token sequence returns null (freeform)", () => {
     expect(classifyTerminalCommand(["/aidlc intent help"])).toBeNull();
     expect(classifyTerminalCommand(["$aidlc --status"])).toBeNull();

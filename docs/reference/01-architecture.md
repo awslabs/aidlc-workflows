@@ -439,7 +439,7 @@ binding then precede the two shared per-user cursors:
 - **Intent** - precedence `explicit arg > session binding >
   aidlc/spaces/<space>/intents/active-intent cursor (if it names a real record
   holding aidlc-state.md) > lone-intent > null`. A `null` intent
-  means "no record yet" - the signal the orchestrator uses to auto-birth the
+  means "no record yet" - the signal the orchestrator uses to auto-creation the
   first intent.
 
 Session bindings live at

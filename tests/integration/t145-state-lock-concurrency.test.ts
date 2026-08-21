@@ -60,11 +60,11 @@ const LOG_TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-lo
 
 let proj: string;
 
-// P4: init now BIRTHS a per-intent record — state lands at
+// P4: init now CREATES a per-intent record - state lands at
 // aidlc/spaces/<space>/intents/<slug>-<id8>/aidlc-state.md and audit at
 // <record>/audit/<host>-<clone>.md (per-clone shards), NOT the flat aidlc-docs/.
-// Resolve the born record from the active-space + active-intent cursors (flat
-// fallback for a not-yet-born project). The concurrency under test is unchanged
+// Resolve the created record from the active-space + active-intent cursors (flat
+// fallback for a not-yet-created project). The concurrency under test is unchanged
 // — the per-intent lock serialises the concurrent writers exactly as before.
 function recordDirOf(p: string): string {
   const spaceCursor = join(p, "aidlc", "active-space");

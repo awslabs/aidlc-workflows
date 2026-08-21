@@ -338,7 +338,7 @@ describe("t-tui-custom-harness (the {sdk,tui} two-driver journey)", () => {
   // -------------------------------------------------------------------------
 
   // ===================== sdk journey (surface 1) =========================
-  // Drive birth-init through the real SDK prompt. The SDK surface asserts the
+  // Drive creation-init through the real SDK prompt. The SDK surface asserts the
   // invariant routing seam: a custom scope is accepted by the live conductor,
   // the init tool records it, and the first post-init stage is the custom head
   // stage (`schema-snapshot`). We stop immediately after that Bash tool_result;
@@ -346,7 +346,7 @@ describe("t-tui-custom-harness (the {sdk,tui} two-driver journey)", () => {
   test.skipIf(SKIP_REASON !== null)(
     `[sdk] the custom scope initializes and routes to the custom workflow in a real run${SKIP_REASON ? ` — SKIP: ${SKIP_REASON}` : ""}`,
     async () => {
-      // This journey proves workflow birth, so start without the fixture
+      // This journey proves workflow creation, so start without the fixture
       // registry-only intent. A registry row whose record has no state is an
       // intentional "pick/repair an existing intent" path, not a fresh init.
       const sdkProj = setupTuiProject({
@@ -567,7 +567,7 @@ describe("t-tui-custom-harness (the {sdk,tui} two-driver journey)", () => {
         expect(ourFire).toBeDefined();
 
         // --- THE CHAIN: both artefacts exist; the tail consumes the head ------
-        // Resolve the CONCRETE born-intent record (the *_OUTPUT_REL constants
+        // Resolve the CONCRETE created-intent record (the *_OUTPUT_REL constants
         // carry a `*` for the runtime-minted intent dir, used by --until-file; the
         // existence reads need the resolved record).
         const headArtifact = join(recordDirFor(tuiProj), SNAPSHOT_STAGE_PHASE, SNAPSHOT_STAGE_SLUG, `${SNAPSHOT_ARTIFACT}.md`);

@@ -8,7 +8,7 @@
 //     (listSpaces() always reports at least the always-present "default", so a
 //     single-team user — exactly one space — never sees the word "space");
 //   - the intent SLUG renders whenever a per-intent record is active; on the
-//     flat-legacy / pre-auto-birth layout activeIntent() returns null, so the
+//     flat-legacy / pre-auto-create layout activeIntent() returns null, so the
 //     prefix is empty and the line reads exactly as it did before the move.
 //
 // WHY CLI (process-boundary, not in-process): the SUBJECT is a hook. The render
@@ -26,10 +26,10 @@
 // the test tracks the real layout, then overwrite the record's aidlc-state.md
 // with a phase-bearing body so the render reaches the orientation branch.
 //
-// Empty-state: a project with no record (no birth) hits the hook's :233 no-op
+// Empty-state: a project with no record (no creation) hits the hook's :233 no-op
 // gate (stateFilePath resolves the flat fallback, which is absent) and paints
 // the bare "[AIDLC] ready" — proving the prefix never leaks onto the no-workflow
-// line and the pre-auto-birth workspace renders cleanly, not an error.
+// line and the pre-auto-create workspace renders cleanly, not an error.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
@@ -69,17 +69,17 @@ function runStatusline(p: string): string {
 }
 
 /**
- * Birth an intent in `space` and write a CONSTRUCTION-phase state body into its
+ * Create an intent in `space` and write a CONSTRUCTION-phase state body into its
  * record dir so the statusline reaches the orientation render branch. Returns
- * the born intent's slug. The state body mirrors the t61 seedState shape (a
+ * the created intent's slug. The state body mirrors the t61 seedState shape (a
  * phase + stage so phaseProgress/extractField resolve a non-"ready" line).
  */
 function seedIntent(p: string, slug: string, space: string): void {
-  const born = createIntent(p, slug, space, "feature");
+  const created = createIntent(p, slug, space, "feature");
   // createIntent leaves a header-only stub; overwrite with a phase-bearing body
-  // (stateFilePath resolves the active intent's record dir → born.recordDir).
+  // (stateFilePath resolves the active intent's record dir → created.recordDir).
   writeFileSync(
-    stateFilePath(p, born.dirName, space),
+    stateFilePath(p, created.dirName, space),
     `# AI-DLC State Tracking
 ## Current Status
 - **Lifecycle Phase**: CONSTRUCTION
@@ -103,7 +103,7 @@ describe("t168 statusline orientation prefix (mechanism cli — spawned hook + p
   });
 
   test("two spaces: shows `<space> · <intent> · <phase>` once >1 space exists", () => {
-    // Birth one intent in "default", then create a second space "teamB" with an
+    // Create one intent in "default", then create a second space "teamB" with an
     // active intent and point both cursors at it. Now listSpaces().length === 2,
     // so the space token appears.
     seedIntent(proj, "checkout-flow", "default");
@@ -115,7 +115,7 @@ describe("t168 statusline orientation prefix (mechanism cli — spawned hook + p
   });
 
   test("empty state (no record) paints the bare `[AIDLC] ready` — no prefix leak", () => {
-    // No birth: stateFilePath resolves the flat fallback (absent) → the hook's
+    // No creation: stateFilePath resolves the flat fallback (absent) → the hook's
     // no-state gate paints "[AIDLC] ready", with no orientation prefix.
     const out = runStatusline(proj);
     expect(out).toContain("[AIDLC] ready");
@@ -123,7 +123,7 @@ describe("t168 statusline orientation prefix (mechanism cli — spawned hook + p
   });
 
   test("a record with no resolvable phase still paints bare `[AIDLC] ready` (graceful)", () => {
-    // Birth leaves a header-only stub (no Lifecycle Phase) — the hook's !phase
+    // Creation leaves a header-only stub (no Lifecycle Phase) - the hook's !phase
     // gate fires BEFORE the orientation prefix is computed, so the no-workflow
     // line stays clean even with an active record.
     createIntent(proj, "stub-only", "default");

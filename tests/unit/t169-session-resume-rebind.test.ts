@@ -83,7 +83,7 @@ function fire(p: string, source: string, sessionId: string): FireResult {
 describe("t169 session-start resume rebind (mechanism cli — spawned hook + cursor drift)", () => {
   test("startup stamps the working intent; resume after a cursor move OFFERS a rebind", () => {
     // Two real intents in the default space. createIntent leaves the cursor on
-    // the LAST born (export-bug). Move it to auth-service so the conversation
+    // the LAST created (export-bug). Move it to auth-service so the conversation
     // starts bound to auth-service.
     const a = createIntent(proj, "auth-service", "default", "feature");
     const b = createIntent(proj, "export-bug", "default", "feature");
@@ -178,7 +178,7 @@ describe("t169 session-start resume rebind (mechanism cli — spawned hook + cur
   });
 
   test("flat-legacy project (no per-intent record) never offers a rebind", () => {
-    // No birth — the project is flat-legacy (activeIntentUuid → null). Seed a
+    // No creation - the project is flat-legacy (activeIntentUuid → null). Seed a
     // flat state file so the hook passes its no-state gate, then fire resume.
     mkdirSync(join(proj, "aidlc-docs"), { recursive: true });
     writeFileSync(

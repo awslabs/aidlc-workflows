@@ -34,7 +34,7 @@
 // EVERY step against a fresh `list --json`, so a failure localises to the
 // step that broke it rather than surfacing only at the end.
 //
-// Mechanism: real filesystem, real subprocesses, real intent birth via
+// Mechanism: real filesystem, real subprocesses, real intent creation via
 // `aidlc-utility.ts intent-create` (a hand-written intents.json would let the
 // test agree with a fiction). Generous timeouts: this spawns dozens of
 // processes, and the oversized-file phase alone writes >32 MiB.
@@ -272,7 +272,7 @@ describe("t293 the documented workflow, end to end, through the public dispatche
       const id = (onboarded.indexed as { id: string }[])[0].id;
       checkInvariants(p, "after onboard policy.md");
 
-      // 7. associate to a real intent (born via aidlc-utility.ts intent-create),
+      // 7. associate to a real intent (created via aidlc-utility.ts intent-create),
       // then dissociate.
       const intentUuid = intentCreate(p, "auth");
       const assoc = run(p, "associate policy.md to auth", ["associate", id, "--intent", "auth"]);

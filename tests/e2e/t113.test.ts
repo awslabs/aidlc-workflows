@@ -69,7 +69,7 @@ import {
   cleanupTestProject,
   createTestProject,
 } from "../harness/fixtures.ts";
-// P4: audit is sharded per clone under the born intent's record; read the
+// P4: audit is sharded per clone under the created intent's record; read the
 // merged shards via the shipped helper (default-resolves the active intent).
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
@@ -172,7 +172,7 @@ function countEvent(seq: string[], type: string): number {
 }
 
 // Drive a complete bugfix workflow once; return the project dir (audit is read
-// from the born intent's shards via readAllAuditShards(proj)). Bootstrap via
+// from the created intent's shards via readAllAuditShards(proj)). Bootstrap via
 // init (emits WORKFLOW_STARTED + init phase + PHASE_SKIPPED for Ideation and
 // pre-completes the 3 init stages), then walk the remaining EXECUTE stages.
 function driveBugfixToCompletion(): { proj: string } {
