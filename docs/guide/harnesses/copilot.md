@@ -150,7 +150,7 @@ git checkout v2
   carry no per-call agent field; the adapter brackets delegations via
   SubagentStart/SubagentStop (including VS Code's `agent_type`/`agent_id`
   fields) and forwards the identity when exactly one subagent is active.
-  Ambiguous overlap fails open for that call (the §12a prose bound still
+  Ambiguous overlap fails open for that call (the reviewer-module prose bound still
   governs).
 - **Personas carry no `model:` pin.** The two surfaces disagree on model
   value syntax (the CLI forwards frontmatter strings verbatim to the BYOK

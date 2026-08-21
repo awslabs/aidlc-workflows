@@ -1,7 +1,7 @@
 // t146-core-hygiene: core/ prose carries the {{HARNESS_DIR}} token, never a raw
 // harness-dir path literal — except a small, named carve-out set.
 //
-// covers: file:core/aidlc-common/protocols/stage-protocol.md
+// covers: file:core/aidlc-common/protocols/stage-protocol.md, file:core/aidlc-common/protocols/stage-protocol-reviewer.md
 //
 // WHAT. The dist-unified keystone (MR-1) made core/ harness-neutral: every
 // path that names the harness directory in .md prose is written
@@ -20,6 +20,8 @@
 //   - stage-protocol.md's CWD-drift note says "on Claude Code,
 //     $CLAUDE_PROJECT_DIR/.claude/tools/" — a Claude-Code-specific example, true
 //     only for that harness.
+//   - stage-protocol-reviewer.md preserves the original Codex reviewer-binding
+//     clause verbatim, including the literal `.codex/agents/` resolution path.
 // Both are exactly what survives the proven anchored migration by NON-MATCH
 // (the anchors only rewrite `.claude/<subdir>` path forms), so this carve-out
 // list is the same set the packager and the kiro/codex dist trees already prove.
@@ -47,6 +49,15 @@ function isCarvedOut(relPath: string, line: string): boolean {
   if (
     relPath === "aidlc-common/protocols/stage-protocol.md" &&
     line.includes("$CLAUDE_PROJECT_DIR/.claude/tools/")
+  ) {
+    return true;
+  }
+  // Reviewer module's verbatim Codex harness binding.
+  if (
+    relPath === "aidlc-common/protocols/stage-protocol-reviewer.md" &&
+    line.includes(
+      "the harness resolves its `.codex/agents/aidlc-<role>-agent.toml`",
+    )
   ) {
     return true;
   }

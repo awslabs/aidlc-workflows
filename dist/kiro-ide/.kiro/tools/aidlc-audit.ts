@@ -102,7 +102,7 @@ const VALID_EVENT_TYPES = new Set([
   "REVIEWER_SCOPE_BLOCKED",
   // Terminal-receipt write-freeze enforcement (hook-emitted): a declared
   // produces-artifact write was refused because it would invalidate a fresh
-  // READY review receipt before the gate (stage-protocol §12a terminal
+  // READY review receipt before the gate (stage-protocol-reviewer §12a terminal
   // ordering). No bracket characters in this comment: t47 slices the array
   // literal at the first closing bracket after the const name.
   "REVIEW_FREEZE_BLOCKED",

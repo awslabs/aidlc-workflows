@@ -50,7 +50,7 @@ demands. The shipped default lives in the org rule you author at
 (`org.md:28-42`). Read it as the framework's stance:
 
 - The **walking-skeleton Bolt runs first** for greenfield scopes — `mvp`,
-  `enterprise`, `feature`, `poc`, `workshop`, `infra`. Bolt 1 is solo and gated,
+  `enterprise`, `feature`, `poc`, `classic`, `workshop`, `infra`. Bolt 1 is solo and gated,
   and the user approves it before the remaining Bolts run.
 - The **skeleton ceremony is skipped** for incremental scopes — `bugfix`,
   `refactor`, `security-patch`. There is nothing to bootstrap on an existing
@@ -143,8 +143,8 @@ functional-design with zero files. An untagged Unit keeps the full matrix.
 once at the end across everything, so they are not part of the per-Unit fan-out.)
 
 **This parallel surface exists only for the scopes where `units-generation`
-runs** — `enterprise`, `feature`, `mvp`, and `workshop`. The incremental scopes
-(`bugfix`, `refactor`, `security-patch`) and `poc`/`infra` never run
+runs** — `enterprise`, `feature`, `mvp`, `classic`, and `workshop`. The incremental scopes
+(`bugfix`, `refactor`, `security-patch`) and `poc`/`infra`/`express` never run
 `units-generation`, so they produce no edge block, carry no `bolt_dag`, and run
 Construction single-pass with nothing for the swarm to fan out across. Shape the
 swarm where the work is genuinely multi-Unit, and treat hands-off Construction as
@@ -238,7 +238,7 @@ driver seam contract is in
 
 One judgment never moves with the driver: a failure **always halts and
 re-engages the human**, regardless of autonomy mode, per
-`aidlc-common/protocols/stage-protocol.md:125` ("Halt-and-ask on failure"). When
+`aidlc-common/protocols/stage-protocol-construction.md` ("Halt-and-ask on failure"). When
 the referee's `finalize` returns its exit-2 envelope, the conductor takes the
 baton back to a human. Hands-off mode removes the happy-path gates while keeping
 the failure halt loud.

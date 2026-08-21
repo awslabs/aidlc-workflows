@@ -199,6 +199,8 @@ function logWorktreeReview(proj: string, unit: string): void {
         : `# ${name}\n`;
     if (!existsSync(artifact)) writeFileSync(artifact, body);
   }
+  const traceability = join(dir, "traceability.json");
+  if (!existsSync(traceability)) writeFileSync(traceability, "{}\n");
   for (const terminal of [false, true]) {
     const args = [
       LOG_TOOL,

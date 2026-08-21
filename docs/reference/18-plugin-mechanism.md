@@ -171,8 +171,8 @@ disabled plugins remain on disk, but they are not valid runtime scopes until the
 plugin is selected again. If core is disabled and exactly one plugin scope owner
 is enabled, freeform/default scope fallback uses that plugin's first scope
 alphabetically. If multiple plugin scope owners are enabled and core's
-`feature` fallback is unavailable, the orchestrator errors and asks for an
-explicit `--scope`.
+preferred `classic` fallback is unavailable, the orchestrator errors and
+asks for an explicit `--scope`.
 
 Disabling a plugin also removes what it merged into core stages, not just its
 own files. Compose records the structural adds it actually applied (produces /
@@ -333,7 +333,7 @@ under `scopes/<plugin>-<name>.md`, with frontmatter `name` equal to the filename
 stem and `plugin: <plugin>`. Compose copies it into `<harness>/scopes/` without
 clobbering. Membership on plugin-authored stages works through those stages'
 `scopes:` frontmatter. A plugin scope may set `freeform_default: true` to
-nominate itself when the preferred core default is disabled; at most one
+nominate itself when the preferred core `classic` default is disabled; at most one
 enabled scope may claim the nomination, and graph compilation rejects an
 ambiguous selected set. Adding a plugin scope to an existing core stage works
 through a contribution's `adds.scopes` (§6) — own-plugin scopes only, and the

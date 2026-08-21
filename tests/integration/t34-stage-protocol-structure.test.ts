@@ -1,4 +1,4 @@
-// covers: file:aidlc-common/protocols/stage-protocol.md, file:knowledge/aidlc-shared/state-template.md
+// covers: file:aidlc-common/protocols/stage-protocol.md, file:aidlc-common/protocols/stage-protocol-construction.md, file:knowledge/aidlc-shared/state-template.md
 //
 // In-process port of tests/integration/t34-stage-protocol-structure.sh (TAP plan
 // 69), mechanism = none. The .sh is a documentation structure + cross-reference
@@ -95,9 +95,19 @@ const STATE_TEMPLATE_PATH = join(
   "aidlc-shared",
   "state-template.md",
 );
+const CONSTRUCTION_PROTOCOL_PATH = join(
+  AIDLC_SRC,
+  "aidlc-common",
+  "protocols",
+  "stage-protocol-construction.md",
+);
 
 const PROTOCOL = readFileSync(PROTOCOL_PATH, "utf-8");
 const STATE_TEMPLATE = readFileSync(STATE_TEMPLATE_PATH, "utf-8");
+const CONSTRUCTION_PROTOCOL = readFileSync(
+  CONSTRUCTION_PROTOCOL_PATH,
+  "utf-8",
+);
 
 /** assert_grep equivalent: the .sh's `grep -E "<re>"` over the protocol. The
  *  pattern is matched with multiline semantics so a `^`-anchored heading regex
@@ -127,7 +137,6 @@ describe("t34 stage-protocol.md structure + cross-references (migrated from t34-
     [8, "Depth Guidance"],
     [9, "Terminology"],
     [10, "Content Validation"],
-    [11, "Subagent Return Summary"],
     [12, "Phase Boundary Verification"],
     [13, "Learnings Ritual"],
   ];
@@ -197,6 +206,9 @@ describe("t34 stage-protocol.md structure + cross-references (migrated from t34-
     "refactor",
     "infra",
     "security-patch",
+    "classic",
+    "workshop",
+    "express",
   ] as const;
   for (const scope of SCOPES) {
     test(`§2: depth/progress tables list scope "${scope}"`, () => {
@@ -371,15 +383,17 @@ describe("t34 stage-protocol.md structure + cross-references (migrated from t34-
   // =========================================================================
   // §3 — Within-Bolt Question Collection + execution modes (.sh 143-145).
   // =========================================================================
-  test("§3: Within-Bolt Question Collection section exists", () => {
-    expect(protocolHas("### Within-Bolt Question Collection")).toBe(true);
+  test("Construction module carries Within-Bolt Question Collection", () => {
+    expect(CONSTRUCTION_PROTOCOL).toContain(
+      "### Within-Bolt Question Collection",
+    );
   });
 
   test("§3: bolt protocol references QUESTION-ONLY mode", () => {
-    expect(protocolHas("QUESTION-ONLY mode")).toBe(true);
+    expect(CONSTRUCTION_PROTOCOL).toContain("QUESTION-ONLY mode");
   });
 
   test("§3: bolt protocol references ARTIFACT-ONLY mode", () => {
-    expect(protocolHas("ARTIFACT-ONLY mode")).toBe(true);
+    expect(CONSTRUCTION_PROTOCOL).toContain("ARTIFACT-ONLY mode");
   });
 });

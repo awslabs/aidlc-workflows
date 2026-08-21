@@ -41,6 +41,7 @@ import emit from "./emit.ts";
 const manifest: HarnessManifest = {
   name: "copilot",
   harnessDir: ".aidlc",
+  orchestratorSkillPath: ".github/skills/aidlc/SKILL.md",
   tierFlavor: "copilot",
 
   // Same core projection as claude, into .aidlc/. The persona .md files ARE

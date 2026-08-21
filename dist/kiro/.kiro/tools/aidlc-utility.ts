@@ -38,9 +38,11 @@ import {
   createIntent,
   composeMarkerPath,
   COMPOSE_MARKER_TTL_MS,
+  DEFAULT_SCOPE,
   DEFAULT_SPACE,
   detectLeakedLocks,
   docsDir,
+  envDefaultScope,
   knowledgeDir,
   agentsDir,
   emitError,
@@ -2752,7 +2754,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
     });
   }
 
-  // Scope validation — run validateScope over all 9 scopes, tally errors
+  // Scope validation — run validateScope over all 11 scopes, tally errors
   // and advisories. Repo-level setup check, not workflow-state.
   try {
     const scopes = [...validScopes()];
@@ -3885,10 +3887,13 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     );
   }
 
-  // Default when --scope is omitted; selection-aware so a plugin-only install
-  // (where the core "poc" default is deselected) resolves to its nominated
-  // freeform default instead of crashing with "Unknown scope".
-  const scope = flags.scope || resolveDefaultScope("poc");
+  // Default when --scope is omitted: AWS_AIDLC_DEFAULT_SCOPE overrides, then
+  // the framework's single hard-coded fallback (DEFAULT_SCOPE, "classic");
+  // selection-aware so a plugin-only install (where the core default is
+  // deselected) resolves to its nominated freeform default instead of
+  // crashing with "Unknown scope".
+  const scope = flags.scope || envDefaultScope() ||
+    resolveDefaultScope(DEFAULT_SCOPE);
   if (!validScopes().has(scope)) {
     die(
       `Unknown scope: "${scope}". Valid scopes: ${[...validScopes()].join(", ")}.`

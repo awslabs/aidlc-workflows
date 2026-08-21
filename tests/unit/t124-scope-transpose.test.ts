@@ -47,7 +47,7 @@
 //   .sh test 9  (compile --check clean tree exits 0)             -> CLI "compile --check on a clean tree exits 0"
 //   .sh test 10 (compile --check stale grid exits 1)             -> CLI "compile --check exits 1 on a stale scope-grid.json (drift guard)"
 //   .sh test 11 (compile --check missing grid exits 1)           -> CLI "compile --check exits 1 when scope-grid.json is missing"
-//   .sh test 12 (grid EXECUTE set == subgraphForScope, 9 scopes) -> "shipped grid EXECUTE set is cell-identical to subgraphForScope for all 9 scopes"
+//   .sh test 12 (grid EXECUTE set == subgraphForScope) -> "shipped grid EXECUTE set is cell-identical to subgraphForScope for all 11 scopes"
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -78,7 +78,7 @@ const GRAPH_TOOL = join(AIDLC_SRC, "tools", "aidlc-graph.ts");
 const GRAPH_JSON = join(AIDLC_SRC, "tools", "data", "stage-graph.json");
 const GRID_JSON = join(AIDLC_SRC, "tools", "data", "scope-grid.json");
 
-// The nine scopes the shipped grid carries — the .sh's hard-coded list.
+// The eleven scopes the shipped grid carries.
 const SCOPES = [
   "enterprise",
   "feature",
@@ -88,7 +88,9 @@ const SCOPES = [
   "refactor",
   "infra",
   "security-patch",
+  "classic",
   "workshop",
+  "express",
 ];
 
 const tempFiles: string[] = [];
@@ -113,13 +115,19 @@ function mkTempPath(tag: string): string {
  * shipped grid is never touched. Returns the spawnSync result (status +
  * captured streams).
  */
-function runGraph(args: string[], graphPath: string, gridPath: string) {
+function runGraph(
+  args: string[],
+  graphPath: string,
+  gridPath: string,
+  extraEnv: Record<string, string> = {},
+) {
   return spawnSync(BUN, [GRAPH_TOOL, ...args], {
     encoding: "utf-8",
     env: {
       ...process.env,
       AIDLC_STAGE_GRAPH: graphPath,
       AIDLC_SCOPE_GRID: gridPath,
+      ...extraEnv,
     },
   });
 }
@@ -193,13 +201,13 @@ describe("canonicalScopeGridJson() + compileStageGraph() determinism (in-process
 });
 
 // ===========================================================================
-// Grid <-> subgraph parity for all 9 shipped scopes (none).
+// Grid <-> subgraph parity for all 10 shipped scopes (none).
 // .sh test 12: the shipped grid's EXECUTE set per scope == subgraphForScope's
 // slugs per scope. The grid is the source the subgraph reads, so this is the
 // round-trip invariant the runtime relies on.
 // ===========================================================================
 describe("scope-grid <-> subgraphForScope parity (in-process)", () => {
-  test("shipped grid EXECUTE set is cell-identical to subgraphForScope for all 9 scopes [.sh test 12]", () => {
+  test("shipped grid EXECUTE set is cell-identical to subgraphForScope for all 11 scopes [.sh test 12]", () => {
     const grid = JSON.parse(readFileSync(GRID_JSON, "utf-8")) as Record<
       string,
       { stages: Record<string, "EXECUTE" | "SKIP"> }
@@ -218,7 +226,7 @@ describe("scope-grid <-> subgraphForScope parity (in-process)", () => {
       }
     }
     // STRONGER than the .sh's ALL_MATCH string: assert no scope mismatched
-    // AND that every scope was actually compared (all 9 present in the grid).
+    // AND that every scope was actually compared (all 10 present in the grid).
     expect(mismatches).toEqual([]);
     expect(SCOPES.every((sc) => grid[sc] !== undefined)).toBe(true);
   });
@@ -318,12 +326,23 @@ describe("compile preserves composed scope-grid entries", () => {
     grid["composed-t124"] = { stages: { ...grid[donor].stages } };
     writeFileSync(gridPath, `${JSON.stringify(grid, null, 2)}\n`, "utf-8");
 
+    // The composer contract is two-file: the grid entry survives only while a
+    // matching scope identity file exists.
+    const scopesDir = mkdtempSync(join(tmpdir(), "aidlc-t124-scopes-"));
+    tempFiles.push(scopesDir);
+    writeFileSync(
+      join(scopesDir, "aidlc-composed-t124.md"),
+      "---\nname: composed-t124\ndepth: Minimal\nkeywords: []\ndescription: composed t124\n---\n",
+      "utf-8",
+    );
+    const env = { AIDLC_SCOPES_DIR: scopesDir };
+
     // A grid carrying a composed entry is NOT drift: --check exits 0.
-    const check = runGraph(["compile", "--check"], graphPath, gridPath);
+    const check = runGraph(["compile", "--check"], graphPath, gridPath, env);
     expect(check.status).toBe(0);
 
     // A full recompile keeps the composed entry (and the stock scopes).
-    const r = runGraph(["compile"], graphPath, gridPath);
+    const r = runGraph(["compile"], graphPath, gridPath, env);
     expect(r.status).toBe(0);
     const after = JSON.parse(readFileSync(gridPath, "utf-8")) as Record<
       string,

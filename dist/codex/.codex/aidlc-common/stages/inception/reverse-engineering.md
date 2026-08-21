@@ -31,7 +31,9 @@ scopes:
   - bugfix
   - refactor
   - security-patch
+  - classic
   - workshop
+  - express
 inputs: <record>/aidlc-state.md
 outputs: "aidlc/spaces/<active-space>/codekb/<repo>/ (9 artifacts: business-overview.md, architecture.md, code-structure.md, api-documentation.md, component-inventory.md, technology-stack.md, dependencies.md, code-quality-assessment.md, reverse-engineering-timestamp.md)"
 ---
@@ -40,7 +42,7 @@ outputs: "aidlc/spaces/<active-space>/codekb/<repo>/ (9 artifacts: business-over
 
 MANDATORY: Follow stage-protocol.md for approval gates, question format, and completion messages.
 
-This stage runs `mode: pipeline` (stage-protocol.md §5): a two-link chain in
+This stage runs `mode: pipeline` (stage-protocol-ensemble.md §5): a two-link chain in
 which each link advances the work product directly. The developer lead (link
 1) scans and returns structured results; the architect (link 2, the final
 link) synthesizes those results and writes the 9 artifacts. The final link

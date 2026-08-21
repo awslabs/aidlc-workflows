@@ -721,12 +721,12 @@ export function blockReason(v: FreezeVerdict): string {
   return (
     `review-freeze: "${v.target}" is a declared produces[] artifact of ${scope}, ` +
     `which holds a fresh terminal review receipt. Writing it now would invalidate ` +
-    `that receipt and the engine would refuse the gate (stage-protocol §12a: the ` +
+    `that receipt and the engine would refuse the gate (stage-protocol-reviewer.md §12a: the ` +
     `terminal receipt ends artifact work). Present the gate instead - quote any ` +
     `reviewer suggestions there verbatim for the human to weigh. If the artifact ` +
     `genuinely needs changes, reject at the gate (or have the human request ` +
     `changes); the recorded rejection lifts this freeze and the revision then ` +
-    `re-runs the §12a reviewer for a fresh receipt.`
+    `re-runs the stage-protocol-reviewer.md §12a reviewer for a fresh receipt.`
   );
 }
 

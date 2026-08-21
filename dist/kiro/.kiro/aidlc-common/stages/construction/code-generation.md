@@ -53,7 +53,9 @@ scopes:
   - bugfix
   - refactor
   - security-patch
+  - classic
   - workshop
+  - express
 inputs: ALL prior design artifacts for this unit
 outputs: application code + code-generation-plan.md, code-generation-questions.md, unit-test-instructions.md, code-summary.md, traceability.json (under this stage's per-unit record dir, engine-resolved)
 ---
@@ -83,7 +85,18 @@ Read all design artifacts for the current unit:
 - Story map from `<record>/inception/units-generation/unit-of-work-story-map.md` (if exists)
 - Requirements from `<record>/inception/requirements-analysis/requirements.md` (if exists)
 
-Incremental scopes (bugfix, poc, refactor, security-patch) skip units-generation and domain-design by design; when those inputs are absent, scope the work from the requirements and, on brownfield, the reverse-engineered code knowledge base at `aidlc/spaces/<active-space>/codekb/<repo>/` — never invent the content of a missing artifact.
+Incremental scopes (bugfix, poc, refactor, security-patch) and the zero-Unit
+`express` scope skip Units Generation by design. When those inputs are absent,
+scope the work from Requirements Analysis and the workspace; on brownfield, also
+use the reverse-engineered code knowledge base at
+`aidlc/spaces/<active-space>/codekb/<repo>/`. Never invent the content of a
+missing artifact.
+
+For a zero-Unit directive (`directive.unit` absent and no Unit DAG), run exactly
+one implementation iteration and write this stage's artifacts under
+`<record>/construction/code-generation/` with no synthetic Unit segment. This is
+ordinary stage work: no Bolt, walking-skeleton, ladder, per-Unit receipt, or
+swarm ceremony applies.
 
 ### Step 2: PART 1 — Planning
 

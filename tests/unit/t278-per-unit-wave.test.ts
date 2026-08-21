@@ -1,5 +1,5 @@
 // covers: subcommand:aidlc-orchestrate:next, function:validateDirective,
-// file:aidlc-common/protocols/stage-protocol.md §3 §5,
+// file:aidlc-common/protocols/stage-protocol-construction.md,
 // file:skills/aidlc/SKILL.md per-unit wave paragraph
 //
 // t278 - engine-emitted, receipt-settled waves for stage-major per-unit design.
@@ -871,7 +871,7 @@ describe("t278 wave protocol parity", () => {
         "core",
         "aidlc-common",
         "protocols",
-        "stage-protocol.md",
+        "stage-protocol-construction.md",
       ),
       "utf-8",
     );

@@ -329,7 +329,7 @@ function auditTailHasFields(
 //
 // The HUMAN_TURN pivot in conjunct 4 is load-bearing: the reviewer appends its
 // `## Review` section to the primary artifact BEFORE the human responds at the
-// gate (stage-protocol.md §12a), firing an ARTIFACT_UPDATED on a produces file.
+// gate (stage-protocol-reviewer.md §12a), firing an ARTIFACT_UPDATED on a produces file.
 // Anchoring the artifact window at the first post-anchor human turn (not the gate
 // open) excludes that legitimate pre-response append, so the reviewer's edit is
 // never mistaken for a human-driven revision.
@@ -1492,6 +1492,15 @@ function producesDirsForStage(
   if (rec === null) return [];
   const perUnit = stage.for_each === "unit-of-work";
   if (perUnit) {
+    const resolution = resolveBoltDag(pd);
+    const stateContent = readStateFile(pd);
+    const scope = getField(stateContent, "Scope");
+    const unitProducerAction =
+      parseStateStageSuffixes(stateContent).get("units-generation") ??
+      (scope ? loadScopeMapping()[scope]?.stages["units-generation"] : undefined);
+    if (resolution.state === "none" && unitProducerAction !== "EXECUTE") {
+      return [join(rec, "construction", stage.slug)];
+    }
     const ctorRoot = join(rec, "construction");
     if (!existsSync(ctorRoot)) return [];
     const dirs: string[] = [];
@@ -1939,7 +1948,7 @@ function reviewerPreconditionError(slug: string, reviewer: string): never {
   error(
     `Refusing to complete "${slug}": it declares a reviewer (${reviewer}) but no ` +
       `fresh REVIEW_COMPLETED is recorded for it. Invoke the reviewer ` +
-      `(stage-protocol §12a) and record the verdict with \`aidlc-log.ts review --stage ` +
+      `(stage-protocol-reviewer.md §12a) and record the verdict with \`aidlc-log.ts review --stage ` +
       `${slug} --reviewer ${reviewer} --verdict <READY|NOT-READY>\` before completing. ` +
       `Terminal ordering: apply any fixes FIRST, then run the reviewer, record the ` +
       `receipt, and stop editing produces[] artifacts - a later write to one ` +

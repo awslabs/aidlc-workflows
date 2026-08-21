@@ -196,12 +196,54 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     expect(validateDirective(runStage()).valid).toBe(true);
   });
 
+  test("run-stage accepts validated protocol module hints", () => {
+    expect(
+      errs({
+        ...runStage(),
+        protocol_modules: ["reviewer", "ensemble", "construction"],
+      }),
+    ).toBe("VALID");
+  });
+
+  test("run-stage accepts only literal true for the settled-swarm marker", () => {
+    expect(
+      errs({
+        ...runStage(),
+        protocol_modules: ["construction", "swarm"],
+        swarm_settled: true,
+      }),
+    ).toBe("VALID");
+    expect(errs({ ...runStage(), swarm_settled: false })).toContain(
+      "run-stage: swarm_settled must be true when present",
+    );
+  });
+
+  test("run-stage rejects unknown protocol module hints", () => {
+    expect(
+      errs({
+        ...runStage(),
+        protocol_modules: ["reviewer", "unknown"],
+      }),
+    ).toContain(
+      "run-stage: protocol_modules[1] must be one of reviewer | ensemble | construction | swarm",
+    );
+  });
+
   test("dispatch-subagent well-formed -> VALID", () => {
     expect(validateDirective(dispatchSubagent()).valid).toBe(true);
   });
 
   test("invoke-swarm well-formed -> VALID", () => {
     expect(validateDirective(invokeSwarm()).valid).toBe(true);
+  });
+
+  test("invoke-swarm accepts construction/swarm protocol module hints", () => {
+    expect(
+      errs({
+        ...invokeSwarm(),
+        protocol_modules: ["reviewer", "construction", "swarm"],
+      }),
+    ).toBe("VALID");
   });
 
   // M1: the optional `repo` field (single-recorded-repo case) — the engine

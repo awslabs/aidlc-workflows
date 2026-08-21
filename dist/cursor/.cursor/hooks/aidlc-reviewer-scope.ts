@@ -1,5 +1,5 @@
 // PreToolUse hook: deterministic enforcement of the per-unit reviewer
-// read-scope bound (stage-protocol 12a).
+// read-scope bound (stage-protocol-reviewer.md §12a).
 //
 // The prose bound says a reviewer dispatched for one unit must not read other
 // units' construction/<other-unit>/ content through any tool - not by opening
@@ -19,7 +19,7 @@
 //
 // How the hook knows a review is in flight: the conductor writes a dispatch
 // record (reviewerDispatchPath, `<record>/.aidlc-reviewer-dispatch.json`) at
-// 12a step 1 before invoking a per-unit reviewer, and deletes it at step 3
+// stage-protocol-reviewer.md §12a step 1 before invoking a per-unit reviewer, and deletes it at step 3
 // when the verdict is read. The record carries {reviewer, stage, unit,
 // exempt[]} - the facts no harness payload delivers. Identity comes from the
 // harness: Claude Code and Codex put the active subagent's name in the
@@ -67,7 +67,7 @@ const HOOK_NAME = "reviewer-scope";
 // the decision table is unit-testable without a live session. The hook body
 // only wires stdin, the dispatch record, and the exit code around it.
 
-/** The conductor-written dispatch record (12a step 1). */
+/** The conductor-written dispatch record (stage-protocol-reviewer.md §12a step 1). */
 export interface ReviewerDispatch {
   /** Agent name of the dispatched reviewer, e.g. aidlc-architecture-reviewer-agent. */
   reviewer: string;
@@ -700,7 +700,7 @@ export function blockReason(target: string, dispatch: ReviewerDispatch): string 
 
 // The two shipped review-only agents. Used ONLY for the advisory
 // missing-record drop below (when one of these is active with no dispatch
-// record and touches construction/ paths, the conductor likely forgot the 12a
+// record and touches construction/ paths, the conductor likely forgot the stage-protocol-reviewer.md §12a
 // step-1 write); the dispatch record's reviewer field is the authoritative
 // identity during enforcement.
 const REVIEW_AGENT_RE = /^aidlc-(architecture-reviewer|product-lead)-agent$/;
@@ -744,7 +744,7 @@ export async function run(input: string): Promise<number> {
   if (!existsSync(recordPath)) {
     // No review in flight. One advisory: a review-only agent touching
     // construction/ paths with no dispatch record suggests the conductor
-    // skipped the 12a step-1 write - surfaced via the doctor's drop counters,
+    // skipped the stage-protocol-reviewer.md §12a step-1 write - surfaced via the doctor's drop counters,
     // never a block (the record is the only source of unit + exempt, so there
     // is nothing sound to enforce without it). RATE-BOUNDED: a chatty reviewer
     // under a conductor that never writes the record would otherwise append
@@ -764,7 +764,7 @@ export async function run(input: string): Promise<number> {
             recordHookDrop(
               projectDir,
               HOOK_NAME,
-              `${agent} touched construction/ paths with no reviewer dispatch record; enforcement skipped (write the 12a step-1 dispatch record before invoking a per-unit reviewer)`,
+              `${agent} touched construction/ paths with no reviewer dispatch record; enforcement skipped (write the stage-protocol-reviewer.md §12a step-1 dispatch record before invoking a per-unit reviewer)`,
             );
           }
         }

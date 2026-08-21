@@ -103,8 +103,8 @@ export function isPerUnitStage(e: { slug: string; for_each?: string }): boolean 
 export interface ScopeDefinition {
   depth: string;
   stages: Record<string, "EXECUTE" | "SKIP">;
-  // Optional fields from scope-mapping.json. `testStrategy` is on
-  // workshop; `keywords` drives NL scope inference (see
+  // Optional fields from scope-mapping.json. `testStrategy` can override
+  // the depth-derived default; `keywords` drives NL scope inference (see
   // aidlc-utility.ts inferScopeFromText); `description` is a one-line
   // scope summary rendered into HELP_TEXT.
   testStrategy?: string;
@@ -5631,7 +5631,7 @@ export function turnMarkersShowConversational(
 }
 
 // `<root>/.aidlc-reviewer-dispatch.json` — the per-unit reviewer dispatch
-// record. The conductor writes it at stage-protocol 12a step 1 (per-unit
+// record. The conductor writes it at stage-protocol-reviewer.md §12a step 1 (per-unit
 // stages only) before invoking the reviewer sub-agent, and deletes it at step
 // 3 the moment the verdict is read. The reviewer-scope PreToolUse hook reads
 // it back to learn WHICH unit is under review and which contract paths are
@@ -7926,7 +7926,7 @@ interface ScopeMetadata {
    *  resolveReviewClass. */
   reviewCap?: "adversarial" | "advisory" | "none";
   /** When true, this scope is the enabled plugin's freeform/default fallback
-   *  (plugin-only installs where the core `feature`/`poc` defaults are
+   *  (plugin-only installs where the core `classic` default is
    *  deselected). At most one enabled scope should set this. */
   freeformDefault?: boolean;
 }
@@ -8042,7 +8042,7 @@ export function loadScopeMetadataAll(): Record<string, ScopeMetadata> {
   return out;
 }
 
-// --- Review-class resolution (stage-protocol §12a) ---
+// --- Review-class resolution (stage-protocol-reviewer §12a) ---
 //
 // Three inputs, one effective class, resolved LOW-WINS along the same
 // precedence idea as the tier cap (aidlc-tiers.ts): the stage declares its
@@ -8209,7 +8209,26 @@ export interface DefaultScopeResolution {
   note?: string;
 }
 
-export function selectionAwareDefaultScope(preferred = "feature"): DefaultScopeResolution {
+// The framework's single hard-coded default scope — the bottom of every
+// default ladder (the engine's scope resolution, `/aidlc-init`, the low-level
+// `intent-create` fallback, and the help-text "(default)" marker). Exactly two
+// things control the implicit default: the AWS_AIDLC_DEFAULT_SCOPE env var
+// (which overrides when set) and this constant (when the var is unset).
+export const DEFAULT_SCOPE = "classic";
+
+// AWS_AIDLC_DEFAULT_SCOPE resolved with the engine ladder's semantics: unset →
+// null; a valid scope → itself; an installed-but-disabled scope → the
+// selection-aware rescue; an unknown value → returned verbatim so the caller's
+// own validation owns the canonical `Unknown scope` error.
+export function envDefaultScope(): string | null {
+  const envScope = (process.env.AWS_AIDLC_DEFAULT_SCOPE || "").trim();
+  if (envScope.length === 0) return null;
+  if (validScopes().has(envScope)) return envScope;
+  if (loadScopeMetadataAll()[envScope] === undefined) return envScope;
+  return selectionAwareDefaultScope(envScope).scope;
+}
+
+export function selectionAwareDefaultScope(preferred: string = DEFAULT_SCOPE): DefaultScopeResolution {
   const scopes = [...validScopes()];
   if (scopes.includes(preferred)) return { scope: preferred };
 
@@ -8263,7 +8282,8 @@ export function selectionAwareDefaultScope(preferred = "feature"): DefaultScopeR
 /**
  * Thin string-returning wrapper over {@link selectionAwareDefaultScope} for
  * callers that just need the resolved scope name. `preferred` is the caller's
- * core-era literal ("feature" for freeform inference, "poc" for intent birth).
+ * core-era literal (DEFAULT_SCOPE, "classic", for both freeform inference and
+ * intent birth).
  * When `preferred` is enabled it wins (stock behaviour preserved); otherwise
  * the nominated freeform default (or the sole enabled plugin's first scope) is
  * returned, falling back to `preferred` when nothing can be chosen.
@@ -9031,7 +9051,7 @@ export function nextInScopeStage(
   // take precedence over scope-mapping. The common case (no overrides,
   // or only SKIP overrides) produces byte-identical output to
   // subgraphForScope-based iteration — proven by t66 walk parity across
-  // all 9 scopes. The uncommon case (a hand-edited state file promoting
+  // all 11 scopes. The uncommon case (a hand-edited state file promoting
   // a scope-SKIP stage to EXECUTE) is the power-user escape hatch
   // aidlc-state.ts:276-284's explicit-advance path also honours; keeping
   // both callers consistent on the same input.
