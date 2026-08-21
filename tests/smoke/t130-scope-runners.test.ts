@@ -199,6 +199,9 @@ describe("t130 scope-runners — structural conformance of the shipped first-bat
       expect(body).toContain("AskUserQuestion");
       expect(body).toContain("next --new-intent --scope <the confirmed scope>");
       expect(body).toContain("`intent-create` command");
+      // Guard generated prose from resurfacing the retired command.
+      const retiredIntentCommand = "intent-" + "b" + "irth";
+      expect(body).not.toContain(`\`${retiredIntentCommand}\``);
       // The offer defaults the proposed scope to THIS runner's baked scope
       // (same-flavour follow-up) while allowing a different one, so the runner's
       // own scope is named in the offer prose. (Asserted on newline-collapsed
@@ -215,6 +218,7 @@ describe("t130 scope-runners — structural conformance of the shipped first-bat
       const rendered = renderRunner(scope, DISCOVERED[scope]?.description ?? "");
       expect(rendered).toContain("next --new-intent --scope <the confirmed scope>");
       expect(rendered).toContain("`intent-create` command");
+      expect(rendered).not.toContain(`\`${retiredIntentCommand}\``);
       expect(rendered.replace(/\s+/g, " ")).toContain(`baked \`${scope}\``);
       expect(rendered).toContain("/clear");
     });

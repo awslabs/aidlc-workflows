@@ -16,7 +16,7 @@ orchestration engine is resolving the compiled scope grid" does not.
 
 **Reserved internal vocabulary. These words are for your instructions, never
 for chat narration:** engine, directive, dispatch, conductor, harness, verb,
-scope grid, steering, forwarding loop, mint, creation, swarm, entropy, and the
+scope grid, steering, forwarding loop, mint, swarm, entropy, and the
 ARS component names (IAE, CSU, VE, R, UA). The user's project has none of
 these things.
 

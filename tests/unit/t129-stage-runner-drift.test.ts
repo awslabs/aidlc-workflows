@@ -327,6 +327,9 @@ describe("t129 stage-runner drift guard (migrated from t129-stage-runner-drift.s
     expect(initSkill).toContain("--arguments");
     // And it no longer forwards $ARGUMENTS verbatim to intent-create (the bug).
     expect(initSkill).not.toContain("intent-create $ARGUMENTS");
+    // Guard generated prose from resurfacing the retired command.
+    const retiredIntentCommand = "intent-" + "b" + "irth";
+    expect(initSkill).not.toContain(retiredIntentCommand);
     expect(initSkill).toContain("intent-create --scope <scope> --arguments");
     expect(initSkill).toContain("otherwise omit\n   `--scope`");
     expect(initSkill).toContain("`AWS_AIDLC_DEFAULT_SCOPE`, else `classic`");
