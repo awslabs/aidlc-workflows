@@ -211,6 +211,15 @@ begin Step 4, dispatch the developer agent, or infer approval from a
 forwarding-loop continuation. Only an explicit "Approve Plan" response
 authorizes generation from the exact fingerprinted files and contract.
 
+> **Build-and-Test loop-back exception:** The loop-back in the construction
+> protocol module (`aidlc-common/protocols/stage-protocol-construction.md`)
+> repairs the already-approved plan. Do not blank the Plan Approval `[Answer]:`
+> when applying that revision; record the plan delta in the Loop-Back Log
+> instead. In gated mode, the human's "Retry with fix" answer is the re-approval
+> of the revised approach and is recorded through `--user-input` on the replayed
+> approval report. The plan-approval guard's evidence survives the jump because
+> the non-empty plan and approved questions file are preserved.
+
 ### Step 4: PART 2 — Generation
 
 Before delegating, display to the user:
@@ -291,7 +300,7 @@ Summary of code produced (files, tests, key decisions), then:
 
 Approval gate: strictly 2-option (Approve / Request Changes).
 
-> **Note — orchestrator-managed completion gating.** Step 3 Plan Approval is a mandatory hard stop in every execution mode, including Bolt execution: generation must never begin before the human chooses "Approve Plan". Only the Step 7 completion approval gate is suppressed by the orchestrator during normal Bolt execution. A single Bolt-level gate (or batch-level gate for parallel Bolt batches) covers completion for all Units in the Bolt. The completion gate still exists here for direct-invocation use (e.g., `/aidlc --stage code-generation` re-running a single Unit), and subagents invoked via Task must NOT invoke that completion gate themselves — the orchestrator owns completion-gate presentation across the batch.
+> **Note — orchestrator-managed completion gating.** Step 3 Plan Approval is a mandatory hard stop in every execution mode, including Bolt execution, except for the explicit Build-and-Test loop-back replay carve-out above: generation must never begin before the human chooses "Approve Plan", and the carve-out reuses that preserved approval rather than inferring a new one. Only the Step 7 completion approval gate is suppressed by the orchestrator during normal Bolt execution. A single Bolt-level gate (or batch-level gate for parallel Bolt batches) covers completion for all Units in the Bolt. The completion gate still exists here for direct-invocation use (e.g., `/aidlc --stage code-generation` re-running a single Unit), and subagents invoked via Task must NOT invoke that completion gate themselves — the orchestrator owns completion-gate presentation across the batch.
 
 ## Sensors
 

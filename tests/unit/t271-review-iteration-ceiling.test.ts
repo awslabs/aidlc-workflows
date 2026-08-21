@@ -294,6 +294,7 @@ describe("t271 review iteration ceiling", () => {
 
   test("adversarial stage: budget is reviewer_max_iterations (2), iteration 3 refused", () => {
     const proj = seedProject("feature");
+    const iterationOnly = { AIDLC_SKIP_SOURCE_FRESHNESS: "1" };
     // code-generation declares adversarial, cap 2 — and feature scope has no cap.
     for (const n of ["1", "2"]) {
       const request = [
@@ -301,17 +302,17 @@ describe("t271 review iteration ceiling", () => {
         "--reviewer", "aidlc-architecture-reviewer-agent",
         "--iteration", n,
       ];
-      const ok = runReview(proj, request);
+      const ok = runReview(proj, request, iterationOnly);
       expect(ok.status).toBe(0);
       expect(
-        runReview(proj, [...request, "--verdict", "NOT-READY"]).status,
+        runReview(proj, [...request, "--verdict", "NOT-READY"], iterationOnly).status,
       ).toBe(0);
     }
     const over = runReview(proj, [
       "--stage", "code-generation",
       "--reviewer", "aidlc-architecture-reviewer-agent",
       "--iteration", "3",
-    ]);
+    ], iterationOnly);
     expect(over.status).not.toBe(0);
     expect(over.stderr).toContain("exceeds");
     expect(over.stderr).toContain("review budget (2)");
@@ -376,6 +377,7 @@ describe("t271 review iteration ceiling", () => {
 
   test("a matching autonomous Bolt attempt uses the declared class", () => {
     const proj = seedProject("feature");
+    const iterationOnly = { AIDLC_SKIP_SOURCE_FRESHNESS: "1" };
     const sf = seededStateFile(proj);
     writeFileSync(
       sf,
@@ -398,10 +400,10 @@ describe("t271 review iteration ceiling", () => {
         "--unit", "unit-alpha",
         "--iteration", iteration,
       ];
-      const ok = runReview(proj, request);
+      const ok = runReview(proj, request, iterationOnly);
       expect(ok.status).toBe(0);
       expect(
-        runReview(proj, [...request, "--verdict", "NOT-READY"]).status,
+        runReview(proj, [...request, "--verdict", "NOT-READY"], iterationOnly).status,
       ).toBe(0);
     }
     const over = runReview(proj, [
@@ -409,7 +411,7 @@ describe("t271 review iteration ceiling", () => {
       "--reviewer", "aidlc-architecture-reviewer-agent",
       "--unit", "unit-alpha",
       "--iteration", "3",
-    ]);
+    ], iterationOnly);
     expect(over.status).not.toBe(0);
     expect(over.stderr).toContain("review budget (2)");
 
@@ -422,7 +424,7 @@ describe("t271 review iteration ceiling", () => {
       "--reviewer", "aidlc-architecture-reviewer-agent",
       "--unit", "unit-alpha",
       "--iteration", "1",
-    ]);
+    ], iterationOnly);
     expect(afterFailure.status).not.toBe(0);
     expect(afterFailure.stderr).toContain("review budget (0)");
   });

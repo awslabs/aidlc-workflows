@@ -116,6 +116,7 @@ function walkStage(proj: string, slug: string): void {
   const env = {
     ...process.env,
     AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+    AIDLC_SKIP_SOURCE_FRESHNESS: "1",
   };
   // Reviewer-bearing stages need a terminal REVIEW_COMPLETED before gate-start
   // (§12a), recorded by the stage's DECLARED reviewer.

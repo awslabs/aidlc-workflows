@@ -1,7 +1,7 @@
 // covers: subcommand:aidlc-utility:select-plugins, audit:PLUGIN_SELECTION_CHANGED, function:pluginsEnabled,
 // function:compileStageGraph, function:mergeComposedScopes
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -16,6 +16,7 @@ import {
 
 const BUN = process.execPath;
 const TIMEOUT_MS = 60_000;
+setDefaultTimeout(TIMEOUT_MS);
 const PLUGIN = "test-pro";
 const STAGE_TABLE_BEGIN =
   "<!-- BEGIN: compiled stage graph via `bun aidlc-utility.ts stage-table` - do NOT hand-edit -->";
@@ -131,7 +132,7 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
       projectDir: join(tmp, "proj"),
       pluginBuilt,
     }).projectDir;
-  });
+  }, TIMEOUT_MS);
 
   afterAll(() => {
     if (tmp && existsSync(tmp)) rmSync(tmp, { recursive: true, force: true });

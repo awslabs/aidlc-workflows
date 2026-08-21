@@ -96,7 +96,7 @@ Before and during EVERY stage, verify:
 2. [ ] **Log non-gate questions via `aidlc-log.ts`** — before presenting a structured question that is not an approval gate: `bun .cursor/tools/aidlc-log.ts decision --stage <slug> --decision "<summary>" --options "<csv>"`. After response: `bun .cursor/tools/aidlc-log.ts answer --stage <slug> --details "<exact choice>"`. Approval choices go only through `aidlc-orchestrate.ts report`. (§2, §3)
 3. [ ] **Never summarize User Input** — use exact option labels. (§2, §3)
 4. [ ] **Task transitions + state sync** — Mark previous task `completed`, then `TaskUpdate({ ..., status: "in_progress", activeForm: "Running [Stage] [slug]" })`. The `[slug]` suffix triggers the PostToolUse hook that syncs the state file. `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"` auto-advances to the next in-scope stage (or completes the workflow on the final stage) — do NOT call `advance` separately after approval. (§4)
-5. [ ] **Stage ritual is ATOMIC** — once a stage starts, EVERY step in its protocol fires: questions → artifact → reviewer (if declared) → learnings → gate. No step is skippable based on inferred user intent. "Skip to stage X" means skip INTERMEDIATE stages, NOT shortcut the TARGET stage's ritual. If a user jumps forward from a stage at its gate, the current stage's learnings ritual (§13) MUST fire before the jump executes.
+5. [ ] **Stage ritual is ATOMIC** — once a stage starts, EVERY step in its protocol fires: questions → artifact → reviewer (if declared) → learnings → gate. No step is skippable based on inferred user intent. "Skip to stage X" means skip INTERMEDIATE stages, NOT shortcut the TARGET stage's ritual. If a user jumps forward from a stage at its gate, the current stage's learnings ritual (§13) MUST fire before the jump executes. EXCEPTION: the Build-and-Test failure loop-back in the construction protocol module (`aidlc-common/protocols/stage-protocol-construction.md`) jumps back from a deliberately in-flight failed stage; its §13 learnings ritual defers to the eventual passing run.
 6. [ ] **Autonomy is NEVER inferred** — a user saying "go with recommended" or "pick the best answers" for one stage is a ONE-TIME instruction for THAT stage only. It does NOT create a standing rule. The next stage starts fresh with its declared autonomy mode. The ONLY way to get autonomous mode is: (a) the directive explicitly carries `autonomy: autonomous`, OR (b) the human explicitly says "run this autonomous" for the specific stage being proposed. NEVER carry forward an autonomy inference from a previous stage. NEVER self-answer questions without explicit permission for THIS stage.
 
 ---
@@ -110,7 +110,7 @@ Every stage (except the 3 stages in the Initialization phase: workspace-scaffold
 When you present an approval gate question, you MUST end your turn immediately and wait for the user's explicit response. Do NOT call any tool until the user has typed their choice in a new message. An approval gate is a mandatory human checkpoint that cannot be inferred, auto-approved, or skipped.
 
 ### NO EMERGENT BEHAVIOR RULE
-Construction and Operation stages MUST use standardized 2-option completion messages. DO NOT create 3-option menus or other emergent navigation patterns. Only IDEATION and INCEPTION stages may conditionally include a 3rd option (to add a previously skipped stage). Any deviation from these patterns is a protocol violation.
+Construction and Operation stages MUST use standardized 2-option completion messages. DO NOT create 3-option menus or other emergent navigation patterns. Only IDEATION and INCEPTION stages may conditionally include a 3rd option (to add a previously skipped stage). Any deviation from these patterns is a protocol violation. Two sanctioned carve-outs exist: the revision loop escape hatch (below) and the Build-and-Test failure loop-back in the construction protocol module (`aidlc-common/protocols/stage-protocol-construction.md`).
 
 ### For simple decisions (3 or fewer options):
 Present a structured question:
@@ -150,6 +150,22 @@ options:
 
 CONSTRUCTION and OPERATION stages: Strictly 2-option only (Approve / Request Changes).
 
+### Non-matching checkpoint replies
+
+For an approval gate or the consolidated-summary confirmation, compare the
+human's reply only with the choices currently offered. If it matches none of
+them, do not call `aidlc-orchestrate.ts report` or `aidlc-log.ts answer`, do not
+write it to an `[Answer]:` tag, and do not treat the checkpoint as resolved.
+In the same turn, acknowledge the received reply (quote it briefly, truncating
+long text), state that it did not match an offered choice, and re-present the
+same structured question with every valid choice. Then end the turn and wait.
+Never silently repeat a checkpoint prompt after an unmatched reply.
+The deterministic report/state guards enforce the same boundary. Forward the
+exact selected label in `--user-input`; never substitute a paraphrase or
+feedback prose. A refusal instructs you to re-render the original held gate
+with every option it offered because conditional choices are not reconstructible
+from a fixed fallback list.
+
 ### Revision loop escape hatch
 After 3 "Request Changes" cycles on the same stage, add a third option to all subsequent approval gates for that stage:
 
@@ -172,7 +188,8 @@ After the 2nd revision cycle (before the escape hatch activates), include a note
 
 ### Conditional construction protocol
 
-Walking-skeleton, ladder, Bolt-gate, and halt-and-ask behavior lives in
+Walking-skeleton, ladder, Bolt-gate, halt-and-ask, and Build-and-Test
+failure-loop-back behavior lives in
 `.cursor/aidlc-common/protocols/stage-protocol-construction.md`.
 Load it on the first Construction-phase directive of the session and on every `invoke-swarm` (the engine lists it in `directive.protocol_modules`).
 ---
@@ -188,8 +205,8 @@ Entering the gate:
 3. Present Part 3 (the approval question). This is a lifecycle gate, not an interview question: do not call `aidlc-log.ts decision` or `aidlc-log.ts answer` for it. Word it per the voice contract at the top of this file: what you produced, what to look at, what happens next.
 4. Based on the user response:
    - **Approve** → `bun .cursor/tools/aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"`. That call emits any missing `STAGE_AWAITING_APPROVAL`, then `GATE_APPROVED` + `STAGE_COMPLETED`, and auto-advances to the next in-scope stage (or completes the workflow on the final stage). No separate `advance` call required.
-   - **Request Changes** → `bun .cursor/tools/aidlc-orchestrate.ts report --stage <slug> --result rejected --user-input "<feedback>"`. That call emits `GATE_REJECTED` + `STAGE_REVISING`, marks `[?]` → `[R]`, and increments Revision Count. When the feedback already names what to change, revise immediately; ask a clarifying question first ONLY when the feedback is genuinely ambiguous, and ask it as a structured question with concrete options drawn from the artifact (never an open-ended freeform prompt — a driver or scripted session that answers only structured questions must be able to progress the revision loop). When the revision changed a `produces[]` artifact and the directive carries a reviewer, re-run the `stage-protocol-reviewer.md` §12a reviewer step before reporting revised — fresh dispatch record, fresh `## Review` verdict replacing the stale one; the NOT-READY lead-alone loop and its iteration budget apply as at first entry. (The §13 learnings ritual runs once per stage and is not re-run.) Then call `bun .cursor/tools/aidlc-orchestrate.ts report --stage <slug> --result revised` to emit a fresh `STAGE_AWAITING_APPROVAL` and mark `[R]` → `[?]` — always re-present the gate after the revision; never leave the stage parked in `[R]` waiting on further conversation.
-   - **Accept as-is** (after 3 rejection cycles) → same as Approve; include `--user-input "Accept as-is after N cycles"`.
+   - **Request Changes** → `bun .cursor/tools/aidlc-orchestrate.ts report --stage <slug> --result rejected --user-input "Request Changes" --reason "<feedback>"`. The selected decision and its feedback are separate fields; never put feedback in `--user-input`. That call emits `GATE_REJECTED` + `STAGE_REVISING`, marks `[?]` → `[R]`, and increments Revision Count. When the feedback already names what to change, revise immediately; ask a clarifying question first ONLY when the feedback is genuinely ambiguous, and ask it as a structured question with concrete options drawn from the artifact (never an open-ended freeform prompt — a driver or scripted session that answers only structured questions must be able to progress the revision loop). When the revision changed a `produces[]` artifact and the directive carries a reviewer, re-run the `stage-protocol-reviewer.md` §12a reviewer step before reporting revised — fresh dispatch record, fresh `## Review` verdict replacing the stale one; the NOT-READY lead-alone loop and its iteration budget apply as at first entry. (The §13 learnings ritual runs once per stage and is not re-run.) Then call `bun .cursor/tools/aidlc-orchestrate.ts report --stage <slug> --result revised` to emit a fresh `STAGE_AWAITING_APPROVAL` and mark `[R]` → `[?]` — always re-present the gate after the revision; never leave the stage parked in `[R]` waiting on further conversation.
+   - **Accept as-is** (after 3 rejection cycles) → same as Approve; include the exact offered label `--user-input "Accept as-is"`.
 
 ### Part 1: Announcement (mandatory)
 ```markdown
@@ -352,6 +369,9 @@ Log the user's mode choice to `<record>/audit/<host>-<clone>.md` using the Quest
   --details "<exact choice>"` using the same `--unit` / `--single` identity.
   The tool refuses a self-selected answer, a response without a matching prompt
   record and later human turn, or a questions file whose stored choice differs.
+  A reply other than **Looks correct** or **Request changes** follows the
+  non-matching checkpoint rule in §1: acknowledge it, restate both choices, and
+  leave the tag and receipt untouched.
 
   If the choice is **Request changes**, append a sibling
   `## Requested Changes Feedback` question with a blank `[Answer]:`, ask the
@@ -568,7 +588,7 @@ The explicit stage pin and nonblank reason are mandatory. The engine preserves
 completes the workflow) without emitting `STAGE_COMPLETED`. A single-stage run
 cannot use this routing outcome.
 
-**Event emission is tool-owned.** State transitions (`advance`, `approve`, `reject`, `skip`, `complete-workflow`, etc.) emit the correct audit events internally. Config changes (`scope-change`, `config-change`, `detect-scope`) likewise. Construction bolts use `aidlc-bolt.ts`. Non-gate questions and decisions use `aidlc-log.ts`; approval gates use the state transition emitted by `aidlc-orchestrate.ts report`. The `aidlc-audit.ts append` CLI is a narrow diagnostic escape hatch (e.g., logging an `ERROR_LOGGED` event where no specific tool owns it yet); it REFUSES authority-bearing receipts (`HUMAN_TURN`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `AUTONOMY_MODE_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`) — those are emitted only by their owning tool or hook through the library path.
+**Event emission is tool-owned.** State transitions (`advance`, `approve`, `reject`, `skip`, `complete-workflow`, etc.) emit the correct audit events internally. Config changes (`scope-change`, `config-change`, `detect-scope`) likewise. Construction bolts use `aidlc-bolt.ts`. Non-gate questions, decisions, reviews, and pipeline-link receipts use `aidlc-log.ts`; artifact reuse receipts use `aidlc-state.ts reuse-artifact`; approval gates use the state transition emitted by `aidlc-orchestrate.ts report`. The `aidlc-audit.ts append` CLI is a narrow diagnostic escape hatch (e.g., logging an `ERROR_LOGGED` event where no specific tool owns it yet); it REFUSES authority-bearing receipts (`HUMAN_TURN`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED`, `ARTIFACT_REUSED`, `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `AUTONOMY_MODE_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`) — those are emitted only by their owning tool or hook through the library path.
 
 **Stage graph lookups** (no state file needed):
 ```bash
@@ -981,17 +1001,17 @@ Trigger after Step N-1 (completion message rendered) and before Step N (approval
    ```bash
    bun .cursor/tools/aidlc-learnings.ts surface --slug <stage-slug>
    ```
-   The tool parses memory.md and emits structured JSON: one candidate per non-blank entry under **Interpretations / Deviations / Tradeoffs** (surfaced verbatim — no paraphrase, no "interesting" filtering), plus a read-only `parked_open_questions[]` list. Open questions are research items, not learnings to install — they never become candidates. Most runs surface nothing worth keeping; that's the most common outcome.
+   The tool parses memory.md and emits structured JSON: one candidate per non-blank entry under **Interpretations / Deviations / Tradeoffs** (surfaced verbatim — no paraphrase, no "interesting" filtering), plus a read-only `parked_open_questions[]` list. Open questions are research items, not learnings to install — they never become candidates. Most runs surface nothing worth keeping; that's the most common outcome. The output also carries `space` and `intent` — the workspace's active space/intent resolved AT THIS MOMENT, not re-derived later. Carry both verbatim into the selections file in step 5; `persist` uses these, never the live active-intent cursor, so a later intent switch before persisting can't misattribute the write. Multiple intent records with no valid active-intent cursor is a hard failure here, not a silent `intent: null`.
 
 3. **Render the structured question + free-text channel.** For each candidate, render one option whose `label` is the candidate `summary` (verbatim) and whose `description` names the routed destination (e.g. `→ project.md ## Corrections`) plus a "promote to team?" affordance. After `multiSelect` returns, correlate each kept label back to its candidate `id` + `source_heading`. Then **always** ask the human "Anything to add for next time?" with at least two explicit choices: **Nothing to add** and **Add a note**. This question is mandatory even when `surface` returned zero candidates: do not infer or self-select **Nothing to add**, and END YOUR TURN at the question — the approval gate is a separate, later turn, never rendered in the same message. This is a structured question, so the §3 logging pair applies to it like any other: `aidlc-log.ts decision` before presenting it, `aidlc-log.ts answer` with the human's exact choice after — the resulting `QUESTION_ANSWERED` row preceding the gate's `STAGE_AWAITING_APPROVAL` is the auditable proof the ritual ran as its own human interaction. `Add a note` opens a free-text follow-up; a harness-provided Other/notes escape remains a direct free-text path. Never emit a one-option structured question — Claude Code and Codex reject it. For any non-empty response, ask the user to pick one of the four diary headings (Interpretation / Deviation / Tradeoff / Open question). **The diary-heading pick is the only classification asked of the user.** From it, the orchestrator routes the learning to the fitting practice heading in the method file (KNOWLEDGE): a testing learning → `## Testing Posture`, a prohibition → `## Forbidden`, anything general → `## Corrections` (the default). The user never picks the destination heading directly — the orchestrator routes by fit, and the tool ensure-exists the heading before it writes.
 
 4. **Admission conflict-check (before any write).** For each kept learning candidate, compare the proposed practice line against `org.md`'s matching `## <section>` (matched by the routed heading — the single-line variant of the §5 admission gate). This comparison is a section-level LLM check (knowledge → orchestrator-LLM). If the practice contradicts an org guardrail, surface the conflicting org sentence inline; the user **revises, skips this candidate, or escalates** (judgement → user; there is no user-override path). Only conflict-clear or user-escalated selections proceed to the write. Sensor manifests have no org-section analogue and skip this check.
 
-5. **Persist (the tool writes + emits audit).** Build the selections file and call:
+5. **Persist (the tool writes + emits audit).** Build the selections file — `{ stage_slug, space, intent, selections[] }`, where `space`/`intent` are carried verbatim from step 2's surface output — and call:
    ```bash
    bun .cursor/tools/aidlc-learnings.ts persist --slug <stage-slug> --selections-json <path>
    ```
-   The tool, inside one `withAuditLock` transaction (decide-inside-lock, content-presence idempotency via a `<!-- cid:<slug>:<id> -->` marker so a crashed run recovers without double-appending):
+   The tool rejects a `--slug` that differs from the selections file's `stage_slug`, then verifies inside one `withAuditLock` transaction that the pinned space and non-null intent record still exist. It deduplicates against both the fresh audit snapshot and hashes emitted earlier in the same batch, using a `<!-- cid:<intent-slug>:<stage-slug>:<content-hash> -->` marker whose content hash is the full SHA-256 digest of the learning text. A crashed run therefore recovers without double-appending, while distinct learning text cannot share a truncated persisted identity:
    - **Learning** → appends a practice line under the orchestrator-routed heading in `<scope>.md` (scope ∈ {project, team}): `- <text> (learned YYYY-MM-DD) <!-- cid:... -->`. Ensure-exists the heading first, so a routed heading the file doesn't yet carry is created rather than throwing. Emits `RULE_LEARNED` (with `Source: orchestrator | user_addition`, `Heading: <routed>`).
    - **Sensor** → scaffolds a project-tier `<project>/.cursor/sensors/aidlc-<id>.md` manifest (with the user-supplied `matches:` glob) AND appends the new id to the originating stage's `sensors:` frontmatter list — both writes inside the same lock. Emits `SENSOR_PROPOSED`. The sensor binds and fires from the next workflow's compile.
 
@@ -1051,9 +1071,48 @@ When a stage detects existing output artifacts in its artifact directory:
 ```bash
 bun .cursor/tools/aidlc-state.ts reuse-artifact <stage-slug> \
   --decision <keep|modify|redo> \
-  --artifacts "<comma-separated list of existing artifacts found>"
+  --artifacts "<comma-separated list of existing artifacts found>" \
+  [--repo <repo>]
 ```
 
-The tool emits `ARTIFACT_REUSED` with the `Stage` / `Decision` / `Artifacts` fields — never hand-write `**Event**:` markdown blocks. See `docs/reference/12-state-machine.md` for the canonical emitter registry.
+The tool emits `ARTIFACT_REUSED` with the `Stage` / `Decision` / `Artifacts`
+fields and optional `Repo` — never hand-write `**Event**:` markdown blocks.
+Use `--repo` when one repository's reuse decision must be distinguished from
+other repositories in the same stage. See `docs/reference/12-state-machine.md`
+for the canonical emitter registry.
 
 This applies to ALL stages, not just jump targets — when the workflow replays forward after a backward jump, each subsequent stage will also encounter existing artifacts and offer the same choice.
+
+**Autonomous failure loop-back**: when the replay was initiated by the
+Build-and-Test failure loop-back in the construction protocol module
+(`aidlc-common/protocols/stage-protocol-construction.md`) under `Construction
+Autonomy Mode: autonomous`, the 3-option question is NOT presented (the loop is
+meant to run without the human). The conductor decides deterministically from
+the Loop-Back Log's planned fix: **Modify** for the unit(s) the fix targets,
+**Keep** for all other units, **Modify** for build-and-test itself on re-entry
+(Redo is forbidden there — it would erase the Loop-Back Log). Every
+auto-decision is still audited via `aidlc-state.ts reuse-artifact <slug>
+--decision <keep|modify> --artifacts "<comma-separated list of existing
+artifacts found>"`. In receipt mode apply those decisions inside each emitted
+per-unit replay between `unit start` and the fresh reviewer / `unit complete`;
+in artifact-only mode apply them through the pre-gate override. Either way,
+fresh current-attempt reviews for every applicable unit are mandatory before
+the replayed gate is auto-approved.
+
+**Gated failure loop-back**: the same override applies when the human chose
+"Retry with fix" at the Build-and-Test halt-and-ask in the construction
+protocol module (`aidlc-common/protocols/stage-protocol-construction.md`) under
+`Construction Autonomy Mode: gated` (or unset). Artifact-only workflows may
+arrive directly at the all-covered `gate: true` directive, where the ordinary
+Artifact Re-use question never fires; receipt-mode workflows instead receive
+per-unit replay directives. In the fast path, BEFORE presenting the gate,
+apply the planned fix through the override. In receipt mode, apply it inline
+while the units re-run. Both use **Modify** for the unit(s) the fix targets,
+**Keep** for all other units, and **Modify** for build-and-test itself on
+re-entry (Redo is forbidden there — it would erase the Loop-Back Log), audited
+via the same `aidlc-state.ts reuse-artifact <slug> --decision <keep|modify>
+--artifacts "<comma-separated list of existing artifacts found>"` call. After
+those decisions, dispatch the declared reviewer for every applicable unit and
+record fresh current-attempt reviews BEFORE presenting the settle/approval
+gate. The human already gave the confirming decision by choosing "Retry with
+fix"; this is not a second, silent autonomy inference.

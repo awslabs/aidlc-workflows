@@ -20,10 +20,12 @@
 //
 // Source under test (dist/claude/.claude/tools/aidlc-state.ts):
 //   verifyStageArtifacts(pd, stage) - two layers:
-//     1. producesArtifactsExist - a stage that declares produces[] must have at
-//        least one declared .md on disk under <record>/<phase>/<slug>/ (or
-//        <record>/construction/<unit>/<slug>/ for per-unit stages, or
-//        <space>/codekb/<repo>/ for codekb stages). Empty-produces stages
+//     1. producesArtifactsExist - a normal stage that declares produces[] must
+//        have at least one declared .md on disk under
+//        <record>/<phase>/<slug>/ (or
+//        <record>/construction/<unit>/<slug>/ for per-unit stages). Codekb
+//        stages require every declared artifact in every registered repo's
+//        canonical <space>/codekb/<repo>/ directory. Empty-produces stages
 //        vacuously pass.
 //     2. workspace_requires - a code-producing stage (frontmatter flag, set on
 //        code-generation) must ALSO have a file outside the aidlc/ workspace
@@ -84,7 +86,9 @@ function reviewCodeGen(proj: string, unit?: string): void {
 function guarded(proj: string, args: string[]): { rc: number; out: string } {
   const env = { ...process.env };
   delete env.AIDLC_SKIP_ARTIFACT_GUARD;
+  delete env.AIDLC_DISABLE_ENSEMBLE_EVIDENCE;
   env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS = "1";
+  env.AIDLC_SKIP_SOURCE_FRESHNESS = "1";
   const r = spawnSync(BUN, [STATE, ...args, "--project-dir", proj], {
     encoding: "utf-8",
     env,
@@ -94,11 +98,13 @@ function guarded(proj: string, args: string[]): { rc: number; out: string } {
 
 // Same but with the bypass var set - proves the escape hatch.
 function bypassed(proj: string, args: string[]): { rc: number; out: string } {
-  const env = {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
     AIDLC_SKIP_ARTIFACT_GUARD: "1",
+    AIDLC_SKIP_SOURCE_FRESHNESS: "1",
     AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
   };
+  delete env.AIDLC_DISABLE_ENSEMBLE_EVIDENCE;
   const r = spawnSync(BUN, [STATE, ...args, "--project-dir", proj], {
     encoding: "utf-8",
     env,
@@ -229,6 +235,75 @@ function writeWorkspaceFile(proj: string, rel: string): void {
   const full = join(proj, rel);
   mkdirSync(join(full, ".."), { recursive: true });
   writeFileSync(full, "export const x = 1;\n");
+}
+
+const RE_PRODUCES = [
+  "business-overview",
+  "architecture",
+  "code-structure",
+  "api-documentation",
+  "component-inventory",
+  "technology-stack",
+  "dependencies",
+  "code-quality-assessment",
+  "reverse-engineering-timestamp",
+];
+
+function rewriteIntentRepos(proj: string, repos: string[]): void {
+  const registry = join(
+    proj,
+    "aidlc",
+    "spaces",
+    "default",
+    "intents",
+    "intents.json",
+  );
+  const rows = JSON.parse(readFileSync(registry, "utf-8")) as Array<
+    Record<string, unknown>
+  >;
+  rows[0].repos = repos;
+  writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`);
+}
+
+function writeCodekbSet(
+  proj: string,
+  repo: string,
+  omitted?: string,
+): void {
+  const dir = join(proj, "aidlc", "spaces", "default", "codekb", repo);
+  mkdirSync(dir, { recursive: true });
+  for (const name of RE_PRODUCES) {
+    if (name === omitted) continue;
+    writeFileSync(join(dir, `${name}.md`), "# stub\n");
+  }
+}
+
+function completePipelineReceipts(proj: string, repos: string[] = []): void {
+  const chains = repos.length > 0 ? repos : [undefined];
+  for (const repo of chains) {
+    for (const link of ["aidlc-developer-agent", "aidlc-architect-agent"]) {
+      const args = [
+        LOG,
+        "link",
+        "--stage",
+        "reverse-engineering",
+        "--link",
+        link,
+        "--project-dir",
+        proj,
+      ];
+      if (repo) args.splice(args.length - 2, 0, "--repo", repo);
+      const env = { ...process.env };
+      delete env.AIDLC_SKIP_ARTIFACT_GUARD;
+      delete env.AIDLC_DISABLE_ENSEMBLE_EVIDENCE;
+      const result = spawnSync(BUN, args, { encoding: "utf-8", env });
+      if ((result.status ?? -1) !== 0) {
+        throw new Error(
+          `pipeline receipt failed: ${result.stdout ?? ""}${result.stderr ?? ""}`,
+        );
+      }
+    }
+  }
 }
 
 let proj: string;
@@ -453,30 +528,74 @@ describe("t185: stage-completion artifact guard (#366)", () => {
   // real reverse-engineering approval. (The old flat-path design had no codekb
   // concept; this case did not exist in the reference t154.)
   describe("codekb placement (reverse-engineering)", () => {
-    function writeCodekbDoc(name: string): void {
-      // basename(proj) is codekbRepoName's default when the intent records no
-      // repos (the fixture records none) - the same key the tool resolves.
-      const repo = proj.split("/").filter(Boolean).pop() ?? "repo";
-      const dir = join(proj, "aidlc", "spaces", "default", "codekb", repo);
-      mkdirSync(dir, { recursive: true });
-      writeFileSync(join(dir, `${name}.md`), "# stub\n");
-    }
-
     test("REFUSES reverse-engineering with no codekb artifacts", () => {
       guarded(proj, ["set", "Current Stage=reverse-engineering"]);
       guarded(proj, ["checkbox", "reverse-engineering=in-progress"]);
+      completePipelineReceipts(proj);
       bypassed(proj, ["gate-start", "reverse-engineering"]);
       const r = guarded(proj, ["approve", "reverse-engineering", "--user-input", "ok"]);
       expect(r.rc).not.toBe(0);
       expect(r.out).toContain("Refusing to complete");
     });
 
-    test("PASSES reverse-engineering once a codekb artifact exists", () => {
+    test("PASSES reverse-engineering once the complete codekb artifact set exists", () => {
       guarded(proj, ["set", "Current Stage=reverse-engineering"]);
       guarded(proj, ["checkbox", "reverse-engineering=in-progress"]);
-      writeCodekbDoc("business-overview"); // a declared produces[] of RE
+      writeCodekbSet(proj, proj.split("/").filter(Boolean).pop() ?? "repo");
+      completePipelineReceipts(proj);
       guarded(proj, ["gate-start", "reverse-engineering"]);
       const r = guarded(proj, ["approve", "reverse-engineering", "--user-input", "ok"]);
+      expect(r.rc).toBe(0);
+    });
+
+    test("REFUSES multi-repo codekb when one registered repo is missing one artifact", () => {
+      const repos = ["repo-a", "repo-b"];
+      rewriteIntentRepos(proj, repos);
+      guarded(proj, ["set", "Current Stage=reverse-engineering"]);
+      guarded(proj, ["checkbox", "reverse-engineering=in-progress"]);
+      writeCodekbSet(proj, "repo-a");
+      writeCodekbSet(proj, "repo-b", "dependencies");
+      completePipelineReceipts(proj, repos);
+
+      const r = guarded(proj, ["gate-start", "reverse-engineering"]);
+      expect(r.rc).not.toBe(0);
+      expect(r.out).toContain("Refusing to complete");
+    });
+
+    test("PASSES multi-repo codekb when every registered repo has the full set", () => {
+      const repos = ["repo-a", "repo-b"];
+      rewriteIntentRepos(proj, repos);
+      guarded(proj, ["set", "Current Stage=reverse-engineering"]);
+      guarded(proj, ["checkbox", "reverse-engineering=in-progress"]);
+      writeCodekbSet(proj, "repo-a");
+      writeCodekbSet(proj, "repo-b");
+      completePipelineReceipts(proj, repos);
+
+      const r = guarded(proj, ["gate-start", "reverse-engineering"]);
+      expect(r.rc).toBe(0);
+    });
+
+    test("PASSES mixed reuse and scan with receipts only for the scanned repo", () => {
+      const repos = ["repo-a", "repo-b"];
+      rewriteIntentRepos(proj, repos);
+      guarded(proj, ["set", "Current Stage=reverse-engineering"]);
+      guarded(proj, ["checkbox", "reverse-engineering=in-progress"]);
+      writeCodekbSet(proj, "repo-a");
+      writeCodekbSet(proj, "repo-b");
+      const reused = guarded(proj, [
+        "reuse-artifact",
+        "reverse-engineering",
+        "--decision",
+        "keep",
+        "--artifacts",
+        "aidlc/spaces/default/codekb/repo-a/",
+        "--repo",
+        "repo-a",
+      ]);
+      expect(reused.rc).toBe(0);
+      completePipelineReceipts(proj, ["repo-b"]);
+
+      const r = guarded(proj, ["gate-start", "reverse-engineering"]);
       expect(r.rc).toBe(0);
     });
   });

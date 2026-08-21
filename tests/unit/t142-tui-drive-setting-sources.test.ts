@@ -34,6 +34,24 @@ import {
 } from "../harness/tui-fixtures.ts";
 import { seededRecordDir } from "../harness/fixtures.ts";
 
+const REPO_ROOT = join(import.meta.dir, "..", "..");
+const KIRO_PROTOCOL = readFileSync(
+  join(
+    REPO_ROOT,
+    "dist",
+    "kiro",
+    ".kiro",
+    "aidlc-common",
+    "protocols",
+    "stage-protocol.md",
+  ),
+  "utf8",
+);
+const KIRO_SKILL = readFileSync(
+  join(REPO_ROOT, "dist", "kiro", ".kiro", "skills", "aidlc", "SKILL.md"),
+  "utf8",
+);
+
 function env(settingSources?: string): NodeJS.ProcessEnv {
   return settingSources === undefined
     ? {}
@@ -360,6 +378,28 @@ describe("Kiro numbered-prose answer classification", () => {
     expect(state.confirmedSummaries.size).toBe(2);
   });
 
+  test("recognizes restated summary and approval choices after an unmatched reply", () => {
+    const summaryState = createKiroNumberedProseAnswerState();
+    expect(
+      nextKiroNumberedProseAnswer(
+        'I received "go ahead", but it did not match an offered choice.\n' +
+          "Does this all look correct before I generate the artifact?\n" +
+          "1. Looks correct\n2. Request changes",
+        summaryState,
+      ),
+    ).toBe("Looks correct");
+
+    const gateState = createKiroNumberedProseAnswerState();
+    gateState.learningsAnswered = 1;
+    expect(
+      nextKiroNumberedProseAnswer(
+        'I received "go ahead", but it did not match an offered choice.\n' +
+          "How would you like to proceed?\n1. Approve\n2. Request Changes",
+        gateState,
+      ),
+    ).toBe("Approve");
+  });
+
   test("answers an ad-hoc lettered clarification menu once, and a distinct one after it", () => {
     // A live hub that spots a contradiction between two recorded answers may
     // invent a mid-stage lettered menu (observed live: intent-capture Q3-vs-Q5
@@ -409,6 +449,28 @@ describe("Kiro numbered-prose answer classification", () => {
     ).toBe("Nothing to add");
     expect(state.learningsAnswered).toBe(2);
     expect(state.approvalsAnswered).toBe(1);
+  });
+});
+
+describe("Kiro non-matching checkpoint protocol", () => {
+  test("shared protocol acknowledges the reply, restates choices, and records nothing", () => {
+    expect(KIRO_PROTOCOL).toContain("### Non-matching checkpoint replies");
+    expect(KIRO_PROTOCOL).toContain("acknowledge the received reply");
+    expect(KIRO_PROTOCOL).toContain("state that it did not match an offered choice");
+    expect(KIRO_PROTOCOL).toContain("same structured question with every valid choice");
+    expect(KIRO_PROTOCOL).toContain("do not call `aidlc-orchestrate.ts report`");
+    expect(KIRO_PROTOCOL).toContain("do not treat the checkpoint as resolved");
+    expect(KIRO_PROTOCOL).toContain("original held gate");
+  });
+
+  test("runner repeats the rule for both summary confirmation and approval", () => {
+    expect(KIRO_SKILL).toContain(
+      "If the reply matches neither **Looks correct** nor **Request changes**",
+    );
+    expect(KIRO_SKILL).toContain(
+      "If the reply matches none of them, do not report it",
+    );
+    expect(KIRO_SKILL.match(/say it did not match an offered choice/g)).toHaveLength(2);
   });
 });
 

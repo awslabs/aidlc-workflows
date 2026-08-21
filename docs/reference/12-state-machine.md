@@ -156,13 +156,14 @@ route can be retried without duplicating the skip event. `report --single
 **Artifact guard (issue #366).** Every report outcome that marks a stage `[x]`
 runs a deterministic artifact check before completing it, so a stage cannot be
 marked complete without evidence of work on disk. A stage that declares
-`produces[]` must have at least one of those artifacts present (under the
-active intent's record dir, its per-unit Construction directories, or the
-active space's `codekb/<repo>/` for codekb stages); `workspace_requires: true`
-also requires source-work evidence outside `aidlc/` and the harness dir. A
-failure writes nothing. Optional outputs do not participate. For
-`produces_kinds`, units whose kind prunes the required set to zero owe no
-artifact; any applicable unit remains strict. Bypass with
+`produces[]` must have at least one of those artifacts present under the active
+intent's record dir or its per-unit Construction directories. A codekb stage
+is stricter: every registered repository directory must contain the full
+declared `produces[]` set; single/unrecorded intents use the one resolved
+codekb directory. `workspace_requires: true` also requires source-work evidence
+outside `aidlc/` and the harness dir. A failure writes nothing. Optional outputs
+do not participate. For `produces_kinds`, units whose kind prunes the required
+set to zero owe no artifact; any applicable unit remains strict. Bypass with
 `AIDLC_SKIP_ARTIFACT_GUARD=1`.
 
 **Reviewer gate guard (issue #551).** A reviewer-bearing stage cannot enter
@@ -185,8 +186,37 @@ declared support agent's contribution file
 `**Collaborator:**` identity-marker first line — the deterministic proof the
 ensemble actually convened. A settled autonomous swarm is exempt (its per-unit
 convergence ledger is the evidence); `report --single` checks stage-level
-evidence only. Bypass with `AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1`, intended only
-for recovering a legitimately-run stage whose contribution files were lost.
+evidence only. On `mode: pipeline`, the same report outcomes and every direct
+completing transition require an ordered, current-attempt
+`PIPELINE_LINK_COMPLETED` receipt for every lead/support link. Multi-repo
+reverse engineering requires a complete chain per scanned repo; a current-attempt
+repo-scoped `ARTIFACT_REUSED` row with `Decision=keep` exempts a reused repo,
+while `modify`/`redo` rows do not. A rejection, jump, or later stage start resets
+the main-workflow evidence, and isolated `--single` link rows never satisfy it. Bypass with
+`AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1`, intended only for recovering a
+legitimately-run stage whose contribution files or in-flight link receipts were
+lost.
+
+**Source-freshness binding (#629/#646).** On a `workspace_requires` stage, each
+terminal review receipt carries a `Source Fingerprint` for the source tree the
+reviewer inspected. `approve`, `advance`, `finalize`, and `complete-workflow`
+reconcile the chronologically newest modern binding against the current tree.
+A mismatch invalidates the collected receipts as one workspace-global set and
+enters the same bounded `stale-receipt` recovery flow as a post-review artifact
+write: one recovery request/verdict is available even after the ordinary
+iteration budget is exhausted. Reverting the edit also restores the binding
+because it is content-addressed. Already-`[x]` recovery skips receipt
+existence/cardinality only; a recorded modern binding is still compared.
+
+The workspace-global hash proves that the current source equals the tree seen by
+the newest review; it does **not** prove per-unit attribution. Source changed
+before that newest review can be revalidated by one later unit receipt. That
+explicit policy is the accepted limitation until RFC #662 adds a machine-readable
+per-unit source-path manifest. New `unbindable` receipts fail closed; only
+pre-#629 receipts with no field retain migration behavior.
+`AIDLC_SKIP_SOURCE_FRESHNESS=1` disables the check. Swarm finalization records an
+immutable reviewed `Source Commit`; a bypassed finalize records
+`Source Freshness Bypass: true`, and merge must repeat the same switch.
 
 **Gate-revision backstop.** If the conductor revises an artifact at an open
 gate without first reporting rejection, the `approved` report reconciles the
@@ -241,7 +271,7 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 
 ## Audit event taxonomy
 
-**85 events**, grouped below into 19 categories (the canonical `audit-format.md` registry splits the same 85 into 22 - the grouping is presentational, the event set is the invariant). Every event has exactly one tool or hook emitter, except for events pre-registered for an upcoming release whose Emitter cell reads `Reserved (v0.4.0 PR N)`, `Reserved (v0.5.0 PR N)`, or `Reserved (v0.6.0 PR N)` - these are skipped by the drift test's forward check until the consumer PR ships the emitter. The drift test `tests/integration/t48-audit-event-emitters.test.ts` enforces forward/reverse/tertiary/pairing/MD-MD consistency between this chapter's tables and the code.
+**86 events**, grouped below into 19 categories (the canonical `audit-format.md` registry splits the same 86 into 22 - the grouping is presentational, the event set is the invariant). Every event has exactly one tool or hook emitter, except for events pre-registered for an upcoming release whose Emitter cell reads `Reserved (v0.4.0 PR N)`, `Reserved (v0.5.0 PR N)`, or `Reserved (v0.6.0 PR N)` - these are skipped by the drift test's forward check until the consumer PR ships the emitter. The drift test `tests/integration/t48-audit-event-emitters.test.ts` enforces forward/reverse/tertiary/pairing/MD-MD consistency between this chapter's tables and the code.
 
 ### Workflow lifecycle
 
@@ -287,7 +317,8 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 | `QUESTION_ANSWERED` | `tools/aidlc-log.ts` | Fires after a non-gate question response; approval choices are lifecycle events owned by `report` |
 | `SUMMARY_CONFIRMATION_RECORDED` | `tools/aidlc-log.ts` | Human-backed consolidated-summary receipt; bound to the questions-file digest and reserved from public audit append |
 | `REVIEW_REQUESTED` | `tools/aidlc-log.ts` | Fires when the conductor dispatches the reviewer defined by `stage-protocol-reviewer.md` §12a, records the artifact fingerprint sent for review, and rejects a second normal request while one is unmatched. `--unit` must name a member of the authoritative DAG; a legacy no-DAG swarm may instead prove the exact Unit through a matching, still-open tool-owned Bolt attempt. `--retry-pending` re-dispatches the exact unmatched ordinal. |
-| `REVIEW_COMPLETED` | `tools/aidlc-log.ts` | Fires only after a matching positive-iteration `REVIEW_REQUESTED` whose artifact fingerprint still equals the current bytes; a write during review requires re-dispatch before a verdict can be recorded. `READY` is terminal immediately; advisory `NOT-READY` is terminal after its normal-flow pass; adversarial `NOT-READY` is terminal only at `reviewer_max_iterations` (earlier rows expose repair/retry progress to a wave). A terminal receipt invalidated by a later declared-output write gets one distinct recovery request at the next ordinal; either recovery verdict is terminal, and a second invalidation requires human reset. Gate-opening transitions (`gate-start` and `revise`) and all completing state transitions (`approve`, `advance`, `finalize`, and `complete-workflow`) require a matching terminal receipt from the current workflow attempt whose fingerprint still matches; per-unit stages require one receipt per applicable unit, while only a Unit-less receipt can satisfy a no-DAG stage-level fallback. Autonomous swarm finalization additionally requires each configured unit's paired terminal receipt after its Bolt started and every applicable required artifact to exist as a file in that Bolt worktree; absent optional outputs remain valid fingerprint entries. |
+| `REVIEW_COMPLETED` | `tools/aidlc-log.ts` | Fires only after a matching positive-iteration `REVIEW_REQUESTED` whose request fingerprint still equals both the verdict fingerprint and the current declared output paths and bytes; a write during review requires re-dispatch before a verdict can be recorded. `READY` is terminal immediately; advisory `NOT-READY` is terminal after its normal-flow pass; adversarial `NOT-READY` is terminal only at `reviewer_max_iterations` (earlier rows expose repair/retry progress to a wave). A terminal receipt invalidated by a later declared-output or source write gets one distinct recovery request at the next ordinal; either recovery verdict is terminal, and a second invalidation requires human reset. `workspace_requires` stages also record `Source Fingerprint` (a git-native source hash, or `unbindable`); modern unbindable receipts fail closed, while fieldless pre-#629 rows retain migration behavior. Gate-opening transitions (`gate-start` and `revise`) and all completing state transitions (`approve`, `advance`, `finalize`, and `complete-workflow`) require a matching terminal receipt from the current workflow attempt; per-unit stages require one receipt per applicable unit, while only a Unit-less receipt can satisfy a no-DAG stage-level fallback. Autonomous swarm finalization additionally requires each configured unit's paired terminal receipt after its Bolt started, current artifact and source bindings, and every applicable required artifact to exist as a file in that Bolt worktree; absent optional outputs remain valid fingerprint entries. |
+| `PIPELINE_LINK_COMPLETED` | `tools/aidlc-log.ts` | Fires after one declared pipeline link returns. Carries `Stage`, `Link`, and `Position k/N`; multi-repo chains also carry `Repo`, and isolated runs carry `Workflow=single-stage:<slug>`. The tool refuses undeclared, duplicate, or out-of-order links within that receipt scope. Main-workflow gate-start, approval, advance, finalize, and workflow completion ignore isolated rows and require every scanned-repo current-attempt link receipt. |
 
 ### Unit lifecycle (inline per-unit Construction stages)
 
@@ -316,7 +347,7 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 |---|---|---|
 | `ARTIFACT_CREATED` | `hooks/aidlc-write-audit-log.ts` | Write to net-new path — distinguished from UPDATED via `mtimeMs == birthtimeMs` stat check |
 | `ARTIFACT_UPDATED` | `hooks/aidlc-write-audit-log.ts` | Edit tool or Write overwriting existing file |
-| `ARTIFACT_REUSED` | `tools/aidlc-state.ts` | `reuse-artifact` subcommand — keep/modify/redo decisions |
+| `ARTIFACT_REUSED` | `tools/aidlc-state.ts` | `reuse-artifact` subcommand — keep/modify/redo decisions; optional `Repo` scopes evidence to one registered repo, but only `keep` grants a current-attempt pipeline exemption |
 
 ### Construction Bolts
 
@@ -452,7 +483,7 @@ Pre-registered for v0.6.0 in milestone 2. All six swarm events now emit from the
 | Event | Emitter | Trigger |
 |---|---|---|
 | `SWARM_STARTED` | `tools/aidlc-swarm.ts` | Swarm referee `prepare` captured the exact attempt and forked a batch of dependency-linked Units |
-| `SWARM_UNIT_CONVERGED` | `tools/aidlc-swarm.ts` | A swarm Unit re-verified green and untampered, with its configured post-Bolt reviewer receipt present, then merged back (a converged unit whose merge-back failed gets no row until a finalize retry merges it) |
+| `SWARM_UNIT_CONVERGED` | `tools/aidlc-swarm.ts` | A swarm Unit re-verified green and untampered, with its configured post-Bolt reviewer receipt present, then merged AIDLC metadata back. For a source-bound stage it records the validated `Source Fingerprint` and immutable `Source Commit`; the later source merge rechecks and consumes that exact object rather than the movable Bolt branch. A bypass row is explicit and requires `AIDLC_SKIP_SOURCE_FRESHNESS=1` again at merge. |
 | `SWARM_UNIT_FAILED` | `tools/aidlc-swarm.ts` | A swarm Unit failed the `finalize` re-verify (not claimed, claimed-but-red, tampered, or missing its configured reviewer receipt) |
 | `SWARM_BATON_RETURNED` | `tools/aidlc-swarm.ts` | A swarm Unit returned the baton to the conductor for orchestrator-mediated coordination |
 | `SWARM_COMPLETED` | `tools/aidlc-swarm.ts` | All Units in the batch finished (converged or failed); batch closed |
@@ -504,7 +535,7 @@ Don't emit audit events from LLM prose. The following anti-patterns are the reas
 - `**Event**: STAGE_COMPLETED` markdown block written by a stage file — events only come from `appendAuditEntry` in a tool or hook
 - Freeform `## Artifact Update` sections written by hooks — replaced by canonical `ARTIFACT_CREATED` / `ARTIFACT_UPDATED`
 
-The public CLI enforces the sharpest slice of this mechanically: `append` / `append-batch` refuse the authority-bearing receipts the engine's guards read as authorization evidence (`HUMAN_TURN`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `AUTONOMY_MODE_SET`, and the four `UNIT_*` lifecycle receipts — the `CLI_PROTECTED_EVENT_TYPES` set in `aidlc-audit.ts`), every field name must match a strict printable single-line label grammar (and `Event` remains reserved), values have line terminators escaped, and `append-raw` refuses taxonomy event lines or line-breaking headings. The structured renderer exclusively owns `Timestamp` and `Event`, so every block it writes contains exactly one of each; free-form `append-raw` blocks sit outside that guarantee (they carry the emitter's `**Timestamp**:` line, no `**Event**:` line, and a verbatim body). `Timestamp` remains accepted by generic `--field` parsing for compatibility, but a supplied value is intentionally ignored; park/unpark and other owning tools do not pass it. Historical shards are not rewritten: block-aware readers need no migration, while flat readers must split on `---` and use the first emitter-owned timestamp in each block or deduplicate older duplicate timestamp fields. Owning tools and hooks emit through the library import (`appendAuditEntry`), which the floor does not touch. Test fixtures that simulate owning emitters set `AIDLC_ALLOW_DIRECT_AUDIT_EVENTS=1`.
+The public CLI enforces the sharpest slice of this mechanically: `append` / `append-batch` refuse the authority-bearing receipts the engine's guards read as authorization evidence (`HUMAN_TURN`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED`, `ARTIFACT_REUSED`, `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `AUTONOMY_MODE_SET`, and the four `UNIT_*` lifecycle receipts — the `CLI_PROTECTED_EVENT_TYPES` set in `aidlc-audit.ts`), every field name must match a strict printable single-line label grammar (and `Event` remains reserved), values have line terminators escaped, and `append-raw` refuses taxonomy event lines or line-breaking headings. The structured renderer exclusively owns `Timestamp` and `Event`, so every block it writes contains exactly one of each; free-form `append-raw` blocks sit outside that guarantee (they carry the emitter's `**Timestamp**:` line, no `**Event**:` line, and a verbatim body). `Timestamp` remains accepted by generic `--field` parsing for compatibility, but a supplied value is intentionally ignored; park/unpark and other owning tools do not pass it. Historical shards are not rewritten: block-aware readers need no migration, while flat readers must split on `---` and use the first emitter-owned timestamp in each block or deduplicate older duplicate timestamp fields. Owning tools and hooks emit through the library import (`appendAuditEntry`), which the floor does not touch. Test fixtures that simulate owning emitters set `AIDLC_ALLOW_DIRECT_AUDIT_EVENTS=1`.
 
 The drift test at `tests/integration/t48-audit-event-emitters.test.ts` catches drift between this chapter's tables and the code: every event in the tables must have a matching `appendAuditEntry(..., "EVENT", ...)` call in the declared emitter file, and every emission call site in the codebase must appear in the tables. The test also guards against deleted events being resurrected and against pairing invariants (e.g., `handleApprove` must emit both `GATE_APPROVED` and `STAGE_COMPLETED`).
 

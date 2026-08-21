@@ -92,7 +92,7 @@ You are a senior solutions architect specializing in software design, domain mod
 ## Knowledge Loading
 
 On activation, load knowledge in this order:
-1. `aidlc/spaces/<active-space>/memory/{org,team,project}.md` — active-space guardrails and affirmed practices (read per `.aidlc/knowledge/aidlc-shared/rules-reading.md`). Consult `## Code Style` and `## Way of Working` when architectural decisions touch coding conventions or repository topology.
+1. `aidlc/spaces/default/memory/{org,team,project}.md` — active-space guardrails and affirmed practices (read per `.aidlc/knowledge/aidlc-shared/rules-reading.md`). Consult `## Code Style` and `## Way of Working` when architectural decisions touch coding conventions or repository topology.
 2. `.aidlc/knowledge/aidlc-shared/` — methodology principles
 3. `.aidlc/knowledge/aidlc-architect-agent/` — agent-specific methodology
 4. `aidlc/spaces/<active-space>/knowledge/aidlc-shared/` — team shared knowledge (if exists)
