@@ -1025,13 +1025,17 @@ function buildPluginProjection(pluginName: string, harnessName: string, outDir: 
   //    supported host hooks can front the fold through `aidlc plugin sync`;
   //    fall back to the direct bun compose.ts path for source/tree installs.
   //    Kiro CLI emits no registration and uses the explicit composer. Claude
-  //    populates CLAUDE_PLUGIN_ROOT, Codex PLUGIN_ROOT, Cursor resolves relative
-  //    commands from the plugin root, and Kiro IDE runs from the workspace root.
+  //    populates CLAUDE_PLUGIN_ROOT, Codex PLUGIN_ROOT, and the Cursor/Kiro IDE
+  //    launchers resolve their plugin and project roots without a shell.
   //    AIDLC_HARNESS_DIR targets the right harness tree.
   const hooksDir = join(outDir, "hooks");
   mkdirSync(hooksDir, { recursive: true });
   for (const f of readdirSync(templateHooks)) {
-    if (f === "aidlc-plugin-compose.ts" && kind !== "cursor") continue;
+    if (
+      f === "aidlc-plugin-compose.ts" &&
+      kind !== "cursor" &&
+      kind !== "kiro-ide"
+    ) continue;
     cpSync(join(templateHooks, f), join(hooksDir, f));
   }
   // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell parameter expansions
@@ -1042,20 +1046,23 @@ function buildPluginProjection(pluginName: string, harnessName: string, outDir: 
     // directly; the launcher probes aidlc and falls back to sibling compose.ts
     // without relying on sh, command -v, or POSIX parameter expansion.
     command = `bun ./hooks/aidlc-plugin-compose.ts ${harnessLeaf}`;
+  } else if (kind === "kiro-ide") {
+    // Kiro IDE also runs natively on Windows and resolves hook commands from
+    // the workspace root after the plugin projection is folder-dropped.
+    command =
+      `bun ./hooks/aidlc-plugin-compose.ts ${harnessLeaf} ${targetHarnessName}`;
   } else {
-    const composePath =
-      kind === "kiro-ide" ? "hooks/compose.ts" : `${rootExpr}/hooks/compose.ts`;
-    const pluginRootEnv = kind === "kiro-ide" ? 'AIDLC_PLUGIN_ROOT="$PWD" ' : "";
+    const composePath = `${rootExpr}/hooks/compose.ts`;
     // Probe aidlc on PATH first, then bun on PATH / ~/.bun/bin. If neither is
     // executable, exit 0 with a note rather than running a non-existent binary.
     const aidlcExpr =
       'AIDLC=$(command -v aidlc 2>/dev/null || true); ' +
-      `[ -n "$AIDLC" ] && { ${pluginRootEnv}AIDLC_HARNESS_DIR=${harnessLeaf} AIDLC_HARNESS_NAME=${targetHarnessName} "$AIDLC" plugin sync && exit 0; }; `;
+      `[ -n "$AIDLC" ] && { AIDLC_HARNESS_DIR=${harnessLeaf} AIDLC_HARNESS_NAME=${targetHarnessName} "$AIDLC" plugin sync && exit 0; }; `;
     const bunExpr =
       'BUN=$(command -v bun 2>/dev/null || true); ' +
       '[ -z "$BUN" ] && [ -x "$HOME/.bun/bin/bun" ] && BUN="$HOME/.bun/bin/bun"; ' +
       '[ -z "$BUN" ] && { echo "aidlc plugin compose: aidlc and bun not found, skipping" >&2; exit 0; }';
-    command = `sh -c '${aidlcExpr}${bunExpr}; ${pluginRootEnv}AIDLC_HARNESS_DIR=${harnessLeaf} AIDLC_HARNESS_NAME=${targetHarnessName} "$BUN" "${composePath}"'`;
+    command = `sh -c '${aidlcExpr}${bunExpr}; AIDLC_HARNESS_DIR=${harnessLeaf} AIDLC_HARNESS_NAME=${targetHarnessName} "$BUN" "${composePath}"'`;
   }
 
   if (kind === "kiro") {

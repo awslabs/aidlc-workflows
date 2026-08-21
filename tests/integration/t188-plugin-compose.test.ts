@@ -182,11 +182,11 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
           expect(hook?.trigger).toBe("SessionStart");
           expect(hook?.action?.type).toBe("command");
           const command = hook?.action?.command ?? "";
-          expect(command).toContain('AIDLC_PLUGIN_ROOT="$PWD"');
-          expect(command).toContain("AIDLC_HARNESS_DIR=.kiro");
-          expect(command).toContain("AIDLC_HARNESS_NAME=kiro-ide");
-          expect(command).toContain('"hooks/compose.ts"');
-          expect(command).not.toContain(`\${PLUGIN_ROOT}`);
+          expect(command).toBe(
+            "bun ./hooks/aidlc-plugin-compose.ts .kiro kiro-ide",
+          );
+          expect(command).not.toContain("sh -c");
+          expect(existsSync(join(built, "hooks", "aidlc-plugin-compose.ts"))).toBe(true);
         } else if (harness.name === "cursor") {
           expect(wiring, `${harness.name}: harness dir argument`).toContain(
             `aidlc-plugin-compose.ts ${harness.manifest.harnessDir}`,
@@ -219,6 +219,50 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
         `${harness.name}: knowledge`,
       ).toBe(true);
     }
+  });
+
+  test("Kiro IDE executes its generated compose wiring after a folder-drop", () => {
+    const built = pluginBuilds.get("kiro-ide")!;
+    const kiroProject = join(tmp, "kiro-ide-folder-drop");
+    cpSync(join(REPO_ROOT, "dist", "kiro-ide"), kiroProject, { recursive: true });
+    cpSync(built, kiroProject, { recursive: true });
+
+    const registration = JSON.parse(
+      readFileSync(
+        join(kiroProject, ".kiro", "hooks", `aidlc-${PLUGIN}-compose.json`),
+        "utf-8",
+      ),
+    ) as {
+      hooks?: Array<{ action?: { command?: string } }>;
+    };
+    const command = registration.hooks?.[0]?.action?.command ?? "";
+    const [runtime, script, ...args] = command.split(" ");
+    expect(runtime).toBe("bun");
+    expect(script).toBe("./hooks/aidlc-plugin-compose.ts");
+
+    const env: NodeJS.ProcessEnv = { ...process.env, PATH: "" };
+    delete env.AIDLC_HARNESS_DIR;
+    delete env.AIDLC_HARNESS_NAME;
+    delete env.AIDLC_PLUGIN_ROOT;
+    delete env.AIDLC_PROJECT_DIR;
+    delete env.CLAUDE_PLUGIN_ROOT;
+    delete env.CLAUDE_PROJECT_DIR;
+    delete env.PLUGIN_ROOT;
+    const compose = spawnSync(BUN, [script, ...args], {
+      cwd: kiroProject,
+      encoding: "utf-8",
+      timeout: TIMEOUT_MS - 5_000,
+      env,
+    });
+    expect(compose.status, compose.stderr).toBe(0);
+
+    const kiroGraph = JSON.parse(
+      readFileSync(
+        join(kiroProject, ".kiro", "tools", "data", "stage-graph.json"),
+        "utf-8",
+      ),
+    ) as GraphStage[];
+    expect(kiroGraph.some((item) => item.slug === "test-pro-integration")).toBe(true);
   });
 
   test("Cursor projection uses Cursor's flat camelCase hook schema", () => {
