@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.48] - 2026-08-21
+
+opencode and GitHub Copilot installations now ship mutable persona memory references on the `default` space seed, matching Cursor, so `/aidlc space default` no longer rewrites unchanged framework files while later space switches still repoint every managed persona. **Upgrade:** refresh your `dist/<harness>/` shell to replace placeholder-bearing persona copies with the concrete default-space seed.
+
+* `/aidlc space default` leaves shipped opencode, GitHub Copilot, and Cursor persona files byte-identical.
+* `/aidlc space <name>` continues to repoint both inline and harness-native persona copies to the selected space.
+* Packaging checks reject opencode or GitHub Copilot persona emissions that retain the mutable `<active-space>` placeholder.
+
 ## [2.6.47] - 2026-08-21
 
 Kiro plugin projections now use the composition mechanism supported by each runtime generation. **Upgrade:** rebuild or re-copy Kiro plugin projections; remove any scripted dependency on the retired `hooks/aidlc-plugin-compose.kiro.hook` filename.
