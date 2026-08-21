@@ -9,8 +9,8 @@
 //   1. tool_name varies by runtime generation: `shell`/`execute_bash`,
 //      `write`/`fs_write`/`str_replace`/`fs_append`, and
 //      `subagent`/`invoke_sub_agent`/`subagent_<agent>`.
-//   2. file paths can arrive as `path`, `file_path`, `paths[]`, or
-//      `operations[].path`.
+//   2. file paths can be project-relative and arrive as `path`, `file_path`,
+//      `paths[]`, or `operations[].path`.
 //   3. `todo_list` input is command-shaped ({command: "create",
 //      task_list_description: "...", tasks: [{task_description}]}) — there is
 //      no status/activeForm transition.
@@ -106,29 +106,38 @@ function kiroDispatch(input: KiroHookInput): KiroDispatch | null {
   // is not a dispatch and must never produce a completion or steering event.
   if (tool === "subagent_response") return null;
   if (tool === "subagent") {
+    // The alias is used for both legacy crew payloads and direct dispatches.
+    // Only a non-empty set of valid crew stages identifies the former; an
+    // absent or empty/malformed stages field must fall through to direct
+    // identity and prompt extraction so guards do not fail open.
     const stages = Array.isArray(toolInput.stages)
       ? toolInput.stages.filter(
-          (stage): stage is { role?: unknown; prompt_template?: unknown } =>
-            stage !== null && typeof stage === "object",
+          (stage): stage is { role?: unknown; prompt_template?: unknown } => {
+            if (stage === null || typeof stage !== "object") return false;
+            const role = (stage as { role?: unknown }).role;
+            return typeof role === "string" && role.trim().length > 0;
+          },
         )
       : [];
-    const agents = stages.map((stage) => {
-      const role = typeof stage.role === "string" ? stage.role.trim() : "";
-      return role || "unknown";
-    });
-    const prompt = [
-      firstNonBlank([toolInput.task]),
-      ...stages
-        .filter((stage) =>
-          typeof stage.role === "string" && stage.role.trim() === "aidlc-developer-agent"
-        )
-        .map((stage) => firstNonBlank([stage.prompt_template])),
-    ].filter((part) => part.length > 0).join("\n");
-    return { coreTool: "subagent", coreInput: toolInput, agents, prompt };
+    if (stages.length > 0) {
+      const agents = stages.map((stage) => {
+        const role = typeof stage.role === "string" ? stage.role.trim() : "";
+        return role || "unknown";
+      });
+      const prompt = [
+        firstNonBlank([toolInput.task]),
+        ...stages
+          .filter((stage) =>
+            typeof stage.role === "string" && stage.role.trim() === "aidlc-developer-agent"
+          )
+          .map((stage) => firstNonBlank([stage.prompt_template])),
+      ].filter((part) => part.length > 0).join("\n");
+      return { coreTool: "subagent", coreInput: toolInput, agents, prompt };
+    }
   }
 
   const named = /^subagent_(.+)$/.exec(tool);
-  if (tool !== "invoke_sub_agent" && named === null) return null;
+  if (tool !== "subagent" && tool !== "invoke_sub_agent" && named === null) return null;
   const namedAgent = named?.[1]?.trim() ?? "";
   const agent = namedAgent || firstNonBlank([
     toolInput.name,
@@ -143,6 +152,8 @@ function kiroDispatch(input: KiroHookInput): KiroDispatch | null {
     coreInput: {
       ...toolInput,
       ...(agent ? { subagent_type: agent } : {}),
+      // The shared hook scans prompt before task, so replace a blank prompt
+      // with the selected nonblank fallback before forwarding the payload.
       ...(prompt ? { prompt } : {}),
     },
     agents: agent ? [agent] : [],
@@ -841,7 +852,11 @@ function canonicalTool(
   return name;
 }
 
-type Forward = { hook: string; input: Record<string, unknown> } | null;
+type Forward = {
+  hook: string;
+  input: Record<string, unknown>;
+  inputs?: Record<string, unknown>[];
+} | null;
 
 function buildForward(): Forward {
   const ti = kiro.tool_input ?? {};
@@ -869,15 +884,19 @@ function buildForward(): Forward {
     case "audit-and-sensors": {
       // postToolUse(write/edit) → write-audit-log THEN run-sensors (both ship core).
       if (tool !== "Write" && tool !== "Edit") return null;
-      const filePath = inputPaths(ti)[0] ?? "";
-      if (!filePath) return null;
+      const filePaths = [...new Set(inputPaths(ti).map((filePath) =>
+        isAbsolute(filePath) ? filePath : resolve(projectDir, filePath)
+      ))];
+      if (filePaths.length === 0) return null;
+      const inputs = filePaths.map((filePath) => ({
+        hook_event_name: "PostToolUse",
+        tool_name: tool,
+        tool_input: { file_path: filePath },
+      }));
       return {
         hook: "__audit_and_sensors__", // handled specially below (two hooks)
-        input: {
-          hook_event_name: "PostToolUse",
-          tool_name: tool,
-          tool_input: { file_path: filePath },
-        },
+        input: inputs[0]!,
+        inputs,
       };
     }
 
@@ -989,9 +1008,12 @@ if (fwd === null) {
 
 if (fwd.hook === "__audit_and_sensors__") {
   // Two core hooks ride the same write event, in audit-then-sensors order
-  // (mirrors the Claude settings.json registration). Both advisory: exit 0.
-  runCore("aidlc-write-audit-log.ts", fwd.input);
-  runCore("aidlc-run-sensors.ts", fwd.input);
+  // (mirrors the Claude settings.json registration). A batch contributes one
+  // such event per target. Both hooks remain advisory: exit 0.
+  for (const hookInput of fwd.inputs ?? [fwd.input]) {
+    runCore("aidlc-write-audit-log.ts", hookInput);
+    runCore("aidlc-run-sensors.ts", hookInput);
+  }
   return 0;
 }
 

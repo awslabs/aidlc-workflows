@@ -396,7 +396,10 @@ describe("t148 dist/kiro file structure", () => {
     ]) {
       const config = readJson(join(agentDir, name));
       const scope = registrationMatchers(config, "preToolUse", "reviewer-scope");
-      for (const tool of REGISTRATION_TOOL_NAMES.reads) {
+      for (const tool of [
+        ...REGISTRATION_TOOL_NAMES.reads,
+        ...REGISTRATION_TOOL_NAMES.writes,
+      ]) {
         expect(
           scope.filter((matcher) => matchesKiroMatcher(matcher, tool)),
           `${name}: reviewer scope selection for ${tool}`,

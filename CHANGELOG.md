@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 
 Kiro CLI agent-v1 hooks retain the literal selectors required by the host's canonical-name/alias glob semantics, while the adapter now normalizes selected payloads before shared guards and observers run. **Upgrade:** re-copy `dist/kiro/` into the project.
 
-* Literal `fs_write` and `fs_read` registrations select the live-proven write/read alias families exactly once; write command modes reach canonical Write/Edit audit and sensors, while top-level, list, and operation paths reach reviewer scope and review freeze.
+* The existing literal `fs_write` and `fs_read` registrations continue to select the live-proven write/read alias families exactly once; the adapter normalizes create, replace, and append payloads to Write/Edit, audits each project-relative or batched target, and forwards all supported path fields to reviewer scope and review freeze.
 * Literal `subagent` registrations do not select `subagent_response`; legacy crew and defensive direct-dispatch payloads share one normalization path, and a nonblank `task` cannot be hidden by a blank higher-priority `prompt` during stage-rule delivery.
 
 ## [2.6.18] - 2026-08-19

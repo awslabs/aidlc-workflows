@@ -10,7 +10,7 @@
   "_adapter_tool_names": {
     "_provenance": "Defensive adapter vocabulary from issue #778's Kiro CLI v3/IDE census and issue #543's direct-dispatch report; these names are exercised by direct adapter tests, not treated as agent-v1 registration selectors.",
     "writes": ["write", "fs_write", "str_replace", "fs_append"],
-    "freeze_only": ["delete_file"],
+    "deletes": ["delete_file"],
     "reads": ["read", "fs_read", "read_file", "read_files"]
   },
   "agentSpawn": {
