@@ -186,6 +186,9 @@ not on individual tool commands. Every spawned tool then inherits the same
 identity. If that override disagrees with a session found through PID ancestry,
 AI-DLC refuses before writing either workflow and points you to the owning
 conversation or the intent and space switch verbs for rebinding.
+`AIDLC_SESSION_OVERRIDE_SOURCE=payload` is an internal same-user contract, not
+an authenticated security boundary; deliberately setting both variables is
+treated like an intentional sanctioned session switch.
 
 The cursors remain write-through compatibility state. Older or unsupported
 environments with no binding therefore behave exactly as before.

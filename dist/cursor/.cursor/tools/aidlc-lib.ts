@@ -2562,6 +2562,11 @@ export function resolveWorkflowSelection(
     sessionId = explicitSession;
   } else {
     const envSession = validSessionId(process.env.AIDLC_SESSION_OVERRIDE);
+    // This refusal is a footgun guard against stale exported overrides, not a
+    // security boundary. The SOURCE marker is an internal hookChildEnv contract.
+    // Deliberately setting both variables is an intentional same-user act
+    // equivalent to a sanctioned session switch; no privilege boundary exists
+    // between callers that could authenticate it.
     const payloadOverride =
       envSession !== null &&
       process.env.AIDLC_SESSION_OVERRIDE_SOURCE === "payload";
