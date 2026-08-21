@@ -80,6 +80,10 @@ const VALID_EVENT_TYPES = new Set([
   // and complete-workflow).
   "REVIEW_REQUESTED",
   "REVIEW_COMPLETED",
+  // Ordered pipeline-link receipt. Emitted only by aidlc-log.ts link after a
+  // declared link returns; completion guards require the full current-attempt
+  // chain before a pipeline stage may enter or resolve approval.
+  "PIPELINE_LINK_COMPLETED",
   // Unit-of-work lifecycle on INLINE per-unit Construction stages (for_each:
   // unit-of-work, mode: inline) — emitted by `aidlc-state.ts unit
   // start|pause|resume|complete`. UNIT_COMPLETED is the completion receipt the
@@ -215,6 +219,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   SUMMARY_CONFIRMATION_RECORDED: "Summary Confirmation Recorded",
   REVIEW_REQUESTED: "Review Requested",
   REVIEW_COMPLETED: "Review Completed",
+  PIPELINE_LINK_COMPLETED: "Pipeline Link Completed",
   UNIT_STARTED: "Unit Started",
   UNIT_PAUSED: "Unit Paused",
   UNIT_RESUMED: "Unit Resumed",
@@ -289,8 +294,10 @@ const CLI_RESERVED_EVENT_TYPES = new Set([
   "SUMMARY_CONFIRMATION_RECORDED",
   "ARTIFACT_CREATED",
   "ARTIFACT_UPDATED",
+  "ARTIFACT_REUSED",
   "REVIEW_REQUESTED",
   "REVIEW_COMPLETED",
+  "PIPELINE_LINK_COMPLETED",
 ]);
 
 function refuseReservedCliEvent(eventType: string): void {
@@ -347,6 +354,8 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "QUESTION_ANSWERED",
   "REVIEW_REQUESTED",
   "REVIEW_COMPLETED",
+  "PIPELINE_LINK_COMPLETED",
+  "ARTIFACT_REUSED",
   "SWARM_STARTED",
   "SWARM_UNIT_CONVERGED",
   "AUTONOMY_MODE_SET",

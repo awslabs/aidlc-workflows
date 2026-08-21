@@ -61,7 +61,7 @@ const FIXTURES = JSON.parse(
 // intent's record, not the flat aidlc-docs/ root. So the scratch project seeds
 // the per-intent workspace shell + the state fixture into the default record (so
 // the active-intent cursor resolves) + the resolved audit SHARD (pinned clone-id
-// so the log-subagent shard gate passes and reads are deterministic).
+// so audit reads are deterministic).
 const PINNED_CLONE_ID = "testcloneid147";
 function pinnedShardName(): string {
   const host =
@@ -104,8 +104,8 @@ function scratchProject(withState: boolean): string {
       seededStateFile(dir),
       readFileSync(join(REPO_ROOT, "tests", "fixtures", "state-brownfield-feature.md"), "utf-8"),
     );
-    // The resolved audit shard (pinned clone-id) so the log-subagent shard gate
-    // passes and the trail seeds the "# AI-DLC Audit Log" header.
+    // The resolved audit shard (pinned clone-id) keeps log-subagent writes
+    // deterministic and seeds the "# AI-DLC Audit Log" header.
     writeFileSync(join(dir, "aidlc", ".aidlc-clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
     const auditDir = seededAuditDir(dir);
     mkdirSync(auditDir, { recursive: true });

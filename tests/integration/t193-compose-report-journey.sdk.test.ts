@@ -105,6 +105,10 @@ describe("t193 report composer journey (/aidlc compose --report, sdk live)", () 
         const stateText = readStateFile(proj) ?? "";
         const scope = readStateField(stateText, "Scope");
         expect(["bugfix", "security-patch"]).toContain(scope ?? "");
+        const projectDescription = readStateField(stateText, "Project");
+        expect(projectDescription).toBeDefined();
+        expect(projectDescription).not.toBe("[Project description]");
+        expect(projectDescription?.trim().length ?? 0).toBeGreaterThan(0);
       } finally {
         cleanupTestProject(proj);
       }

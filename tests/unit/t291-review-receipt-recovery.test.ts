@@ -83,9 +83,6 @@ describe("t291 stale review receipt recovery", () => {
       "--reviewer", "aidlc-product-lead-agent",
     ];
 
-    expect(
-      run(STATE_TOOL, ["gate-start", "requirements-analysis"], proj).status,
-    ).toBe(0);
     expect(run(LOG_TOOL, [...review, "--iteration", "1"], proj).status).toBe(0);
     expect(
       run(
@@ -93,6 +90,9 @@ describe("t291 stale review receipt recovery", () => {
         [...review, "--iteration", "1", "--verdict", "READY"],
         proj,
       ).status,
+    ).toBe(0);
+    expect(
+      run(STATE_TOOL, ["gate-start", "requirements-analysis"], proj).status,
     ).toBe(0);
 
     writeRequirements(proj, "changed requirements\n");
@@ -156,9 +156,6 @@ describe("t291 stale review receipt recovery", () => {
       "--reviewer", "aidlc-product-lead-agent",
     ];
 
-    expect(
-      run(STATE_TOOL, ["gate-start", "requirements-analysis"], proj).status,
-    ).toBe(0);
     expect(run(LOG_TOOL, [...review, "--iteration", "1"], proj).status).toBe(0);
     expect(
       run(
@@ -166,6 +163,9 @@ describe("t291 stale review receipt recovery", () => {
         [...review, "--iteration", "1", "--verdict", "READY"],
         proj,
       ).status,
+    ).toBe(0);
+    expect(
+      run(STATE_TOOL, ["gate-start", "requirements-analysis"], proj).status,
     ).toBe(0);
 
     writeRequirements(proj, "changed before recovery\n");

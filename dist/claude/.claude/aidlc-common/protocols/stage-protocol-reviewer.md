@@ -77,7 +77,7 @@ Everything else in this section is silent. Nothing is said about invoking, handi
 
 3. **Read verdict.** After the reviewer returns, delete `<record>/.aidlc-reviewer-dispatch.json` if one was written (the enforcement window closes with the review; a leftover record would keep refusing sibling access for later, unrelated work), then read the `## Review` section from the primary artifact and validate it. The review is complete only when the artifact carries exactly ONE current `## Review` section whose verdict is exactly one canonical token, READY or NOT-READY. Anything else is an INCOMPLETE attempt, not a verdict: no section at all (the reviewer has a hard turn cap and may have been stopped before writing it - step 1 deletes any prior section before every dispatch, so a missing section means an incomplete review on every path, first entry or revision alike), a section with no canonical verdict line (a reviewer cut off mid-write), or more than one `## Review` section or verdict line (conflicting - never guess which was meant).
 
-   **On an incomplete attempt:** no verdict exists to record, so the step-1 request is still unmatched. If the ledger does not yet mark a retry on this request, re-dispatch it exactly once - rerun the same request command with `--retry-pending` (step 1's contract: accepted only while the request is unmatched, consumes no review iteration) and return to step 1 (whose delete rule clears any partial section). If the retried attempt is ALSO incomplete, stop retrying: record the terminal receipt with `--verdict NOT-READY` and the finding "review did not complete within its turn budget", then proceed as that NOT-READY verdict directs for the effective review class - on `advisory` it is terminal (present the gate with the finding quoted as decision support); on `adversarial` with iterations remaining, skip the lead re-invoke (the artifact itself was never reviewed, so there is nothing for the builder to act on) and go directly back to step 1 with a fresh iteration and a fresh request; on `adversarial` with iterations exhausted, proceed to the gate with the finding noted. Recording the receipt is what keeps the engine's completion precondition satisfiable: the gate is never presented on a silently missing verdict, and never deadlocks on one either.
+   **On an incomplete attempt:** no verdict exists to record, so the step-1 request is still unmatched. If the ledger does not yet mark a retry on this request, re-dispatch it exactly once - rerun the same request command with `--retry-pending` (step 1's contract: accepted only while the request is unmatched, consumes no review iteration) and return to step 1 (whose delete rule clears any partial section). If the retried attempt is ALSO incomplete, stop retrying: record the terminal receipt with `--verdict NOT-READY` and the finding "review did not complete within its turn budget", then proceed as that NOT-READY verdict directs for the effective review class - on `advisory` it is terminal (present the gate with the finding quoted as decision support); on `adversarial` with iterations remaining, skip the lead re-invoke (the artifact itself was never reviewed, so there is nothing for the builder to act on) and go directly back to step 1 with a fresh iteration and a fresh request; on `adversarial` with iterations exhausted, proceed to the gate with the finding noted. Recording the receipt is what keeps the engine's gate and completion precondition satisfiable: the gate is never presented on a silently missing verdict, and never deadlocks on one either.
 
    **On a complete review**, record the terminal receipt with the same `aidlc-log.ts review` command plus `--verdict <READY|NOT-READY>` (and the same `--unit` / `--single` fields).
 
@@ -106,18 +106,19 @@ the same lead-alone loop and iteration budget as at first entry; an
 `advisory` review re-runs as one fresh advisory pass (its findings ride the
 re-presented gate).
 
-> **Completion precondition (enforced by the engine).** Every completion path
-> (`approve`, `advance`, `finalize`, and `complete-workflow`) refuses a stage
-> that declares a reviewer until the audit ledger contains a fresh
-> `REVIEW_COMPLETED` from that reviewer. Per-unit stages require one receipt for
-> every applicable unit. A workflow restart, relevant jump, gate rejection, or
-> later write to a declared stage artifact invalidates older receipts (per-unit
-> writes invalidate only that unit). After such a write, the engine permits
-> exactly one recovery review request at the next ordinal; record its verdict
-> and stop editing `produces[]` artifacts. Only a `READY` or `NOT-READY` verdict is
-> terminal. The precondition is hard on the review having happened and soft on
-> its verdict: a NOT-READY verdict after the iteration cap still reaches the
-> human gate. Autonomous Construction is not exempt; swarm
+> **Gate and completion precondition (enforced by the engine).** Every gate
+> opening (`gate-start` and `revise`) and completion path (`approve`, `advance`,
+> `finalize`, and `complete-workflow`) refuses a stage that declares a reviewer
+> until the audit ledger contains a fresh `REVIEW_COMPLETED` from that reviewer.
+> Per-unit stages require one receipt for every applicable unit. A workflow
+> restart, relevant jump, gate rejection, or later write to a declared stage
+> artifact invalidates older receipts (per-unit writes invalidate only that
+> unit). After such a write, the engine permits exactly one recovery review
+> request at the next ordinal; record its verdict and stop editing `produces[]`
+> artifacts. Only a `READY` or `NOT-READY` verdict is terminal. The precondition
+> is hard on the review having happened and soft on its verdict: a NOT-READY
+> verdict after the iteration cap still reaches the human gate. Autonomous
+> Construction is not exempt; swarm
 > units are reviewed in their Bolt worktrees after convergence and before
 > finalization. The swarm referee verifies each configured unit's terminal
 > receipt after its `BOLT_STARTED` boundary before merging it, so autonomy

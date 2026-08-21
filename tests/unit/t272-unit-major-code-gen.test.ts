@@ -223,7 +223,13 @@ function runReport(proj: string, args: string[]): Directive {
   const r = spawnSync(BUN, [ORCH, "report", ...args, "--project-dir", proj], {
     encoding: "utf-8",
     env: (() => {
-      const e = { ...process.env };
+      const e: NodeJS.ProcessEnv = {
+        ...process.env,
+        // This routing fixture is intentionally not a Git checkout. Source
+        // freshness is exercised end to end by t304; keep this test scoped to
+        // the unit-major cascade instead of minting unbindable review receipts.
+        AIDLC_SKIP_SOURCE_FRESHNESS: "1",
+      };
       delete e.AWS_AIDLC_DEFAULT_SCOPE;
       return e;
     })(),

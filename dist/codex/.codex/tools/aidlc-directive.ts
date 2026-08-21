@@ -130,6 +130,11 @@ export interface RunStageWave {
   entries: RunStageWaveEntry[];
 }
 
+export interface RunStagePipeline {
+  links: string[];
+  completed: string[];
+}
+
 // run-stage — load the resolved rules, load lead + support agents, load
 // `consumes` artifacts, run the stage body, write `produces`, keep memory.md. Routing fields (lead_agent,
 // support_agents, mode, gate, sensors_applicable, rules_in_context, stage_file)
@@ -145,6 +150,10 @@ export interface RunStageDirective {
   lead_agent: string;
   support_agents: string[];
   mode: "inline" | "subagent" | "pipeline" | "mob" | "agent-team";
+  // Pipeline recovery surface. links is the declared lead→support chain;
+  // completed contains current-attempt receipts (repo-qualified as
+  // `<repo>:<agent>` when the intent registers multiple repositories).
+  pipeline?: RunStagePipeline;
   // single marks an isolated stage-runner invocation. The conductor branches
   // on this before gate handling, reports with `report --single`, and treats
   // the returned `done` as terminal.
@@ -451,6 +460,7 @@ const RUN_STAGE_FIELDS = [
   "lead_agent",
   "support_agents",
   "mode",
+  "pipeline",
   "single",
   "inline_context_paths",
   "context_warnings",
@@ -720,6 +730,7 @@ function checkRunStageShared(
   checkStringArray(o, "support_agents", kind, errors);
   checkString(o, "mode", kind, errors);
   checkEnum(o, "mode", VALID_MODES, kind, errors);
+  checkOptionalPipeline(o, kind, errors);
   checkStringArray(o, "inline_context_paths", kind, errors);
   checkOptionalStringArray(o, "context_warnings", kind, errors);
   checkGate(o, "gate", kind, errors);
@@ -881,6 +892,27 @@ function checkOptionalBoolean(
   if (typeof o[field] !== "boolean") {
     errors.push(`${kind}: ${field} must be boolean, got ${describe(o[field])}`);
   }
+}
+
+function checkOptionalPipeline(
+  o: Record<string, unknown>,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!("pipeline" in o)) return;
+  const value = o.pipeline;
+  if (!isPlainObject(value)) {
+    errors.push(`${kind}: pipeline must be object, got ${describe(value)}`);
+    return;
+  }
+  const keys = Object.keys(value);
+  for (const key of keys) {
+    if (key !== "links" && key !== "completed") {
+      errors.push(`${kind}: pipeline unknown key: ${key}`);
+    }
+  }
+  checkStringArray(value, "links", kind, errors);
+  checkStringArray(value, "completed", kind, errors);
 }
 
 function checkOptionalTrue(

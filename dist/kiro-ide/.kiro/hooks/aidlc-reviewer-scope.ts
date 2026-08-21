@@ -27,8 +27,11 @@
 // both), and the Kiro CLI adapter asserts scoped registration instead (it
 // wires this hook inside the reviewer agents' own JSON configs, so every
 // call arriving through that registration IS the reviewer's). Kiro IDE
-// ships no registration: its hook payloads carry no tool inputs, so a
-// pre-tool matcher has nothing to inspect there.
+// ships no registration: tool inputs are not uniformly available across its
+// supported generations (captured 0.12 and early-1.x payloads are empty; later
+// 1.x builds populate some PreToolUse and delegation inputs - see
+// docs/reference/kiro-ide-hook-payload.md), and its payloads carry no
+// agent_type, so no stable identity/target contract exists there.
 //
 // Fail-open everywhere: no record, a stale record (mtime beyond
 // REVIEWER_DISPATCH_TTL_MS - janitored like the compose marker), malformed
@@ -809,9 +812,13 @@ export async function run(input: string): Promise<number> {
   // calls). The Kiro CLI adapter instead asserts scoped_registration - it
   // registers this hook inside the reviewer agents' own JSON configs, so
   // every call arriving through that registration is the reviewer's. (Kiro
-  // IDE ships no registration at all: its hook payloads carry no tool inputs,
-  // so there is nothing to match on there.) Anything else - the conductor's
-  // own calls, other subagents - passes through untouched.
+  // IDE ships no registration at all: tool inputs are not uniformly available
+  // across its supported generations - captured 0.12 and early-1.x payloads
+  // are empty, while later 1.x builds populate some PreToolUse and delegation
+  // inputs (see docs/reference/kiro-ide-hook-payload.md) - and its payloads
+  // carry no agent_type, so no stable identity/target contract exists there.)
+  // Anything else - the conductor's own calls, other subagents - passes
+  // through untouched.
   const agentType = parsed.agent_type ?? "";
   const scopedRegistration = parsed.scoped_registration === true;
   const isDispatchedReviewer =

@@ -102,7 +102,7 @@ import {
 import {
   activeSpace,
   ActiveDirectiveLockContendedError,
-  advanceCopilotContinuation,
+  advanceContinuationCursor,
   activeUnitCheckpoint,
   artifactFilename,
   auditBlockField,
@@ -110,15 +110,15 @@ import {
   checkSummaryConfirmationEvidence,
   clearActiveDirectiveMarker,
   codekbRepoName,
-  copilotDirectiveCommitRequired,
   currentUnitLifecycleMode,
   errorMessage,
   filterProducesByKind,
   firstInScopeStageOfPhase,
+  formatReceivedReply,
   freshReviewReceipts,
   getField,
   intentRepos,
-  inspectCopilotContinuation,
+  inspectContinuationCursor,
   isPerUnitStage,
   isRegularFile,
   KNOWN_CODEKB_STAGES,
@@ -129,6 +129,7 @@ import {
   loadScopeMapping,
   nextInScopeStage,
   parseCheckboxes,
+  pipelineLinkEvidence,
   type KnowledgeCommand,
   parseKnowledgeCommand,
   type PluginCommand,
@@ -141,7 +142,6 @@ import {
   readAllAuditShards,
   recordHookDrop,
   markEngineTouch,
-  markActiveDirectiveResumeWaiting,
   relativeCodekbDir,
   relativeRecordDir,
   relativeSpaceRecordPrefix,
@@ -286,23 +286,21 @@ function prepareEmission(directive: Directive): PreparedEmission {
         directive.kind === "run-stage" && directive.single === true &&
           existsSync(stateFilePath(route.codekbCtx.projectDir))
           ? sha256(readFileSync(stateFilePath(route.codekbCtx.projectDir), "utf-8"))
-          : null
+          : sha256("")
       );
-    if (markerStateHash) {
-      marker = {
-        kind: transported.kind,
-        stage: transported.stage,
-        ...(directive.kind === "run-stage" && directive.unit ? { unit: directive.unit } : {}),
-        ...(transported.kind === "load-steering"
-          ? {
-              part: transported.part,
-              parts: transported.parts,
-              continue_token: transported.continue_token,
-            }
-          : {}),
-        state_sha256: markerStateHash,
-      };
-    }
+    marker = {
+      kind: transported.kind,
+      stage: transported.stage,
+      ...(directive.kind === "run-stage" && directive.unit ? { unit: directive.unit } : {}),
+      ...(transported.kind === "load-steering"
+        ? {
+            part: transported.part,
+            parts: transported.parts,
+            continue_token: transported.continue_token,
+          }
+        : {}),
+      state_sha256: markerStateHash,
+    };
   }
   return {
     transported,
@@ -314,15 +312,13 @@ function prepareEmission(directive: Directive): PreparedEmission {
 }
 
 function writePrepared(prepared: PreparedEmission): void {
-  process.stdout.write(`${prepared.serialized}\n`);
+  writeFileSync(1, `${prepared.serialized}\n`, "utf-8");
 }
 
 function emit(directive: Directive): void {
   const prepared = prepareEmission(directive);
   if (prepared.marker) {
     const projectDir = prepared.projectDir;
-    let requireCopilotCommit = !!projectDir && engineInvocation?.commandKind === "next" &&
-      copilotDirectiveCommitRequired(projectDir, prepared.marker.state_sha256);
     try {
       if (projectDir) {
         const publication = writeActiveDirectiveMarker(projectDir, prepared.marker, {
@@ -330,7 +326,6 @@ function emit(directive: Directive): void {
           ...(engineInvocation ? { commandKind: engineInvocation.commandKind } : {}),
           ...(engineInvocation ? { commandSha256: engineInvocation.commandSha256 } : {}),
           resultSha256: prepared.resultSha256,
-          requireCopilotCommit,
         });
         if (publication === "stale-attempt") {
           recordHookDrop(projectDir, "active-directive", "tracked fresh next attempt was superseded before publication");
@@ -339,26 +334,22 @@ function emit(directive: Directive): void {
           )));
           return;
         }
-        if (requireCopilotCommit && publication !== "copilot-committed") {
-          recordHookDrop(projectDir, "active-directive", "fresh Copilot next did not commit its directive");
+        if (publication !== "copilot-committed" && publication !== "generic-committed") {
+          recordHookDrop(projectDir, "active-directive", "fresh next did not commit its directive");
           writePrepared(prepareEmission(errorDirective(
-            "The fresh Copilot directive could not be published, so no work directive was issued. Retry `next`; if coordination remains busy, run `/aidlc --doctor`.",
+            "The directive could not be published, so no work directive was issued. Retry the command; if coordination remains busy, run `/aidlc --doctor`.",
           )));
           return;
         }
       }
     } catch (e) {
       if (projectDir) {
-        requireCopilotCommit ||= engineInvocation?.commandKind === "next" &&
-          copilotDirectiveCommitRequired(projectDir, prepared.marker.state_sha256);
         recordHookDrop(projectDir, "active-directive", errorMessage(e));
       }
-      if (requireCopilotCommit) {
-        writePrepared(prepareEmission(errorDirective(
-          "The fresh Copilot directive could not be published, so no work directive was issued. Retry `next`; if coordination remains busy, run `/aidlc --doctor`.",
-        )));
-        return;
-      }
+      writePrepared(prepareEmission(errorDirective(
+        "The directive could not be published, so no work directive was issued. Retry the command; if coordination remains busy, run `/aidlc --doctor`.",
+      )));
+      return;
     }
   }
   writePrepared(prepared);
@@ -707,7 +698,7 @@ interface ParsedFlags {
   review?: string; // --review <adversarial|advisory|none>: per-run review-class override
   readOnly?: string; // the matched read-only flag, if any
   readOnlyArgs?: string[]; // allowlisted trailing args for the read-only flag (e.g. --doctor --export --output <dir>)
-  resume?: boolean; // --resume: re-enter an existing workflow (resume choice)
+  resume?: boolean; // --resume: continue an existing workflow directly
   single?: boolean; // --single: run ONE stage under a synthetic workflow id, never touching the main pointer
   newIntent?: boolean; // --new-intent: the conductor confirmed new-work alongside an active intent → emit the SAME birth directive (with the --label seam) the fresh-start path uses, instead of constructing intent-create from SKILL.md prose
   intent?: string; // freeform request text (no leading --flag)
@@ -752,8 +743,17 @@ function parseNextFlags(args: string[]): ParsedFlags {
   }
   const flags: ParsedFlags = {};
   const intentWords: string[] = [];
+  let literalIntent = false;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
+    if (literalIntent) {
+      intentWords.push(a);
+      continue;
+    }
+    if (a === "--") {
+      literalIntent = true;
+      continue;
+    }
     if (READ_ONLY_FLAGS.has(a)) {
       flags.readOnly = a;
       continue;
@@ -825,7 +825,10 @@ function parseNextFlags(args: string[]): ParsedFlags {
       // into the freeform intent text (the path would read as intent words).
       flags.report = args[i + 1];
       i++;
-    } else if (!a.startsWith("--")) {
+    } else {
+      // Unknown flag-looking tokens are task text, not disposable noise. Use
+      // the standard `--` delimiter when a task must contain a token that is
+      // otherwise a recognized AIDLC flag (for example `compose -- --scope`).
       intentWords.push(a);
     }
   }
@@ -888,7 +891,7 @@ function createPrintDirective(scope: string, flags: ParsedFlags, description?: s
   let labelHint = "";
   if (description && description.length > 0) {
     // Shell-quote the freeform description so multi-word intents survive intact.
-    cmd.push(`--arguments ${JSON.stringify(description)}`);
+    cmd.push(`--arguments=${shellArg(description)}`);
     // The conductor (LLM) condenses the description into the short dir-name label
     // — the engine can't summarize. Name the missing --label in the directive so
     // the conductor adds it; the dir name becomes `<YYMMDD>-<label>`. (A bare run
@@ -957,6 +960,15 @@ function composeDispatchDirective(
     parts.push(
       `Dispatch the composer agent (${hd}/agents/aidlc-composer-agent.md) as a subagent to propose the workflow plan for: "${flags.intent ?? ""}".`,
     );
+    if (flags.intent) {
+      parts.push(
+        `The proposal's required \`birthDescription\` MUST equal the original task text verbatim: ${JSON.stringify(flags.intent)}. On approval, pass it after the literal \`--\` delimiter as one shell-safe argv value; for this exact task the command is \`next --scope <scopeName> -- ${shellArg(flags.intent)}\`. Never use double quotes around untrusted task text and never use a bare \`next --scope <scopeName>\`, so shell metacharacters and flag-like descriptions stay literal and the born Project field preserves the real description.`,
+      );
+    } else {
+      parts.push(
+        "The proposal MUST include a nonblank `birthDescription` grounded in the approved work. For report-driven composition, derive it from the report's actual findings; for a task-less front composition, derive it from the approved proposal. Never approve a proposal that would continue into a scope-only birth.",
+      );
+    }
     if (flags.report) {
       parts.push(
         `First have it read and triage the scan report at "${flags.report}" (auto-fixable vs human-decision findings), then compose a compact fix-and-ship grid - this often routes to the stock bugfix or security-patch scope rather than minting a new one.`,
@@ -970,7 +982,7 @@ function composeDispatchDirective(
   }
   const proposalShape = inFlight
     ? "mode in-flight, the current scopeName, an ars block (the five component scores with method codekb|fallback), an arsRationale, the preserved full effective grid, exact changes.skip and changes.add arrays, a per-change rationale, a summary the strict validator computed, and two pre-rendered markdown tables (ARS scores with bands; per-stage decisions with reasoning)"
-    : "mode matched|custom, scopeName, an ars block (the five component scores with method codekb|fallback), an arsRationale, the per-stage EXECUTE/SKIP grid, a per-SKIP rationale, a summary the validator computed, and two pre-rendered markdown tables (ARS scores with bands; per-stage decisions with reasoning)";
+    : "mode matched|custom, scopeName, a nonblank birthDescription, an ars block (the five component scores with method codekb|fallback), an arsRationale, the per-stage EXECUTE/SKIP grid, a per-SKIP rationale, a summary the validator computed, and two pre-rendered markdown tables (ARS scores with bands; per-stage decisions with reasoning)";
   const modeContract = inFlight
     ? "the composer's mode is IN-FLIGHT and FINAL for the returned delta: nearest_stock is advisory, the running scope and frozen actions stay unchanged, and approval uses only changes.skip/changes.add through recompose; neither presentation nor comparison with stock grids may alter that delta"
     : "the composer's mode is FINAL for the grid it returned: it routed matched-vs-custom solely on the final proposal validator's nearest_stock distance, a matched proposal already carries the revalidated stock grid verbatim, and neither presentation nor your own comparison of grids ever changes the verdict - never re-derive it, and a MATCHED proposal writes no scope file; if the human edits that stock grid, re-dispatch the composer, which must convert it to CUSTOM and revalidate before re-presenting";
@@ -1473,16 +1485,29 @@ function isCodekb(node: GraphStage): boolean {
 // codekbRepoName(projectDir); `space` is the active-space cursor. When absent
 // (a non-codekb caller, e.g. a test invoking buildRunStageDirective with
 // defaults) the codekb branch never fires and the record-dir path stands.
-type CodekbCtx = { projectDir: string; space: string; codekbRepo: string };
+type CodekbCtx = {
+  projectDir: string;
+  space: string;
+  codekbRepo: string;
+  repos: string[];
+};
 
 // Build the CodekbCtx for a live projectDir, resolving the active-space cursor
 // and the deterministic codekb repo name (both read-only). One place so the
 // `next` happy path, the jump paths, and the report-side per-unit coverage guard
 // share the same construction instead of repeating the object literal.
 function codekbCtxFor(pd: string): CodekbCtx {
-  return { projectDir: pd, space: activeSpace(pd), codekbRepo: codekbRepoName(pd) };
+  return {
+    projectDir: pd,
+    space: activeSpace(pd),
+    codekbRepo: codekbRepoName(pd),
+    repos: intentRepos(pd),
+  };
 }
 
+function codekbArtifactRepos(ctx: CodekbCtx): string[] {
+  return ctx.repos.length > 1 ? ctx.repos : [ctx.codekbRepo];
+}
 
 // Resolve a single artifact vocabulary name to its canonical aidlc-docs/... path
 // UNDER THE STAGE THAT OWNS THE FILE. Non-per-unit stages map to
@@ -1529,24 +1554,41 @@ function resolveArtifactPath(
   return `${prefix}/${owner.phase}/${owner.slug}/${filename}`;
 }
 
-// Resolve a CONSUMED artifact's path. A consumed artifact lives under the stage
-// that PRODUCES it (the 1:1 producer rule above), so we key the path on the
-// producer node — never on the consuming `node`. producersOf returns the
-// producing stages; the verified graph invariant is exactly one producer per
-// artifact (a clean 1:1 map), so producersOf(name)[0] is the owner. Defensive
-// fallback: if no producer is found (an orphan consume — a graph defect the
-// doctor surfaces, not expected in the shipped graph), resolve under the
-// consuming node's own directory rather than crash, so the engine still emits a
-// well-formed directive.
-function resolveConsumePath(
+function resolveArtifactPaths(
+  name: string,
+  owner: GraphStage,
+  unit: string | null,
+  recordPrefix: string | null,
+  codekbCtx?: CodekbCtx,
+): string[] {
+  if (isCodekb(owner) && codekbCtx && codekbCtx.repos.length > 1) {
+    const filename = artifactFilename(name);
+    return codekbArtifactRepos(codekbCtx).map(
+      (repo) =>
+        `${relativeCodekbDir(codekbCtx.projectDir, repo, codekbCtx.space)}/${filename}`,
+    );
+  }
+  return [resolveArtifactPath(name, owner, unit, recordPrefix, codekbCtx)];
+}
+
+// Resolve a consumed artifact under its producer. Multi-repo codekb producers
+// expand to one path per registered repo; an orphan consume defensively falls
+// back to the consuming node so the directive remains well formed.
+function resolveConsumePaths(
   name: string,
   node: GraphStage,
   unit: string | null,
   recordPrefix: string | null,
   codekbCtx?: CodekbCtx,
-): string {
+): string[] {
   const producer = producersOf(name)[0];
-  return resolveArtifactPath(name, producer ?? node, unit, recordPrefix, codekbCtx);
+  return resolveArtifactPaths(
+    name,
+    producer ?? node,
+    unit,
+    recordPrefix,
+    codekbCtx,
+  );
 }
 
 // Normalise the workflow's Project Type to the lowercase token the graph's
@@ -1607,11 +1649,19 @@ function resolveConsumes(
     ) {
       continue;
     }
-    resolved.push({
-      artifact: consume.artifact,
-      required: consume.required,
-      path: resolveConsumePath(consume.artifact, node, unit, recordPrefix, codekbCtx),
-    });
+    for (const path of resolveConsumePaths(
+      consume.artifact,
+      node,
+      unit,
+      recordPrefix,
+      codekbCtx,
+    )) {
+      resolved.push({
+        artifact: consume.artifact,
+        required: consume.required,
+        path,
+      });
+    }
   }
   return resolved;
 }
@@ -1680,7 +1730,9 @@ function resolveProduces(
   unitKind: string | null = null,
 ): string[] {
   return applicableProduceNames(node, unitKind, true)
-    .map((name) => resolveArtifactPath(name, node, unit, recordPrefix, codekbCtx));
+    .flatMap((name) =>
+      resolveArtifactPaths(name, node, unit, recordPrefix, codekbCtx)
+    );
 }
 
 // The one applicability rule for a stage's kind-aware produce set. Callers
@@ -2037,6 +2089,13 @@ function buildRunStageDirective(
     sensors_applicable: (node.sensors_applicable ?? []).map((s) => s.id),
     stage_file: stageFileFor(node.phase, node.slug),
   };
+  if (node.mode === "pipeline" && codekbCtx) {
+    const evidence = pipelineLinkEvidence(codekbCtx.projectDir, node);
+    directive.pipeline = {
+      links: evidence.links,
+      completed: evidence.completed,
+    };
+  }
   if (inlineContext.warnings.length > 0) {
     directive.context_warnings = inlineContext.warnings;
   }
@@ -2813,8 +2872,8 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // workflow must CLEAR the marker before continuing, else the next plain `next`
   // would re-park. Clearing is a MUTATION, so `next` NAMES the move (a
   // run-then-continue print) and the conductor runs the tool; `next` itself
-  // writes nothing. Fires before Branch 6 (the resume-choice ask) so the marker
-  // is cleared first.
+  // writes nothing. Fires before normal continuation routing so the marker is
+  // cleared first.
   if (
     stateContent &&
     flags.resume &&
@@ -3026,30 +3085,6 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     }
   }
 
-  // Branch 6 — resume (SKILL.md:292). When the conductor re-enters an existing
-  // workflow (`/aidlc --resume`), the prose presents a resume-choice
-  // AskUserQuestion. The engine NEVER calls AskUserQuestion (it is a Bash tool
-  // the conductor owns); it emits an `ask` directive carrying the question and
-  // STOPS, and the conductor renders it and feeds the answer back via report.
-  // No state file → there is nothing to resume, so fall through to the
-  // no-state error below.
-  if (flags.resume && stateContent) {
-    const currentSlug = getField(stateContent, "Current Stage") ?? "";
-    const where = currentSlug.length > 0 ? ` (currently at "${currentSlug}")` : "";
-    if (currentSlug) {
-      try {
-        markActiveDirectiveResumeWaiting(pd, stateContent, currentSlug);
-      } catch (e) {
-        recordHookDrop(pd, "active-directive", errorMessage(e));
-      }
-    }
-    emit(askDirective(
-      `An existing workflow was found${where}. How would you like to proceed? ` +
-        "Resume from last checkpoint, redo the current stage, jump to a stage, or start fresh.",
-    ));
-    return;
-  }
-
   // Branch 7 — explicit --phase / --stage jump. The conductor relays the
   // human's jump target; the engine SUPPLIES the resolved direction by shelling
   // out to `aidlc-jump.ts resolve` (a pure read) rather than re-deriving the
@@ -3058,7 +3093,8 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // relayed as its VERBATIM `Stage "..." is skipped for scope "...".` error.
   // On success we surface the run-stage directive for the resolved target,
   // carrying resolved artifact paths (projectType feeds the conditional_on
-  // filter for the jumped-to stage).
+  // filter for the jumped-to stage). An explicit target also wins when combined
+  // with --resume: `next --resume --stage <slug>` reaches this jump branch.
   if (flags.phase || flags.stage) {
     emitJumpDirective(flags, scope, pd, projectType);
     return;
@@ -3069,7 +3105,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // leading valid token into positionalScope and leaves any trailing prose in
   // flags.intent. Birth the positional scope and preserve that prose as the
   // intent-create --arguments value. An explicit --scope outranks this branch
-  // and reaches Branch 9a; --resume never births.
+  // and reaches Branch 9a; a no-state --resume never births.
   if (
     !stateContent &&
     flags.positionalScope &&
@@ -3151,10 +3187,10 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // flag already died at Branch 3b). Naming a scope on a fresh workspace is a
   // request to START a workflow — the same birth move as Branch 7b's
   // valid-scope positional, reached here because the flag passes Branch 3b
-  // validation and no jump/init/resume branch fired. Scaffolding is a
+  // validation and no jump/init branch fired. Scaffolding is a
   // mutation, so the engine names the init move (run-then-continue print)
-  // rather than performing it. `--resume` never births: resuming claims a
-  // workflow already exists, so with no state it falls to the 9b error.
+  // rather than performing it. A no-state `--resume` never births: resuming
+  // claims a workflow already exists, so it falls to the 9b error.
   if (!stateContent && source === "flag" && !flags.resume) {
     // Same fresh-clone guard as Branch 7b: if intents already exist in the
     // active space with no cursor set, prompt to pick one instead of birthing a
@@ -3242,8 +3278,8 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // routing flag, a workflow is active), so the engine surfaces the question
   // and stops - the classification stays with the human, the same split as
   // every other ask. Explicit forms are untouched: --scope'd prose, positional
-  // scopes, jumps, compose, --new-intent, --single and --resume all returned
-  // in earlier branches or are excluded here.
+  // scopes, jumps, compose, --new-intent, and --single returned in earlier
+  // branches; --resume is excluded here and continues the current workflow.
   if (flags.intent && !flags.scope && !flags.positionalScope && !flags.resume) {
     const activeLabel =
       (getField(stateContent, "Project") ?? "").trim() ||
@@ -4834,8 +4870,9 @@ interface ReportFlags {
   stage?: string; // --stage <slug>: the acted stage (required under --single; preferred for main workflow reports)
 }
 
-// Extract report's flags. --result is the verdict; --user-input rides through
-// to approve's GATE_APPROVED row; --reason rides through to complete-workflow.
+// Extract report's flags. --result is the verdict; --user-input carries the
+// exact offered choice, while --reason carries rejection feedback or an early
+// completion reason.
 // --skeleton-stance carries the conductor's classified walking-skeleton stance
 // (the classify round-trip): it does NOT commit a transition — it records the
 // stance so the next `next` resolves the deferred gate.
@@ -5126,6 +5163,27 @@ function checkStageCompletionEvidence(
     pd,
     boltResolution ?? undefined,
   );
+
+  if (
+    node.mode === "pipeline" &&
+    process.env.AIDLC_DISABLE_ENSEMBLE_EVIDENCE !== "1"
+  ) {
+    const evidence = pipelineLinkEvidence(pd, node);
+    if (evidence.missing.length > 0) {
+      const missing = evidence.missing.map(({ link, repo }) =>
+        repo ? `${repo}:${link}` : link
+      );
+      return {
+        ok: false,
+        message:
+          `Stage "${slug}" is mode: pipeline and cannot enter or complete approval until every ` +
+          `declared link has a current-attempt PIPELINE_LINK_COMPLETED receipt. Missing: ${missing.join(", ")}. ` +
+          `After each link returns, run \`bun ${harnessDir()}/tools/aidlc-log.ts link --stage ${slug} ` +
+          `--link <agent>${evidence.repos.length > 0 ? " --repo <repo>" : ""}\`. ` +
+          `Set AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1 only to recover a legitimately-run in-flight pipeline.`,
+      };
+    }
+  }
 
   if (isPerUnit(node) && !settledSwarm) {
     const resolution = boltResolution ?? resolveBoltBatches(pd);
@@ -5629,6 +5687,52 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   }
 
   const isGated = node.phase !== "initialization";
+  const protectedHumanGate =
+    isGated &&
+    stageCheckbox.state !== "completed" &&
+    readAutonomyMode(stateContent) !== "autonomous" &&
+    process.env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD !== "1";
+
+  if (protectedHumanGate && flags.result === "rejected") {
+    if (flags.userInput?.trim() !== "Request Changes") {
+      emit(errorDirective(
+        `report --result rejected for "${slug}" received reply ` +
+          `${formatReceivedReply(flags.userInput)} which did not match an offered choice at ` +
+          "the held gate. Re-present the original held gate with every " +
+          "offered choice and wait for the human to choose one.",
+      ));
+      return;
+    }
+    if (!flags.reason?.trim()) {
+      emit(errorDirective(
+        `report --result rejected for "${slug}" requires nonblank revision feedback in ` +
+          "--reason, separate from --user-input \"Request Changes\".",
+      ));
+      return;
+    }
+  }
+
+  if (
+    protectedHumanGate &&
+    FORWARD_RESULTS.has(flags.result ?? "")
+  ) {
+    const rawRevisionCount = getField(stateContent, "Revision Count");
+    const parsedRevisionCount = rawRevisionCount ? parseInt(rawRevisionCount, 10) : 0;
+    const revisionCount = Number.isFinite(parsedRevisionCount) ? parsedRevisionCount : 0;
+    const approvalChoice = flags.userInput?.trim();
+    const matchesOfferedApproval =
+      approvalChoice === "Approve" ||
+      (approvalChoice === "Accept as-is" && revisionCount >= 3);
+    if (!matchesOfferedApproval) {
+      emit(errorDirective(
+        `report --result ${flags.result} for "${slug}" received reply ` +
+          `${formatReceivedReply(approvalChoice)} which did not match an offered choice at ` +
+          "the held gate. Re-present the original held gate with every offered " +
+          "choice and wait for the human to choose one.",
+      ));
+      return;
+    }
+  }
 
   // Gate lifecycle reports keep every model-issued state transition behind the
   // engine boundary. They resolve before artifact/ensemble completion guards:
@@ -5658,14 +5762,17 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     }
 
     let subArgs: string[];
+    let revalidatingOpenGate = false;
     if (flags.result === "awaiting-approval") {
       if (stageCheckbox.state === "awaiting-approval") {
-        emit(printDirective(`Stage "${slug}" is already awaiting approval.`));
-        return;
+        revalidatingOpenGate = true;
       }
-      if (stageCheckbox.state !== "in-progress") {
+      if (
+        stageCheckbox.state !== "in-progress" &&
+        stageCheckbox.state !== "awaiting-approval"
+      ) {
         emit(errorDirective(
-          `Stage "${slug}" is ${stageCheckbox.state}; only an in-progress stage can open a gate.`,
+          `Stage "${slug}" is ${stageCheckbox.state}; only an in-progress or already-open stage can validate a gate.`,
         ));
         return;
       }
@@ -5680,14 +5787,15 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         ));
         return;
       }
-      const feedback = (flags.userInput ?? flags.reason)?.trim();
+      const feedback = flags.reason?.trim() ?? flags.userInput?.trim();
       if (!feedback) {
         emit(errorDirective(
-          `report --result rejected for "${slug}" requires nonblank --user-input or --reason feedback.`,
+          `report --result rejected for "${slug}" requires nonblank revision feedback.`,
         ));
         return;
       }
       subArgs = ["reject", slug, "--feedback", feedback];
+      if (flags.userInput) subArgs.push("--user-input", flags.userInput);
     } else {
       if (stageCheckbox.state !== "revising") {
         emit(errorDirective(
@@ -5707,9 +5815,13 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       ));
       return;
     }
-    emit(printDirective(
-      `Recorded ${flags.result} for "${slug}".`,
-    ));
+    emit(
+      printDirective(
+        revalidatingOpenGate
+          ? `Stage "${slug}" is already awaiting approval; gate evidence revalidated.`
+          : `Recorded ${flags.result} for "${slug}".`,
+      ),
+    );
     return;
   }
 
@@ -5741,19 +5853,6 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         "Run aidlc-state.ts practices-promote after the human approves; it records " +
         "Practices Affirmed Timestamp and a fresh PRACTICES_AFFIRMED receipt for " +
         "this stage attempt, then report --result approved --user-input \"<exact choice>\".",
-    ));
-    return;
-  }
-
-  if (
-    isGated &&
-    stageCheckbox.state !== "completed" &&
-    readAutonomyMode(stateContent) !== "autonomous" &&
-    process.env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD !== "1" &&
-    !flags.userInput?.trim()
-  ) {
-    emit(errorDirective(
-      `report --result ${flags.result} for "${slug}" requires --user-input with the human's exact approval choice.`,
     ));
     return;
   }
@@ -5953,7 +6052,7 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
     ));
     return;
   }
-  const cursor = inspectCopilotContinuation(pd, liveState, token);
+  const cursor = inspectContinuationCursor(pd, liveState);
 
   const directive = buildRunStageDirective(
     node,
@@ -6005,50 +6104,23 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
     return;
   }
   try {
-    const advanced = advanceCopilotContinuation(
+    const advanced = advanceContinuationCursor(
       cursor,
       token,
       prepared.marker,
       prepared.resultSha256,
       engineInvocation?.attemptId,
     );
-    if (advanced === "advanced" || advanced === "stateless") {
+    if (advanced === "advanced") {
       writePrepared(prepared);
       return;
     }
     const message = advanced === "superseded"
-      ? "This continuation token is no longer current for this Copilot workflow. Run a fresh `next`; do not reuse an earlier token."
+      ? "This continuation token is no longer current for this workflow. Run a fresh `next`; do not reuse an earlier token."
       : "The active workflow context changed while this continuation was prepared. Run a fresh `next`; do not use the prepared result.";
     writePrepared(prepareEmission(errorDirective(message)));
   } catch (error) {
     if (!(error instanceof ActiveDirectiveLockContendedError)) throw error;
-    if (cursor.authority === "stateless" && !cursor.copilotInstalled) {
-      try {
-        const latest = inspectCopilotContinuation(
-          pd,
-          loadStateFileIfPresent(pd),
-          token,
-        );
-        if (
-          latest.authority === "stateless" &&
-          !latest.copilotInstalled &&
-          latest.target.markerPath === cursor.target.markerPath &&
-          latest.target.intentUuid === cursor.target.intentUuid &&
-          latest.stateSha256 === cursor.stateSha256 &&
-          latest.statePresent === cursor.statePresent
-        ) {
-          recordHookDrop(
-            pd,
-            "active-directive",
-            "stateless continuation marker publication contended; delivered without updating the marker",
-          );
-          writePrepared(prepared);
-          return;
-        }
-      } catch {
-        // Keep the coordination-busy refusal when authority cannot be rechecked.
-      }
-    }
     writePrepared(prepareEmission(errorDirective(
       "Continuation coordination is busy. This call did not commit a cursor change. Retry the current token; if it is reported superseded, run a fresh `next`.",
     )));
@@ -6065,11 +6137,15 @@ export function main(argv: string[]): void {
   let attemptId: string | undefined;
   let conflictingAttemptId = false;
   const filteredArgs: string[] = [];
+  let literalArgs = false;
   for (let i = 0; i < rawArgs.length; i++) {
-    if (rawArgs[i] === "--project-dir" && i + 1 < rawArgs.length) {
+    if (rawArgs[i] === "--") {
+      literalArgs = true;
+      filteredArgs.push(rawArgs[i]);
+    } else if (!literalArgs && rawArgs[i] === "--project-dir" && i + 1 < rawArgs.length) {
       projectDir = rawArgs[i + 1];
       i++;
-    } else if (rawArgs[i] === "--aidlc-attempt-id" && i + 1 < rawArgs.length) {
+    } else if (!literalArgs && rawArgs[i] === "--aidlc-attempt-id" && i + 1 < rawArgs.length) {
       const candidate = rawArgs[i + 1];
       if (/^[A-Za-z0-9._:-]{1,128}$/.test(candidate)) {
         if (attemptId !== undefined && attemptId !== candidate) conflictingAttemptId = true;

@@ -200,22 +200,6 @@ beforeAll(() => {
   // (emits GATE_APPROVED + STAGE_COMPLETED + STAGE_STARTED for stage 2), then
   // compile #2 (.sh:75-79). ---
   const transitionEnv = { AIDLC_SKIP_ARTIFACT_GUARD: "1" };
-  const gate = run(
-    ORCHESTRATE,
-    [
-      "report",
-      "--stage",
-      firstStage,
-      "--result",
-      "awaiting-approval",
-      "--project-dir",
-      proj,
-    ],
-    transitionEnv,
-  );
-  if (gate.status !== 0 || !gate.out.includes('"kind":"print"')) {
-    throw new Error(`gate report failed: ${gate.out}`);
-  }
   const reviewArgs = [
     "review",
     "--stage",
@@ -233,6 +217,22 @@ beforeAll(() => {
     "--verdict",
     "READY",
   ]);
+  const gate = run(
+    ORCHESTRATE,
+    [
+      "report",
+      "--stage",
+      firstStage,
+      "--result",
+      "awaiting-approval",
+      "--project-dir",
+      proj,
+    ],
+    transitionEnv,
+  );
+  if (gate.status !== 0 || !gate.out.includes('"kind":"print"')) {
+    throw new Error(`gate report failed: ${gate.out}`);
+  }
   const approval = run(
     ORCHESTRATE,
     [

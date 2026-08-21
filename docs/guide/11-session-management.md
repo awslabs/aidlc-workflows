@@ -12,25 +12,33 @@ A workflow may span multiple harness sessions. AI-DLC persists all progress to d
 
 ## Resume Flow
 
-When you run `/aidlc` and the active intent's `aidlc-state.md` (under its record dir) exists from a previous session, AI-DLC presents a status summary and offers four resume options.
+When you run bare `/aidlc` in a new session and the active intent's `aidlc-state.md` exists, AI-DLC presents a status summary and offers four resume options. Run `/aidlc --resume` when you already know you want to continue from the saved checkpoint; it skips the menu and routes directly to the current stage.
 
 ```mermaid
 flowchart TD
     START(["/aidlc invoked"])
+    MODE{"Invocation"}
     STATE_EXISTS{"aidlc-state.md\nexists?"}
     RECOVERY_CHECK{".aidlc-recovery.md\nexists?"}
     CORRUPTION{"State matches\nrecovery file?"}
     WARN["Warn about possible\nstate corruption"]
     RESUME_MENU["Resume Options"]
-
     OPT_RESUME["Resume from\nlast checkpoint"]
     OPT_REDO["Redo\ncurrent stage"]
     OPT_JUMP["Jump to\nspecific stage"]
     OPT_FRESH["Start fresh\n(new intent alongside)"]
-
+    RESUME_STATE{"aidlc-state.md\nexists?"}
+    PARKED{"Workflow parked?"}
+    UNPARK["Clear park marker"]
+    CONTINUE["Continue current stage"]
+    JUMP["Jump to named stage"]
+    NO_STATE["Error: no workflow state"]
     SCOPE_DETECT["Detect scope,\nstart new workflow"]
 
-    START --> STATE_EXISTS
+    START --> MODE
+    MODE -->|"bare /aidlc"| STATE_EXISTS
+    MODE -->|"/aidlc --resume"| RESUME_STATE
+    MODE -->|"/aidlc --resume --stage"| JUMP
     STATE_EXISTS -->|Yes| RECOVERY_CHECK
     STATE_EXISTS -->|No| SCOPE_DETECT
 
@@ -44,12 +52,19 @@ flowchart TD
     RESUME_MENU --> OPT_JUMP
     RESUME_MENU --> OPT_FRESH
 
+    RESUME_STATE -->|No| NO_STATE
+    RESUME_STATE -->|Yes| PARKED
+    PARKED -->|Yes| UNPARK --> CONTINUE
+    PARKED -->|No| CONTINUE
+
     style START fill:#e1bee7,stroke:#7b1fa2
     style RESUME_MENU fill:#bbdefb,stroke:#1565c0
+    style CONTINUE fill:#c8e6c9,stroke:#388e3c
     style WARN fill:#ffcdd2,stroke:#c62828
+    style NO_STATE fill:#ffcdd2,stroke:#c62828
 ```
 
-<!-- Text fallback: /aidlc invoked. If state file exists, check for recovery file. If recovery file exists and stage doesn't match state, warn about possible corruption. Then show four resume options. If no state file exists, start a new workflow with scope detection. -->
+<!-- Text fallback: bare /aidlc with state checks the recovery breadcrumb and shows four resume options; without state it starts scope detection. /aidlc --resume with state clears a park marker if needed and continues directly; without state it errors. /aidlc --resume --stage jumps to the named stage. -->
 
 ### Four resume options
 
@@ -59,6 +74,8 @@ flowchart TD
 | **Redo current stage** | Reset the current stage's checkbox (via `aidlc-jump.ts execute --direction redo`) and re-execute it from scratch. | All other artifacts and state | Current stage's completion status and partial work |
 | **Jump to stage** | Skip to a specific stage (via `next --stage <slug>`). Warns about skipped stages and potential downstream artifact invalidation. | All existing artifacts | Stages between current and target are marked `[S]` (skipped) |
 | **Start fresh** | Start a new intent alongside the existing one (via `next --new-intent`, after confirming scope and description). | The existing workflow's artifacts, state, and audit trail (it stays in place) | Nothing - the prior intent remains resumable |
+
+`/aidlc --resume --stage <slug>` treats the explicit stage as the target and takes the normal jump path.
 
 Dispatched ensemble work resumes from evidence on disk. For Practices
 Discovery, the conductor preserves the lead draft and every existing

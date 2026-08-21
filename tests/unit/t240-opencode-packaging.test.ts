@@ -188,6 +188,9 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
       for (const f of readdirSync(agentsDir).filter((x) => x.endsWith(".md"))) {
         const raw = readFileSync(join(agentsDir, f), "utf-8");
         expect(raw, `${f}: no nonexistent rules path`).not.toContain(".aidlc/rules/");
+        expect(raw, `${f}: concrete default memory pointer`).not.toContain(
+          "aidlc/spaces/<active-space>/memory/",
+        );
         if (
           raw.includes("organization and project guardrails") ||
           raw.includes("execution guardrails")

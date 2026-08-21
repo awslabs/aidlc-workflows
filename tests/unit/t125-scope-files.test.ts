@@ -297,4 +297,53 @@ describe("dropped-file scope dynamics (AIDLC_SCOPES_DIR seam)", () => {
     expect(audit).toContain("**Event**: SCOPE_DETECTED");
     expect(res.stdout).toContain('"scope":"dropscope"');
   });
+
+  test("detect-scope --from-text resolves flow-style keywords from a dropped scope", () => {
+    const proj = setupIntegrationProject({ stripEnvScope: true });
+    projects.push(proj);
+    writeFileSync(
+      seededStateFile(proj),
+      "# AI-DLC State Tracking\n## Current Status\n- **Scope**: feature\n",
+      "utf-8",
+    );
+    const projScopes = join(proj, ".claude", "scopes");
+    writeFileSync(
+      join(projScopes, "aidlc-flowdropscope.md"),
+      `---
+name: flowdropscope
+depth: Minimal
+keywords: [dropkw, otherkw]
+description: Flow-style dropped scope for t125
+---
+
+# flowdropscope
+`,
+      "utf-8",
+    );
+
+    const res = spawnSync(
+      BUN,
+      [
+        UTIL,
+        "detect-scope",
+        "--from-text",
+        "--input",
+        "dropkw",
+        "--project-dir",
+        proj,
+      ],
+      {
+        encoding: "utf-8",
+        env: { ...process.env, AIDLC_SCOPES_DIR: projScopes },
+      },
+    );
+    expect(res.status).toBe(0);
+
+    const auditPath = seededAuditShard(proj);
+    expect(existsSync(auditPath)).toBe(true);
+    const audit = readFileSync(auditPath, "utf-8");
+    expect(/Detected scope.*: flowdropscope/.test(audit)).toBe(true);
+    expect(audit).toContain("**Event**: SCOPE_DETECTED");
+    expect(res.stdout).toContain('"scope":"flowdropscope"');
+  });
 });

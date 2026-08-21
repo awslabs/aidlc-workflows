@@ -88,6 +88,7 @@ function run(
   const env = { ...process.env, ...extraEnv };
   if (tool === STATE) {
     env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS = "1";
+    env.AIDLC_SKIP_SOURCE_FRESHNESS = "1";
   }
   const res = spawnSync(
     process.execPath,
@@ -101,12 +102,11 @@ function run(
   };
 }
 
-// gate-start -> approve a single stage, exactly as t51's walk_stage does.
+// Review (when configured) -> gate-start -> approve a single stage, exactly as
+// the reviewer gate contract requires.
 function walkStage(slug: string, proj: string): void {
-  const gs = run(STATE, ["gate-start", slug], proj);
-  expect(gs.status).toBe(0);
-  // Reviewer-bearing stages need a terminal REVIEW_COMPLETED before approve
-  // commits (§12a gate precondition), recorded by the stage's DECLARED reviewer.
+  // Reviewer-bearing stages need a terminal REVIEW_COMPLETED before gate-start
+  // presents the approval gate (§12a), recorded by the declared reviewer.
   // Record one for the two reviewer-bearing stages this walk crosses; a
   // no-reviewer stage ignores the extra row. This walk drives transitions to
   // accumulate the audit trail, not to test the reviewer gate. Mirrors t51.
@@ -138,6 +138,8 @@ function walkStage(slug: string, proj: string): void {
     ], proj);
     expect(rv.status).toBe(0);
   }
+  const gs = run(STATE, ["gate-start", slug], proj);
+  expect(gs.status).toBe(0);
   const ap = run(STATE, ["approve", slug, "--user-input", "approve"], proj);
   expect(ap.status).toBe(0);
 }

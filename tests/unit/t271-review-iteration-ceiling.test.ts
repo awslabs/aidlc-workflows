@@ -33,7 +33,10 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
-import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  boltSlugForUnit,
+  readAllAuditShards,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const LOG_TOOL = join(
   import.meta.dir,
@@ -97,6 +100,7 @@ function seedProject(scope: "bugfix" | "feature"): string {
       )
     );
   }
+  seedBoltDagBatches(proj, [["unit-alpha"]]);
   return proj;
 }
 
@@ -290,20 +294,25 @@ describe("t271 review iteration ceiling", () => {
 
   test("adversarial stage: budget is reviewer_max_iterations (2), iteration 3 refused", () => {
     const proj = seedProject("feature");
+    const iterationOnly = { AIDLC_SKIP_SOURCE_FRESHNESS: "1" };
     // code-generation declares adversarial, cap 2 — and feature scope has no cap.
     for (const n of ["1", "2"]) {
-      const ok = runReview(proj, [
+      const request = [
         "--stage", "code-generation",
         "--reviewer", "aidlc-architecture-reviewer-agent",
         "--iteration", n,
-      ]);
+      ];
+      const ok = runReview(proj, request, iterationOnly);
       expect(ok.status).toBe(0);
+      expect(
+        runReview(proj, [...request, "--verdict", "NOT-READY"], iterationOnly).status,
+      ).toBe(0);
     }
     const over = runReview(proj, [
       "--stage", "code-generation",
       "--reviewer", "aidlc-architecture-reviewer-agent",
       "--iteration", "3",
-    ]);
+    ], iterationOnly);
     expect(over.status).not.toBe(0);
     expect(over.stderr).toContain("exceeds");
     expect(over.stderr).toContain("review budget (2)");
@@ -368,6 +377,7 @@ describe("t271 review iteration ceiling", () => {
 
   test("a matching autonomous Bolt attempt uses the declared class", () => {
     const proj = seedProject("feature");
+    const iterationOnly = { AIDLC_SKIP_SOURCE_FRESHNESS: "1" };
     const sf = seededStateFile(proj);
     writeFileSync(
       sf,
@@ -384,20 +394,24 @@ describe("t271 review iteration ceiling", () => {
       "Bolt slug": "unit-alpha",
     }, proj);
     for (const iteration of ["1", "2"]) {
-      const ok = runReview(proj, [
+      const request = [
         "--stage", "code-generation",
         "--reviewer", "aidlc-architecture-reviewer-agent",
         "--unit", "unit-alpha",
         "--iteration", iteration,
-      ]);
+      ];
+      const ok = runReview(proj, request, iterationOnly);
       expect(ok.status).toBe(0);
+      expect(
+        runReview(proj, [...request, "--verdict", "NOT-READY"], iterationOnly).status,
+      ).toBe(0);
     }
     const over = runReview(proj, [
       "--stage", "code-generation",
       "--reviewer", "aidlc-architecture-reviewer-agent",
       "--unit", "unit-alpha",
       "--iteration", "3",
-    ]);
+    ], iterationOnly);
     expect(over.status).not.toBe(0);
     expect(over.stderr).toContain("review budget (2)");
 
@@ -410,7 +424,7 @@ describe("t271 review iteration ceiling", () => {
       "--reviewer", "aidlc-architecture-reviewer-agent",
       "--unit", "unit-alpha",
       "--iteration", "1",
-    ]);
+    ], iterationOnly);
     expect(afterFailure.status).not.toBe(0);
     expect(afterFailure.stderr).toContain("review budget (0)");
   });
@@ -599,21 +613,122 @@ describe("t271 review iteration ceiling", () => {
     }
   });
 
-  test("duplicate and out-of-order ordinals are refused from audit history", () => {
+  test("a normal request is refused while another iteration is unmatched", () => {
     const proj = seedProject("feature");
-    const request = (iteration: string) => runReview(proj, [
+    const args = (iteration: string) => [
       "--stage", "code-generation",
       "--reviewer", "aidlc-architecture-reviewer-agent",
       "--iteration", iteration,
-    ]);
-    expect(request("1").status).toBe(0);
-    const duplicate = request("1");
+    ];
+    expect(runReview(proj, args("1")).status).toBe(0);
+    const duplicate = runReview(proj, args("1"));
     expect(duplicate.status).not.toBe(0);
-    expect(duplicate.stderr).toContain("expected 2");
-    expect(request("2").status).toBe(0);
+    expect(duplicate.stderr).toContain("still unmatched");
+    const concurrentNext = runReview(proj, args("2"));
+    expect(concurrentNext.status).not.toBe(0);
+    expect(concurrentNext.stderr).toContain("still unmatched");
+
+    expect(
+      runReview(proj, [...args("1"), "--verdict", "NOT-READY"]).status,
+    ).toBe(0);
+    expect(runReview(proj, args("2")).status).toBe(0);
     const rows =
       readAllAuditShards(proj).match(/\*\*Event\*\*: REVIEW_REQUESTED/g) ?? [];
     expect(rows.length).toBe(2);
+  });
+
+  test("request fingerprints bind the verdict to the dispatched artifact bytes", () => {
+    const proj = seedProject("feature");
+    const artifact = writeReviewedArtifact(
+      proj,
+      "requirements-analysis",
+      "reviewed requirements\n",
+    );
+    const request = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+      "--iteration", "1",
+    ];
+
+    expect(runReview(proj, request).status).toBe(0);
+    expect(readAllAuditShards(proj)).toMatch(
+      /\*\*Event\*\*: REVIEW_REQUESTED[\s\S]*?\*\*Artifact Fingerprint\*\*: sha256:[0-9a-f]{64}/,
+    );
+
+    writeFileSync(artifact, "changed while reviewer was running\n", "utf-8");
+    const staleVerdict = runReview(proj, [...request, "--verdict", "READY"]);
+    expect(staleVerdict.status).not.toBe(0);
+    expect(staleVerdict.stderr).toContain("changed after REVIEW_REQUESTED");
+    expect(readAllAuditShards(proj)).not.toContain("**Event**: REVIEW_COMPLETED");
+
+    expect(runReview(proj, [...request, "--retry-pending"]).status).toBe(0);
+    expect(runReview(proj, [...request, "--verdict", "READY"]).status).toBe(0);
+  });
+
+  test("--unit requires membership in an authoritative DAG", () => {
+    const noDag = createTestProject();
+    seedStateFile(noDag, "state-mid-inception.md");
+    seedAuditFile(noDag);
+    const base = [
+      "--stage", "code-generation",
+      "--reviewer", "aidlc-architecture-reviewer-agent",
+      "--iteration", "1",
+    ];
+
+    const absent = runReview(noDag, [...base, "--unit", "ghost"]);
+    expect(absent.status).not.toBe(0);
+    expect(absent.stderr).toContain("no authoritative unit DAG exists");
+    expect(readAllAuditShards(noDag)).not.toContain("**Event**: REVIEW_REQUESTED");
+
+    const boltBacked = createTestProject();
+    seedStateFile(boltBacked, "state-mid-inception.md");
+    seedAuditFile(boltBacked);
+    appendAuditEntry("BOLT_STARTED", {
+      "Bolt names": "2fa",
+      "Batch number": "1",
+      "Walking skeleton": "false",
+      "Bolt slug": boltSlugForUnit("2fa"),
+    }, boltBacked);
+    appendAuditEntry("STAGE_STARTED", {
+      Stage: "code-generation",
+    }, boltBacked);
+    expect(runReview(boltBacked, [...base, "--unit", "2fa"]).status).toBe(0);
+
+    const mismatchedBolt = createTestProject();
+    seedStateFile(mismatchedBolt, "state-mid-inception.md");
+    seedAuditFile(mismatchedBolt);
+    appendAuditEntry("BOLT_STARTED", {
+      "Bolt names": "unit-alpha",
+      "Batch number": "1",
+      "Walking skeleton": "false",
+      "Bolt slug": "unit-alpha",
+    }, mismatchedBolt);
+    const mismatched = runReview(mismatchedBolt, [...base, "--unit", "ghost"]);
+    expect(mismatched.status).not.toBe(0);
+    expect(mismatched.stderr).toContain("no matching active Bolt attempt");
+
+    const closedBolt = createTestProject();
+    seedStateFile(closedBolt, "state-mid-inception.md");
+    seedAuditFile(closedBolt);
+    appendAuditEntry("BOLT_STARTED", {
+      "Bolt names": "unit-alpha",
+      "Batch number": "1",
+      "Walking skeleton": "false",
+      "Bolt slug": "unit-alpha",
+    }, closedBolt);
+    appendAuditEntry("BOLT_FAILED", {
+      "Bolt slug": "unit-alpha",
+      Reason: "review-failed",
+    }, closedBolt);
+    const closed = runReview(closedBolt, [...base, "--unit", "unit-alpha"]);
+    expect(closed.status).not.toBe(0);
+    expect(closed.stderr).toContain("no matching active Bolt attempt");
+
+    const proj = seedProject("feature");
+    const unknown = runReview(proj, [...base, "--unit", "ghost"]);
+    expect(unknown.status).not.toBe(0);
+    expect(unknown.stderr).toContain("not present in the authoritative unit DAG");
+    expect(runReview(proj, [...base, "--unit", "unit-alpha"]).status).toBe(0);
   });
 
   test("unknown stages and wrong reviewers are refused", () => {

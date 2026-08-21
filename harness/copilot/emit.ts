@@ -164,7 +164,12 @@ export default function emit(ctx: EmitContext): void {
     emissions.push({
       path: join(SHELL, "agents", f),
       content: () =>
-        substituteToken(emitAgentMd(readFileSync(join(agentsDir, f), "utf-8"), join(agentsDir, f))),
+        substituteToken(
+          emitAgentMd(readFileSync(join(agentsDir, f), "utf-8"), join(agentsDir, f)),
+        ).replaceAll(
+          "aidlc/spaces/<active-space>/memory/",
+          "aidlc/spaces/default/memory/",
+        ),
     });
   }
 
