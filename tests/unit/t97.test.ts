@@ -32,8 +32,16 @@
 //     exit 2 on unknown subcommand / missing subcommand.
 //
 // IDEMPOTENCY DISCIPLINE (this tool WRITES audit rows): persist appends
-// RULE_LEARNED rows and learnings-file lines keyed by a `cid:<slug>:<id>`
-// marker. The .sh proves persist-twice produces NO duplicate audit row and NO
+// RULE_LEARNED rows and learnings-file lines keyed by a
+// `cid:<intent-slug>:<slug>:<hash>` marker (#735 + PR #747 review: the
+// intent-slug component prevents an unrelated intent's identically-numbered
+// candidate from colliding on the same workspace-level file; the hash
+// component is a content-addressed dedup key, not the positional candidate
+// id — see t306's own coverage of that finding. These fixtures explicitly
+// pin intent: null in the selections file rather than resolving no active
+// intent — persist never re-resolves the live cursor itself — so "unscoped"
+// is the expected sentinel value throughout).
+// The .sh proves persist-twice produces NO duplicate audit row and NO
 // duplicate file line (tests 23/25), and a belt-and-braces recovery (test 24:
 // audit row present, file line deleted -> re-write only). Those assertions are
 // preserved EXACTLY — spawn twice into a FRESH project per case and grep the
@@ -468,7 +476,7 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
     const pd = mkproj("p18");
     const sel = writeSel(
       pd,
-      `{ "stage_slug": "user-stories", "selections": [
+      `{ "stage_slug": "user-stories", "space": "default", "intent": null, "selections": [
   { "candidate_id": "c1", "type": "learning", "scope": "project", "heading": "Corrections", "text": "Reused auth module; saved a rewrite", "source": "orchestrator" } ] }
 `,
     );
@@ -483,7 +491,7 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
     ]);
     expect(res.rc).toBe(0);
     const plf = projectPractices(pd);
-    expect(readFile(plf)).toContain("cid:user-stories:c1");
+    expect(readFile(plf)).toMatch(/cid:unscoped:user-stories:[0-9a-f]{8}/);
     // ensure-exists created the routed heading; the practice landed under it.
     expect(/^## Corrections/m.test(readFile(plf))).toBe(true);
     expect(/Event.*: RULE_LEARNED/.test(readAudit(pd))).toBe(true);
@@ -494,13 +502,13 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
     const pd = mkproj("p19");
     const sel = writeSel(
       pd,
-      `{ "stage_slug": "user-stories", "selections": [
+      `{ "stage_slug": "user-stories", "space": "default", "intent": null, "selections": [
   { "candidate_id": "c2", "type": "learning", "scope": "team", "heading": "Testing Posture", "text": "Picked TDD over BDD", "source": "orchestrator" } ] }
 `,
     );
     runCli(["persist", "--slug", "user-stories", "--selections-json", sel, "--project-dir", pd]);
-    expect(readFile(teamPractices(pd))).toContain(
-      "cid:user-stories:c2",
+    expect(readFile(teamPractices(pd))).toMatch(
+      /cid:unscoped:user-stories:[0-9a-f]{8}/,
     );
   });
 
@@ -510,7 +518,7 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
     const pd = mkproj("p20");
     const sel = writeSel(
       pd,
-      `{ "stage_slug": "user-stories", "selections": [
+      `{ "stage_slug": "user-stories", "space": "default", "intent": null, "selections": [
   { "candidate_id": "c5", "type": "sensor", "origin_stage": "user-stories",
     "manifest_fields": { "id": "acceptance-format", "kind": "deterministic", "command": "bun .claude/tools/aidlc-sensor.ts fire acceptance-format", "default_severity": "advisory", "description": "Checks AC format", "matches": "**/aidlc-docs/inception/user-stories/**", "timeout_seconds": 30 } } ] }
 `,
@@ -534,7 +542,7 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
     mkdirSync(join(pd, "dist", "claude", ".claude", "sensors"), { recursive: true });
     const sel = writeSel(
       pd,
-      `{ "stage_slug": "user-stories", "selections": [
+      `{ "stage_slug": "user-stories", "space": "default", "intent": null, "selections": [
   { "candidate_id": "c9", "type": "sensor", "origin_stage": "user-stories",
     "manifest_fields": { "id": "bad", "kind": "deterministic", "command": "x", "default_severity": "advisory", "description": "d", "matches": "**/*" } } ] }
 `,
@@ -557,7 +565,7 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
     const pd = mkproj("p22");
     const sel = writeSel(
       pd,
-      `{ "stage_slug": "user-stories", "selections": [
+      `{ "stage_slug": "user-stories", "space": "default", "intent": null, "selections": [
   { "candidate_id": "free_text_1", "type": "learning", "scope": "project", "heading": "Corrections", "text": "Surface unknowns earlier", "source": "user_addition" } ] }
 `,
     );
@@ -585,7 +593,7 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
     const pd = mkproj("p23");
     const sel = writeSel(
       pd,
-      `{ "stage_slug": "user-stories", "selections": [
+      `{ "stage_slug": "user-stories", "space": "default", "intent": null, "selections": [
   { "candidate_id": "c1", "type": "learning", "scope": "project", "heading": "Corrections", "text": "kept once", "source": "orchestrator" } ] }
 `,
     );
@@ -594,7 +602,7 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
     const rows = grepCountAudit(pd, /Event.*: RULE_LEARNED/);
     const lines = grepCount(
       projectPractices(pd),
-      "cid:user-stories:c1",
+      /cid:unscoped:user-stories:[0-9a-f]{8}/,
     );
     expect(`${rows}:${lines}`).toBe("1:1");
   });
@@ -605,16 +613,17 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
     const pd = mkproj("p24");
     const sel = writeSel(
       pd,
-      `{ "stage_slug": "user-stories", "selections": [
+      `{ "stage_slug": "user-stories", "space": "default", "intent": null, "selections": [
   { "candidate_id": "c1", "type": "learning", "scope": "project", "heading": "Testing Posture", "text": "recover me", "source": "orchestrator" } ] }
 `,
     );
     runCli(["persist", "--slug", "user-stories", "--selections-json", sel, "--project-dir", pd]);
     // Delete the file line, KEEP the audit row (mirrors the .sh's grep -v ... mv).
     const plf = projectPractices(pd);
+    const markerRe = /cid:unscoped:user-stories:[0-9a-f]{8}/;
     const kept = readFile(plf)
       .split("\n")
-      .filter((l) => !l.includes("cid:user-stories:c1"))
+      .filter((l) => !markerRe.test(l))
       .join("\n");
     writeFileSync(plf, kept, "utf-8");
     const res = runCli([
@@ -627,7 +636,7 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
       pd,
     ]);
     const rows = grepCountAudit(pd, /Event.*: RULE_LEARNED/);
-    const lines = grepCount(plf, "cid:user-stories:c1");
+    const lines = grepCount(plf, markerRe);
     expect(`${res.rc}:${rows}:${lines}`).toBe("0:1:1");
   });
 
@@ -637,7 +646,7 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
     const pd = mkproj("p25");
     const sel = writeSel(
       pd,
-      `{ "stage_slug": "user-stories", "selections": [
+      `{ "stage_slug": "user-stories", "space": "default", "intent": null, "selections": [
   { "candidate_id": "c1", "type": "learning", "scope": "project", "heading": "Corrections", "text": "no double append", "source": "orchestrator" } ] }
 `,
     );
@@ -645,7 +654,7 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
     runCli(["persist", "--slug", "user-stories", "--selections-json", sel, "--project-dir", pd]);
     const lines = grepCount(
       projectPractices(pd),
-      "cid:user-stories:c1",
+      /cid:unscoped:user-stories:[0-9a-f]{8}/,
     );
     expect(lines).toBe(1);
   });

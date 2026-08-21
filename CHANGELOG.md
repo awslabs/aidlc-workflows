@@ -1,14 +1,111 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
-## [2.6.26] - 2026-08-20
+## [2.6.44] - 2026-08-21
 
-A new deterministic drift gate links hook registration matchers to captured payload fixture tool names across Codex, Kiro IDE, Cursor, and Copilot. This changes no runtime behavior and requires no upgrade action.
+Codex structured `request_user_input` selections now mint the same `HUMAN_TURN` evidence as typed prompts, without treating empty, cancelled, timed-out, auto-resolved, error, or malformed responses as human judgment. **Upgrade:** refresh `dist/codex/`, then re-run `bun scripts/package.ts codex trust --project "/absolute/project/path"` and replace the existing hook trust tables before starting a fresh Codex session.
 
-* Matcher-bearing registrations must select at least one tool name observed for that harness, while fixture vocabularies and registration discovery have anti-rot assertions.
-* Codex's live-verified `spawn_agent` registration is tracked as an explicit fixture gap that must be removed when a delegation capture lands.
-* Kiro CLI is excluded here: its agent-v1 matchers use glob and canonical-name/alias semantics whose live-captured evidence is tracked with issue #778, and `t148` pins its registration matcher list; Claude remains excluded until a captured hook payload fixture exists.
+* The new PostToolUse registration routes `request_user_input` through the existing record-human-turn target only when `tool_response` is the Codex JSON-encoded `answers: Record<questionId,{answers:string[]}>` contract and every selected value is explicit, nonblank, and passes the shared cancellation-boilerplate floor.
+* Completed-looking `{}` payloads and cancellation metadata fail closed; substantive selections remain valid, and values such as `Abort` count when they exactly match an option the question actually presented.
+* Codex duplicate delivery replays the first response and emits exactly one `HUMAN_TURN`; projects without active workflow state remain untouched.
 
+## [2.6.43] - 2026-08-21
+
+Explicit resume now means continue immediately: `/aidlc --resume` no longer repeats the session re-entry Resume / Redo / Jump / Start Fresh menu before returning to the saved stage. Bare `/aidlc` still offers that menu when a harness session re-enters existing work. **Upgrade:** refresh your `dist/<harness>/` shell; existing workflow state needs no migration, and legacy Copilot resume markers are superseded by the next explicit resume.
+
+* `/aidlc --resume` falls through to the normal load-steering and stage-routing path after the existing parked-workflow and no-state guards.
+* Bare `/aidlc` session re-entry keeps the four-option menu and its `report --result resumed --user-input "<answer>"` routing for Resume, Redo, Jump, and Start Fresh; OpenCode performs a read-only status probe because its plugin cannot inject session-start context.
+* `/aidlc --resume --stage <slug>` honors the explicit target and uses the normal jump path.
+* Copilot treats `report --result resumed` as a plain report instead of requiring an engine-armed resume gate; legacy selected-marker skip recovery remains supported.
+
+## [2.6.42] - 2026-08-21
+
+Front/report composition now carries one approved, nonblank `birthDescription` into same-turn intent creation without shell expansion or placeholder fallback. **Upgrade:** refresh your `dist/<harness>/` shell so the composer contract, conductor instructions, and birth command quoting stay aligned.
+
+* Task-backed proposals preserve the original task text exactly; report-only and task-less proposals derive a grounded description from the approved report/plan before birth.
+* Compose and scope-routed descriptions that begin with `--` are retained as task text instead of being discarded as unknown flags.
+* Engine-generated `next` commands place the description after the literal `--` delimiter, and `intent-create` uses `--arguments=<value>` with POSIX-safe single-argument quoting, so leading flags, `$()`, backticks, variables, quotes, and newlines remain literal input.
+
+## [2.6.41] - 2026-08-21
+
+Workspace detection now follows nested container layouts far enough to find application roots such as `services/api/src/main.py`, preventing incremental scopes from misclassifying existing code as Greenfield and skipping Reverse Engineering. The deterministic fallback evaluates eligible container directories independently up to three levels below the workspace root, aggregates every Brownfield hit without double-counting source files, and reports each hit's relative path. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* `bugfix`, `refactor`, and `security-patch` workflows now detect codebases nested within up to three container levels instead of only checking top-level containers.
+* `Nested Root` audit data and `nestedRoot` detect output now use slash-joined workspace-relative paths such as `services/api`, comma-joining multiple detected roots in deterministic order.
+* Each visited directory is evaluated at its own depth, so sibling projects remain distinct and source files or manifests in a fourth arbitrary container remain outside the documented three-level boundary.
+* Hidden dirs, case-insensitive excluded and sample/documentation names, exact-case recognized source-directory names, symlinks, and non-directories are skipped at every container level; odd-case directories such as `SRC/` remain eligible containers.
+* The Greenfield advisory now describes the three-container-level detection boundary; routing remains unchanged when no code is found.
+
+## [2.6.40] - 2026-08-21
+
+The shared Stop hook now preserves state-bound Resume waits before probing `next`, and its no-progress cap distinguishes real directive transitions from audit or timestamp noise. **Upgrade:** refresh your `dist/<harness>/` shell so the shared Stop hook and active-directive evidence reader are updated; Copilot's session-owned Stop path remains unchanged.
+
+* A sessionless Resume choice with an exact state-bound `ask` marker now allows the turn under the active-directive lock before the Stop hook can overwrite it with a fresh probe. Foreign-session, stale-state, autonomous, or contended evidence fails safely.
+* Shared directive fingerprints now include load-steering part/token/content, run-stage wave, `invoke-swarm` units, and dispatched worker/repo identity, so advancing chunks, waves, and batches reset the streak even when progress is audit-backed.
+* The state component excludes `Last Updated`, preventing status-only timestamp writes from resetting a genuinely stuck loop; semantic state changes still reset the counter.
+
+## [2.6.39] - 2026-08-21
+
+Reverse Engineering now requires complete, current-attempt Code Knowledge Base evidence for every registered repository before approval or completion. **Upgrade:** refresh your `dist/<harness>/` shell so the complete artifact guard, ordered pipeline receipts, repo-scoped reuse evidence, and resume directives are installed.
+
+* Every registered repository must contain all nine declared Reverse Engineering artifacts; a partial pre-existing Code Knowledge Base no longer satisfies the completion guard.
+* Pipeline stages record ordered `PIPELINE_LINK_COMPLETED` receipts for every declared link, and gate entry plus every completion route require receipts from the current main or isolated attempt.
+* Multi-repository Reverse Engineering maintains an independent receipt chain per scanned repository. A current-attempt, repo-scoped `ARTIFACT_REUSED` receipt with `Decision=keep` exempts only that reused repository; rejection, jump, and later stage-start boundaries invalidate older evidence.
+* Pipeline directives expose completed links so an interrupted run resumes from the first missing link without accepting stale receipts from an earlier attempt or a different workflow mode.
+
+## [2.6.38] - 2026-08-21
+
+Testing Posture resolution now ignores HTML-commented examples while preserving visible prose, structured fields, and fenced notes. **Upgrade:** refresh your `dist/<harness>/` shell; contracts whose Testing Posture sections contain comments will re-resolve, so re-approve affected Code Generation plans.
+
+* Commented headings and comment-only `Testing Posture` sections no longer select, truncate, or affirm a methodology; the resolver falls through to the real visible section or next visible memory layer.
+* Visible `Methodology` and `Ordering` fields remain authoritative beside comments, and visible prose and fenced content remain in `applicable_notes`.
+* Testing Contract input fingerprints retain each raw resolved section, including comments and fenced content, so comment-only changes still invalidate stale approvals.
+
+## [2.6.37] - 2026-08-21
+
+Code-generation review receipts are now bound to the workspace source state the reviewer inspected, and every completion route refuses when that state is stale. The same binding follows autonomous swarm work from finalize through source merge. **Upgrade:** refresh your `dist/<harness>/` shell so the source-fingerprint tools, guards, audit schema, and generated harness files are installed.
+
+* `aidlc-log.ts review --verdict` adds `Source Fingerprint` to `REVIEW_COMPLETED` for `workspace_requires` stages. The git-native temporary-index fingerprint covers tracked, staged, unstaged, untracked, deleted, recursively initialized-submodule, and raw clean/process-filtered regular-file content without touching the real index; symlinks remain link-text, ignored paths remain outside the binding, and unexpected Git failures are recorded as `unbindable` and fail closed.
+* `approve`, `advance`, `finalize`, and `complete-workflow` now refuse with a source-fingerprint mismatch when current source differs from the newest modern review binding. Revert the source edit or record the one bounded stale-receipt recovery review; that recovery remains available after the normal review iteration budget is exhausted. Already-`[x]` crash recovery still compares modern source bindings while skipping only receipt existence/cardinality.
+* `AIDLC_SKIP_SOURCE_FRESHNESS=1` is the deterministic off-switch. A swarm finalized under it records `Source Freshness Bypass: true`, and source merge requires the same switch again; newly unbindable receipts fail closed, while fieldless pre-#629 receipts remain migration-compatible.
+* Autonomous swarm finalize validates each receipt in its own Bolt worktree, rejects dirty initialized submodules, creates an immutable reviewed-source commit retained under `refs/aidlc/reviewed-source/<bolt>/<commit>`, and records its OID. `aidlc-worktree merge` consumes that exact object, rechecks branch movement, and compare-deletes framework-owned refs/branches.
+* Explicit `--intent`/`--space` source merges resolve legacy Unit names against the selected intent's DAG before reading convergence evidence, and framework-created reviewed-source commits use an internal AI-DLC Git identity rather than requiring ambient user configuration.
+* Known limitation (RFC #662): the stage-level fingerprint is workspace-global while receipts are per Unit, so it proves equality with the source seen by the newest review, not per-unit path attribution. Source changed before that newest review can be revalidated by one later receipt; per-unit attribution needs a machine-readable path manifest the engine does not yet produce.
+
+## [2.6.36] - 2026-08-21
+
+`aidlc-learnings.ts persist`'s write-idempotency now keys on the learning's own content, not its positional candidate id, and binds provenance (space + intent + stage) at `surface()` time instead of re-resolving live state inside `persist`. Candidate ids restart at `c1` on every `surface()` call, so a later run of the same stage in the same intent previously reused `c1` for a completely different learning and silently dropped the second write; re-resolving the active intent live also meant a surface-then-switch-intent-then-persist sequence could write under the wrong intent's marker. Fixes the follow-up findings from #735's own fix, across all five rounds of PR #747 review. **Upgrade:** re-copy your `dist/<harness>/` shell into the project. A pre-upgrade selections file now fails with `selections-json is malformed: missing or non-string space`; a replay whose pinned space/intent no longer exists also fails closed. Re-run the stage's `surface` step to regenerate the file before retrying `persist`.
+
+* `cidMarker`'s third key component is now the full SHA-256 hash of the learning's text (`<!-- cid:<intent-slug>:<stage-slug>:<content-hash> -->`), not the candidate id or a truncated digest. An exact retry still hashes identically and dedups; different learning text cannot collide through a 32-bit prefix.
+* `surface`'s output and the selections-json schema now carry `space`/`intent`, bound once at surface time; `persist` reads and uses these directly rather than re-resolving `activeIntent()`/`activeSpace()` itself. The audit read, audit write, and lock identity are all pinned to the same surface-time intent.
+* Multiple intent records with no valid active-intent cursor now fail closed with an explicit error, rather than silently falling back to the shared `unscoped` identity.
+* Markers and audit rows written under the prior candidate-id formats (pre-#735's `<!-- cid:<stage>:<id> -->` and #735's first fix's `<!-- cid:<intent>:<stage>:<id> -->`) or the earlier 8-hex content-hash revision are recognized for upgrade-time dedup, so a retried learning is not duplicated under the full-hash marker. Short-hash compatibility is text-gated so a 32-bit collision cannot suppress different content.
+* `practiceFilePath` now also takes the surface-time-pinned space (round 2 review): the lock and audit were already pinned to it, but this path alone still fell back to whichever space happened to be live-active when `persist` ran, so a learning could land in the wrong space's `project.md`/`team.md`.
+* The sensor branch's own dedup now keys `SENSOR_PROPOSED` on `(stage, sensor id)` rather than `(stage, candidate_id)` (round 2 review) — the same unstable-key defect class as the first bullet above, recurring in the sensor path. Stage stays in the key: binding a manifest to a stage's frontmatter is per-stage even though the manifest file itself is a per-project singleton, so a second, unrelated stage independently recommending the same sensor still gets bound.
+* A legacy-marker match is now gated on the marked line's own text equalling the current selection's text (round 2 review) — a legacy marker is keyed on candidate id alone, so a genuinely different learning landing on the same positional candidate id post-upgrade was previously mistaken for a retry of the original and silently dropped.
+* An unscoped selections replay now fails closed if intent records appeared after `surface`: `intent: null` can no longer be safely attributed once a live/lone intent exists, so the error directs the user to re-run the stage's `surface` step and regenerate the selections file.
+* Selections-file `space` and non-null `intent` values are validated before any path is built. Space must use the lowercase slug shape; intent must be a single safe record-directory name, so malformed provenance cannot escape `aidlc/spaces/` or redirect audit paths.
+* `persist` also verifies inside the lock that the pinned space and non-null intent record still exist, and rejects a `--slug` that differs from the selections file's `stage_slug`, so stale or contradictory provenance cannot create partial records or misattribute audit rows.
+* Learning hashes emitted earlier in the same selections batch participate in dedup immediately; duplicate content in one batch now produces one practice line and one `RULE_LEARNED` row instead of inflating the audit count.
+
+## [2.6.20] - 2026-08-19
+
+Bounded Build & Test → Code Generation failure loop-back. When Build and Test (3.6) diagnoses a failure whose root cause lies in generated code or a code-generation approach choice (a library/version, container image, instance type, algorithm, or flag), the workflow can now jump back to Code Generation and repair it instead of writing the approach off or dead-ending at a failed gate. Step 10's failure handling is a four-rung ladder: bounded in-stage fixes, classification plus estimated impact (effort, financial cost, risk), an autonomous loop-back capped at three entries per intent, and an impact-estimated halt-and-ask when human judgement is required. The contract lives in the conditional Construction protocol module (`aidlc-common/protocols/stage-protocol-construction.md`). **Upgrade:** re-copy your `dist/<harness>/` shell into the project, including the refreshed `tools/` tree; this release updates `aidlc-state.ts` as well as protocol guidance.
+
+* The loop-back counter is a crash-safe artifact ledger: an append-only `## Loop-Back Log` in test-results.md, one `### Loop-back N — <ISO timestamp>` entry (Diagnosis / Root-cause stage / Planned fix / Estimated impact) per attempt. The entry count is the bound; human-directed jumps do not count.
+* The jump routes through the engine: `aidlc-orchestrate.ts next --stage code-generation` emits the validated `aidlc-jump.ts execute` command, and the conductor runs that printed command rather than composing one.
+* Re-entry is settlement-aware. Artifact-only workflows may take the all-covered gate fast path; sticky receipt-mode workflows re-emit per-Unit work and re-mint `unit start` / `unit complete`. Both paths apply fixes and Artifact Re-use decisions before the gate and require a fresh current-attempt review for every applicable Code Generation Unit because `STAGE_JUMPED` invalidates prior receipts.
+* Autonomous unit-major replay now uses the inline lifecycle ledger as routed: `unit start` no longer fails with the incorrect "swarm referee owns per-unit bookkeeping" error when `Construction Iteration: unit-major` is active. `t307-loopback-unitmajor-replay` proves start, fresh review, completion, and approval, while retaining the refusal for autonomous stage-major swarm ownership.
+* The approved Code Generation plan remains authoritative on a loop-back replay. The Plan Approval answer is not blanked, the plan delta is recorded in the Loop-Back Log, and gated "Retry with fix" is the human re-approval of the revised approach.
+* Autonomous Artifact Re-use is deterministic: Modify targeted Units, Keep the rest, and Modify Build and Test on re-entry; Redo is forbidden because it would erase the ledger. Unit-major replays remain on the serial per-Unit path and do not invoke the autonomous swarm.
+* Gated "Retry with fix" uses the same settlement-aware override. The fix and Modify/Keep decisions happen before the settle gate, and fresh per-Unit reviewer receipts are mandatory before the gate is presented.
+* Rung 4 has two forms: an impact-estimated three-option question (Retry with fix / Accept failure / Abort) when a candidate exists, and a no-fix two-option question (Accept failure / Abort) when it does not.
+* Swarm replays discard stale worktrees and run a fresh `prepare`; old worktrees cannot be adopted into the new attempt because `finalize` requires the current prepare stamp. The check-first cheap path still skips builder turns for already-green Units, but every claimed Unit receives a fresh terminal review and `finalize` verifies its current artifact fingerprint before merge.
+* Crash resume re-executes a logged-but-not-jumped repair instead of re-diagnosing. After a recorded jump, it resumes the artifact-only or receipt-mode inline path, or follows the Construction module's Swarm interaction procedure when replay re-emits `invoke-swarm` (discard stale worktrees, fresh prepare, check-first, fresh reviewer receipts, finalize).
+* Build and Test's in-stage retry remit is limited to its own test configuration, build scripts, and environment setup. Generated source and test-code defects route through the ledgered Code Generation loop-back regardless of size.
+* Single-stage runs (`/aidlc --stage build-and-test --single`) stop at classification because they have no main-workflow position to move; impact-estimated options appear in the isolated-run summary.
+* The stage-ritual exception is present in all seven shipped conductor SKILLs, including Cursor and GitHub Copilot, and generated distributions remain byte-aligned with their authored sources.
+* Deterministic integration coverage (`t304-loopback-review-receipt-replay`) proves the replayed Code Generation gate refuses stale per-Unit reviews after `STAGE_JUMPED` and succeeds only after fresh receipts are recorded.
 ## [2.6.18] - 2026-08-19
 
 Classic and Express are new scope options, and the implicit default scope is now Classic — a **declared behavior change**: invocations that name no scope and match no keyword now run the v1-style lifecycle without Ideation instead of the full-lifecycle Feature scope. Exactly two things control the implicit default: the `AWS_AIDLC_DEFAULT_SCOPE` env var (which overrides) and the framework's hard-coded `classic` fallback. Express has a deterministic requirements-to-conditional-deploy path, and conditional protocol modules reduce fixed context without dropping reviewer recovery behavior. **Upgrade:** refresh your `dist/<harness>/` shell; in-flight workflows keep their persisted scope and need no migration; set `AWS_AIDLC_DEFAULT_SCOPE=feature` (Claude: the `.claude/settings.json` `env` block, which now ships `classic`) to keep the previous full-lifecycle default.

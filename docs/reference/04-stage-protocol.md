@@ -31,7 +31,7 @@ conductor based on workflow context:
 | `stage-protocol-governance.md` | Phase Boundary Verification (§13) | At phase boundaries (1.7->2.1, 2.9->3.1, 3.7->4.1) |
 | `stage-protocol-reviewer.md` | Reviewer dispatch, receipts, read scope, terminal ordering, and NOT-READY loop | When the directive names an effective reviewer |
 | `stage-protocol-ensemble.md` | Ensemble topology, subagent returns, contribution files, and objection triage | For subagent, pipeline, mob, or support-agent stages |
-| `stage-protocol-construction.md` | Bolt gates, Construction questions, per-unit iteration, receipts, and waves | On the first Construction directive of the session and every invoke-swarm |
+| `stage-protocol-construction.md` | Bolt gates, the Build-and-Test failure loop-back, Construction questions, per-unit iteration, receipts, and waves | On the first Construction directive of the session and every invoke-swarm |
 | `stage-protocol-swarm.md` | Harness-specific autonomous fan-out, convergence, finalize, and reviewer boundary | Every invoke-swarm |
 
 ### Conditional Loading Logic (from SKILL.md Routing)
@@ -140,7 +140,26 @@ never guesses the next stage.
 
 **No Emergent Behavior Rule:** Construction and Operation stages (phases 3-4)
 must always use this 2-option format. They must never introduce additional
-navigation options.
+navigation options. Two sanctioned carve-outs exist: the revision escape
+hatch (below) and the Build-and-Test failure loop-back in the construction
+protocol module (`aidlc-common/protocols/stage-protocol-construction.md`,
+"Build-and-Test failure loop-back" -- the bounded 3.6 to 3.5 repair loop with
+its impact-estimated halt-and-ask question).
+
+The loop-back has two deterministic re-entry routes. If Code Generation has
+never used lifecycle receipts, preserved artifacts can settle every Unit and
+the engine may emit the all-covered `gate: true` fast path. Once any lifecycle
+row exists, receipt mode is sticky: the jump invalidates the old settlement
+receipts and the engine re-emits per-Unit work so `unit start` / `unit complete`
+are minted again. Both routes apply the planned fix and deterministic
+Modify/Keep decisions before the gate and MUST produce a fresh
+`REVIEW_COMPLETED` for every applicable Unit, because `STAGE_JUMPED` invalidates
+all earlier reviews and the completion precondition refuses stale coverage.
+Under unit-major the replay stays on this serial walk and never swarms.
+
+Plan Approval is not reopened for this repair. The approved answer and non-empty
+plan survive the jump, the Loop-Back Log records the plan delta, and a gated
+"Retry with fix" answer is the human's re-approval of that revised approach.
 
 ### Conditional 3rd Option
 

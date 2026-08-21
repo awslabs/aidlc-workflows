@@ -522,7 +522,7 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
         "intent-create --scope bugfix",
       );
       expect(r.directive.message ?? "").toContain(
-        '--arguments "Fix duplicate todo persistence"',
+        "--arguments='Fix duplicate todo persistence'",
       );
       expect(r.directive.kind).not.toBe("ask");
     });
@@ -580,7 +580,7 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
       expect(r.directive.message ?? "").toContain("intent-create --scope mvp");
       expect(r.directive.message ?? "").not.toContain("intent-create --scope bugfix");
       expect(r.directive.message ?? "").toContain(
-        '--arguments "bugfix Fix duplicate todo"',
+        "--arguments='bugfix Fix duplicate todo'",
       );
     });
 
@@ -600,7 +600,7 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
       expect(r.directive.kind).toBe("print");
       expect(r.directive.message ?? "").toContain("intent-create --scope feature");
       expect(r.directive.message ?? "").toContain(
-        '--arguments "feature flags for billing"',
+        "--arguments='feature flags for billing'",
       );
     });
 

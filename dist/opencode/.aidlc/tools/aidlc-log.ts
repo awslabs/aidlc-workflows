@@ -27,6 +27,8 @@ import {
   loadStageGraphAll,
   isNonAnswer,
   parseCheckboxes,
+  pipelineLinkEvidence,
+  pipelineLinks,
   readAllAuditShards,
   readStateFile,
   recordDir,
@@ -37,7 +39,9 @@ import {
   SUMMARY_CONFIRMATION_CHECKPOINT,
   stateFilePath,
   toPosix,
+  UNBINDABLE_FINGERPRINT,
   withAuditLock,
+  workspaceSourceFingerprint,
 } from "./aidlc-lib.js";
 import type { ReviewClass } from "./aidlc-lib.js";
 
@@ -540,6 +544,107 @@ function handleAnswer(args: string[]): void {
   });
 }
 
+// --- Subcommand: link ---
+// Usage:
+//   aidlc-log link --stage <slug> --link <agent> [--repo <repo>] [--single]
+//       → PIPELINE_LINK_COMPLETED
+//
+// The receipt is emitted only after a declared pipeline link returns. Ordering,
+// duplicate prevention, and attempt freshness are checked under the audit lock
+// so two concurrent conductors cannot advance the same chain.
+function handleLink(args: string[]): void {
+  const { flags } = parseFlags(args);
+  if (!flags.stage) error("Missing --stage <slug>");
+  if (!flags.link) error("Missing --link <agent>");
+  if (flags.intent || flags.space) {
+    error(
+      "The link command does not accept --intent/--space selectors. Switch to the target workspace first.",
+    );
+  }
+
+  const pd = resolveActiveProjectDir(projectDir);
+  const space = activeSpace(pd);
+  const intent = activeIntent(pd, space);
+  if (!intent) {
+    error("Cannot resolve the active intent for pipeline link logging.");
+  }
+  const singleRun = flags.single === "true";
+
+  try {
+    withAuditLock(pd, () => {
+      const node = loadStageGraphAll().find((stage) => stage.slug === flags.stage);
+      if (node?.mode !== "pipeline") {
+        throw new Error(
+          `Cannot record pipeline link: stage "${flags.stage}" is not mode: pipeline.`,
+        );
+      }
+      const links = pipelineLinks(node);
+      const index = links.indexOf(flags.link);
+      if (index === -1) {
+        throw new Error(
+          `Cannot record pipeline link for "${flags.stage}": "${flags.link}" is not in its declared lead/support chain (${links.join(", ")}).`,
+        );
+      }
+
+      const evidence = pipelineLinkEvidence(pd, node, { singleRun });
+      if (evidence.repos.length > 0) {
+        if (!flags.repo) {
+          throw new Error(
+            `Cannot record pipeline link for "${flags.stage}": this intent has multiple repositories; pass --repo <repo>.`,
+          );
+        }
+        if (!evidence.repos.includes(flags.repo)) {
+          throw new Error(
+            `Cannot record pipeline link for "${flags.stage}": repo "${flags.repo}" is not registered for this intent (${evidence.repos.join(", ")}).`,
+          );
+        }
+      }
+
+      const repo = flags.repo ?? null;
+      if (evidence.receipts.some((receipt) =>
+        receipt.link === flags.link && receipt.repo === repo
+      )) {
+        throw new Error(
+          `Cannot record pipeline link for "${flags.stage}": link "${flags.link}"` +
+            `${repo ? ` for repo "${repo}"` : ""} already completed this attempt.`,
+        );
+      }
+      if (index > 0) {
+        const previous = links[index - 1];
+        const previousCompleted = evidence.receipts.some((receipt) =>
+          receipt.link === previous && receipt.repo === repo
+        );
+        if (!previousCompleted) {
+          throw new Error(
+            `Cannot record pipeline link for "${flags.stage}": "${flags.link}" is out of order; ` +
+              `position ${index + 1}/${links.length} requires current-attempt receipt for "${previous}"` +
+              `${repo ? ` in repo "${repo}"` : ""}.`,
+          );
+        }
+      }
+
+      const fields: Record<string, string> = {
+        Stage: flags.stage,
+        Link: flags.link,
+        Position: `${index + 1}/${links.length}`,
+      };
+      if (repo) fields.Repo = repo;
+      if (singleRun) fields.Workflow = `single-stage:${flags.stage}`;
+      emitAudit(pd, "PIPELINE_LINK_COMPLETED", fields, intent, space);
+    }, intent, space);
+  } catch (e) {
+    error(errorMessage(e));
+  }
+
+  console.log(JSON.stringify({
+    emitted: "PIPELINE_LINK_COMPLETED",
+    stage: flags.stage,
+    link: flags.link,
+    ...(flags.repo ? { repo: flags.repo } : {}),
+    ...(singleRun ? { single: true } : {}),
+  }));
+}
+
 // --- Subcommand: review ---
 // Usage:
 //   aidlc-log review --stage <slug> --reviewer <agent> [--unit <u>] --iteration <n>
@@ -892,16 +997,28 @@ function handleReview(args: string[]): void {
           autonomousCandidate,
         } = loadContext();
         const expected = attempt.requestCount + 1;
+        const sameSourceRecoveryScope =
+          receipts?.newestSourceUnit === (flags.unit ?? null);
+        const sourceScopeStale =
+          sameSourceRecoveryScope && receipts?.sourceStale === true;
         const scopeStale =
+          process.env.AIDLC_SKIP_SOURCE_FRESHNESS !== "1" &&
           fields.Workflow === undefined &&
           receipts !== null &&
-          (flags.unit
-            ? receipts.unitStale.has(flags.unit)
-            : receipts.stageStale);
+          (sourceScopeStale ||
+            (flags.unit
+              ? receipts.unitStale.has(flags.unit)
+              : receipts.stageStale));
+        const sourceRecoverySpent =
+          sourceScopeStale &&
+          (receipts?.sourceRecoverySpent === true ||
+            receipts?.sourceStaleProgress?.recoverySpent === true);
+        const recoverySpent =
+          attempt.recoverySpent || sourceRecoverySpent;
         if (retryPending) {
           if (!attempt.pendingIterations.has(iteration)) {
             if (scopeStale) {
-              if (attempt.recoverySpent) {
+              if (recoverySpent) {
                 refuseReview(
                   reviewRecoverySpentMessage(
                     flags.stage,
@@ -918,13 +1035,14 @@ function handleReview(args: string[]): void {
               const unitArg = flags.unit ? ` --unit "${flags.unit}"` : "";
               refuseReview(
                 `Refusing review retry for "${flags.stage}": the prior review ` +
-                  "completed, but its receipt was invalidated by a later artifact " +
-                  "write, so no unmatched request remains. Start the one recovery " +
+                  "completed, but its receipt was invalidated by a later artifact write " +
+                  "or workspace source mismatch, so no unmatched request remains. Start " +
+                  "the one recovery " +
                   `pass with \`aidlc-log.ts review --stage "${flags.stage}" ` +
                   `--reviewer "${flags.reviewer}"${unitArg} --iteration ${expected}\`.`,
               );
             }
-            if (attempt.recoverySpent) {
+            if (recoverySpent) {
               refuseReview(
                 reviewRecoveryAlreadyRequestedMessage(
                   flags.stage,
@@ -946,8 +1064,8 @@ function handleReview(args: string[]): void {
           budget !== null &&
           scopeStale &&
           attempt.pendingIterations.size === 0 &&
-          !attempt.recoverySpent;
-        if (scopeStale && attempt.recoverySpent) {
+          !recoverySpent;
+        if (scopeStale && recoverySpent) {
           refuseReview(
             reviewRecoverySpentMessage(
               flags.stage,
@@ -961,7 +1079,7 @@ function handleReview(args: string[]): void {
             ),
           );
         }
-        if (attempt.recoverySpent) {
+        if (recoverySpent) {
           refuseReview(
             reviewRecoveryAlreadyRequestedMessage(
               flags.stage,
@@ -1032,6 +1150,14 @@ function handleReview(args: string[]): void {
         );
       }
       fields["Artifact Fingerprint"] = fingerprint;
+      // Bind the terminal receipt to the workspace source state the reviewer
+      // inspected. Only workspace-writing stages carry this binding. A newly
+      // unbindable receipt records that explicitly so completion fails closed;
+      // only genuinely legacy fieldless receipts keep migration behavior.
+      if (node.workspace_requires) {
+        fields["Source Fingerprint"] =
+          workspaceSourceFingerprint(pd) ?? UNBINDABLE_FINGERPRINT;
+      }
       emitAudit(pd, "REVIEW_COMPLETED", fields, intent, space);
     }, intent, space);
   } catch (e) {
@@ -1070,11 +1196,14 @@ export function main(argv: string[]): void {
       case "answer":
         handleAnswer(filteredArgs.slice(1));
         break;
+      case "link":
+        handleLink(filteredArgs.slice(1));
+        break;
       case "review":
         handleReview(filteredArgs.slice(1));
         break;
       default:
-        error(`Unknown subcommand: ${subcommand}. Valid: decision, answer, review`);
+        error(`Unknown subcommand: ${subcommand}. Valid: decision, answer, link, review`);
     }
   } catch (e) {
     error(errorMessage(e));
