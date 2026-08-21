@@ -39,23 +39,37 @@ function writeFile(proj: string, rel: string, content: string): void {
   writeFileSync(join(proj, rel), content, "utf-8");
 }
 
-// Run doctor with HOME pinned to the project so the user-settings layer
-// (~/.claude/settings.json) resolves to a path under the project, keeping the
-// test hermetic against the developer's real ~/.claude/settings.json.
+// Path the injectable managed-settings seam points at during tests. Kept under
+// the project so the host's real managed-settings file can never leak into a
+// result; a test writes here to simulate an enterprise managed policy.
+function managedPath(proj: string): string {
+  return join(proj, ".claude", "managed-settings.json");
+}
+
+// Run doctor hermetically: HOME pinned to the project pins the user-settings
+// layer (~/.claude/settings.json) under the project, and
+// AIDLC_MANAGED_SETTINGS_PATH pins the enterprise managed layer to a file we
+// control (absent by default) instead of the developer's/CI host's real
+// /etc/claude-code/ or Program Files managed-settings.json.
 function runDoctor(proj: string): { status: number; out: string } {
   const res = spawnSync(BUN, [UTIL, "doctor", "--project-dir", proj], {
     encoding: "utf-8",
-    env: { ...process.env, HOME: proj, USERPROFILE: proj },
+    env: {
+      ...process.env,
+      HOME: proj,
+      USERPROFILE: proj,
+      AIDLC_MANAGED_SETTINGS_PATH: managedPath(proj),
+    },
   });
   return { status: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
 }
 
-describe("t283 doctor disableAllHooks gate", () => {
+describe("t304 doctor disableAllHooks gate", () => {
   test("a clean install passes the Hooks-enabled row", () => {
     const proj = setupIntegrationProject();
     created.push(proj);
     const { out } = runDoctor(proj);
-    expect(out).toMatch(/Hooks enabled \(no disableAllHooks override\)/);
+    expect(out).toMatch(/Hooks enabled \(no disableAllHooks:true in any inspected settings file\)/);
     expect(out).not.toMatch(/Hooks DISABLED/);
   });
 
@@ -97,6 +111,33 @@ describe("t283 doctor disableAllHooks gate", () => {
     writeFile(proj, ".claude/settings.local.json", JSON.stringify({ disableAllHooks: false }, null, 2));
     const { out } = runDoctor(proj);
     // The local layer wins → hooks are enabled → no disabled warning.
+    expect(out).toMatch(/Hooks enabled/);
+    expect(out).not.toMatch(/Hooks DISABLED/);
+  });
+
+  // Managed-settings is the realistic IT-policy vector for issue #802 (reported
+  // on Windows). The managed layer is read from the injectable seam, so this
+  // covers the managed channel on any host platform.
+  test("disableAllHooks:true in enterprise managed settings fails and is attributed to the managed layer", () => {
+    const proj = setupIntegrationProject();
+    created.push(proj);
+    writeFileSync(managedPath(proj), JSON.stringify({ disableAllHooks: true }, null, 2), "utf-8");
+    const { status, out } = runDoctor(proj);
+    expect(out).toMatch(/Hooks DISABLED/);
+    expect(out).toMatch(/enterprise managed settings/);
+    expect(status).not.toBe(0);
+    // The remedy must NOT tell the user to override a managed policy from a
+    // local layer — managed settings is the highest-precedence layer.
+    expect(out).not.toMatch(/set it to false in a higher-precedence layer/);
+    expect(out).toMatch(/IT policy must remove it/);
+  });
+
+  test("managed settings is highest precedence: managed:false SUPPRESSES a project settings.json:true", () => {
+    const proj = setupIntegrationProject();
+    created.push(proj);
+    patchProjectSettings(proj, { disableAllHooks: true });
+    writeFileSync(managedPath(proj), JSON.stringify({ disableAllHooks: false }, null, 2), "utf-8");
+    const { out } = runDoctor(proj);
     expect(out).toMatch(/Hooks enabled/);
     expect(out).not.toMatch(/Hooks DISABLED/);
   });

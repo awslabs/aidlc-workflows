@@ -302,6 +302,7 @@ Run the health check to confirm everything is in place:
 |-------|-------------------|
 | Prerequisites | `bun` is installed and on `$PATH` |
 | Hook presence | Every hook `settings.json` wires (its `hooks` blocks + the `statusLine` command — all 16 framework hooks) exists in `.claude/hooks/`; a wired-but-missing hook fails loudly. Sourcing the expected roster from `settings.json` means adding a hook there auto-checks it |
+| Hooks enabled (Claude Code) | No inspected settings file globally disables hooks. Fails loudly when `"disableAllHooks": true` is resolved from any settings layer — enterprise managed settings, `.claude/settings.local.json`, `.claude/settings.json`, or `~/.claude/settings.json` — since that silently skips every present hook. Follows Claude Code's layer precedence, so a higher-precedence `false` suppresses a lower `true` |
 | Project structure | `.claude/settings.json` exists with expected configuration |
 | Workspace shell | `.claude/` + `aidlc/spaces/default/memory/` are present (the shipped shell) |
 | State file | the active intent's `aidlc-state.md` matches its audit trail (no drift) |
@@ -325,6 +326,7 @@ Run the health check to confirm everything is in place:
 ✓ aidlc-session-end.ts present
 ✓ aidlc-statusline.ts present
 ✓ settings.json present
+✓ Hooks enabled (no disableAllHooks:true in any inspected settings file)
 ✓ AWS_AIDLC_DEFAULT_SCOPE (unset — no project default)
 ✓ workspace shell ready (.claude/ + aidlc/spaces/default/memory/)
 ✓ Hook heartbeats: not yet fired (first workflow stage will populate)
