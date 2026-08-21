@@ -1,4 +1,4 @@
-// t304-hook-matcher-fixture: weak-direction drift gate for hook registrations.
+// t308-hook-matcher-fixture: weak-direction drift gate for hook registrations.
 //
 // Every registered matcher in scope must select at least one tool_name that we
 // have actually captured for that harness. This intentionally does not claim
@@ -29,6 +29,12 @@ const CODEX_FIXTURE_GAPS = [
     matcher: "spawn_agent",
     reason:
       "harness/codex/emit.ts:39-41 records this registration as verified live on Codex 0.142.5; #777 has no delegation capture yet",
+  },
+  {
+    event: "PostToolUse",
+    matcher: "request_user_input",
+    reason:
+      "harness/codex/emit.ts registers the structured-input human-turn seam added by #553; no live Codex request_user_input capture exists yet",
   },
 ] as const;
 
@@ -98,9 +104,11 @@ function matcherRegistrations(document: JsonObject, source: string): MatcherRegi
   return registrations;
 }
 
-function selectedNames(matcher: string, toolNames: readonly string[]): string[] {
-  // Current Codex matchers are literals, so regex, glob, and exact evaluation
-  // produce the same hit/miss verdict for the captured vocabulary.
+function selectedLiteralNames(matcher: string, toolNames: readonly string[]): string[] {
+  return toolNames.filter((name) => name === matcher);
+}
+
+function selectedPatternNames(matcher: string, toolNames: readonly string[]): string[] {
   const pattern = new RegExp(matcher);
   return toolNames.filter((name) => {
     pattern.lastIndex = 0;
@@ -108,7 +116,7 @@ function selectedNames(matcher: string, toolNames: readonly string[]): string[] 
   });
 }
 
-describe("t304 hook registration matchers select captured fixture tool names", () => {
+describe("t308 hook registration matchers select captured fixture tool names", () => {
   test("Codex matcher registrations reach captures or an explicit fixture gap", () => {
     const source = "dist/codex/.codex/hooks.json";
     const registrations = matcherRegistrations(
@@ -126,7 +134,7 @@ describe("t304 hook registration matchers select captured fixture tool names", (
       );
       if (gap) continue;
       expect(
-        selectedNames(registration.matcher, toolNames),
+        selectedLiteralNames(registration.matcher, toolNames),
         `Codex ${registration.event}/${registration.matcher} must select a captured tool_name`,
       ).not.toEqual([]);
     }
@@ -141,7 +149,7 @@ describe("t304 hook registration matchers select captured fixture tool names", (
         gap.reason,
       ).toBe(true);
       expect(
-        selectedNames(gap.matcher, toolNames),
+        selectedLiteralNames(gap.matcher, toolNames),
         `${gap.reason}; remove this fixture-gap entry once a capture lands`,
       ).toEqual([]);
     }
@@ -174,7 +182,7 @@ describe("t304 hook registration matchers select captured fixture tool names", (
     expect(new Set(registrations.map((registration) => registration.file)).size).toBe(4);
     for (const registration of registrations) {
       expect(
-        selectedNames(registration.matcher, KIRO_IDE_OBSERVED_TOOLS),
+        selectedPatternNames(registration.matcher, KIRO_IDE_OBSERVED_TOOLS),
         `${registration.file} ${registration.event}/${registration.matcher} must select an observed tool name`,
       ).not.toEqual([]);
     }
@@ -194,7 +202,7 @@ describe("t304 hook registration matchers select captured fixture tool names", (
 
       for (const registration of registrations) {
         expect(
-          selectedNames(registration.matcher, toolNames),
+          selectedPatternNames(registration.matcher, toolNames),
           `${harness} ${registration.event}/${registration.matcher} must select a captured tool_name`,
         ).not.toEqual([]);
       }
