@@ -111,11 +111,12 @@ const childCwd = process.env.AIDLC_PROJECT_DIR ? projectDir : process.cwd();
 // block API, so the conductor relays rather than is bypassed — measured to land
 // the command and leave the active intent untouched).
 //
-// WHY the args are recovered from the EXPANDED body: Kiro fires userPromptSubmit
-// with `prompt` = the fully-expanded skill body (the raw `/aidlc …` literal is
-// gone), but it SUBSTITUTES the user's post-/aidlc text ($ARGUMENTS) into the
-// forwarding-loop anchor `aidlc-orchestrate.ts next <ARGS>`. We read the args
-// back from that anchor — the same text the conductor would forward.
+// WHY the args support BOTH payload shapes: expanded-body generations substitute
+// $ARGUMENTS into the forwarding-loop anchor
+// `aidlc-orchestrate.ts next <ARGS>`, so that anchor remains the first source.
+// The repo's live kiro-cli 2.6.1 fixture carries plain prompt text, while issue
+// #776 measured Kiro IDE 1.0.309 and kiro-cli 2.18.1 --v3 delivering the raw
+// typed `/aidlc …` text. The fallback recovers argv directly from that raw shape.
 function shellWords(input: string): string[] {
   const words: string[] = [];
   let word = "";
@@ -166,8 +167,11 @@ function extractNextInvocation(
   // step-1 anchor) and take the tokens up to the closing backtick. The anchor is
   // inside a markdown code span, so the args end at the backtick.
   const m = expandedPrompt.match(/aidlc-orchestrate\.ts next ([^`\n]*)`/);
-  if (!m) return { raw: "", args: [] };
-  const raw = m[1].trim();
+  const rawInvocation = m
+    ? m[1]
+    : expandedPrompt.match(/^\s*\/aidlc(?![\w-])([\s\S]*)$/)?.[1];
+  if (rawInvocation === undefined) return { raw: "", args: [] };
+  const raw = rawInvocation.trim();
   return { raw, args: shellWords(raw) };
 }
 

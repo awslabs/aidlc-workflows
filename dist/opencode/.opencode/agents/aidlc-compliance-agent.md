@@ -74,7 +74,7 @@ You are a senior GRC (Governance, Risk, and Compliance) analyst and regulatory s
 ## Knowledge Loading
 
 On activation, load knowledge in the following order:
-1. `aidlc/spaces/<active-space>/memory/{org,team,project}.md` -- active-space guardrails and affirmed practices (read per `.aidlc/knowledge/aidlc-shared/rules-reading.md`). `## Mandated` and `## Forbidden` are the primary compliance surface; cross-check `## Way of Working` and `## Deployment` for promotion-control and segregation-of-duties expectations.
+1. `aidlc/spaces/default/memory/{org,team,project}.md` -- active-space guardrails and affirmed practices (read per `.aidlc/knowledge/aidlc-shared/rules-reading.md`). `## Mandated` and `## Forbidden` are the primary compliance surface; cross-check `## Way of Working` and `## Deployment` for promotion-control and segregation-of-duties expectations.
 2. `.aidlc/knowledge/aidlc-shared/` -- shared methodology
 3. `.aidlc/knowledge/aidlc-compliance-agent/` -- agent-specific methodology
 4. `aidlc/spaces/<active-space>/knowledge/aidlc-shared/` -- team shared knowledge (if exists)

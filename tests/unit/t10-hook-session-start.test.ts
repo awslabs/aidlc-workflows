@@ -216,6 +216,11 @@ describe("t10 session-start SessionStart hook (mechanism cli — spawned hook + 
     const parsed = JSON.parse(r.stdout.trim());
     expect(typeof parsed.additionalContext).toBe("string");
     expect(parsed.additionalContext.length).toBeGreaterThan(0);
+    expect(parsed.additionalContext).toContain("On BARE /aidlc re-entry");
+    expect(parsed.additionalContext).toContain(
+      "Explicit /aidlc --resume already selects Resume",
+    );
+    expect(parsed.additionalContext).toContain("do NOT offer the menu");
   });
 
   test("injects the Lifecycle Phase (IDEATION) [.sh test 4]", () => {

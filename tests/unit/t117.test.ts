@@ -33,8 +33,8 @@
 //             DIR  '"direction":"redo"'               -> t3
 //   - .sh T4  OUT  '"kind":"error"'                   -> t4
 //             OUT  'is skipped for scope'             -> t4 (resolve verbatim)
-//   - .sh T5  OUT  '"kind":"ask"'                     -> t5 (resume, jumped)
-//   - .sh T6  OUT  '"kind":"ask"'                     -> t6 (resume, mid-ideation)
+//   - .sh T5  OUT  direct continuation                -> t5 (resume, jumped)
+//   - .sh T6  OUT  direct continuation                -> t6 (resume, mid-ideation)
 //   - .sh T7  OUT  '"kind":"error"'                   -> t7 (init guard)
 //             OUT  'Use --force to reinitialize'      -> t7 (verbatim guard)
 //   - .sh T8  OUT  '"kind":"print"'                   -> t8 (init clean)
@@ -80,6 +80,8 @@ import {
   createTestProject,
   removeWorkspaceRecord,
   resetAidlcEnv,
+  runOrchestrateNext,
+  seedAidlcMemory,
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
@@ -105,7 +107,10 @@ afterAll(() => {
 function proj(stateFixture?: string): string {
   const p = createTestProject();
   tempDirs.push(p);
-  if (stateFixture) seedStateFile(p, join(FIXTURES_DIR, stateFixture));
+  if (stateFixture) {
+    seedAidlcMemory(p);
+    seedStateFile(p, join(FIXTURES_DIR, stateFixture));
+  }
   return p;
 }
 
@@ -255,25 +260,27 @@ describe("t117 jump-direction delegation (migrated from t117-orchestrate-branche
 });
 
 // ============================================================
-// Resume branch — existing state surfaces an `ask` directive (engine never
-// calls AskUserQuestion). (.sh Tests 5-6)
+// Explicit resume — existing state continues through normal routing without
+// surfacing the session re-entry menu. (.sh Tests 5-6)
 // ============================================================
 
-describe("t117 resume branch", () => {
-  // --- Test 5: resume with existing state → ask directive ---
-  test("5: resume with existing state (jumped) → ask directive", () => {
+describe("t117 explicit resume routing", () => {
+  // --- Test 5: resume with existing state → current stage ---
+  test("5: resume with existing state (jumped) → code-generation continuation", () => {
     const p = proj("state-jumped.md");
-    const r = next(["--resume"], p);
-    expect(r.out).toContain('"kind":"ask"');
-    expect(directive(r.stdout).kind).toBe("ask");
+    const r = runOrchestrateNext(ORCH, p, ["--resume"]);
+    expect(r.directive?.kind).toBe("run-stage");
+    expect(r.directive?.stage).toBe("code-generation");
+    expect(r.steering.length).toBeGreaterThan(0);
   });
 
-  // --- Test 6: resume over a mid-phase fixture → ask directive ---
-  test("6: resume over a mid-phase workflow (mid-ideation) → ask directive", () => {
+  // --- Test 6: resume over a mid-phase fixture → current stage ---
+  test("6: resume over a mid-phase workflow → feasibility continuation", () => {
     const p = proj("state-mid-ideation.md");
-    const r = next(["--resume"], p);
-    expect(r.out).toContain('"kind":"ask"');
-    expect(directive(r.stdout).kind).toBe("ask");
+    const r = runOrchestrateNext(ORCH, p, ["--resume"]);
+    expect(r.directive?.kind).toBe("run-stage");
+    expect(r.directive?.stage).toBe("feasibility");
+    expect(r.steering.length).toBeGreaterThan(0);
   });
 });
 

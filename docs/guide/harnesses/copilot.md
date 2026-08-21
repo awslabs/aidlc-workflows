@@ -133,11 +133,11 @@ git checkout v2
   delivery; correlation loss does not create a permanent deny. Once a claim is
   attempted, project, state, or session ownership rejection is an explicit deny:
   another session cannot execute the owner's current token as untracked work.
-- **Resume and conversation waits are session-scoped.** Stop allows a pending
-  Resume question or a genuine conversational response to end cleanly. A
-  foreign Copilot session cannot answer or advance that wait with bare `next`;
-  explicit `next --resume` reissues the choice. Prompt text and rules content
-  are not persisted in the coordination marker.
+- **Legacy Resume and conversation waits are session-scoped.** Stop allows a
+  genuine conversational response to end cleanly. A Resume marker written by a
+  pre-2.6.19 installation remains owner-scoped; explicit `next --resume`
+  supersedes it and continues directly. Prompt text and rules content are not
+  persisted in the coordination marker.
 - **Host evidence is intentionally bounded.** Rewriting and carried-ID echo
   were live-verified on Copilot CLI 1.0.79 on macOS in noninteractive mode.
   VS Code's `tool_use_id`, `updatedInput`, and `tool_response` path is covered

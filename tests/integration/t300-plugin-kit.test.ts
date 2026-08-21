@@ -1,6 +1,6 @@
 // covers: file:scripts/package.ts (plugin build), file:tests/harness/plugin-kit.ts
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   existsSync,
   mkdirSync,
@@ -20,6 +20,9 @@ import {
   liveGateFor,
   validatePluginContent,
 } from "../harness/plugin-kit.ts";
+
+const TIMEOUT_MS = 60_000;
+setDefaultTimeout(TIMEOUT_MS);
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const TEST_PRO_ROOT = join(REPO_ROOT, "plugins", "test-pro");

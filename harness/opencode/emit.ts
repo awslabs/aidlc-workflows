@@ -74,6 +74,7 @@ function emitSubagentMd(raw: string, srcPath: string, tierCap: EmitContext["tier
 
 function projectActiveMemoryReferences(raw: string): string {
   return raw
+    .replaceAll("aidlc/spaces/<active-space>/memory/", "aidlc/spaces/default/memory/")
     .replaceAll(".aidlc/rules/aidlc-org.md", "aidlc/spaces/default/memory/org.md")
     .replaceAll(".aidlc/rules/aidlc-team.md", "aidlc/spaces/default/memory/team.md")
     .replaceAll(".aidlc/rules/aidlc-project.md", "aidlc/spaces/default/memory/project.md")

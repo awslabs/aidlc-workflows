@@ -70,7 +70,7 @@ Each Bolt is one pass through the Construction stages executing one or more Unit
 ## Knowledge Loading
 
 On activation, load knowledge in the following order:
-1. `aidlc/spaces/<active-space>/memory/{org,team,project}.md` -- active-space guardrails and affirmed practices (read per `.aidlc/knowledge/aidlc-shared/rules-reading.md`). Consult `## Walking Skeleton` for the skeleton-first stance and `## Way of Working` for Bolt-to-branch mapping. If no stance is affirmed, use the active scope's defaults.
+1. `aidlc/spaces/default/memory/{org,team,project}.md` -- active-space guardrails and affirmed practices (read per `.aidlc/knowledge/aidlc-shared/rules-reading.md`). Consult `## Walking Skeleton` for the skeleton-first stance and `## Way of Working` for Bolt-to-branch mapping. If no stance is affirmed, use the active scope's defaults.
 2. `.aidlc/knowledge/aidlc-shared/` -- shared methodology
 3. `.aidlc/knowledge/aidlc-delivery-agent/` -- agent-specific methodology
 4. `aidlc/spaces/<active-space>/knowledge/aidlc-shared/` -- team shared knowledge (if exists)

@@ -143,8 +143,9 @@ const manifest: HarnessManifest = {
 
   emit: null,
 
-  // Folder-drop + .kiro.hook, same as Kiro CLI (both .kiro trees). No host store.
-  plugin: { manifestDir: ".kiro-plugin", kind: "kiro" },
+  // Folder-drop with a v2 SessionStart registration under .kiro/hooks/. Kiro
+  // IDE has no host plugin store, but current IDEs execute this JSON schema.
+  plugin: { manifestDir: ".kiro-plugin", kind: "kiro-ide" },
 };
 
 export default manifest;
