@@ -188,7 +188,8 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
     );
     expect(questionRendering).toContain("numbered prose options in chat");
     expect(questionRendering).toContain("does not fire the trusted `UserPromptSubmit`");
-    expect(questionRendering).toContain("Calling either picker would therefore deadlock");
+    expect(questionRendering).toContain("the matcher-free PreToolUse guard denies");
+    expect(questionRendering).toContain("With no workflow state, the guard fails open");
     expect(questionRendering).toContain("start every question at `1`");
     expect(questionRendering).toMatch(/Use unordered\s+bullets/);
     expect(questionRendering).toMatch(/Visible `1`\s+maps/);

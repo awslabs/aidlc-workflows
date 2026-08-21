@@ -14,6 +14,9 @@
 //   guard-tool-call deny → a guard block (core exit 2 + stderr) converts to the
 //                    {"hookSpecificOutput":{"permissionDecision":"deny"}}
 //                    stdout JSON with exit 0 — Copilot's only deny channel.
+//   guard-tool-call picker → native question pickers deny only while workflow
+//                    state exists; non-AIDLC projects and foreign tools remain
+//                    silent.
 //   guard-tool-call remap → Copilot's `path` file-tool key reaches the core hooks
 //                    as `file_path` (the shim re-keys).
 //   post-tool      → a Write into the record lands ARTIFACT_CREATED in the
@@ -413,6 +416,55 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     };
     expect(parsed.hookSpecificOutput?.permissionDecision).toBe("deny");
     expect(parsed.hookSpecificOutput?.permissionDecisionReason?.length ?? 0).toBeGreaterThan(0);
+  });
+
+  test("4a: ask_user is denied while workflow state is active", () => {
+    const dir = scratchProject(true);
+    const r = runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      cwd: dir,
+      tool_name: "ask_user",
+      tool_input: { question: "Continue?" },
+    });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain('"permissionDecision":"deny"');
+    expect(r.stdout).toContain("numbered prose");
+  });
+
+  test("4b: VS Code vscode/askQuestions camel payload is denied with active state", () => {
+    const dir = scratchProject(true);
+    const r = runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      cwd: dir,
+      toolName: "vscode/askQuestions",
+      toolInput: { questions: [{ prompt: "Continue?" }] },
+    });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain('"permissionDecision":"deny"');
+  });
+
+  test("4c: native question picker fails open without workflow state", () => {
+    const dir = scratchProject(false);
+    const r = runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      cwd: dir,
+      tool_name: "ask_user",
+      tool_input: { question: "Continue?" },
+    });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe("");
+  });
+
+  test("4d: unrelated foreign tool stays silent with active workflow state", () => {
+    const dir = scratchProject(true);
+    const r = runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      cwd: dir,
+      tool_name: "foreign_question_tool",
+      tool_input: { question: "Continue?" },
+    });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe("");
   });
 
   test("5: guard-tool-call allows an ordinary command silently", () => {
