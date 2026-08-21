@@ -18,6 +18,7 @@ import {
   cleanupTestProject,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
+import { resolveManagedSettingsCandidates } from "../../core/tools/aidlc-utility.ts";
 
 const BUN = process.execPath;
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
@@ -140,5 +141,54 @@ describe("t304 doctor disableAllHooks gate", () => {
     const { out } = runDoctor(proj);
     expect(out).toMatch(/Hooks enabled/);
     expect(out).not.toMatch(/Hooks DISABLED/);
+  });
+});
+
+// Pin the managed-settings path resolver for EVERY platform without needing a
+// host of that OS — the deterministic equivalent of booting a real Windows box.
+// Paths are verified against Claude Code's own settings docs
+// (code.claude.com/docs/en/settings): Windows moved to %ProgramFiles%\ClaudeCode\
+// (legacy %PROGRAMDATA% unsupported since v2.1.75), macOS uses
+// /Library/Application Support/ClaudeCode/, Linux and WSL use /etc/claude-code/.
+describe("t304 resolveManagedSettingsCandidates (per-platform paths)", () => {
+  test("Windows probes Program Files first, then legacy ProgramData", () => {
+    const paths = resolveManagedSettingsCandidates("win32", {
+      ProgramFiles: "C:\\Program Files",
+      PROGRAMDATA: "C:\\ProgramData",
+    });
+    expect(paths).toEqual([
+      "C:\\Program Files\\ClaudeCode\\managed-settings.json",
+      "C:\\ProgramData\\ClaudeCode\\managed-settings.json",
+    ]);
+    // Program Files (supported) must outrank ProgramData (legacy).
+    expect(paths[0]).toContain("Program Files");
+  });
+
+  test("Windows falls back to default roots when env vars are unset", () => {
+    const paths = resolveManagedSettingsCandidates("win32", {});
+    expect(paths[0]).toBe("C:\\Program Files\\ClaudeCode\\managed-settings.json");
+    expect(paths[1]).toBe("C:\\ProgramData\\ClaudeCode\\managed-settings.json");
+  });
+
+  test("macOS uses the Application Support path", () => {
+    expect(resolveManagedSettingsCandidates("darwin", {})).toEqual([
+      "/Library/Application Support/ClaudeCode/managed-settings.json",
+    ]);
+  });
+
+  test("Linux (and WSL) use /etc/claude-code", () => {
+    expect(resolveManagedSettingsCandidates("linux", {})).toEqual([
+      "/etc/claude-code/managed-settings.json",
+    ]);
+  });
+
+  test("AIDLC_MANAGED_SETTINGS_PATH overrides the platform default on every OS", () => {
+    for (const platform of ["win32", "darwin", "linux"] as const) {
+      expect(
+        resolveManagedSettingsCandidates(platform, {
+          AIDLC_MANAGED_SETTINGS_PATH: "/custom/managed-settings.json",
+        }),
+      ).toEqual(["/custom/managed-settings.json"]);
+    }
   });
 });

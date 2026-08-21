@@ -19,6 +19,7 @@ import {
   relative,
   resolve,
   sep,
+  win32 as winPath,
 } from "node:path";
 import { pathToFileURL } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
@@ -1408,6 +1409,38 @@ export const PRACTICES_STALENESS_DAYS = 90;
 // covers a generous LLM Task call budget (Haiku 30s + retry + parse).
 export const MERGE_DISPATCH_TIMEOUT_SEC = 60;
 
+/**
+ * Resolve the ordered list of Claude Code `managed-settings.json` paths to probe
+ * for a `disableAllHooks` override, most-authoritative first. Pure and
+ * platform/env-injected so every OS can be unit-tested without a host of that OS.
+ *
+ * Paths per Claude Code's settings docs (code.claude.com/docs/en/settings):
+ *   - macOS:       /Library/Application Support/ClaudeCode/managed-settings.json
+ *   - Linux / WSL: /etc/claude-code/managed-settings.json
+ *   - Windows:     %ProgramFiles%\ClaudeCode\managed-settings.json
+ *                  (legacy %PROGRAMDATA%\ClaudeCode\ — unsupported since v2.1.75,
+ *                   kept only as a secondary probe)
+ *
+ * AIDLC_MANAGED_SETTINGS_PATH overrides the list entirely — a custom managed
+ * path, and the seam tests use to stay hermetic against the host's real file.
+ */
+export function resolveManagedSettingsCandidates(
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv,
+): string[] {
+  if (env.AIDLC_MANAGED_SETTINGS_PATH) return [env.AIDLC_MANAGED_SETTINGS_PATH];
+  if (platform === "darwin") return ["/Library/Application Support/ClaudeCode/managed-settings.json"];
+  if (platform === "win32") {
+    // Use the win32 joiner explicitly so paths carry backslashes regardless of
+    // the host OS running doctor's tests (native `join` would use the host's).
+    return [
+      winPath.join(env.ProgramFiles || "C:\\Program Files", "ClaudeCode", "managed-settings.json"),
+      winPath.join(env.PROGRAMDATA || "C:\\ProgramData", "ClaudeCode", "managed-settings.json"),
+    ];
+  }
+  return ["/etc/claude-code/managed-settings.json"];
+}
+
 interface NamingMismatch {
   file: string;
   stem: string;
@@ -1963,24 +1996,9 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
     // fragment dir) — so a pass means "no disableAllHooks:true in any settings
     // file we could inspect", not a guarantee the whole enterprise layer is clean.
     //
-    // Managed-settings file location is platform-specific and, on current
-    // Claude Code (>= 2.1.75), Windows moved from %PROGRAMDATA% to %ProgramFiles%
-    // (default C:\Program Files\ClaudeCode\); we probe Program Files first and
-    // keep ProgramData only as a legacy secondary. AIDLC_MANAGED_SETTINGS_PATH
-    // overrides the candidate list (a custom managed path, and the seam tests
-    // use to stay hermetic against the host's real managed file).
-    const managedOverride = process.env.AIDLC_MANAGED_SETTINGS_PATH;
-    const managedCandidates = managedOverride
-      ? [managedOverride]
-      : process.platform === "darwin"
-        ? ["/Library/Application Support/ClaudeCode/managed-settings.json"]
-        : process.platform === "win32"
-          ? [
-              join(process.env.ProgramFiles || "C:\\Program Files", "ClaudeCode", "managed-settings.json"),
-              // Legacy secondary — unsupported since Claude Code 2.1.75.
-              join(process.env.PROGRAMDATA || "C:\\ProgramData", "ClaudeCode", "managed-settings.json"),
-            ]
-          : ["/etc/claude-code/managed-settings.json"];
+    // Managed-settings file location is platform-specific (resolved by the pure,
+    // per-platform-tested resolveManagedSettingsCandidates below).
+    const managedCandidates = resolveManagedSettingsCandidates(process.platform, process.env);
     const home = process.env.HOME || process.env.USERPROFILE || "";
     const MANAGED_LABEL = "enterprise managed settings";
     const hookDisableLayers: Array<[string, string]> = [
