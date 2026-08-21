@@ -836,7 +836,19 @@ Options:
 
 ### NO EMERGENT BEHAVIOR RULE
 
-Construction and Operation stages MUST use standardized 2-option completion messages. The orchestrator must NOT create 3-option menus or other emergent navigation patterns for these phases. Only Ideation and Inception stages may conditionally include a 3rd option (to add a previously skipped stage). The sole exception is the revision loop escape hatch (3+ revision cycles).
+Construction and Operation stages MUST use standardized 2-option completion messages. The orchestrator must NOT create 3-option menus or other emergent navigation patterns for these phases. Only Ideation and Inception stages may conditionally include a 3rd option (to add a previously skipped stage). Two sanctioned exceptions exist: the revision loop escape hatch (3+ revision cycles) and the Build-and-Test failure loop-back in the construction protocol module (`aidlc-common/protocols/stage-protocol-construction.md`) with its impact-estimated halt-and-ask question.
+
+The loop-back replay is settlement-aware. Artifact-only Code Generation
+workflows may return directly to the all-covered gate; sticky receipt-mode
+workflows re-emit per-Unit directives and re-mint `unit start` / `unit
+complete`. Both routes apply the planned fix and deterministic Artifact Re-use
+decisions before the gate, then invoke the declared reviewer for every
+applicable Unit to record fresh current-attempt `REVIEW_COMPLETED` receipts:
+the jump invalidates every prior review and approval refuses without
+replacements. Unit-major uses this serial per-Unit route and never invokes the
+autonomous swarm. The replay repairs the already-approved plan, so its Plan
+Approval answer remains intact; a gated "Retry with fix" is the re-approval of
+the revised approach.
 
 ---
 

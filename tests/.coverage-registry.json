@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 596,
+    "total": 601,
     "enumeratedByClass": {
-      "function": 336,
+      "function": 341,
       "audit": 85,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 165,
+      "function": 166,
       "audit": 43,
       "scope": 11,
       "stage": 11,
@@ -409,6 +409,14 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/integration/t304-loopback-review-receipt-replay.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t307-loopback-unitmajor-replay.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t115.test.ts",
           "mechanism": "cli"
         }
@@ -575,6 +583,14 @@
         {
           "file": "tests/e2e/t57-workflow-backward-jump.test.ts",
           "mechanism": "sdk"
+        },
+        {
+          "file": "tests/integration/t304-loopback-review-receipt-replay.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t307-loopback-unitmajor-replay.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -757,6 +773,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t307-loopback-unitmajor-replay.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
           "mechanism": "cli"
         }
@@ -792,6 +812,10 @@
       "unitId": "UNIT_STARTED",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t307-loopback-unitmajor-replay.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
           "mechanism": "cli"
@@ -1815,6 +1839,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:filteredRawIndexEntries",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:filterProducesByKind",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1913,6 +1944,10 @@
       "unitId": "function:freshReviewReceipts",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t304-loopback-review-receipt-replay.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t264-review-freeze-hook.test.ts",
           "mechanism": "cli"
@@ -3512,6 +3547,20 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:reviewedSourceRef",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:reviewedSourceRefPrefix",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:REVIEWER_DISPATCH_TTL_MS",
       "minMechanism": "none",
       "coveredBy": [],
@@ -4016,6 +4065,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:UNBINDABLE_FINGERPRINT",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:UNIT_KINDS",
       "minMechanism": "none",
       "coveredBy": [],
@@ -4226,6 +4282,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t229-workspace-parser.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:workspaceSourceFingerprint",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t304-source-freshness-receipts.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -5692,6 +5760,14 @@
           "mechanism": "sdk"
         },
         {
+          "file": "tests/integration/t304-loopback-review-receipt-replay.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t307-loopback-unitmajor-replay.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t19.test.ts",
           "mechanism": "cli"
         },
@@ -5872,6 +5948,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t306-learnings-cid-collision-followup.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t97.test.ts",
           "mechanism": "cli"
         }
@@ -5889,6 +5969,10 @@
         },
         {
           "file": "tests/unit/t199-learnings-memory-path.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t306-learnings-cid-collision-followup.test.ts",
           "mechanism": "cli"
         },
         {
@@ -5927,6 +6011,14 @@
       "unitId": "aidlc-log review",
       "minMechanism": "cli",
       "coveredBy": [
+        {
+          "file": "tests/integration/t304-loopback-review-receipt-replay.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t307-loopback-unitmajor-replay.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t115.test.ts",
           "mechanism": "cli"
@@ -6421,6 +6513,10 @@
       "unitId": "aidlc-state unit",
       "minMechanism": "cli",
       "coveredBy": [
+        {
+          "file": "tests/integration/t307-loopback-unitmajor-replay.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
           "mechanism": "cli"

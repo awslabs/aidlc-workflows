@@ -37,7 +37,9 @@ import {
   SUMMARY_CONFIRMATION_CHECKPOINT,
   stateFilePath,
   toPosix,
+  UNBINDABLE_FINGERPRINT,
   withAuditLock,
+  workspaceSourceFingerprint,
 } from "./aidlc-lib.js";
 import type { ReviewClass } from "./aidlc-lib.js";
 
@@ -892,16 +894,28 @@ function handleReview(args: string[]): void {
           autonomousCandidate,
         } = loadContext();
         const expected = attempt.requestCount + 1;
+        const sameSourceRecoveryScope =
+          receipts?.newestSourceUnit === (flags.unit ?? null);
+        const sourceScopeStale =
+          sameSourceRecoveryScope && receipts?.sourceStale === true;
         const scopeStale =
+          process.env.AIDLC_SKIP_SOURCE_FRESHNESS !== "1" &&
           fields.Workflow === undefined &&
           receipts !== null &&
-          (flags.unit
-            ? receipts.unitStale.has(flags.unit)
-            : receipts.stageStale);
+          (sourceScopeStale ||
+            (flags.unit
+              ? receipts.unitStale.has(flags.unit)
+              : receipts.stageStale));
+        const sourceRecoverySpent =
+          sourceScopeStale &&
+          (receipts?.sourceRecoverySpent === true ||
+            receipts?.sourceStaleProgress?.recoverySpent === true);
+        const recoverySpent =
+          attempt.recoverySpent || sourceRecoverySpent;
         if (retryPending) {
           if (!attempt.pendingIterations.has(iteration)) {
             if (scopeStale) {
-              if (attempt.recoverySpent) {
+              if (recoverySpent) {
                 refuseReview(
                   reviewRecoverySpentMessage(
                     flags.stage,
@@ -918,13 +932,14 @@ function handleReview(args: string[]): void {
               const unitArg = flags.unit ? ` --unit "${flags.unit}"` : "";
               refuseReview(
                 `Refusing review retry for "${flags.stage}": the prior review ` +
-                  "completed, but its receipt was invalidated by a later artifact " +
-                  "write, so no unmatched request remains. Start the one recovery " +
+                  "completed, but its receipt was invalidated by a later artifact write " +
+                  "or workspace source mismatch, so no unmatched request remains. Start " +
+                  "the one recovery " +
                   `pass with \`aidlc-log.ts review --stage "${flags.stage}" ` +
                   `--reviewer "${flags.reviewer}"${unitArg} --iteration ${expected}\`.`,
               );
             }
-            if (attempt.recoverySpent) {
+            if (recoverySpent) {
               refuseReview(
                 reviewRecoveryAlreadyRequestedMessage(
                   flags.stage,
@@ -946,8 +961,8 @@ function handleReview(args: string[]): void {
           budget !== null &&
           scopeStale &&
           attempt.pendingIterations.size === 0 &&
-          !attempt.recoverySpent;
-        if (scopeStale && attempt.recoverySpent) {
+          !recoverySpent;
+        if (scopeStale && recoverySpent) {
           refuseReview(
             reviewRecoverySpentMessage(
               flags.stage,
@@ -961,7 +976,7 @@ function handleReview(args: string[]): void {
             ),
           );
         }
-        if (attempt.recoverySpent) {
+        if (recoverySpent) {
           refuseReview(
             reviewRecoveryAlreadyRequestedMessage(
               flags.stage,
@@ -1032,6 +1047,14 @@ function handleReview(args: string[]): void {
         );
       }
       fields["Artifact Fingerprint"] = fingerprint;
+      // Bind the terminal receipt to the workspace source state the reviewer
+      // inspected. Only workspace-writing stages carry this binding. A newly
+      // unbindable receipt records that explicitly so completion fails closed;
+      // only genuinely legacy fieldless receipts keep migration behavior.
+      if (node.workspace_requires) {
+        fields["Source Fingerprint"] =
+          workspaceSourceFingerprint(pd) ?? UNBINDABLE_FINGERPRINT;
+      }
       emitAudit(pd, "REVIEW_COMPLETED", fields, intent, space);
     }, intent, space);
   } catch (e) {

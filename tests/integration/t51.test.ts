@@ -116,6 +116,7 @@ function walkStage(proj: string, slug: string): void {
   const env = {
     ...process.env,
     AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+    AIDLC_SKIP_SOURCE_FRESHNESS: "1",
   };
   const gs = spawnSync(BUN, [STATE, "gate-start", slug, "--project-dir", proj], {
     encoding: "utf-8",

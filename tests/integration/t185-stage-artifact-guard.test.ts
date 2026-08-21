@@ -85,6 +85,7 @@ function guarded(proj: string, args: string[]): { rc: number; out: string } {
   const env = { ...process.env };
   delete env.AIDLC_SKIP_ARTIFACT_GUARD;
   env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS = "1";
+  env.AIDLC_SKIP_SOURCE_FRESHNESS = "1";
   const r = spawnSync(BUN, [STATE, ...args, "--project-dir", proj], {
     encoding: "utf-8",
     env,
@@ -97,6 +98,7 @@ function bypassed(proj: string, args: string[]): { rc: number; out: string } {
   const env = {
     ...process.env,
     AIDLC_SKIP_ARTIFACT_GUARD: "1",
+    AIDLC_SKIP_SOURCE_FRESHNESS: "1",
     AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
   };
   const r = spawnSync(BUN, [STATE, ...args, "--project-dir", proj], {

@@ -521,7 +521,7 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     ]);
     // The guard must not fire on a completed stage; report commits the forward
     // transition (a done directive), never a per-unit coverage error.
-    expect(d.kind).not.toBe("error");
+    expect(d.kind).toBe("done");
   }, 30000);
 
   // 11: skeleton-gate precedence. functional-design is the FIRST construction
