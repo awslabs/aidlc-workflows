@@ -149,7 +149,7 @@ sequenceDiagram
 | 5 | `aidlc/knowledge/[agent]/` | 2 | Team | Mid |
 | 6 | Prior stage artifacts | -- | Dynamic | Last |
 
-> **Note:** Steps 1-5 are agent knowledge loading (defined in each agent file). Step 6 (prior stage artifacts) is context added by the orchestrator at runtime, not a file-loading step.
+> **Note:** Steps 1-5 are agent knowledge loading defined by `stage-protocol.md` Section 5. Step 6 (prior stage artifacts) is context added by the orchestrator at runtime, not a file-loading step.
 
 ### What Each Layer Contributes
 
