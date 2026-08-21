@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-utility:doctor
+// covers: subcommand:aidlc-utility:doctor, function:consumedArtifactProducerCollisions
 //
 // CLI-contract port of tests/unit/t37-utility-doctor-drift.sh (TAP plan 23),
 // mechanism = cli. Equal-or-stronger migration: every .sh assertion that
@@ -261,7 +261,7 @@ describe("t37 aidlc-utility doctor — state/audit drift (migrated from t37-util
 });
 
 // ============================================================
-// Graph-level checks — cycle / orphan / scope / schema / refs / keyword
+// Graph-level checks — cycle / orphan / scope / schema / refs / producers / keyword
 // (covers: subcommand:aidlc-utility:doctor)
 // ============================================================
 
@@ -452,6 +452,43 @@ describe("t37 aidlc-utility doctor — graph-level checks", () => {
     const r = doctor(p, { AIDLC_STAGE_GRAPH: graph });
     expect(r.out).toContain("broken reference");
     expect(r.status).toBe(1);
+  });
+
+  test("13a: duplicate producers happy -> every consumed artifact has a single producer", () => {
+    const p = track(createTestProject());
+    const r = doctor(p);
+    expect(r.out).toContain(
+      "Duplicate producers: every consumed artifact has a single producer",
+    );
+  });
+
+  test("13b: duplicate producers advisory preserves runtime order and exit 0", () => {
+    const p = track(setupIntegrationProject());
+    const shippedGraph = JSON.parse(
+      readFileSync(
+        join(p, ".claude", "tools", "data", "stage-graph.json"),
+        "utf-8",
+      ),
+    ) as Array<{ slug: string; produces?: string[] }>;
+    const additionalProducer = shippedGraph.find(
+      (stage) => stage.slug === "feasibility",
+    );
+    if (!additionalProducer) {
+      throw new Error("fixture graph is missing feasibility");
+    }
+    additionalProducer.produces = [
+      ...(additionalProducer.produces ?? []),
+      "intent-statement",
+    ];
+    const graph = fixtureFile(
+      "duplicate-producers-graph",
+      JSON.stringify(shippedGraph),
+    );
+    const r = doctor(p, { AIDLC_STAGE_GRAPH: graph });
+    expect(r.out).toContain(
+      'Duplicate producers: 1 consumed artifact(s) with multiple producers (advisory); runtime resolves the first by load order: "intent-statement" <- [intent-capture, feasibility]',
+    );
+    expect(r.status).toBe(0);
   });
 
   test("14: keyword overlap happy -> 'no conflicts' on real scope-mapping", () => {

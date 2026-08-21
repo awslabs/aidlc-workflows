@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 665,
+    "total": 666,
     "enumeratedByClass": {
-      "function": 400,
+      "function": 401,
       "audit": 87,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 209,
+      "function": 210,
       "audit": 46,
       "scope": 11,
       "stage": 11,
@@ -1615,6 +1615,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t249-copilot-adapter.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:consumedArtifactProducerCollisions",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t37.test.ts",
           "mechanism": "cli"
         }
       ],

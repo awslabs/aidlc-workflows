@@ -33,6 +33,7 @@ import {
 } from "./aidlc-doctor-bundle.ts";
 import {
   artifactsRegistryFor,
+  consumedArtifactProducerCollisions,
   findCycles,
   frameworkMemorySeedDir,
   loadGraph,
@@ -3752,6 +3753,26 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
     results.push({
       pass: false,
       label: "Graph references: check failed",
+      fix: errorMessage(e),
+    });
+  }
+
+  // Advisory only: runtime resolves producersOf(artifact)[0], so duplicate
+  // producers are deterministic but ambiguous rather than an immediate setup
+  // failure. Keep all actionable detail in the label because passing rows do
+  // not render their `fix` field.
+  try {
+    const collisions = consumedArtifactProducerCollisions();
+    results.push({
+      pass: true,
+      label: collisions.length === 0
+        ? "Duplicate producers: every consumed artifact has a single producer"
+        : `Duplicate producers: ${collisions.length} consumed artifact(s) with multiple producers (advisory); runtime resolves the first by load order: ${collisions.map(({ artifact, producers }) => `"${artifact}" <- [${producers.join(", ")}]`).join("; ")} - re-run \`bun ${harnessDir()}/tools/aidlc-graph.ts compile\``,
+    });
+  } catch (e) {
+    results.push({
+      pass: false,
+      label: "Duplicate producers: check failed",
       fix: errorMessage(e),
     });
   }

@@ -843,6 +843,31 @@ export function consumersOf(artifact: string): GraphStage[] {
   );
 }
 
+/** Consumed artifacts with more than one loaded producer. Runtime resolution
+ *  selects the first producer by graph load order, so callers can surface this
+ *  ambiguous configuration before that implicit choice affects a workflow. */
+export function consumedArtifactProducerCollisions(): {
+  artifact: string;
+  producers: string[];
+  consumers: string[];
+}[] {
+  const consumedArtifacts = [
+    ...new Set(
+      loadGraph().flatMap((stage) =>
+        (stage.consumes ?? []).map((consume) => consume.artifact)
+      )
+    ),
+  ].sort();
+
+  return consumedArtifacts
+    .map((artifact) => ({
+      artifact,
+      producers: producersOf(artifact).map((stage) => stage.slug),
+      consumers: consumersOf(artifact).map((stage) => stage.slug).sort(),
+    }))
+    .filter(({ producers }) => producers.length >= 2);
+}
+
 /** TPL — the subset of a stage's `produces[]` eligible for a template
  *  override. The template-override layer keys a template off the
  *  output-filename stem (artifact X → X.md, per resolveArtifactPath's
