@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 628,
+    "total": 629,
     "enumeratedByClass": {
-      "function": 365,
+      "function": 366,
       "audit": 87,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 183,
+      "function": 184,
       "audit": 45,
       "scope": 11,
       "stage": 11,
@@ -1647,6 +1647,18 @@
     {
       "unitClass": "function",
       "unitId": "function:currentStageSourceBaseline",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t305-per-unit-attribution-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:currentSwarmAttemptObligations",
       "minMechanism": "none",
       "coveredBy": [
         {
