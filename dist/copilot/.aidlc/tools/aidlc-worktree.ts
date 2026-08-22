@@ -38,7 +38,6 @@ import {
   serializeSourceListing,
   sourceListingEntriesEqual,
   sourceListingSha256,
-  type WorkspaceSourceListing,
   type WorkspaceSourceState,
   UNBINDABLE_FINGERPRINT,
   validateUnitName,
