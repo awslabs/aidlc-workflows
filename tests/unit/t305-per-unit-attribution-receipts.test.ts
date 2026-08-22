@@ -1579,7 +1579,9 @@ describe("t305 post-merge source authority failure", () => {
     const output = `${merged.stdout ?? ""}${merged.stderr ?? ""}`;
     expect(merged.status).not.toBe(0);
     expect(output).toContain("[merge-succeeded:");
-    expect(output).toContain("outside immutable reviewed commit");
+    expect(output).toContain(
+      "post-merge source does not match landed merge commit",
+    );
     expect(output).toContain("Do not retry this merge");
     expect(existsSync(join(project, source))).toBe(true);
     expect(existsSync(join(project, "merge-interleaved.ts"))).toBe(true);
@@ -1654,11 +1656,92 @@ describe("t305 post-merge source authority failure", () => {
     expect(merged.status).not.toBe(0);
     expect(output).toContain("[merge-succeeded:");
     expect(output).toContain(
-      "post-merge source entries do not match immutable reviewed commit",
+      "post-merge source does not match landed merge commit",
     );
     expect(output).toContain("Do not retry this merge");
     expect(readFileSync(join(project, source), "utf-8")).toContain(
       "tampered",
+    );
+    expect(existsSync(wt)).toBe(true);
+    expect(readAllAuditShards(project)).not.toContain(
+      "**Event**: SWARM_SOURCE_MERGED",
+    );
+  }, 120000);
+
+  test("a second commit created by a post-commit hook is refused", () => {
+    const project = swarmFixture();
+    const unit = "merge-second-commit";
+    seedBoltDag(project, [unit]);
+    const prepared = runSwarm(project, [
+      "prepare",
+      "--batch",
+      "1",
+      "--units",
+      unit,
+      "--base",
+      "main",
+    ]);
+    expect(prepared.rc, prepared.out).toBe(0);
+
+    const wt = join(project, ".aidlc", "worktrees", `bolt-${unit}`);
+    const source = `${unit}.ts`;
+    writeFileSync(join(wt, source), "export const reviewed = true;\n");
+    const reviewed = review(
+      wt,
+      seededRecordDir(wt),
+      unit,
+      [{ path: source }],
+    );
+    expect(reviewed.verdict.rc, reviewed.verdict.out).toBe(0);
+    const finalized = runSwarm(project, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      unit,
+      "--claimed",
+      unit,
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('${source}')"`,
+    ]);
+    expect(finalized.rc, finalized.out).toBe(0);
+
+    const hook = join(project, ".git", "hooks", "post-commit");
+    writeFileSync(
+      hook,
+      [
+        "#!/bin/sh",
+        'marker="$(git rev-parse --git-dir)/aidlc-second-commit"',
+        'if [ -e "$marker" ]; then exit 0; fi',
+        'touch "$marker"',
+        "printf '%s\\n' 'export const injected = true;' > hook-commit.ts",
+        "git add -- hook-commit.ts",
+        "git -c user.name=hook -c user.email=hook@test commit --no-verify -m hook-commit >/dev/null 2>&1",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(hook, 0o755);
+    const merged = spawnSync(
+      process.execPath,
+      [
+        WORKTREE,
+        "merge",
+        "--slug",
+        unit,
+        "--target",
+        "main",
+        "--strategy",
+        "squash",
+        "--project-dir",
+        project,
+      ],
+      { cwd: project, encoding: "utf-8" },
+    );
+    const output = `${merged.stdout ?? ""}${merged.stderr ?? ""}`;
+    expect(merged.status).not.toBe(0);
+    expect(output).toContain("[merge-succeeded:");
+    expect(output).toContain(
+      "unexpected commit or tree change landed during the source merge",
     );
     expect(existsSync(wt)).toBe(true);
     expect(readAllAuditShards(project)).not.toContain(

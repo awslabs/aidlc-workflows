@@ -1161,36 +1161,60 @@ function assertAggregateSourceBeforeMerge(
   };
 }
 
-function reviewedSourceChangedEntries(
-  repoCwd: string,
-  baseCommit: string,
-  sourceCommit: string,
+function expectedAggregateAfterCommit(
+  before: ReadonlyMap<string, string>,
+  priorCommittedRepo: ReadonlyMap<string, string>,
+  landedCommittedRepo: ReadonlyMap<string, string>,
   repo: string | null,
-): Map<string, string | undefined> | null {
-  const changed = runGit(
-    [
-      "diff-tree",
-      "--no-commit-id",
-      "--name-only",
-      "-r",
-      "-z",
-      "--no-renames",
-      baseCommit,
-      sourceCommit,
-    ],
-    repoCwd,
-  );
-  if (!changed.ok) return null;
-  const reviewedListing = gitCommitSourceListing(repoCwd, sourceCommit);
-  if (reviewedListing === null) return null;
-  const entries = new Map<string, string | undefined>();
-  for (const path of changed.stdout.split("\0").filter(Boolean)) {
-    entries.set(
-      `${repo ?? ""}\0${path}`,
-      reviewedListing.get(`\0${path}`),
+): Map<string, string> {
+  const expected = new Map(before);
+  for (const key of changedSourceListingKeys(
+    priorCommittedRepo,
+    landedCommittedRepo,
+  )) {
+    const aggregateKey = `${repo ?? ""}${key}`;
+    const landed = landedCommittedRepo.get(key);
+    if (landed === undefined) expected.delete(aggregateKey);
+    else expected.set(aggregateKey, landed);
+  }
+  return expected;
+}
+
+function stagedTreeOid(repoCwd: string): string | null {
+  const tree = runGit(["write-tree"], repoCwd);
+  const oid = tree.ok ? tree.stdout.trim() : "";
+  return /^[0-9a-f]{40,64}$/.test(oid) ? oid : null;
+}
+
+function assertLandedMergeCommit(
+  slug: string,
+  repoCwd: string,
+  priorHead: string,
+  commitSha: string,
+  expectedTree: string,
+  expectedSecondParent: string | null | undefined,
+): void {
+  const parent = runGit(["rev-parse", `${commitSha}^1`], repoCwd);
+  const tree = runGit(["rev-parse", `${commitSha}^{tree}`], repoCwd);
+  const secondParent = runGit(["rev-parse", `${commitSha}^2`], repoCwd);
+  const secondParentMatches =
+    expectedSecondParent === undefined ||
+    (expectedSecondParent === null
+      ? !secondParent.ok
+      : secondParent.ok &&
+        secondParent.stdout.trim() === expectedSecondParent);
+  if (
+    !parent.ok ||
+    parent.stdout.trim() !== priorHead ||
+    !tree.ok ||
+    tree.stdout.trim() !== expectedTree ||
+    !secondParentMatches
+  ) {
+    errorWithSlug(
+      slug,
+      `[merge-succeeded:${commitSha}] unexpected commit or tree change landed during the source merge; no SWARM_SOURCE_MERGED authority was emitted. Do not retry this merge. Preserve the worktree and restart the stage attempt.`,
     );
   }
-  return entries;
 }
 
 function renderSourcePathKeys(keys: Iterable<string>): string {
@@ -1358,6 +1382,7 @@ function handleMerge(args: string[]): void {
   }
 
   let commitSha = "";
+  const priorTargetHead = currentSha(repoCwd);
   // conflictCwd records which checkout the conflicting state lives in:
   // squash/merge run in the target repo's main checkout (cwd = repoCwd), rebase
   // runs in the worktree (cwd = wtPath). For conflict-file enumeration, we query
@@ -1368,7 +1393,10 @@ function handleMerge(args: string[]): void {
   let conflictHit = false;
   switch (strategy) {
     case "squash": {
-      const m = runGit(["merge", "--squash", mergeTarget], repoCwd);
+      const m = runGit(
+        ["merge", "--squash", "--no-verify", mergeTarget],
+        repoCwd,
+      );
       if (!m.ok) {
         if (isConflict(m)) {
           conflictHit = true;
@@ -1379,7 +1407,11 @@ function handleMerge(args: string[]): void {
           `git merge --squash failed: ${m.stderr.trim() || `exit ${m.code}`}`
         );
       }
-      const c = runGit(["commit", "--no-edit", "-m", message], repoCwd);
+      const expectedTree = stagedTreeOid(repoCwd);
+      if (expectedTree === null) {
+        errorWithSlug(slug, "cannot resolve the staged squash merge tree");
+      }
+      const c = runGit(["commit", "--no-verify", "-m", message], repoCwd);
       if (!c.ok) {
         errorWithSlug(
           slug,
@@ -1387,15 +1419,22 @@ function handleMerge(args: string[]): void {
         );
       }
       commitSha = currentSha(repoCwd);
+      assertLandedMergeCommit(
+        slug,
+        repoCwd,
+        priorTargetHead,
+        commitSha,
+        expectedTree,
+        null,
+      );
       break;
     }
     case "merge": {
       const m = runGit([
         "merge",
         "--no-ff",
-        "--no-edit",
-        "-m",
-        `Merge bolt ${slug}`,
+        "--no-commit",
+        "--no-verify",
         mergeTarget,
       ], repoCwd);
       if (!m.ok) {
@@ -1408,7 +1447,31 @@ function handleMerge(args: string[]): void {
           `git merge --no-ff failed: ${m.stderr.trim() || `exit ${m.code}`}`
         );
       }
+      const expectedTree = stagedTreeOid(repoCwd);
+      if (expectedTree === null) {
+        errorWithSlug(slug, "cannot resolve the staged merge tree");
+      }
+      const c = runGit(
+        ["commit", "--no-verify", "-m", `Merge bolt ${slug}`],
+        repoCwd,
+      );
+      if (!c.ok) {
+        errorWithSlug(
+          slug,
+          `git commit failed: ${c.stderr.trim() || `exit ${c.code}`}`,
+        );
+      }
       commitSha = currentSha(repoCwd);
+      assertLandedMergeCommit(
+        slug,
+        repoCwd,
+        priorTargetHead,
+        commitSha,
+        expectedTree,
+        sourceRecord?.kind === "bound"
+          ? sourceRecord.commit
+          : undefined,
+      );
       break;
     }
     case "rebase": {
@@ -1471,41 +1534,36 @@ function handleMerge(args: string[]): void {
         `${cleanupTag} cannot bind the post-merge main-checkout source aggregate; worktree and retained source commit preserved`,
       );
     }
-    const reviewedChanges = reviewedSourceChangedEntries(
+    const priorCommittedRepo = gitCommitSourceListing(
       repoCwd,
-      sourceRecord.baseCommit,
-      sourceRecord.commit,
+      priorTargetHead,
+    );
+    const landedCommittedRepo = gitCommitSourceListing(repoCwd, commitSha);
+    if (priorCommittedRepo === null || landedCommittedRepo === null) {
+      errorWithSlug(
+        slug,
+        `${cleanupTag} cannot reconstruct the committed source delta; no SWARM_SOURCE_MERGED authority was emitted. Do not retry this merge. Preserve the worktree and restart the stage attempt.`,
+      );
+    }
+    const expectedAfter = expectedAggregateAfterCommit(
+      aggregateBefore.state.listing,
+      priorCommittedRepo,
+      landedCommittedRepo,
       repoTarget.repo,
     );
-    if (reviewedChanges === null) {
-      errorWithSlug(
-        slug,
-        `${cleanupTag} cannot verify the immutable reviewed commit's source footprint; no SWARM_SOURCE_MERGED authority was emitted. Do not retry this merge. Preserve the worktree and restart the stage attempt.`,
-      );
-    }
-    const extraChanges = [...changedSourceListingKeys(
-      aggregateBefore.state.listing,
-      aggregateAfter.listing,
-    )].filter((path) => !reviewedChanges.has(path));
-    if (extraChanges.length > 0) {
-      errorWithSlug(
-        slug,
-        `${cleanupTag} post-merge source contains path changes outside immutable reviewed commit ${sourceRecord.commit} (${renderSourcePathKeys(extraChanges) || "unknown paths"}); no SWARM_SOURCE_MERGED authority was emitted. Do not retry this merge. Preserve the worktree and restart the stage attempt.`,
-      );
-    }
-    const mismatchedEntries = [...reviewedChanges]
-      .filter(
-        ([path, expected]) =>
-          !sourceListingEntriesEqual(
-            aggregateAfter.listing.get(path),
-            expected,
-          ),
-      )
-      .map(([path]) => path);
+    const mismatchedEntries = [
+      ...changedSourceListingKeys(expectedAfter, aggregateAfter.listing),
+    ];
     if (mismatchedEntries.length > 0) {
       errorWithSlug(
         slug,
-        `${cleanupTag} post-merge source entries do not match immutable reviewed commit ${sourceRecord.commit} (${renderSourcePathKeys(mismatchedEntries) || "unknown paths"}); no SWARM_SOURCE_MERGED authority was emitted. Do not retry this merge. Preserve the worktree and restart the stage attempt.`,
+        `${cleanupTag} post-merge source does not match landed merge commit ${commitSha} (${renderSourcePathKeys(mismatchedEntries) || "unknown paths"}); no SWARM_SOURCE_MERGED authority was emitted. Do not retry this merge. Preserve the worktree and restart the stage attempt.`,
+      );
+    }
+    if (currentSha(repoCwd) !== commitSha) {
+      errorWithSlug(
+        slug,
+        `${cleanupTag} target HEAD changed after the source merge result was verified; no SWARM_SOURCE_MERGED authority was emitted. Do not retry this merge. Preserve the worktree and restart the stage attempt.`,
       );
     }
     try {
