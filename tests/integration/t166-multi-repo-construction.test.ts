@@ -29,12 +29,20 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { AIDLC_SRC, cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import {
+  latestMainWorkflowStageRunFloorForProject,
+  readAllAuditShards,
+  readUnitSourceManifest,
+  workspaceSourceFingerprint,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath;
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const WT_TOOL = join(AIDLC_SRC, "tools", "aidlc-worktree.ts");
 const SWARM_TOOL = join(AIDLC_SRC, "tools", "aidlc-swarm.ts");
 const LOG_TOOL = join(AIDLC_SRC, "tools", "aidlc-log.ts");
+const STATE_TOOL = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 
 const tempDirs: string[] = [];
 const aliasDirs: string[] = [];
@@ -66,6 +74,26 @@ function runWorktree(proj: string, ...args: string[]): RunResult {
 function runSwarm(proj: string, ...args: string[]): RunResult {
   const r = spawnSync(BUN, [SWARM_TOOL, ...args, "--project-dir", proj], { encoding: "utf-8", cwd: proj });
   return { status: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}`, stdout: r.stdout ?? "" };
+}
+
+function runState(proj: string, ...args: string[]): RunResult {
+  const env = {
+    ...process.env,
+    AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
+    AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+  };
+  delete env.AIDLC_SKIP_ARTIFACT_GUARD;
+  delete env.AIDLC_SKIP_SOURCE_FRESHNESS;
+  const r = spawnSync(
+    BUN,
+    [STATE_TOOL, ...args, "--project-dir", proj],
+    { encoding: "utf-8", cwd: proj, env },
+  );
+  return {
+    status: r.status ?? -1,
+    out: `${r.stdout ?? ""}${r.stderr ?? ""}`,
+    stdout: r.stdout ?? "",
+  };
 }
 
 function git(cwd: string, ...args: string[]): { status: number; out: string } {
@@ -119,7 +147,8 @@ function seedOneUnitDag(proj: string, unit: string): void {
     state,
     readFileSync(state, "utf-8")
       .replace(/^- \*\*Current Stage\*\*:.*$/m, "- **Current Stage**: code-generation")
-      .replace(/^- \*\*Construction Autonomy Mode\*\*:.*$/m, "- **Construction Autonomy Mode**: autonomous"),
+      .replace(/^- \*\*Construction Autonomy Mode\*\*:.*$/m, "- **Construction Autonomy Mode**: autonomous")
+      .replace(/^- \[[^\]]\] code-generation.*$/m, "- [?] code-generation — EXECUTE"),
   );
 }
 
@@ -146,6 +175,45 @@ function recordWorktreeReview(proj: string, unit: string, sourcePath: string): R
     return { status: requested.status ?? -1, out: `${requested.stdout ?? ""}${requested.stderr ?? ""}`, stdout: requested.stdout ?? "" };
   }
   const completed = spawnSync(BUN, [LOG_TOOL, ...args, "--verdict", "READY"], { encoding: "utf-8", cwd: wt });
+  return { status: completed.status ?? -1, out: `${completed.stdout ?? ""}${completed.stderr ?? ""}`, stdout: completed.stdout ?? "" };
+}
+
+function recordMainReview(
+  proj: string,
+  unit: string,
+  repo: string,
+  sourcePath: string,
+): RunResult {
+  const record = activeRecord(proj);
+  const dir = join(record, "construction", unit, "code-generation");
+  mkdirSync(dir, { recursive: true });
+  for (const name of ["code-generation-plan.md", "unit-test-instructions.md", "code-summary.md"]) {
+    writeFileSync(join(dir, name), `# ${name}\n`);
+  }
+  writeFileSync(join(dir, "traceability.json"), "{}\n");
+  writeFileSync(
+    join(dir, "source-manifest.json"),
+    `${JSON.stringify({
+      stage: "code-generation",
+      unit,
+      version: 1,
+      writes: [{ repo, path: sourcePath }],
+    }, null, 2)}\n`,
+  );
+  const manifest = readUnitSourceManifest(proj, "code-generation", unit);
+  if (!manifest.ok) {
+    return { status: -1, out: manifest.reason, stdout: "" };
+  }
+  const args = [
+    "review", "--stage", "code-generation", "--reviewer",
+    "aidlc-architecture-reviewer-agent", "--unit", unit, "--iteration", "1",
+    "--project-dir", proj,
+  ];
+  const requested = spawnSync(BUN, [LOG_TOOL, ...args], { encoding: "utf-8", cwd: proj });
+  if ((requested.status ?? -1) !== 0) {
+    return { status: requested.status ?? -1, out: `${requested.stdout ?? ""}${requested.stderr ?? ""}`, stdout: requested.stdout ?? "" };
+  }
+  const completed = spawnSync(BUN, [LOG_TOOL, ...args, "--verdict", "READY"], { encoding: "utf-8", cwd: proj });
   return { status: completed.status ?? -1, out: `${completed.stdout ?? ""}${completed.stderr ?? ""}`, stdout: completed.stdout ?? "" };
 }
 
@@ -405,37 +473,74 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
   // ===========================================================================
   describe("M1 multi-repo: swarm prepare --repo forks the batch inside the target sibling repo", () => {
     const proj = freshWorkspace();
-    makeSiblingRepo(proj, "repo-a");
+    const repoA = makeSiblingRepo(proj, "repo-a");
     makeSiblingRepo(proj, "repo-b");
+    mkdirSync(join(repoA, "aidlc"), { recursive: true });
+    writeFileSync(
+      join(repoA, "aidlc", "application.ts"),
+      "export const reviewed = 1;\n",
+    );
+    git(repoA, "add", "--", "aidlc/application.ts");
+    git(repoA, "commit", "-q", "-m", "seed sibling aidlc application source");
     runUtil(proj, "intent-create", "--scope", "feature", "--repos", "repo-a,repo-b");
     seedOneUnitDag(proj, "swarmunit");
     const prepared = runSwarm(
       proj, "prepare", "--batch", "1", "--units", "swarmunit", "--base", "main", "--repo", "repo-a",
     );
     const wt = worktreeDir(proj, "swarmunit");
-    writeFileSync(join(wt, "swarm.ts"), "export const swarm = true;\n");
-    const reviewed = prepared.status === 0
-      ? recordWorktreeReview(proj, "swarmunit", "swarm.ts")
-      : { status: -1, out: prepared.out, stdout: "" };
-    const finalized = reviewed.status === 0
-      ? runSwarm(
-          proj, "finalize", "--batch", "1", "--units", "swarmunit", "--claimed", "swarmunit",
-          "--check-cmd", `"${process.execPath}" -e "require('fs').accessSync('swarm.ts')"`,
-        )
-      : { status: -1, out: reviewed.out, stdout: "" };
-    const merged = finalized.status === 0
+    writeFileSync(
+      join(wt, "aidlc", "application.ts"),
+      "export const reviewed = 2;\n",
+    );
+    git(wt, "add", "--", "aidlc/application.ts");
+    git(wt, "commit", "-q", "-m", "reviewed sibling aidlc application source");
+    const sourceCommit = git(wt, "rev-parse", "HEAD").out.trim();
+    const sourceFingerprint = workspaceSourceFingerprint(wt);
+    if (sourceFingerprint !== null) {
+      appendAuditEntry(
+        "SWARM_UNIT_CONVERGED",
+        {
+          "Batch number": "1",
+          "Unit name": "swarmunit",
+          Stage: "code-generation",
+          "Run floor": latestMainWorkflowStageRunFloorForProject(
+            proj,
+            "code-generation",
+          ),
+          "Source Fingerprint": sourceFingerprint,
+          "Source Commit": sourceCommit,
+        },
+        proj,
+      );
+    }
+    const merged = sourceFingerprint !== null
       ? runWorktree(proj, "merge", "--slug", "swarmunit", "--target", "main", "--strategy", "squash", "--repo", "repo-a")
-      : { status: -1, out: finalized.out, stdout: "" };
+      : { status: -1, out: "source fingerprint unavailable", stdout: "" };
+    const reviewed = merged.status === 0
+      ? recordMainReview(
+          proj,
+          "swarmunit",
+          "repo-a",
+          "aidlc/application.ts",
+        )
+      : { status: -1, out: merged.out, stdout: "" };
+    const approved = reviewed.status === 0
+      ? runState(proj, "approve", "code-generation", "--user-input", "ship")
+      : { status: -1, out: reviewed.out, stdout: "" };
 
     test("prepare --repo repo-a exits 0", () => {
       expect(prepared.status).toBe(0);
     });
-    test("worktree-relative manifest review, finalize, and source merge land only in repo-a", () => {
-      expect(reviewed.status).toBe(0);
-      expect(finalized.status).toBe(0);
-      expect(merged.status).toBe(0);
-      expect(existsSync(join(proj, "repo-a", "swarm.ts"))).toBe(true);
-      expect(existsSync(join(proj, "repo-b", "swarm.ts"))).toBe(false);
+    test("reviewed sibling aidlc/ source merges with authority and completes", () => {
+      expect(merged.status, merged.out).toBe(0);
+      expect(
+        readFileSync(join(repoA, "aidlc", "application.ts"), "utf-8"),
+      ).toContain("reviewed = 2");
+      const audit = readAllAuditShards(proj);
+      expect(audit).toContain("**Event**: SWARM_SOURCE_MERGED");
+      expect(reviewed.status, reviewed.out).toBe(0);
+      expect(approved.status, approved.out).toBe(0);
+      expect(readAllAuditShards(proj)).toContain("**Event**: STAGE_COMPLETED");
     });
   });
 

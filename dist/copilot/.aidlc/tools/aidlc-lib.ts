@@ -6266,6 +6266,15 @@ const AIDLC_SENSOR_CACHE_GLOBS = [
   ":(glob)**/aidlc/spaces/*/intents/**/.aidlc-sensors/**",
 ];
 
+function sourceGitExclusionPathspecs(
+  carriesWorkspaceShell: boolean,
+): string[] {
+  return [
+    ...(carriesWorkspaceShell ? AIDLC_SHELL_DIR_NAMES : []),
+    ...AIDLC_SENSOR_CACHE_GLOBS,
+  ];
+}
+
 // Git runs a configured `clean` filter as content enters the index, so the tree
 // written below hashes the FILTERED bytes - not the bytes sitting in the
 // worktree. A lossy filter therefore maps two different worktrees onto one
@@ -6437,10 +6446,13 @@ function replaceSourceListingEntryOid(entry: string | undefined, oid: string): s
  * A temporary index is seeded from the commit and checkout-index populates an
  * ordinary directory, so clean/process/ident raw-byte folding sees the same
  * files and repository-local configuration as a real worktree checkout.
+ * `carriesWorkspaceShell` is required for the same reason as gitTreeSourceState:
+ * sibling repositories keep top-level aidlc/ and .aidlc/ as application source.
  */
 export function gitCommitSourceListing(
   repoDir: string,
   commit: string,
+  carriesWorkspaceShell: boolean,
 ): WorkspaceSourceListing | null {
   if (!isGitRepoDir(repoDir) || !/^[0-9a-f]{40,64}$/.test(commit)) return null;
   const root = join(tmpdir(), `aidlc-commit-listing-${process.pid}-${randomUUID().slice(0, 8)}`);
@@ -6462,10 +6474,8 @@ export function gitCommitSourceListing(
     );
     if (checkout.status !== 0) return null;
 
-    const shellPatterns = [
-      ...AIDLC_SHELL_DIR_NAMES,
-      ...AIDLC_SENSOR_CACHE_GLOBS,
-    ];
+    const shellPatterns =
+      sourceGitExclusionPathspecs(carriesWorkspaceShell);
     const excluded = spawnSync(
       "git",
       [
@@ -6602,10 +6612,7 @@ function gitTreeSourceState(repoDir: string, carriesWorkspaceShell: boolean): Gi
     // Drop the aidlc workspace family from the fingerprint and listing. The
     // root shell names apply only where the workspace shell lives; the sensor
     // cache glob remains depth-tolerant exactly as documented above.
-    const excluded = [
-      ...(carriesWorkspaceShell ? AIDLC_SHELL_DIR_NAMES : []),
-      ...AIDLC_SENSOR_CACHE_GLOBS,
-    ];
+    const excluded = sourceGitExclusionPathspecs(carriesWorkspaceShell);
     if (excluded.length > 0) {
       const removed = spawnSync(
         "git",

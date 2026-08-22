@@ -283,8 +283,13 @@ function resolveRepoTarget(
 function rawBaseSourceListing(
   repoCwd: string,
   baseCommit: string,
+  carriesWorkspaceShell: boolean,
 ): { serialized: string; hash: string } | null {
-  const listing = gitCommitSourceListing(repoCwd, baseCommit);
+  const listing = gitCommitSourceListing(
+    repoCwd,
+    baseCommit,
+    carriesWorkspaceShell,
+  );
   if (listing === null) return null;
   const serialized = serializeSourceListing(listing);
   if (parseSourceListing(serialized) === null) return null;
@@ -338,7 +343,8 @@ function handleCreate(args: string[]): void {
   const intentRecord = relativeRecordDir(pd, flags.intent, flags.space);
   // P7: anchor every git op to the target sibling repo (or the projectDir for a
   // legacy single-repo intent). The guard is evaluated against that same checkout.
-  const repoCwd = resolveRepoCwd(pd, flags, slug);
+  const repoTarget = resolveRepoTarget(pd, flags, slug);
+  const repoCwd = repoTarget.cwd;
   assertNotSiblingWorktree(repoCwd);
 
   // Pre-audit checks: every failure here exits without emitting.
@@ -360,7 +366,11 @@ function handleCreate(args: string[]): void {
   if (!/^[0-9a-f]{40,64}$/.test(baseCommit)) {
     errorWithSlug(slug, `Base branch resolved to an invalid commit id: ${flags.base}`);
   }
-  const rawBase = rawBaseSourceListing(repoCwd, baseCommit);
+  const rawBase = rawBaseSourceListing(
+    repoCwd,
+    baseCommit,
+    repoTarget.repo === null,
+  );
   if (rawBase === null) {
     errorWithSlug(slug, `Base source listing could not be computed for: ${flags.base}`);
   }
@@ -1537,8 +1547,13 @@ function handleMerge(args: string[]): void {
     const priorCommittedRepo = gitCommitSourceListing(
       repoCwd,
       priorTargetHead,
+      repoTarget.repo === null,
     );
-    const landedCommittedRepo = gitCommitSourceListing(repoCwd, commitSha);
+    const landedCommittedRepo = gitCommitSourceListing(
+      repoCwd,
+      commitSha,
+      repoTarget.repo === null,
+    );
     if (priorCommittedRepo === null || landedCommittedRepo === null) {
       errorWithSlug(
         slug,

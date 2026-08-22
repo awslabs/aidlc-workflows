@@ -1,4 +1,5 @@
 // covers: function:workspaceSourceFingerprint
+// covers: function:gitCommitSourceListing
 //
 // t304 - reviewer receipts bound to workspace source state (#629).
 //
@@ -54,6 +55,7 @@ import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   boltSlugForUnit,
+  gitCommitSourceListing,
   readAllAuditShards,
   sourceBaselineAuditFields,
   workspaceSourceFingerprint,
@@ -693,6 +695,22 @@ process.stdin.on("data", (chunk) => {
     mkdirSync(join(dir, ".aidlc", "worktrees"), { recursive: true });
     writeFileSync(join(dir, ".aidlc", "worktrees", "x.md"), "shell\n", "utf-8");
     expect(workspaceSourceFingerprint(dir)).toBe(fp1);
+    git(dir, ["add", "-A"]);
+    git(dir, ["commit", "-qm", "commit root framework shell"]);
+    const rootHead = spawnSync(
+      "git",
+      ["-C", dir, "rev-parse", "HEAD"],
+      { encoding: "utf-8" },
+    ).stdout.trim();
+    const rootLive = workspaceSourceListing(dir);
+    const rootCommitted = gitCommitSourceListing(dir, rootHead, true);
+    for (const path of [
+      "\0aidlc/x.md",
+      "\0.aidlc/worktrees/x.md",
+    ]) {
+      expect(rootLive?.has(path)).toBe(false);
+      expect(rootCommitted?.has(path)).toBe(false);
+    }
 
     // REAL application source nested under a directory coincidentally named
     // `aidlc` (not the shell's own top level) DOES change the fingerprint -
@@ -741,6 +759,27 @@ process.stdin.on("data", (chunk) => {
     writeFileSync(join(repoA, ".aidlc", "config.ts"), "export const cfg = 1;\n", "utf-8");
     const fp3 = workspaceSourceFingerprint(dir);
     expect(fp3).not.toBe(fp2);
+    git(repoA, ["add", "-A"]);
+    git(repoA, ["commit", "-qm", "commit sibling aidlc application source"]);
+    const siblingHead = spawnSync(
+      "git",
+      ["-C", repoA, "rev-parse", "HEAD"],
+      { encoding: "utf-8" },
+    ).stdout.trim();
+    const siblingLive = workspaceSourceListing(dir);
+    const siblingCommitted = gitCommitSourceListing(
+      repoA,
+      siblingHead,
+      false,
+    );
+    expect(
+      siblingLive?.has("repo-a\0aidlc/application.ts"),
+    ).toBe(true);
+    expect(
+      siblingLive?.has("repo-a\0.aidlc/config.ts"),
+    ).toBe(true);
+    expect(siblingCommitted?.has("\0aidlc/application.ts")).toBe(true);
+    expect(siblingCommitted?.has("\0.aidlc/config.ts")).toBe(true);
 
     writeFileSync(join(repoA, "control.ts"), "export const control = 1;\n", "utf-8");
     expect(workspaceSourceFingerprint(dir)).not.toBe(fp3);
