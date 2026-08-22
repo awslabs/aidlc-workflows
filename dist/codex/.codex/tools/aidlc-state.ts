@@ -2097,8 +2097,9 @@ function verifyReviewerPrecondition(
     receipts.sourceBaseline.state === "invalid"
   ) {
     error(
-      `Refusing to complete "${stage.slug}": the stage's source baseline snapshot is missing or does not ` +
-        `match its recorded hash, so unclaimed source changes cannot be verified. Re-enter the stage ` +
+      `Refusing to complete "${stage.slug}": the stage's source baseline snapshot is missing, ` +
+        `inconsistent with other modern source-binding evidence, or does not match its recorded hash, ` +
+        `so unclaimed source changes cannot be verified. Re-enter the stage ` +
         `(a stage jump records a fresh baseline) or set AIDLC_SKIP_SOURCE_FRESHNESS=1 to bypass ` +
         `deterministically.`,
     );

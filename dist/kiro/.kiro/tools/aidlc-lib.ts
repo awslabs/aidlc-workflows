@@ -5509,6 +5509,37 @@ export function reviewArtifactFingerprint(
 // over precise. Unit-major construction may author a later stage's per-unit
 // artifacts before that stage's STAGE_STARTED row exists, so its floor
 // ignores STAGE_STARTED; stage-major and non-per-unit flows floor on it.
+function hasModernSourceBindingEvidence(
+  rows: ReadonlyArray<{ event: string; block: string }>,
+): boolean {
+  return rows.some((row) => {
+    if (auditBlockField(row.block, "Source Baseline") !== null) return true;
+    if (
+      row.event === "REVIEW_COMPLETED" &&
+      auditBlockField(row.block, "Unit") !== null &&
+      (auditBlockField(row.block, "Unit Source Fingerprint") !== null ||
+        auditBlockField(row.block, "Unit Source Binding Bypass") !== null)
+    ) {
+      return true;
+    }
+    if (
+      (row.event === "WORKTREE_CREATED" || row.event === "BOLT_STARTED") &&
+      (auditBlockField(row.block, "Base commit") !== null ||
+        auditBlockField(row.block, "Base Source Listing") !== null)
+    ) {
+      return true;
+    }
+    if (
+      row.event === "SWARM_UNIT_CONVERGED" &&
+      (auditBlockField(row.block, "Source Commit") !== null ||
+        auditBlockField(row.block, "Source Freshness Bypass") !== null)
+    ) {
+      return true;
+    }
+    return row.event === "SWARM_SOURCE_MERGED";
+  });
+}
+
 export function freshReviewReceipts(
   projectDir: string,
   stateContent: string,
@@ -5565,7 +5596,10 @@ export function freshReviewReceipts(
     "REVIEW_REQUESTED",
     "REVIEW_COMPLETED",
   ]);
-  const events = readAuditShardEvents(projectDir)
+  const allEvents = readAuditShardEvents(projectDir);
+  const modernSourceBindingEvidence =
+    hasModernSourceBindingEvidence(allEvents);
+  const events = allEvents
     .filter((row) => RELEVANT.has(row.event))
     .sort((a, b) => {
       if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
@@ -6060,15 +6094,15 @@ export function freshReviewReceipts(
         (event.event !== "STAGE_STARTED" || unitMajor)
       ) continue;
       const field = auditBlockField(event.block, "Source Baseline");
-      if (field !== null) {
-        if (eventIsCrossShardTied(i)) baselineField = UNBINDABLE_FINGERPRINT;
-        else baselineField = field;
-      }
+      if (eventIsCrossShardTied(i)) baselineField = UNBINDABLE_FINGERPRINT;
+      else baselineField = field;
     }
     if (baselineField === UNBINDABLE_FINGERPRINT) sourceBaseline = { state: "unbindable" };
     else if (baselineField !== null) {
       const listing = readBaselineSourceSnapshot(projectDir, stage.slug, baselineField);
       sourceBaseline = listing === null ? { state: "invalid" } : { state: "ready", listing };
+    } else if (modernSourceBindingEvidence) {
+      sourceBaseline = { state: "invalid" };
     }
   }
 
@@ -7250,7 +7284,10 @@ export function currentStageSourceBaseline(
   intent?: string,
   space?: string,
 ): SourceBaselineResult {
-  const events = readAuditShardEvents(projectDir, intent, space)
+  const allEvents = readAuditShardEvents(projectDir, intent, space);
+  const modernSourceBindingEvidence =
+    hasModernSourceBindingEvidence(allEvents);
+  const events = allEvents
     .filter((row) =>
       row.event === "WORKFLOW_STARTED" ||
       row.event === "STAGE_STARTED" ||
@@ -7305,9 +7342,13 @@ export function currentStageSourceBaseline(
       continue;
     }
     const candidate = auditBlockField(event.block, "Source Baseline");
-    if (candidate !== null) field = candidate;
+    field = candidate;
   }
-  if (field === null) return { state: "legacy" };
+  if (field === null) {
+    return modernSourceBindingEvidence
+      ? { state: "invalid" }
+      : { state: "legacy" };
+  }
   if (field === UNBINDABLE_FINGERPRINT) return { state: "unbindable" };
   const listing = readBaselineSourceSnapshot(
     projectDir,

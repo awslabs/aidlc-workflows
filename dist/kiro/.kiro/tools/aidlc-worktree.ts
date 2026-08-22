@@ -751,14 +751,16 @@ function convergedSourceRecord(
   );
   const creationModern =
     creationBaseCommit !== null || creationBaseListing !== null;
-  if (creationModern && (!creationBaseCommit || !creationBaseListing)) {
+  const durableModernWorktree = worktreeMeta !== null || retained.length > 0;
+  const modernWorktree = durableModernWorktree || creationModern;
+  if (modernWorktree && (!creationBaseCommit || !creationBaseListing)) {
     errorWithSlug(
       slug,
-      "refusing to merge: the current WORKTREE_CREATED source attestation is incomplete",
+      "refusing to merge: durable modern worktree evidence is inconsistent with the current WORKTREE_CREATED source attestation",
     );
   }
 
-  if (creationModern) {
+  if (modernWorktree) {
     if (worktreeMeta === null) {
       errorWithSlug(
         slug,
@@ -836,7 +838,7 @@ function convergedSourceRecord(
     );
   }
   if (
-    creationModern &&
+    modernWorktree &&
     (auditBlockField(boltStart.block, "Base commit") !== creationBaseCommit ||
       auditBlockField(boltStart.block, "Base Source Listing") !==
         creationBaseListing)
@@ -880,7 +882,7 @@ function convergedSourceRecord(
   const stage = auditBlockField(swarmStart.block, "Stage");
   const floor = auditBlockField(swarmStart.block, "Run floor");
   if (!stage || !floor) {
-    if (!creationModern) return null; // pre-binding swarm migration
+    if (!modernWorktree) return null; // pre-binding swarm migration
     errorWithSlug(
       slug,
       "refusing to merge: current modern SWARM_STARTED lacks Stage/Run floor authority",
@@ -974,7 +976,7 @@ function convergedSourceRecord(
   }
   if (process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1") return null;
   if (!fingerprint || !commit) {
-    if (!creationModern && !fingerprint && !commit) return null;
+    if (!modernWorktree && !fingerprint && !commit) return null;
     errorWithSlug(
       slug,
       "refusing to merge: the current modern convergence row lacks complete immutable source authority; rerun finalize",

@@ -570,6 +570,42 @@ function stripUnitBindings(project: string): void {
   }
 }
 
+function stripAuditFields(
+  project: string,
+  event: string,
+  fields: string[],
+): void {
+  const intentsRoot = join(
+    project,
+    "aidlc",
+    "spaces",
+    "default",
+    "intents",
+  );
+  for (const record of readdirSync(intentsRoot)) {
+    const auditDir = join(intentsRoot, record, "audit");
+    if (!existsSync(auditDir)) continue;
+    for (const file of readdirSync(auditDir).filter((name) => name.endsWith(".md"))) {
+      const path = join(auditDir, file);
+      const body = readFileSync(path, "utf-8");
+      const stripped = body
+        .split("\n---\n")
+        .map((block) => {
+          if (!block.includes(`**Event**: ${event}`)) return block;
+          return block
+            .split("\n")
+            .filter(
+              (line) =>
+                !fields.some((field) => line.startsWith(`**${field}**:`)),
+            )
+            .join("\n");
+        })
+        .join("\n---\n");
+      writeFileSync(path, stripped, "utf-8");
+    }
+  }
+}
+
 function swarmFixture(): string {
   const project = setupWorktreeFixture();
   worktreeDirs.push(project);
@@ -802,6 +838,74 @@ describe("t305 real receipt and guard flows", () => {
     const args=["review","--stage","code-generation","--reviewer",REVIEWER,"--iteration","1"]; expect(cli(LOG,args,zero.project).rc).toBe(0); expect(cli(LOG,[...args,"--verdict","READY"],zero.project).rc).toBe(0); expect(approve(zero.project).rc).toBe(0);
   }, 30000);
 
+  test("missing baseline fields fail closed after modern evidence but pure legacy stays open", () => {
+    const modern = runtimeFixture();
+    review(modern.project, modern.record, "alpha", [{ path: "app.ts" }]);
+    review(modern.project, modern.record, "beta", []);
+    stripAuditFields(modern.project, "WORKFLOW_STARTED", ["Source Baseline"]);
+    stripAuditFields(modern.project, "STAGE_STARTED", ["Source Baseline"]);
+    const modernState = readFileSync(
+      join(modern.record, "aidlc-state.md"),
+      "utf-8",
+    );
+    expect(
+      freshReviewReceipts(modern.project, modernState, {
+        slug: "code-generation",
+        phase: "construction",
+        for_each: "unit-of-work",
+        reviewer: REVIEWER,
+        reviewer_max_iterations: 2,
+        workspace_requires: true,
+        produces: [
+          "code-generation-plan",
+          "unit-test-instructions",
+          "code-summary",
+          "traceability",
+        ],
+      }).sourceBaseline.state,
+    ).toBe("invalid");
+    expect(
+      currentStageSourceBaseline(
+        modern.project,
+        "code-generation",
+        false,
+      ).state,
+    ).toBe("invalid");
+    const refused = approve(modern.project);
+    expect(refused.rc).toBe(1);
+    expect(refused.out).toContain(
+      "inconsistent with other modern source-binding evidence",
+    );
+
+    const legacy = runtimeFixture();
+    review(legacy.project, legacy.record, "alpha", [{ path: "app.ts" }]);
+    review(legacy.project, legacy.record, "beta", []);
+    stripAuditFields(legacy.project, "WORKFLOW_STARTED", ["Source Baseline"]);
+    stripAuditFields(legacy.project, "STAGE_STARTED", ["Source Baseline"]);
+    stripUnitBindings(legacy.project);
+    const legacyState = readFileSync(
+      join(legacy.record, "aidlc-state.md"),
+      "utf-8",
+    );
+    expect(
+      freshReviewReceipts(legacy.project, legacyState, {
+        slug: "code-generation",
+        phase: "construction",
+        for_each: "unit-of-work",
+        reviewer: REVIEWER,
+        reviewer_max_iterations: 2,
+        workspace_requires: true,
+        produces: [
+          "code-generation-plan",
+          "unit-test-instructions",
+          "code-summary",
+          "traceability",
+        ],
+      }).sourceBaseline.state,
+    ).toBe("legacy");
+    expect(approve(legacy.project).rc).toBe(0);
+  }, 30000);
+
   test("12 two recorded repos invalidate only the owning repo and unit", () => {
     const base=runtimeFixture(); const project=base.project; const record=base.record; rmSync(join(project,".git"),{recursive:true,force:true}); for (const repo of ["repo-a","repo-b"]) { const path=join(project,repo); mkdirSync(path,{recursive:true}); git(path,["init","-q"]); git(path,["config","user.email","t@test"]); git(path,["config","user.name","t"]); writeFileSync(join(path,`${repo}.ts`),`export const ${repo.replace(/-/g,"_")}=1\n`); git(path,["add","-A"]); git(path,["commit","-qm","seed"]); } const registry=join(project,"aidlc","spaces","default","intents","intents.json"); const rows=JSON.parse(readFileSync(registry,"utf-8")); rows[0].repos=["repo-a","repo-b"]; writeFileSync(registry,`${JSON.stringify(rows)}\n`); const initial=workspaceSourceListing(project)!; appendAuditEntry("STAGE_JUMPED",{Target:"code-generation","Source Baseline":writeBaselineSourceSnapshot(project,"code-generation",initial)},project); const multiBoundary=Math.floor(Date.now()/1000); while(Math.floor(Date.now()/1000)===multiBoundary){}
     review(project,record,"alpha",[{repo:"repo-a",path:"repo-a.ts"}]); review(project,record,"beta",[{repo:"repo-b",path:"repo-b.ts"}]); writeFileSync(join(project,"repo-b","repo-b.ts"),"export const repo_b=2\n"); review(project,record,"alpha",[{repo:"repo-a",path:"repo-a.ts"}]); const r=approve(project); expect(r.out).toContain("Invalidated receipts: beta"); expect(r.out).not.toContain("Invalidated receipts: alpha");
@@ -877,6 +981,84 @@ describe("t305 real receipt and guard flows", () => {
 });
 
 describe("t305 post-merge source authority failure", () => {
+  test("durable modern worktree evidence prevents field-deletion branch fallback", () => {
+    const project = swarmFixture();
+    const unit = "modern-downgrade";
+    seedBoltDag(project, [unit]);
+    const prepared = runSwarm(project, [
+      "prepare",
+      "--batch",
+      "1",
+      "--units",
+      unit,
+      "--base",
+      "main",
+    ]);
+    expect(prepared.rc, prepared.out).toBe(0);
+    const wt = join(project, ".aidlc", "worktrees", `bolt-${unit}`);
+    const source = `${unit}.ts`;
+    writeFileSync(join(wt, source), "export const reviewed = true;\n");
+    const reviewed = review(
+      wt,
+      seededRecordDir(wt),
+      unit,
+      [{ path: source }],
+    );
+    expect(reviewed.request.rc, reviewed.request.out).toBe(0);
+    expect(reviewed.verdict.rc, reviewed.verdict.out).toBe(0);
+    const finalized = runSwarm(project, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      unit,
+      "--claimed",
+      unit,
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('${source}')"`,
+    ]);
+    expect(finalized.rc, finalized.out).toBe(0);
+
+    writeFileSync(join(wt, "unreviewed.ts"), "export const unreviewed = true;\n");
+    git(wt, ["add", "--", "unreviewed.ts"]);
+    git(wt, ["commit", "-qm", "advance movable branch"]);
+    stripAuditFields(project, "WORKTREE_CREATED", [
+      "Base commit",
+      "Base Source Listing",
+    ]);
+    stripAuditFields(project, "SWARM_STARTED", ["Stage", "Run floor"]);
+    const before = spawnSync("git", ["-C", project, "rev-parse", "HEAD"], {
+      encoding: "utf-8",
+    }).stdout.trim();
+    const merged = spawnSync(
+      process.execPath,
+      [
+        WORKTREE,
+        "merge",
+        "--slug",
+        unit,
+        "--target",
+        "main",
+        "--strategy",
+        "squash",
+        "--project-dir",
+        project,
+      ],
+      { cwd: project, encoding: "utf-8" },
+    );
+    const output = `${merged.stdout ?? ""}${merged.stderr ?? ""}`;
+    expect(merged.status).not.toBe(0);
+    expect(output).toContain("durable modern worktree evidence is inconsistent");
+    expect(output).not.toContain("[merge-succeeded:");
+    expect(
+      spawnSync("git", ["-C", project, "rev-parse", "HEAD"], {
+        encoding: "utf-8",
+      }).stdout.trim(),
+    ).toBe(before);
+    expect(existsSync(join(project, source))).toBe(false);
+    expect(existsSync(join(project, "unreviewed.ts"))).toBe(false);
+  }, 120000);
+
   test("an unrelated source write during merge is not folded into aggregate authority", () => {
     const project = swarmFixture();
     const unit = "merge-interleave";
