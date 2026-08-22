@@ -38,6 +38,8 @@ import {
   serializeSourceListing,
   sourceListingEntriesEqual,
   sourceListingSha256,
+  type WorkspaceSourceListing,
+  type WorkspaceSourceState,
   UNBINDABLE_FINGERPRINT,
   validateUnitName,
   workspaceSourceFingerprint,
@@ -256,8 +258,16 @@ function resolveRepoCwd(
   flags: Record<string, string>,
   slug: string,
 ): string {
+  return resolveRepoTarget(pd, flags, slug).cwd;
+}
+
+function resolveRepoTarget(
+  pd: string,
+  flags: Record<string, string>,
+  slug: string,
+): { cwd: string; repo: string | null } {
   try {
-    return resolveConstructionRepo(pd, flags.repo, flags.intent, flags.space).cwd;
+    return resolveConstructionRepo(pd, flags.repo, flags.intent, flags.space);
   } catch (e) {
     errorWithSlug(slug, errorMessage(e));
   }
@@ -1023,10 +1033,10 @@ function sourceListingsEqual(
   return true;
 }
 
-function changedSourceListingPaths(
+function changedSourceListingKeys(
   left: ReadonlyMap<string, string>,
   right: ReadonlyMap<string, string>,
-): string[] {
+): Set<string> {
   const changed = new Set<string>();
   for (const [key, value] of left) {
     if (!sourceListingEntriesEqual(right.get(key), value)) changed.add(key);
@@ -1034,7 +1044,14 @@ function changedSourceListingPaths(
   for (const key of right.keys()) {
     if (!left.has(key)) changed.add(key);
   }
-  return [...changed]
+  return changed;
+}
+
+function changedSourceListingPaths(
+  left: ReadonlyMap<string, string>,
+  right: ReadonlyMap<string, string>,
+): string[] {
+  return [...changedSourceListingKeys(left, right)]
     .sort()
     .slice(0, 10)
     .map((key) => {
@@ -1051,7 +1068,7 @@ function assertAggregateSourceBeforeMerge(
   record: ConvergedSourceRecord | null,
   intent?: string,
   space?: string,
-): string | null {
+): WorkspaceSourceState | null {
   if (!record || record.kind === "bypass") return null;
   const current = workspaceSourceState(pd, intent, space);
   if (current === null) {
@@ -1085,7 +1102,7 @@ function assertAggregateSourceBeforeMerge(
         "refusing to merge: the main checkout source changed after the previous reviewed-source merge",
       );
     }
-    return current.fingerprint;
+    return current;
   }
 
   const opening = currentSwarmSourceOpeningFingerprint(
@@ -1123,7 +1140,47 @@ function assertAggregateSourceBeforeMerge(
       "refusing to merge: the main checkout source does not match the prior attempt's final reviewed aggregate",
     );
   }
-  return opening.fingerprint;
+  return current;
+}
+
+function reviewedSourceChangedPathKeys(
+  repoCwd: string,
+  sourceCommit: string,
+  repo: string | null,
+): Set<string> | null {
+  const changed = runGit(
+    [
+      "diff-tree",
+      "--no-commit-id",
+      "--name-only",
+      "-r",
+      "-z",
+      "--no-renames",
+      `${sourceCommit}^`,
+      sourceCommit,
+    ],
+    repoCwd,
+  );
+  if (!changed.ok) return null;
+  return new Set(
+    changed.stdout
+      .split("\0")
+      .filter(Boolean)
+      .map((path) => `${repo ?? ""}\0${path}`),
+  );
+}
+
+function renderSourcePathKeys(keys: Iterable<string>): string {
+  return [...keys]
+    .sort()
+    .slice(0, 10)
+    .map((key) => {
+      const separator = key.indexOf("\0");
+      const repo = separator === -1 ? "" : key.slice(0, separator);
+      const path = separator === -1 ? key : key.slice(separator + 1);
+      return repo ? `${repo}/${path}` : path;
+    })
+    .join(", ");
 }
 
 function handleMerge(args: string[]): void {
@@ -1144,7 +1201,8 @@ function handleMerge(args: string[]): void {
   // P7: anchor every git op to the target sibling repo. The merge runs IN that
   // repo's main checkout (squash/merge/ff/commit/worktree-remove/branch-D); the
   // rebase still runs in the worktree (wtPath). Legacy single-repo → repoCwd=pd.
-  const repoCwd = resolveRepoCwd(pd, flags, slug);
+  const repoTarget = resolveRepoTarget(pd, flags, slug);
+  const repoCwd = repoTarget.cwd;
   assertNotSiblingWorktree(repoCwd);
 
   // Defensive HEAD check: the caller must have <target> checked out at the repo cwd.
@@ -1390,6 +1448,27 @@ function handleMerge(args: string[]): void {
         `${cleanupTag} cannot bind the post-merge main-checkout source aggregate; worktree and retained source commit preserved`,
       );
     }
+    const reviewedChanges = reviewedSourceChangedPathKeys(
+      repoCwd,
+      sourceRecord.commit,
+      repoTarget.repo,
+    );
+    if (reviewedChanges === null) {
+      errorWithSlug(
+        slug,
+        `${cleanupTag} cannot verify the immutable reviewed commit's source footprint; no SWARM_SOURCE_MERGED authority was emitted. Do not retry this merge. Preserve the worktree and restart the stage attempt.`,
+      );
+    }
+    const extraChanges = [...changedSourceListingKeys(
+      aggregateBefore.listing,
+      aggregateAfter.listing,
+    )].filter((path) => !reviewedChanges.has(path));
+    if (extraChanges.length > 0) {
+      errorWithSlug(
+        slug,
+        `${cleanupTag} post-merge source contains path changes outside immutable reviewed commit ${sourceRecord.commit} (${renderSourcePathKeys(extraChanges) || "unknown paths"}); no SWARM_SOURCE_MERGED authority was emitted. Do not retry this merge. Preserve the worktree and restart the stage attempt.`,
+      );
+    }
     try {
       emitAudit(
         pd,
@@ -1399,7 +1478,7 @@ function handleMerge(args: string[]): void {
           "Unit name": sourceRecord.unit,
           Stage: sourceRecord.stage,
           "Run floor": sourceRecord.floor,
-          "Previous Source Fingerprint": aggregateBefore,
+          "Previous Source Fingerprint": aggregateBefore.fingerprint,
           "Source Fingerprint": aggregateAfter.fingerprint,
           "Source Commit": sourceRecord.commit,
           "Merge commit": commitSha,
