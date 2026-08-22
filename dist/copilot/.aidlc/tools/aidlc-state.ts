@@ -1451,12 +1451,13 @@ function isSettledSwarmForArtifactGuard(
   pd: string,
   stage: { slug: string; phase: string; for_each?: string; mode?: string },
   stateContent: string,
+  action: ReviewerPreconditionAction = "complete",
 ): boolean {
   if (getField(stateContent, "Construction Iteration")?.trim() === "unit-major") {
     return false;
   }
   if (!isAutonomousSwarmStage(pd, stateContent, stage)) return false;
-  const units = currentAttemptSwarmUnits(pd, stage.slug);
+  const units = currentAttemptSwarmUnits(pd, stage.slug, action);
   if (units === null || units.length === 0) return false;
   // Shared attempt-scoped read (aidlc-lib.ts): a row counts only when its
   // Stage names this slug AND its Run floor equals the current attempt's
@@ -1468,11 +1469,12 @@ function isSettledSwarmForArtifactGuard(
 function currentAttemptSwarmUnits(
   pd: string,
   stageSlug: string,
+  action: ReviewerPreconditionAction,
 ): string[] | null {
   const obligations = currentSwarmAttemptObligations(pd, stageSlug);
   if (obligations.state === "invalid") {
     error(
-      `Refusing to complete "${stageSlug}": current swarm Unit obligations are invalid ` +
+      `${reviewerPreconditionPrefix(stageSlug, action)}: current swarm Unit obligations are invalid ` +
         `(${obligations.reason}). Restore unit-of-work-dependency.md or restart the stage attempt.`,
     );
   }
@@ -1482,7 +1484,7 @@ function currentAttemptSwarmUnits(
   }
   if (resolution.state !== "ok") {
     error(
-      `Refusing to complete "${stageSlug}": the current Unit DAG cannot be compared with ` +
+      `${reviewerPreconditionPrefix(stageSlug, action)}: the current Unit DAG cannot be compared with ` +
         `the attempt-bound Unit obligations. Restore unit-of-work-dependency.md or restart the stage attempt.`,
     );
   }
@@ -1497,7 +1499,7 @@ function currentAttemptSwarmUnits(
       added.length > 0 ? `added Units: ${added.join(", ")}` : "",
     ].filter(Boolean).join("; ");
     error(
-      `Refusing to complete "${stageSlug}": the Unit DAG changed during the current swarm attempt ` +
+      `${reviewerPreconditionPrefix(stageSlug, action)}: the Unit DAG changed during the current swarm attempt ` +
         `(${detail}). Restore unit-of-work-dependency.md to the attempt-bound Unit set or restart the stage attempt.`,
     );
   }
@@ -1507,6 +1509,7 @@ function currentAttemptSwarmUnits(
 function verifySettledSwarmSourceBinding(
   pd: string,
   stage: { slug: string; workspace_requires?: boolean },
+  action: ReviewerPreconditionAction,
 ): void {
   if (
     stage.workspace_requires !== true ||
@@ -1514,10 +1517,10 @@ function verifySettledSwarmSourceBinding(
   ) {
     return;
   }
-  const units = currentAttemptSwarmUnits(pd, stage.slug);
+  const units = currentAttemptSwarmUnits(pd, stage.slug, action);
   if (units === null) {
     error(
-      `Refusing to complete "${stage.slug}": its settled swarm Unit obligations cannot be resolved for the current attempt.`,
+      `${reviewerPreconditionPrefix(stage.slug, action)}: its settled swarm Unit obligations cannot be resolved for the current attempt.`,
     );
   }
   const chain = currentSwarmSourceMergeChain(pd, stage.slug);
@@ -1800,7 +1803,8 @@ function workspaceHasWork(pd: string): boolean {
 // untouched. `stage` is the StageEntry being completed. No-op when bypass active.
 function verifyStageArtifacts(
   pd: string,
-  stage: { slug: string; name: string; phase: string; for_each?: string; mode?: string; produces?: string[]; produces_kinds?: Record<string, string[]>; workspace_requires?: boolean }
+  stage: { slug: string; name: string; phase: string; for_each?: string; mode?: string; produces?: string[]; produces_kinds?: Record<string, string[]>; workspace_requires?: boolean },
+  action: ReviewerPreconditionAction = "complete",
 ): void {
   if (artifactGuardDisabled()) return;
 
@@ -1815,13 +1819,18 @@ function verifyStageArtifacts(
     // No readable state file: not a swarm settle; stay strict.
   }
   if (stateContent !== null) {
-    settledSwarm = isSettledSwarmForArtifactGuard(pd, stage, stateContent);
+    settledSwarm = isSettledSwarmForArtifactGuard(
+      pd,
+      stage,
+      stateContent,
+      action,
+    );
   }
   if (settledSwarm) return;
 
   if (!producesArtifactsExist(pd, stage)) {
     error(
-      `Refusing to complete "${stage.slug}": none of its declared artifacts exist ` +
+      `${reviewerPreconditionPrefix(stage.slug, action)}: none of its declared artifacts exist ` +
         `under the intent's record directory. The stage protocol requires ${stage.name} ` +
         `to produce output before the gate. Produce the artifacts before completing. ` +
         `(declared: ${(stage.produces ?? []).join(", ") || "none"})`
@@ -1830,7 +1839,7 @@ function verifyStageArtifacts(
 
   if (stage.workspace_requires && !workspaceHasWork(pd)) {
     error(
-      `Refusing to complete "${stage.slug}": it is a code-producing stage ` +
+      `${reviewerPreconditionPrefix(stage.slug, action)}: it is a code-producing stage ` +
         `(workspace_requires) but no source work is evident outside the aidlc/ ` +
         `workspace tree. In a git workspace this means no uncommitted change and no ` +
         `code in the last commit; otherwise no source file exists. Planning docs alone ` +
@@ -1951,7 +1960,12 @@ function verifyReviewerPrecondition(
   // binding and applies newest-fresh-claimant shielding per path.
   const sourceFreshnessOff =
     process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1";
-  const settledSwarm = isSettledSwarmForArtifactGuard(pd, stage, content);
+  const settledSwarm = isSettledSwarmForArtifactGuard(
+    pd,
+    stage,
+    content,
+    action,
+  );
   // A tightly bounded reconciliation handles the one intentional exception to
   // the global outer boundary: after an unclaimed addition is reverted, the
   // current baseline delta can be fully covered by fresh modern unit bindings
@@ -2023,7 +2037,7 @@ function verifyReviewerPrecondition(
   }
 
   if (settledSwarm) {
-    verifySettledSwarmSourceBinding(pd, stage);
+    verifySettledSwarmSourceBinding(pd, stage, action);
     return;
   }
 
@@ -2870,7 +2884,7 @@ function handleGateStart(args: string[]): void {
   if (!stage) error(`Unknown stage: ${slug}`);
   validateSlugInState(content, slug, ["in-progress", "awaiting-approval"]);
   const alreadyAwaiting = getSlugState(content, slug) === "awaiting-approval";
-  verifyStageArtifacts(pd, stage);
+  verifyStageArtifacts(pd, stage, "present-approval-gate");
   verifySummaryConfirmationPrecondition(pd, content, stage);
   verifyPipelineLinkPrecondition(pd, stage);
   if (!reviewerGateGuardDisabled()) {
@@ -2987,7 +3001,7 @@ function handleApprove(args: string[]): void {
   // enforcement point on the approve path. Bypass via AIDLC_SKIP_ARTIFACT_GUARD.
   // Covers per-unit Construction stages (globs the record's
   // construction/<unit>/<slug>/) and code-producing stages (workspace_requires).
-  verifyStageArtifacts(pd, stage);
+  verifyStageArtifacts(pd, stage, "present-approval-gate");
   verifySummaryConfirmationPrecondition(pd, content, stage);
 
   // Human-presence guard: a gate cannot be approved unless a real

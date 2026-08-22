@@ -10021,16 +10021,24 @@ export function currentSwarmAttemptObligations(
       : { state: "none" };
   }
 
+  const obligationFields = starts.map((row) =>
+    auditBlockField(row.block, "Unit obligations")
+  );
+  const fieldBearing = obligationFields.filter(
+    (field): field is string => field !== null,
+  );
+  if (fieldBearing.length === 0) return { state: "none" };
+  if (fieldBearing.length !== starts.length) {
+    return {
+      state: "invalid",
+      reason:
+        "current-attempt SWARM_STARTED mixes fieldless and field-bearing Unit obligations",
+    };
+  }
+
   let canonical: string | null = null;
   let units: Set<string> | null = null;
-  for (const row of starts) {
-    const raw = auditBlockField(row.block, "Unit obligations");
-    if (raw === null) {
-      return {
-        state: "invalid",
-        reason: "current-attempt SWARM_STARTED lacks Unit obligations",
-      };
-    }
+  for (const raw of fieldBearing) {
     const parsed = raw
       .split(",")
       .map((unit) => unit.trim())

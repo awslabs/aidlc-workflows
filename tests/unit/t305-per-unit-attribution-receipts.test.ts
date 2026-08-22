@@ -26,6 +26,7 @@ import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   currentStageSourceBaseline,
+  currentSwarmAttemptObligations,
   currentSwarmSourceMergeChain,
   currentSwarmSourceOpeningFingerprint,
   freshReviewReceipts,
@@ -1105,6 +1106,149 @@ describe("t305 real receipt and guard flows", () => {
     );
     expect(readAllAuditShards(project)).not.toContain(
       "**Event**: STAGE_COMPLETED",
+    );
+  }, 120000);
+
+  test("uniformly fieldless swarm starts migrate open while mixed starts refuse", () => {
+    const legacy = swarmFixture();
+    const legacyUnit = "legacy-obligations";
+    seedBoltDag(legacy, [legacyUnit]);
+    const prepared = runSwarm(legacy, [
+      "prepare",
+      "--batch",
+      "1",
+      "--units",
+      legacyUnit,
+      "--base",
+      "main",
+    ]);
+    expect(prepared.rc, prepared.out).toBe(0);
+    stripAuditFields(legacy, "SWARM_STARTED", ["Unit obligations"]);
+    expect(
+      currentSwarmAttemptObligations(
+        legacy,
+        "code-generation",
+      ).state,
+    ).toBe("none");
+    const legacyWt = join(
+      legacy,
+      ".aidlc",
+      "worktrees",
+      `bolt-${legacyUnit}`,
+    );
+    const source = `${legacyUnit}.ts`;
+    writeFileSync(join(legacyWt, source), "export const legacy = true;\n");
+    const reviewed = review(
+      legacyWt,
+      seededRecordDir(legacyWt),
+      legacyUnit,
+      [{ path: source }],
+    );
+    expect(reviewed.verdict.rc, reviewed.verdict.out).toBe(0);
+    const finalized = runSwarm(legacy, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      legacyUnit,
+      "--claimed",
+      legacyUnit,
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('${source}')"`,
+    ]);
+    expect(finalized.rc, finalized.out).toBe(0);
+    const merged = spawnSync(
+      process.execPath,
+      [
+        WORKTREE,
+        "merge",
+        "--slug",
+        legacyUnit,
+        "--target",
+        "main",
+        "--strategy",
+        "squash",
+        "--project-dir",
+        legacy,
+      ],
+      { cwd: legacy, encoding: "utf-8" },
+    );
+    expect(merged.status, `${merged.stdout ?? ""}${merged.stderr ?? ""}`)
+      .toBe(0);
+    const legacyStatePath = seededStateFile(legacy);
+    writeFileSync(
+      legacyStatePath,
+      readFileSync(legacyStatePath, "utf-8")
+        .replace(
+          "- **Construction Autonomy Mode**: gated",
+          "- **Construction Autonomy Mode**: autonomous",
+        )
+        .replace("- [-] code-generation", "- [?] code-generation"),
+    );
+    const approved = approve(legacy, {
+      AIDLC_SKIP_SOURCE_FRESHNESS: "1",
+    });
+    expect(approved.rc, approved.out).toBe(0);
+    expect(readAllAuditShards(legacy)).toContain(
+      "**Event**: STAGE_COMPLETED",
+    );
+
+    const mixed = swarmFixture();
+    const mixedUnit = "mixed-obligations";
+    seedBoltDag(mixed, [mixedUnit]);
+    const mixedPrepared = runSwarm(mixed, [
+      "prepare",
+      "--batch",
+      "1",
+      "--units",
+      mixedUnit,
+      "--base",
+      "main",
+    ]);
+    expect(mixedPrepared.rc, mixedPrepared.out).toBe(0);
+    appendAuditEntry(
+      "SWARM_STARTED",
+      {
+        "Batch number": "2",
+        "Unit names": mixedUnit,
+        "Concurrency cap": "1",
+        Stage: "code-generation",
+        "Run floor": latestMainWorkflowStageRunFloorForProject(
+          mixed,
+          "code-generation",
+        ),
+      },
+      mixed,
+    );
+    expect(
+      currentSwarmAttemptObligations(
+        mixed,
+        "code-generation",
+      ).state,
+    ).toBe("invalid");
+    const mixedStatePath = seededStateFile(mixed);
+    writeFileSync(
+      mixedStatePath,
+      readFileSync(mixedStatePath, "utf-8").replace(
+        "- **Construction Autonomy Mode**: gated",
+        "- **Construction Autonomy Mode**: autonomous",
+      ),
+    );
+    const refused = cli(
+      STATE,
+      ["gate-start", "code-generation"],
+      mixed,
+    );
+    expect(refused.rc).toBe(1);
+    const refusal = JSON.parse(refused.out) as { error: string };
+    expect(refusal.error).toContain(
+      'Refusing to present the approval gate for "code-generation"',
+    );
+    expect(refusal.error).toContain(
+      "mixes fieldless and field-bearing Unit obligations",
+    );
+    expect(readFileSync(mixedStatePath, "utf-8")).toContain(
+      "- [-] code-generation",
     );
   }, 120000);
 
