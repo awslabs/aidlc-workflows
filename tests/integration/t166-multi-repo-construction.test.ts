@@ -77,7 +77,7 @@ function runSwarm(proj: string, ...args: string[]): RunResult {
 }
 
 function runState(proj: string, ...args: string[]): RunResult {
-  const env = {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
     AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
     AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
@@ -150,32 +150,6 @@ function seedOneUnitDag(proj: string, unit: string): void {
       .replace(/^- \*\*Construction Autonomy Mode\*\*:.*$/m, "- **Construction Autonomy Mode**: autonomous")
       .replace(/^- \[[^\]]\] code-generation.*$/m, "- [?] code-generation — EXECUTE"),
   );
-}
-
-function recordWorktreeReview(proj: string, unit: string, sourcePath: string): RunResult {
-  const wt = worktreeDir(proj, unit);
-  const record = activeRecord(wt);
-  const dir = join(record, "construction", unit, "code-generation");
-  mkdirSync(dir, { recursive: true });
-  for (const name of ["code-generation-plan.md", "unit-test-instructions.md", "code-summary.md"]) {
-    writeFileSync(join(dir, name), `# ${name}\n`);
-  }
-  writeFileSync(join(dir, "traceability.json"), "{}\n");
-  writeFileSync(
-    join(dir, "source-manifest.json"),
-    `${JSON.stringify({ stage: "code-generation", unit, version: 1, writes: [{ path: sourcePath }] }, null, 2)}\n`,
-  );
-  const args = [
-    "review", "--stage", "code-generation", "--reviewer",
-    "aidlc-architecture-reviewer-agent", "--unit", unit, "--iteration", "1",
-    "--project-dir", wt,
-  ];
-  const requested = spawnSync(BUN, [LOG_TOOL, ...args], { encoding: "utf-8", cwd: wt });
-  if ((requested.status ?? -1) !== 0) {
-    return { status: requested.status ?? -1, out: `${requested.stdout ?? ""}${requested.stderr ?? ""}`, stdout: requested.stdout ?? "" };
-  }
-  const completed = spawnSync(BUN, [LOG_TOOL, ...args, "--verdict", "READY"], { encoding: "utf-8", cwd: wt });
-  return { status: completed.status ?? -1, out: `${completed.stdout ?? ""}${completed.stderr ?? ""}`, stdout: completed.stdout ?? "" };
 }
 
 function recordMainReview(
