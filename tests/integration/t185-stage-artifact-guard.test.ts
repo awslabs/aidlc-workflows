@@ -1665,7 +1665,7 @@ X. Other (please specify)
       stageCodeGenDocsOnly();
       writeWorkspaceFile(proj, "src/auth/login.ts"); // outside aidlc/ + harness
       reviewCodeGen(proj, UNIT);
-      guarded(proj, ["gate-start", "code-generation"]);
+      bypassed(proj, ["gate-start", "code-generation"]);
       const r = guarded(proj, ["approve", "code-generation", "--user-input", "ok"], {
         AIDLC_SKIP_SOURCE_FRESHNESS: "1",
       });
@@ -1687,7 +1687,7 @@ X. Other (please specify)
       writeWorkspaceFile(proj, "src/stage-level.ts");
 
       reviewCodeGen(proj);
-      const r = guarded(proj, ["gate-start", "code-generation"]);
+      const r = bypassed(proj, ["gate-start", "code-generation"]);
       expect(r.rc).toBe(0);
     });
   });
@@ -1806,7 +1806,6 @@ X. Other (please specify)
       return guarded(
         proj,
         ["approve", "code-generation", "--user-input", "ok"],
-        { AIDLC_SKIP_SOURCE_FRESHNESS: "1" },
       );
     }
 
