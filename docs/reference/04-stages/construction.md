@@ -79,7 +79,8 @@ that Unit's four design documents (3.1 through 3.4) and then generates its code
 Unit's design, not after every Unit's. Code Generation's per-Unit Plan Approval
 (Step 3) still hard-stops before generation, and the autonomous Construction
 swarm never fires while the knob is set (the walk owns the build, serially in
-Bolt build order; parallel batch swarms are stage-major territory). The
+Bolt build order; parallel batches under autonomous swarm mode are stage-major
+territory). The
 per-stage approval gates are unchanged in count and machinery; under unit-major
 they fire late, in stage order, once the whole (stage by Unit) grid — Code
 Generation included — is covered, one human approval per stage.
@@ -806,7 +807,7 @@ This stage has a **two-part structure**: planning followed by generation.
    modified, or deleted, including shell-, scaffolding-, and generator-written
    files. Paths are POSIX-relative and use no globs or `..`; a trailing `/`
    claims a generated directory tree. In a main-workspace multi-repo run every
-   entry names its recorded `repo`; inside a Bolt worktree paths are relative
+   entry names its recorded `repo`; inside the worktree hosting the Bolt, paths are relative
    to that selected repo and omit `repo`.
 
    The engine validates this schema and refuses to record a terminal per-unit

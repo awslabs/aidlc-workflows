@@ -124,8 +124,8 @@ re-presented gate).
 > `NOT-READY` verdict is
 > terminal. The precondition is hard on the review having happened and soft on
 > its verdict: a NOT-READY verdict after the iteration cap still reaches the
-> human gate. Autonomous Construction is not exempt; swarm
-> units are reviewed in their Bolt worktrees after convergence and before
+> human gate. Autonomous Construction is not exempt; each swarm
+> Unit is reviewed in the worktree hosting its Bolt after convergence and before
 > finalization. The swarm referee verifies each configured unit's terminal
 > receipt after its `BOLT_STARTED` boundary before merging it, so autonomy
 > removes human interruptions rather than verification.

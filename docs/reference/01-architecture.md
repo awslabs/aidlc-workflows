@@ -109,7 +109,7 @@ Worked examples:
 - *"Trunk-based development is the recommended branching strategy"* — same for every project (framework opinion) and loaded continuously (read at delivery-planning). Goes to `aidlc/spaces/<active-space>/memory/org.md`.
 - *"The 5 common branching strategies and their trade-offs"* — same for every project (framework reference) and loaded continuously (aidlc-pipeline-deploy-agent reads when discovering branching strategy). Goes to `.claude/knowledge/aidlc-pipeline-deploy-agent/branching-strategies.md`.
 - *"This run's requirements analysis"* — project-specific and per-workflow (each run produces fresh analysis). Goes to `<record>/inception/requirements-analysis/`.
-- *"Bolt-1's worktree state mid-Construction"* — project-specific and per-workflow (regenerated each Bolt). Goes to the Bolt worktree's copy of the record dir, `.aidlc/worktrees/bolt-1/<record>/aidlc-state.md`.
+- *"State in the worktree hosting Bolt-1 mid-Construction"* — project-specific and per-workflow (regenerated for each swarm-mode Bolt). Goes to that worktree's copy of the record dir, `.aidlc/worktrees/bolt-1/<record>/aidlc-state.md`.
 
 ### Sub-categories of harness config (top row)
 

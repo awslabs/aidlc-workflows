@@ -185,7 +185,8 @@ Read it in order the first time:
    context.
 8. **[Construction and the Swarm](08-construction-and-swarm.md)** — set the
    team's Construction autonomy posture in the rule layer, and shape what the
-   per-Unit Bolt swarm can run in parallel through `units-generation`.
+   per-Unit Bolts in an autonomous swarm can run in parallel through
+   `units-generation`.
 9. **[Porting to a New Harness](09-porting-to-a-new-harness.md)** — add another
    CLI harness with one `harness/<name>/` directory and a manifest row, no
    `core/` edits: the manifest contract, the hook adapter, and `emit.ts`.

@@ -126,7 +126,8 @@ implicit skill matching so 37 runner descriptions don't pollute the index).
   `config.toml` (linked worktrees resolve into `<main>/.git/worktrees/*`,
   so it must be the main repo's `.git`).
 - **Swarm floor = `codex exec` workers** — one headless worker per
-  Construction unit in its Bolt worktree (always `< /dev/null`), with the
+  emitted Construction Unit in the isolated worktree for that Unit's Bolt
+  (always `< /dev/null`), with the
   same deterministic referee. `AIDLC_USE_SWARM=1` has no Workflow tool here
   and loud-degrades (`SWARM_DEGRADED` is audited).
 - **Session lifecycle**: Codex has no SessionEnd event; an unclosed session
