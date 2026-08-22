@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.55] - 2026-08-22
+
+Run-stage directive emission now creates each stage diary deterministically before the agent begins work, eliminating failed read probes for a file that is expected to be absent on first entry. Internal Stop-hook probes remain write-free, and size-bounded waves create diaries only for the Unit entries actually carried by the emitted directive. **Upgrade:** refresh your `dist/<harness>/` shell so the updated engine and stage guidance are installed.
+
+* `aidlc-orchestrate.ts next` creates `memory.md` from the shipped template when it emits a real run-stage directive, preserves existing diary content on re-entry, and skips the Stop hook's internal read-only consultation.
+* Per-Unit waves create diaries only after applying the directive transport limit, so deferred same-batch Units remain untouched until a later directive includes them.
+* Stage guidance now forbids using read tools to probe maybe-absent files, provides one idempotent POSIX fallback command for the rare case where a diary is missing, and identifies `question-rendering.md` as a sibling of the orchestrator `SKILL.md`.
+
 ## [2.6.54] - 2026-08-21
 
 Subagent completion auditing now runs only while the active workflow state is explicitly `Running`, instead of writing whenever a state file or audit shard remains from an earlier workflow. **Upgrade:** refresh your `dist/<harness>/` shell so project-wide SubagentStop hooks no longer write audit entries or health heartbeats during non-AI-DLC sessions or after workflow completion.
