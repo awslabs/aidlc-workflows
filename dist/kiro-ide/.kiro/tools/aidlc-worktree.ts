@@ -1077,7 +1077,10 @@ function assertAggregateSourceBeforeMerge(
   record: ConvergedSourceRecord | null,
   intent?: string,
   space?: string,
-): WorkspaceSourceState | null {
+): {
+  state: WorkspaceSourceState;
+  openingFingerprint: string;
+} | null {
   if (!record || record.kind === "bypass") return null;
   const current = workspaceSourceState(pd, intent, space);
   if (current === null) {
@@ -1111,7 +1114,10 @@ function assertAggregateSourceBeforeMerge(
         "refusing to merge: the main checkout source changed after the previous reviewed-source merge",
       );
     }
-    return current;
+    return {
+      state: current,
+      openingFingerprint: chain.fingerprint,
+    };
   }
 
   const opening = currentSwarmSourceOpeningFingerprint(
@@ -1149,7 +1155,10 @@ function assertAggregateSourceBeforeMerge(
       "refusing to merge: the main checkout source does not match the prior attempt's final reviewed aggregate",
     );
   }
-  return current;
+  return {
+    state: current,
+    openingFingerprint: opening.fingerprint,
+  };
 }
 
 function reviewedSourceChangedEntries(
@@ -1475,7 +1484,7 @@ function handleMerge(args: string[]): void {
       );
     }
     const extraChanges = [...changedSourceListingKeys(
-      aggregateBefore.listing,
+      aggregateBefore.state.listing,
       aggregateAfter.listing,
     )].filter((path) => !reviewedChanges.has(path));
     if (extraChanges.length > 0) {
@@ -1508,7 +1517,7 @@ function handleMerge(args: string[]): void {
           "Unit name": sourceRecord.unit,
           Stage: sourceRecord.stage,
           "Run floor": sourceRecord.floor,
-          "Previous Source Fingerprint": aggregateBefore.fingerprint,
+          "Previous Source Fingerprint": aggregateBefore.openingFingerprint,
           "Source Fingerprint": aggregateAfter.fingerprint,
           "Source Commit": sourceRecord.commit,
           "Merge commit": commitSha,
