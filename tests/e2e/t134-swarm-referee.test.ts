@@ -113,7 +113,7 @@ afterAll(() => {
  * carries it (and so `git worktree add` does NOT byte-copy audit.md /
  * runtime-graph.json into the child).
  */
-function makeSwarmFixture(): string {
+function makeSwarmFixture(units: string[] = []): string {
   const proj = setupWorktreeFixture();
   fixtures.push(proj);
   // Seed Construction-phase state into the per-intent record + a fresh audit log
@@ -138,6 +138,7 @@ function makeSwarmFixture(): string {
       "",
     ].join("\n"),
   );
+  if (units.length > 0) seedBoltDag(proj, units);
   // Stage everything and amend the seed commit so HEAD carries the gitignore +
   // state, mirroring the .sh's `git add -A && commit --amend --no-edit`.
   const git = (args: string[]): void => {
@@ -297,7 +298,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
   // converged unit, mirroring the .sh's first PROJ block.
   // ===========================================================================
   test("1 prepare: forks a worktree per unit + emits SWARM_STARTED", () => {
-    const proj = makeSwarmFixture();
+    const proj = makeSwarmFixture(["alpha", "beta"]);
     const r = runRef(proj, ["prepare", "--batch", "1", "--units", "alpha", "--base", "main"]);
     // .sh grepped `"ok": true` — but handlePrepare's envelope carries no top-level
     // `ok` field; the .sh's grep matched the nested per-unit `"ok": true` row.
@@ -485,7 +486,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
   }, 120000);
 
   test("14a stale finalize is refused before merge after the stage attempt changes", () => {
-    const proj = makeSwarmFixture();
+    const proj = makeSwarmFixture(["stale"]);
     expect(
       runRef(proj, [
         "prepare",
@@ -547,7 +548,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
   }, 120000);
 
   test("14b a fully proven pre-upgrade swarm can finalize without re-prepare", () => {
-    const proj = makeSwarmFixture();
+    const proj = makeSwarmFixture(["legacy"]);
     prepareAsLegacy(proj, "legacy");
     writeFileSync(join(wtPath(proj, "legacy"), "impl.txt"), "done\n");
     logWorktreeReview(proj, "legacy");
@@ -573,7 +574,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
   }, 120000);
 
   test("14c a pre-upgrade swarm from a prior attempt remains refused", () => {
-    const proj = makeSwarmFixture();
+    const proj = makeSwarmFixture(["legacy-stale"]);
     prepareAsLegacy(proj, "legacy-stale");
     writeFileSync(join(wtPath(proj, "legacy-stale"), "impl.txt"), "done\n");
     writeFileSync(
@@ -615,7 +616,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
   test("2 check: genuinely converged unit -> exit 0, converged:true", () => {
     // Covered by the case-2 block in "1 prepare ..." (shared fixture). Re-prove
     // standalone: a fresh fixture, prepared + impl-staged unit checks green.
-    const proj = makeSwarmFixture();
+    const proj = makeSwarmFixture(["g2"]);
     runRef(proj, ["prepare", "--batch", "1", "--units", "g2", "--base", "main"]);
     writeFileSync(join(wtPath(proj, "g2"), "impl.txt"), "done\n");
     const c = runRef(proj, ["check", "g2", "--check-cmd", "test -f impl.txt"]);
@@ -624,7 +625,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
   }, 120000);
 
   test("3 check is stateless: repeat call same verdict (no counter)", () => {
-    const proj = makeSwarmFixture();
+    const proj = makeSwarmFixture(["g3"]);
     runRef(proj, ["prepare", "--batch", "1", "--units", "g3", "--base", "main"]);
     writeFileSync(join(wtPath(proj, "g3"), "impl.txt"), "done\n");
     const first = runRef(proj, ["check", "g3", "--check-cmd", "test -f impl.txt"]);
@@ -637,7 +638,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
   }, 120000);
 
   test("4 check: not-yet-converged unit -> exit non-zero, converged:false", () => {
-    const proj = makeSwarmFixture();
+    const proj = makeSwarmFixture(["g4"]);
     runRef(proj, ["prepare", "--batch", "1", "--units", "g4", "--base", "main"]);
     // No impl staged -> the check command fails (exit non-zero).
     const c = runRef(proj, ["check", "g4", "--check-cmd", "test -f impl.txt"]);
@@ -650,7 +651,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
   // baseline re-derived from the worktree's own git fork (no stored hash).
   // ===========================================================================
   test("5 anti-tamper: edited protected --test-file -> tampered:true, refused", () => {
-    const proj = makeSwarmFixture();
+    const proj = makeSwarmFixture(["gamma"]);
     // Seed a TRACKED protected file so the worktree fork carries it at HEAD.
     mkdirSync(join(proj, "spec"), { recursive: true });
     writeFileSync(join(proj, "spec", "unit.test"), "EXPECTED\n");
@@ -682,7 +683,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
   // two units converged; only one actually is.
   // ===========================================================================
   test("7 lying-conductor: falsely-claimed-converged unit re-verify-refused", () => {
-    const proj = makeSwarmFixture();
+    const proj = makeSwarmFixture(["win", "lie"]);
     runRef(proj, ["prepare", "--batch", "2", "--units", "win,lie", "--base", "main"]);
     // `win` genuinely converges; `lie` does NOT (no impl) but is falsely claimed.
     writeFileSync(join(wtPath(proj, "win"), "win.txt"), "done\n");
@@ -721,7 +722,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     // The .sh asserted cases 7 + 9 on a single finalize run; re-prove case 9
     // standalone on a fresh fixture so the tally invariant is independently
     // anchored.
-    const proj = makeSwarmFixture();
+    const proj = makeSwarmFixture(["wn", "le"]);
     runRef(proj, ["prepare", "--batch", "2", "--units", "wn,le", "--base", "main"]);
     writeFileSync(join(wtPath(proj, "wn"), "wn.txt"), "done\n");
     logWorktreeReview(proj, "wn");
@@ -748,7 +749,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
   // edited is re-verify-rejected even though the check command keys off it.
   // ===========================================================================
   test("8 finalize anti-tamper: tampered claimed unit re-verify-rejected", () => {
-    const proj = makeSwarmFixture();
+    const proj = makeSwarmFixture(["delta"]);
     mkdirSync(join(proj, "spec"), { recursive: true });
     writeFileSync(join(proj, "spec", "unit.test"), "EXPECTED\n");
     spawnSync("git", ["add", "-A"], { cwd: proj, encoding: "utf-8" });
@@ -787,7 +788,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
   // Case 10: loud-degrade — prepare --degraded-from ultracode emits SWARM_DEGRADED.
   // ===========================================================================
   test("10 loud-degrade: prepare --degraded-from ultracode emits SWARM_DEGRADED", () => {
-    const proj = makeSwarmFixture();
+    const proj = makeSwarmFixture(["epsilon"]);
     runRef(proj, [
       "prepare",
       "--batch",
@@ -809,7 +810,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
   // typed error on check, not a silently-disabled anti-tamper guard.
   // ===========================================================================
   test("11 path-confinement: a ../ --test-file is a typed error, not a disabled guard", () => {
-    const proj = makeSwarmFixture();
+    const proj = makeSwarmFixture(["zeta"]);
     runRef(proj, ["prepare", "--batch", "1", "--units", "zeta", "--base", "main"]);
     writeFileSync(join(wtPath(proj, "zeta"), "impl.txt"), "done\n");
     const c = runRef(proj, [
@@ -835,7 +836,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
   // determinism->tool records) instead of the cap-exhausted default.
   // ===========================================================================
   test("12 conductor attribution: --reasons unsatisfiable lands the typed reason (envelope + audit)", () => {
-    const proj = makeSwarmFixture();
+    const proj = makeSwarmFixture(["stuck"]);
     runRef(proj, ["prepare", "--batch", "1", "--units", "stuck", "--base", "main"]);
     // `stuck` gets no impl and is NOT claimed; the conductor attributes unsatisfiable.
     const f = runRef(proj, [
@@ -869,7 +870,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
   // applies only to DECLINED units, never to launder a claimed-but-red one.
   // ===========================================================================
   test("13 --reasons cannot override the lying-conductor guard: claimed-but-red stays error", () => {
-    const proj = makeSwarmFixture();
+    const proj = makeSwarmFixture(["sneaky"]);
     runRef(proj, ["prepare", "--batch", "1", "--units", "sneaky", "--base", "main"]);
     // sneaky is CLAIMED converged but no impl exists; the conductor also tries to
     // dress the failure as unsatisfiable via --reasons. The tool must ignore that
@@ -907,7 +908,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
   // finalize retry scoped to the unit merges cleanly.
   // ===========================================================================
   test("14 merge failure: converged-but-unmerged unit gets no SWARM_UNIT_CONVERGED row", () => {
-    const proj = makeSwarmFixture();
+    const proj = makeSwarmFixture(["orphan"]);
     runRef(proj, ["prepare", "--batch", "1", "--units", "orphan", "--base", "main"]);
     writeFileSync(join(wtPath(proj, "orphan"), "impl.txt"), "done\n");
     logWorktreeReview(proj, "orphan");

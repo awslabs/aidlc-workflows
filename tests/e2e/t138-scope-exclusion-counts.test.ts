@@ -61,8 +61,10 @@ import {
 } from "../harness/fixtures.ts";
 import { auditFilePathFor, driveAidlc } from "../harness/sdk-drive.ts";
 
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "2400", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 2400) * 1000;
+// Isolated runs finish close to 40 minutes; the deterministic e2e slice also
+// runs the long t126 SDK journey, so retain a five-minute load margin.
+const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "2700", 10);
+const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 2700) * 1000;
 const DRIVE_TIMEOUT_MS = Math.max(120_000, TEST_TIMEOUT_MS - 15_000);
 
 const SCOPE = "security-patch";
