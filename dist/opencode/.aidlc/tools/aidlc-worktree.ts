@@ -1690,7 +1690,7 @@ function handleMerge(args: string[]): void {
         "clean",
         "-ffdx",
         "--",
-        ".aidlc/",
+        ":(top).aidlc/",
       ],
       wtPath,
     );
