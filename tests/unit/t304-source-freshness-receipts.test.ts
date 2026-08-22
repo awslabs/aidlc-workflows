@@ -22,15 +22,12 @@
 //   3. GUARD (cli) - approve passes while the source matches; a post-review
 //      source edit refuses with the source-fingerprint-mismatch message; the
 //      AIDLC_SKIP_SOURCE_FRESHNESS=1 off-switch restores the legacy pass;
-//      receipts without the field (legacy rows) keep passing (fail-open).
-//   4. MULTI-UNIT POLICY (cli) - what the workspace-global hash proves and
-//      what it does not. It proves source-state equality against the NEWEST
-//      recorded review, so the ordinary sequential run, the §12a rework loop
-//      and shared-file integration all pass. It does NOT prove per-unit
-//      attribution: an earlier unit's edit masked by a later unit's review,
-//      and an addition no reviewer was shown, are accepted - the documented
-//      policy #629's acceptance criterion allows. Those rows assert the
-//      limitation deliberately and go red when attribution lands.
+//      genuinely pre-modern receipts retain migration fail-open behavior.
+//   4. MULTI-UNIT ATTRIBUTION (cli) - the newest global fingerprint remains the
+//      outer workspace boundary, while per-Unit manifests/snapshots bind each
+//      Unit's paths. Newer validated claims may own intentional shared-file
+//      integration; stale owners are invalidated individually, and changes
+//      outside the fresh claims union fail closed against the stage baseline.
 //
 // Mechanism: MIXED - in-process import for the fingerprint pins, spawns of the
 // real dist tools (log, state) for the stamping + guard rows. The guard rows
@@ -838,7 +835,7 @@ describe("t304 receipt stamping + completion guard (cli)", () => {
   test("review --verdict stamps Source Fingerprint for code-generation; approve passes while source matches", () => {
     recordReview(proj);
     expect(readAllAuditShards(proj)).toContain("**Source Fingerprint**: ");
-    const r = guarded(proj, ["gate-start", "code-generation"]);
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.out).not.toContain("source-fingerprint mismatch");
     expect(r.rc).toBe(0);
   });
@@ -1009,25 +1006,14 @@ describe("t304 receipt stamping + completion guard (cli)", () => {
   }
 });
 
-// What the workspace-global fingerprint does and does not prove on a
-// for_each: unit-of-work stage, where receipts are per-unit but the engine
-// presents ONE stage-level gate after ALL units are built (#646 review).
-//
-// It proves SOURCE-STATE EQUALITY: the current tree is identical to the one
-// the newest recorded review inspected. It does NOT prove PER-UNIT
-// ATTRIBUTION - one hash cannot say which unit wrote a given file, so source
-// changed before that newest review passes, and a fresh receipt re-validates
-// every earlier one. An earlier revision tried to recover attribution from the
-// diff SHAPE (every consecutive transition a pure addition); it was removed
-// after being reproduced failing in both directions - refusing the §12a rework
-// loop and ordinary shared-file integration, while still admitting an
-// addition nobody reviewed. #629's acceptance criterion allows this via
-// "ambiguous attribution fails closed OR FOLLOWS AN EXPLICITLY DOCUMENTED
-// POLICY"; the policy is stated in the CHANGELOG, docs/reference/
-// 12-state-machine.md and verifyReviewerPrecondition's own comment block, and
-// pinned by the two limitation tests below. When per-unit attribution lands
-// those two turn red on purpose.
-describe("t304 multi-unit flow: what the workspace-global fingerprint does and does not prove", () => {
+// Per-unit attribution composes two boundaries. The newest global fingerprint
+// proves no source changed after the last terminal review. Unit snapshots bind
+// manifest bytes plus exact/directory claims and are checked newest-first, so a
+// newer fresh claimant may intentionally own an overlapping shared path. The
+// stage-entry baseline then rejects every changed path outside the fresh claim
+// union. The cases below pin legitimate sequential/rework/shared integration,
+// owner-specific stale invalidation, and fail-closed unclaimed additions.
+describe("t304 multi-unit source attribution", () => {
   let proj: string;
 
   beforeEach(() => {
@@ -1037,6 +1023,16 @@ describe("t304 multi-unit flow: what the workspace-global fingerprint does and d
     seedGitRepo(proj);
     seedTwoUnitDag(proj);
     guarded(proj, ["checkbox", "code-generation=in-progress"]);
+    appendAuditEntry(
+      "WORKFLOW_STARTED",
+      {
+        Scope: "feature",
+        ...sourceBaselineAuditFields(proj, "code-generation"),
+      },
+      proj,
+    );
+    const boundarySecond = Math.floor(Date.now() / 1000);
+    while (Math.floor(Date.now() / 1000) === boundarySecond) {}
   });
 
   afterEach(() => cleanupTestProject(proj));
@@ -1054,7 +1050,7 @@ describe("t304 multi-unit flow: what the workspace-global fingerprint does and d
 
     // Nothing edited after beta's review - both units are reviewed against
     // exactly the tree state that exists at approve time. This must pass.
-    const r = guarded(proj, ["gate-start", "code-generation"]);
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.out).not.toContain("source-fingerprint mismatch");
     expect(r.rc).toBe(0);
   }, 30000);
@@ -1109,16 +1105,9 @@ describe("t304 multi-unit flow: what the workspace-global fingerprint does and d
     expect(r.rc).toBe(0);
   });
 
-  // DOCUMENTED LIMITATION (#646 review, first reported as a laundering bypass
-  // on aidlc-state.ts). alpha is reviewed, then edited with NO new review,
-  // then beta is coded and reviewed - beta's receipt stamps a fingerprint over
-  // the CURRENT tree, which already contains alpha's unreviewed edit, so the
-  // newest-matches-current comparison passes. The finding is real and is NOT
-  // fixed here: a workspace-global hash cannot attribute the changed file to
-  // alpha. Per #629's "explicitly documented policy" branch this is accepted
-  // and written down rather than guessed at; see the describe comment. This
-  // test asserts the documented behaviour so the policy is visible in code,
-  // and goes red when per-unit attribution lands.
+  // Alpha's manifest/snapshot owns alpha.ts. A later beta review refreshes the
+  // global outer binding but cannot shield alpha.ts because beta does not claim
+  // it, so alpha alone is invalidated.
   test("a unit edited after its own review, then masked by a later unit's review, is refused", () => {
     writeFileSync(join(proj, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
     git(proj, ["add", "-A"]);
@@ -1139,16 +1128,19 @@ describe("t304 multi-unit flow: what the workspace-global fingerprint does and d
       { path: "beta.ts" },
     ]);
 
-    const r = guarded(proj, ["gate-start", "code-generation"]);
+    const gate = guarded(
+      proj,
+      ["gate-start", "code-generation"],
+      { AIDLC_SKIP_REVIEWER_GATE_GUARD: "1" },
+    );
+    expect(gate.rc, gate.out).toBe(0);
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.rc).toBe(1);
     expect(r.out).toContain("Invalidated receipts: alpha");
   });
 
-  // DOCUMENTED LIMITATION, the inverse ordering (#646 review, inline comment
-  // on aidlc-state.ts): an EARLIER unit is RE-reviewed after a LATER unit was
-  // edited, so the newest fingerprint (stamped at alpha's second review)
-  // matches the workspace while beta's now-stale receipt survives. Same root
-  // cause, same accepted policy, same red-on-attribution intent.
+  // Re-reviewing alpha refreshes the global outer binding, but beta's own
+  // snapshot still detects the unreviewed beta.ts edit and invalidates beta.
   test("re-reviewing an earlier unit refuses a later unit's stale receipt", () => {
     writeFileSync(join(proj, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
     git(proj, ["add", "-A"]);
@@ -1180,12 +1172,8 @@ describe("t304 multi-unit flow: what the workspace-global fingerprint does and d
     expect(r.out).toContain("Invalidated receipts: beta");
   }, 15000);
 
-  // DOCUMENTED LIMITATION - the `A`-shaped case, which the removed rule never
-  // blocked either: an added file is exactly as unreviewed as a modified one.
-  // Reachable in practice because the per-unit reviewer is briefed with only
-  // its own unit's artifacts (stage-protocol §12a), so beta's reviewer is
-  // never pointed at this file. Asserting rc 0 states the policy explicitly
-  // rather than leaving the gap undocumented.
+  // The stage-entry baseline sees unreviewed.ts, while neither fresh Unit
+  // manifest claims it. A newer beta review cannot launder an unclaimed path.
   test("an addition nobody reviewed is refused as unclaimed", () => {
     appendAuditEntry(
       "WORKFLOW_STARTED",
@@ -1215,7 +1203,13 @@ describe("t304 multi-unit flow: what the workspace-global fingerprint does and d
       { path: "beta.ts" },
     ]);
 
-    const r = guarded(proj, ["gate-start", "code-generation"]);
+    const gate = guarded(
+      proj,
+      ["gate-start", "code-generation"],
+      { AIDLC_SKIP_REVIEWER_GATE_GUARD: "1" },
+    );
+    expect(gate.rc, gate.out).toBe(0);
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.rc).toBe(1);
     expect(r.out).toContain("Unclaimed source changes fail closed");
     expect(r.out).toContain("unreviewed.ts");
@@ -1235,6 +1229,16 @@ describe("t304 multi-unit flow: what the workspace-global fingerprint does and d
     const rows = JSON.parse(readFileSync(regPath, "utf-8")) as Array<Record<string, unknown>>;
     rows[0].repos = ["repo-a"];
     writeFileSync(regPath, `${JSON.stringify(rows, null, 2)}\n`, "utf-8");
+    appendAuditEntry(
+      "STAGE_JUMPED",
+      {
+        Target: "code-generation",
+        ...sourceBaselineAuditFields(proj, "code-generation"),
+      },
+      proj,
+    );
+    const repoBoundarySecond = Math.floor(Date.now() / 1000);
+    while (Math.floor(Date.now() / 1000) === repoBoundarySecond) {}
 
     writeFileSync(join(repoA, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
     recordReview(proj, "code-generation", REVIEWER, "alpha");

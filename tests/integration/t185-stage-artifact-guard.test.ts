@@ -57,6 +57,7 @@ import {
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   SUMMARY_CONFIRMATION_HASH_SCOPE,
+  sourceBaselineAuditFields,
   summaryConfirmationContentHash,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
@@ -1687,7 +1688,9 @@ X. Other (please specify)
       writeWorkspaceFile(proj, "src/stage-level.ts");
 
       reviewCodeGen(proj);
-      const r = bypassed(proj, ["gate-start", "code-generation"]);
+      const r = guarded(proj, ["gate-start", "code-generation"], {
+        AIDLC_SKIP_SOURCE_FRESHNESS: "1",
+      });
       expect(r.rc).toBe(0);
     });
   });
@@ -1797,6 +1800,17 @@ X. Other (please specify)
     function stageCodeGenDocsOnly(): void {
       guarded(proj, ["set", "Current Stage=code-generation"]);
       guarded(proj, ["checkbox", "code-generation=in-progress"]);
+      appendAuditEntry(
+        "STAGE_STARTED",
+        {
+          Stage: "code-generation",
+          Agent: "aidlc-developer-agent",
+          ...sourceBaselineAuditFields(proj, "code-generation"),
+        },
+        proj,
+      );
+      const boundarySecond = Math.floor(Date.now() / 1000);
+      while (Math.floor(Date.now() / 1000) === boundarySecond) {}
       writeRecordDoc(proj, `construction/${UNIT}/code-generation/code-generation-plan.md`);
       writeRecordDoc(proj, `construction/${UNIT}/code-generation/code-summary.md`);
     }
