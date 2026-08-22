@@ -137,6 +137,30 @@ describe("t305 strict source-manifest validation", () => {
     expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(false);
   });
 
+  test("accepts a trailing-slash prefix for a directory committed in HEAD", () => {
+    const { project, record } = fixture();
+    mkdirSync(join(project, "src"), { recursive: true });
+    writeFileSync(join(project, "src", "committed.ts"), "export const committed = true;\n");
+    git(project, ["add", "--", "src/committed.ts"]);
+    git(project, ["commit", "-qm", "commit source directory"]);
+    manifest(record, "alpha", {
+      stage: "code-generation",
+      unit: "alpha",
+      version: 1,
+      writes: [{ path: "src/" }],
+    });
+
+    const accepted = readUnitSourceManifest(
+      project,
+      "code-generation",
+      "alpha",
+    );
+    expect(accepted.ok).toBe(true);
+    if (accepted.ok) {
+      expect(sourceClaimCovers("\0src/committed.ts", accepted)).toBe(true);
+    }
+  });
+
   test("rejects ignored exact claims and prefixes containing ignored source", () => {
     const { project, record } = fixture();
     writeFileSync(

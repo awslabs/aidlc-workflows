@@ -6908,7 +6908,7 @@ function ignoredSourceClaimReason(
     }
     const entry = listed.stdout.split("\0").find(Boolean);
     if (entry) {
-      if (/^040000 /.test(entry)) {
+      if (!prefix && /^040000 /.test(entry)) {
         return `${JSON.stringify(path)} is a directory; directory claims must end with "/"`;
       }
       headTracked = true;
