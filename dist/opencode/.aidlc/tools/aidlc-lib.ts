@@ -6907,6 +6907,53 @@ function isBoltWorktreeProjectDir(projectDir: string): boolean {
   return existsSync(join(projectDir, ".aidlc", "worktree-meta.json"));
 }
 
+function currentGitPathMode(
+  sourceRepoDir: string,
+  literalPath: string,
+): { ok: boolean; mode: string | null } {
+  const indexFile = join(
+    tmpdir(),
+    `aidlc-claim-mode-${process.pid}-${randomUUID().slice(0, 8)}`,
+  );
+  const env = { ...process.env, GIT_INDEX_FILE: indexFile };
+  try {
+    const seeded = spawnSync("git", ["-C", sourceRepoDir, "read-tree", "HEAD"], {
+      env,
+      encoding: "utf-8",
+      maxBuffer: 512 * 1024 * 1024,
+    });
+    if (seeded.status !== 0) {
+      const empty = spawnSync(
+        "git",
+        ["-C", sourceRepoDir, "read-tree", "--empty"],
+        { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+      );
+      if (empty.status !== 0) return { ok: false, mode: null };
+    }
+    const added = spawnSync("git", ["-C", sourceRepoDir, "add", "-A"], {
+      env,
+      encoding: "utf-8",
+      maxBuffer: 512 * 1024 * 1024,
+    });
+    if (added.status !== 0) return { ok: false, mode: null };
+    const listed = spawnSync(
+      "git",
+      ["-C", sourceRepoDir, "ls-files", "-s", "-z", "--", `./${literalPath}`],
+      { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+    );
+    if (listed.status !== 0) return { ok: false, mode: null };
+    for (const record of listed.stdout.split("\0")) {
+      const tab = record.indexOf("\t");
+      if (tab === -1 || record.slice(tab + 1) !== literalPath) continue;
+      const mode = /^(\d{6}) /.exec(record.slice(0, tab))?.[1] ?? null;
+      return { ok: mode !== null, mode };
+    }
+    return { ok: true, mode: null };
+  } finally {
+    rmSync(indexFile, { force: true });
+  }
+}
+
 function ignoredSourceClaimReason(
   sourceRepoDir: string,
   path: string,
@@ -6926,7 +6973,13 @@ function ignoredSourceClaimReason(
     // An absent exact path is valid and becomes stale if it appears later.
   }
   if (!prefix && currentIsDirectory) {
-    return `${JSON.stringify(path)} is a directory; directory claims must end with "/"`;
+    const currentMode = currentGitPathMode(sourceRepoDir, literalPath);
+    if (!currentMode.ok) {
+      return `Git could not verify the current path type for ${JSON.stringify(path)}`;
+    }
+    if (currentMode.mode !== "160000") {
+      return `${JSON.stringify(path)} is a directory; directory claims must end with "/"`;
+    }
   }
 
   let headTracked = false;

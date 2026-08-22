@@ -476,6 +476,7 @@ interface BoundConvergedSourceRecord {
   kind: "bound";
   fingerprint: string;
   commit: string;
+  baseCommit: string;
   unit: string;
   batch: string;
   stage: string;
@@ -991,10 +992,17 @@ function convergedSourceRecord(
       "refusing to merge: the current convergence source authority is malformed",
     );
   }
+  if (!creationBaseCommit) {
+    errorWithSlug(
+      slug,
+      "refusing to merge: bound convergence has no immutable worktree base commit authority",
+    );
+  }
   return {
     kind: "bound",
     fingerprint,
     commit,
+    baseCommit: creationBaseCommit,
     unit: unitName,
     batch,
     stage,
@@ -1147,6 +1155,7 @@ function assertAggregateSourceBeforeMerge(
 
 function reviewedSourceChangedPathKeys(
   repoCwd: string,
+  baseCommit: string,
   sourceCommit: string,
   repo: string | null,
 ): Set<string> | null {
@@ -1158,7 +1167,7 @@ function reviewedSourceChangedPathKeys(
       "-r",
       "-z",
       "--no-renames",
-      `${sourceCommit}^`,
+      baseCommit,
       sourceCommit,
     ],
     repoCwd,
@@ -1452,6 +1461,7 @@ function handleMerge(args: string[]): void {
     }
     const reviewedChanges = reviewedSourceChangedPathKeys(
       repoCwd,
+      sourceRecord.baseCommit,
       sourceRecord.commit,
       repoTarget.repo,
     );
