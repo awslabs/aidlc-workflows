@@ -1680,6 +1680,26 @@ function handleMerge(args: string[]): void {
         `${cleanupTag} application source changed during the bypassed merge; worktree preserved`,
       );
     }
+  } else {
+    // Ordinary Bolts also carry framework-owned runtime attestations under the
+    // root .aidlc/ shell. Git treats that ignored directory as one cleanable
+    // entry, so remove the shell as a unit; non-forced worktree removal below
+    // must continue to protect every application path.
+    const clean = runGit(
+      [
+        "clean",
+        "-ffdx",
+        "--",
+        ".aidlc/",
+      ],
+      wtPath,
+    );
+    if (!clean.ok) {
+      errorWithSlug(
+        slug,
+        `${cleanupTag} ordinary Bolt metadata cleanup failed: ${clean.stderr.trim() || `exit ${clean.code}`}`,
+      );
+    }
   }
   // A raw-byte snapshot can remain permanently "modified" under its own lossy
   // clean filter even after reset (Git re-cleans the raw index blob for status).
