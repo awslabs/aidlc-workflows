@@ -514,7 +514,7 @@ describe("t185: stage-completion artifact guard (#366)", () => {
     const slug = field(proj, "Current Stage");
     const r = guarded(proj, ["gate-start", slug]);
     expect(r.rc).not.toBe(0);
-    expect(r.out).toContain("Refusing to complete");
+    expect(r.out).toContain("Refusing to present the approval gate");
     expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(
       `- [-] ${slug}`,
     );
@@ -525,7 +525,7 @@ describe("t185: stage-completion artifact guard (#366)", () => {
     bypassed(proj, ["checkbox", `${slug}=revising`]);
     const r = guarded(proj, ["revise", slug]);
     expect(r.rc).not.toBe(0);
-    expect(r.out).toContain("Refusing to complete");
+    expect(r.out).toContain("Refusing to present the approval gate");
     expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(
       `- [R] ${slug}`,
     );
@@ -1734,7 +1734,7 @@ X. Other (please specify)
 
       const r = guarded(proj, ["gate-start", "reverse-engineering"]);
       expect(r.rc).not.toBe(0);
-      expect(r.out).toContain("Refusing to complete");
+      expect(r.out).toContain("Refusing to present the approval gate");
     });
 
     test("PASSES multi-repo codekb when every registered repo has the full set", () => {

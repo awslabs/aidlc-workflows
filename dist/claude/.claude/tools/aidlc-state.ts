@@ -3001,7 +3001,7 @@ function handleApprove(args: string[]): void {
   // enforcement point on the approve path. Bypass via AIDLC_SKIP_ARTIFACT_GUARD.
   // Covers per-unit Construction stages (globs the record's
   // construction/<unit>/<slug>/) and code-producing stages (workspace_requires).
-  verifyStageArtifacts(pd, stage, "present-approval-gate");
+  verifyStageArtifacts(pd, stage);
   verifySummaryConfirmationPrecondition(pd, content, stage);
 
   // Human-presence guard: a gate cannot be approved unless a real
@@ -3338,7 +3338,7 @@ function handleRevise(args: string[]): void {
   const stage = findStageBySlug(slug);
   if (!stage) error(`Unknown stage: ${slug}`);
   validateSlugInState(content, slug, "revising");
-  verifyStageArtifacts(pd, stage);
+  verifyStageArtifacts(pd, stage, "present-approval-gate");
   verifySummaryConfirmationPrecondition(pd, content, stage);
   if (!reviewerGateGuardDisabled()) {
     verifyReviewerPrecondition(pd, content, stage, "present-approval-gate");
