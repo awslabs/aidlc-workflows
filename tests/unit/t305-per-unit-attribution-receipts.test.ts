@@ -1543,9 +1543,11 @@ describe("t305 healthy settled-swarm source completion", () => {
     expect(chain.state).toBe("ready");
     if (chain.state === "ready") {
       expect([...chain.units]).toEqual([unit]);
-      expect(chain.fingerprint).toBe(
-        workspaceSourceState(project)?.fingerprint,
-      );
+      const current = workspaceSourceState(project);
+      expect(current).not.toBeNull();
+      if (current !== null) {
+        expect(chain.fingerprint).toBe(current.fingerprint);
+      }
     }
 
     const statePath = seededStateFile(project);
@@ -1649,9 +1651,11 @@ describe("t305 healthy settled-swarm source completion", () => {
     expect(chain.state).toBe("ready");
     if (chain.state === "ready") {
       expect([...chain.units].sort()).toEqual(units);
-      expect(chain.fingerprint).toBe(
-        workspaceSourceState(project)?.fingerprint,
-      );
+      const current = workspaceSourceState(project);
+      expect(current).not.toBeNull();
+      if (current !== null) {
+        expect(chain.fingerprint).toBe(current.fingerprint);
+      }
     }
     const shared = readFileSync(join(project, "shared.ts"), "utf-8");
     expect(shared).toContain("alphaOwned");
