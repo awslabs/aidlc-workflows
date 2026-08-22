@@ -696,7 +696,9 @@ function stripAuditFields(
   }
 }
 
-function swarmFixture(): string {
+function swarmFixture(
+  seedApplication?: (project: string) => void,
+): string {
   const project = setupWorktreeFixture();
   worktreeDirs.push(project);
   git(project, ["config", "user.email", "t@test"]);
@@ -724,6 +726,7 @@ function swarmFixture(): string {
       "",
     ].join("\n"),
   );
+  seedApplication?.(project);
   git(project, ["add", "-A"]);
   git(project, [
     "-c",
@@ -780,6 +783,32 @@ function runSwarm(
   const result = spawnSync(
     process.execPath,
     [SWARM, "--project-dir", project, ...args],
+    { cwd: project, encoding: "utf-8" },
+  );
+  return {
+    rc: result.status ?? -1,
+    out: `${result.stdout ?? ""}${result.stderr ?? ""}`,
+  };
+}
+
+function mergeSwarmUnit(
+  project: string,
+  unit: string,
+): { rc: number; out: string } {
+  const result = spawnSync(
+    process.execPath,
+    [
+      WORKTREE,
+      "merge",
+      "--slug",
+      unit,
+      "--target",
+      "main",
+      "--strategy",
+      "squash",
+      "--project-dir",
+      project,
+    ],
     { cwd: project, encoding: "utf-8" },
   );
   return {
@@ -1460,6 +1489,191 @@ describe("t305 real receipt and guard flows", () => {
   test("calls freshReviewReceipts directly for a modern unit chain", () => {
     const {project,record}=runtimeFixture(); review(project,record,"alpha",[{path:"app.ts"}]); review(project,record,"beta",[]); const state=readFileSync(join(record,"aidlc-state.md"),"utf-8"); const receipts=freshReviewReceipts(project,state,{slug:"code-generation",phase:"construction",for_each:"unit-of-work",reviewer:REVIEWER,reviewer_max_iterations:2,workspace_requires:true,produces:["code-generation-plan","unit-test-instructions","code-summary","traceability"]}); expect(receipts.unitVerdicts.size).toBe(2);
   }, 30000);
+});
+
+describe("t305 healthy settled-swarm source completion", () => {
+  test("one reviewed source merge forms a ready chain and approves without a freshness bypass", () => {
+    const project = swarmFixture();
+    const unit = "healthy-one";
+    seedBoltDag(project, [unit]);
+    const prepared = runSwarm(project, [
+      "prepare",
+      "--batch",
+      "1",
+      "--units",
+      unit,
+      "--base",
+      "main",
+    ]);
+    expect(prepared.rc, prepared.out).toBe(0);
+
+    const wt = join(project, ".aidlc", "worktrees", `bolt-${unit}`);
+    const source = `${unit}.ts`;
+    writeFileSync(join(wt, source), "export const healthy = true;\n");
+    const reviewed = review(
+      wt,
+      seededRecordDir(wt),
+      unit,
+      [{ path: source }],
+    );
+    expect(reviewed.verdict.rc, reviewed.verdict.out).toBe(0);
+    const finalized = runSwarm(project, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      unit,
+      "--claimed",
+      unit,
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('${source}')"`,
+    ]);
+    expect(finalized.rc, finalized.out).toBe(0);
+    const merged = mergeSwarmUnit(project, unit);
+    expect(merged.rc, merged.out).toBe(0);
+    expect(
+      (readAllAuditShards(project).match(
+        /\*\*Event\*\*: SWARM_SOURCE_MERGED/g,
+      ) ?? []).length,
+    ).toBe(1);
+    const chain = currentSwarmSourceMergeChain(
+      project,
+      "code-generation",
+    );
+    expect(chain.state).toBe("ready");
+    if (chain.state === "ready") {
+      expect([...chain.units]).toEqual([unit]);
+      expect(chain.fingerprint).toBe(
+        workspaceSourceState(project)?.fingerprint,
+      );
+    }
+
+    const statePath = seededStateFile(project);
+    writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8")
+        .replace(
+          "- **Construction Autonomy Mode**: gated",
+          "- **Construction Autonomy Mode**: autonomous",
+        )
+        .replace("- [-] code-generation", "- [?] code-generation"),
+    );
+    expect(process.env.AIDLC_SKIP_SOURCE_FRESHNESS).not.toBe("1");
+    const approved = approve(project);
+    expect(approved.rc, approved.out).toBe(0);
+    expect(readAllAuditShards(project)).toContain(
+      "**Event**: STAGE_COMPLETED",
+    );
+  }, 120000);
+
+  test("two reviewed Units can merge non-overlapping shared-file edits and approve", () => {
+    const baseLines = Array.from(
+      { length: 40 },
+      (_, index) => `export const line${index} = ${index};`,
+    );
+    const project = swarmFixture((root) => {
+      writeFileSync(join(root, "shared.ts"), `${baseLines.join("\n")}\n`);
+    });
+    const units = ["alpha", "beta"];
+    seedBoltDag(
+      project,
+      units.map((name) => ({ name, depends_on: [] })),
+      [units],
+    );
+    const prepared = runSwarm(project, [
+      "prepare",
+      "--batch",
+      "1",
+      "--units",
+      units.join(","),
+      "--base",
+      "main",
+    ]);
+    expect(prepared.rc, prepared.out).toBe(0);
+
+    for (const [unit, index, value] of [
+      ["alpha", 0, "export const alphaOwned = true;"],
+      ["beta", 39, "export const betaOwned = true;"],
+    ] as Array<[string, number, string]>) {
+      const wt = join(
+        project,
+        ".aidlc",
+        "worktrees",
+        `bolt-${unit}`,
+      );
+      const lines = [...baseLines];
+      lines[index] = value;
+      writeFileSync(join(wt, "shared.ts"), `${lines.join("\n")}\n`);
+      const reviewed = review(
+        wt,
+        seededRecordDir(wt),
+        unit,
+        [{ path: "shared.ts" }],
+      );
+      expect(reviewed.verdict.rc, reviewed.verdict.out).toBe(0);
+    }
+    const finalized = runSwarm(project, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      units.join(","),
+      "--claimed",
+      units.join(","),
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('shared.ts')"`,
+    ]);
+    expect(finalized.rc, finalized.out).toBe(0);
+
+    const alphaMerge = mergeSwarmUnit(project, "alpha");
+    expect(alphaMerge.rc, alphaMerge.out).toBe(0);
+    const alphaChain = currentSwarmSourceMergeChain(
+      project,
+      "code-generation",
+    );
+    expect(alphaChain.state).toBe("ready");
+    if (alphaChain.state === "ready") {
+      expect([...alphaChain.units]).toEqual(["alpha"]);
+    }
+
+    const betaMerge = mergeSwarmUnit(project, "beta");
+    expect(betaMerge.rc, betaMerge.out).toBe(0);
+    const audit = readAllAuditShards(project);
+    expect(
+      (audit.match(/\*\*Event\*\*: SWARM_SOURCE_MERGED/g) ?? []).length,
+    ).toBe(2);
+    const chain = currentSwarmSourceMergeChain(
+      project,
+      "code-generation",
+    );
+    expect(chain.state).toBe("ready");
+    if (chain.state === "ready") {
+      expect([...chain.units].sort()).toEqual(units);
+      expect(chain.fingerprint).toBe(
+        workspaceSourceState(project)?.fingerprint,
+      );
+    }
+    const shared = readFileSync(join(project, "shared.ts"), "utf-8");
+    expect(shared).toContain("alphaOwned");
+    expect(shared).toContain("betaOwned");
+
+    const statePath = seededStateFile(project);
+    writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8")
+        .replace(
+          "- **Construction Autonomy Mode**: gated",
+          "- **Construction Autonomy Mode**: autonomous",
+        )
+        .replace("- [-] code-generation", "- [?] code-generation"),
+    );
+    expect(process.env.AIDLC_SKIP_SOURCE_FRESHNESS).not.toBe("1");
+    const approved = approve(project);
+    expect(approved.rc, approved.out).toBe(0);
+    expect(readAllAuditShards(project)).toContain(
+      "**Event**: STAGE_COMPLETED",
+    );
+  }, 120000);
 });
 
 describe("t305 post-merge source authority failure", () => {
