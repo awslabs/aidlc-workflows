@@ -5540,6 +5540,24 @@ function hasModernSourceBindingEvidence(
   });
 }
 
+function isSourceBaselineBoundaryEvent(
+  event: Pick<AuditShardEvent, "event" | "block">,
+  stageSlug: string,
+  unitMajor: boolean,
+): boolean {
+  if (auditBlockField(event.block, "Workflow")?.startsWith("single-stage:")) {
+    return false;
+  }
+  if (event.event === "WORKFLOW_STARTED" || event.event === "STAGE_JUMPED") {
+    return true;
+  }
+  return (
+    event.event === "STAGE_STARTED" &&
+    !unitMajor &&
+    auditBlockField(event.block, "Stage") === stageSlug
+  );
+}
+
 export function freshReviewReceipts(
   projectDir: string,
   stateContent: string,
@@ -6087,12 +6105,7 @@ export function freshReviewReceipts(
     let baselineField: string | null = null;
     for (let i = Math.max(boundary, 0); i < firstWork; i++) {
       const event = events[i];
-      if (auditBlockField(event.block, "Workflow")?.startsWith("single-stage:")) continue;
-      if (
-        event.event !== "WORKFLOW_STARTED" &&
-        event.event !== "STAGE_JUMPED" &&
-        (event.event !== "STAGE_STARTED" || unitMajor)
-      ) continue;
+      if (!isSourceBaselineBoundaryEvent(event, stage.slug, unitMajor)) continue;
       const field = auditBlockField(event.block, "Source Baseline");
       if (eventIsCrossShardTied(i)) baselineField = UNBINDABLE_FINGERPRINT;
       else baselineField = field;
@@ -7415,18 +7428,7 @@ export function currentStageSourceBaseline(
   let field: string | null = null;
   for (let index = Math.max(boundary, 0); index < firstWork; index++) {
     const event = events[index];
-    if (auditBlockField(event.block, "Workflow")?.startsWith("single-stage:")) {
-      continue;
-    }
-    if (
-      event.event !== "WORKFLOW_STARTED" &&
-      event.event !== "STAGE_JUMPED" &&
-      (event.event !== "STAGE_STARTED" ||
-        unitMajor ||
-        auditBlockField(event.block, "Stage") !== stageSlug)
-    ) {
-      continue;
-    }
+    if (!isSourceBaselineBoundaryEvent(event, stageSlug, unitMajor)) continue;
     const candidate = auditBlockField(event.block, "Source Baseline");
     field = candidate;
   }

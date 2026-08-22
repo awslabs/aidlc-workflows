@@ -496,6 +496,20 @@ describe("t305 content-addressed source review evidence", () => {
     );
     expect(selected.state).toBe("ready");
     if (selected.state === "ready") expect(selected.listing.size).toBe(0);
+    const selectedStageMajor = currentStageSourceBaseline(
+      jumped,
+      "code-generation",
+      false,
+    );
+    expect(selectedStageMajor.state).toBe("ready");
+    if (selectedStageMajor.state === "ready") {
+      expect(selectedStageMajor.listing.size).toBe(0);
+    }
+    const opening = currentSwarmSourceOpeningFingerprint(
+      jumped,
+      "code-generation",
+    );
+    expect(opening.state).toBe("ready");
     expect(recordDir(jumped)).not.toBeNull();
   }, 30000);
 
