@@ -20,10 +20,10 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 611,
+    "total": 628,
     "enumeratedByClass": {
-      "function": 349,
-      "audit": 86,
+      "function": 365,
+      "audit": 87,
       "scope": 11,
       "stage": 33,
       "hook": 17,
@@ -31,8 +31,8 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 175,
-      "audit": 44,
+      "function": 183,
+      "audit": 45,
       "scope": 11,
       "stage": 11,
       "hook": 17,
@@ -718,6 +718,18 @@
       "coveredBy": [
         {
           "file": "tests/e2e/t134-swarm-referee.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "SWARM_SOURCE_MERGED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t305-per-unit-attribution-receipts.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -1634,6 +1646,42 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:currentStageSourceBaseline",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t305-per-unit-attribution-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:currentSwarmSourceMergeChain",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t305-per-unit-attribution-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:currentSwarmSourceOpeningFingerprint",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t305-per-unit-attribution-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:currentUnitLifecycleMode",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2002,6 +2050,13 @@
     {
       "unitClass": "function",
       "unitId": "function:getField",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:gitCommitSourceListing",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -2979,6 +3034,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:parseSourceListing",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:parseStageFrontmatter",
       "minMechanism": "none",
       "coveredBy": [
@@ -3220,6 +3282,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:readBaselineSourceSnapshot",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t305-per-unit-attribution-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:readCurrentSessionId",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3269,6 +3343,30 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readUnitSourceManifest",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t305-per-unit-attribution-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readUnitSourceSnapshot",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t305-per-unit-attribution-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -3594,6 +3692,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:restrictSourceListing",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:REVIEW_CLASSES",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3771,6 +3876,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:serializeSourceListing",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:SESSION_INTENT_HANDOFF_TTL_MS",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3912,6 +4024,56 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:sourceBaselineAuditFields",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t305-per-unit-attribution-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:sourceClaimCovers",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t305-per-unit-attribution-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:sourceListingEntriesEqual",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t305-per-unit-attribution-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:sourceListingSha256",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:sourcePathKey",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -4237,6 +4399,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:unitSourceFingerprint",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:updateCopilotStopCount",
       "minMechanism": "none",
       "coveredBy": [
@@ -4426,6 +4595,25 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:workspaceSourceListing",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t305-per-unit-attribution-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:workspaceSourceState",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:worktreeAuditFilePath",
       "minMechanism": "none",
       "coveredBy": [],
@@ -4471,6 +4659,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t272-unit-major-code-gen.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:writeBaselineSourceSnapshot",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t305-per-unit-attribution-receipts.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -4532,6 +4732,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:writeUnitSourceSnapshot",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t305-per-unit-attribution-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "hook",

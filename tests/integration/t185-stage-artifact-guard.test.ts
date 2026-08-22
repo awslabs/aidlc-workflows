@@ -51,6 +51,7 @@ import {
   seededAuditShard,
   seededRecordDir,
   seededStateFile,
+  seedBoltDag,
   seedStateFile,
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
@@ -71,6 +72,36 @@ function reviewStage(
   reviewer: string,
   unit?: string,
 ): void {
+  if (stage === "code-generation" && unit) {
+    let unitIsResolved = false;
+    try {
+      const graph = JSON.parse(
+        readFileSync(join(seededRecordDir(proj), "runtime-graph.json"), "utf-8"),
+      ) as { bolt_dag?: { units?: Array<{ name?: unknown }> } };
+      unitIsResolved =
+        graph.bolt_dag?.units?.some((candidate) => candidate.name === unit) === true;
+    } catch {
+      // Seed a focused DAG below.
+    }
+    if (!unitIsResolved) seedBoltDag(proj, [unit]);
+
+    const dir = join(
+      seededRecordDir(proj),
+      "construction",
+      unit,
+      "code-generation",
+    );
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "source-manifest.json"),
+      `${JSON.stringify({
+        stage: "code-generation",
+        unit,
+        version: 1,
+        writes: [{ path: "src/" }],
+      }, null, 2)}\n`,
+    );
+  }
   const args = [
     LOG,
     "review",
@@ -84,8 +115,13 @@ function reviewStage(
     proj,
   ];
   if (unit) args.splice(4, 0, "--unit", unit);
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  // Several artifact-guard fixtures are deliberately non-Git. Source binding
+  // cannot be computed there, so isolate the artifact-guard contract with the
+  // documented freshness switch while still requiring a valid manifest.
+  env.AIDLC_SKIP_SOURCE_FRESHNESS = "1";
   for (const suffix of [[], ["--verdict", "READY"]]) {
-    const result = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
+    const result = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8", env });
     if ((result.status ?? -1) !== 0) {
       throw new Error(`reviewStage failed: ${result.stdout}${result.stderr}`);
     }
@@ -103,12 +139,15 @@ function reviewCodeGen(proj: string, unit?: string): void {
 
 // Drive a state subcommand with the artifact guard ENABLED (clear the suite's
 // bypass var). Returns exit code + combined output.
-function guarded(proj: string, args: string[]): { rc: number; out: string } {
-  const env = { ...process.env };
+function guarded(
+  proj: string,
+  args: string[],
+  extraEnv: Record<string, string> = {},
+): { rc: number; out: string } {
+  const env = { ...process.env, ...extraEnv };
   delete env.AIDLC_SKIP_ARTIFACT_GUARD;
   delete env.AIDLC_DISABLE_ENSEMBLE_EVIDENCE;
   env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS = "1";
-  env.AIDLC_SKIP_SOURCE_FRESHNESS = "1";
   const r = spawnSync(BUN, [STATE, ...args, "--project-dir", proj], {
     encoding: "utf-8",
     env,
@@ -1625,9 +1664,11 @@ X. Other (please specify)
     test("PASSES code-generation once real source exists outside aidlc/", () => {
       stageCodeGenDocsOnly();
       writeWorkspaceFile(proj, "src/auth/login.ts"); // outside aidlc/ + harness
-      reviewCodeGen(proj);
+      reviewCodeGen(proj, UNIT);
       guarded(proj, ["gate-start", "code-generation"]);
-      const r = guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
+      const r = guarded(proj, ["approve", "code-generation", "--user-input", "ok"], {
+        AIDLC_SKIP_SOURCE_FRESHNESS: "1",
+      });
       expect(r.rc).toBe(0);
     });
 
@@ -1760,9 +1801,13 @@ X. Other (please specify)
       writeRecordDoc(proj, `construction/${UNIT}/code-generation/code-summary.md`);
     }
     function approveCodeGen(): { rc: number; out: string } {
-      reviewCodeGen(proj);
+      reviewCodeGen(proj, UNIT);
       bypassed(proj, ["gate-start", "code-generation"]);
-      return guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
+      return guarded(
+        proj,
+        ["approve", "code-generation", "--user-input", "ok"],
+        { AIDLC_SKIP_SOURCE_FRESHNESS: "1" },
+      );
     }
 
     // BROWNFIELD bug closed: a git repo whose src/ was committed in a PRIOR
@@ -1805,7 +1850,7 @@ X. Other (please specify)
       git(["add", "-A"]); // stage BOTH the docs and the new code
       git(["commit", "-q", "-m", "code-generation output"]);
       const r = approveCodeGen();
-      expect(r.rc).toBe(0);
+      expect(r.rc, r.out).toBe(0);
     }, 30000);
 
     // SINGLE-commit clean tree, the source IS in the sole commit -> PASS. The
@@ -1824,7 +1869,7 @@ X. Other (please specify)
       git(["add", "-A"]); // stage docs + the new code into the FIRST and ONLY commit
       git(["commit", "-q", "-m", "first commit: code-generation output"]);
       const r = approveCodeGen();
-      expect(r.rc).toBe(0);
+      expect(r.rc, r.out).toBe(0);
     }, 30000);
   });
 
@@ -1889,7 +1934,11 @@ X. Other (please specify)
     test("PASSES with zero on-disk artifacts once every DAG unit converged", () => {
       seedSwarm(UNITS); // all converged; nothing written to the record dir
       bypassed(proj, ["gate-start", "code-generation"]);
-      const r = guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
+      const r = guarded(
+        proj,
+        ["approve", "code-generation", "--user-input", "ok"],
+        { AIDLC_SKIP_SOURCE_FRESHNESS: "1" },
+      );
       expect(r.rc).toBe(0);
     });
 

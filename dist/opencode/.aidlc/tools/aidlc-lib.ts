@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { accessSync, appendFileSync, closeSync, constants as fsConstants, cpSync, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, appendFileSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -5286,6 +5286,12 @@ export interface StaleReviewProgress {
   recoverySpent: boolean;
 }
 
+export type SourceBaselineResult =
+  | { state: "legacy" }
+  | { state: "unbindable" }
+  | { state: "invalid" }
+  | { state: "ready"; listing: WorkspaceSourceListing };
+
 export interface FreshReviewReceipts {
   /** Verdict of the last fresh terminal receipt without a Unit field, or null
    *  when none survives. Per-unit receipts live only in unitVerdicts. */
@@ -5313,6 +5319,12 @@ export interface FreshReviewReceipts {
   sourceRecoverySpent: boolean;
   /** Units whose terminal receipt was invalidated in the current attempt. */
   unitStale: Set<string>;
+  /** Validated modern claim model for every unit whose receipt remains fresh. */
+  freshUnitClaims: Map<string, SourceClaimModel>;
+  /** Effective stage-entry source baseline for unclaimed-path verification. */
+  sourceBaseline: SourceBaselineResult;
+  /** Current source listing from the guard's single workspace walk, when needed. */
+  currentSourceListing: WorkspaceSourceListing | null;
   /** Next request ordinal and recovery availability for a stale stage receipt. */
   stageStaleProgress: StaleReviewProgress | null;
   /** Next request ordinal and recovery availability for stale unit receipts. */
@@ -5527,6 +5539,9 @@ export function freshReviewReceipts(
     sourceStaleProgress: null,
     sourceRecoverySpent: false,
     unitStale: new Set(),
+    freshUnitClaims: new Map(),
+    sourceBaseline: { state: "legacy" },
+    currentSourceListing: null,
     stageStaleProgress: null,
     unitStaleProgress: new Map(),
     stageIteration: null,
@@ -5540,9 +5555,6 @@ export function freshReviewReceipts(
   if (reviewClass === "none") return empty;
   const maxIterations =
     reviewClass === "advisory" ? 1 : stage.reviewer_max_iterations ?? 2;
-  const audit = readAllAuditShards(projectDir);
-  if (audit.length === 0) return empty;
-
   const RELEVANT = new Set([
     "WORKFLOW_STARTED",
     "STAGE_STARTED",
@@ -5553,31 +5565,72 @@ export function freshReviewReceipts(
     "REVIEW_REQUESTED",
     "REVIEW_COMPLETED",
   ]);
-  const blocks = audit.replace(/\r\n/g, "\n").split(/\n---\n/);
-  const events: { pos: number; ts: string; event: string; block: string }[] = [];
-  for (let i = 0; i < blocks.length; i++) {
-    const ev = auditBlockField(blocks[i], "Event");
-    if (!ev || !RELEVANT.has(ev)) continue;
-    events.push({ pos: i, ts: auditBlockField(blocks[i], "Timestamp") ?? "", event: ev, block: blocks[i] });
-  }
-  events.sort((a, b) => (a.ts !== b.ts ? (a.ts < b.ts ? -1 : 1) : a.pos - b.pos));
+  const events = readAuditShardEvents(projectDir)
+    .filter((row) => RELEVANT.has(row.event))
+    .sort((a, b) => {
+      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+      // Same-shard ties have real append order. Cross-shard ties remain
+      // adjacent but causally unordered; authority-sensitive consumers below
+      // fail closed instead of trusting shard filename order.
+      if (a.shard === b.shard) return a.pos - b.pos;
+      return a.shardIndex - b.shardIndex;
+    });
+  if (events.length === 0) return empty;
+  const eventIsCrossShardTied = (index: number): boolean => {
+    const event = events[index];
+    return events.some(
+      (candidate, otherIndex) =>
+        otherIndex !== index &&
+        candidate.timestamp === event.timestamp &&
+        candidate.shard !== event.shard,
+    );
+  };
 
   const perUnit = stage.for_each === "unit-of-work";
   const unitMajor =
     perUnit && getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
+  const dag = perUnit ? options.boltDag ?? resolveBoltDag(projectDir) : null;
+  const applicableUnits: Set<string> | null = dag?.state === "ok" ? new Set() : null;
+  if (dag?.state === "ok" && applicableUnits !== null) {
+    for (const unit of dag.units) {
+      if (
+        filterProducesByKind(
+          stage.produces_kinds,
+          stage.produces ?? [],
+          dag.unitKinds?.get(unit) ?? null,
+        ).length > 0
+      ) applicableUnits.add(unit);
+    }
+  }
 
   let floorIdx = -1;
   for (let i = 0; i < events.length; i++) {
     const e = events[i];
-    if (e.event === "WORKFLOW_STARTED" || e.event === "STAGE_JUMPED") {
-      floorIdx = i;
-      continue;
+    let boundary = e.event === "WORKFLOW_STARTED" || e.event === "STAGE_JUMPED";
+    if (!boundary && auditBlockField(e.block, "Stage") === stage.slug) {
+      boundary = e.event === "GATE_REJECTED" || (
+        e.event === "STAGE_STARTED" &&
+        !unitMajor &&
+        !auditBlockField(e.block, "Workflow")?.startsWith("single-stage:")
+      );
     }
-    if (auditBlockField(e.block, "Stage") !== stage.slug) continue;
-    if (e.event === "STAGE_STARTED" && !unitMajor) {
-      if (auditBlockField(e.block, "Workflow")?.startsWith("single-stage:")) continue;
-      floorIdx = i;
-    } else if (e.event === "GATE_REJECTED") {
+    if (!boundary) continue;
+    const tiedCrossShard = events.some(
+      (candidate, index) =>
+        index !== i &&
+        candidate.timestamp === e.timestamp &&
+        candidate.shard !== e.shard,
+    );
+    // A boundary involved in a cross-shard same-second tie floors the entire
+    // timestamp group. No receipt or artifact row in that unordered group may
+    // survive based on shard filename order. A later unambiguous boundary
+    // restores ordinary accounting.
+    if (tiedCrossShard) {
+      let end = i;
+      while (end + 1 < events.length && events[end + 1].timestamp === e.timestamp) end++;
+      floorIdx = end;
+      i = end;
+    } else {
       floorIdx = i;
     }
   }
@@ -5600,6 +5653,20 @@ export function freshReviewReceipts(
       iteration: number;
       recovery: boolean;
       fingerprint: string | null;
+      timestamp: string;
+      shard: string;
+    }
+  >();
+  const modernUnitReceipts = new Map<
+    string,
+    {
+      fingerprint: string | null;
+      bypass: boolean;
+      order: number;
+      timestamp: string;
+      shard: string;
+      iteration: number;
+      recovery: boolean;
     }
   >();
   let stageVerdict: ReviewVerdict | null = null;
@@ -5630,39 +5697,29 @@ export function freshReviewReceipts(
         stageVerdict = null;
         stageIteration = null;
         stageReceiptRecovery = false;
+      } else if (targetUnit === null) {
+        for (const unit of unitVerdicts.keys()) {
+          unitStale.add(unit);
+          unitStaleProgress.set(unit, {
+            nextIteration: (unitIterations.get(unit) ?? 0) + 1,
+            recoverySpent: unitReceiptRecovery.get(unit) ?? false,
+          });
+        }
+        unitVerdicts.clear();
+        unitIterations.clear();
+        unitReceiptRecovery.clear();
+        modernUnitReceipts.clear();
       } else {
-        if (stageVerdict !== null) {
-          stageStale = true;
-          stageStaleProgress = {
-            nextIteration: (stageIteration ?? 0) + 1,
-            recoverySpent: stageReceiptRecovery,
-          };
+        if (unitVerdicts.delete(targetUnit)) {
+          unitStale.add(targetUnit);
+          unitStaleProgress.set(targetUnit, {
+            nextIteration: (unitIterations.get(targetUnit) ?? 0) + 1,
+            recoverySpent: unitReceiptRecovery.get(targetUnit) ?? false,
+          });
         }
-        stageVerdict = null;
-        stageIteration = null;
-        stageReceiptRecovery = false;
-        if (targetUnit === null) {
-          for (const unit of unitVerdicts.keys()) {
-            unitStale.add(unit);
-            unitStaleProgress.set(unit, {
-              nextIteration: (unitIterations.get(unit) ?? 0) + 1,
-              recoverySpent: unitReceiptRecovery.get(unit) ?? false,
-            });
-          }
-          unitVerdicts.clear();
-          unitIterations.clear();
-          unitReceiptRecovery.clear();
-        } else {
-          if (unitVerdicts.delete(targetUnit)) {
-            unitStale.add(targetUnit);
-            unitStaleProgress.set(targetUnit, {
-              nextIteration: (unitIterations.get(targetUnit) ?? 0) + 1,
-              recoverySpent: unitReceiptRecovery.get(targetUnit) ?? false,
-            });
-          }
-          unitIterations.delete(targetUnit);
-          unitReceiptRecovery.delete(targetUnit);
-        }
+        unitIterations.delete(targetUnit);
+        unitReceiptRecovery.delete(targetUnit);
+        modernUnitReceipts.delete(targetUnit);
       }
       continue;
     }
@@ -5679,8 +5736,14 @@ export function freshReviewReceipts(
     if (!iterationField || !/^[1-9][0-9]*$/.test(iterationField)) continue;
     const iteration = Number(iterationField);
     const unit = auditBlockField(e.block, "Unit") || undefined;
+    if (
+      perUnit &&
+      applicableUnits !== null &&
+      (unit === undefined || !applicableUnits.has(unit))
+    ) continue;
     const requestKey = `${unit ?? ""}\u0000${iterationField}`;
     if (e.event === "REVIEW_REQUESTED") {
+      if (eventIsCrossShardTied(i)) continue;
       const previous = pendingRequests.get(requestKey);
       const recovery =
         previous?.recovery === true ||
@@ -5691,13 +5754,23 @@ export function freshReviewReceipts(
         iteration,
         recovery,
         fingerprint: auditBlockField(e.block, "Artifact Fingerprint"),
+        timestamp: e.timestamp,
+        shard: e.shard,
       });
       continue;
     }
     const verdict = auditBlockField(e.block, "Verdict");
     if (verdict !== "READY" && verdict !== "NOT-READY") continue;
+    if (eventIsCrossShardTied(i)) {
+      pendingRequests.delete(requestKey);
+      continue;
+    }
     const request = pendingRequests.get(requestKey);
-    if (!request || !pendingRequests.delete(requestKey)) continue;
+    if (
+      !request ||
+      (request.timestamp === e.timestamp && request.shard !== e.shard) ||
+      !pendingRequests.delete(requestKey)
+    ) continue;
     const recordedFingerprint = auditBlockField(e.block, "Artifact Fingerprint");
     const requestedFingerprint = request.fingerprint;
     const artifactFingerprintUsable =
@@ -5730,7 +5803,7 @@ export function freshReviewReceipts(
       // A below-cap NOT-READY is repair progress, not a freshness boundary;
       // otherwise the expected repair edit would consume recovery prematurely.
       const sourceFingerprint = auditBlockField(e.block, "Source Fingerprint");
-      if (sourceFingerprint) {
+      if (sourceFingerprint && !eventIsCrossShardTied(i)) {
         newestSourceFingerprint = sourceFingerprint;
         newestSourceUnit = unit ?? null;
         newestSourceProgress = {
@@ -5780,6 +5853,15 @@ export function freshReviewReceipts(
       unitIterations.set(unit, iteration);
       unitReceiptRecovery.set(unit, request.recovery);
       unitPending.delete(unit);
+      modernUnitReceipts.set(unit, {
+        fingerprint: auditBlockField(e.block, "Unit Source Fingerprint"),
+        bypass: auditBlockField(e.block, "Unit Source Binding Bypass") === "true",
+        order: i,
+        timestamp: e.timestamp,
+        shard: e.shard,
+        iteration,
+        recovery: request.recovery,
+      });
     } else {
       stageVerdict = terminalVerdict;
       stageIteration = iteration;
@@ -5806,15 +5888,189 @@ export function freshReviewReceipts(
     }
   }
 
-  const currentSourceFingerprint =
-    stage.workspace_requires === true && newestSourceFingerprint !== null
-      ? workspaceSourceFingerprint(projectDir)
-      : null;
+  const sourceFreshnessApplies =
+    stage.workspace_requires === true &&
+    process.env.AIDLC_SKIP_SOURCE_FRESHNESS !== "1";
+  const needsCurrentSource =
+    stage.workspace_requires === true &&
+    (newestSourceFingerprint !== null || modernUnitReceipts.size > 0);
+  // One shared temp-index pass supplies BOTH global reconciliation and every
+  // per-unit comparison. Never recompute inside the unit loop.
+  const currentSourceState = needsCurrentSource
+    ? workspaceSourceState(projectDir)
+    : null;
+  const currentSourceFingerprint = currentSourceState?.fingerprint ?? null;
+  const currentSourceListing = currentSourceState?.listing ?? null;
   const sourceStale =
     newestSourceFingerprint !== null &&
     (newestSourceFingerprint === UNBINDABLE_FINGERPRINT ||
       currentSourceFingerprint === null ||
       currentSourceFingerprint !== newestSourceFingerprint);
+
+  const freshUnitClaims = new Map<string, SourceClaimModel>();
+  if (sourceFreshnessApplies && currentSourceListing !== null) {
+    const newerFreshClaims: SourceClaimModel[] = [];
+    const receiptsNewestFirst = [...modernUnitReceipts.entries()]
+      .filter(([unit]) => unitVerdicts.has(unit))
+      .sort((a, b) => b[1].order - a[1].order);
+    const ambiguousReceiptTimes = new Set(
+      receiptsNewestFirst
+        .filter(([, receipt], index, all) =>
+          all.some(
+            ([, other], otherIndex) =>
+              otherIndex !== index &&
+              other.timestamp === receipt.timestamp &&
+              other.shard !== receipt.shard,
+          ),
+        )
+        .map(([, receipt]) => receipt.timestamp),
+    );
+    for (const [unit, receipt] of receiptsNewestFirst) {
+      // Shielding needs a real newest claimant. Equal-second receipts from
+      // different shards are causally unordered, so invalidate that tied set
+      // rather than let shard filename order choose authority.
+      if (ambiguousReceiptTimes.has(receipt.timestamp)) {
+        unitVerdicts.delete(unit);
+        unitStale.add(unit);
+        unitStaleProgress.set(unit, {
+          nextIteration: receipt.iteration + 1,
+          recoverySpent: receipt.recovery,
+        });
+        continue;
+      }
+      // No modern binding marker at all is migration evidence: keep the #629
+      // global policy for this unit and do not invent claims from current bytes.
+      if (receipt.fingerprint === null && !receipt.bypass) continue;
+      let stale = receipt.bypass;
+      let claimModel: SourceClaimModel | null = null;
+      let reviewedListing: WorkspaceSourceListing | null = null;
+      if (!stale && receipt.fingerprint === UNBINDABLE_FINGERPRINT) stale = true;
+      if (!stale && receipt.fingerprint !== null) {
+        const snapshot = readUnitSourceSnapshot(
+          projectDir,
+          stage.slug,
+          unit,
+          receipt.fingerprint,
+        );
+        const manifest = readUnitSourceManifest(projectDir, stage.slug, unit);
+        if (snapshot === null || !manifest.ok || snapshot.manifestSha256 !== manifest.rawBytesSha256) {
+          stale = true;
+        } else {
+          claimModel = { claims: manifest.claims, prefixes: manifest.prefixes };
+          reviewedListing = snapshot.listing;
+          for (const [pathKey, reviewedOid] of reviewedListing) {
+            if (newerFreshClaims.some((claims) => sourceClaimCovers(pathKey, claims))) continue;
+            if (
+              !sourceListingEntriesEqual(
+                currentSourceListing.get(pathKey),
+                reviewedOid,
+              )
+            ) {
+              stale = true;
+              break;
+            }
+          }
+          if (!stale) {
+            // Both exact and directory claims bind future additions. An exact
+            // claim that was absent at review cannot launder a later-created
+            // path; over-claiming therefore invalidates more receipts, never
+            // fewer. A newer validated claimant may still shield the path.
+            for (const [pathKey] of currentSourceListing) {
+              const newlyPresentExact = manifest.claims.has(pathKey) && !reviewedListing.has(pathKey);
+              const newlyPresentUnderPrefix =
+                manifest.prefixes.some((prefix) => pathKey.startsWith(prefix)) &&
+                !reviewedListing.has(pathKey);
+              if (!newlyPresentExact && !newlyPresentUnderPrefix) continue;
+              if (newerFreshClaims.some((claims) => sourceClaimCovers(pathKey, claims))) continue;
+              stale = true;
+              break;
+            }
+          }
+        }
+      }
+      if (stale) {
+        unitVerdicts.delete(unit);
+        unitStale.add(unit);
+        unitStaleProgress.set(unit, {
+          nextIteration: receipt.iteration + 1,
+          recoverySpent: receipt.recovery,
+        });
+        continue;
+      }
+      if (claimModel !== null) {
+        freshUnitClaims.set(unit, claimModel);
+        newerFreshClaims.push(claimModel);
+      }
+    }
+  } else if (sourceFreshnessApplies && modernUnitReceipts.size > 0) {
+    for (const [unit, receipt] of modernUnitReceipts) {
+      if (!unitVerdicts.has(unit)) continue;
+      if (receipt.fingerprint === null && !receipt.bypass) continue;
+      unitVerdicts.delete(unit);
+      unitStale.add(unit);
+      unitStaleProgress.set(unit, {
+        nextIteration: receipt.iteration + 1,
+        recoverySpent: receipt.recovery,
+      });
+    }
+  }
+
+  // Anchor the unclaimed-path baseline to the stage's real entry. Unit-major
+  // NEVER trusts STAGE_STARTED because shell/generator source writes can precede
+  // that row without ARTIFACT_* evidence. GATE_REJECTED resets review accounting
+  // but never re-anchors cumulative manifests: doing so would grandfather any
+  // unclaimed source present when the human requested changes. Synthetic
+  // single-stage rows cannot affect the floor.
+  let sourceBaseline: SourceBaselineResult = { state: "legacy" };
+  if (stage.workspace_requires === true) {
+    let boundary = -1;
+    for (let i = 0; i < events.length; i++) {
+      if (auditBlockField(events[i].block, "Workflow")?.startsWith("single-stage:")) continue;
+      if (
+        events[i].event === "WORKFLOW_STARTED" ||
+        events[i].event === "STAGE_JUMPED"
+      ) {
+        boundary = i;
+      }
+    }
+    let firstWork = events.length;
+    for (let i = Math.max(boundary, 0); i < events.length; i++) {
+      const event = events[i];
+      if (auditBlockField(event.block, "Workflow")?.startsWith("single-stage:")) continue;
+      if (auditBlockField(event.block, "Stage") !== stage.slug) continue;
+      if (event.event === "REVIEW_REQUESTED") {
+        firstWork = i;
+        break;
+      }
+      if (event.event === "ARTIFACT_CREATED" || event.event === "ARTIFACT_UPDATED") {
+        const file = auditBlockField(event.block, "File");
+        if (file && producesArtifactUnit(stage, file, recordedRepos) !== undefined) {
+          firstWork = i;
+          break;
+        }
+      }
+    }
+    let baselineField: string | null = null;
+    for (let i = Math.max(boundary, 0); i < firstWork; i++) {
+      const event = events[i];
+      if (auditBlockField(event.block, "Workflow")?.startsWith("single-stage:")) continue;
+      if (
+        event.event !== "WORKFLOW_STARTED" &&
+        event.event !== "STAGE_JUMPED" &&
+        (event.event !== "STAGE_STARTED" || unitMajor)
+      ) continue;
+      const field = auditBlockField(event.block, "Source Baseline");
+      if (field !== null) {
+        if (eventIsCrossShardTied(i)) baselineField = UNBINDABLE_FINGERPRINT;
+        else baselineField = field;
+      }
+    }
+    if (baselineField === UNBINDABLE_FINGERPRINT) sourceBaseline = { state: "unbindable" };
+    else if (baselineField !== null) {
+      const listing = readBaselineSourceSnapshot(projectDir, stage.slug, baselineField);
+      sourceBaseline = listing === null ? { state: "invalid" } : { state: "ready", listing };
+    }
+  }
 
   return {
     stageVerdict,
@@ -5833,6 +6089,9 @@ export function freshReviewReceipts(
       : null,
     sourceRecoverySpent,
     unitStale,
+    freshUnitClaims,
+    sourceBaseline,
+    currentSourceListing: sourceFreshnessApplies ? currentSourceListing : null,
     stageStaleProgress,
     unitStaleProgress,
     stageIteration,
@@ -5895,9 +6154,11 @@ export function repoDir(projectDir: string, repoName: string): string {
 //
 // Multi-repo: the intent's recorded repo set (intentRepos), each resolved via
 // repoDir(); no recorded repos = the legacy single-repo default (projectDir).
-// Returns null when ANY target dir is not a usable git checkout. New receipts
-// record that explicitly as `unbindable` and completion fails closed; only a
-// legacy receipt with no fingerprint field keeps the migration fail-open.
+// An unchanged no-Git greenfield whose only paths are the excluded AIDLC shell
+// binds to the canonical empty listing. Returns null when any application path
+// exists without Git, or when any recorded repo is not a usable checkout. New
+// receipts record null explicitly as `unbindable` and completion fails closed;
+// only a legacy receipt with no fingerprint field keeps the migration fail-open.
 
 // The record tree and the CLI/IDE workspace shell are anchored at the top level
 // of the dir that CARRIES the shell: the workspace roof, or a Bolt worktree
@@ -6096,9 +6357,172 @@ export function filteredRawIndexEntries(
   return cleanFilteredRawLines(repoDir, env, paths)?.entries ?? null;
 }
 
+function sourceListingEntry(mode: string, oid: string): string | null {
+  if (!/^\d{6}$/.test(mode) || !/^[0-9a-f]{40,64}$/.test(oid)) return null;
+  return `${mode} ${oid}`;
+}
+
+function replaceSourceListingEntryOid(entry: string | undefined, oid: string): string | null {
+  const parsed = entry ? /^(\d{6}) [0-9a-f]{40,64}$/.exec(entry) : null;
+  return parsed === null ? null : sourceListingEntry(parsed[1], oid);
+}
+
+/**
+ * Reconstruct the exact checked-out source listing for an immutable commit
+ * without registering a Git worktree or touching the caller's index/worktree.
+ * A temporary index is seeded from the commit and checkout-index populates an
+ * ordinary directory, so clean/process/ident raw-byte folding sees the same
+ * files and repository-local configuration as a real worktree checkout.
+ */
+export function gitCommitSourceListing(
+  repoDir: string,
+  commit: string,
+): WorkspaceSourceListing | null {
+  if (!isGitRepoDir(repoDir) || !/^[0-9a-f]{40,64}$/.test(commit)) return null;
+  const root = join(tmpdir(), `aidlc-commit-listing-${process.pid}-${randomUUID().slice(0, 8)}`);
+  const indexFile = join(root, "index");
+  const checkoutDir = join(root, "checkout");
+  const env = { ...process.env, GIT_INDEX_FILE: indexFile };
+  try {
+    mkdirSync(checkoutDir, { recursive: true });
+    const readTree = spawnSync("git", ["-C", repoDir, "read-tree", commit], {
+      env,
+      encoding: "utf-8",
+      maxBuffer: 512 * 1024 * 1024,
+    });
+    if (readTree.status !== 0) return null;
+    const checkout = spawnSync(
+      "git",
+      ["-C", repoDir, "checkout-index", "-a", "-f", `--prefix=${checkoutDir}${sep}`],
+      { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+    );
+    if (checkout.status !== 0) return null;
+
+    const shellPatterns = [
+      ...AIDLC_SHELL_DIR_NAMES,
+      ...AIDLC_SENSOR_CACHE_GLOBS,
+    ];
+    const excluded = spawnSync(
+      "git",
+      [
+        "-C",
+        repoDir,
+        "rm",
+        "-r",
+        "-q",
+        "-f",
+        "--cached",
+        "--ignore-unmatch",
+        "--",
+        ...shellPatterns,
+      ],
+      { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+    );
+    if (excluded.status !== 0) return null;
+
+    const listed = spawnSync("git", ["-C", repoDir, "ls-files", "-s", "-z"], {
+      env,
+      encoding: "utf-8",
+      maxBuffer: 512 * 1024 * 1024,
+    });
+    if (listed.status !== 0) return null;
+    const listing: WorkspaceSourceListing = new Map();
+    const regularPaths: string[] = [];
+    for (const record of listed.stdout.split("\0")) {
+      if (!record) continue;
+      const tab = record.indexOf("\t");
+      if (tab === -1) return null;
+      const match = /^(\d{6}) ([0-9a-f]{40,64}) \d+$/.exec(record.slice(0, tab));
+      const path = record.slice(tab + 1);
+      if (match === null || !path) return null;
+      const entry = sourceListingEntry(match[1], match[2]);
+      if (entry === null) return null;
+      listing.set(`\0${path}`, entry);
+      if (match[1] === "100644" || match[1] === "100755") regularPaths.push(path);
+    }
+
+    // Query attributes/config through the owning repository while pointing Git
+    // at the ordinary reconstructed checkout. The worktree bytes hashed here
+    // therefore match a real checkout without registering one.
+    const gitDir = spawnSync("git", ["-C", repoDir, "rev-parse", "--absolute-git-dir"], {
+      encoding: "utf-8",
+      maxBuffer: 512 * 1024 * 1024,
+    });
+    if (gitDir.status !== 0 || !gitDir.stdout.trim()) return null;
+    const checkoutEnv = {
+      ...env,
+      GIT_DIR: gitDir.stdout.trim(),
+      GIT_WORK_TREE: checkoutDir,
+    };
+    const raw = cleanFilteredRawLines(checkoutDir, checkoutEnv, regularPaths);
+    if (raw === null) return null;
+    for (const entry of raw.entries) {
+      const key = `\0${entry.path}`;
+      const replacement = replaceSourceListingEntryOid(listing.get(key), entry.sha);
+      if (replacement === null) return null;
+      listing.set(key, replacement);
+    }
+    return listing;
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+export type WorkspaceSourceListing = Map<string, string>;
+
+/**
+ * New listings bind mode/type plus OID. Three-column snapshots from the
+ * immediately preceding format carry only an OID; they migrate by content
+ * equality while every newly written snapshot remains mode-aware.
+ */
+export function sourceListingEntriesEqual(
+  left: string | undefined,
+  right: string | undefined,
+): boolean {
+  if (left === right) return true;
+  if (left === undefined || right === undefined) return false;
+  const leftModern = /^\d{6} ([0-9a-f]{40,64})$/.exec(left);
+  const rightModern = /^\d{6} ([0-9a-f]{40,64})$/.exec(right);
+  if (leftModern !== null && rightModern !== null) return false;
+  const leftOid = leftModern?.[1] ?? (/^[0-9a-f]{40,64}$/.test(left) ? left : null);
+  const rightOid =
+    rightModern?.[1] ?? (/^[0-9a-f]{40,64}$/.test(right) ? right : null);
+  return leftOid !== null && leftOid === rightOid;
+}
+
+export interface WorkspaceSourceState {
+  fingerprint: string;
+  listing: WorkspaceSourceListing;
+}
+
+function emptyNoGitWorkspaceSourceState(
+  projectDir: string,
+): WorkspaceSourceState | null {
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(projectDir, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  for (const entry of entries) {
+    const path = `${entry.name}${entry.isDirectory() ? "/" : ""}`;
+    if (!sourcePathIsExcluded(path, true)) return null;
+  }
+  const serialized = serializeSourceListing(new Map());
+  return {
+    fingerprint: sourceListingSha256(serialized),
+    listing: new Map(),
+  };
+}
+
+interface GitTreeSourceState extends WorkspaceSourceState {}
+
 // `carriesWorkspaceShell` is REQUIRED, never defaulted: a new call site must
 // decide, so the shell exclusion cannot leak into a derived dir by omission.
-function gitTreeFingerprint(repoDir: string, carriesWorkspaceShell: boolean): string | null {
+// The fingerprint and per-path listing deliberately come from this SAME temp
+// index pass. A caller that needs both must use workspaceSourceState(), rather
+// than independently invoking the compatibility fingerprint/listing wrappers.
+function gitTreeSourceState(repoDir: string, carriesWorkspaceShell: boolean): GitTreeSourceState | null {
   if (!isGitRepoDir(repoDir)) return null;
   const idx = join(
     tmpdir(),
@@ -6111,100 +6535,113 @@ function gitTreeFingerprint(repoDir: string, carriesWorkspaceShell: boolean): st
     spawnSync("git", ["-C", repoDir, "read-tree", "HEAD"], { env, encoding: "utf-8" });
     const add = spawnSync("git", ["-C", repoDir, "add", "-A"], { env, encoding: "utf-8" });
     if (add.status !== 0) return null;
-    // Drop the aidlc workspace family from the fingerprint, at ANY depth: the
-    // record tree is COMMITTED by design and mutates on every engine action
-    // (the very REVIEW_COMPLETED append this fingerprint is stamped into,
-    // gate rows, state updates), so including it would make every receipt
-    // stale by the time the completion guard recomputes. Record-artifact
-    // freshness is already covered by the audit-event invalidation; this
-    // fingerprint is the APPLICATION SOURCE binding. --ignore-unmatch keeps
-    // this a no-op when nothing matches (sibling repos with no aidlc tree).
+    // Drop the aidlc workspace family from the fingerprint and listing. The
+    // root shell names apply only where the workspace shell lives; the sensor
+    // cache glob remains depth-tolerant exactly as documented above.
     const excluded = [
       ...(carriesWorkspaceShell ? AIDLC_SHELL_DIR_NAMES : []),
       ...AIDLC_SENSOR_CACHE_GLOBS,
     ];
     if (excluded.length > 0) {
-      spawnSync(
+      const removed = spawnSync(
         "git",
-        ["-C", repoDir, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", ...excluded],
+        [
+          "-C",
+          repoDir,
+          "rm",
+          "-r",
+          "-q",
+          "-f",
+          "--cached",
+          "--ignore-unmatch",
+          "--",
+          ...excluded,
+        ],
         { env, encoding: "utf-8" },
       );
+      if (removed.status !== 0) return null;
     }
     const wt = spawnSync("git", ["-C", repoDir, "write-tree"], { env, encoding: "utf-8" });
     if (wt.status !== 0) return null;
-    const sha = wt.stdout.trim();
-    if (sha.length === 0) return null;
+    const treeSha = wt.stdout.trim();
+    if (treeSha.length === 0) return null;
 
-    // A submodule is recorded in the tree above as a gitlink (its checked-out
-    // commit sha), so editing its tracked source WITHOUT committing inside the
-    // submodule leaves the gitlink - and therefore `sha` above - unchanged,
-    // shipping a reviewed-then-edited submodule as if nothing had changed.
-    // Fold each INITIALIZED submodule's own fingerprint (recursive - a
-    // submodule can itself nest submodules) into the parent's. An
-    // uninitialized submodule has no materialized content in the workspace,
-    // so it contributes nothing to bind. Gitlinks are read straight off the
-    // temp index (mode 160000 in `ls-files -s`) rather than via `git submodule
-    // status`, which spawns the submodule subsystem and measured 1s+ per call
-    // on Windows - a cost this fingerprint (recomputed on every completion
-    // route) cannot afford.
-    //
-    // `-z` is required, not cosmetic (#646 review): without
-    // it, git's default `core.quotePath` wraps a path containing a non-ASCII
-    // byte or other "unusual" character in double quotes and C-escapes it
-    // (e.g. `"vendor/caf\303\251"` for `vendor/café`) - parsed as a literal
-    // string, that quoted-and-escaped text never resolves to the real
-    // on-disk path, so `isGitRepoDir` silently reports "not a submodule" and
-    // the fingerprint drops it entirely (a reviewed-then-edited submodule at
-    // such a path would ship unreviewed). `-z` disables quoting and
-    // NUL-terminates each record instead of newline-terminating it, so the
-    // path bytes come back exactly as they are on disk.
-    // A large index overruns the default buffer: the call then fails with
-    // ENOBUFS, and every submodule and clean-filtered path drops out of the
-    // fingerprint while the bare tree sha is still returned as if the repo had
-    // neither (#646 review - reproduced at 8,000 tracked paths / 1.68 MB of
-    // listing). Sized well past any index this is expected to meet.
-    const lsFiles = spawnSync("git", ["-C", repoDir, "ls-files", "-s", "-z"], { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 });
-    // Fail closed. A listing that could not be read is not evidence that the
-    // repository has no submodules and no filtered paths, and the caller reads
-    // null as "cannot bind this workspace" rather than as a clean tree.
+    // One NUL-terminated index enumeration supplies all three consumers:
+    // ordinary per-path oids, initialized-submodule recursion, and the clean-
+    // filter raw-byte scan. Keeping this walk shared preserves Git path bytes
+    // (including tabs/newlines/non-ASCII) and avoids a second index traversal.
+    const lsFiles = spawnSync("git", ["-C", repoDir, "ls-files", "-s", "-z"], {
+      env,
+      encoding: "utf-8",
+      maxBuffer: 512 * 1024 * 1024,
+    });
     if (lsFiles.status !== 0) return null;
-    const subLines: string[] = [];
-    // The same listing feeds the clean-filter scan below, so binding raw bytes
-    // costs no extra walk of the index.
+
+    const listing: WorkspaceSourceListing = new Map();
+    const submodules: string[] = [];
     const blobPaths: string[] = [];
     for (const record of lsFiles.stdout.split("\0")) {
+      if (record.length === 0) continue;
       const tabIdx = record.indexOf("\t");
-      if (tabIdx === -1) continue;
+      if (tabIdx === -1) return null;
+      const metadata = record.slice(0, tabIdx);
       const entryPath = record.slice(tabIdx + 1);
-      if (!entryPath) continue;
-      if (!record.startsWith("160000 ")) {
-        // Attribute filters apply to regular blobs, not mode-120000 symlinks.
-        // Hashing a symlink path with `hash-object --no-filters` follows its
-        // destination, making external target bytes part of the fingerprint.
-        if (/^100(?:644|755) /.test(record)) blobPaths.push(entryPath);
-        continue;
+      const parsed = /^(\d{6}) ([0-9a-f]{40,64}) (\d+)$/.exec(metadata);
+      if (parsed === null || entryPath.length === 0) return null;
+      const mode = parsed[1];
+      const oid = parsed[2];
+      const entry = sourceListingEntry(mode, oid);
+      if (entry === null) return null;
+      listing.set(entryPath, entry);
+      if (mode === "160000") {
+        submodules.push(entryPath);
+      } else if (mode === "100644" || mode === "100755") {
+        // Attribute filters apply only to regular blobs, never symlinks/gitlinks.
+        blobPaths.push(entryPath);
       }
-      const subDir = join(repoDir, entryPath);
-      if (!isGitRepoDir(subDir)) continue;
-      // A submodule's own `aidlc/` is the submodule's application source.
-      const subFp = gitTreeFingerprint(subDir, false);
-      if (subFp === null) return null;
-      subLines.push(`${entryPath}=${subFp}`);
     }
+
+    const subLines: string[] = [];
+    for (const entryPath of submodules) {
+      const subDir = join(repoDir, entryPath);
+      // An uninitialized submodule has no materialized source beyond its gitlink.
+      if (!isGitRepoDir(subDir)) continue;
+      // A submodule's own `aidlc/` is application source, not the parent shell.
+      const subState = gitTreeSourceState(subDir, false);
+      if (subState === null) return null;
+      subLines.push(`${entryPath}=${subState.fingerprint}`);
+      for (const [path, oid] of subState.listing) {
+        listing.set(`${entryPath}/${path}`, oid);
+      }
+    }
+
     const raw = cleanFilteredRawLines(repoDir, env, blobPaths);
     if (raw === null) return null;
+    // A lossy clean/process/ident transform must not hide the worktree bytes.
+    // Replace the indexed oid for each affected path with its raw no-filter oid
+    // while retaining the index mode/type in the canonical listing.
+    for (const entry of raw.entries) {
+      const replacement = replaceSourceListingEntryOid(
+        listing.get(entry.path),
+        entry.sha,
+      );
+      if (replacement === null) return null;
+      listing.set(entry.path, replacement);
+    }
+
     const rawLines = raw.lines;
-    // A repo with neither submodules nor clean-filtered paths keeps returning
-    // the bare tree sha, so the common workspace's fingerprint is unchanged by
-    // this and receipts stamped before it stay comparable.
-    if (subLines.length === 0 && rawLines.length === 0) return sha;
-    subLines.sort();
-    rawLines.sort();
-    // `raw:` prefixes the filtered-content rows so they cannot be confused with
-    // a submodule row whose path and sha happen to line up.
-    return createHash("sha256")
-      .update([sha, ...subLines, ...rawLines].join("\n"))
-      .digest("hex");
+    let fingerprint = treeSha;
+    // Preserve the pre-listing fingerprint VALUE byte-for-byte: the common case
+    // remains the bare tree oid; only initialized submodules/raw-filter paths
+    // fold into the existing sha256 composite, with the same sorted line form.
+    if (subLines.length > 0 || rawLines.length > 0) {
+      subLines.sort();
+      rawLines.sort();
+      fingerprint = createHash("sha256")
+        .update([treeSha, ...subLines, ...rawLines].join("\n"))
+        .digest("hex");
+    }
+    return { fingerprint, listing };
   } finally {
     rmSync(idx, { force: true });
   }
@@ -6215,20 +6652,696 @@ function gitTreeFingerprint(repoDir: string, carriesWorkspaceShell: boolean): st
 // pre-#629 receipt that carries no field at all (#646 review).
 export const UNBINDABLE_FINGERPRINT = "unbindable";
 
-export function workspaceSourceFingerprint(projectDir: string): string | null {
-  const repos = intentRepos(projectDir);
-  // No recorded repos: projectDir IS the checkout (legacy single-repo, or a Bolt
-  // worktree - see aidlc-swarm.ts finalize) and carries the shell at its top.
-  if (repos.length === 0) return gitTreeFingerprint(projectDir, true);
+// Compute the opaque #629 source fingerprint and the #662 canonical per-path
+// listing in one temporary-index pass per repo. Keys are `<repo>\0<path>`;
+// single-repo/Bolt worktrees use an empty repo component.
+export function workspaceSourceState(
+  projectDir: string,
+  intent?: string,
+  space?: string,
+): WorkspaceSourceState | null {
+  const repos = intentRepos(projectDir, intent ?? null, space);
+  if (repos.length === 0) {
+    if (!isGitRepoDir(projectDir)) {
+      return emptyNoGitWorkspaceSourceState(projectDir);
+    }
+    const state = gitTreeSourceState(projectDir, true);
+    if (state === null) return null;
+    return {
+      fingerprint: state.fingerprint,
+      listing: new Map([...state.listing].map(([path, oid]) => [`\0${path}`, oid])),
+    };
+  }
+
   const lines: string[] = [];
+  const listing: WorkspaceSourceListing = new Map();
   for (const name of [...repos].sort()) {
     // A sibling repo is a child of the roof; the shell is its SIBLING, never
     // nested inside it, so nothing there belongs to the framework.
-    const sha = gitTreeFingerprint(repoDir(projectDir, name), false);
-    if (sha === null) return null;
-    lines.push(`${name}=${sha}`);
+    const state = gitTreeSourceState(repoDir(projectDir, name), false);
+    if (state === null) return null;
+    lines.push(`${name}=${state.fingerprint}`);
+    for (const [path, oid] of state.listing) listing.set(`${name}\0${path}`, oid);
   }
-  return createHash("sha256").update(lines.join("\n")).digest("hex");
+  return {
+    fingerprint: createHash("sha256").update(lines.join("\n")).digest("hex"),
+    listing,
+  };
+}
+
+export function workspaceSourceFingerprint(
+  projectDir: string,
+  intent?: string,
+  space?: string,
+): string | null {
+  return workspaceSourceState(projectDir, intent, space)?.fingerprint ?? null;
+}
+
+export function workspaceSourceListing(
+  projectDir: string,
+  intent?: string,
+  space?: string,
+): WorkspaceSourceListing | null {
+  return workspaceSourceState(projectDir, intent, space)?.listing ?? null;
+}
+
+export interface UnitSourceManifestWrite {
+  path: string;
+  repo?: string;
+}
+
+export interface UnitSourceManifest {
+  stage: string;
+  unit: string;
+  version: 1;
+  writes: UnitSourceManifestWrite[];
+}
+
+export interface SourceClaimModel {
+  claims: Set<string>;
+  prefixes: string[];
+}
+
+export type ReadUnitSourceManifestResult =
+  | {
+      ok: true;
+      manifest: UnitSourceManifest;
+      claims: Set<string>;
+      prefixes: string[];
+      rawBytesSha256: string;
+    }
+  | { ok: false; reason: string };
+
+function sourceListingFieldEncode(value: string): string {
+  return value
+    .replaceAll("\\", "\\\\")
+    .replaceAll("\t", "\\t")
+    .replaceAll("\n", "\\n")
+    .replaceAll("\r", "\\r");
+}
+
+function sourceListingFieldDecode(value: string): string | null {
+  let decoded = "";
+  for (let i = 0; i < value.length; i++) {
+    if (value[i] !== "\\") {
+      decoded += value[i];
+      continue;
+    }
+    i++;
+    if (i >= value.length) return null;
+    if (value[i] === "\\") decoded += "\\";
+    else if (value[i] === "t") decoded += "\t";
+    else if (value[i] === "n") decoded += "\n";
+    else if (value[i] === "r") decoded += "\r";
+    else return null;
+  }
+  return decoded;
+}
+
+function splitSourcePathKey(key: string): { repo: string; path: string } | null {
+  const separator = key.indexOf("\0");
+  if (separator === -1 || key.indexOf("\0", separator + 1) !== -1) return null;
+  const repo = key.slice(0, separator);
+  const path = key.slice(separator + 1);
+  if (path.length === 0 || (repo.length > 0 && !isValidRepoName(repo))) return null;
+  return { repo, path };
+}
+
+/** Canonical key shared by listings and manifest claims: `<repo>\0<path>`. */
+export function sourcePathKey(repo: string, path: string): string {
+  if (repo.includes("\0") || path.includes("\0")) {
+    throw new Error("Source path keys cannot contain NUL bytes");
+  }
+  return `${repo}\0${path}`;
+}
+
+/**
+ * Stable snapshot representation. Ordinary paths remain readable TSV; the four
+ * characters that can make a TSV row ambiguous are backslash-escaped so Git
+ * paths containing tabs/newlines still round-trip without weakening the NUL-
+ * safe index enumeration that produced them.
+ */
+export function serializeSourceListing(listing: ReadonlyMap<string, string>): string {
+  const rows: Array<{ key: string; line: string }> = [];
+  for (const [key, entry] of listing) {
+    const parsed = splitSourcePathKey(key);
+    if (parsed === null) throw new Error("Invalid canonical source-listing path key");
+    const modern = /^(\d{6}) ([0-9a-f]{40,64})$/.exec(entry);
+    const legacy = /^[0-9a-f]{40,64}$/.test(entry);
+    if (modern === null && !legacy) {
+      throw new Error(`Invalid source-listing entry for ${JSON.stringify(parsed.path)}`);
+    }
+    const suffix = modern === null ? entry : `${modern[1]}\t${modern[2]}`;
+    rows.push({
+      key,
+      line: `${sourceListingFieldEncode(parsed.repo)}\t${sourceListingFieldEncode(parsed.path)}\t${suffix}`,
+    });
+  }
+  rows.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  return rows.length === 0 ? "" : `${rows.map((row) => row.line).join("\n")}\n`;
+}
+
+export function parseSourceListing(serialized: string): WorkspaceSourceListing | null {
+  if (serialized === "") return new Map();
+  if (!serialized.endsWith("\n")) return null;
+  const listing: WorkspaceSourceListing = new Map();
+  for (const line of serialized.slice(0, -1).split("\n")) {
+    const fields = line.split("\t");
+    if (fields.length !== 3 && fields.length !== 4) return null;
+    const repo = sourceListingFieldDecode(fields[0]);
+    const path = sourceListingFieldDecode(fields[1]);
+    const mode = fields.length === 4 ? fields[2] : null;
+    const oid = fields.at(-1) ?? "";
+    if (
+      repo === null ||
+      path === null ||
+      path.length === 0 ||
+      (repo.length > 0 && !isValidRepoName(repo)) ||
+      (mode !== null && !/^\d{6}$/.test(mode)) ||
+      !/^[0-9a-f]{40,64}$/.test(oid)
+    ) return null;
+    const key = sourcePathKey(repo, path);
+    if (listing.has(key)) return null;
+    listing.set(key, mode === null ? oid : `${mode} ${oid}`);
+  }
+  return listing;
+}
+
+export function sourceListingSha256(serialized: string): string {
+  return createHash("sha256").update(serialized, "utf-8").digest("hex");
+}
+
+function normalizeManifestSourcePath(path: string): { path: string; prefix: boolean } | { reason: string } {
+  if (path.length === 0) return { reason: "writes[].path must be non-empty" };
+  if (path.includes("\0")) return { reason: "writes[].path cannot contain a NUL byte" };
+  if (path.includes("\\")) return { reason: "writes[].path must use POSIX '/' separators, not backslashes" };
+  if (path.startsWith("/") || /^[A-Za-z]:\//.test(path)) {
+    return { reason: "writes[].path must be relative, not absolute" };
+  }
+  if (/[*?[\]{}]/.test(path)) return { reason: "writes[].path cannot contain glob syntax" };
+  const inputSegments = path.split("/");
+  if (inputSegments.includes("..")) return { reason: "writes[].path cannot contain '..' segments" };
+  const prefix = path.endsWith("/");
+  const segments = inputSegments.filter((segment) => segment !== "" && segment !== ".");
+  if (segments.length === 0) return { reason: "writes[].path must name a path below the repository root" };
+  return { path: `${segments.join("/")}${prefix ? "/" : ""}`, prefix };
+}
+
+function sourcePathIsExcluded(path: string, carriesWorkspaceShell: boolean): boolean {
+  const withoutTrailingSlash = path.replace(/\/+$/, "");
+  if (
+    carriesWorkspaceShell &&
+    (path === "aidlc/" || path === ".aidlc/" || path.startsWith("aidlc/") || path.startsWith(".aidlc/"))
+  ) return true;
+
+  const segments = withoutTrailingSlash.split("/");
+  for (let i = 0; i + 4 < segments.length; i++) {
+    if (segments[i] !== "aidlc" || segments[i + 1] !== "spaces" || segments[i + 3] !== "intents") continue;
+    if (segments[i + 2].length === 0) continue;
+    if (segments.slice(i + 4).includes(".aidlc-sensors")) return true;
+  }
+  return false;
+}
+
+export interface ReadUnitSourceManifestOptions {
+  /** Bolt worktrees fingerprint exactly one selected repo even if their forked
+   * record still names the parent multi-repo intent. */
+  worktreeRelative?: boolean;
+}
+
+function isBoltWorktreeProjectDir(projectDir: string): boolean {
+  return existsSync(join(projectDir, ".aidlc", "worktree-meta.json"));
+}
+
+function ignoredSourceClaimReason(
+  sourceRepoDir: string,
+  path: string,
+  prefix: boolean,
+): string | null {
+  if (!isGitRepoDir(sourceRepoDir)) return null;
+  const literalPath = path.replace(/\/+$/, "");
+  const literalPathspec = `./${literalPath}`;
+
+  let headTracked = false;
+  const head = spawnSync(
+    "git",
+    ["-C", sourceRepoDir, "rev-parse", "--verify", "HEAD^{commit}"],
+    { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+  );
+  if (head.status === 0 && head.stdout.trim()) {
+    const listed = spawnSync(
+      "git",
+      [
+        "-C",
+        sourceRepoDir,
+        "ls-tree",
+        "-z",
+        "--full-tree",
+        head.stdout.trim(),
+        "--",
+        literalPathspec,
+      ],
+      { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+    );
+    if (listed.status !== 0) {
+      return `Git could not verify HEAD membership for ${JSON.stringify(path)}`;
+    }
+    const entry = listed.stdout.split("\0").find(Boolean);
+    if (entry) {
+      if (/^040000 /.test(entry)) {
+        return `${JSON.stringify(path)} is a directory; directory claims must end with "/"`;
+      }
+      headTracked = true;
+    }
+  }
+  if (!prefix && !headTracked) {
+    try {
+      if (lstatSync(join(sourceRepoDir, literalPath)).isDirectory()) {
+        return `${JSON.stringify(path)} is a directory; directory claims must end with "/"`;
+      }
+    } catch {
+      // An absent exact path is valid and becomes stale if it appears later.
+    }
+  }
+
+  const ignored = spawnSync(
+    "git",
+    [
+      "-C",
+      sourceRepoDir,
+      "check-ignore",
+      "-q",
+      "--no-index",
+      "--",
+      literalPathspec,
+    ],
+    { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+  );
+  if (ignored.status === 0) {
+    if (!prefix && headTracked) return null;
+    return `${JSON.stringify(path)} is ignored by Git and cannot be source-review evidence`;
+  }
+  if (ignored.status !== 1) {
+    return `Git could not verify ignore rules for ${JSON.stringify(path)}`;
+  }
+  if (!prefix) return null;
+
+  const ignoredDescendants = spawnSync(
+    "git",
+    [
+      "-C",
+      sourceRepoDir,
+      "ls-files",
+      "-z",
+      "--others",
+      "--ignored",
+      "--exclude-standard",
+      "--",
+      literalPathspec,
+    ],
+    { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+  );
+  if (ignoredDescendants.status !== 0) {
+    return `Git could not enumerate ignored source below ${JSON.stringify(path)}`;
+  }
+  const firstIgnored = ignoredDescendants.stdout.split("\0").find(Boolean);
+  return firstIgnored
+    ? `${JSON.stringify(path)} contains ignored application source ${JSON.stringify(firstIgnored)}`
+    : null;
+}
+
+/** Strictly read and validate a unit's engine-required source-manifest.json. */
+export function readUnitSourceManifest(
+  projectDir: string,
+  stageSlug: string,
+  unit: string,
+  options: ReadUnitSourceManifestOptions = {},
+): ReadUnitSourceManifestResult {
+  if (!/^[a-z][a-z0-9-]*$/.test(stageSlug)) return { ok: false, reason: `invalid stage slug ${JSON.stringify(stageSlug)}` };
+  const unitError = validateUnitName(unit);
+  if (unitError !== null) return { ok: false, reason: unitError };
+  const record = recordDir(projectDir);
+  if (record === null) return { ok: false, reason: "no active intent record resolves" };
+  const manifestPath = join(record, "construction", unit, stageSlug, "source-manifest.json");
+
+  let rawBytes: Buffer;
+  let value: unknown;
+  try {
+    rawBytes = readFileSync(manifestPath);
+  } catch (error) {
+    return { ok: false, reason: `cannot read source-manifest.json (${errorMessage(error)})` };
+  }
+  try {
+    value = JSON.parse(rawBytes.toString("utf-8")) as unknown;
+  } catch (error) {
+    return { ok: false, reason: `source-manifest.json is not valid JSON (${errorMessage(error)})` };
+  }
+  if (!isPlainObject(value)) return { ok: false, reason: "source-manifest.json must contain a JSON object" };
+
+  const allowedTopLevel = new Set(["stage", "unit", "version", "writes"]);
+  const unknownTopLevel = Object.keys(value).filter((key) => !allowedTopLevel.has(key));
+  if (unknownTopLevel.length > 0) {
+    return { ok: false, reason: `source-manifest.json has unknown field(s): ${unknownTopLevel.sort().join(", ")}` };
+  }
+  if (value.stage !== stageSlug) return { ok: false, reason: `stage must equal ${JSON.stringify(stageSlug)}` };
+  if (value.unit !== unit) return { ok: false, reason: `unit must equal ${JSON.stringify(unit)}` };
+  if (value.version !== 1) return { ok: false, reason: "version must equal 1" };
+  if (!Array.isArray(value.writes)) return { ok: false, reason: "writes must be an array" };
+
+  const recordedRepos =
+    options.worktreeRelative || isBoltWorktreeProjectDir(projectDir)
+      ? []
+      : intentRepos(projectDir);
+  const recordedRepoSet = new Set(recordedRepos);
+  const carriesWorkspaceShell = recordedRepos.length === 0;
+  const claims = new Set<string>();
+  const prefixes: string[] = [];
+  const seen = new Set<string>();
+  const writes: UnitSourceManifestWrite[] = [];
+
+  for (let index = 0; index < value.writes.length; index++) {
+    const write = value.writes[index];
+    if (!isPlainObject(write)) return { ok: false, reason: `writes[${index}] must be an object` };
+    const allowedWriteFields = new Set(["repo", "path"]);
+    const unknownWriteFields = Object.keys(write).filter((key) => !allowedWriteFields.has(key));
+    if (unknownWriteFields.length > 0) {
+      return { ok: false, reason: `writes[${index}] has unknown field(s): ${unknownWriteFields.sort().join(", ")}` };
+    }
+    if (typeof write.path !== "string") return { ok: false, reason: `writes[${index}].path must be a string` };
+    if ("repo" in write && typeof write.repo !== "string") {
+      return { ok: false, reason: `writes[${index}].repo must be a string when present` };
+    }
+
+    const declaredRepo = typeof write.repo === "string" ? write.repo : undefined;
+    let canonicalRepo = declaredRepo;
+    if (canonicalRepo !== undefined) {
+      if (!isValidRepoName(canonicalRepo)) return { ok: false, reason: `writes[${index}].repo is not a valid recorded-repo name` };
+      if (!recordedRepoSet.has(canonicalRepo)) return { ok: false, reason: `writes[${index}].repo ${JSON.stringify(canonicalRepo)} is not recorded for this intent` };
+    } else if (recordedRepos.length > 1) {
+      return { ok: false, reason: `writes[${index}].repo is required for a multi-repo intent` };
+    } else if (recordedRepos.length === 1) {
+      canonicalRepo = recordedRepos[0];
+    }
+
+    const normalized = normalizeManifestSourcePath(write.path);
+    if ("reason" in normalized) return { ok: false, reason: `writes[${index}].path: ${normalized.reason}` };
+    if (sourcePathIsExcluded(normalized.path, carriesWorkspaceShell)) {
+      return { ok: false, reason: `writes[${index}].path is inside the framework record/shell exclusions` };
+    }
+    const sourceRepoDir =
+      options.worktreeRelative || isBoltWorktreeProjectDir(projectDir)
+        ? projectDir
+        : canonicalRepo === undefined
+          ? projectDir
+          : repoDir(projectDir, canonicalRepo);
+    const ignoredReason = ignoredSourceClaimReason(
+      sourceRepoDir,
+      normalized.path,
+      normalized.prefix,
+    );
+    if (ignoredReason !== null) {
+      return { ok: false, reason: `writes[${index}].path: ${ignoredReason}` };
+    }
+    const key = sourcePathKey(canonicalRepo ?? "", normalized.path);
+    if (seen.has(key)) return { ok: false, reason: `writes[${index}] duplicates a normalized source claim` };
+    seen.add(key);
+    if (normalized.prefix) prefixes.push(key);
+    else claims.add(key);
+    writes.push({ ...(declaredRepo === undefined ? {} : { repo: declaredRepo }), path: normalized.path });
+  }
+
+  prefixes.sort();
+  return {
+    ok: true,
+    manifest: { stage: stageSlug, unit, version: 1, writes },
+    claims,
+    prefixes,
+    rawBytesSha256: createHash("sha256").update(rawBytes).digest("hex"),
+  };
+}
+
+/** True when a canonical path is claimed exactly or by a directory prefix. */
+export function sourceClaimCovers(pathKey: string, claimModel: SourceClaimModel): boolean {
+  if (claimModel.claims.has(pathKey)) return true;
+  return claimModel.prefixes.some((prefix) => pathKey.startsWith(prefix));
+}
+
+/** Expand exact/directory claims against one current source listing. */
+export function restrictSourceListing(
+  listing: ReadonlyMap<string, string>,
+  claimModel: SourceClaimModel,
+): WorkspaceSourceListing {
+  const restricted: WorkspaceSourceListing = new Map();
+  for (const [key, oid] of listing) {
+    if (sourceClaimCovers(key, claimModel)) restricted.set(key, oid);
+  }
+  return restricted;
+}
+
+function serializeUnitSourceListing(
+  listing: ReadonlyMap<string, string>,
+  claimModel: SourceClaimModel,
+  manifestSha256: string,
+): string {
+  if (!/^[0-9a-f]{64}$/.test(manifestSha256)) throw new Error("Invalid source-manifest sha256");
+  return `manifest\t${manifestSha256}\t-\n${serializeSourceListing(restrictSourceListing(listing, claimModel))}`;
+}
+
+/** Audit-field value binding manifest bytes plus every currently claimed path. */
+export function unitSourceFingerprint(
+  listing: ReadonlyMap<string, string>,
+  claimModel: SourceClaimModel,
+  manifestSha256: string,
+): string {
+  return `sha256:${sourceListingSha256(serializeUnitSourceListing(listing, claimModel, manifestSha256))}`;
+}
+
+function validSourceSnapshotFingerprint(fingerprint: string): string | null {
+  const matched = /^sha256:([0-9a-f]{64})$/.exec(fingerprint);
+  return matched?.[1] ?? null;
+}
+
+function sourceSnapshotDir(
+  projectDir: string,
+  stageSlug: string,
+  intent?: string,
+  space?: string,
+): string | null {
+  if (!/^[a-z][a-z0-9-]*$/.test(stageSlug)) return null;
+  const record = recordDir(projectDir, intent, space);
+  return record === null ? null : join(record, ".aidlc-source-review", stageSlug);
+}
+
+function writeSourceSnapshot(path: string, serialized: string): string {
+  const hash = sourceListingSha256(serialized);
+  mkdirSync(dirname(path), { recursive: true });
+  if (existsSync(path)) {
+    const existing = readFileSync(path);
+    if (existing.equals(Buffer.from(serialized, "utf-8"))) return `sha256:${hash}`;
+    // A different payload at the same 12-hex address is either corruption or
+    // a prefix collision. Never destroy evidence already referenced by audit.
+    throw new Error(`Source snapshot address collision or corruption at ${path}`);
+  }
+  writeFileAtomic(path, serialized);
+  return `sha256:${hash}`;
+}
+
+/** Write a content-addressed stage-entry baseline listing snapshot. */
+export function writeBaselineSourceSnapshot(
+  projectDir: string,
+  stageSlug: string,
+  listing: ReadonlyMap<string, string>,
+  intent?: string,
+  space?: string,
+): string {
+  const dir = sourceSnapshotDir(projectDir, stageSlug, intent, space);
+  if (dir === null) throw new Error("Cannot write source baseline without a valid active record and stage slug");
+  const serialized = serializeSourceListing(listing);
+  const hash = sourceListingSha256(serialized);
+  return writeSourceSnapshot(join(dir, `baseline-${hash.slice(0, 12)}.tsv`), serialized);
+}
+
+/** Build the modern source-baseline audit field for any workflow/stage boundary. */
+export function sourceBaselineAuditFields(
+  projectDir: string,
+  stageSlug: string,
+  intent?: string,
+  space?: string,
+): Record<string, string> {
+  const repos = intentRepos(projectDir, intent ?? null, space);
+  const hasGitCheckout =
+    repos.length === 0
+      ? isGitRepoDir(projectDir)
+      : repos.some((name) => isGitRepoDir(repoDir(projectDir, name)));
+  const sourceState = workspaceSourceState(projectDir, intent, space);
+  if (sourceState === null) {
+    if (hasGitCheckout) {
+      return { "Source Baseline": UNBINDABLE_FINGERPRINT };
+    }
+    return {
+      "Source Baseline": writeBaselineSourceSnapshot(
+        projectDir,
+        stageSlug,
+        new Map(),
+        intent,
+        space,
+      ),
+    };
+  }
+  return {
+    "Source Baseline": writeBaselineSourceSnapshot(
+      projectDir,
+      stageSlug,
+      sourceState.listing,
+      intent,
+      space,
+    ),
+  };
+}
+
+/** Write a content-addressed unit listing snapshot including its manifest header. */
+export function writeUnitSourceSnapshot(
+  projectDir: string,
+  stageSlug: string,
+  unit: string,
+  listing: ReadonlyMap<string, string>,
+  claimModel: SourceClaimModel,
+  manifestSha256: string,
+): string {
+  const dir = sourceSnapshotDir(projectDir, stageSlug);
+  const unitError = validateUnitName(unit);
+  if (dir === null || unitError !== null) throw new Error("Cannot write unit source snapshot without a valid active record, stage slug, and unit");
+  const serialized = serializeUnitSourceListing(listing, claimModel, manifestSha256);
+  const hash = sourceListingSha256(serialized);
+  return writeSourceSnapshot(join(dir, `unit-${unit}-${hash.slice(0, 12)}.tsv`), serialized);
+}
+
+function readSourceSnapshot(path: string, fingerprint: string): string | null {
+  const expected = validSourceSnapshotFingerprint(fingerprint);
+  if (expected === null) return null;
+  try {
+    const bytes = readFileSync(path);
+    if (createHash("sha256").update(bytes).digest("hex") !== expected) return null;
+    return bytes.toString("utf-8");
+  } catch {
+    return null;
+  }
+}
+
+/** Read a baseline only after exact verification against the full audit hash. */
+export function readBaselineSourceSnapshot(
+  projectDir: string,
+  stageSlug: string,
+  fingerprint: string,
+  intent?: string,
+  space?: string,
+): WorkspaceSourceListing | null {
+  const dir = sourceSnapshotDir(projectDir, stageSlug, intent, space);
+  const hash = validSourceSnapshotFingerprint(fingerprint);
+  if (dir === null || hash === null) return null;
+  const serialized = readSourceSnapshot(join(dir, `baseline-${hash.slice(0, 12)}.tsv`), fingerprint);
+  return serialized === null ? null : parseSourceListing(serialized);
+}
+
+export function currentStageSourceBaseline(
+  projectDir: string,
+  stageSlug: string,
+  unitMajor: boolean,
+  intent?: string,
+  space?: string,
+): SourceBaselineResult {
+  const events = readAuditShardEvents(projectDir, intent, space)
+    .filter((row) =>
+      row.event === "WORKFLOW_STARTED" ||
+      row.event === "STAGE_STARTED" ||
+      row.event === "STAGE_JUMPED" ||
+      row.event === "ARTIFACT_CREATED" ||
+      row.event === "ARTIFACT_UPDATED" ||
+      row.event === "REVIEW_REQUESTED"
+    )
+    .sort((a, b) => {
+      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+      if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+      return a.pos - b.pos;
+    });
+  let boundary = -1;
+  for (let index = 0; index < events.length; index++) {
+    if (
+      events[index].event === "WORKFLOW_STARTED" ||
+      events[index].event === "STAGE_JUMPED"
+    ) {
+      boundary = index;
+    }
+  }
+  let firstWork = events.length;
+  for (let index = Math.max(boundary, 0); index < events.length; index++) {
+    const event = events[index];
+    if (auditBlockField(event.block, "Workflow")?.startsWith("single-stage:")) {
+      continue;
+    }
+    if (auditBlockField(event.block, "Stage") !== stageSlug) continue;
+    if (
+      event.event === "REVIEW_REQUESTED" ||
+      event.event === "ARTIFACT_CREATED" ||
+      event.event === "ARTIFACT_UPDATED"
+    ) {
+      firstWork = index;
+      break;
+    }
+  }
+  let field: string | null = null;
+  for (let index = Math.max(boundary, 0); index < firstWork; index++) {
+    const event = events[index];
+    if (auditBlockField(event.block, "Workflow")?.startsWith("single-stage:")) {
+      continue;
+    }
+    if (
+      event.event !== "WORKFLOW_STARTED" &&
+      event.event !== "STAGE_JUMPED" &&
+      (event.event !== "STAGE_STARTED" ||
+        unitMajor ||
+        auditBlockField(event.block, "Stage") !== stageSlug)
+    ) {
+      continue;
+    }
+    const candidate = auditBlockField(event.block, "Source Baseline");
+    if (candidate !== null) field = candidate;
+  }
+  if (field === null) return { state: "legacy" };
+  if (field === UNBINDABLE_FINGERPRINT) return { state: "unbindable" };
+  const listing = readBaselineSourceSnapshot(
+    projectDir,
+    stageSlug,
+    field,
+    intent,
+    space,
+  );
+  return listing === null ? { state: "invalid" } : { state: "ready", listing };
+}
+
+export interface UnitSourceSnapshot {
+  listing: WorkspaceSourceListing;
+  manifestSha256: string;
+}
+
+/** Read a unit snapshot only after full-hash verification and strict parsing. */
+export function readUnitSourceSnapshot(
+  projectDir: string,
+  stageSlug: string,
+  unit: string,
+  fingerprint: string,
+): UnitSourceSnapshot | null {
+  const dir = sourceSnapshotDir(projectDir, stageSlug);
+  const hash = validSourceSnapshotFingerprint(fingerprint);
+  if (dir === null || hash === null || validateUnitName(unit) !== null) return null;
+  const serialized = readSourceSnapshot(join(dir, `unit-${unit}-${hash.slice(0, 12)}.tsv`), fingerprint);
+  if (serialized === null) return null;
+  const newline = serialized.indexOf("\n");
+  if (newline === -1) return null;
+  const header = /^manifest\t([0-9a-f]{64})\t-$/.exec(serialized.slice(0, newline));
+  if (header === null) return null;
+  const listing = parseSourceListing(serialized.slice(newline + 1));
+  return listing === null ? null : { listing, manifestSha256: header[1] };
 }
 
 
@@ -8645,6 +9758,8 @@ export function latestMainWorkflowStageRunFloorForProject(
   projectDir: string,
   slug: string,
   unitMajor = false,
+  intent?: string,
+  space?: string,
 ): string {
   const relevant = new Set([
     "WORKFLOW_STARTED",
@@ -8652,7 +9767,7 @@ export function latestMainWorkflowStageRunFloorForProject(
     "STAGE_JUMPED",
     "GATE_REJECTED",
   ]);
-  const rows = readAuditShardEvents(projectDir)
+  const rows = readAuditShardEvents(projectDir, intent, space)
     .filter((row) => {
       if (!relevant.has(row.event)) return false;
       const stage = auditBlockField(row.block, "Stage");
@@ -8731,6 +9846,282 @@ export function swarmConvergedUnits(
     if (unit) converged.add(unit);
   }
   return converged;
+}
+
+export type SwarmSourceMergeChain =
+  | { state: "none" }
+  | { state: "invalid"; reason: string }
+  | {
+      state: "ready";
+      fingerprint: string;
+      units: Set<string>;
+    };
+
+export type SwarmSourceOpeningFingerprint =
+  | { state: "invalid"; reason: string }
+  | {
+      state: "ready";
+      fingerprint: string;
+      source: "stage-baseline" | "prior-accepted";
+      listing?: WorkspaceSourceListing;
+    };
+
+/**
+ * Resolve the trusted predecessor for the current attempt's first aggregate
+ * source merge. A rejection may carry only the final validated aggregate from
+ * the prior attempt; it never replaces the stage-entry completion baseline.
+ */
+export function currentSwarmSourceOpeningFingerprint(
+  projectDir: string,
+  slug: string,
+  intent?: string,
+  space?: string,
+): SwarmSourceOpeningFingerprint {
+  const floor = latestMainWorkflowStageRunFloorForProject(
+    projectDir,
+    slug,
+    false,
+    intent,
+    space,
+  );
+  if (floor.startsWith("AMBIGUOUS:")) {
+    return {
+      state: "invalid",
+      reason: "current stage attempt boundary is cross-shard ambiguous",
+    };
+  }
+  const rejected = /^GATE_REJECTED:(.+)#([1-9][0-9]*)$/.exec(floor);
+  if (rejected !== null) {
+    const ordinal = Number(rejected[2]);
+    const rows = readAuditShardEvents(projectDir, intent, space)
+      .filter(
+        (row) =>
+          row.event === "GATE_REJECTED" &&
+          auditBlockField(row.block, "Stage") === slug,
+      )
+      .sort((a, b) => {
+        if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+        if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+        return a.pos - b.pos;
+      });
+    const row = rows[ordinal - 1];
+    if (!row || row.timestamp !== rejected[1]) {
+      return {
+        state: "invalid",
+        reason: "current rejection boundary cannot be correlated to its audit row",
+      };
+    }
+    const prior = auditBlockField(
+      row.block,
+      "Prior Accepted Source Fingerprint",
+    );
+    if (prior !== null) {
+      if (!/^[0-9a-f]{40,64}$/.test(prior)) {
+        return {
+          state: "invalid",
+          reason: "current rejection carries malformed prior accepted source authority",
+        };
+      }
+      return {
+        state: "ready",
+        fingerprint: prior,
+        source: "prior-accepted",
+      };
+    }
+  }
+
+  let stateContent: string;
+  try {
+    stateContent = readStateFile(projectDir, intent, space);
+  } catch {
+    return {
+      state: "invalid",
+      reason: "current state is unavailable for the opening aggregate link",
+    };
+  }
+  const baseline = currentStageSourceBaseline(
+    projectDir,
+    slug,
+    getField(stateContent, "Construction Iteration")?.trim() === "unit-major",
+    intent,
+    space,
+  );
+  if (baseline.state !== "ready") {
+    return {
+      state: "invalid",
+      reason: "current source baseline is unavailable for the opening aggregate link",
+    };
+  }
+  return {
+    state: "ready",
+    fingerprint: sourceListingSha256(serializeSourceListing(baseline.listing)),
+    source: "stage-baseline",
+    listing: baseline.listing,
+  };
+}
+
+/**
+ * Validate the current attempt's post-source-merge aggregate chain. Each row
+ * links the main checkout state before one immutable reviewed-source merge to
+ * the state after it. Cross-shard same-second rows are causally unordered and
+ * therefore cannot form an authority chain.
+ */
+export function currentSwarmSourceMergeChain(
+  projectDir: string,
+  slug: string,
+  intent?: string,
+  space?: string,
+): SwarmSourceMergeChain {
+  const floor = latestMainWorkflowStageRunFloorForProject(
+    projectDir,
+    slug,
+    false,
+    intent,
+    space,
+  );
+  const allRows = readAuditShardEvents(projectDir, intent, space);
+  const rows = allRows
+    .filter(
+      (row) =>
+        row.event === "SWARM_SOURCE_MERGED" &&
+        auditBlockField(row.block, "Stage") === slug &&
+        auditBlockField(row.block, "Run floor") === floor,
+    )
+    .sort((a, b) => {
+      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+      if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+      return a.pos - b.pos;
+    });
+  if (rows.length === 0) return { state: "none" };
+
+  const units = new Set<string>();
+  let priorFingerprint: string | null = null;
+  let openingPrevious: string | null = null;
+  for (let start = 0; start < rows.length;) {
+    let end = start + 1;
+    while (end < rows.length && rows[end].timestamp === rows[start].timestamp) end++;
+    const tied = rows.slice(start, end);
+    if (new Set(tied.map((row) => row.shard)).size > 1) {
+      return {
+        state: "invalid",
+        reason: `same-second cross-shard SWARM_SOURCE_MERGED rows are causally ambiguous at ${rows[start].timestamp}`,
+      };
+    }
+    for (const row of tied) {
+      const unit = auditBlockField(row.block, "Unit name");
+      const batch = auditBlockField(row.block, "Batch number");
+      const previous = auditBlockField(row.block, "Previous Source Fingerprint");
+      const fingerprint = auditBlockField(row.block, "Source Fingerprint");
+      const sourceCommit = auditBlockField(row.block, "Source Commit");
+      const mergeCommit = auditBlockField(row.block, "Merge commit");
+      if (
+        !unit ||
+        !batch ||
+        !/^[1-9][0-9]*$/.test(batch) ||
+        !previous ||
+        !/^[0-9a-f]{40,64}$/.test(previous) ||
+        !fingerprint ||
+        !/^[0-9a-f]{40,64}$/.test(fingerprint) ||
+        !sourceCommit ||
+        !/^[0-9a-f]{40,64}$/.test(sourceCommit) ||
+        !mergeCommit ||
+        !/^[0-9a-f]{40,64}$/.test(mergeCommit)
+      ) {
+        return {
+          state: "invalid",
+          reason: `malformed SWARM_SOURCE_MERGED authority for unit ${JSON.stringify(unit ?? "")}`,
+        };
+      }
+      if (units.has(unit)) {
+        return {
+          state: "invalid",
+          reason: `duplicate SWARM_SOURCE_MERGED authority for unit ${JSON.stringify(unit)}`,
+        };
+      }
+      if (priorFingerprint !== null && previous !== priorFingerprint) {
+        return {
+          state: "invalid",
+          reason: `broken SWARM_SOURCE_MERGED aggregate link before unit ${JSON.stringify(unit)}`,
+        };
+      }
+      if (openingPrevious === null) openingPrevious = previous;
+      const convergenceRows = allRows
+        .filter(
+          (candidate) =>
+            candidate.event === "SWARM_UNIT_CONVERGED" &&
+            auditBlockField(candidate.block, "Unit name") === unit &&
+            auditBlockField(candidate.block, "Stage") === slug &&
+            auditBlockField(candidate.block, "Run floor") === floor,
+        )
+        .sort((a, b) => {
+          if (a.timestamp !== b.timestamp) {
+            return a.timestamp < b.timestamp ? -1 : 1;
+          }
+          if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+          return a.pos - b.pos;
+        });
+      const latestConvergenceTimestamp =
+        convergenceRows.at(-1)?.timestamp ?? null;
+      const latestConvergences =
+        latestConvergenceTimestamp === null
+          ? []
+          : convergenceRows.filter(
+              (candidate) =>
+                candidate.timestamp === latestConvergenceTimestamp,
+            );
+      if (
+        latestConvergences.length === 0 ||
+        (new Set(latestConvergences.map((candidate) => candidate.shard)).size >
+          1 &&
+          new Set(
+            latestConvergences.map((candidate) =>
+              [
+                auditBlockField(candidate.block, "Batch number") ?? "",
+                auditBlockField(candidate.block, "Source Commit") ?? "",
+              ].join("\0")
+            ),
+          ).size !== 1)
+      ) {
+        return {
+          state: "invalid",
+          reason: `missing or ambiguous current convergence authority for unit ${JSON.stringify(unit)}`,
+        };
+      }
+      const latestConvergence =
+        latestConvergences[latestConvergences.length - 1];
+      if (
+        auditBlockField(latestConvergence.block, "Batch number") !== batch ||
+        auditBlockField(latestConvergence.block, "Source Commit") !==
+          sourceCommit
+      ) {
+        return {
+          state: "invalid",
+          reason: `SWARM_SOURCE_MERGED authority for unit ${JSON.stringify(unit)} does not match its latest convergence`,
+        };
+      }
+      units.add(unit);
+      priorFingerprint = fingerprint;
+    }
+    start = end;
+  }
+  const opening = currentSwarmSourceOpeningFingerprint(
+    projectDir,
+    slug,
+    intent,
+    space,
+  );
+  if (opening.state === "invalid") {
+    return opening;
+  }
+  if (openingPrevious !== opening.fingerprint) {
+    return {
+      state: "invalid",
+      reason: `opening SWARM_SOURCE_MERGED link does not match the current ${opening.source === "prior-accepted" ? "prior accepted aggregate" : "stage baseline"}`,
+    };
+  }
+  return priorFingerprint === null
+    ? { state: "none" }
+    : { state: "ready", fingerprint: priorFingerprint, units };
 }
 
 // The set of units the CURRENT attempt of an INLINE per-unit stage has

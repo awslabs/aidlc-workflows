@@ -182,6 +182,7 @@ const VALID_EVENT_TYPES = new Set([
   // from `prepare`). See CHANGELOG + audit-format.md.
   "SWARM_STARTED",
   "SWARM_UNIT_CONVERGED",
+  "SWARM_SOURCE_MERGED",
   "SWARM_UNIT_FAILED",
   "SWARM_BATON_RETURNED",
   "SWARM_COMPLETED",
@@ -272,6 +273,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   SENSOR_PROPOSED: "Sensor Proposed",
   SWARM_STARTED: "Swarm Started",
   SWARM_UNIT_CONVERGED: "Swarm Unit Converged",
+  SWARM_SOURCE_MERGED: "Swarm Source Merged",
   SWARM_UNIT_FAILED: "Swarm Unit Failed",
   SWARM_BATON_RETURNED: "Swarm Baton Returned",
   SWARM_COMPLETED: "Swarm Completed",
@@ -358,6 +360,7 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "ARTIFACT_REUSED",
   "SWARM_STARTED",
   "SWARM_UNIT_CONVERGED",
+  "SWARM_SOURCE_MERGED",
   "AUTONOMY_MODE_SET",
   // Unit lifecycle receipts: routing trusts UNIT_COMPLETED as the completion
   // signal (unitSettled) and UNIT_PAUSED as the hard-stop checkpoint, and the
@@ -417,6 +420,7 @@ const MERGE_PROTECTED_EVENT_TYPES = new Set([
   "SWARM_DEGRADED",
   "SWARM_BATON_RETURNED",
   "SWARM_UNIT_CONVERGED",
+  "SWARM_SOURCE_MERGED",
   "SWARM_UNIT_FAILED",
   "BOLT_STARTED",
   "BOLT_COMPLETED",

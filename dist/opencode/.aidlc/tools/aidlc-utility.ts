@@ -124,6 +124,7 @@ import {
   stageEnabledBySelection,
   stagesInScope,
   stateFilePath,
+  sourceBaselineAuditFields,
   withAuditLock,
   validateBoltSlug,
   validScopes,
@@ -4466,6 +4467,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     appendAuditEvent(projectDir, "WORKFLOW_STARTED", {
       Scope: scope,
       Request: `/aidlc ${flags.arguments || scope}`,
+      ...sourceBaselineAuditFields(projectDir, "code-generation"),
       ...(reviewOverride !== undefined
         ? {
             "Review Override":

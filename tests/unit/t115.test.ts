@@ -75,6 +75,7 @@
 // cleaned in afterAll. Nothing is written under tests/fixtures/**.
 
 import { afterAll, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -362,6 +363,95 @@ describe("t115 routed skip (report -> aidlc-state skip --route)", () => {
     expect(auditBlocksFor(p, "STAGE_SKIPPED")[0]).toContain(
       "**Reason**: No feasibility decision is needed",
     );
+  }, 30000);
+
+  test("routed skip into code-generation stamps a source baseline backed by its snapshot", () => {
+    const p = projWithState("state-jumped.md");
+    const state = readFileSync(statePath(p), "utf-8")
+      .replace("- [S] infrastructure-design — EXECUTE", "- [-] infrastructure-design — EXECUTE")
+      .replace("- [-] code-generation — EXECUTE", "- [ ] code-generation — EXECUTE")
+      .replace("- **In Progress**: code-generation", "- **In Progress**: infrastructure-design")
+      .replace("- **Current Stage**: code-generation", "- **Current Stage**: infrastructure-design")
+      .replace("- **Next Stage**: build-and-test", "- **Next Stage**: code-generation")
+      .replace("- **Next Action**: Execute code-generation", "- **Next Action**: Execute infrastructure-design");
+    writeFileSync(statePath(p), state, "utf-8");
+
+    const git = (args: string[]): void => {
+      const result = spawnSync("git", ["-C", p, ...args], { encoding: "utf-8" });
+      expect(result.status, `${result.stdout ?? ""}${result.stderr ?? ""}`).toBe(0);
+    };
+    git(["init", "-q"]);
+    git(["config", "user.email", "t@test"]);
+    git(["config", "user.name", "t"]);
+    writeFileSync(join(p, "app.ts"), "export const baseline = true;\n", "utf-8");
+    git(["add", "-A"]);
+    git(["commit", "-qm", "baseline"]);
+
+    const report = orchestrate([
+      "report",
+      "--stage",
+      "infrastructure-design",
+      "--result",
+      "skipped",
+      "--reason",
+      "No infrastructure changes",
+    ], p);
+    expect(report.status, report.out).toBe(0);
+
+    const started = auditBlocksFor(p, "STAGE_STARTED").find((block) =>
+      block.includes("**Stage**: code-generation")
+    );
+    expect(started).toBeDefined();
+    const fingerprint = started?.match(/^\*\*Source Baseline\*\*: (sha256:[0-9a-f]{64})$/m)?.[1];
+    expect(fingerprint).toMatch(/^sha256:[0-9a-f]{64}$/);
+    const hash = fingerprint?.slice("sha256:".length) as string;
+    const snapshot = join(
+      seededRecordDir(p),
+      ".aidlc-source-review",
+      "code-generation",
+      `baseline-${hash.slice(0, 12)}.tsv`,
+    );
+    expect(existsSync(snapshot)).toBe(true);
+    expect(createHash("sha256").update(readFileSync(snapshot)).digest("hex")).toBe(hash);
+  }, 30000);
+
+  test("routed skip into code-generation records an empty modern baseline before Git exists", () => {
+    const p = projWithState("state-jumped.md");
+    const content = readFileSync(statePath(p), "utf-8")
+      .replace("- [S] infrastructure-design — EXECUTE", "- [-] infrastructure-design — EXECUTE")
+      .replace("- [-] code-generation — EXECUTE", "- [ ] code-generation — EXECUTE")
+      .replace("- **In Progress**: code-generation", "- **In Progress**: infrastructure-design")
+      .replace("- **Current Stage**: code-generation", "- **Current Stage**: infrastructure-design")
+      .replace("- **Next Stage**: build-and-test", "- **Next Stage**: code-generation")
+      .replace("- **Next Action**: Execute code-generation", "- **Next Action**: Execute infrastructure-design");
+    writeFileSync(statePath(p), content, "utf-8");
+
+    const report = orchestrate([
+      "report",
+      "--stage",
+      "infrastructure-design",
+      "--result",
+      "skipped",
+      "--reason",
+      "No infrastructure changes",
+    ], p);
+    expect(report.status, report.out).toBe(0);
+
+    const started = auditBlocksFor(p, "STAGE_STARTED").find((block) =>
+      block.includes("**Stage**: code-generation")
+    );
+    const fingerprint = started?.match(
+      /^\*\*Source Baseline\*\*: (sha256:[0-9a-f]{64})$/m,
+    )?.[1];
+    expect(fingerprint).toMatch(/^sha256:[0-9a-f]{64}$/);
+    const hash = fingerprint?.slice("sha256:".length) as string;
+    const snapshot = join(
+      seededRecordDir(p),
+      ".aidlc-source-review",
+      "code-generation",
+      `baseline-${hash.slice(0, 12)}.tsv`,
+    );
+    expect(readFileSync(snapshot, "utf-8")).toBe("");
   }, 30000);
 
   test("revising stage can be skipped through the same routed outcome", () => {

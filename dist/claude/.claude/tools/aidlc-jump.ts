@@ -23,6 +23,7 @@ import {
   setField,
   setPhaseProgress,
   stageIndex,
+  sourceBaselineAuditFields,
   writeStateFile,
 } from "./aidlc-lib.js";
 
@@ -441,13 +442,15 @@ function handleExecute(args: string[]): void {
       });
     }
 
-    // The canonical STAGE_JUMPED event for the target itself
+    // The jump boundary owns the baseline. Its companion STAGE_STARTED row
+    // remains field-free so one transition never creates competing snapshots.
     emitAudit(pd, "STAGE_JUMPED", {
       Direction: direction.toUpperCase(),
       Source: currentSlug,
       Target: targetSlug,
       Scope: scope,
       Details: `${direction.toUpperCase()} jump from ${currentSlug} to ${targetSlug} (${targetStage.number}). Scope: ${scope}.`,
+      ...sourceBaselineAuditFields(pd, "code-generation"),
     });
 
     // Target enters Active state — emit STAGE_STARTED so audit reflects the

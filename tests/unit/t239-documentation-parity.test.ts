@@ -145,7 +145,7 @@ const engineCommands = [...engineMain.matchAll(/case "([^"]+)":/g)].map((match) 
 
 describe("documentation parity derives current behavior from authored implementation", () => {
   test("event count and user-guide taxonomy match VALID_EVENT_TYPES", () => {
-    expect(eventTypes.length).toBe(86);
+    expect(eventTypes.length).toBe(87);
 
     const guide = read("docs", "guide", "10-state-and-audit.md");
     const guideTaxonomy = sliceBetween(

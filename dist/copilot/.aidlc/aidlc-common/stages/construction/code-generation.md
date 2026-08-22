@@ -71,6 +71,7 @@ MANDATORY: Follow stage-protocol.md for approval gates, question format, and com
 - Application code goes to workspace root, NEVER to the record dir
 - Brownfield: modify files in-place. NEVER create duplicates like ClassName_modified.java
 - Add data-testid attributes to interactive UI elements for test automation
+- Before review, write `source-manifest.json` listing every application-source path this unit created, modified, or deleted, including shell-, scaffolding-, and generator-written files
 
 ### Step 1: Read All Unit Artifacts
 
@@ -259,6 +260,30 @@ After subagent completes, create `<record>/construction/{unit-name}/code-generat
 - Test coverage summary
 - Any deviations from the plan
 
+Create `<record>/construction/{unit-name}/code-generation/source-manifest.json`
+with this strict schema:
+
+```json
+{
+  "stage": "code-generation",
+  "unit": "u1-auth",
+  "version": 1,
+  "writes": [
+    { "path": "src/auth/login.ts" },
+    { "path": "src/auth/generated/" },
+    { "repo": "repo-a", "path": "src/api/routes.ts" }
+  ]
+}
+```
+
+List every application-source path this unit created, modified, or deleted,
+including files written by shell commands, scaffolding, or generators. Use a
+trailing `/` directory claim for generated trees. In the main workspace,
+multi-repo entries name their recorded `repo`; inside a Bolt worktree paths are
+relative to its single selected repo and MUST omit `repo`. The engine refuses
+to record the unit review without this manifest, and unclaimed changed paths
+block stage completion.
+
 Create
 `<record>/construction/{unit-name}/code-generation/traceability.json`.
 Enumerate every assigned AC, detailed `NFRx.y`, and `BRx.y` (or direct `FR` /
@@ -311,7 +336,10 @@ the record dir); the planning, plan-approval, and summary artefacts
 `unit-test-instructions.md`, `code-summary.md`) live under
 `<record>/construction/{unit-name}/code-generation/`.
 
-The imported sensors check the code outputs and per-unit markdown artefacts:
+The imported sensors check the code outputs and per-unit markdown artefacts.
+`source-manifest.json` is engine-validated against its strict schema and source
+binding; like `traceability.json`, it is not subject to the markdown
+`required-sections` floor:
 
 - **`required-sections`** verifies each markdown artefact has the generic
   document-shape floor (at least 2 H2 headings), including the per-unit unit

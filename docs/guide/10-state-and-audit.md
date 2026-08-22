@@ -77,7 +77,7 @@ stateDiagram-v2
 
 The audit trail lives in the intent's record dir at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/audit/`. It is an append-only event log written as **per-clone shards** (`<host>-<clone>.md`): each clone appends only to its own shard, so concurrent appends from sibling worktrees never git-conflict. Readers glob `audit/*.md` and merge-sort by ISO timestamp to reconstruct the full chronological history of decisions and events.
 
-### 86-event taxonomy
+### 87-event taxonomy
 
 Events are organized into 22 categories:
 
@@ -104,7 +104,7 @@ Events are organized into 22 categories:
 | **Merge Dispatch** | 3 | `MERGE_DISPATCH_INVOKED`, `MERGE_DISPATCH_RETURNED`, `MERGE_DISPATCH_FALLBACK` |
 | **Sensors** | 5 | `SENSOR_FIRED`, `SENSOR_PASSED`, `SENSOR_FAILED`, `SENSOR_BUDGET_OVERRIDE`, `GUARDRAIL_LOADED` |
 | **Learning Loop** | 3 | `MEMORY_EMPTY`, `RULE_LEARNED`, `SENSOR_PROPOSED` |
-| **Swarm** | 6 | `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `SWARM_UNIT_FAILED`, `SWARM_BATON_RETURNED`, `SWARM_COMPLETED`, `SWARM_DEGRADED` |
+| **Swarm** | 7 | `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `SWARM_SOURCE_MERGED`, `SWARM_UNIT_FAILED`, `SWARM_BATON_RETURNED`, `SWARM_COMPLETED`, `SWARM_DEGRADED` |
 
 ### What gets logged and when
 
@@ -152,6 +152,33 @@ sequenceDiagram
 ```
 
 <!-- Text fallback: The orchestrator requests the next directive and the engine emits STAGE_STARTED. Stage execution writes artifacts; the PostToolUse hook appends ARTIFACT_CREATED or ARTIFACT_UPDATED. After the stage work and approval gate, the orchestrator reports the outcome. The engine emits the gate result and, on approval, STAGE_COMPLETED while updating state and routing. -->
+
+---
+
+### Source-bound review receipts
+
+Code Generation writes application source outside the intent record, so its
+terminal per-unit review receipt binds more than markdown artifacts. The
+reviewed unit's strict `source-manifest.json` lists created, modified, or deleted
+source paths; `Unit Source Fingerprint` binds those claims and manifest bytes.
+At completion the engine validates each unit newest-first (a newer reviewed
+claim can own an intentional shared-file integration), then compares the union
+of fresh claims with the stage-entry source baseline. An uncovered change or a
+stale unit blocks all four completion routes and offers that unit's one bounded
+stale-receipt recovery.
+
+The workspace-global `Source Fingerprint` is normally the outer post-review
+mutation boundary. One narrow reconciliation makes the documented “revert”
+recovery real: after any unclaimed baseline change (addition, modification, or
+deletion) is fully reverted, completion can continue
+only when the stage baseline is present and valid, every applicable unit still
+has a fresh modern binding, and the baseline-to-current delta has zero
+unclaimed paths. Ordinary post-review edits, stale or legacy unit evidence, and
+any remaining unclaimed path still refuse. Pre-upgrade fieldless receipts or
+baselines retain documented migration fail-open behavior; missing or corrupt
+modern evidence fails closed. `AIDLC_SKIP_SOURCE_FRESHNESS=1` is the
+deterministic emergency off-switch and must be present again when consuming a
+bypass-marked receipt.
 
 ---
 

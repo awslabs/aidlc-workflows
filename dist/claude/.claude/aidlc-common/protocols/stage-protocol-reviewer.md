@@ -32,6 +32,11 @@ Everything else in this section is silent. Nothing is said about invoking, handi
      - For a **per-unit** stage (`directive.unit` present) these include the shared inception contracts that pin cross-unit boundaries (`components.md`, `contract-summary.md`, `unit-of-work.md`).
      - For a **workflow-level** stage with no `directive.unit` (e.g. `contract-design`), these are the upstream artifacts that justify the produced output — the unit DAG (`unit-of-work.md`, `unit-of-work-dependency.md`), the component catalogue (`components.md`), and `requirements.md` — so the reviewer can verify the contracts against the boundaries, entities, and NFRs they formalise rather than reviewing the summary in isolation.
    - The validation tools list from the stage definition's frontmatter (if any)
+   - For a per-unit `workspace_requires` stage, the unit's
+     `source-manifest.json` path and its claimed source paths. Review the
+     implementation differentially at those paths rather than sweeping the
+     whole workspace; treat any claim that looks unrelated to the unit as a
+     finding.
 
    Do NOT pass: `memory.md` (builder's diary) or any plan/reasoning files. The reviewer forms independent judgment.
 
@@ -81,11 +86,11 @@ Everything else in this section is silent. Nothing is said about invoking, handi
 
    **On a complete review**, record the terminal receipt with the same `aidlc-log.ts review` command plus `--verdict <READY|NOT-READY>` (and the same `--unit` / `--single` fields).
 
-   The recorded receipt is TERMINAL whenever no further review pass follows it: do not write to any `produces[]` artifact between recording it and gate approval (a later write invalidates the receipt and the engine refuses the gate). A verdict may arrive with optional suggestions riding along; do NOT apply them - quote them verbatim in the completion summary for the human to weigh at the gate. A suggestion is gate input, not a defect (step 2: it is not grounds for NOT-READY, so it is not grounds for editing past the terminal receipt either). Riding suggestions also never change the gate itself: keep the §1 approval question's standard option order (Approve first, Request Changes second) - do not present Request Changes as the recommended or first option because a suggestion exists. On harnesses with PreToolUse enforcement the review-freeze hook refuses such a write deterministically (`REVIEW_FREEZE_BLOCKED`); a recorded gate rejection lifts the freeze for the revision path.
+   The recorded receipt is TERMINAL whenever no further review pass follows it: do not write to any `produces[]` artifact between recording it and gate approval; for a per-unit `workspace_requires` stage, also do not write the unit's `source-manifest.json` or any claimed source path (a later write is deterministically invalidated at completion and the engine refuses the gate). A verdict may arrive with optional suggestions riding along; do NOT apply them - quote them verbatim in the completion summary for the human to weigh at the gate. A suggestion is gate input, not a defect (step 2: it is not grounds for NOT-READY, so it is not grounds for editing past the terminal receipt either). Riding suggestions also never change the gate itself: keep the §1 approval question's standard option order (Approve first, Request Changes second) - do not present Request Changes as the recommended or first option because a suggestion exists. On harnesses with PreToolUse enforcement the review-freeze hook refuses declared `produces[]`/`optional_produces[]` writes (`REVIEW_FREEZE_BLOCKED`); manifest and claimed-source writes are caught by the completion guard rather than the hook. A recorded gate rejection lifts the freeze for the revision path.
 
-   If a write still invalidates the receipt, the first request after that stale terminal evidence is exactly one recovery review at the next ordinal, even when an adversarial stage had unused normal iterations. The logger marks it `Recovery: stale-receipt`; record either verdict as terminal, then stop editing `produces[]` artifacts. If that recovery receipt is invalidated again, request no further review. On an interactive stage, present the recovery-spent refusal to the human; only Request Changes (`GATE_REJECTED`) resets the attempt.
+   If a write still invalidates the receipt, the first request after that stale terminal evidence is exactly one recovery review at the next ordinal, even when an adversarial stage had unused normal iterations. The logger marks it `Recovery: stale-receipt`; record either verdict as terminal, then stop editing `produces[]` artifacts, `source-manifest.json`, and claimed source paths. If that recovery receipt is invalidated again, request no further review. On an interactive stage, present the recovery-spent refusal to the human; only Request Changes (`GATE_REJECTED`) resets the attempt.
 
-   **On an `advisory` review, both verdicts are terminal here.** Do not re-invoke the lead or the reviewer during normal flow; proceed to section 13, then present the approval gate with the reviewer's findings quoted verbatim - severity, location, and recommendation - as decision support: "The reviewer flagged N findings for your review before approving." The human triages; a Request Changes at the gate is how an advisory finding becomes a revision. If a `produces[]` artifact was written after the terminal receipt and voided it, the engine permits exactly one recovery request at the next ordinal; record its verdict, then stop editing `produces[]` artifacts.
+   **On an `advisory` review, both verdicts are terminal here.** Do not re-invoke the lead or the reviewer during normal flow; proceed to section 13, then present the approval gate with the reviewer's findings quoted verbatim - severity, location, and recommendation - as decision support: "The reviewer flagged N findings for your review before approving." The human triages; a Request Changes at the gate is how an advisory finding becomes a revision. If a `produces[]` artifact, `source-manifest.json`, or claimed source path was written after the terminal receipt and voided it, the engine permits exactly one recovery request at the next ordinal; record its verdict, then stop editing those same surfaces.
 
    **On an `adversarial` review**, branch on the verdict:
    - **READY** → the receipt is terminal (above); proceed to §13 learnings ritual then the approval gate
@@ -115,10 +120,11 @@ re-presented gate).
 > artifact invalidates older receipts (per-unit writes invalidate only that
 > unit). After such a write, the engine permits exactly one recovery review
 > request at the next ordinal; record its verdict and stop editing `produces[]`
-> artifacts. Only a `READY` or `NOT-READY` verdict is terminal. The precondition
-> is hard on the review having happened and soft on its verdict: a NOT-READY
-> verdict after the iteration cap still reaches the human gate. Autonomous
-> Construction is not exempt; swarm
+> artifacts, `source-manifest.json`, and claimed source paths. Only a `READY` or
+> `NOT-READY` verdict is
+> terminal. The precondition is hard on the review having happened and soft on
+> its verdict: a NOT-READY verdict after the iteration cap still reaches the
+> human gate. Autonomous Construction is not exempt; swarm
 > units are reviewed in their Bolt worktrees after convergence and before
 > finalization. The swarm referee verifies each configured unit's terminal
 > receipt after its `BOLT_STARTED` boundary before merging it, so autonomy

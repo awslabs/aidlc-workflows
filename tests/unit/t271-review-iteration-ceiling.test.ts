@@ -28,6 +28,7 @@ import {
   createTestProject,
   seedAuditFile,
   seedBoltDagBatches,
+  seededAuditDir,
   seededRecordDir,
   seedStateFile,
   seededStateFile,
@@ -122,10 +123,78 @@ function writeReviewedArtifact(
       : "code-generation-plan.md",
   );
   writeFileSync(path, content, "utf-8");
+  if (stage === "code-generation" && unit) {
+    const dagDir = join(seededRecordDir(proj), "inception", "units-generation");
+    mkdirSync(dagDir, { recursive: true });
+    writeFileSync(
+      join(dagDir, "unit-of-work-dependency.md"),
+      `\`\`\`yaml\nunits:\n  - name: ${unit}\n    depends_on: []\n\`\`\`\n`,
+      "utf-8",
+    );
+    writeFileSync(
+      join(dir, "source-manifest.json"),
+      `${JSON.stringify({ stage, unit, version: 1, writes: [] }, null, 2)}\n`,
+      "utf-8",
+    );
+  }
   return path;
 }
 
 describe("t271 review iteration ceiling", () => {
+  test("autonomous and historical Bolt boundaries cannot authorize a ghost unit", () => {
+    for (const autonomy of [false, true]) {
+      const proj = seedProject("feature");
+      writeReviewedArtifact(proj, "code-generation", "plan\n", "unit-alpha");
+      if (autonomy) {
+        const state = seededStateFile(proj);
+        writeFileSync(
+          state,
+          `${readFileSync(state, "utf-8")}\n- **Construction Autonomy Mode**: autonomous\n`,
+        );
+      }
+      appendAuditEntry("BOLT_STARTED", {
+        "Bolt names": "ghost",
+        "Batch number": "1",
+        "Walking skeleton": "false",
+        "Bolt slug": "ghost",
+      }, proj);
+      const ghost = runReview(proj, [
+        "--stage", "code-generation",
+        "--reviewer", "aidlc-architecture-reviewer-agent",
+        "--unit", "ghost",
+        "--iteration", "1",
+      ]);
+      expect(ghost.status).not.toBe(0);
+      expect(ghost.stderr).toContain("not in the current resolved Unit DAG");
+    }
+  });
+
+  test("a fresh STAGE_STARTED clears an earlier cross-shard boundary ambiguity", () => {
+    const proj = seedProject("feature");
+    const auditDir = seededAuditDir(proj);
+    mkdirSync(auditDir, { recursive: true });
+    const tieSecond = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+    const block = (event: string, extra: string) =>
+      `# AI-DLC Audit Log\n\n## ${event}\n**Timestamp**: ${tieSecond}\n**Event**: ${event}\n${extra}\n---\n`;
+    writeFileSync(join(auditDir, "tie-a.md"), block("WORKFLOW_STARTED", "**Scope**: feature"));
+    writeFileSync(
+      join(auditDir, "tie-b.md"),
+      block("GATE_REJECTED", "**Stage**: requirements-analysis"),
+    );
+    const second = Math.floor(Date.now() / 1000);
+    while (Math.floor(Date.now() / 1000) === second) {}
+    appendAuditEntry("STAGE_STARTED", {
+      Stage: "requirements-analysis",
+      Agent: "aidlc-product-agent",
+    }, proj);
+    const review = runReview(proj, [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+      "--iteration", "1",
+    ]);
+    expect(review.status).toBe(0);
+  });
+
   test("advisory stage: iteration 1 passes, iteration 2 refused with terminal guidance", () => {
     const proj = seedProject("feature"); // requirements-analysis declares advisory
     const ok = runReview(proj, [
@@ -352,6 +421,13 @@ describe("t271 review iteration ceiling", () => {
 
   test("inline per-unit reviews remain subject to scope caps", () => {
     const proj = seedProject("bugfix");
+    const dagDir = join(seededRecordDir(proj), "inception", "units-generation");
+    mkdirSync(dagDir, { recursive: true });
+    writeFileSync(
+      join(dagDir, "unit-of-work-dependency.md"),
+      "```yaml\nunits:\n  - name: unit-alpha\n    depends_on: []\n```\n",
+      "utf-8",
+    );
     const ok = runReview(proj, [
       "--stage", "functional-design",
       "--reviewer", "aidlc-architecture-reviewer-agent",

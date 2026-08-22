@@ -626,7 +626,7 @@ present only when multiple units share resources.
 | support_agents    | (none -- focused implementation)                                                                  |
 | mode              | subagent (Task tool subagent_type: aidlc-developer-agent)                                               |
 | Inputs            | ALL prior design artifacts for this unit                                                          |
-| Outputs           | application code (workspace root) + `<record>/construction/{unit-name}/code-generation/` -- code-generation-plan.md, code-generation-questions.md, unit-test-instructions.md, code-summary.md |
+| Outputs           | application code (workspace root) + `<record>/construction/{unit-name}/code-generation/` -- code-generation-plan.md, code-generation-questions.md, unit-test-instructions.md, code-summary.md, traceability.json, plus engine-required companion source-manifest.json |
 
 ### Purpose
 
@@ -641,6 +641,9 @@ the execution plan. Code is written to the workspace root, never to
 - Brownfield: modify files in-place. NEVER create duplicates like
   `ClassName_modified.java`
 - Add `data-testid` attributes to interactive UI elements for test automation
+- Before review, write the engine-required companion `source-manifest.json`
+  listing every application-source path this unit created, modified, or deleted,
+  including files written by shell commands, scaffolding, or generators
 
 ### Inputs
 
@@ -786,13 +789,30 @@ This stage has a **two-part structure**: planning followed by generation.
    full content. The subagent generates all code, test files, and
    configuration artifacts in the workspace.
 
-5. **Generate Code Summary** -- After subagent completes, create
+5. **Generate Code Summary and Source Manifest** -- After the subagent
+   completes, create
    `<record>/construction/{unit-name}/code-generation/code-summary.md`
    documenting:
    - Files created/modified
    - Key implementation decisions
    - Test coverage summary
    - Any deviations from the plan
+
+   Also create
+   `<record>/construction/{unit-name}/code-generation/source-manifest.json`.
+   This is a strict version-1 JSON companion file, not a declared `produces[]`
+   artifact. It records `stage: "code-generation"`, the exact unit name, and a
+   `writes` array containing every application-source path the unit created,
+   modified, or deleted, including shell-, scaffolding-, and generator-written
+   files. Paths are POSIX-relative and use no globs or `..`; a trailing `/`
+   claims a generated directory tree. In a main-workspace multi-repo run every
+   entry names its recorded `repo`; inside a Bolt worktree paths are relative
+   to that selected repo and omit `repo`.
+
+   The engine validates this schema and refuses to record a terminal per-unit
+   review without it. Its bytes and claims join the `Unit Source Fingerprint`;
+   changed stage-source paths outside all fresh reviewed manifests block
+   completion.
 
 6. **Prepare Completion** -- Verify the unit's code and summary artifacts.
    Do not edit state; report the gate outcome through `aidlc-orchestrate.ts`.
@@ -807,6 +827,8 @@ This stage has a **two-part structure**: planning followed by generation.
 | code-generation-questions.md | Persisted Plan Approval question and explicit human answer       |
 | unit-test-instructions.md | Per-unit setup, scoped run commands, coverage, mocks, and test data |
 | code-summary.md           | Files created/modified, decisions, test coverage, plan deviations   |
+| traceability.json         | Structured coverage of assigned upstream IDs by code/test targets   |
+| source-manifest.json      | Engine-required strict companion attribution index; deliberately not in `produces[]` |
 | (application code)        | All source code, tests, and config written to workspace root        |
 
 ### Approval Gate
@@ -831,6 +853,11 @@ Strictly 2-option: Approve / Request Changes.
 - **Mandatory test file inclusion**: Test files MUST be part of the code
   generation plan. Stage 3.6 (Build and Test) verifies and extends tests but
   does not create them from scratch.
+- **Source-manifest enforcement**: `source-manifest.json` is engine-validated,
+  not a Markdown `required-sections` target. Its strict schema and
+  `Unit Source Fingerprint` bind every exact/directory source claim; the engine
+  refuses the terminal review when it is absent or invalid and refuses stage
+  completion for changed source outside the fresh reviewed claims union.
 - **Unit-scoped execution**: Each per-unit test instruction file uses exact
   test paths or an exact unit filter so the cross-unit execution stage does
   not rerun the project-wide suite for every unit.

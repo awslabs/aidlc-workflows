@@ -512,9 +512,11 @@ export function setupWorktreeFixture(): string {
   };
   git(["init", "-q"]);
   git(["symbolic-ref", "HEAD", "refs/heads/main"]);
+  git(["config", "user.email", "t@x"]);
+  git(["config", "user.name", "t"]);
   writeFileSync(join(proj, "README.md"), "seed\n");
   git(["add", "README.md"]);
-  git(["-c", "user.email=t@x", "-c", "user.name=t", "commit", "-qm", "init"]);
+  git(["commit", "-qm", "init"]);
   // Seed the per-intent workspace shell + default record so the data-path
   // helpers (and the worktree-mirror resolution that threads relativeRecordDir)
   // anchor under aidlc/spaces/default/intents/<record>/ instead of a flat

@@ -128,8 +128,8 @@ function walkStage(proj: string, slug: string): void {
     "code-generation": "aidlc-architecture-reviewer-agent",
   };
   if (reviewerFor[slug]) {
-    spawnSync(BUN, [LOG, "review", "--stage", slug, "--reviewer", reviewerFor[slug], "--iteration", "1", "--project-dir", proj], { encoding: "utf-8" });
-    spawnSync(BUN, [LOG, "review", "--stage", slug, "--reviewer", reviewerFor[slug], "--iteration", "1", "--verdict", "READY", "--project-dir", proj], { encoding: "utf-8" });
+    spawnSync(BUN, [LOG, "review", "--stage", slug, "--reviewer", reviewerFor[slug], "--iteration", "1", "--project-dir", proj], { encoding: "utf-8", env });
+    spawnSync(BUN, [LOG, "review", "--stage", slug, "--reviewer", reviewerFor[slug], "--iteration", "1", "--verdict", "READY", "--project-dir", proj], { encoding: "utf-8", env });
   }
   const gs = spawnSync(BUN, [STATE, "gate-start", slug, "--project-dir", proj], {
     encoding: "utf-8",

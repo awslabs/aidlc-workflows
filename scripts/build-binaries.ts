@@ -797,6 +797,22 @@ function swarmReentryGate(artifact: string): GateResult {
       ["intent", "create", "--scope", "poc", "--label", "swarm-gate", "--project-dir", projectArg],
       { cwd: invocationCwd, env, timeoutMs: 30_000 },
     );
+    // `swarm prepare` now accepts authority only for Units in the current DAG.
+    // Seed the minimal one-unit DAG in this binary self-reentry fixture rather
+    // than relying on an arbitrary --units slug to create review authority.
+    const intentsRoot = join(project, "aidlc", "spaces", "default", "intents");
+    const cursor = ["active-intent", ".active-intent"]
+      .map((name) => join(intentsRoot, name))
+      .find((path) => existsSync(path));
+    if (!cursor) throw new Error(`swarm reentry intent cursor missing under ${intentsRoot}`);
+    const activeIntent = readFileSync(cursor, "utf-8").trim();
+    const dagDir = join(intentsRoot, activeIntent, "inception", "units-generation");
+    mkdirSync(dagDir, { recursive: true });
+    writeFileSync(
+      join(dagDir, "unit-of-work-dependency.md"),
+      "```yaml\nunits:\n  - name: swarm-unit\n    depends_on: []\n```\n",
+      "utf-8",
+    );
     const result = run(
       artifact,
       [

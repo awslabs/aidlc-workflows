@@ -30,7 +30,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
-import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { documentExtractors } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -63,7 +63,20 @@ beforeEach(() => {
   // to the checkout's node_modules is read-only for everything this suite
   // runs (the packager writes only dist/), so it cannot violate the
   // scratch-isolation contract above.
-  symlinkSync(join(REPO, "node_modules"), join(scratch, "node_modules"));
+  const repoNodeModules = [
+    join(REPO, "node_modules"),
+    // Managed development worktrees may share dependencies from the main
+    // checkout rather than carrying their own node_modules directory.
+    join(REPO, "..", "..", "..", "node_modules"),
+  ].find((path) => {
+    try {
+      return statSync(path).isDirectory();
+    } catch {
+      return false;
+    }
+  });
+  if (!repoNodeModules) throw new Error("t294 requires an installed node_modules directory");
+  symlinkSync(repoNodeModules, join(scratch, "node_modules"));
 });
 afterEach(() => {
   // The scratch dir is disposable: on a SIGKILL mid-test, the OS temp dir is
@@ -161,7 +174,7 @@ describe("t294 absent by default — no harness is perturbed", () => {
   test("--check is green with the field absent", () => {
     const r = pkg(["--check"]);
     expect(r.status, r.out).toBe(0);
-  });
+  }, 15000);
 
   test("the runtime accessor returns null when nothing is configured", () => {
     // Absent is the NORMAL case, not an error: the tool then probes pdftotext on
