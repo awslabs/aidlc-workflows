@@ -1962,5 +1962,29 @@ X. Other (please specify)
       expect(r.rc).not.toBe(0);
       expect(r.out).toContain("Refusing to complete");
     });
+
+    test("unexpected settled-swarm probe failures are controlled and leave state unchanged", () => {
+      seedSwarm(UNITS);
+      const brokenScopes = join(proj, "broken-scopes");
+      mkdirSync(brokenScopes, { recursive: true });
+      writeFileSync(join(brokenScopes, "broken.md"), "# Missing frontmatter\n");
+      const statePath = seededStateFile(proj);
+      const before = readFileSync(statePath, "utf-8");
+
+      const r = guarded(
+        proj,
+        ["gate-start", "code-generation"],
+        { AIDLC_SCOPES_DIR: brokenScopes },
+      );
+
+      expect(r.rc).toBe(1);
+      const refusal = JSON.parse(r.out) as { error: string };
+      expect(refusal.error).toContain(
+        'Refusing to present the approval gate for "code-generation"',
+      );
+      expect(refusal.error).toContain("settled-swarm probe failed unexpectedly");
+      expect(refusal.error).toContain("Scope file missing frontmatter");
+      expect(readFileSync(statePath, "utf-8")).toBe(before);
+    });
   });
 });

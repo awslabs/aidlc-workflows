@@ -1412,6 +1412,9 @@ describe("t305 real receipt and guard flows", () => {
     expect(refusal.error).toContain(
       "mixes fieldless and field-bearing Unit obligations",
     );
+    expect(refusal.error).not.toContain(
+      "settled-swarm probe failed unexpectedly",
+    );
     expect(readFileSync(mixedStatePath, "utf-8")).toContain(
       "- [-] code-generation",
     );

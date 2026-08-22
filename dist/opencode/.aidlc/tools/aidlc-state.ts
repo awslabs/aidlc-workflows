@@ -1466,6 +1466,22 @@ function isSettledSwarmForArtifactGuard(
   return units.every((unit) => converged.has(unit));
 }
 
+function settledSwarmForArtifactGuardOrError(
+  pd: string,
+  stage: { slug: string; phase: string; for_each?: string; mode?: string },
+  stateContent: string,
+  action: ReviewerPreconditionAction,
+): boolean {
+  try {
+    return isSettledSwarmForArtifactGuard(pd, stage, stateContent, action);
+  } catch (e) {
+    error(
+      `${reviewerPreconditionPrefix(stage.slug, action)}: the settled-swarm probe failed unexpectedly ` +
+        `(${errorMessage(e)}). Restore readable state, audit, and Unit DAG evidence before retrying.`,
+    );
+  }
+}
+
 function currentAttemptSwarmUnits(
   pd: string,
   stageSlug: string,
@@ -1819,7 +1835,7 @@ function verifyStageArtifacts(
     // No readable state file: not a swarm settle; stay strict.
   }
   if (stateContent !== null) {
-    settledSwarm = isSettledSwarmForArtifactGuard(
+    settledSwarm = settledSwarmForArtifactGuardOrError(
       pd,
       stage,
       stateContent,
@@ -1960,7 +1976,7 @@ function verifyReviewerPrecondition(
   // binding and applies newest-fresh-claimant shielding per path.
   const sourceFreshnessOff =
     process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1";
-  const settledSwarm = isSettledSwarmForArtifactGuard(
+  const settledSwarm = settledSwarmForArtifactGuardOrError(
     pd,
     stage,
     content,
