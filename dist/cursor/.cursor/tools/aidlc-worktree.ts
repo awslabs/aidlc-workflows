@@ -1152,12 +1152,12 @@ function assertAggregateSourceBeforeMerge(
   return current;
 }
 
-function reviewedSourceChangedPathKeys(
+function reviewedSourceChangedEntries(
   repoCwd: string,
   baseCommit: string,
   sourceCommit: string,
   repo: string | null,
-): Set<string> | null {
+): Map<string, string | undefined> | null {
   const changed = runGit(
     [
       "diff-tree",
@@ -1172,12 +1172,16 @@ function reviewedSourceChangedPathKeys(
     repoCwd,
   );
   if (!changed.ok) return null;
-  return new Set(
-    changed.stdout
-      .split("\0")
-      .filter(Boolean)
-      .map((path) => `${repo ?? ""}\0${path}`),
-  );
+  const reviewedListing = gitCommitSourceListing(repoCwd, sourceCommit);
+  if (reviewedListing === null) return null;
+  const entries = new Map<string, string | undefined>();
+  for (const path of changed.stdout.split("\0").filter(Boolean)) {
+    entries.set(
+      `${repo ?? ""}\0${path}`,
+      reviewedListing.get(`\0${path}`),
+    );
+  }
+  return entries;
 }
 
 function renderSourcePathKeys(keys: Iterable<string>): string {
@@ -1458,7 +1462,7 @@ function handleMerge(args: string[]): void {
         `${cleanupTag} cannot bind the post-merge main-checkout source aggregate; worktree and retained source commit preserved`,
       );
     }
-    const reviewedChanges = reviewedSourceChangedPathKeys(
+    const reviewedChanges = reviewedSourceChangedEntries(
       repoCwd,
       sourceRecord.baseCommit,
       sourceRecord.commit,
@@ -1478,6 +1482,21 @@ function handleMerge(args: string[]): void {
       errorWithSlug(
         slug,
         `${cleanupTag} post-merge source contains path changes outside immutable reviewed commit ${sourceRecord.commit} (${renderSourcePathKeys(extraChanges) || "unknown paths"}); no SWARM_SOURCE_MERGED authority was emitted. Do not retry this merge. Preserve the worktree and restart the stage attempt.`,
+      );
+    }
+    const mismatchedEntries = [...reviewedChanges]
+      .filter(
+        ([path, expected]) =>
+          !sourceListingEntriesEqual(
+            aggregateAfter.listing.get(path),
+            expected,
+          ),
+      )
+      .map(([path]) => path);
+    if (mismatchedEntries.length > 0) {
+      errorWithSlug(
+        slug,
+        `${cleanupTag} post-merge source entries do not match immutable reviewed commit ${sourceRecord.commit} (${renderSourcePathKeys(mismatchedEntries) || "unknown paths"}); no SWARM_SOURCE_MERGED authority was emitted. Do not retry this merge. Preserve the worktree and restart the stage attempt.`,
       );
     }
     try {

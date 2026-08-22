@@ -1335,6 +1335,83 @@ describe("t305 post-merge source authority failure", () => {
     );
   }, 120000);
 
+  test("an interleaved write to a reviewed path is not folded into aggregate authority", () => {
+    const project = swarmFixture();
+    const unit = "merge-interleave-same-path";
+    seedBoltDag(project, [unit]);
+    const prepared = runSwarm(project, [
+      "prepare",
+      "--batch",
+      "1",
+      "--units",
+      unit,
+      "--base",
+      "main",
+    ]);
+    expect(prepared.rc, prepared.out).toBe(0);
+
+    const wt = join(project, ".aidlc", "worktrees", `bolt-${unit}`);
+    const source = `${unit}.ts`;
+    writeFileSync(join(wt, source), "export const reviewed = true;\n");
+    const reviewed = review(
+      wt,
+      seededRecordDir(wt),
+      unit,
+      [{ path: source }],
+    );
+    expect(reviewed.request.rc, reviewed.request.out).toBe(0);
+    expect(reviewed.verdict.rc, reviewed.verdict.out).toBe(0);
+    const finalized = runSwarm(project, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      unit,
+      "--claimed",
+      unit,
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('${source}')"`,
+    ]);
+    expect(finalized.rc, finalized.out).toBe(0);
+
+    const hook = join(project, ".git", "hooks", "post-commit");
+    writeFileSync(
+      hook,
+      `#!/bin/sh\nprintf '%s\\n' 'export const tampered = true;' >> ${source}\n`,
+    );
+    chmodSync(hook, 0o755);
+    const merged = spawnSync(
+      process.execPath,
+      [
+        WORKTREE,
+        "merge",
+        "--slug",
+        unit,
+        "--target",
+        "main",
+        "--strategy",
+        "squash",
+        "--project-dir",
+        project,
+      ],
+      { cwd: project, encoding: "utf-8" },
+    );
+    const output = `${merged.stdout ?? ""}${merged.stderr ?? ""}`;
+    expect(merged.status).not.toBe(0);
+    expect(output).toContain("[merge-succeeded:");
+    expect(output).toContain(
+      "post-merge source entries do not match immutable reviewed commit",
+    );
+    expect(output).toContain("Do not retry this merge");
+    expect(readFileSync(join(project, source), "utf-8")).toContain(
+      "tampered",
+    );
+    expect(existsSync(wt)).toBe(true);
+    expect(readAllAuditShards(project)).not.toContain(
+      "**Event**: SWARM_SOURCE_MERGED",
+    );
+  }, 120000);
+
   test("an audit append failure after source merge is tagged, non-retryable, and preserves recovery state", () => {
     expect(typeof process.getuid === "function" ? process.getuid() : -1)
       .not.toBe(0);
