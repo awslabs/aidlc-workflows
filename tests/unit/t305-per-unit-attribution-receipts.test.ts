@@ -17,8 +17,8 @@
 // attribution are kept here so upstream-owned t304 remains conflict-minimal.
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -37,6 +37,7 @@ import {
   sourceClaimCovers,
   sourceListingEntriesEqual,
   serializeSourceListing,
+  sourceBaselineAuditFields,
   sourceListingSha256,
   workspaceSourceListing,
   workspaceSourceState,
@@ -46,9 +47,16 @@ import {
 
 import {
   AIDLC_SRC,
+  cleanupWorktreeFixture,
   createTestProject,
   FIXTURES_DIR,
+  seedBoltDag,
+  seededAuditDir,
+  seededAuditShard,
+  seededRecordDir,
+  seededStateFile,
   seedStateFile,
+  setupWorktreeFixture,
 } from "../harness/fixtures.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
@@ -58,11 +66,15 @@ const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const JUMP = join(AIDLC_SRC, "tools", "aidlc-jump.ts");
+const SWARM = join(AIDLC_SRC, "tools", "aidlc-swarm.ts");
+const WORKTREE = join(AIDLC_SRC, "tools", "aidlc-worktree.ts");
 const REVIEWER = "aidlc-architecture-reviewer-agent";
 const dirs: string[] = [];
+const worktreeDirs: string[] = [];
 
 afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  for (const dir of worktreeDirs.splice(0)) cleanupWorktreeFixture(dir);
 });
 
 function git(dir: string, args: string[]): void {
@@ -558,6 +570,111 @@ function stripUnitBindings(project: string): void {
   }
 }
 
+function swarmFixture(): string {
+  const project = setupWorktreeFixture();
+  worktreeDirs.push(project);
+  git(project, ["config", "user.email", "t@test"]);
+  git(project, ["config", "user.name", "t"]);
+  const state = readFileSync(
+    join(FIXTURES_DIR, "state-construction-with-worktree.md"),
+    "utf-8",
+  ).replace(/^(- \*\*Bolt Refs\*\*: ).*$/m, "$1");
+  writeFileSync(seededStateFile(project), state);
+  mkdirSync(seededAuditDir(project), { recursive: true });
+  writeFileSync(
+    seededAuditShard(project),
+    "# AI-DLC Audit Log\n",
+    "utf-8",
+  );
+  writeFileSync(
+    join(project, ".gitignore"),
+    [
+      "aidlc/active-space",
+      "aidlc/.aidlc-clone-id",
+      "aidlc/spaces/*/intents/active-intent",
+      "aidlc/spaces/*/intents/*/runtime-graph.json",
+      "aidlc/spaces/*/intents/*/.aidlc-*",
+      "aidlc/spaces/*/intents/*/audit/",
+      "",
+    ].join("\n"),
+  );
+  git(project, ["add", "-A"]);
+  git(project, [
+    "-c",
+    "user.email=t@t",
+    "-c",
+    "user.name=t",
+    "commit",
+    "-q",
+    "--amend",
+    "--no-edit",
+  ]);
+  appendAuditEntry(
+    "WORKFLOW_STARTED",
+    {
+      Scope: "feature",
+      ...sourceBaselineAuditFields(project, "code-generation"),
+    },
+    project,
+  );
+  const boundarySecond = Math.floor(Date.now() / 1000);
+  while (Math.floor(Date.now() / 1000) === boundarySecond) {}
+  return project;
+}
+
+function runSwarm(
+  project: string,
+  args: string[],
+): { rc: number; out: string } {
+  const result = spawnSync(
+    process.execPath,
+    [SWARM, "--project-dir", project, ...args],
+    { cwd: project, encoding: "utf-8" },
+  );
+  return {
+    rc: result.status ?? -1,
+    out: `${result.stdout ?? ""}${result.stderr ?? ""}`,
+  };
+}
+
+function auditLockWatcher(
+  shard: string,
+  marker: string,
+  slug: string,
+) {
+  const script = `
+    const fs = require("node:fs");
+    const shard = process.env.AIDLC_TEST_AUDIT_SHARD;
+    const marker = process.env.AIDLC_TEST_AUDIT_MARKER;
+    const slug = process.env.AIDLC_TEST_BOLT_SLUG;
+    const deadline = Date.now() + 15000;
+    const poll = () => {
+      let body = "";
+      try { body = fs.readFileSync(shard, "utf8"); } catch {}
+      if (
+        body.includes("**Event**: WORKTREE_MERGED") &&
+        body.includes("**Bolt slug**: " + slug)
+      ) {
+        fs.chmodSync(shard, 0o444);
+        fs.writeFileSync(marker, "locked\\n");
+        process.exit(0);
+      }
+      if (Date.now() >= deadline) process.exit(2);
+      setTimeout(poll, 1);
+    };
+    poll();
+  `;
+  return spawn(process.execPath, ["-e", script], {
+    env: {
+      ...process.env,
+      AIDLC_TEST_AUDIT_SHARD: shard,
+      AIDLC_TEST_AUDIT_MARKER: marker,
+      AIDLC_TEST_BOLT_SLUG: slug,
+    },
+    stdio: "ignore",
+  });
+}
+
 describe("t305 real receipt and guard flows", () => {
   test("2 stamp refuses without manifest; bypass marker is check-time enforced", () => {
     const { project, record } = runtimeFixture(); seedArtifacts(record, "alpha");
@@ -757,6 +874,94 @@ describe("t305 real receipt and guard flows", () => {
   test("calls freshReviewReceipts directly for a modern unit chain", () => {
     const {project,record}=runtimeFixture(); review(project,record,"alpha",[{path:"app.ts"}]); review(project,record,"beta",[]); const state=readFileSync(join(record,"aidlc-state.md"),"utf-8"); const receipts=freshReviewReceipts(project,state,{slug:"code-generation",phase:"construction",for_each:"unit-of-work",reviewer:REVIEWER,reviewer_max_iterations:2,workspace_requires:true,produces:["code-generation-plan","unit-test-instructions","code-summary","traceability"]}); expect(receipts.unitVerdicts.size).toBe(2);
   }, 30000);
+});
+
+describe("t305 post-merge source authority failure", () => {
+  test("an audit append failure after source merge is tagged, non-retryable, and preserves recovery state", () => {
+    expect(typeof process.getuid === "function" ? process.getuid() : -1)
+      .not.toBe(0);
+    const project = swarmFixture();
+    const unit = "audit-failure";
+    seedBoltDag(project, [unit]);
+    const prepared = runSwarm(project, [
+      "prepare",
+      "--batch",
+      "1",
+      "--units",
+      unit,
+      "--base",
+      "main",
+    ]);
+    expect(prepared.rc, prepared.out).toBe(0);
+
+    const wt = join(project, ".aidlc", "worktrees", `bolt-${unit}`);
+    const source = `${unit}.ts`;
+    writeFileSync(
+      join(wt, source),
+      "export const auditFailure = true;\n",
+    );
+    const reviewed = review(
+      wt,
+      seededRecordDir(wt),
+      unit,
+      [{ path: source }],
+    );
+    expect(reviewed.request.rc, reviewed.request.out).toBe(0);
+    expect(reviewed.verdict.rc, reviewed.verdict.out).toBe(0);
+    const finalized = runSwarm(project, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      unit,
+      "--claimed",
+      unit,
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('${source}')"`,
+    ]);
+    expect(finalized.rc, finalized.out).toBe(0);
+
+    const shard = seededAuditShard(project);
+    const marker = join(project, ".aidlc", "audit-lock-marker");
+    const originalMode = statSync(shard).mode & 0o777;
+    const watcher = auditLockWatcher(shard, marker, unit);
+    let merge: ReturnType<typeof spawnSync>;
+    let locked = false;
+    try {
+      merge = spawnSync(
+        process.execPath,
+        [
+          WORKTREE,
+          "merge",
+          "--slug",
+          unit,
+          "--target",
+          "main",
+          "--strategy",
+          "squash",
+          "--project-dir",
+          project,
+        ],
+        { cwd: project, encoding: "utf-8" },
+      );
+      locked = existsSync(marker);
+    } finally {
+      watcher.kill();
+      chmodSync(shard, originalMode);
+      rmSync(marker, { force: true });
+    }
+
+    const output = `${merge.stdout ?? ""}${merge.stderr ?? ""}`;
+    expect(locked).toBe(true);
+    expect(merge.status).not.toBe(0);
+    expect(output).toContain("[merge-succeeded:");
+    expect(output).toContain("Do not retry this merge");
+    expect(existsSync(join(project, source))).toBe(true);
+    expect(existsSync(wt)).toBe(true);
+    expect(readAllAuditShards(project)).not.toContain(
+      "**Event**: SWARM_SOURCE_MERGED",
+    );
+  }, 120000);
 });
 
 describe("t305 stage and protocol source-attribution requirements", () => {

@@ -1391,9 +1391,6 @@ function handleMerge(args: string[]): void {
       );
     }
     try {
-      if (process.env.AIDLC_TEST_FAIL_SOURCE_MERGE_AUDIT === "1") {
-        throw new Error("injected SWARM_SOURCE_MERGED audit failure");
-      }
       emitAudit(
         pd,
         "SWARM_SOURCE_MERGED",
