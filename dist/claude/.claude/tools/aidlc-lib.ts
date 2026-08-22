@@ -10024,6 +10024,23 @@ export function currentSwarmAttemptObligations(
     space,
   );
   const rows = readAuditShardEvents(projectDir, intent, space);
+  const modernCurrentAttempt = rows.some(
+    (row) =>
+      auditBlockField(row.block, "Stage") === slug &&
+      auditBlockField(row.block, "Run floor") === floor &&
+      ((row.event === "SWARM_UNIT_CONVERGED" &&
+        (auditBlockField(row.block, "Source Commit") !== null ||
+          auditBlockField(row.block, "Source Freshness Bypass") !== null)) ||
+        row.event === "SWARM_SOURCE_MERGED"),
+  );
+  const missingObligations = (): SwarmAttemptObligations =>
+    modernCurrentAttempt
+      ? {
+          state: "invalid",
+          reason:
+            "modern current-attempt swarm evidence exists without SWARM_STARTED Unit obligations",
+        }
+      : { state: "none" };
   const starts = rows.filter(
     (row) =>
       row.event === "SWARM_STARTED" &&
@@ -10031,22 +10048,7 @@ export function currentSwarmAttemptObligations(
       auditBlockField(row.block, "Run floor") === floor,
   );
   if (starts.length === 0) {
-    const modernCurrentAttempt = rows.some(
-      (row) =>
-        auditBlockField(row.block, "Stage") === slug &&
-        auditBlockField(row.block, "Run floor") === floor &&
-        ((row.event === "SWARM_UNIT_CONVERGED" &&
-          (auditBlockField(row.block, "Source Commit") !== null ||
-            auditBlockField(row.block, "Source Freshness Bypass") !== null)) ||
-          row.event === "SWARM_SOURCE_MERGED"),
-    );
-    return modernCurrentAttempt
-      ? {
-          state: "invalid",
-          reason:
-            "modern current-attempt swarm evidence exists without SWARM_STARTED Unit obligations",
-        }
-      : { state: "none" };
+    return missingObligations();
   }
 
   const obligationFields = starts.map((row) =>
@@ -10055,7 +10057,7 @@ export function currentSwarmAttemptObligations(
   const fieldBearing = obligationFields.filter(
     (field): field is string => field !== null,
   );
-  if (fieldBearing.length === 0) return { state: "none" };
+  if (fieldBearing.length === 0) return missingObligations();
   if (fieldBearing.length !== starts.length) {
     return {
       state: "invalid",

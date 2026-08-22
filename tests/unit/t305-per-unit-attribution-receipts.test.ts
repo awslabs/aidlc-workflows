@@ -1223,68 +1223,37 @@ describe("t305 real receipt and guard flows", () => {
     const legacy = swarmFixture();
     const legacyUnit = "legacy-obligations";
     seedBoltDag(legacy, [legacyUnit]);
-    const prepared = runSwarm(legacy, [
-      "prepare",
-      "--batch",
-      "1",
-      "--units",
-      legacyUnit,
-      "--base",
-      "main",
-    ]);
-    expect(prepared.rc, prepared.out).toBe(0);
-    stripAuditFields(legacy, "SWARM_STARTED", ["Unit obligations"]);
+    const legacyFloor = latestMainWorkflowStageRunFloorForProject(
+      legacy,
+      "code-generation",
+    );
+    appendAuditEntry(
+      "SWARM_STARTED",
+      {
+        "Batch number": "1",
+        "Unit names": legacyUnit,
+        "Concurrency cap": "1",
+        Stage: "code-generation",
+        "Run floor": legacyFloor,
+      },
+      legacy,
+    );
+    appendAuditEntry(
+      "SWARM_UNIT_CONVERGED",
+      {
+        "Batch number": "1",
+        "Unit name": legacyUnit,
+        Stage: "code-generation",
+        "Run floor": legacyFloor,
+      },
+      legacy,
+    );
     expect(
       currentSwarmAttemptObligations(
         legacy,
         "code-generation",
       ).state,
     ).toBe("none");
-    const legacyWt = join(
-      legacy,
-      ".aidlc",
-      "worktrees",
-      `bolt-${legacyUnit}`,
-    );
-    const source = `${legacyUnit}.ts`;
-    writeFileSync(join(legacyWt, source), "export const legacy = true;\n");
-    const reviewed = review(
-      legacyWt,
-      seededRecordDir(legacyWt),
-      legacyUnit,
-      [{ path: source }],
-    );
-    expect(reviewed.verdict.rc, reviewed.verdict.out).toBe(0);
-    const finalized = runSwarm(legacy, [
-      "finalize",
-      "--batch",
-      "1",
-      "--units",
-      legacyUnit,
-      "--claimed",
-      legacyUnit,
-      "--check-cmd",
-      `"${process.execPath}" -e "require('fs').accessSync('${source}')"`,
-    ]);
-    expect(finalized.rc, finalized.out).toBe(0);
-    const merged = spawnSync(
-      process.execPath,
-      [
-        WORKTREE,
-        "merge",
-        "--slug",
-        legacyUnit,
-        "--target",
-        "main",
-        "--strategy",
-        "squash",
-        "--project-dir",
-        legacy,
-      ],
-      { cwd: legacy, encoding: "utf-8" },
-    );
-    expect(merged.status, `${merged.stdout ?? ""}${merged.stderr ?? ""}`)
-      .toBe(0);
     const legacyStatePath = seededStateFile(legacy);
     writeFileSync(
       legacyStatePath,
@@ -1302,6 +1271,63 @@ describe("t305 real receipt and guard flows", () => {
     expect(readAllAuditShards(legacy)).toContain(
       "**Event**: STAGE_COMPLETED",
     );
+
+    const stripped = swarmFixture();
+    const strippedUnit = "stripped-obligations";
+    seedBoltDag(stripped, [strippedUnit]);
+    const strippedFloor = latestMainWorkflowStageRunFloorForProject(
+      stripped,
+      "code-generation",
+    );
+    appendAuditEntry(
+      "SWARM_STARTED",
+      {
+        "Batch number": "1",
+        "Unit names": strippedUnit,
+        "Unit obligations": strippedUnit,
+        "Concurrency cap": "1",
+        Stage: "code-generation",
+        "Run floor": strippedFloor,
+      },
+      stripped,
+    );
+    appendAuditEntry(
+      "SWARM_UNIT_CONVERGED",
+      {
+        "Batch number": "1",
+        "Unit name": strippedUnit,
+        Stage: "code-generation",
+        "Run floor": strippedFloor,
+        "Source Fingerprint": "a".repeat(40),
+        "Source Commit": "b".repeat(40),
+      },
+      stripped,
+    );
+    appendAuditEntry(
+      "SWARM_SOURCE_MERGED",
+      {
+        "Batch number": "1",
+        "Unit name": strippedUnit,
+        Stage: "code-generation",
+        "Run floor": strippedFloor,
+        "Previous Source Fingerprint": "c".repeat(40),
+        "Source Fingerprint": "d".repeat(40),
+        "Source Commit": "b".repeat(40),
+        "Merge commit": "e".repeat(40),
+      },
+      stripped,
+    );
+    stripAuditFields(stripped, "SWARM_STARTED", ["Unit obligations"]);
+    const strippedObligations = currentSwarmAttemptObligations(
+      stripped,
+      "code-generation",
+    );
+    expect(strippedObligations.state).toBe("invalid");
+    if (strippedObligations.state === "invalid") {
+      expect(strippedObligations.reason).toContain(
+        "modern current-attempt swarm evidence exists without SWARM_STARTED Unit obligations",
+      );
+    }
 
     const mixed = swarmFixture();
     const mixedUnit = "mixed-obligations";
