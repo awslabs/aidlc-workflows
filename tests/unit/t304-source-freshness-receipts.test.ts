@@ -54,10 +54,13 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   boltSlugForUnit,
   readAllAuditShards,
+  sourceBaselineAuditFields,
   workspaceSourceFingerprint,
+  workspaceSourceListing,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
@@ -127,6 +130,7 @@ function recordReview(
   reviewer = REVIEWER,
   unit?: string,
   verdict = "READY",
+  claimPaths?: Array<{ path: string; repo?: string }>,
 ): void {
   // v2 requires every per-unit code-generation receipt to bind the declared
   // artifacts as well as workspace source. Seed the minimal real contract in
@@ -146,6 +150,20 @@ function recordReview(
       );
       if (!existsSync(path)) writeFileSync(path, `# ${artifact}\n`, "utf-8");
     }
+    const listing = workspaceSourceListing(proj);
+    const writes = claimPaths ?? (listing === null
+      ? []
+      : [...listing.keys()].map((key) => {
+          const separator = key.indexOf("\0");
+          const repo = key.slice(0, separator);
+          const path = key.slice(separator + 1);
+          return repo.length > 0 ? { repo, path } : { path };
+        }));
+    writeFileSync(
+      join(artifactDir, "source-manifest.json"),
+      `${JSON.stringify({ stage, unit, version: 1, writes }, null, 2)}\n`,
+      "utf-8",
+    );
   }
   const audit = readAllAuditShards(proj).replace(/\r\n/g, "\n");
   const priorRequests = audit
@@ -284,7 +302,7 @@ describe("t304 workspace source fingerprint (in-process)", () => {
     expect(workspaceSourceFingerprint(dir)).toBe(fp1);
   });
 
-  test("never mutates the real index, and returns null off-git", () => {
+  test("never mutates the real index, and binds only an empty off-git workspace", () => {
     const src = seedGitRepo(dir);
     writeFileSync(src, "export const answer = 99;\n", "utf-8"); // dirty worktree
     workspaceSourceFingerprint(dir);
@@ -296,6 +314,8 @@ describe("t304 workspace source fingerprint (in-process)", () => {
     expect(status).toContain(" M app.ts");
     const plain = mkdtempSync(join(tmpdir(), "t304-plain-"));
     try {
+      expect(workspaceSourceFingerprint(plain)).toMatch(/^[0-9a-f]{64}$/);
+      writeFileSync(join(plain, "raw.ts"), "unbound\n");
       expect(workspaceSourceFingerprint(plain)).toBeNull();
     } finally {
       rmSync(plain, { recursive: true, force: true });
@@ -818,7 +838,7 @@ describe("t304 receipt stamping + completion guard (cli)", () => {
   test("review --verdict stamps Source Fingerprint for code-generation; approve passes while source matches", () => {
     recordReview(proj);
     expect(readAllAuditShards(proj)).toContain("**Source Fingerprint**: ");
-    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    const r = guarded(proj, ["gate-start", "code-generation"]);
     expect(r.out).not.toContain("source-fingerprint mismatch");
     expect(r.rc).toBe(0);
   });
@@ -1034,7 +1054,7 @@ describe("t304 multi-unit flow: what the workspace-global fingerprint does and d
 
     // Nothing edited after beta's review - both units are reviewed against
     // exactly the tree state that exists at approve time. This must pass.
-    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    const r = guarded(proj, ["gate-start", "code-generation"]);
     expect(r.out).not.toContain("source-fingerprint mismatch");
     expect(r.rc).toBe(0);
   }, 30000);
@@ -1099,11 +1119,13 @@ describe("t304 multi-unit flow: what the workspace-global fingerprint does and d
   // and written down rather than guessed at; see the describe comment. This
   // test asserts the documented behaviour so the policy is visible in code,
   // and goes red when per-unit attribution lands.
-  test("a unit edited after its own review, then masked by a later unit's review, is accepted (documented limitation)", () => {
+  test("a unit edited after its own review, then masked by a later unit's review, is refused", () => {
     writeFileSync(join(proj, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
     git(proj, ["add", "-A"]);
     git(proj, ["commit", "-qm", "alpha code v1"]);
-    recordReview(proj, "code-generation", REVIEWER, "alpha");
+    recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [
+      { path: "alpha.ts" },
+    ]);
 
     // Edited with NO new review recorded for alpha.
     writeFileSync(join(proj, "alpha.ts"), "export const alpha = 999; // no re-review\n", "utf-8");
@@ -1113,11 +1135,13 @@ describe("t304 multi-unit flow: what the workspace-global fingerprint does and d
     writeFileSync(join(proj, "beta.ts"), "export const beta = 2;\n", "utf-8");
     git(proj, ["add", "-A"]);
     git(proj, ["commit", "-qm", "beta code"]);
-    recordReview(proj, "code-generation", REVIEWER, "beta");
+    recordReview(proj, "code-generation", REVIEWER, "beta", "READY", [
+      { path: "beta.ts" },
+    ]);
 
-    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
-    expect(r.out).not.toContain("source-fingerprint mismatch");
-    expect(r.rc).toBe(0);
+    const r = guarded(proj, ["gate-start", "code-generation"]);
+    expect(r.rc).toBe(1);
+    expect(r.out).toContain("Invalidated receipts: alpha");
   });
 
   // DOCUMENTED LIMITATION, the inverse ordering (#646 review, inline comment
@@ -1125,16 +1149,20 @@ describe("t304 multi-unit flow: what the workspace-global fingerprint does and d
   // edited, so the newest fingerprint (stamped at alpha's second review)
   // matches the workspace while beta's now-stale receipt survives. Same root
   // cause, same accepted policy, same red-on-attribution intent.
-  test("re-reviewing an earlier unit carries a later unit's stale receipt (documented limitation)", () => {
+  test("re-reviewing an earlier unit refuses a later unit's stale receipt", () => {
     writeFileSync(join(proj, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
     git(proj, ["add", "-A"]);
     git(proj, ["commit", "-qm", "alpha code"]);
-    recordReview(proj, "code-generation", REVIEWER, "alpha");
+    recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [
+      { path: "alpha.ts" },
+    ]);
 
     writeFileSync(join(proj, "beta.ts"), "export const beta = 1;\n", "utf-8");
     git(proj, ["add", "-A"]);
     git(proj, ["commit", "-qm", "beta code"]);
-    recordReview(proj, "code-generation", REVIEWER, "beta");
+    recordReview(proj, "code-generation", REVIEWER, "beta", "READY", [
+      { path: "beta.ts" },
+    ]);
 
     // Edit beta, no new review for beta.
     writeFileSync(join(proj, "beta.ts"), "export const beta = 999; // no re-review\n", "utf-8");
@@ -1143,11 +1171,13 @@ describe("t304 multi-unit flow: what the workspace-global fingerprint does and d
 
     // Re-review alpha (not beta) - alpha's own content is unchanged, but the
     // tree now includes beta's unreviewed edit.
-    recordReview(proj, "code-generation", REVIEWER, "alpha");
+    recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [
+      { path: "alpha.ts" },
+    ]);
 
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
-    expect(r.out).not.toContain("source-fingerprint mismatch");
-    expect(r.rc).toBe(0);
+    expect(r.rc).toBe(1);
+    expect(r.out).toContain("Invalidated receipts: beta");
   }, 15000);
 
   // DOCUMENTED LIMITATION - the `A`-shaped case, which the removed rule never
@@ -1156,11 +1186,23 @@ describe("t304 multi-unit flow: what the workspace-global fingerprint does and d
   // its own unit's artifacts (stage-protocol §12a), so beta's reviewer is
   // never pointed at this file. Asserting rc 0 states the policy explicitly
   // rather than leaving the gap undocumented.
-  test("an addition nobody reviewed is accepted by the workspace-global binding (documented limitation)", () => {
+  test("an addition nobody reviewed is refused as unclaimed", () => {
+    appendAuditEntry(
+      "WORKFLOW_STARTED",
+      {
+        Scope: "feature",
+        ...sourceBaselineAuditFields(proj, "code-generation"),
+      },
+      proj,
+    );
+    const boundarySecond = Math.floor(Date.now() / 1000);
+    while (Math.floor(Date.now() / 1000) === boundarySecond) {}
     writeFileSync(join(proj, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
     git(proj, ["add", "-A"]);
     git(proj, ["commit", "-qm", "alpha code"]);
-    recordReview(proj, "code-generation", REVIEWER, "alpha");
+    recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [
+      { path: "alpha.ts" },
+    ]);
 
     writeFileSync(join(proj, "unreviewed.ts"), "export const extra = () => process.env;\n", "utf-8");
     git(proj, ["add", "-A"]);
@@ -1169,10 +1211,14 @@ describe("t304 multi-unit flow: what the workspace-global fingerprint does and d
     writeFileSync(join(proj, "beta.ts"), "export const beta = 2;\n", "utf-8");
     git(proj, ["add", "-A"]);
     git(proj, ["commit", "-qm", "beta code"]);
-    recordReview(proj, "code-generation", REVIEWER, "beta");
+    recordReview(proj, "code-generation", REVIEWER, "beta", "READY", [
+      { path: "beta.ts" },
+    ]);
 
-    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
-    expect(r.rc).toBe(0);
+    const r = guarded(proj, ["gate-start", "code-generation"]);
+    expect(r.rc).toBe(1);
+    expect(r.out).toContain("Unclaimed source changes fail closed");
+    expect(r.out).toContain("unreviewed.ts");
   }, 15000);
 
   // #646 review - the recorded-repo layout is the DEFAULT (sibling
@@ -1271,14 +1317,16 @@ describe("t304 settled-swarm exemption from fingerprint reconciliation (#646 rev
 
   afterEach(() => cleanupTestProject(proj));
 
-  test("approve PASSES despite a main-checkout mismatch once every DAG unit has converged", () => {
+  test("approve refuses a settled swarm without a main-checkout source-merge chain", () => {
     // Simulates the worktree code never having merged into the main checkout:
     // the recorded receipts' fingerprints (stamped in this test's proj, since
     // no real worktree is involved here) no longer match the current tree.
     writeFileSync(join(proj, "app.ts"), "export const answer = 999;\n", "utf-8");
-    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
-    expect(r.out).not.toContain("source-fingerprint mismatch");
-    expect(r.rc).toBe(0);
+    const r = guarded(proj, ["gate-start", "code-generation"]);
+    expect(r.rc).toBe(1);
+    expect(r.out).toContain(
+      "no current-attempt post-merge main-checkout source binding",
+    );
   });
 });
 
@@ -1324,11 +1372,25 @@ describe("t304 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     );
     git(proj, ["add", "-A"]);
     git(proj, ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--amend", "--no-edit"]);
+    appendAuditEntry(
+      "WORKFLOW_STARTED",
+      {
+        Scope: "feature",
+        ...sourceBaselineAuditFields(proj, "code-generation"),
+      },
+      proj,
+    );
+    const boundarySecond = Math.floor(Date.now() / 1000);
+    while (Math.floor(Date.now() / 1000) === boundarySecond) {}
     return proj;
   }
 
   function wtPath(proj: string, unit: string): string {
     return join(proj, ".aidlc", "worktrees", `bolt-${unit}`);
+  }
+
+  function ensureDagUnit(proj: string, unit: string): void {
+    seedBoltDag(proj, [unit]);
   }
 
   function runSwarm(
@@ -1346,6 +1408,7 @@ describe("t304 swarm finalize source-fingerprint check (#646 review P1#3)", () =
 
   test("finalize refuses a claimed unit whose worktree source changed after its terminal review", () => {
     const proj = makeFixture();
+    ensureDagUnit(proj, "foo");
     runSwarm(proj, ["prepare", "--batch", "1", "--units", "foo", "--base", "main"]);
     const wt = wtPath(proj, "foo");
     writeFileSync(join(wt, "foo.ts"), "export const foo = 1;\n", "utf-8");
@@ -1374,6 +1437,7 @@ describe("t304 swarm finalize source-fingerprint check (#646 review P1#3)", () =
 
   test("finalize fails closed when reviewed bytes live only in a dirty initialized submodule", () => {
     const proj = makeFixture();
+    ensureDagUnit(proj, "subdirty");
     const origin = mkdtempSync(join(tmpdir(), "aidlc-t304-submodule-"));
     extraDirs.push(origin);
     seedGitRepo(origin);
@@ -1416,6 +1480,7 @@ describe("t304 swarm finalize source-fingerprint check (#646 review P1#3)", () =
 
   test("a finalize-time bypass cannot become fieldless legacy evidence after the switch is unset", () => {
     const proj = makeFixture();
+    ensureDagUnit(proj, "bypass");
     runSwarm(proj, ["prepare", "--batch", "1", "--units", "bypass", "--base", "main"]);
     const wt = wtPath(proj, "bypass");
     writeFileSync(join(wt, "reviewed.ts"), "export const reviewed = true;\n", "utf-8");
@@ -1495,6 +1560,7 @@ describe("t304 swarm finalize source-fingerprint check (#646 review P1#3)", () =
 
   test("a bypassed convergence merges when the source merge repeats the switch", () => {
     const proj = makeFixture();
+    ensureDagUnit(proj, "bypass-switch");
     runSwarm(proj, ["prepare", "--batch", "1", "--units", "bypass-switch", "--base", "main"]);
     const wt = wtPath(proj, "bypass-switch");
     writeFileSync(join(wt, "reviewed.ts"), "export const reviewed = true;\n", "utf-8");
@@ -1561,6 +1627,7 @@ describe("t304 swarm finalize source-fingerprint check (#646 review P1#3)", () =
 
   test("bypass cleanup preserves untracked and ignored application source", () => {
     const proj = makeFixture();
+    ensureDagUnit(proj, "bypass-dirty");
     runSwarm(proj, ["prepare", "--batch", "1", "--units", "bypass-dirty", "--base", "main"]);
     const wt = wtPath(proj, "bypass-dirty");
     writeFileSync(
@@ -1662,6 +1729,7 @@ describe("t304 swarm finalize source-fingerprint check (#646 review P1#3)", () =
 
   test("a tracked symlink matched by a broad clean filter stays a symlink through finalize and merge", () => {
     const proj = makeFixture();
+    ensureDagUnit(proj, "link");
     git(proj, ["config", "core.symlinks", "true"]);
     runSwarm(proj, ["prepare", "--batch", "1", "--units", "link", "--base", "main"]);
     const wt = wtPath(proj, "link");
@@ -1693,6 +1761,7 @@ describe("t304 swarm finalize source-fingerprint check (#646 review P1#3)", () =
 
   test("finalize merges a claimed unit whose worktree source is unchanged since its terminal review", () => {
     const proj = makeFixture();
+    ensureDagUnit(proj, "bar");
     runSwarm(proj, ["prepare", "--batch", "1", "--units", "bar", "--base", "main"]);
     const wt = wtPath(proj, "bar");
     git(wt, ["config", "filter.tidy.clean", "sed 's/[[:space:]]*$//'"]);
@@ -1813,6 +1882,7 @@ describe("t304 swarm finalize source-fingerprint check (#646 review P1#3)", () =
 
   test("discard removes the retained reviewed-source refs for that Bolt", () => {
     const proj = makeFixture();
+    ensureDagUnit(proj, "drop");
     runSwarm(proj, ["prepare", "--batch", "1", "--units", "drop", "--base", "main"]);
     const wt = wtPath(proj, "drop");
     writeFileSync(join(wt, "drop.ts"), "export const drop = true;\n", "utf-8");

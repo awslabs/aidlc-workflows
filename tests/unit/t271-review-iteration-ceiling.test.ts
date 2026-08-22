@@ -165,7 +165,7 @@ describe("t271 review iteration ceiling", () => {
         "--iteration", "1",
       ]);
       expect(ghost.status).not.toBe(0);
-      expect(ghost.stderr).toContain("not in the current resolved Unit DAG");
+      expect(ghost.stderr).toContain("not present in the authoritative unit DAG");
     }
   });
 
@@ -759,16 +759,17 @@ describe("t271 review iteration ceiling", () => {
     const boltBacked = createTestProject();
     seedStateFile(boltBacked, "state-mid-inception.md");
     seedAuditFile(boltBacked);
+    appendAuditEntry("STAGE_STARTED", {
+      Stage: "code-generation",
+    }, boltBacked);
     appendAuditEntry("BOLT_STARTED", {
       "Bolt names": "2fa",
       "Batch number": "1",
       "Walking skeleton": "false",
       "Bolt slug": boltSlugForUnit("2fa"),
     }, boltBacked);
-    appendAuditEntry("STAGE_STARTED", {
-      Stage: "code-generation",
-    }, boltBacked);
-    expect(runReview(boltBacked, [...base, "--unit", "2fa"]).status).toBe(0);
+    const boltReview = runReview(boltBacked, [...base, "--unit", "2fa"]);
+    expect(boltReview.status, boltReview.stderr).toBe(0);
 
     const mismatchedBolt = createTestProject();
     seedStateFile(mismatchedBolt, "state-mid-inception.md");
