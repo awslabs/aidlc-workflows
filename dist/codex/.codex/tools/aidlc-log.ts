@@ -6,7 +6,6 @@
 // (the §12a reviewer step). Orchestrator-callable; state tool doesn't own these
 // because they fire per-question / per-review, not per state transition.
 
-import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { relative, resolve, sep } from "node:path";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
@@ -17,7 +16,6 @@ import {
   boltSlugForUnit,
   emitError,
   errorMessage,
-  extractMarkdownSection,
   formatReceivedReply,
   freshReviewReceipts,
   getField,
@@ -32,6 +30,7 @@ import {
   pipelineLinkEvidence,
   pipelineLinks,
   readAllAuditShards,
+  readAuditShardEvents,
   readStateFile,
   recordDir,
   reviewArtifactFingerprint,
@@ -40,6 +39,9 @@ import {
   resolveReviewClass,
   selfAttributedDecisionMarker,
   SUMMARY_CONFIRMATION_CHECKPOINT,
+  SUMMARY_CONFIRMATION_HASH_SCOPE,
+  summaryConfirmationAnswer,
+  summaryConfirmationContentHash,
   stateFilePath,
   toPosix,
   UNBINDABLE_FINGERPRINT,
@@ -147,12 +149,7 @@ function summaryQuestionEvidence(
   }
 
   const body = readFileSync(absolute, "utf-8");
-  const section = extractMarkdownSection(
-    body,
-    `## ${SUMMARY_CONFIRMATION_CHECKPOINT}`,
-  );
-  const answers = [...section.matchAll(/^\[Answer\]:[ \t]*(.*)$/gm)];
-  if (answers.length !== 1 || answers[0][1].trim() !== expectedAnswer) {
+  if (summaryConfirmationAnswer(body) !== expectedAnswer) {
     const rendered = expectedAnswer || "a blank value";
     error(
       `Summary confirmation section in ${supplied} must contain exactly one ` +
@@ -160,9 +157,17 @@ function summaryQuestionEvidence(
     );
   }
 
+  let sha256: string;
+  try {
+    sha256 = summaryConfirmationContentHash(body);
+  } catch (e) {
+    error(
+      `Summary confirmation questions file ${supplied} is invalid: ${errorMessage(e)}.`,
+    );
+  }
   return {
     relativePath: toPosix(relative(pd, absolute)),
-    sha256: createHash("sha256").update(body).digest("hex"),
+    sha256,
   };
 }
 
@@ -281,76 +286,131 @@ function pendingSummaryDecision(
   unit: string | undefined,
   workflow: string | undefined,
   questionsFile: string,
-): { pending: boolean; humanAfterDecision: boolean } {
-  const audit = readAllAuditShards(pd);
-  if (audit.length === 0) {
+): { pending: boolean; humanAfterDecision: boolean; ambiguity?: string } {
+  const entries = readAuditShardEvents(pd).filter((entry) => {
+    if (entry.event === "HUMAN_TURN") return true;
+    if (entry.event === "STAGE_COMPLETED") {
+      return (
+        auditBlockField(entry.block, "Stage") === stage &&
+        (auditBlockField(entry.block, "Workflow") ?? undefined) === workflow
+      );
+    }
+    if (
+      entry.event !== "DECISION_RECORDED" &&
+      entry.event !== "SUMMARY_CONFIRMATION_RECORDED"
+    ) {
+      return false;
+    }
+    return (
+      auditBlockField(entry.block, "Stage") === stage &&
+      auditBlockField(entry.block, "Checkpoint") ===
+        SUMMARY_CONFIRMATION_CHECKPOINT &&
+      (auditBlockField(entry.block, "Unit") ?? undefined) === unit &&
+      (auditBlockField(entry.block, "Workflow") ?? undefined) === workflow &&
+      auditBlockField(entry.block, "Questions File") === questionsFile
+    );
+  });
+  if (entries.length === 0) {
     return { pending: false, humanAfterDecision: false };
   }
 
-  const entries = audit
-    .replace(/\r\n/g, "\n")
-    .split(/\n---\n/)
-    .map((block, position) => ({
-      block,
-      position,
-      event: auditBlockField(block, "Event") ?? "",
-      timestamp: auditBlockField(block, "Timestamp") ?? "",
-    }))
-    .filter((entry) =>
-      entry.event === "DECISION_RECORDED" ||
-      entry.event === "SUMMARY_CONFIRMATION_RECORDED" ||
-      entry.event === "STAGE_COMPLETED" ||
-      entry.event === "HUMAN_TURN"
-    )
-    .sort((a, b) =>
-      a.timestamp !== b.timestamp
-        ? (a.timestamp < b.timestamp ? -1 : 1)
-        : a.position - b.position
+  type Entry = (typeof entries)[number];
+  const follows = (candidate: Entry, boundary: Entry): true | false | null => {
+    if (candidate.shard === boundary.shard) {
+      return candidate.pos > boundary.pos;
+    }
+    if (candidate.timestamp !== boundary.timestamp) {
+      return candidate.timestamp > boundary.timestamp;
+    }
+    return null;
+  };
+  const latestFrontier = (candidates: Entry[]): Entry[] => {
+    const byShard = new Map<string, Entry>();
+    for (const entry of candidates) {
+      const previous = byShard.get(entry.shard);
+      if (!previous || entry.pos > previous.pos) byShard.set(entry.shard, entry);
+    }
+    const latestTimestamp = [...byShard.values()].reduce(
+      (latest, entry) =>
+        entry.timestamp > latest ? entry.timestamp : latest,
+      "",
     );
-
-  let decision = -1;
-  let answer = -1;
-  let human = -1;
-  for (let i = 0; i < entries.length; i++) {
-    const entry = entries[i];
-    if (
-      entry.event === "STAGE_COMPLETED" &&
-      auditBlockField(entry.block, "Stage") === stage &&
-      auditBlockField(entry.block, "Workflow") === workflow
-    ) {
-      decision = -1;
-      answer = -1;
-      human = -1;
-      continue;
-    }
-    if (entry.event === "HUMAN_TURN") {
-      human = i;
-      continue;
-    }
-    if (auditBlockField(entry.block, "Stage") !== stage) continue;
-    if (
-      auditBlockField(entry.block, "Checkpoint") !==
-        SUMMARY_CONFIRMATION_CHECKPOINT
-    ) {
-      continue;
-    }
-    if ((auditBlockField(entry.block, "Unit") ?? undefined) !== unit) continue;
-    if (
-      (auditBlockField(entry.block, "Workflow") ?? undefined) !== workflow
-    ) {
-      continue;
-    }
-    if (auditBlockField(entry.block, "Questions File") !== questionsFile) {
-      continue;
-    }
-    if (entry.event === "DECISION_RECORDED") decision = i;
-    if (entry.event === "SUMMARY_CONFIRMATION_RECORDED") answer = i;
+    return [...byShard.values()].filter(
+      (entry) => entry.timestamp === latestTimestamp,
+    );
+  };
+  const floors = latestFrontier(
+    entries.filter((entry) => entry.event === "STAGE_COMPLETED"),
+  );
+  const afterFloor = (entry: Entry): true | false | null => {
+    if (floors.length === 0) return true;
+    const relations = floors.map((floor) => follows(entry, floor));
+    if (relations.every((relation) => relation === true)) return true;
+    if (relations.some((relation) => relation === false)) return false;
+    return null;
+  };
+  const actions = entries.filter((entry) =>
+    entry.event === "DECISION_RECORDED" ||
+    entry.event === "SUMMARY_CONFIRMATION_RECORDED"
+  );
+  const orderedActions = actions.filter((entry) => afterFloor(entry) === true);
+  const latestActions = latestFrontier(orderedActions);
+  const latestActionTimestamp = latestActions[0]?.timestamp;
+  const unorderedActions = actions.filter((entry) => afterFloor(entry) === null);
+  if (
+    unorderedActions.some((entry) =>
+      latestActionTimestamp === undefined ||
+      entry.timestamp >= latestActionTimestamp
+    )
+  ) {
+    return {
+      pending: false,
+      humanAfterDecision: false,
+      ambiguity: floors[0]?.timestamp ?? unorderedActions[0].timestamp,
+    };
+  }
+  if (latestActions.length === 0 || latestActionTimestamp === undefined) {
+    return { pending: false, humanAfterDecision: false };
   }
 
-  return {
-    pending: decision > answer,
-    humanAfterDecision: human > decision && decision >= 0,
-  };
+  const latestKinds = new Set(
+    latestActions.map((entry) => entry.event),
+  );
+  if (latestKinds.size > 1) {
+    return {
+      pending: false,
+      humanAfterDecision: false,
+      ambiguity: latestActionTimestamp,
+    };
+  }
+  if (!latestKinds.has("DECISION_RECORDED")) {
+    return { pending: false, humanAfterDecision: false };
+  }
+
+  const humans = entries.filter((entry) => entry.event === "HUMAN_TURN");
+  const humanRelations = humans.map((human) =>
+    latestActions.map((decision) => follows(human, decision))
+  );
+  if (
+    humanRelations.some((relations) =>
+      relations.every((relation) => relation === true)
+    )
+  ) {
+    return { pending: true, humanAfterDecision: true };
+  }
+  if (
+    humanRelations.some((relations) =>
+      !relations.some((relation) => relation === false) &&
+      relations.some((relation) => relation === null)
+    )
+  ) {
+    return {
+      pending: false,
+      humanAfterDecision: false,
+      ambiguity: latestActionTimestamp,
+    };
+  }
+  return { pending: true, humanAfterDecision: false };
 }
 
 function handleAnswer(args: string[]): void {
@@ -401,6 +461,7 @@ function handleAnswer(args: string[]): void {
     fields.Checkpoint = SUMMARY_CONFIRMATION_CHECKPOINT;
     fields["Questions File"] = summaryEvidence!.relativePath;
     fields["Questions SHA-256"] = summaryEvidence!.sha256;
+    fields["Hash Scope"] = SUMMARY_CONFIRMATION_HASH_SCOPE;
   }
   if (flags.unit) fields.Unit = flags.unit;
   if (flags.single === "true") fields.Workflow = `single-stage:${flags.stage}`;
@@ -457,6 +518,15 @@ function handleAnswer(args: string[]): void {
         workflow,
         summaryEvidence!.relativePath,
       );
+      if (pending.ambiguity !== undefined) {
+        error(
+          "Refusing to record summary confirmation: matching prompt, response, " +
+          `or run-boundary events share audit Timestamp "${pending.ambiguity}" ` +
+          "across different shards, so a human response after this prompt cannot " +
+          "be proven. Present a fresh summary prompt after that second, end the " +
+          "turn, and record the human's new response.",
+        );
+      }
       if (!pending.pending) {
         error(
           "Refusing to record summary confirmation: no matching unanswered " +
@@ -466,12 +536,12 @@ function handleAnswer(args: string[]): void {
       }
       if (
         !humanPresenceGuardDisabled() &&
-        !pending.humanAfterDecision
+        (!pending.humanAfterDecision || !humanActedSinceLastAnswer(pd))
       ) {
         error(
           "Refusing to record summary confirmation: a real human has not responded " +
-          "after this summary prompt. End the turn, wait for the human's choice, " +
-          "then record it.",
+          "after this summary prompt, or the turn was already consumed by another " +
+          "decision. End the turn, wait for the human's choice, then record it.",
         );
       }
       try {

@@ -86,6 +86,16 @@ describe("t264 (a) judgeFreeze decision table", () => {
     // The reason redirects to the gate, not to a retry of the same write.
     expect(blockReason(v)).toContain("Present the gate instead");
     expect(blockReason(v)).toContain("terminal receipt ends artifact work");
+    expect(blockReason(v)).toContain(
+      'report --stage "requirements-analysis" --result rejected',
+    );
+    expect(blockReason(v)).toContain("Request Changes");
+    expect(blockReason(v)).toContain(
+      '--user-input "Request Changes" --reason "<requested changes>"',
+    );
+    expect(blockReason(v)).toContain("wait for a fresh human turn");
+    expect(blockReason(v)).toContain("still in-progress");
+    expect(blockReason(v)).toContain("backfills the missing gate row");
   });
 
   test("blocks under a terminal NOT-READY receipt", () => {

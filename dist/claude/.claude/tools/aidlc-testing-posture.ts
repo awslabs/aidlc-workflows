@@ -16,6 +16,7 @@ import {
   getField,
   resolveProjectDir,
   stateFilePath,
+  visibleMarkdownLines,
 } from "./aidlc-lib.ts";
 
 export type TestingMethodology = "tdd" | "bdd" | "atdd" | "test-after" | "custom";
@@ -785,61 +786,6 @@ function isPlanApprovalLabel(value: string): boolean {
     }
   }
   return normalized.toLowerCase() === "plan approval";
-}
-
-function visibleMarkdownLines(body: string): string[] {
-  const lines = body.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").split("\n");
-  const visible: string[] = [];
-  let inComment = false;
-  let fence: { marker: "`" | "~"; length: number } | null = null;
-
-  for (const rawLine of lines) {
-    if (fence) {
-      const closing = /^ {0,3}([`~]+)[ \t]*$/.exec(rawLine);
-      if (
-        closing &&
-        closing[1][0] === fence.marker &&
-        closing[1].length >= fence.length
-      ) {
-        fence = null;
-      }
-      visible.push("");
-      continue;
-    }
-    let line = "";
-    let cursor = 0;
-    while (cursor < rawLine.length) {
-      if (inComment) {
-        const end = rawLine.indexOf("-->", cursor);
-        if (end < 0) {
-          cursor = rawLine.length;
-          break;
-        }
-        inComment = false;
-        cursor = end + 3;
-        continue;
-      }
-      const start = rawLine.indexOf("<!--", cursor);
-      if (start < 0) {
-        line += rawLine.slice(cursor);
-        break;
-      }
-      line += rawLine.slice(cursor, start);
-      inComment = true;
-      cursor = start + 4;
-    }
-    const opening = /^ {0,3}(`{3,}|~{3,})/.exec(line);
-    if (opening) {
-      fence = {
-        marker: opening[1][0] as "`" | "~",
-        length: opening[1].length,
-      };
-      visible.push("");
-      continue;
-    }
-    visible.push(line);
-  }
-  return visible;
 }
 
 function latestPlanApproval(body: string): {

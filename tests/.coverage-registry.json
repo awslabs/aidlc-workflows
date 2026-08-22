@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 607,
+    "total": 611,
     "enumeratedByClass": {
-      "function": 345,
+      "function": 349,
       "audit": 86,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 171,
+      "function": 175,
       "audit": 44,
       "scope": 11,
       "stage": 11,
@@ -1342,6 +1342,10 @@
       "unitId": "function:checkSummaryConfirmationEvidence",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t185-stage-artifact-guard.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t188-human-presence-gate.test.ts",
           "mechanism": "cli"
@@ -3200,6 +3204,14 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t185-stage-artifact-guard.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t188-human-presence-gate.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
           "mechanism": "cli"
         }
@@ -4039,6 +4051,42 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:SUMMARY_CONFIRMATION_HASH_SCOPE",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t188-human-presence-gate.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:summaryConfirmationAnswer",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t185-stage-artifact-guard.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:summaryConfirmationContentHash",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t185-stage-artifact-guard.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:summaryConfirmationGuardDisabled",
       "minMechanism": "none",
       "coveredBy": [
@@ -4297,6 +4345,18 @@
         {
           "file": "tests/unit/t286-read-write-boundary.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:visibleMarkdownLines",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t185-stage-artifact-guard.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"

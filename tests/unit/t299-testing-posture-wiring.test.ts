@@ -21,6 +21,8 @@ import {
   combineTestObligations,
   evaluateCodeGenerationApproval,
   parseTestingContract,
+  questionsFileApprovalFingerprint,
+  questionsFileApproved,
   renderTestingContract,
   resolveTestingPosture,
   resolveTestingPostureFromSections,
@@ -576,6 +578,21 @@ describe("t299 (4) structured contract and approval fingerprint", () => {
     expect(
       approvalFingerprint("plan", "instructions", `sha256:${"b".repeat(64)}`),
     ).not.toBe(baseline);
+  });
+
+  test("inline comments do not break Plan Approval recognition", () => {
+    const fingerprint = `sha256:${"a".repeat(64)}`;
+    const questions = [
+      "## Plan <!-- heading -->Approval",
+      `[Approval Fingerprint]: ${fingerprint}<!-- fingerprint -->`,
+      "A. Approve Plan",
+      "B. Request Changes",
+      "[Answer]: A. Approve <!-- answer -->Plan",
+      "",
+    ].join("\n");
+
+    expect(questionsFileApproved(questions)).toBe(true);
+    expect(questionsFileApprovalFingerprint(questions)).toBe(fingerprint);
   });
 
   test("a memory change after approval invalidates the unit contract", () => {

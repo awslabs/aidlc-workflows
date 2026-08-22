@@ -3967,6 +3967,422 @@ export function humanActedSinceLastAnswer(projectDir: string): boolean {
 // this event, so the conductor cannot mint it through `aidlc-audit append`.
 export const SUMMARY_CONFIRMATION_CHECKPOINT =
   "Consolidated Summary Confirmation";
+export const SUMMARY_CONFIRMATION_HASH_SCOPE = "confirmed-content-v1";
+
+// Keep an opaque marker where an HTML comment was removed. It preserves the
+// required whitespace boundary in `##<!-- comment --> Heading` while allowing
+// comments inside a valid heading title.
+const INVISIBLE_COMMENT_MARKER = "\u0000";
+const RAW_INVISIBLE_COMMENT_MARKER_ESCAPE = "\u0001";
+
+function stripInvisibleCommentMarkers(line: string): string {
+  return line.replaceAll(INVISIBLE_COMMENT_MARKER, "");
+}
+
+function isEscapedAt(line: string, offset: number): boolean {
+  let escapes = 0;
+  for (let cursor = offset - 1; cursor >= 0 && line[cursor] === "\\"; cursor--) {
+    escapes++;
+  }
+  return escapes % 2 === 1;
+}
+
+type MarkdownContainerSegment =
+  | { type: "blockquote" }
+  | { type: "list"; indent: number };
+
+function markdownIndentWidth(value: string): number {
+  let width = 0;
+  for (const character of value) {
+    width = character === "\t" ? width + (4 - width % 4) : width + 1;
+  }
+  return width;
+}
+
+function markdownContainerLine(line: string): {
+  content: string;
+  segments: MarkdownContainerSegment[];
+} {
+  let candidate = line;
+  const segments: MarkdownContainerSegment[] = [];
+  while (true) {
+    const before = candidate;
+    const blockquote = /^ {0,3}>[ \t]?/.exec(candidate);
+    if (blockquote) {
+      candidate = candidate.slice(blockquote[0].length);
+      segments.push({ type: "blockquote" });
+      continue;
+    }
+    const list = /^( {0,3})(?:[*+-]|\d{1,9}[.)])([ \t]+)/.exec(candidate);
+    if (list) {
+      candidate = candidate.slice(list[0].length);
+      segments.push({
+        type: "list",
+        indent: markdownIndentWidth(list[0]),
+      });
+      continue;
+    }
+    if (candidate === before) break;
+  }
+  return { content: candidate, segments };
+}
+
+function stripMarkdownContainerPrefix(line: string): string {
+  return markdownContainerLine(line).content;
+}
+
+function markdownContainerContinuation(
+  line: string,
+  segments: MarkdownContainerSegment[],
+): string | null {
+  let candidate = line;
+  for (const segment of segments) {
+    if (segment.type === "blockquote") {
+      const blockquote = /^ {0,3}>[ \t]?/.exec(candidate);
+      if (!blockquote) return null;
+      candidate = candidate.slice(blockquote[0].length);
+      continue;
+    }
+
+    let offset = 0;
+    let width = 0;
+    while (offset < candidate.length && width < segment.indent) {
+      const character = candidate[offset];
+      if (character !== " " && character !== "\t") return null;
+      width = character === "\t" ? width + (4 - width % 4) : width + 1;
+      offset++;
+    }
+    if (width < segment.indent) return null;
+    candidate = candidate.slice(offset);
+  }
+  return candidate;
+}
+
+function isMarkdownBlockBoundary(line: string): boolean {
+  return /^ {0,3}(?:#{1,6}(?:[ \t]|$)|[`~]{3,}|(?:=+|-+)[ \t]*$|(?:(?:\*|_|-)[ \t]*){3,}$)/.test(
+    line,
+  );
+}
+
+interface RawHtmlBlockStart {
+  end: RegExp;
+}
+
+function rawHtmlBlockStart(line: string): RawHtmlBlockStart | null {
+  const literal = /^ {0,3}<(script|pre|style|textarea)(?:[ \t>]|$)/i.exec(line);
+  if (literal) {
+    return {
+      end: new RegExp(`</${escapeRegex(literal[1])}>`, "i"),
+    };
+  }
+  return null;
+}
+
+function stripInlineCodeSpans(line: string): string {
+  const visible: string[] = [];
+  let cursor = 0;
+  while (cursor < line.length) {
+    const start = line.indexOf("`", cursor);
+    if (start < 0) {
+      visible.push(line.slice(cursor));
+      break;
+    }
+    visible.push(line.slice(cursor, start));
+    const end = inlineCodeSpanEnd(line, start);
+    if (end === null) {
+      // An unclosed inline-code span consumes the rest of this line. Do not
+      // inspect its literal HTML-looking text as a raw tag.
+      break;
+    }
+    cursor = end;
+  }
+  return visible.join("");
+}
+
+function inlineCodeSpanEnd(line: string, start: number): number | null {
+  let length = 1;
+  while (line[start + length] === "`") length++;
+  let cursor = start + length;
+  while (cursor < line.length) {
+    const candidate = line.indexOf("`", cursor);
+    if (candidate < 0) return null;
+    let candidateLength = 1;
+    while (line[candidate + candidateLength] === "`") candidateLength++;
+    if (candidateLength === length) return candidate + candidateLength;
+    cursor = candidate + candidateLength;
+  }
+  return null;
+}
+
+interface VisibleMarkdownHeading {
+  title: string;
+  level: number;
+  style: "atx" | "setext" | "html";
+  nested: boolean;
+}
+
+function visibleAtxHeading(line: string): VisibleMarkdownHeading | null {
+  const atx = /^ {0,3}(#{1,6})(?:[ \t]+|$)(.*)$/.exec(line);
+  return atx
+    ? {
+        title: stripInvisibleCommentMarkers(atx[2])
+          .replace(/[ \t]+#+[ \t]*$/, "")
+        .trim(),
+        level: atx[1].length,
+        style: "atx",
+        nested: false,
+      }
+    : null;
+}
+
+function visibleSetextHeading(
+  lines: string[],
+  line: number,
+): VisibleMarkdownHeading | null {
+  const underline = /^ {0,3}(=+|-+)[ \t]*$/.exec(
+    stripMarkdownContainerPrefix(lines[line]),
+  );
+  if (line === 0 || !underline) return null;
+  const previous = lines[line - 1];
+  const visiblePrevious = stripMarkdownContainerPrefix(
+    stripInvisibleCommentMarkers(previous),
+  );
+  if (
+    visiblePrevious.trim() === "" ||
+    visibleAtxHeading(visiblePrevious) !== null
+  ) {
+    return null;
+  }
+  return {
+    title: visiblePrevious.trim(),
+    level: underline[1][0] === "=" ? 1 : 2,
+    style: "setext",
+    nested:
+      stripMarkdownContainerPrefix(lines[line]) !== lines[line] ||
+      stripMarkdownContainerPrefix(previous) !== previous,
+  };
+}
+
+function isMarkdownAngleLinkDestination(line: string, tagOffset: number): boolean {
+  const before = line.slice(0, tagOffset);
+  const destination = before.lastIndexOf("](");
+  if (destination < 0 || !/^[ \t]*$/.test(before.slice(destination + 2))) {
+    return false;
+  }
+  if (isEscapedAt(before, destination)) return false;
+  const label = before.lastIndexOf("[", destination);
+  if (label < 0) return false;
+  if (isEscapedAt(before, label)) return false;
+  const closing = line.indexOf(">", tagOffset + 1);
+  return (
+    closing >= 0 &&
+    /^[ \t]*\)/.test(line.slice(closing + 1))
+  );
+}
+
+function visibleHtmlHeading(line: string): VisibleMarkdownHeading | null {
+  const htmlLine = stripMarkdownContainerPrefix(stripInvisibleCommentMarkers(line));
+  // A four-space or tab indentation starts a Markdown code block, so its
+  // HTML-looking contents are literal rather than visible headings.
+  if (/^(?: {4}|\t)/.test(htmlLine)) return null;
+  const codeFreeLine = stripInlineCodeSpans(htmlLine);
+  for (let cursor = 0; cursor < codeFreeLine.length; cursor++) {
+    if (codeFreeLine[cursor] !== "<") continue;
+    if (isMarkdownAngleLinkDestination(codeFreeLine, cursor)) continue;
+    if (isEscapedAt(codeFreeLine, cursor)) continue;
+    const tagStart = cursor + 1;
+    const match = /^h([1-6])\b/i.exec(codeFreeLine.slice(tagStart));
+    if (match) {
+      return {
+        title: `<h${match[1]}>`,
+        level: Number(match[1]),
+        style: "html",
+        nested: !/^\s*<h[1-6]\b/i.test(codeFreeLine),
+      };
+    }
+    // Skip the rest of a non-heading HTML tag, respecting quoted attributes,
+    // so `<h2>` in `data-example="<h2>"` is not mistaken for a heading.
+    let inQuote: '"' | "'" | null = null;
+    for (let end = tagStart; end < codeFreeLine.length; end++) {
+      const character = codeFreeLine[end];
+      if (inQuote !== null) {
+        if (character === inQuote) inQuote = null;
+      } else if (character === "'" || character === '"') {
+        inQuote = character;
+      } else if (character === ">") {
+        cursor = end;
+        break;
+      }
+    }
+  }
+  return null;
+}
+
+function visibleH2Title(line: string): string | null {
+  const heading = visibleAtxHeading(line);
+  return heading?.level === 2 ? heading.title : null;
+}
+
+function visibleQuestionId(title: string): string | null {
+  const match = /^Q([1-9][0-9]*)(?:[.:](?:[ \t]+.*)?)?$/.exec(title);
+  return match ? `Q${match[1]}` : null;
+}
+
+function visibleHeading(
+  lines: string[],
+  line: number,
+): VisibleMarkdownHeading | null {
+  const candidate = stripMarkdownContainerPrefix(lines[line]);
+  const nested = candidate !== lines[line];
+  const atx = visibleAtxHeading(candidate);
+  if (atx) return { ...atx, nested };
+  const setext = visibleSetextHeading(lines, line);
+  if (setext) return setext;
+  const html = visibleHtmlHeading(candidate);
+  return html ? { ...html, nested: nested || html.nested } : null;
+}
+
+// Hash the normalized semantic questions content the human confirmed. The
+// shared protocol does not impose names on pre-checkpoint sections, while
+// follow-up Q<n> sections after an assumption decision remain hashable.
+export function summaryConfirmationContentHash(content: string): string {
+  const normalized = content.replace(/\r\n?/g, "\n");
+  const lines = normalized.split("\n");
+  const visibleLines = visibleMarkdownLines(normalized, {
+    preserveCommentBoundaries: true,
+  });
+  let sawSummary = false;
+  let postSummaryAssumptionSeen = false;
+  let openExcludedAssumption: number | null = null;
+  const excludedRanges: Array<[number, number]> = [];
+  const questionIds = new Set<string>();
+
+  const closeExcludedAssumption = (line: number): void => {
+    if (openExcludedAssumption !== null) {
+      excludedRanges.push([openExcludedAssumption, line]);
+      openExcludedAssumption = null;
+    }
+  };
+
+  for (let line = 0; line < visibleLines.length; line++) {
+    const heading = visibleHeading(visibleLines, line);
+    if (heading === null) continue;
+    const { title } = heading;
+    const atxH2 =
+      heading.style === "atx" && heading.level === 2 && !heading.nested;
+
+    if (title === SUMMARY_CONFIRMATION_CHECKPOINT && atxH2) {
+      if (sawSummary) {
+        throw new Error(
+          `duplicate H2 section "${SUMMARY_CONFIRMATION_CHECKPOINT}"`,
+        );
+      }
+      sawSummary = true;
+      continue;
+    }
+
+    if (!sawSummary) {
+      if (atxH2) {
+        const questionId = visibleQuestionId(title);
+        if (questionId !== null) {
+          if (questionIds.has(questionId)) {
+            throw new Error(`duplicate H2 section "${questionId}"`);
+          }
+          questionIds.add(questionId);
+        }
+      }
+      continue;
+    }
+
+    if (title === "Assumption Confirmation" && atxH2 && sawSummary) {
+      if (postSummaryAssumptionSeen) {
+        throw new Error('duplicate H2 section "Assumption Confirmation"');
+      }
+      postSummaryAssumptionSeen = true;
+      openExcludedAssumption = line;
+      continue;
+    }
+
+    const questionId = atxH2 ? visibleQuestionId(title) : null;
+    if (
+      atxH2 &&
+      (title === "Requested Changes Feedback" || questionId !== null)
+    ) {
+      if (questionId !== null) {
+        if (questionIds.has(questionId)) {
+          throw new Error(`duplicate H2 section "${questionId}"`);
+        }
+        questionIds.add(questionId);
+      }
+      // Follow-up questions may be added after an assumption decision. They
+      // are included in a later receipt's digest; only the assumption section
+      // itself remains outside the scope.
+      closeExcludedAssumption(line);
+      continue;
+    }
+
+    if (sawSummary) {
+      const boundary = !postSummaryAssumptionSeen
+        ? 'after the consolidated summary; only Q<n>, "Requested Changes Feedback", or one "Assumption Confirmation" section may follow'
+        : 'after "Assumption Confirmation"; only Q<n> or "Requested Changes Feedback" sections may follow';
+      const headingKind = heading.style === "html"
+        ? `HTML H${heading.level}`
+        : heading.style === "setext"
+          ? `Setext H${heading.level}`
+          : `H${heading.level}`;
+      throw new Error(
+        `unsupported ${headingKind} heading "${title}" ` +
+          boundary,
+      );
+    }
+  }
+
+  if (!sawSummary) {
+    throw new Error(
+      `missing required H2 section "${SUMMARY_CONFIRMATION_CHECKPOINT}"`,
+    );
+  }
+
+  closeExcludedAssumption(lines.length);
+  const excluded = new Set<number>();
+  for (const [start, end] of excludedRanges) {
+    for (let line = start; line < end; line++) excluded.add(line);
+  }
+  const confirmedContent = lines
+    .filter((_, line) => !excluded.has(line))
+    .join("\n")
+    .trimEnd();
+  return createHash("sha256")
+    .update(confirmedContent, "utf-8")
+    .digest("hex");
+}
+
+// Read the persisted choice through the same visibility model as the hash
+// contract. The generic section extractor intentionally retains comments for
+// other callers, so it cannot safely validate this checkpoint.
+export function summaryConfirmationAnswer(content: string): string | null {
+  const visibleLines = visibleMarkdownLines(content, {
+    preserveCommentBoundaries: true,
+  });
+  let inSummary = false;
+  const answers: string[] = [];
+
+  for (const line of visibleLines) {
+    const heading = visibleH2Title(line);
+    if (heading !== null) {
+      if (inSummary) break;
+      if (heading === SUMMARY_CONFIRMATION_CHECKPOINT) inSummary = true;
+      continue;
+    }
+    if (!inSummary) continue;
+    const answer = /^\[Answer\]:[ \t]*(.*)$/.exec(
+      stripInvisibleCommentMarkers(line),
+    );
+    if (answer) answers.push(answer[1].trim());
+  }
+
+  return inSummary && answers.length === 1 ? answers[0] : null;
+}
 
 export function summaryConfirmationGuardDisabled(): boolean {
   return process.env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD === "1";
@@ -4051,20 +4467,11 @@ function summaryQuestionFiles(
 }
 
 function summaryAnswerFromFile(path: string): string | null {
-  let body: string;
   try {
-    body = readFileSync(path, "utf-8");
+    return summaryConfirmationAnswer(readFileSync(path, "utf-8"));
   } catch {
     return null;
   }
-  const section = extractMarkdownSection(
-    body,
-    `## ${SUMMARY_CONFIRMATION_CHECKPOINT}`,
-  );
-  if (!section) return null;
-  const answers = [...section.matchAll(/^\[Answer\]:[ \t]*(.*)$/gm)];
-  if (answers.length !== 1) return null;
-  return answers[0][1].trim();
 }
 
 function summaryArtifactPaths(
@@ -4173,16 +4580,6 @@ export function checkSummaryConfirmationEvidence(
     }
   }
 
-  const audit = readAllAuditShards(projectDir);
-  if (audit.length === 0) {
-    return {
-      ok: false,
-      message:
-        `Refusing to complete "${stage.slug}": no human-backed consolidated ` +
-        "summary confirmation receipt is recorded.",
-    };
-  }
-
   const relevant = new Set([
     "WORKFLOW_STARTED",
     "STAGE_STARTED",
@@ -4192,64 +4589,130 @@ export function checkSummaryConfirmationEvidence(
     "ARTIFACT_CREATED",
     "ARTIFACT_UPDATED",
   ]);
-  const events = audit
-    .replace(/\r\n/g, "\n")
-    .split(/\n---\n/)
-    .map((block, position) => ({
-      block,
-      position,
-      event: auditBlockField(block, "Event") ?? "",
-      timestamp: auditBlockField(block, "Timestamp") ?? "",
-    }))
-    .filter((entry) => relevant.has(entry.event))
-    .sort((a, b) =>
-      a.timestamp !== b.timestamp
-        ? (a.timestamp < b.timestamp ? -1 : 1)
-        : a.position - b.position
+  const events = readAuditShardEvents(projectDir)
+    .filter((entry) => relevant.has(entry.event));
+  if (events.length === 0) {
+    return {
+      ok: false,
+      message:
+        `Refusing to complete "${stage.slug}": no human-backed consolidated ` +
+        "summary confirmation receipt is recorded.",
+    };
+  }
+
+  const latestFrontier = (candidates: AuditShardEvent[]): AuditShardEvent[] => {
+    const byShard = new Map<string, AuditShardEvent>();
+    for (const entry of candidates) {
+      const previous = byShard.get(entry.shard);
+      if (!previous || entry.pos > previous.pos) byShard.set(entry.shard, entry);
+    }
+    const latestTimestamp = [...byShard.values()].reduce(
+      (latest, entry) =>
+        entry.timestamp > latest ? entry.timestamp : latest,
+      "",
     );
+    return [...byShard.values()].filter(
+      (entry) => entry.timestamp === latestTimestamp,
+    );
+  };
+  const latestEvent = (
+    candidates: AuditShardEvent[],
+  ): { event: AuditShardEvent | null; ambiguousTimestamp?: string } => {
+    const latest = latestFrontier(candidates);
+    if (latest.length > 1) {
+      return { event: null, ambiguousTimestamp: latest[0].timestamp };
+    }
+    return { event: latest[0] ?? null };
+  };
+  const orderingFailure = (
+    evidence: string,
+    timestamp: string,
+    reconfirm = true,
+  ): SummaryConfirmationEvidence => ({
+    ok: false,
+    message:
+      `Refusing to complete "${stage.slug}": ${evidence} share audit Timestamp ` +
+      `"${timestamp}" across different shards, so their causal order cannot be ` +
+      "proven. " +
+      (reconfirm
+        ? `Repeat the ${options.workflow === undefined ? "summary" : "isolated summary"} ` +
+          "confirmation after that second, then regenerate or re-save each artifact " +
+          "so the audit records a strictly later write."
+        : "Regenerate or re-save the artifact after that second so the audit " +
+          "records a strictly later write."),
+  });
 
   const workflow = options.workflow;
   const unitMajor =
     isPerUnitStage(stage) &&
     getField(options.stateContent ?? "", "Construction Iteration")?.trim() ===
       "unit-major";
-  let floor = -1;
-  for (let i = 0; i < events.length; i++) {
-    const entry = events[i];
+  const floorCandidates = events.filter((entry) => {
     const eventWorkflow = auditBlockField(entry.block, "Workflow");
     if (workflow !== undefined) {
-      if (
+      return (
         entry.event === "STAGE_COMPLETED" &&
         eventWorkflow === workflow &&
         auditBlockField(entry.block, "Stage") === stage.slug
-      ) {
-        floor = i;
-      }
-      continue;
+      );
     }
-    if (eventWorkflow?.startsWith("single-stage:")) continue;
+    if (eventWorkflow?.startsWith("single-stage:")) return false;
     if (
       entry.event === "WORKFLOW_STARTED" ||
       entry.event === "STAGE_JUMPED"
     ) {
-      floor = i;
-      continue;
+      return true;
     }
-    if (auditBlockField(entry.block, "Stage") !== stage.slug) continue;
-    if (entry.event === "STAGE_STARTED" && !unitMajor) {
-      floor = i;
-    }
-  }
+    return (
+      auditBlockField(entry.block, "Stage") === stage.slug &&
+      entry.event === "STAGE_STARTED" &&
+      !unitMajor
+    );
+  });
+  const floors = latestFrontier(floorCandidates);
+  const afterFloor = (entry: AuditShardEvent): true | false | null => {
+    if (floors.length === 0) return true;
+    const relations = floors.map((floor): true | false | null => {
+      if (entry.shard === floor.shard) return entry.pos > floor.pos;
+      if (entry.timestamp !== floor.timestamp) {
+        return entry.timestamp > floor.timestamp;
+      }
+      return null;
+    });
+    if (relations.every((relation) => relation === true)) return true;
+    if (relations.some((relation) => relation === false)) return false;
+    return null;
+  };
 
   if (workflow !== undefined && isPerUnitStage(stage)) {
-    let receiptFile: string | null = null;
-    for (let i = floor + 1; i < events.length; i++) {
-      const entry = events[i];
-      if (entry.event !== "SUMMARY_CONFIRMATION_RECORDED") continue;
-      if (auditBlockField(entry.block, "Stage") !== stage.slug) continue;
-      if (auditBlockField(entry.block, "Workflow") !== workflow) continue;
-      receiptFile = auditBlockField(entry.block, "Questions File");
+    const candidates = events.filter((entry) =>
+      entry.event === "SUMMARY_CONFIRMATION_RECORDED" &&
+      auditBlockField(entry.block, "Stage") === stage.slug &&
+      auditBlockField(entry.block, "Workflow") === workflow
+    );
+    const ordered = candidates.filter((entry) => afterFloor(entry) === true);
+    const receiptSelection = latestEvent(ordered);
+    if (receiptSelection.ambiguousTimestamp !== undefined) {
+      return orderingFailure(
+        "isolated summary receipts",
+        receiptSelection.ambiguousTimestamp,
+      );
     }
+    const unordered = candidates.filter((entry) => afterFloor(entry) === null);
+    if (
+      unordered.some((entry) =>
+        receiptSelection.event === null ||
+        entry.timestamp >= receiptSelection.event.timestamp
+      )
+    ) {
+      return orderingFailure(
+        "the isolated-run boundary and summary receipt",
+        floors[0]?.timestamp ?? unordered[0].timestamp,
+      );
+    }
+    const receiptFile = receiptSelection.event === null
+      ? null
+      : auditBlockField(receiptSelection.event.block, "Questions File");
     if (receiptFile !== null) {
       const matched = questions.find(
         (question) =>
@@ -4273,33 +4736,52 @@ export function checkSummaryConfirmationEvidence(
       };
     }
 
-    let receipt: (typeof events)[number] | null = null;
     const questionRelative = toPosix(relative(projectDir, question.path));
-    for (let i = floor + 1; i < events.length; i++) {
-      const entry = events[i];
-      if (entry.event !== "SUMMARY_CONFIRMATION_RECORDED") continue;
-      if (auditBlockField(entry.block, "Stage") !== stage.slug) continue;
+    const receiptCandidates = events.filter((entry) => {
+      if (entry.event !== "SUMMARY_CONFIRMATION_RECORDED") return false;
+      if (auditBlockField(entry.block, "Stage") !== stage.slug) return false;
       if (
         auditBlockField(entry.block, "Checkpoint") !==
           SUMMARY_CONFIRMATION_CHECKPOINT
       ) {
-        continue;
+        return false;
       }
       const eventWorkflow = auditBlockField(entry.block, "Workflow");
       if (workflow !== undefined) {
-        if (eventWorkflow !== workflow) continue;
+        if (eventWorkflow !== workflow) return false;
       } else if (eventWorkflow?.startsWith("single-stage:")) {
-        continue;
+        return false;
       }
-      const eventUnit = auditBlockField(entry.block, "Unit");
-      if ((eventUnit ?? null) !== question.unit) continue;
-      if (
-        auditBlockField(entry.block, "Questions File") !== questionRelative
-      ) {
-        continue;
+      if ((auditBlockField(entry.block, "Unit") ?? null) !== question.unit) {
+        return false;
       }
-      receipt = entry;
+      return auditBlockField(entry.block, "Questions File") === questionRelative;
+    });
+    const orderedReceipts = receiptCandidates.filter(
+      (entry) => afterFloor(entry) === true,
+    );
+    const receiptSelection = latestEvent(orderedReceipts);
+    if (receiptSelection.ambiguousTimestamp !== undefined) {
+      return orderingFailure(
+        "matching summary receipts",
+        receiptSelection.ambiguousTimestamp,
+      );
     }
+    const unorderedReceipts = receiptCandidates.filter(
+      (entry) => afterFloor(entry) === null,
+    );
+    if (
+      unorderedReceipts.some((entry) =>
+        receiptSelection.event === null ||
+        entry.timestamp >= receiptSelection.event.timestamp
+      )
+    ) {
+      return orderingFailure(
+        "the current-attempt boundary and matching summary receipt",
+        floors[0]?.timestamp ?? unorderedReceipts[0].timestamp,
+      );
+    }
+    const receipt = receiptSelection.event;
     if (
       receipt === null ||
       auditBlockField(receipt.block, "Details") !== "Looks correct"
@@ -4317,45 +4799,114 @@ export function checkSummaryConfirmationEvidence(
       };
     }
 
+    const hashScope = auditBlockField(receipt.block, "Hash Scope");
+    const recovery = workflow === undefined
+      ? (
+        "First repair the questions file: remove or repair every unsupported post-summary " +
+        "section and reset the consolidated-summary `[Answer]:` to blank. Re-present the " +
+        "consolidated summary and record a fresh confirmation with " +
+        `\`aidlc-log.ts decision --checkpoint summary-confirmation --stage "${stage.slug}" ` +
+        `${question.unit ? `--unit "${question.unit}" ` : ""}` +
+        "--questions-file \"<path>\" --decision \"Does this all look correct?\"`; " +
+        "end the turn, wait for the human's response, update the recorded answer, then run " +
+        `\`aidlc-log.ts answer --checkpoint summary-confirmation --stage "${stage.slug}" ` +
+        `${question.unit ? `--unit "${question.unit}" ` : ""}` +
+        "--questions-file \"<path>\" --details \"Looks correct\"`. Re-save each generated " +
+        "artifact, rerun the section-12a reviewer when this stage declares one, then retry " +
+        "the stage completion command. If a completion gate is already open or a terminal " +
+        "section-12a receipt freezes artifact writes, instead present Request Changes and " +
+        "end the turn. After a fresh human turn choosing it, run " +
+        `\`aidlc-orchestrate.ts report --stage "${stage.slug}" --result rejected ` +
+        "--user-input \"Request Changes\" --reason \"<requested changes>\"`; then revise and re-confirm the summary, " +
+        "re-save the artifacts, rerun the reviewer, and report `--result revised`."
+      )
+      : (
+        "First repair the questions file: remove or repair every unsupported post-summary " +
+        "section and reset the consolidated-summary `[Answer]:` to blank. Re-present the " +
+        "consolidated summary in the isolated run and record a fresh confirmation with " +
+        `\`aidlc-log.ts decision --checkpoint summary-confirmation --stage "${stage.slug}" ` +
+        "--questions-file \"<path>\" --single --decision \"Does this all look correct?\"`; " +
+        "end the turn, wait for the human's response, update the recorded answer, then run " +
+        `\`aidlc-log.ts answer --checkpoint summary-confirmation --stage "${stage.slug}" ` +
+        "--questions-file \"<path>\" --single --details \"Looks correct\"`. Regenerate or " +
+        "re-save each generated artifact, rerun the section-12a reviewer when this stage " +
+        "declares one, then run `aidlc-orchestrate.ts report --single " +
+        `--stage "${stage.slug}" --result completed\`.`
+      );
+    if (
+      hashScope !== null &&
+      hashScope !== SUMMARY_CONFIRMATION_HASH_SCOPE
+    ) {
+      return {
+        ok: false,
+        message:
+          `Refusing to complete "${stage.slug}": unsupported summary-confirmation ` +
+          `Hash Scope "${hashScope}". ${recovery}`,
+      };
+    }
+    const legacyRecovery =
+      hashScope === null
+        ? "This is a legacy unscoped receipt, so it still verifies the whole " +
+          "questions file; an allowed post-confirmation append therefore requires " +
+          "reconfirmation to create a new scoped receipt. "
+        : "";
+    const recoveryMessage = legacyRecovery + recovery;
     let currentHash: string;
     try {
-      currentHash = createHash("sha256")
-        .update(readFileSync(question.path))
-        .digest("hex");
-    } catch {
-      currentHash = "";
+      currentHash = hashScope === null
+        ? createHash("sha256").update(readFileSync(question.path)).digest("hex")
+        : summaryConfirmationContentHash(
+          readFileSync(question.path, "utf-8"),
+        );
+    } catch (e) {
+      return {
+        ok: false,
+        message:
+          `Refusing to complete "${stage.slug}": ${question.path} cannot be ` +
+          `validated against its summary confirmation: ${errorMessage(e)}. ${recoveryMessage}`,
+      };
     }
     if (
-      !currentHash ||
       auditBlockField(receipt.block, "Questions SHA-256") !== currentHash
     ) {
       return {
         ok: false,
         message:
           `Refusing to complete "${stage.slug}": ${question.path} changed after ` +
-          "the human confirmed its summary. Reset the confirmation, present the " +
-          "updated summary, and record a new response.",
+          `the human confirmed its summary. ${recoveryMessage}`,
       };
     }
 
-    const receiptIndex = events.indexOf(receipt);
     for (const artifact of summaryArtifactPaths(stage, question)) {
       const artifactAbs = resolvePath(artifact);
-      let lastWrite = -1;
-      for (let i = floor + 1; i < events.length; i++) {
-        const entry = events[i];
+      const writes = events.filter((entry) => {
         if (
           entry.event !== "ARTIFACT_CREATED" &&
           entry.event !== "ARTIFACT_UPDATED"
         ) {
-          continue;
+          return false;
         }
         const file = auditBlockField(entry.block, "File");
-        if (!file) continue;
-        const resolved = resolvePath(projectDir, file);
-        if (resolved === artifactAbs) lastWrite = i;
-      }
-      if (lastWrite <= receiptIndex) {
+        return file !== null && resolvePath(projectDir, file) === artifactAbs;
+      });
+      const writeAfterReceipt = writes.some((entry) => {
+        if (entry.shard === receipt.shard) return entry.pos > receipt.pos;
+        if (entry.timestamp !== receipt.timestamp) {
+          return entry.timestamp > receipt.timestamp;
+        }
+        return false;
+      });
+      if (!writeAfterReceipt) {
+        const unorderedWrite = writes.find((entry) =>
+          entry.timestamp === receipt.timestamp && entry.shard !== receipt.shard
+        );
+        if (unorderedWrite !== undefined) {
+          return orderingFailure(
+            "the summary receipt and artifact write",
+            receipt.timestamp,
+            false,
+          );
+        }
         return {
           ok: false,
           message:
@@ -10107,11 +10658,9 @@ export function extractMarkdownSection(content: string, heading: string): string
   return stripped.slice(bodyStart, bodyEnd);
 }
 
-// Replace the contents of fenced code blocks (```...```) with blank lines of
-// the same count, preserving line numbers and byte offsets up to a few chars
-// per line. Headings inside fenced code blocks are no longer matched by
-// regex scans against the returned string. Used by extractMarkdownSection to
-// keep teaching-example `## Heading` lines from masquerading as real headings.
+// Replace fenced-code contents with blank lines while preserving all other
+// text. This is the long-standing extraction contract: HTML comments remain
+// part of the returned section for callers that inspect them directly.
 function stripFencedCodeBlocks(content: string): string {
   const lines = content.split("\n");
   let inFence = false;
@@ -10124,6 +10673,383 @@ function stripFencedCodeBlocks(content: string): string {
     if (inFence) lines[i] = "";
   }
   return lines.join("\n");
+}
+
+function multilineInlineCodeSpanEnd(
+  lines: string[],
+  startLine: number,
+  start: number,
+): { line: number; offset: number } | null {
+  let length = 1;
+  while (lines[startLine][start + length] === "`") length++;
+  const sameLine = inlineCodeSpanEnd(lines[startLine], start);
+  if (sameLine !== null) return { line: startLine, offset: sameLine };
+
+  // Inline parsing cannot carry through a blank or a new heading-like block.
+  // Stopping conservatively also prevents an unmatched delimiter from hiding a
+  // later question heading while still supporting ordinary soft line breaks.
+  const startCandidate = stripMarkdownContainerPrefix(lines[startLine]);
+  if (/^ {0,3}#{1,6}(?:[ \t]|$)/.test(startCandidate)) return null;
+  for (let line = startLine + 1; line < lines.length; line++) {
+    const candidate = stripMarkdownContainerPrefix(lines[line]);
+    if (
+      candidate.trim() === "" ||
+      isMarkdownBlockBoundary(candidate) ||
+      rawHtmlBlockStart(candidate) !== null
+    ) {
+      return null;
+    }
+    let cursor = 0;
+    while (cursor < lines[line].length) {
+      const tick = lines[line].indexOf("`", cursor);
+      if (tick < 0) break;
+      let candidateLength = 1;
+      while (lines[line][tick + candidateLength] === "`") candidateLength++;
+      if (candidateLength === length) {
+        return { line, offset: tick + candidateLength };
+      }
+      cursor = tick + candidateLength;
+    }
+  }
+  return null;
+}
+
+// Replace invisible Markdown (HTML comments, code spans, and block code) with
+// blank lines while preserving line positions. Literal contexts are resolved
+// before comment state so a `<!--` example cannot hide later visible headings.
+export function visibleMarkdownLines(
+  content: string,
+  options: {
+    preserveIndentedCode?: boolean;
+    preserveCommentBoundaries?: boolean;
+  } = {},
+): string[] {
+  const lines = content
+    .replace(/^\uFEFF/, "")
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    // NUL is the internal marker used below for removed comments. Escape a
+    // literal NUL first so hostile input cannot manufacture a reserved heading.
+    .map((line) =>
+      line.replaceAll(
+        INVISIBLE_COMMENT_MARKER,
+        RAW_INVISIBLE_COMMENT_MARKER_ESCAPE,
+      ),
+    );
+  const visible: string[] = [];
+  let inComment = false;
+  let commentContainer: MarkdownContainerSegment[] = [];
+  let fence: {
+    marker: "`" | "~";
+    length: number;
+    container: MarkdownContainerSegment[];
+  } | null = null;
+  let codeSpanEnd: { line: number; offset: number } | null = null;
+  let rawHtmlBlock: {
+    end: RegExp;
+    container: MarkdownContainerSegment[];
+  } | null = null;
+  let htmlTagOpen = false;
+  let htmlAttributeQuote: '"' | "'" | null = null;
+  let activeContainer: {
+    segments: MarkdownContainerSegment[];
+    hadBlank: boolean;
+  } | null = null;
+
+  for (let lineNumber = 0; lineNumber < lines.length; lineNumber++) {
+    const rawLine = lines[lineNumber];
+    const explicitContainerLine = markdownContainerLine(rawLine);
+    let containerLine = explicitContainerLine;
+    if (activeContainer !== null) {
+      const blank = rawLine.trim() === "";
+      const continuation = blank
+        ? ""
+        : markdownContainerContinuation(rawLine, activeContainer.segments);
+      const hasBlockquote = activeContainer.segments.some(
+        (segment) => segment.type === "blockquote",
+      );
+      const lazyBlockStart = hasBlockquote &&
+        /^(?: {0,3})(?:[`~]{3,}|<!--)/.test(rawLine);
+      if (blank) {
+        containerLine = { content: "", segments: activeContainer.segments };
+        activeContainer = {
+          segments: activeContainer.segments,
+          hadBlank: true,
+        };
+      } else if (continuation !== null) {
+        const nested = markdownContainerLine(continuation);
+        containerLine = {
+          content: nested.content,
+          segments: [...activeContainer.segments, ...nested.segments],
+        };
+        activeContainer = { segments: containerLine.segments, hadBlank: false };
+      } else if (
+        explicitContainerLine.segments.some(
+          (segment) => segment.type === "list" || segment.type === "blockquote",
+        )
+      ) {
+        containerLine = explicitContainerLine;
+        activeContainer = null;
+      } else if (
+        lazyBlockStart ||
+        (!activeContainer.hadBlank && !isMarkdownBlockBoundary(rawLine))
+      ) {
+        // A paragraph may continue lazily after a list or blockquote marker.
+        // Keep the container alive so a later indented fence/comment cannot
+        // be reinterpreted as a top-level excluded span.
+        containerLine = {
+          content: rawLine,
+          segments: activeContainer.segments,
+        };
+        activeContainer = {
+          segments: activeContainer.segments,
+          hadBlank: false,
+        };
+      } else {
+        activeContainer = null;
+      }
+    }
+    if (
+      containerLine.segments.some(
+        (segment) => segment.type === "list" || segment.type === "blockquote",
+      )
+    ) {
+      activeContainer = {
+        segments: containerLine.segments,
+        hadBlank: rawLine.trim() === "",
+      };
+    }
+    if (rawHtmlBlock) {
+      const continuation = rawHtmlBlock.container.length === 0
+        ? rawLine
+        : rawLine.trim() === ""
+          ? ""
+          : markdownContainerContinuation(rawLine, rawHtmlBlock.container);
+      if (continuation === null) {
+        rawHtmlBlock = null;
+      } else {
+        if (rawHtmlBlock.end.test(continuation)) {
+          rawHtmlBlock = null;
+        }
+        visible.push("");
+        continue;
+      }
+    }
+
+    if (fence) {
+      const continuation = fence.container.length === 0
+        ? rawLine
+        : rawLine.trim() === ""
+          ? ""
+          : markdownContainerContinuation(rawLine, fence.container);
+      if (continuation === null) {
+        // CommonMark ends a fenced block when the list item or blockquote that
+        // owns it ends. Reprocess this line outside the old container so a
+        // following top-level heading cannot be hidden by an unclosed fence.
+        fence = null;
+      }
+      if (fence === null) {
+        // Fall through and parse the boundary line normally.
+      } else {
+        // A list item can indent its fenced-code continuation by the marker's
+        // full content offset (more than three columns). Accepting broader
+        // closing indentation here is conservative: if a renderer treats an
+        // over-indented marker as literal code, exposing the following lines can
+        // only fail closed on a visible heading; leaving a real close hidden
+        // would let an appended heading remain inside the excluded span.
+        const closing = /^[ \t]*([`~]+)[ \t]*$/.exec(continuation ?? "");
+        const closingMarker = closing?.[1];
+        if (closingMarker === undefined) {
+          visible.push("");
+          continue;
+        }
+        if (
+          closingMarker.split("").every((marker) => marker === fence!.marker) &&
+          closingMarker.length >= fence.length
+        ) {
+          fence = null;
+        }
+        visible.push("");
+        continue;
+      }
+    }
+
+    if (
+      inComment &&
+      commentContainer.length > 0 &&
+      rawLine.trim() !== "" &&
+      markdownContainerContinuation(rawLine, commentContainer) === null
+    ) {
+      // HTML comment blocks are scoped to their Markdown container just like
+      // fenced blocks. A line outside that container is visible again.
+      inComment = false;
+      commentContainer = [];
+    }
+
+    if (htmlTagOpen) {
+      const candidate = stripMarkdownContainerPrefix(rawLine);
+      if (
+        candidate.trim() === "" ||
+        /^ {0,3}(?:#{1,6}(?:[ \t]|$)|(?:=+|-+)[ \t]*$|<h[1-6]\b)/i.test(
+          candidate,
+        ) ||
+        (htmlAttributeQuote === null && /^\[Answer\]:/.test(candidate))
+      ) {
+        // A malformed, unclosed tag must not mask a later block heading. A
+        // renderer that keeps this inside the attribute only gets a fail-closed
+        // rejection; a real closing tag is still tracked normally below.
+        htmlTagOpen = false;
+        htmlAttributeQuote = null;
+      }
+    }
+    const continuedHtmlTag = htmlTagOpen;
+    let line = continuedHtmlTag ? RAW_INVISIBLE_COMMENT_MARKER_ESCAPE : "";
+    let cursor = 0;
+    let continuedCodeSpan = false;
+    if (codeSpanEnd !== null) {
+      if (lineNumber < codeSpanEnd.line) {
+        visible.push("");
+        continue;
+      }
+      cursor = codeSpanEnd.offset;
+      codeSpanEnd = null;
+      continuedCodeSpan = true;
+      // This line is still paragraph continuation even after the delimiter.
+      // Keep it ineligible for block-heading recognition.
+      line = RAW_INVISIBLE_COMMENT_MARKER_ESCAPE;
+    }
+
+    const rawOpening = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(
+      containerLine.content,
+    );
+    if (
+      !inComment &&
+      !continuedCodeSpan &&
+      !htmlTagOpen &&
+      rawOpening &&
+      (rawOpening[1][0] === "~" || !rawOpening[2].includes("`"))
+    ) {
+      fence = {
+        marker: rawOpening[1][0] as "`" | "~",
+        length: rawOpening[1].length,
+        container: containerLine.segments,
+      };
+      visible.push("");
+      continue;
+    }
+
+    if (
+      !options.preserveIndentedCode &&
+      !inComment &&
+      !continuedCodeSpan &&
+      !htmlTagOpen &&
+      /^(?: {4}|\t)/.test(stripMarkdownContainerPrefix(rawLine))
+    ) {
+      visible.push("");
+      continue;
+    }
+
+    const rawHtmlOpening = !inComment &&
+        !continuedCodeSpan &&
+        !htmlTagOpen
+      ? rawHtmlBlockStart(containerLine.content)
+      : null;
+    if (rawHtmlOpening !== null) {
+      rawHtmlBlock = {
+        ...rawHtmlOpening,
+        container: containerLine.segments,
+      };
+      if (rawHtmlOpening.end.test(containerLine.content)) {
+        rawHtmlBlock = null;
+      }
+      visible.push("");
+      continue;
+    }
+
+    while (cursor < rawLine.length) {
+      if (inComment) {
+        const end = rawLine.indexOf("-->", cursor);
+        if (end < 0) {
+          cursor = rawLine.length;
+          break;
+        }
+        inComment = false;
+        commentContainer = [];
+        line += INVISIBLE_COMMENT_MARKER;
+        cursor = end + 3;
+        continue;
+      }
+
+      if (
+        rawLine[cursor] === "`" &&
+        !htmlTagOpen &&
+        !isEscapedAt(rawLine, cursor)
+      ) {
+        const end = multilineInlineCodeSpanEnd(lines, lineNumber, cursor);
+        if (end === null) {
+          line += rawLine.slice(cursor);
+          break;
+        }
+        if (end.line === lineNumber) {
+          line += rawLine.slice(cursor, end.offset);
+          cursor = end.offset;
+          continue;
+        }
+        line += RAW_INVISIBLE_COMMENT_MARKER_ESCAPE;
+        codeSpanEnd = end;
+        cursor = rawLine.length;
+        continue;
+      }
+
+      if (rawLine.startsWith("<!--", cursor)) {
+        const candidate = containerLine.content;
+        const blockStart = /^ {0,3}<!--/.exec(candidate);
+        const candidateOffset = rawLine.length - candidate.length;
+        const atBlockStart = blockStart !== null &&
+          candidateOffset + blockStart[0].length - 4 === cursor;
+        const closesOnLine = rawLine.indexOf("-->", cursor + 4) >= 0;
+        if (
+          isEscapedAt(rawLine, cursor) ||
+          (!closesOnLine && (!atBlockStart || htmlTagOpen))
+        ) {
+          line += "<!--";
+          cursor += 4;
+          continue;
+        }
+        line += INVISIBLE_COMMENT_MARKER;
+        inComment = true;
+        commentContainer = containerLine.segments;
+        cursor += 4;
+        continue;
+      }
+
+      const character = rawLine[cursor];
+      line += character;
+      if (htmlTagOpen) {
+        if (htmlAttributeQuote !== null) {
+          if (character === htmlAttributeQuote) htmlAttributeQuote = null;
+        } else if (character === '"' || character === "'") {
+          htmlAttributeQuote = character;
+        } else if (character === ">") {
+          htmlTagOpen = false;
+        }
+      } else if (
+        character === "<" &&
+        /[A-Za-z!/]/.test(rawLine[cursor + 1] ?? "")
+      ) {
+        htmlTagOpen = true;
+      }
+      cursor++;
+    }
+
+    visible.push(
+      options.preserveCommentBoundaries
+        ? line
+        : stripInvisibleCommentMarkers(line),
+    );
+  }
+
+  return visible;
 }
 
 export function appendUnderHeading(

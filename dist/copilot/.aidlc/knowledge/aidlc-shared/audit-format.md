@@ -100,10 +100,34 @@ operational evidence, not a tamper-proof human-authorship boundary.
 | `GATE_APPROVED` | Human approved at gate | Timestamp, Stage, User Input | `tools/aidlc-state.ts approve` |
 | `GATE_REJECTED` | Human requested changes | Timestamp, Stage, Feedback, optional `Recovered=true` (backfilled by the approve-time revision backstop) | `tools/aidlc-state.ts reject`, `tools/aidlc-state.ts approve` (backstop backfill) |
 | `QUESTION_ANSWERED` | Non-gate question answered by user | Timestamp, Stage, Details | `tools/aidlc-log.ts answer` |
-| `SUMMARY_CONFIRMATION_RECORDED` | Consolidated-summary choice recorded after the matching prompt and a fresh human turn; reserved from the public audit CLI | Timestamp, Stage, Details, Checkpoint, Questions File, Questions SHA-256; optional Unit, Workflow | `tools/aidlc-log.ts answer --checkpoint summary-confirmation` |
+| `SUMMARY_CONFIRMATION_RECORDED` | Consolidated-summary choice recorded after the matching prompt and a fresh human turn; reserved from the public audit CLI | Timestamp, Stage, Details, Checkpoint, Questions File, Questions SHA-256, Hash Scope (required on new receipts; legacy rows may omit it); optional Unit, Workflow | `tools/aidlc-log.ts answer --checkpoint summary-confirmation` |
 | `REVIEW_REQUESTED` | Conductor dispatches the §12a reviewer sub-agent; reserved from the public audit CLI | Timestamp, Stage, Reviewer, Iteration, Artifact Fingerprint (`sha256:<hex>` over the bytes dispatched for review), optional Unit (authoritative-DAG per-unit stages), optional Retry (`pending-request` recovery of an unmatched request), optional Recovery (`stale-receipt` bounded recovery after artifact/source invalidation) | `tools/aidlc-log.ts review` |
 | `REVIEW_COMPLETED` | Reviewer verdict read; gates the approval of a reviewer-bearing stage, must pair to the same request iteration and unchanged request fingerprint, and is reserved from the public audit CLI | Timestamp, Stage, Reviewer, Iteration, Verdict, Artifact Fingerprint (must match the request and current bytes), optional Unit (per-unit stages), optional Source Fingerprint (`workspace_requires` stages only: git-native source hash or `unbindable`; modern unbindable receipts fail closed) | `tools/aidlc-log.ts review --verdict` |
 | `PIPELINE_LINK_COMPLETED` | A declared pipeline link returned in order; current-attempt receipts gate pipeline approval and are reserved from the public audit CLI | Timestamp, Stage, Link, Position (`k/N`), optional Repo (required by the protocol for multi-repo chains), optional Workflow (`single-stage:<slug>` for isolated runs) | `tools/aidlc-log.ts link` |
+
+`Hash Scope: confirmed-content-v1` identifies the semantic questions-file digest
+used by newly emitted receipts. It normalizes line endings, preserves the
+original order of the preamble and confirmed sections, and trims trailing
+whitespace from the resulting canonical content. It includes every visible
+Q<n> section and each `Requested Changes Feedback` section, including follow-up
+questions added after an assumption decision. Exactly one visible top-level
+`Assumption Confirmation` section after the summary is excluded, along with its
+contents; a same-named pre-summary section remains part of the confirmed digest.
+The excluded section's assumptions and answer remain subject to the stage's
+existing decision/answer and sensor checks. Any other visible Markdown or
+raw-HTML heading after the summary is invalid. Heading-like text in HTML
+comments, code spans, fenced or indented code, and HTML attribute values is not
+a section.
+A receipt with no `Hash Scope` retains the legacy whole-file digest contract;
+an in-flight legacy receipt therefore needs a fresh human confirmation to
+create a scoped receipt before an allowed post-confirmation append can recover.
+Any other scope is rejected.
+
+Summary-confirmation authority comparisons preserve append order within one
+audit shard. Across shards, different timestamps establish order; equal
+timestamps are causally unordered. Completion fails closed when such a tie
+could change the current attempt, selected receipt, or whether an artifact was
+written after confirmation, and requires fresh evidence with a later timestamp.
 
 ### Unit Lifecycle Events (4 events — inline per-unit Construction stages)
 

@@ -130,9 +130,14 @@ stage's question flow:
 
 The receipt is not inferred from markdown alone. `aidlc-log.ts` records the
 reserved `SUMMARY_CONFIRMATION_RECORDED` event after a matching prompt record
-and a later human turn, binding it to the questions-file SHA-256. Completion refuses
-a missing or stale receipt, a changed questions file, or a declared artifact
-without a native write after the receipt. Per-unit stages require one
+and a later human turn, binding it to the questions-file digest and its recorded
+`Hash Scope` (`confirmed-content-v1` for the normalized canonical questions
+content, including all visible Q<n> and feedback sections in file order; one
+post-summary `Assumption Confirmation` section is excluded; unscoped legacy
+receipts use the whole-file SHA-256). Completion refuses a missing or stale receipt, a changed
+confirmed section or forbidden heading, or a declared artifact without a native
+write after the receipt. A legacy in-flight receipt must be re-confirmed to
+create a scoped receipt before that permitted append can be accepted. Per-unit stages require one
 unit-scoped receipt per applicable Unit; isolated runs use the same check with
 their `single-stage:<slug>` workflow identity.
 

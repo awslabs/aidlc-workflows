@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.68] - 2026-08-24
+
+Summary-confirmation receipts now bind to the semantic questions and summary content the human reviewed while allowing the required post-generation assumption section. The contract is versioned, preserves legacy receipt verification, and reports an actionable recovery path for invalidated confirmations. **Upgrade:** refresh your `dist/<harness>/` shell so the scoped receipt, Markdown visibility, and recovery contracts stay aligned.
+
+* New receipts carry `Hash Scope: confirmed-content-v1` and hash normalized semantic content in file order, including all visible Q<n> sections, repeated feedback, and follow-up questions after an assumption decision. One post-summary `Assumption Confirmation` section is excluded; any other visible Markdown or raw-HTML heading after the summary fails closed. Markdown comments and literal code/HTML contexts are parsed consistently so hidden examples cannot launder a new question. Equal-time evidence in different audit shards also fails closed when receipt or artifact-write order cannot be proven. Receipts without a scope retain legacy whole-file verification and require reconfirmation after an allowed append.
+* Summary-validation errors lead with the ordinary fresh-decision and answer recovery path; terminal-review freezes retain the rejection-and-revision path. Isolated runs name their valid `--single` confirmation and completed-report sequence instead.
+
 ## [2.6.65] - 2026-08-23
 
 Stage graph compilation now rejects ambiguous producers before consumers can resolve an artifact by file order. **Upgrade:** refresh your `dist/<harness>/` shell; existing custom stages or plugins that declare the same consumed artifact in `produces` or `optional_produces` must rename one output or update the consumer.

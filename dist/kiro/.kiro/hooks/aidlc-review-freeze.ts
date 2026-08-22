@@ -724,9 +724,13 @@ export function blockReason(v: FreezeVerdict): string {
     `that receipt and the engine would refuse the gate (stage-protocol-reviewer.md §12a: the ` +
     `terminal receipt ends artifact work). Present the gate instead - quote any ` +
     `reviewer suggestions there verbatim for the human to weigh. If the artifact ` +
-    `genuinely needs changes, reject at the gate (or have the human request ` +
-    `changes); the recorded rejection lifts this freeze and the revision then ` +
-    `re-runs the stage-protocol-reviewer.md §12a reviewer for a fresh receipt.`
+    `genuinely needs changes before the gate can open, present Request Changes ` +
+    `to the human and wait for a fresh human turn. If the human chooses it, run ` +
+    `\`aidlc-orchestrate.ts report --stage "${v.stage}" --result rejected ` +
+    `--user-input "Request Changes" --reason "<requested changes>"\`; this works while the stage is still ` +
+    `in-progress and backfills the missing gate row. The rejection lifts this ` +
+    `freeze; revise the artifact, rerun the stage-protocol-reviewer.md §12a ` +
+    `reviewer, then report \`--result revised\`.`
   );
 }
 

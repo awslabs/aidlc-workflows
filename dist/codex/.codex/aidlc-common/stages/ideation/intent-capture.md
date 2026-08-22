@@ -139,19 +139,22 @@ requirement. For required but unresolved fields, write
 If both `## Assumptions & Open Questions` sections contain `None.`, continue.
 Otherwise:
 
-1. Append or reset `## Assumption Confirmation` in
-   `intent-capture-questions.md`, listing every assumption and these options:
-   `A. Accept assumptions` and `B. Convert to follow-up questions`, followed
-   by a blank `[Answer]:`.
+1. Create `## Assumption Confirmation` in `intent-capture-questions.md` if it
+   is absent. Otherwise, reuse that single section, replacing its assumption
+   list and options and resetting `[Answer]:` to blank. List every assumption
+   and these options: `A. Accept assumptions` and
+   `B. Convert to follow-up questions`.
 2. Present those two options as a structured question, log it through the
    standard question decision/answer pair, END YOUR TURN, and wait.
 3. On `Accept assumptions`, fill the confirmation answer exactly as
    `[Answer]: A. Accept assumptions` and retain the `[assumption]` labels.
    Acceptance does not turn an assumption into fact.
 4. On `Convert to follow-up questions`, fill that answer, append consecutively
-   numbered `Q<n>` follow-ups, collect and confirm their answers, revise both
-   artifacts, reset `## Assumption Confirmation`, and repeat this step if any
-   assumptions remain.
+   numbered `Q<n>` follow-ups, collect and confirm their answers, and revise
+   both artifacts. Re-present the consolidated summary and record a fresh
+   standard summary decision/answer receipt before continuing. If assumptions
+   remain, reuse and reset the single `## Assumption Confirmation` section and
+   repeat this step.
 
 Do not invoke the reviewer or proceed to completion while an assumption
 confirmation `[Answer]:` is blank.
