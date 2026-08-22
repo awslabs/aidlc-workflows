@@ -6916,6 +6916,19 @@ function ignoredSourceClaimReason(
   const literalPath = path.replace(/\/+$/, "");
   const literalPathspec = `./${literalPath}`;
 
+  let currentExists = false;
+  let currentIsDirectory = false;
+  try {
+    const current = lstatSync(join(sourceRepoDir, literalPath));
+    currentExists = true;
+    currentIsDirectory = current.isDirectory();
+  } catch {
+    // An absent exact path is valid and becomes stale if it appears later.
+  }
+  if (!prefix && currentIsDirectory) {
+    return `${JSON.stringify(path)} is a directory; directory claims must end with "/"`;
+  }
+
   let headTracked = false;
   const head = spawnSync(
     "git",
@@ -6942,19 +6955,11 @@ function ignoredSourceClaimReason(
     }
     const entry = listed.stdout.split("\0").find(Boolean);
     if (entry) {
-      if (!prefix && /^040000 /.test(entry)) {
+      const headIsDirectory = /^040000 /.test(entry);
+      if (!prefix && !currentExists && headIsDirectory) {
         return `${JSON.stringify(path)} is a directory; directory claims must end with "/"`;
       }
-      headTracked = true;
-    }
-  }
-  if (!prefix && !headTracked) {
-    try {
-      if (lstatSync(join(sourceRepoDir, literalPath)).isDirectory()) {
-        return `${JSON.stringify(path)} is a directory; directory claims must end with "/"`;
-      }
-    } catch {
-      // An absent exact path is valid and becomes stale if it appears later.
+      headTracked = !headIsDirectory;
     }
   }
 
@@ -6980,28 +6985,56 @@ function ignoredSourceClaimReason(
   }
   if (!prefix) return null;
 
-  const ignoredDescendants = spawnSync(
-    "git",
-    [
-      "-C",
-      sourceRepoDir,
-      "ls-files",
-      "-z",
-      "--others",
-      "--ignored",
-      "--exclude-standard",
-      "--",
-      literalPathspec,
-    ],
-    { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+  const indexFile = join(
+    tmpdir(),
+    `aidlc-ignored-claims-${process.pid}-${randomUUID().slice(0, 8)}`,
   );
-  if (ignoredDescendants.status !== 0) {
-    return `Git could not enumerate ignored source below ${JSON.stringify(path)}`;
+  const env = { ...process.env, GIT_INDEX_FILE: indexFile };
+  try {
+    const seeded = spawnSync(
+      "git",
+      [
+        "-C",
+        sourceRepoDir,
+        "read-tree",
+        ...(head.status === 0 && head.stdout.trim()
+          ? [head.stdout.trim()]
+          : ["--empty"]),
+      ],
+      { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+    );
+    if (seeded.status !== 0) {
+      return `Git could not seed ignore verification for ${JSON.stringify(path)}`;
+    }
+    const ignoredDescendants = spawnSync(
+      "git",
+      [
+        "-C",
+        sourceRepoDir,
+        "ls-files",
+        "-z",
+        "--others",
+        "--ignored",
+        "--exclude-standard",
+        "--",
+        literalPathspec,
+      ],
+      {
+        env,
+        encoding: "utf-8",
+        maxBuffer: 512 * 1024 * 1024,
+      },
+    );
+    if (ignoredDescendants.status !== 0) {
+      return `Git could not enumerate ignored source below ${JSON.stringify(path)}`;
+    }
+    const firstIgnored = ignoredDescendants.stdout.split("\0").find(Boolean);
+    return firstIgnored
+      ? `${JSON.stringify(path)} contains ignored application source ${JSON.stringify(firstIgnored)}`
+      : null;
+  } finally {
+    rmSync(indexFile, { force: true });
   }
-  const firstIgnored = ignoredDescendants.stdout.split("\0").find(Boolean);
-  return firstIgnored
-    ? `${JSON.stringify(path)} contains ignored application source ${JSON.stringify(firstIgnored)}`
-    : null;
 }
 
 /** Strictly read and validate a unit's engine-required source-manifest.json. */

@@ -174,6 +174,50 @@ describe("t305 strict source-manifest validation", () => {
     }
   });
 
+  test("accepts an exact claim when a committed directory becomes a file", () => {
+    const { project, record } = fixture();
+    mkdirSync(join(project, "generated"), { recursive: true });
+    writeFileSync(join(project, "generated", "old.ts"), "old\n");
+    git(project, ["add", "--", "generated/old.ts"]);
+    git(project, ["commit", "-qm", "commit generated directory"]);
+    rmSync(join(project, "generated"), { recursive: true });
+    writeFileSync(join(project, "generated"), "replacement\n");
+    manifest(record, "alpha", {
+      stage: "code-generation",
+      unit: "alpha",
+      version: 1,
+      writes: [{ path: "generated" }],
+    });
+
+    const accepted = readUnitSourceManifest(
+      project,
+      "code-generation",
+      "alpha",
+    );
+    expect(accepted.ok).toBe(true);
+    if (!accepted.ok) return;
+    expect(sourceClaimCovers("\0generated", accepted)).toBe(true);
+    const listing = workspaceSourceListing(project);
+    expect(listing).not.toBeNull();
+    if (listing === null) return;
+    const fingerprint = writeUnitSourceSnapshot(
+      project,
+      "code-generation",
+      "alpha",
+      listing,
+      accepted,
+      accepted.rawBytesSha256,
+    );
+    const snapshot = readUnitSourceSnapshot(
+      project,
+      "code-generation",
+      "alpha",
+      fingerprint,
+    );
+    expect(snapshot?.listing.has("\0generated")).toBe(true);
+    expect(snapshot?.listing.has("\0generated/old.ts")).toBe(false);
+  });
+
   test("rejects ignored exact claims and prefixes containing ignored source", () => {
     const { project, record } = fixture();
     writeFileSync(
@@ -256,6 +300,36 @@ describe("t305 strict source-manifest validation", () => {
     );
     expect(slashless.ok).toBe(false);
     if (!slashless.ok) expect(slashless.reason).toContain("must end with");
+  });
+
+  test("rejects a prefix containing a force-added ignored descendant", () => {
+    const { project, record } = fixture();
+    writeFileSync(join(project, ".gitignore"), "force-dir/*.secret\n");
+    git(project, ["add", "--", ".gitignore"]);
+    git(project, ["commit", "-qm", "commit ignore rules"]);
+    mkdirSync(join(project, "force-dir"), { recursive: true });
+    writeFileSync(join(project, "force-dir", "key.secret"), "secret\n");
+    git(project, ["add", "-f", "--", "force-dir/key.secret"]);
+    manifest(record, "alpha", {
+      stage: "code-generation",
+      unit: "alpha",
+      version: 1,
+      writes: [{ path: "force-dir/" }],
+    });
+
+    const rejected = readUnitSourceManifest(
+      project,
+      "code-generation",
+      "alpha",
+    );
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) {
+      expect(rejected.reason).toContain("contains ignored application source");
+      expect(rejected.reason).toContain("force-dir/key.secret");
+    }
+    expect(
+      workspaceSourceListing(project)?.has("\0force-dir/key.secret"),
+    ).toBe(false);
   });
 });
 
