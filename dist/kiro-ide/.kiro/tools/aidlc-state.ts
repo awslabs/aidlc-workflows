@@ -16,6 +16,7 @@ import {
   codekbRepoName,
   countCheckboxes,
   currentSwarmSourceMergeChain,
+  currentSwarmAttemptObligations,
   emitError,
   errorMessage,
   extractMarkdownSection,
@@ -1455,13 +1456,52 @@ function isSettledSwarmForArtifactGuard(
     return false;
   }
   if (!isAutonomousSwarmStage(pd, stateContent, stage)) return false;
-  const resolution = resolveBoltDag(pd);
-  if (resolution.state !== "ok") return false;
+  const units = currentAttemptSwarmUnits(pd, stage.slug);
+  if (units === null || units.length === 0) return false;
   // Shared attempt-scoped read (aidlc-lib.ts): a row counts only when its
   // Stage names this slug AND its Run floor equals the current attempt's
   // floor, so stale-attempt and cross-stage rows never satisfy the guard.
   const converged = swarmConvergedUnits(pd, stage.slug);
-  return resolution.units.every((unit) => converged.has(unit));
+  return units.every((unit) => converged.has(unit));
+}
+
+function currentAttemptSwarmUnits(
+  pd: string,
+  stageSlug: string,
+): string[] | null {
+  const obligations = currentSwarmAttemptObligations(pd, stageSlug);
+  if (obligations.state === "invalid") {
+    error(
+      `Refusing to complete "${stageSlug}": current swarm Unit obligations are invalid ` +
+        `(${obligations.reason}). Restore unit-of-work-dependency.md or restart the stage attempt.`,
+    );
+  }
+  const resolution = resolveBoltDag(pd);
+  if (obligations.state === "none") {
+    return resolution.state === "ok" ? resolution.units : null;
+  }
+  if (resolution.state !== "ok") {
+    error(
+      `Refusing to complete "${stageSlug}": the current Unit DAG cannot be compared with ` +
+        `the attempt-bound Unit obligations. Restore unit-of-work-dependency.md or restart the stage attempt.`,
+    );
+  }
+  const live = new Set(resolution.units);
+  const missing = [...obligations.units].filter((unit) => !live.has(unit)).sort();
+  const added = resolution.units
+    .filter((unit) => !obligations.units.has(unit))
+    .sort();
+  if (missing.length > 0 || added.length > 0) {
+    const detail = [
+      missing.length > 0 ? `missing attempt Units: ${missing.join(", ")}` : "",
+      added.length > 0 ? `added Units: ${added.join(", ")}` : "",
+    ].filter(Boolean).join("; ");
+    error(
+      `Refusing to complete "${stageSlug}": the Unit DAG changed during the current swarm attempt ` +
+        `(${detail}). Restore unit-of-work-dependency.md to the attempt-bound Unit set or restart the stage attempt.`,
+    );
+  }
+  return [...obligations.units];
 }
 
 function verifySettledSwarmSourceBinding(
@@ -1474,10 +1514,10 @@ function verifySettledSwarmSourceBinding(
   ) {
     return;
   }
-  const resolution = resolveBoltDag(pd);
-  if (resolution.state !== "ok") {
+  const units = currentAttemptSwarmUnits(pd, stage.slug);
+  if (units === null) {
     error(
-      `Refusing to complete "${stage.slug}": its settled swarm source merge set cannot be resolved from the current Unit DAG.`,
+      `Refusing to complete "${stage.slug}": its settled swarm Unit obligations cannot be resolved for the current attempt.`,
     );
   }
   const chain = currentSwarmSourceMergeChain(pd, stage.slug);
@@ -1491,7 +1531,7 @@ function verifySettledSwarmSourceBinding(
       `Refusing to complete "${stage.slug}": its post-merge main-checkout source binding chain is invalid (${chain.reason}). Re-run the affected source merge or restart the Bolt attempt.`,
     );
   }
-  const missing = resolution.units.filter((unit) => !chain.units.has(unit));
+  const missing = units.filter((unit) => !chain.units.has(unit));
   if (missing.length > 0) {
     error(
       `Refusing to complete "${stage.slug}": ${missing.length} converged unit(s) have no current-attempt post-merge source binding (${missing.join(", ")}). Merge every reviewed source commit before approval.`,
@@ -1768,10 +1808,14 @@ function verifyStageArtifacts(
   // convergence ledger; its artifacts live in Bolt worktrees this walk cannot
   // see. Same exemption the engine's report-side evidence gate applies.
   let settledSwarm = false;
+  let stateContent: string | null = null;
   try {
-    settledSwarm = isSettledSwarmForArtifactGuard(pd, stage, readStateFile(pd));
+    stateContent = readStateFile(pd);
   } catch {
     // No readable state file: not a swarm settle; stay strict.
+  }
+  if (stateContent !== null) {
+    settledSwarm = isSettledSwarmForArtifactGuard(pd, stage, stateContent);
   }
   if (settledSwarm) return;
 

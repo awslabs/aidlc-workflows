@@ -8,6 +8,7 @@
 // covers: function:currentStageSourceBaseline
 // covers: function:currentSwarmSourceMergeChain
 // covers: function:currentSwarmSourceOpeningFingerprint
+// covers: function:currentSwarmAttemptObligations
 // covers: function:sourceBaselineAuditFields
 // covers: function:sourceListingEntriesEqual
 // covers: audit:SWARM_SOURCE_MERGED
@@ -658,6 +659,31 @@ function swarmFixture(): string {
   return project;
 }
 
+function writeAuthoredDag(
+  project: string,
+  units: Array<{ name: string; dependsOn: string[] }>,
+): void {
+  const dir = join(
+    seededRecordDir(project),
+    "inception",
+    "units-generation",
+  );
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "unit-of-work-dependency.md"),
+    [
+      "```yaml",
+      "units:",
+      ...units.flatMap((unit) => [
+        `  - name: ${unit.name}`,
+        `    depends_on: [${unit.dependsOn.join(", ")}]`,
+      ]),
+      "```",
+      "",
+    ].join("\n"),
+  );
+}
+
 function runSwarm(
   project: string,
   args: string[],
@@ -905,6 +931,94 @@ describe("t305 real receipt and guard flows", () => {
     ).toBe("legacy");
     expect(approve(legacy.project).rc).toBe(0);
   }, 30000);
+
+  test("shrinking the live DAG cannot erase current-attempt swarm obligations", () => {
+    const project = swarmFixture();
+    const alpha = { name: "alpha", dependsOn: [] };
+    const beta = { name: "beta", dependsOn: ["alpha"] };
+    seedBoltDag(
+      project,
+      [
+        { name: alpha.name, depends_on: alpha.dependsOn },
+        { name: beta.name, depends_on: beta.dependsOn },
+      ],
+      [["alpha"], ["beta"]],
+    );
+    writeAuthoredDag(project, [alpha, beta]);
+    const prepared = runSwarm(project, [
+      "prepare",
+      "--batch",
+      "1",
+      "--units",
+      "alpha",
+      "--base",
+      "main",
+    ]);
+    expect(prepared.rc, prepared.out).toBe(0);
+    expect(readAllAuditShards(project)).toContain(
+      "**Unit obligations**: alpha,beta",
+    );
+    const wt = join(project, ".aidlc", "worktrees", "bolt-alpha");
+    writeFileSync(join(wt, "alpha.ts"), "export const alpha = true;\n");
+    const reviewed = review(
+      wt,
+      seededRecordDir(wt),
+      "alpha",
+      [{ path: "alpha.ts" }],
+    );
+    expect(reviewed.verdict.rc, reviewed.verdict.out).toBe(0);
+    const finalized = runSwarm(project, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "alpha",
+      "--claimed",
+      "alpha",
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('alpha.ts')"`,
+    ]);
+    expect(finalized.rc, finalized.out).toBe(0);
+    const merged = spawnSync(
+      process.execPath,
+      [
+        WORKTREE,
+        "merge",
+        "--slug",
+        "alpha",
+        "--target",
+        "main",
+        "--strategy",
+        "squash",
+        "--project-dir",
+        project,
+      ],
+      { cwd: project, encoding: "utf-8" },
+    );
+    expect(merged.status, `${merged.stdout ?? ""}${merged.stderr ?? ""}`)
+      .toBe(0);
+
+    writeAuthoredDag(project, [alpha]);
+    const statePath = seededStateFile(project);
+    writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8")
+        .replace(
+          "- **Construction Autonomy Mode**: gated",
+          "- **Construction Autonomy Mode**: autonomous",
+        )
+        .replace("- [-] code-generation", "- [?] code-generation"),
+    );
+    const refused = approve(project);
+    expect(refused.rc).toBe(1);
+    expect(refused.out).toContain("missing attempt Units: beta");
+    expect(refused.out).toContain(
+      "Restore unit-of-work-dependency.md to the attempt-bound Unit set or restart the stage attempt",
+    );
+    expect(readAllAuditShards(project)).not.toContain(
+      "**Event**: STAGE_COMPLETED",
+    );
+  }, 120000);
 
   test("12 two recorded repos invalidate only the owning repo and unit", () => {
     const base=runtimeFixture(); const project=base.project; const record=base.record; rmSync(join(project,".git"),{recursive:true,force:true}); for (const repo of ["repo-a","repo-b"]) { const path=join(project,repo); mkdirSync(path,{recursive:true}); git(path,["init","-q"]); git(path,["config","user.email","t@test"]); git(path,["config","user.name","t"]); writeFileSync(join(path,`${repo}.ts`),`export const ${repo.replace(/-/g,"_")}=1\n`); git(path,["add","-A"]); git(path,["commit","-qm","seed"]); } const registry=join(project,"aidlc","spaces","default","intents","intents.json"); const rows=JSON.parse(readFileSync(registry,"utf-8")); rows[0].repos=["repo-a","repo-b"]; writeFileSync(registry,`${JSON.stringify(rows)}\n`); const initial=workspaceSourceListing(project)!; appendAuditEntry("STAGE_JUMPED",{Target:"code-generation","Source Baseline":writeBaselineSourceSnapshot(project,"code-generation",initial)},project); const multiBoundary=Math.floor(Date.now()/1000); while(Math.floor(Date.now()/1000)===multiBoundary){}

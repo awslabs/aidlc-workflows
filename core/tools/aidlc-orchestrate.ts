@@ -167,6 +167,7 @@ import {
   writeActiveDirectiveMarker,
   workspaceCommandUtilityArgv,
   classifyStateVersion,
+  currentSwarmAttemptObligations,
 } from "./aidlc-lib.ts";
 import {
   type Consume,
@@ -3516,7 +3517,18 @@ function isSettledAutonomousSwarm(
   if (!isAutonomousSwarmCandidate(node, scope, stateContent)) return false;
   const r = resolution ?? resolveBoltBatches(projectDir);
   if (r.state !== "ok") return false;
-  const units = r.batches.flat();
+  const liveUnits = r.batches.flat();
+  const obligations = currentSwarmAttemptObligations(projectDir, node.slug);
+  if (obligations.state === "invalid") return false;
+  if (
+    obligations.state === "ready" &&
+    (liveUnits.length !== obligations.units.size ||
+      liveUnits.some((unit) => !obligations.units.has(unit)))
+  ) {
+    return false;
+  }
+  const units =
+    obligations.state === "ready" ? [...obligations.units] : liveUnits;
   if (units.length === 0) return false;
   const converged = swarmConvergedUnits(projectDir, node.slug);
   return units.every((unit) => converged.has(unit));

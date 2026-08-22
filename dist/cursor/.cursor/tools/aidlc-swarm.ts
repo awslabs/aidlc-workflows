@@ -784,6 +784,7 @@ function emitSwarmStarted(
   pd: string,
   batch: string,
   units: string[],
+  obligations: string[],
   concurrency: string,
   attempt: SwarmAttemptStamp,
 ): void {
@@ -792,6 +793,7 @@ function emitSwarmStarted(
     {
       "Batch number": batch,
       "Unit names": units.join(","),
+      "Unit obligations": obligations.join(","),
       "Concurrency cap": concurrency,
       Stage: attempt.stage,
       "Run floor": attempt.floor,
@@ -1077,7 +1079,14 @@ function handlePrepare(rest: string[]): void {
   // data to pass finalize's exact-attempt check.
   const readyUnits = prepared.filter((unit) => unit.ok).map((unit) => unit.unit);
   if (readyUnits.length > 0) {
-    emitSwarmStarted(projectDir, flags.batch, readyUnits, concurrency, attempt);
+    emitSwarmStarted(
+      projectDir,
+      flags.batch,
+      readyUnits,
+      dag.units,
+      concurrency,
+      attempt,
+    );
   }
 
   console.log(

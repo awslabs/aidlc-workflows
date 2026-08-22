@@ -9889,6 +9889,88 @@ export function swarmConvergedUnits(
   return converged;
 }
 
+export type SwarmAttemptObligations =
+  | { state: "none" }
+  | { state: "invalid"; reason: string }
+  | { state: "ready"; units: Set<string> };
+
+export function currentSwarmAttemptObligations(
+  projectDir: string,
+  slug: string,
+  intent?: string,
+  space?: string,
+): SwarmAttemptObligations {
+  const floor = latestMainWorkflowStageRunFloorForProject(
+    projectDir,
+    slug,
+    false,
+    intent,
+    space,
+  );
+  const rows = readAuditShardEvents(projectDir, intent, space);
+  const starts = rows.filter(
+    (row) =>
+      row.event === "SWARM_STARTED" &&
+      auditBlockField(row.block, "Stage") === slug &&
+      auditBlockField(row.block, "Run floor") === floor,
+  );
+  if (starts.length === 0) {
+    const modernCurrentAttempt = rows.some(
+      (row) =>
+        auditBlockField(row.block, "Stage") === slug &&
+        auditBlockField(row.block, "Run floor") === floor &&
+        ((row.event === "SWARM_UNIT_CONVERGED" &&
+          (auditBlockField(row.block, "Source Commit") !== null ||
+            auditBlockField(row.block, "Source Freshness Bypass") !== null)) ||
+          row.event === "SWARM_SOURCE_MERGED"),
+    );
+    return modernCurrentAttempt
+      ? {
+          state: "invalid",
+          reason:
+            "modern current-attempt swarm evidence exists without SWARM_STARTED Unit obligations",
+        }
+      : { state: "none" };
+  }
+
+  let canonical: string | null = null;
+  let units: Set<string> | null = null;
+  for (const row of starts) {
+    const raw = auditBlockField(row.block, "Unit obligations");
+    if (raw === null) {
+      return {
+        state: "invalid",
+        reason: "current-attempt SWARM_STARTED lacks Unit obligations",
+      };
+    }
+    const parsed = raw
+      .split(",")
+      .map((unit) => unit.trim())
+      .filter(Boolean);
+    if (
+      parsed.length === 0 ||
+      parsed.some((unit) => validateUnitName(unit) !== null) ||
+      new Set(parsed).size !== parsed.length
+    ) {
+      return {
+        state: "invalid",
+        reason: "current-attempt SWARM_STARTED has malformed Unit obligations",
+      };
+    }
+    const nextCanonical = [...parsed].sort().join("\0");
+    if (canonical !== null && canonical !== nextCanonical) {
+      return {
+        state: "invalid",
+        reason:
+          "current-attempt SWARM_STARTED rows disagree on Unit obligations",
+      };
+    }
+    canonical = nextCanonical;
+    units = new Set(parsed);
+  }
+  return units === null ? { state: "none" } : { state: "ready", units };
+}
+
 export type SwarmSourceMergeChain =
   | { state: "none" }
   | { state: "invalid"; reason: string }
