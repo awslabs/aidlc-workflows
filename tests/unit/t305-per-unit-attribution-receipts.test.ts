@@ -1021,6 +1021,116 @@ describe("t305 real receipt and guard flows", () => {
     expect(approve(legacy.project).rc).toBe(0);
   }, 30000);
 
+  test("field-free cross-shard baseline ties stay legacy while bound ties refuse", () => {
+    const stage = {
+      slug: "code-generation",
+      phase: "construction",
+      for_each: "unit-of-work",
+      reviewer: REVIEWER,
+      reviewer_max_iterations: 2,
+      workspace_requires: true,
+      produces: [
+        "code-generation-plan",
+        "unit-test-instructions",
+        "code-summary",
+        "traceability",
+      ],
+    };
+    const timestamp = "2026-08-22T12:00:00Z";
+    const writeTiedRows = (
+      record: string,
+      baseline?: string,
+    ): void => {
+      const auditDir = join(record, "audit");
+      mkdirSync(auditDir, { recursive: true });
+      const baselineLine =
+        baseline === undefined ? "" : `**Source Baseline**: ${baseline}\n`;
+      writeFileSync(
+        join(auditDir, "a.md"),
+        [
+          "# AI-DLC Audit Log",
+          "## Workflow Start",
+          `**Timestamp**: ${timestamp}`,
+          "**Event**: WORKFLOW_STARTED",
+          "**Scope**: feature",
+          baselineLine.trimEnd(),
+          "",
+          "---",
+          "",
+        ].filter((line, index, rows) =>
+          line !== "" || rows[index - 1] !== ""
+        ).join("\n"),
+      );
+      writeFileSync(
+        join(auditDir, "b.md"),
+        [
+          "# AI-DLC Audit Log",
+          "## Stage Start",
+          `**Timestamp**: ${timestamp}`,
+          "**Event**: STAGE_STARTED",
+          "**Stage**: code-generation",
+          "**Agent**: aidlc-developer-agent",
+          baselineLine.trimEnd(),
+          "",
+          "---",
+          "",
+        ].filter((line, index, rows) =>
+          line !== "" || rows[index - 1] !== ""
+        ).join("\n"),
+      );
+    };
+
+    const legacy = fixture();
+    writeTiedRows(legacy.record);
+    const legacyState = readFileSync(
+      join(legacy.record, "aidlc-state.md"),
+      "utf-8",
+    );
+    expect(
+      freshReviewReceipts(
+        legacy.project,
+        legacyState,
+        stage,
+      ).sourceBaseline.state,
+    ).toBe("legacy");
+    expect(
+      currentStageSourceBaseline(
+        legacy.project,
+        "code-generation",
+        false,
+      ).state,
+    ).toBe("legacy");
+
+    const modern = fixture();
+    const listing = workspaceSourceListing(modern.project);
+    expect(listing).not.toBeNull();
+    if (listing === null) return;
+    const baseline = writeBaselineSourceSnapshot(
+      modern.project,
+      "code-generation",
+      listing,
+    );
+    writeTiedRows(modern.record, baseline);
+    const modernState = readFileSync(
+      join(modern.record, "aidlc-state.md"),
+      "utf-8",
+    );
+    expect(
+      freshReviewReceipts(
+        modern.project,
+        modernState,
+        stage,
+      ).sourceBaseline.state,
+    ).toBe("unbindable");
+    expect(
+      currentStageSourceBaseline(
+        modern.project,
+        "code-generation",
+        false,
+      ).state,
+    ).toBe("unbindable");
+  }, 30000);
+
   test("shrinking the live DAG cannot erase current-attempt swarm obligations", () => {
     const project = swarmFixture();
     const alpha = { name: "alpha", dependsOn: [] };

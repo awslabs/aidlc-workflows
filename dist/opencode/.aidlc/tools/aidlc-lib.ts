@@ -5540,21 +5540,37 @@ function hasModernSourceBindingEvidence(
   });
 }
 
-function isSourceBaselineBoundaryEvent(
+function sourceBaselineBoundaryValue(
   event: Pick<AuditShardEvent, "event" | "block">,
   stageSlug: string,
   unitMajor: boolean,
-): boolean {
+): string | null | undefined {
   if (auditBlockField(event.block, "Workflow")?.startsWith("single-stage:")) {
-    return false;
+    return undefined;
   }
-  if (event.event === "WORKFLOW_STARTED" || event.event === "STAGE_JUMPED") {
-    return true;
-  }
-  return (
+  const qualifies =
+    event.event === "WORKFLOW_STARTED" ||
+    event.event === "STAGE_JUMPED" ||
+    (
     event.event === "STAGE_STARTED" &&
     !unitMajor &&
     auditBlockField(event.block, "Stage") === stageSlug
+  );
+  return qualifies
+    ? auditBlockField(event.block, "Source Baseline")
+    : undefined;
+}
+
+function auditEventIsCrossShardTied(
+  events: ReadonlyArray<Pick<AuditShardEvent, "timestamp" | "shard">>,
+  index: number,
+): boolean {
+  const event = events[index];
+  return events.some(
+    (candidate, otherIndex) =>
+      otherIndex !== index &&
+      candidate.timestamp === event.timestamp &&
+      candidate.shard !== event.shard,
   );
 }
 
@@ -5629,13 +5645,7 @@ export function freshReviewReceipts(
     });
   if (events.length === 0) return empty;
   const eventIsCrossShardTied = (index: number): boolean => {
-    const event = events[index];
-    return events.some(
-      (candidate, otherIndex) =>
-        otherIndex !== index &&
-        candidate.timestamp === event.timestamp &&
-        candidate.shard !== event.shard,
-    );
+    return auditEventIsCrossShardTied(events, index);
   };
 
   const perUnit = stage.for_each === "unit-of-work";
@@ -6105,10 +6115,17 @@ export function freshReviewReceipts(
     let baselineField: string | null = null;
     for (let i = Math.max(boundary, 0); i < firstWork; i++) {
       const event = events[i];
-      if (!isSourceBaselineBoundaryEvent(event, stage.slug, unitMajor)) continue;
-      const field = auditBlockField(event.block, "Source Baseline");
-      if (eventIsCrossShardTied(i)) baselineField = UNBINDABLE_FINGERPRINT;
-      else baselineField = field;
+      const field = sourceBaselineBoundaryValue(
+        event,
+        stage.slug,
+        unitMajor,
+      );
+      if (field === undefined) continue;
+      if (field !== null && eventIsCrossShardTied(i)) {
+        baselineField = UNBINDABLE_FINGERPRINT;
+      } else {
+        baselineField = field;
+      }
     }
     if (baselineField === UNBINDABLE_FINGERPRINT) sourceBaseline = { state: "unbindable" };
     else if (baselineField !== null) {
@@ -7428,9 +7445,20 @@ export function currentStageSourceBaseline(
   let field: string | null = null;
   for (let index = Math.max(boundary, 0); index < firstWork; index++) {
     const event = events[index];
-    if (!isSourceBaselineBoundaryEvent(event, stageSlug, unitMajor)) continue;
-    const candidate = auditBlockField(event.block, "Source Baseline");
-    field = candidate;
+    const candidate = sourceBaselineBoundaryValue(
+      event,
+      stageSlug,
+      unitMajor,
+    );
+    if (candidate === undefined) continue;
+    if (
+      candidate !== null &&
+      auditEventIsCrossShardTied(events, index)
+    ) {
+      field = UNBINDABLE_FINGERPRINT;
+    } else {
+      field = candidate;
+    }
   }
   if (field === null) {
     return modernSourceBindingEvidence
