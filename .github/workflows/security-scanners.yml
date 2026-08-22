@@ -52,7 +52,7 @@ jobs:
           name: gitleaks.sarif
           path: gitleaks-report_sarif.json
           if-no-files-found: error
-      - uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+      - uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         continue-on-error: true
         with:
           sarif_file: gitleaks-report_sarif.json
@@ -152,7 +152,7 @@ jobs:
           name: semgrep.sarif
           path: semgrep-report_sarif.json
           if-no-files-found: error
-      - uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+      - uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         continue-on-error: true
         with:
           sarif_file: semgrep-report_sarif.json
@@ -189,7 +189,7 @@ jobs:
           name: grype.sarif
           path: grype-report_sarif.json
           if-no-files-found: error
-      - uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+      - uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         continue-on-error: true
         with:
           sarif_file: grype-report_sarif.json
@@ -239,7 +239,7 @@ jobs:
           name: bandit.sarif
           path: bandit-report_sarif.json
           if-no-files-found: error
-      - uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+      - uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         continue-on-error: true
         with:
           sarif_file: bandit-report_sarif.json
@@ -292,7 +292,7 @@ jobs:
           name: checkov.sarif
           path: checkov-report_sarif.json
           if-no-files-found: error
-      - uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+      - uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         continue-on-error: true
         with:
           sarif_file: checkov-report_sarif.json
