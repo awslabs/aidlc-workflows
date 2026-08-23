@@ -51,19 +51,28 @@ function seedAudit(
   proj: string,
   rows: Array<{
     timestamp: string;
-    event: "STAGE_AWAITING_APPROVAL" | "GATE_APPROVED";
+    event:
+      | "WORKFLOW_STARTED"
+      | "STAGE_JUMPED"
+      | "STAGE_STARTED"
+      | "STAGE_AWAITING_APPROVAL"
+      | "GATE_APPROVED";
     recovered?: boolean;
+    stage?: string | null;
   }>,
 ): void {
   const shard = seededAuditShard(proj);
   mkdirSync(join(shard, ".."), { recursive: true });
-  const body = rows.map((row) => [
-    "## Gate Event",
-    `**Timestamp**: ${row.timestamp}`,
-    `**Event**: ${row.event}`,
-    "**Stage**: feasibility",
-    ...(row.recovered ? ["**Recovered**: true"] : []),
-  ].join("\n")).join("\n\n---\n\n");
+  const body = rows.map((row) => {
+    const stage = row.stage === undefined ? "feasibility" : row.stage;
+    return [
+      "## Gate Event",
+      `**Timestamp**: ${row.timestamp}`,
+      `**Event**: ${row.event}`,
+      ...(stage === null ? [] : [`**Stage**: ${stage}`]),
+      ...(row.recovered ? ["**Recovered**: true"] : []),
+    ].join("\n");
+  }).join("\n\n---\n\n");
   writeFileSync(shard, `${body}\n`, "utf-8");
 }
 
@@ -136,5 +145,33 @@ describe("t304 doctor gate-pending advisory", () => {
       recovered: true,
     }]);
     expect(runDoctor(recovered).out).not.toContain("Approval gate pending");
+  });
+
+  test("prior-attempt organic gate does not create a current advisory", () => {
+    const proj = projectAtGate();
+    const now = Date.now();
+    seedAudit(proj, [
+      {
+        timestamp: new Date(
+          now - GATE_PENDING_ADVISORY_MS - 3 * 60 * 60 * 1000,
+        ).toISOString(),
+        event: "STAGE_AWAITING_APPROVAL",
+      },
+      {
+        timestamp: new Date(now - 2 * 60 * 60 * 1000).toISOString(),
+        event: "STAGE_JUMPED",
+        stage: null,
+      },
+      {
+        timestamp: new Date(now - 90 * 60 * 1000).toISOString(),
+        event: "STAGE_STARTED",
+      },
+      {
+        timestamp: new Date(now - 60 * 60 * 1000).toISOString(),
+        event: "STAGE_AWAITING_APPROVAL",
+        recovered: true,
+      },
+    ]);
+    expect(runDoctor(proj).out).not.toContain("Approval gate pending");
   });
 });

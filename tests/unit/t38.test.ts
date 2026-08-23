@@ -150,19 +150,29 @@ function seedAudit(
   p: string,
   rows: Array<{
     timestamp: string;
-    event: "STAGE_AWAITING_APPROVAL" | "GATE_APPROVED" | "GATE_REJECTED";
+    event:
+      | "WORKFLOW_STARTED"
+      | "STAGE_JUMPED"
+      | "STAGE_STARTED"
+      | "STAGE_AWAITING_APPROVAL"
+      | "GATE_APPROVED"
+      | "GATE_REJECTED";
     recovered?: boolean;
+    stage?: string | null;
   }>,
 ): void {
   const shard = seededAuditShard(p);
   mkdirSync(join(shard, ".."), { recursive: true });
-  const body = rows.map((row) => [
-    "## Gate Event",
-    `**Timestamp**: ${row.timestamp}`,
-    `**Event**: ${row.event}`,
-    "**Stage**: feasibility",
-    ...(row.recovered ? ["**Recovered**: true"] : []),
-  ].join("\n")).join("\n\n---\n\n");
+  const body = rows.map((row) => {
+    const stage = row.stage === undefined ? "feasibility" : row.stage;
+    return [
+      "## Gate Event",
+      `**Timestamp**: ${row.timestamp}`,
+      `**Event**: ${row.event}`,
+      ...(stage === null ? [] : [`**Stage**: ${stage}`]),
+      ...(row.recovered ? ["**Recovered**: true"] : []),
+    ].join("\n");
+  }).join("\n\n---\n\n");
   writeFileSync(shard, `${body}\n`, "utf-8");
 }
 
@@ -220,6 +230,35 @@ describe("t38 aidlc-utility status — gate awareness (migrated from t38-utility
       event: "STAGE_AWAITING_APPROVAL",
       recovered: true,
     }]);
+    const r = status(p);
+    expect(r.status).toBe(0);
+    expect(r.out).toContain("Awaiting your approval on Feasibility & Constraints");
+    expect(r.out).not.toContain("waiting since");
+  });
+
+  test("1e: a prior-attempt organic gate does not date a recovered current gate", () => {
+    const p = seededProj();
+    sedState(p, /^- \[-\] feasibility/m, "- [?] feasibility");
+    seedAudit(p, [
+      {
+        timestamp: "2026-08-01T08:30:00Z",
+        event: "STAGE_AWAITING_APPROVAL",
+      },
+      {
+        timestamp: "2026-08-20T08:30:00Z",
+        event: "STAGE_JUMPED",
+        stage: null,
+      },
+      {
+        timestamp: "2026-08-20T08:31:00Z",
+        event: "STAGE_STARTED",
+      },
+      {
+        timestamp: "2026-08-20T08:32:00Z",
+        event: "STAGE_AWAITING_APPROVAL",
+        recovered: true,
+      },
+    ]);
     const r = status(p);
     expect(r.status).toBe(0);
     expect(r.out).toContain("Awaiting your approval on Feasibility & Constraints");

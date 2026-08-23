@@ -1073,9 +1073,15 @@ interface PendingOrganicGate {
   timestampMs: number;
 }
 
-function pendingOrganicGate(audit: string, stage: string): PendingOrganicGate | null {
+function pendingOrganicGate(
+  audit: string,
+  stage: string,
+): PendingOrganicGate | null {
   if (audit.length === 0) return null;
   const relevant = new Set([
+    "WORKFLOW_STARTED",
+    "STAGE_JUMPED",
+    "STAGE_STARTED",
     "STAGE_AWAITING_APPROVAL",
     "GATE_APPROVED",
     "GATE_REJECTED",
@@ -1088,9 +1094,10 @@ function pendingOrganicGate(audit: string, stage: string): PendingOrganicGate | 
       stage: auditBlockField(block, "Stage"),
       timestamp: auditBlockField(block, "Timestamp") ?? "",
       recovered: auditBlockField(block, "Recovered") === "true",
+      workflow: auditBlockField(block, "Workflow"),
       position,
     }))
-    .filter((event) => relevant.has(event.event) && event.stage === stage)
+    .filter((event) => relevant.has(event.event))
     .sort((a, b) => {
       if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
       return a.position - b.position;
@@ -1098,6 +1105,19 @@ function pendingOrganicGate(audit: string, stage: string): PendingOrganicGate | 
 
   let pending: PendingOrganicGate | null = null;
   for (const event of events) {
+    if (
+      event.event === "WORKFLOW_STARTED" ||
+      event.event === "STAGE_JUMPED" ||
+      (
+        event.event === "STAGE_STARTED" &&
+        event.stage === stage &&
+        !event.workflow?.startsWith("single-stage:")
+      )
+    ) {
+      pending = null;
+      continue;
+    }
+    if (event.stage !== stage) continue;
     if (event.event === "STAGE_AWAITING_APPROVAL") {
       if (event.recovered) continue;
       const timestampMs = Date.parse(event.timestamp);
