@@ -33,6 +33,7 @@ import {
   readIntentRegistry,
   readSessionBinding,
   readSessionIntentUuid,
+  readSessionRebindOffer,
   setActiveIntentCursor,
   setActiveSpaceCursor,
   writeSessionIntentUuid,
@@ -115,6 +116,22 @@ describe("t169 session-start resume rebind (mechanism cli — spawned hook + cur
     const resumed = fire(proj, "resume", "S2");
     expect(resumed.exitCode).toBe(0);
     expect(resumed.context).not.toContain("INTENT REBIND OFFER");
+  });
+
+  test("a new started lifecycle clears a prior rebind offer receipt", () => {
+    const first = createIntent(proj, "clear-first", "default", "feature");
+    const second = createIntent(proj, "clear-second", "default", "feature");
+    setActiveIntentCursor(proj, first.dirName, "default");
+    fire(proj, "startup", "S-CLEAR");
+    setActiveIntentCursor(proj, second.dirName, "default");
+
+    expect(fire(proj, "resume", "S-CLEAR").context).toContain(
+      "INTENT REBIND OFFER",
+    );
+    expect(readSessionRebindOffer(proj, "S-CLEAR")).not.toBeNull();
+
+    fire(proj, "clear", "S-CLEAR");
+    expect(readSessionRebindOffer(proj, "S-CLEAR")).toBeNull();
   });
 
   test("upgrade stamp without binding preserves the legacy rebind offer", () => {
@@ -201,6 +218,10 @@ describe("t169 session-start resume rebind (mechanism cli — spawned hook + cur
     fire(proj, "startup", "S5");
 
     const live = createIntent(proj, "live-work", "default", "feature");
+    const offered = fire(proj, "resume", "S5");
+    expect(offered.context).toContain("INTENT REBIND OFFER");
+    expect(readSessionRebindOffer(proj, "S5")).not.toBeNull();
+
     const registry = readIntentRegistry(proj, "default")
       .filter((entry) => entry.uuid !== old.uuid);
     writeFileSync(
@@ -215,6 +236,7 @@ describe("t169 session-start resume rebind (mechanism cli — spawned hook + cur
     const resumed = fire(proj, "resume", "S5");
     expect(resumed.exitCode).toBe(0);
     expect(resumed.context).not.toContain("INTENT REBIND OFFER");
+    expect(readSessionRebindOffer(proj, "S5")).toBeNull();
     expect(readSessionIntentUuid(proj, "S5")).toBe(live.uuid);
   });
 });

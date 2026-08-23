@@ -18,13 +18,10 @@ import {
   readStateFile,
   resolveProjectDir,
   resolveStage,
-  sessionConflict,
   type StageEntry,
-  validSessionId,
   setCheckbox,
   setField,
   setPhaseProgress,
-  setSessionResolutionOverride,
   stageIndex,
   sourceBaselineAuditFields,
   writeStateFile,
@@ -58,23 +55,6 @@ let projectDir: string | undefined;
 
 export function main(argv: string[]): void {
   const rawArgs = [...argv];
-  const sessionIdx = rawArgs.indexOf("--session");
-  if (
-    sessionIdx >= 0 &&
-    (
-      rawArgs[sessionIdx + 1] === undefined ||
-      rawArgs[sessionIdx + 1].startsWith("--") ||
-      validSessionId(rawArgs[sessionIdx + 1]) === null
-    )
-  ) {
-    error("--session requires a safe, nonblank session id.");
-  }
-  const sessionFlag =
-    sessionIdx >= 0 ? validSessionId(rawArgs[sessionIdx + 1]) : null;
-  if (sessionIdx >= 0) rawArgs.splice(sessionIdx, 2);
-  setSessionResolutionOverride(
-    sessionFlag ?? validSessionId(process.env.AIDLC_SESSION_OVERRIDE) ?? undefined,
-  );
 
   // Extract --project-dir
   const filteredArgs: string[] = [];
@@ -85,16 +65,6 @@ export function main(argv: string[]): void {
     } else {
       filteredArgs.push(rawArgs[i]);
     }
-  }
-  const appliedSession =
-    sessionFlag ?? validSessionId(process.env.AIDLC_SESSION_OVERRIDE) ?? undefined;
-  const ancestryOwner = appliedSession
-    ? sessionConflict(resolveProjectDir(projectDir), appliedSession)
-    : null;
-  if (ancestryOwner) {
-    error(
-      `Session "${appliedSession}" conflicts with the owning conversation "${ancestryOwner}". Work from the owning conversation, or rebind this session with the intent/space switch verbs.`,
-    );
   }
 
   const subcommand = filteredArgs[0];

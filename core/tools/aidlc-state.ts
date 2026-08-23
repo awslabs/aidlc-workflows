@@ -80,7 +80,6 @@ import {
   removeSlug,
   replaceSection,
   selfAttributedDecisionMarker,
-  sessionConflict,
   resolveBoltDag,
   reviewArtifactFingerprint,
   reviewerGateGuardDisabled,
@@ -96,13 +95,11 @@ import {
   setFieldStrict,
   setOrInsertField,
   setPhaseProgress,
-  setSessionResolutionOverride,
   stagesInScope,
   swarmConvergedUnits,
   updateIntentStatus,
   usesStageLevelPerUnitArtifacts,
   validateUnitName,
-  validSessionId,
   validScopes,
   withAuditLock,
   worktreeDocsDir,
@@ -546,23 +543,6 @@ let stateSessionOverride: string | undefined;
 
 export function main(argv: string[]): void {
   const args = [...argv];
-  const sessionIdx = args.indexOf("--session");
-  if (
-    sessionIdx >= 0 &&
-    (
-      args[sessionIdx + 1] === undefined ||
-      args[sessionIdx + 1].startsWith("--") ||
-      validSessionId(args[sessionIdx + 1]) === null
-    )
-  ) {
-    error("--session requires a safe, nonblank session id.");
-  }
-  const sessionFlag =
-    sessionIdx >= 0 ? validSessionId(args[sessionIdx + 1]) : null;
-  if (sessionIdx >= 0) args.splice(sessionIdx, 2);
-  setSessionResolutionOverride(
-    sessionFlag ?? validSessionId(process.env.AIDLC_SESSION_OVERRIDE) ?? undefined,
-  );
 
   // Extract --project-dir flag
   const pdIdx = args.indexOf("--project-dir");
@@ -570,17 +550,8 @@ export function main(argv: string[]): void {
     projectDir = args[pdIdx + 1];
     args.splice(pdIdx, 2);
   }
-  const appliedSession =
-    sessionFlag ?? validSessionId(process.env.AIDLC_SESSION_OVERRIDE) ?? undefined;
-  stateSessionOverride = appliedSession;
-  const ancestryOwner = appliedSession
-    ? sessionConflict(resolveProjectDir(projectDir), appliedSession)
-    : null;
-  if (ancestryOwner) {
-    error(
-      `Session "${appliedSession}" conflicts with the owning conversation "${ancestryOwner}". Work from the owning conversation, or rebind this session with the intent/space switch verbs.`,
-    );
-  }
+  stateSessionOverride =
+    resolveWorkflowSelection(resolveProjectDir(projectDir)).sessionId ?? undefined;
 
   const subcommand = args[0];
 

@@ -10,6 +10,7 @@ import {
   resolveWorkflowSelection,
   resolveProjectDirFromHook,
   stateFilePathForSelection,
+  validSessionId,
 } from "../tools/aidlc-lib.ts";
 import { sessionUsageAggregate } from "../tools/aidlc-usage.ts";
 
@@ -301,14 +302,15 @@ async function main(stdinText: string): Promise<void> {
   }
 
   const projectDir = await resolveProjectDir(input);
+  const sessionId = validSessionId(input.session_id) ?? undefined;
   const modelShort = abbreviateModel(input.model?.id ?? "");
   const ctxRaw = input.model?.id ? input.context_window?.used_percentage : undefined;
   const ctxInt = typeof ctxRaw === "number" ? Math.round(ctxRaw) : null;
-  const cost = costSegment(projectDir, input.transcript_path, input.session_id);
+  const cost = costSegment(projectDir, input.transcript_path, sessionId);
   const right = buildRightSide(modelShort, ctxInt, cost);
 
   const selection = projectDir
-    ? resolveWorkflowSelection(projectDir, { sessionId: input.session_id })
+    ? resolveWorkflowSelection(projectDir, { sessionId })
     : null;
   const stateFile =
     projectDir && selection
@@ -338,7 +340,7 @@ async function main(stdinText: string): Promise<void> {
   }
   // Orientation prefix — only computed once a record is active (the state file
   // resolved above), so the empty-state "[AIDLC] ready" lines never carry it.
-  const prefix = orientationPrefix(projectDir, input.session_id);
+  const prefix = orientationPrefix(projectDir, sessionId);
   if (status === "Completed" || status === "Complete") {
     // At workflow completion, show a full bar even if Lifecycle Phase no longer
     // resolves to a real heading (e.g. a future caller writes a "COMPLETE"

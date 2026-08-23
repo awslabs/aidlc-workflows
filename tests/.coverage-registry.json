@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 661,
+    "total": 660,
     "enumeratedByClass": {
-      "function": 397,
+      "function": 396,
       "audit": 87,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 203,
+      "function": 205,
       "audit": 46,
       "scope": 11,
       "stage": 11,
@@ -4085,17 +4085,22 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:sessionConflict",
+      "unitId": "function:sessionPidMapDir",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
-      "unitId": "function:sessionPidMapDir",
+      "unitId": "function:SessionResolutionConflictError",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t310-session-binding-helpers.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -4174,13 +4179,6 @@
         }
       ],
       "status": "covered"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:setSessionResolutionOverride",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -4745,8 +4743,13 @@
       "unitClass": "function",
       "unitId": "function:validSessionId",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t310-session-binding-helpers.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",

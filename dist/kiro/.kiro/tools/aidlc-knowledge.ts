@@ -82,9 +82,7 @@ import {
   removeTreeSync,
   renameIntoPlace,
   resolveProjectDir,
-  setSessionResolutionOverride,
   uuidv7,
-  validSessionId,
   validSpaceFlag,
   withAuditLock,
   writeBufferAtomic,
@@ -3804,25 +3802,6 @@ let projectDir: string | undefined;
 
 export function main(argv: string[]): void {
   const args = [...argv];
-  const sessionIdx = args.indexOf("--session");
-  if (
-    sessionIdx >= 0 &&
-    (
-      args[sessionIdx + 1] === undefined ||
-      args[sessionIdx + 1].startsWith("--") ||
-      validSessionId(args[sessionIdx + 1]) === null
-    )
-  ) {
-    error("--session requires a safe, nonblank session id.");
-  }
-  const sessionFlag =
-    sessionIdx >= 0 ? validSessionId(args[sessionIdx + 1]) : null;
-  setSessionResolutionOverride(
-    sessionFlag ?? validSessionId(process.env.AIDLC_SESSION_OVERRIDE) ?? undefined,
-  );
-  if (sessionIdx >= 0) {
-    args.splice(sessionIdx, 2);
-  }
   const pdIdx = args.indexOf("--project-dir");
   if (pdIdx >= 0) {
     projectDir = args[pdIdx + 1];

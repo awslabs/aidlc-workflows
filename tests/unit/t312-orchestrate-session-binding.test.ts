@@ -8,6 +8,7 @@ import { copyFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import {
   createIntent,
+  readAllAuditShards,
   sessionPidMapDir,
   setActiveIntentCursor,
   sessionsDir,
@@ -27,6 +28,12 @@ const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 let proj = "";
 let firstDir = "";
 let secondDir = "";
+
+function cleanEnv(): Record<string, string | undefined> {
+  const env = { ...process.env };
+  delete env.AIDLC_SESSION_OVERRIDE;
+  return env;
+}
 
 beforeEach(() => {
   proj = createOrchestrationTestProject();
@@ -52,79 +59,34 @@ afterEach(() => {
   secondDir = "";
 });
 
-function next(args: string[]): { status: number; out: string } {
-  const result = runOrchestrateNext(ORCH, proj, args, {
+function next(
+  env: Record<string, string | undefined> = cleanEnv(),
+): { status: number; out: string } {
+  const result = runOrchestrateNext(ORCH, proj, [], {
     cwd: proj,
-    env: { ...process.env },
+    env,
   });
   return { status: result.status, out: result.out };
 }
 
-function nextWithSession(sessionId: string): { status: number; out: string; followups: string[] } {
-  let command: string | null = null;
-  const followups: string[] = [];
-  for (let attempts = 0; attempts < 100; attempts++) {
-    const result = command === null
-      ? Bun.spawnSync({
-        cmd: [process.execPath, ORCH, "next", "--session", sessionId, "--project-dir", proj],
-        stdout: "pipe",
-        stderr: "pipe",
-        env: { ...process.env },
-        cwd: proj,
-      })
-      : Bun.spawnSync({
-        cmd: ["bash", "-lc", command],
-        stdout: "pipe",
-        stderr: "pipe",
-        env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
-        cwd: proj,
-      });
-    const stdout = result.stdout.toString();
-    let directive: Record<string, unknown> | null = null;
-    try {
-      directive = JSON.parse(stdout.trim()) as Record<string, unknown>;
-    } catch {
-      return {
-        status: result.exitCode,
-        out: `${stdout}${result.stderr.toString()}`,
-        followups,
-      };
-    }
-    if (directive.kind !== "load-steering") {
-      return {
-        status: result.exitCode,
-        out: `${stdout}${result.stderr.toString()}`,
-        followups,
-      };
-    }
-    const followup = String(directive.continue_command ?? "");
-    followups.push(followup);
-    command = followup.replace(
-      /^bun \S+\/tools\/aidlc-orchestrate\.ts/,
-      `bun ${ORCH}`,
-    );
-  }
-  return { status: -1, out: "steering continuation limit exceeded", followups };
+function statePath(intent: string): string {
+  return join(
+    proj,
+    "aidlc",
+    "spaces",
+    "default",
+    "intents",
+    intent,
+    "aidlc-state.md",
+  );
 }
 
 describe("t312 orchestrate session binding", () => {
-  test("explicit --session keeps session A on intent A after the cursor moves", () => {
-    writeSessionBinding(proj, "session-a", "default", firstDir);
-
-    const result = nextWithSession("session-a");
-    expect(result.status, result.out).toBe(0);
-    expect(result.out).toContain('"stage":"feasibility"');
-    expect(result.out).toContain(firstDir);
-    expect(result.out).not.toContain(secondDir);
-    expect(result.followups.length).toBeGreaterThan(0);
-    expect(result.followups.every((command) => command.includes("--session session-a"))).toBe(true);
-  });
-
-  test("PID ancestry selects the same binding when --session is omitted", () => {
+  test("PID ancestry selects its binding before the shared cursor", () => {
     writeSessionBinding(proj, "session-a", "default", firstDir);
     writeSessionPidEntry(proj, process.pid, "session-a");
 
-    const result = next([]);
+    const result = next();
     expect(result.status, result.out).toBe(0);
     expect(result.out).toContain('"stage":"feasibility"');
     expect(result.out).toContain(firstDir);
@@ -136,51 +98,79 @@ describe("t312 orchestrate session binding", () => {
       force: true,
     });
 
-    const result = next([]);
+    const result = next();
     expect(result.status, result.out).toBe(0);
     expect(result.out).toContain('"stage":"reverse-engineering"');
     expect(result.out).toContain(secondDir);
   });
 
-  test("--session requires a nonblank value", () => {
-    const result = next(["--session"]);
-    expect(result.status).not.toBe(0);
-    expect(result.out).toContain("--session requires a nonblank session id");
+  test("headless environment pin reaches the state child end to end", () => {
+    writeSessionBinding(proj, "session-b", "default", secondDir);
+    rmSync(sessionPidMapDir(proj), { recursive: true, force: true });
+    const firstBefore = readFileSync(statePath(firstDir), "utf-8");
+
+    const result = Bun.spawnSync({
+      cmd: [process.execPath, ORCH, "park", "--project-dir", proj],
+      stdout: "pipe",
+      stderr: "pipe",
+      cwd: proj,
+      env: {
+        ...cleanEnv(),
+        AIDLC_SESSION_OVERRIDE: "session-b",
+      },
+    });
+
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    expect(readFileSync(statePath(firstDir), "utf-8")).toBe(firstBefore);
+    expect(readFileSync(statePath(secondDir), "utf-8")).toContain("- **Parked**:");
   });
 
-  test("explicit session B is refused when ancestry owns session A", () => {
+  test("divergent environment and ancestry refuse before any workflow write", () => {
     writeSessionBinding(proj, "session-a", "default", firstDir);
     writeSessionBinding(proj, "session-b", "default", secondDir);
     writeSessionPidEntry(proj, process.pid, "session-a");
-    const firstPath = join(proj, "aidlc", "spaces", "default", "intents", firstDir, "aidlc-state.md");
-    const secondPath = join(proj, "aidlc", "spaces", "default", "intents", secondDir, "aidlc-state.md");
-    const firstBefore = readFileSync(firstPath, "utf-8");
+    const firstBefore = readFileSync(statePath(firstDir), "utf-8");
+    const secondBefore = readFileSync(statePath(secondDir), "utf-8");
+    const firstAuditBefore = readAllAuditShards(proj, firstDir, "default");
+    const secondAuditBefore = readAllAuditShards(proj, secondDir, "default");
 
     const result = Bun.spawnSync({
-      cmd: [process.execPath, ORCH, "park", "--session", "session-b", "--project-dir", proj],
+      cmd: [process.execPath, ORCH, "park", "--project-dir", proj],
       stdout: "pipe",
       stderr: "pipe",
       cwd: proj,
-      env: { ...process.env },
+      env: {
+        ...cleanEnv(),
+        AIDLC_SESSION_OVERRIDE: "session-b",
+      },
     });
+
     expect(result.exitCode).not.toBe(0);
-    expect(result.stderr.toString()).toContain("conflicts with the owning conversation");
-    expect(readFileSync(firstPath, "utf-8")).toBe(firstBefore);
-    expect(readFileSync(secondPath, "utf-8")).not.toContain("- **Parked**:");
+    expect(result.stderr.toString()).toContain(
+      'Session override "session-b" conflicts with the owning conversation "session-a"',
+    );
+    expect(readFileSync(statePath(firstDir), "utf-8")).toBe(firstBefore);
+    expect(readFileSync(statePath(secondDir), "utf-8")).toBe(secondBefore);
+    expect(readAllAuditShards(proj, firstDir, "default")).toBe(firstAuditBefore);
+    expect(readAllAuditShards(proj, secondDir, "default")).toBe(secondAuditBefore);
+    expect(firstAuditBefore).not.toContain("ERROR_LOGGED");
+    expect(secondAuditBefore).not.toContain("ERROR_LOGGED");
   });
 
-  test("headless explicit session B reaches the state child", () => {
-    writeSessionBinding(proj, "session-b", "default", secondDir);
-    rmSync(sessionPidMapDir(proj), { recursive: true, force: true });
-    const secondPath = join(proj, "aidlc", "spaces", "default", "intents", secondDir, "aidlc-state.md");
-    const result = Bun.spawnSync({
-      cmd: [process.execPath, ORCH, "park", "--session", "session-b", "--project-dir", proj],
-      stdout: "pipe",
-      stderr: "pipe",
-      cwd: proj,
-      env: { ...process.env },
+  for (const invalid of [" session-a", "session-a ", "session/a"]) {
+    test(`invalid environment value ${JSON.stringify(invalid)} is ignored`, () => {
+      writeSessionBinding(proj, "session-a", "default", firstDir);
+      rmSync(sessionPidMapDir(proj), { recursive: true, force: true });
+
+      const result = next({
+        ...cleanEnv(),
+        AIDLC_SESSION_OVERRIDE: invalid,
+      });
+
+      expect(result.status, result.out).toBe(0);
+      expect(result.out).toContain('"stage":"reverse-engineering"');
+      expect(result.out).toContain(secondDir);
+      expect(result.out).not.toContain(firstDir);
     });
-    expect(result.exitCode, result.stderr.toString()).toBe(0);
-    expect(readFileSync(secondPath, "utf-8")).toContain("- **Parked**:");
-  });
+  }
 });

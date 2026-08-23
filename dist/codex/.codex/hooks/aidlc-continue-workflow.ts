@@ -137,9 +137,9 @@ import {
   readSessionIntentUuid,
   recordHookDrop,
   resolveProjectDirFromHook,
-  setSessionResolutionOverride,
+  resolveWorkflowSelection,
   stageDir,
-  stateFilePath,
+  stateFilePathForSelection,
   stopHookDir,
   STOP_HOOK_PROBE_ENV,
   turnMarkersShowConversational,
@@ -898,7 +898,6 @@ interface EngineDirective {
   stage?: string;
   unit?: string;
   continueToken?: string;
-  continueCommand?: string;
   part?: number;
   parts?: number;
   units?: string[];
@@ -944,12 +943,15 @@ function runEngineNextDirective(
       "next",
       "--project-dir",
       projectDir,
-      ...(sessionId ? ["--session", sessionId] : []),
     ],
     stdout: "pipe",
     stderr: "pipe",
     timeout: ENGINE_TIMEOUT_MS,
-    env: { ...process.env, [STOP_HOOK_PROBE_ENV]: "1" },
+    env: {
+      ...process.env,
+      [STOP_HOOK_PROBE_ENV]: "1",
+      ...(sessionId ? { AIDLC_SESSION_OVERRIDE: sessionId } : {}),
+    },
   });
   if (proc.exitCode !== 0) return null;
   const stdout = new TextDecoder().decode(proc.stdout).trim();
@@ -975,11 +977,6 @@ function runEngineNextDirective(
         "continue_token" in parsed &&
           typeof (parsed as { continue_token?: unknown }).continue_token === "string"
           ? (parsed as { continue_token: string }).continue_token.trim()
-          : "";
-      const continueCommand =
-        "continue_command" in parsed &&
-          typeof (parsed as { continue_command?: unknown }).continue_command === "string"
-          ? (parsed as { continue_command: string }).continue_command.trim()
           : "";
       const part =
         "part" in parsed &&
@@ -1029,7 +1026,6 @@ function runEngineNextDirective(
         ...(stage.length > 0 ? { stage } : {}),
         ...(unit.length > 0 ? { unit } : {}),
         ...(continueToken.length > 0 ? { continueToken } : {}),
-        ...(continueCommand.length > 0 ? { continueCommand } : {}),
         ...(part !== undefined ? { part } : {}),
         ...(parts !== undefined ? { parts } : {}),
         ...(units ? { units } : {}),
@@ -1054,20 +1050,15 @@ function continuationReason(
   kind: string,
   stage: string,
   continueToken?: string,
-  continueCommand?: string,
   rulesContent?: Array<{ path: string; text: string }>,
   retained = false,
-  sessionId = "",
 ): string {
   const where = stage.length > 0 ? ` for "${stage}"` : "";
-  const sessionSuffix = sessionId ? ` --session ${sessionId}` : "";
   if (kind === "rehydrate") {
     return `AI-DLC coordination evidence is missing or stale. Run one fresh \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts next\`; do not reuse an earlier continuation token.`;
   }
   if (retained && kind === "load-steering" && continueToken) {
-    const command = continueCommand ??
-      `bun ${harnessDir()}/tools/aidlc-orchestrate.ts continue "${continueToken}"${sessionSuffix}`;
-    return `The delivered AIDLC steering part${where} is still active. Apply every path/text entry from its already-delivered \`rules_content\`, then run \`${command}\`. Keep applying and continuing every returned load-steering part until \`run-stage\`; do not restart at part 1, and do not summarise or narrate rule chunks to the user.`;
+    return `The delivered AIDLC steering part${where} is still active. Apply every path/text entry from its already-delivered \`rules_content\`, then run \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts continue "${continueToken}"\`. Keep applying and continuing every returned load-steering part until \`run-stage\`; do not restart at part 1, and do not summarise or narrate rule chunks to the user.`;
   }
   if (retained && kind === "run-stage") {
     return `The exact delivered AIDLC run-stage${where} is still active. Complete that exact stage, then use \`report\` for the real outcome; use \`park\` for a clean pause. Never rubber-stamp approval or revision gates.`;
@@ -1080,7 +1071,7 @@ function continuationReason(
     return (
       `The AIDLC workflow still has rules to load${where}. ` +
       "Preserve this step-two continuation command, but do not run it yet: " +
-      `\`${continueCommand ?? `bun ${harnessDir()}/tools/aidlc-orchestrate.ts continue "${continueToken}"${sessionSuffix}`}\` ` +
+      `\`bun ${harnessDir()}/tools/aidlc-orchestrate.ts continue "${continueToken}"\` ` +
       "First, apply every path/text entry in the exact `rules_content` payload below. " +
       "Second, run the preserved command and keep following each load-steering step it " +
       "returns, applying its rule chunk before every continuation, until it answers " +
@@ -1107,11 +1098,12 @@ const projectDir = resolveProjectDirFromHook(import.meta.url);
 let earlySessionId = "";
 try {
   const early = JSON.parse(input) as { session_id?: unknown };
-  if (typeof early.session_id === "string") earlySessionId = early.session_id;
+  if (typeof early.session_id === "string") {
+    earlySessionId = validSessionId(early.session_id) ?? "";
+  }
 } catch {
   /* malformed input remains fail-open */
 }
-setSessionResolutionOverride(validSessionId(earlySessionId) ?? undefined);
 
 // Write a health heartbeat (mirrors the other hooks' .aidlc-hooks-health beat).
 try {
@@ -1129,7 +1121,10 @@ if (process.stdin.isTTY) return allowStop();
 
 // No-op outside AIDLC: if there is no workflow state file under the project dir,
 // there is nothing to enforce — allow the stop. Defends the frontmatter scoping.
-const statePath = stateFilePath(projectDir);
+const selection = resolveWorkflowSelection(projectDir, {
+  sessionId: earlySessionId || undefined,
+});
+const statePath = stateFilePathForSelection(projectDir, selection);
 if (!existsSync(statePath)) return allowStop();
 
 let stateContent: string;
@@ -1165,7 +1160,9 @@ try {
   if (raw !== null && typeof raw === "object") {
     const obj = raw as Record<string, unknown>;
     if ("stop_hook_active" in obj) stopHookActive = obj.stop_hook_active === true;
-    if (typeof obj.session_id === "string") sessionId = obj.session_id;
+    if (typeof obj.session_id === "string") {
+      sessionId = validSessionId(obj.session_id) ?? "";
+    }
     if (typeof obj.transcript_path === "string" && obj.transcript_path.length > 0) {
       transcriptPath = obj.transcript_path;
       if (/[/\\]rollout-[^/\\]*\.jsonl$/.test(transcriptPath)) transcriptFormat = "codex";
@@ -1447,10 +1444,8 @@ return blockStop(
     kind,
     activeStage ?? currentStageSlug(stateContent),
     directive.continueToken,
-    directive.continueCommand,
     directive.rulesContent,
     directive.retained,
-    sessionId,
   ),
 );
 }

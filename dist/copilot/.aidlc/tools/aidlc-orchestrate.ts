@@ -156,8 +156,6 @@ import {
   resolveWorkflowSelection,
   scopeCostSummary,
   selectionAwareDefaultScope,
-  sessionConflict,
-  setSessionResolutionOverride,
   resolveDefaultScope,
   DEFAULT_SCOPE,
   type StageEntry,
@@ -169,7 +167,6 @@ import {
   usesStageLevelPerUnitArtifacts,
   toPosix,
   validScopes,
-  validSessionId,
   harnessDir,
   type WorkspaceCommand,
   type WorkflowSelection,
@@ -305,10 +302,6 @@ function engineStateFilePath(projectDir: string): string {
 
 function engineRelativeRecordDir(projectDir: string): string | null {
   return relativeRecordDirForSelection(engineSelection(projectDir));
-}
-
-function engineSessionSuffix(): string {
-  return engineSessionId ? ` --session ${shellArg(engineSessionId)}` : "";
 }
 
 function engineChildEnv(
@@ -1035,7 +1028,6 @@ function createPrintDirective(
   if (flags.depth) cmd.push(`--depth ${flags.depth}`);
   if (flags.testStrategy) cmd.push(`--test-strategy ${flags.testStrategy}`);
   if (flags.review) cmd.push(`--review ${flags.review}`);
-  if (engineSessionId) cmd.push(`--session ${shellArg(engineSessionId)}`);
   // Disclose the ceremony on the print: an explicitly named scope births
   // directly (no confirm ask by design), so the stage/gate counts ride here.
   // Omit the parenthetical when the scope does not resolve (fixture trees).
@@ -1050,7 +1042,7 @@ function createPrintDirective(
         `Nothing is lost: the intent is saved on disk and resumes on the next \`next\`.`,
       )
     : printDirective(
-      `${runCmd} to start the workflow${cost}, then re-run \`next${engineSessionSuffix()}\` to continue.${labelHint}`,
+      `${runCmd} to start the workflow${cost}, then re-run \`next\` to continue.${labelHint}`,
     );
   // The user named a scope (or one was inferred and confirmed), so the spoken
   // line can say what is being set up and how much process that means, with the
@@ -1171,7 +1163,7 @@ function intentPickPromptIfRecordsExist(
     `This project already has ${intents.length} piece${intents.length === 1 ? "" : "s"} of work in progress${spaceLabel}, and none is currently selected ` +
       `(which one you are on is tracked per-person and does not travel with the repo). ` +
       `Pick the one to work on with \`/aidlc intent <slug>\`: ${list}. ` +
-      `That selects it; re-run \`next${engineSessionSuffix()}\` afterward to carry on where it left off.`,
+      "That selects it; re-run `next` afterward to carry on where it left off.",
   );
 }
 
@@ -2316,9 +2308,6 @@ function buildRunStageDirective(
   const directive: RunStageDirective = {
     kind: "run-stage",
     stage: node.slug,
-    report_command:
-      `bun ./${harnessDir()}/tools/aidlc-orchestrate.ts report ` +
-      `--stage ${node.slug} --result <outcome>${engineSessionSuffix()}`,
     phase: node.phase,
     lead_agent: node.lead_agent,
     support_agents: node.support_agents ?? [],
@@ -2816,9 +2805,6 @@ function transportRunStage(
     parts: chunks.length,
     rules_content: chunks[index],
     continue_token: encoded.token,
-    continue_command:
-      `bun ./${harnessDir()}/tools/aidlc-orchestrate.ts continue ` +
-      `${shellArg(encoded.token)}${engineSessionSuffix()}`,
   };
   if (Buffer.byteLength(JSON.stringify(load), "utf-8") > DIRECTIVE_MAX_BYTES) {
     return errorDirective(
@@ -2956,7 +2942,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       ? ` ${flags.readOnlyArgs.join(" ")}`
       : "";
     emit(printDirective(
-      `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${sub}${extra}${engineSessionSuffix()}\`, print its output verbatim, then stop. This is a read-only utility, NOT workflow work: do NOT run \`next\` and do NOT advance, resume, or run any workflow stage.`,
+      `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${sub}${extra}\`, print its output verbatim, then stop. This is a read-only utility, NOT workflow work: do NOT run \`next\` and do NOT advance, resume, or run any workflow stage.`,
     ));
     return;
   }
@@ -2985,7 +2971,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     const [verb, ...tail] = argv;
     const suffix = tail.length > 0 ? ` ${tail.map(shellArg).join(" ")}` : "";
     emit(printDirective(
-      `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${verb}${suffix}${engineSessionSuffix()}\`, print its output verbatim, then stop.`,
+      `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${verb}${suffix}\`, print its output verbatim, then stop.`,
     ));
     return;
   }
@@ -3003,7 +2989,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     const [verb, ...tail] = argv;
     const suffix = tail.length > 0 ? ` ${tail.map(shellArg).join(" ")}` : "";
     emit(printDirective(
-      `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${verb}${suffix}${engineSessionSuffix()}\`, print its output verbatim, then stop. This is a terminal utility, NOT workflow work: do NOT run \`next${engineSessionSuffix()}\` and do NOT advance, resume, or run any workflow stage.`,
+      `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${verb}${suffix}\`, print its output verbatim, then stop. This is a terminal utility, NOT workflow work: do NOT run \`next\` and do NOT advance, resume, or run any workflow stage.`,
     ));
     return;
   }
@@ -3022,7 +3008,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     const [verb, ...tail] = argv;
     const suffix = tail.length > 0 ? ` ${tail.map(shellArg).join(" ")}` : "";
     emit(printDirective(
-      `Run \`bun ${harnessDir()}/tools/aidlc-knowledge.ts ${verb}${suffix}${engineSessionSuffix()}\`, print its output verbatim, then stop. This is a terminal utility, NOT workflow work: do NOT run \`next${engineSessionSuffix()}\` and do NOT advance, resume, or run any workflow stage.`,
+      `Run \`bun ${harnessDir()}/tools/aidlc-knowledge.ts ${verb}${suffix}\`, print its output verbatim, then stop. This is a terminal utility, NOT workflow work: do NOT run \`next\` and do NOT advance, resume, or run any workflow stage.`,
     ));
     return;
   }
@@ -3114,8 +3100,8 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     (getField(stateContent, "Parked") ?? "").trim().length > 0
   ) {
     emit(printDirective(
-      `This workflow is parked. Run \`bun ${harnessDir()}/tools/aidlc-state.ts unpark${engineSessionSuffix()}\` ` +
-        `to clear the park marker, then re-run \`next --resume${engineSessionSuffix()}\` to continue.`,
+      `This workflow is parked. Run \`bun ${harnessDir()}/tools/aidlc-state.ts unpark\` ` +
+        "to clear the park marker, then re-run `next --resume` to continue.",
     ));
     return;
   }
@@ -3544,8 +3530,8 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     emit(printDirective(
       `Stage "${currentSlug}" is SKIP in the approved workflow plan but is still the active cursor. ` +
         `Do not run this stage. Run \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts report ` +
-        `--stage ${shellArg(currentSlug)} --result skipped --reason ${shellArg(reason)}${engineSessionSuffix()}\` ` +
-        `to recover the stale pointer, then re-run \`next${engineSessionSuffix()}\` to continue.`,
+        `--stage ${shellArg(currentSlug)} --result skipped --reason ${shellArg(reason)}\` ` +
+        "to recover the stale pointer, then re-run `next` to continue.",
     ));
     return;
   }
@@ -4840,7 +4826,7 @@ function emitJumpDirective(
     // conductor runs it, the NEXT `next` sees the pivoted state and emits the
     // run-stage for the now-current target.
     emit(printDirective(
-      `Run \`bun ${harnessDir()}/tools/aidlc-jump.ts execute --target ${targetSlug} --direction ${direction} --scope ${scope}${engineSessionSuffix()}\` to perform the jump, then re-run \`next${engineSessionSuffix()}\` to continue from the jump target.`,
+      `Run \`bun ${harnessDir()}/tools/aidlc-jump.ts execute --target ${targetSlug} --direction ${direction} --scope ${scope}\` to perform the jump, then re-run \`next\` to continue from the jump target.`,
     ));
     return;
   }
@@ -6414,11 +6400,7 @@ export function main(argv: string[]): void {
   // Extract --project-dir (mirrors aidlc-jump.ts / aidlc-state.ts).
   let projectDir: string | undefined;
   let attemptId: string | undefined;
-  let sessionId: string | undefined =
-    validSessionId(process.env.AIDLC_SESSION_OVERRIDE) ?? undefined;
-  let explicitSessionId: string | undefined;
   let conflictingAttemptId = false;
-  let conflictingSessionId = false;
   const filteredArgs: string[] = [];
   let literalArgs = false;
   for (let i = 0; i < rawArgs.length; i++) {
@@ -6427,17 +6409,6 @@ export function main(argv: string[]): void {
       filteredArgs.push(rawArgs[i]);
     } else if (!literalArgs && rawArgs[i] === "--project-dir" && i + 1 < rawArgs.length) {
       projectDir = rawArgs[i + 1];
-      i++;
-    } else if (!literalArgs && rawArgs[i] === "--session") {
-      const candidate = rawArgs[i + 1];
-      if (candidate === undefined || candidate.startsWith("--") || candidate.trim() === "") {
-        throw new Error("--session requires a nonblank session id.");
-      }
-      if (explicitSessionId !== undefined && explicitSessionId !== candidate) {
-        conflictingSessionId = true;
-      }
-      explicitSessionId = candidate;
-      sessionId = candidate;
       i++;
     } else if (!literalArgs && rawArgs[i] === "--aidlc-attempt-id" && i + 1 < rawArgs.length) {
       const candidate = rawArgs[i + 1];
@@ -6453,21 +6424,12 @@ export function main(argv: string[]): void {
 
   const subcommand = filteredArgs[0];
   const subArgs = filteredArgs.slice(1);
-  if (conflictingSessionId) {
-    throw new Error("Conflicting --session values are not allowed.");
-  }
-  const ancestryOwner = sessionId
-    ? sessionConflict(resolveProjectDir(projectDir), sessionId)
-    : null;
-  if (ancestryOwner) {
-    throw new Error(
-      `Session "${sessionId}" conflicts with the owning conversation "${ancestryOwner}". Work from the owning conversation, or rebind this session with the intent/space switch verbs.`,
-    );
-  }
   if (engineInvocation !== null) throw new Error("Nested aidlc-orchestrate dispatch is not supported");
-  engineSessionId = sessionId;
-  setSessionResolutionOverride(sessionId);
+  const resolvedProjectDir = resolveProjectDir(projectDir);
+  const resolvedSelection = resolveWorkflowSelection(resolvedProjectDir);
+  engineSessionId = resolvedSelection.sessionId ?? undefined;
   engineSelections.clear();
+  engineSelections.set(resolvedProjectDir, resolvedSelection);
   const commandKind = (["next", "continue", "report", "park"] as const).find((kind) => kind === subcommand);
   if (commandKind) engineInvocation = {
     commandKind,
@@ -6475,7 +6437,6 @@ export function main(argv: string[]): void {
       JSON.stringify([
         commandKind,
         ...subArgs,
-        ...(sessionId ? ["--session", sessionId] : []),
       ]),
     ),
     ...(!conflictingAttemptId && attemptId ? { attemptId } : {}),
@@ -6505,7 +6466,6 @@ export function main(argv: string[]): void {
   } finally {
     engineInvocation = null;
     engineSessionId = undefined;
-    setSessionResolutionOverride();
     engineSelections.clear();
     requestedSteeringContinuation = null;
   }

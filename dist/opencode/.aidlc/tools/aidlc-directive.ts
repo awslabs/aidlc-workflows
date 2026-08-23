@@ -95,7 +95,6 @@ export interface LoadSteeringDirective {
   parts: number;
   rules_content: Array<{ path: string; text: string }>;
   continue_token: string;
-  continue_command: string;
 }
 
 export type WaveReviewState =
@@ -147,7 +146,6 @@ export interface RunStageDirective {
   /** Optional spoken line for the user; presentation only (see NarrationField). */
   narration?: NarrationField;
   stage: string;
-  report_command: string;
   phase: string;
   lead_agent: string;
   support_agents: string[];
@@ -461,7 +459,6 @@ export const VALID_REVIEW_CLASSES = ["adversarial", "advisory"] as const;
 const RUN_STAGE_FIELDS = [
   "kind",
   "stage",
-  "report_command",
   "phase",
   "lead_agent",
   "support_agents",
@@ -497,7 +494,6 @@ const LOAD_STEERING_FIELDS = [
   "parts",
   "rules_content",
   "continue_token",
-  "continue_command",
 ] as const;
 
 // dispatch-subagent = shared run-stage fields + `worker`; the isolated-run
@@ -623,7 +619,6 @@ export function validateDirective(obj: unknown): ValidationResult {
       checkPositiveInteger(o, "parts", kind, errors);
       checkPathTextArray(o, "rules_content", kind, errors);
       checkString(o, "continue_token", kind, errors);
-      checkString(o, "continue_command", kind, errors);
       if (
         typeof o.part === "number" &&
         typeof o.parts === "number" &&
@@ -733,7 +728,6 @@ function checkRunStageShared(
   errors: string[],
 ): void {
   checkString(o, "stage", kind, errors);
-  checkString(o, "report_command", kind, errors);
   checkString(o, "phase", kind, errors);
   checkString(o, "lead_agent", kind, errors);
   checkStringArray(o, "support_agents", kind, errors);
@@ -1333,14 +1327,10 @@ if (import.meta.main) {
         { path: "aidlc-org.md", text: "## Testing Posture\n\nTests are first-class.\n" },
       ],
       continue_token: "opaque-token",
-      continue_command:
-        'bun <harness>/tools/aidlc-orchestrate.ts continue "opaque-token"',
     },
     {
       kind: "run-stage",
       stage: "domain-design",
-      report_command:
-        "bun <harness>/tools/aidlc-orchestrate.ts report --stage domain-design --result <outcome>",
       phase: "inception",
       lead_agent: "aidlc-architect-agent",
       support_agents: ["aidlc-aws-platform-agent", "aidlc-design-agent"],
@@ -1410,8 +1400,6 @@ if (import.meta.main) {
     {
       kind: "run-stage",
       stage: "functional-design",
-      report_command:
-        "bun <harness>/tools/aidlc-orchestrate.ts report --stage functional-design --result <outcome>",
       phase: "construction",
       lead_agent: "aidlc-architect-agent",
       support_agents: ["aidlc-developer-agent"],

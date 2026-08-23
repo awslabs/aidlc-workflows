@@ -51,6 +51,7 @@ import {
   resolveWorkflowSelection,
   resolveProjectDirFromHook,
   stateFilePathForSelection,
+  validSessionId,
   writeCurrentSessionId,
   writeSessionBinding,
   writeSessionIntentUuid,
@@ -83,7 +84,9 @@ if (!process.stdin.isTTY) {
         const raw: unknown = JSON.parse(input);
         if (isClaudeCodeHookInput(raw)) {
           source = raw.source ? String(raw.source) : "unknown";
-          if (typeof raw.session_id === "string") sessionId = raw.session_id;
+          if (typeof raw.session_id === "string") {
+            sessionId = validSessionId(raw.session_id) ?? "";
+          }
           const rawObj = raw as Record<string, unknown>;
           if (typeof rawObj.transcript_path === "string") {
             transcriptPath = rawObj.transcript_path;
@@ -127,6 +130,17 @@ const preExistingBinding =
   sessionId ? readSessionBinding(projectDir, sessionId) : null;
 const preExistingStamp =
   sessionId ? readSessionIntentUuid(projectDir, sessionId) : null;
+if (
+  sessionId &&
+  (
+    source === "startup" ||
+    source === "clear" ||
+    (readSessionRebindOffer(projectDir, sessionId) !== null &&
+      preExistingBinding === null)
+  )
+) {
+  clearSessionRebindOffer(projectDir, sessionId);
+}
 const stampedTarget =
   source === "resume" && !preExistingBinding && preExistingStamp
     ? findIntentByUuid(projectDir, preExistingStamp)

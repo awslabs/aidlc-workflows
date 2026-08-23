@@ -104,8 +104,6 @@ describe("t235 ensemble modes — directive enum carry-through", () => {
     return {
       kind: "run-stage",
       stage: "fixture-stage",
-      report_command:
-        "bun ./.claude/tools/aidlc-orchestrate.ts report --stage fixture-stage --result <outcome>",
       phase: "construction",
       lead_agent: "aidlc-architect-agent",
       support_agents: ["aidlc-developer-agent"],

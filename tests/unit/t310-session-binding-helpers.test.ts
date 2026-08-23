@@ -1,4 +1,4 @@
-// covers: function:readSessionBinding function:writeSessionBinding function:resolveWorkflowSelection function:writeSessionPidEntry function:writeSessionPidAncestry function:resolveSessionIdFromAncestry
+// covers: function:readSessionBinding function:writeSessionBinding function:resolveWorkflowSelection function:SessionResolutionConflictError function:validSessionId function:writeSessionPidEntry function:writeSessionPidAncestry function:resolveSessionIdFromAncestry
 //
 // Deterministic coverage for the per-session binding store and PID ancestry
 // resolver. All writes stay under a fresh project fixture.
@@ -11,9 +11,11 @@ import {
   readSessionBinding,
   resolveSessionIdFromAncestry,
   resolveWorkflowSelection,
+  SessionResolutionConflictError,
   sessionPidMapDir,
   sessionsDir,
   setActiveIntentCursor,
+  validSessionId,
   writeSessionBinding,
   writeSessionPidAncestry,
   writeSessionPidEntry,
@@ -21,12 +23,19 @@ import {
 import { cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
 
 let proj = "";
+const originalSessionOverride = process.env.AIDLC_SESSION_OVERRIDE;
 
 beforeEach(() => {
+  delete process.env.AIDLC_SESSION_OVERRIDE;
   proj = createTestProject();
 });
 
 afterEach(() => {
+  if (originalSessionOverride === undefined) {
+    delete process.env.AIDLC_SESSION_OVERRIDE;
+  } else {
+    process.env.AIDLC_SESSION_OVERRIDE = originalSessionOverride;
+  }
   cleanupTestProject(proj);
   proj = "";
 });
@@ -70,14 +79,40 @@ describe("t310 session binding helpers", () => {
     expect(resolveWorkflowSelection(proj).intent).toBe(second.dirName);
   });
 
+  test("session ids must already be canonical", () => {
+    expect(validSessionId("session-a")).toBe("session-a");
+    expect(validSessionId(" session-a")).toBeNull();
+    expect(validSessionId("session-a ")).toBeNull();
+    expect(validSessionId("session/a")).toBeNull();
+    expect(validSessionId("")).toBeNull();
+  });
+
+  test("environment override conflicts with ancestry at the selection chokepoint", () => {
+    const first = createIntent(proj, "first", "default", "feature");
+    const second = createIntent(proj, "second", "default", "feature");
+    writeSessionBinding(proj, "session-a", "default", first.dirName);
+    writeSessionBinding(proj, "session-b", "default", second.dirName);
+    writeSessionPidEntry(proj, process.ppid, "session-a");
+    process.env.AIDLC_SESSION_OVERRIDE = "session-b";
+
+    expect(() => resolveWorkflowSelection(proj)).toThrow(
+      SessionResolutionConflictError,
+    );
+    expect(
+      resolveWorkflowSelection(proj, { sessionId: "session-b" }).intent,
+    ).toBe(second.dirName);
+  });
+
   test("hostile session ids and invalid pids cannot escape the sessions dir", () => {
     const intent = createIntent(proj, "safe", "default", "feature");
     writeSessionBinding(proj, "..", "default", intent.dirName);
     expect(readSessionBinding(proj, "..")).toBeNull();
 
     writeSessionBinding(proj, "../../outside", "default", intent.dirName);
-    const names = readdirSync(sessionsDir(proj));
-    expect(names.some((name) => name.endsWith(".binding.json"))).toBe(true);
+    const names = existsSync(sessionsDir(proj))
+      ? readdirSync(sessionsDir(proj))
+      : [];
+    expect(names.some((name) => name.endsWith(".binding.json"))).toBe(false);
     expect(existsSync(join(proj, "aidlc", "outside.binding.json"))).toBe(false);
 
     writeSessionPidEntry(proj, -42, "session-a");

@@ -49,8 +49,6 @@ function loadSteering(): Record<string, unknown> {
       { path: "aidlc/spaces/default/memory/org.md", text: "# Organization\n" },
     ],
     continue_token: "opaque-token",
-    continue_command:
-      'bun ./.claude/tools/aidlc-orchestrate.ts continue "opaque-token"',
   };
 }
 
@@ -58,8 +56,6 @@ function runStage(): Record<string, unknown> {
   return {
     kind: "run-stage",
     stage: "application-design",
-    report_command:
-      "bun ./.claude/tools/aidlc-orchestrate.ts report --stage application-design --result <outcome>",
     phase: "inception",
     lead_agent: "aidlc-architect-agent",
     support_agents: ["aidlc-aws-platform-agent", "aidlc-design-agent"],
@@ -109,8 +105,6 @@ function dispatchSubagent(): Record<string, unknown> {
   return {
     kind: "dispatch-subagent",
     stage: "code-generation",
-    report_command:
-      "bun ./.claude/tools/aidlc-orchestrate.ts report --stage code-generation --result <outcome>",
     phase: "construction",
     lead_agent: "aidlc-developer-agent",
     support_agents: ["aidlc-quality-agent"],
@@ -198,20 +192,8 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     expect(validateDirective(loadSteering()).valid).toBe(true);
   });
 
-  test("load-steering without continue_command -> INVALID", () => {
-    const directive = loadSteering();
-    delete directive.continue_command;
-    expect(validateDirective(directive).valid).toBe(false);
-  });
-
   test("run-stage well-formed -> VALID", () => {
     expect(validateDirective(runStage()).valid).toBe(true);
-  });
-
-  test("run-stage without report_command -> INVALID", () => {
-    const directive = runStage();
-    delete directive.report_command;
-    expect(validateDirective(directive).valid).toBe(false);
   });
 
   test("run-stage accepts validated protocol module hints", () => {

@@ -39,6 +39,7 @@ import {
   resolveWorkflowSelection,
   resolveProjectDirFromHook,
   runtimeGraphPath,
+  validSessionId,
   harnessDir,
   writeSessionIntentHandoff,
   writeSessionBinding,
@@ -56,7 +57,7 @@ function bindCreatedIntentToInvokingSession(
   projectDir: string,
   parsed: ClaudeCodeHookInput,
 ): void {
-  const sessionId = parsed.session_id;
+  const sessionId = validSessionId(parsed.session_id);
   if (!sessionId) return;
   const command = parsed.tool_input?.command ?? "";
   const ideAuditMode = (parsed.tool_input?.source ?? "") === "ide-audit-sync";
@@ -158,7 +159,7 @@ if (!ideAuditMode) {
 //    intent (cursor / lone-intent → null = flat-legacy) and glob-merge its
 //    shards. Exit cleanly before init (no audit yet → "").
 const selection = resolveWorkflowSelection(projectDir, {
-  sessionId: parsed.session_id,
+  sessionId: validSessionId(parsed.session_id) ?? undefined,
 });
 const space = selection.space;
 const intent = selection.intent ?? undefined;

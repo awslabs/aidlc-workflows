@@ -170,20 +170,30 @@ Each live session keeps a machine-local binding at
 session's space and intent, so another terminal or IDE window can move the shared
 cursors without silently moving this session's workflow.
 
-Resolution follows one order:
+Session identity follows one order:
 
-1. An explicit space or intent selector.
-2. The session binding, identified by `--session <id>` on the engine or by the
-   spawned tool's process ancestry.
-3. The shared `active-space` and `active-intent` cursors, including the existing
-   lone-intent and empty-workspace fallbacks.
+1. The host session id delivered to a hook.
+2. A valid `AIDLC_SESSION_OVERRIDE` inherited from the harness process.
+3. The nearest live PID ancestry entry.
+4. No session identity.
+
+Once identity is known, an explicit space or intent selector wins, followed by
+that session's binding, then the shared `active-space` and `active-intent`
+cursors with the existing lone-intent and empty-workspace fallbacks.
+
+For headless automation, set `AIDLC_SESSION_OVERRIDE` on the harness process,
+not on individual tool commands. Every spawned tool then inherits the same
+identity. If that override disagrees with a session found through PID ancestry,
+AI-DLC refuses before writing either workflow and points you to the owning
+conversation or the intent and space switch verbs for rebinding.
 
 The cursors remain write-through compatibility state. Older or unsupported
 environments with no binding therefore behave exactly as before.
 
-On Windows, PID ancestry resolution returns no session identity in this
-increment. Spawned tools without an explicit `--session` therefore fall back to
-the shared cursors, so two native Windows sessions are not isolated yet.
+On Windows, PID ancestry resolution returns no session identity. Kiro IDE also
+cannot distinguish multiple chats that share one IDE process. Spawned tools in
+those cases fall back to the shared cursors unless the harness process has a
+valid `AIDLC_SESSION_OVERRIDE`.
 
 ---
 
