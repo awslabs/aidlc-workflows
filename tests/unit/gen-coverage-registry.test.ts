@@ -761,6 +761,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t280-contract-design-wiring.test.ts",
     "unit/t282-state-version-doctor.test.ts",
     "unit/t283-copilot-engine-cursor.test.ts",
+    "unit/t306-learnings-cid-collision-followup.test.ts",
     "unit/t240-opencode-packaging.test.ts",
     "unit/t263-reviewer-terminal-ordering.test.ts",
     "unit/t264-review-freeze-hook.test.ts",
@@ -819,6 +820,10 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     // stayed green. A journey through the documented workflow cannot be run
     // in-process without bypassing the exact layer under test.
     "unit/t293-knowledge-journey.test.ts",
+    // t304 spawns the real directive-emitting CLI because memory bootstrap is
+    // observable only at the process boundary where projectDir and the shipped
+    // harness template are both present.
+    "unit/t304-run-stage-memory-bootstrap.test.ts",
     "integration/t102.test.ts",
     "integration/t104.test.ts",
     "integration/t105.test.ts",
@@ -850,6 +855,8 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "integration/t185-stage-artifact-guard.test.ts",
     "integration/t188-plugin-compose.test.ts",
     "integration/t224-plugin-selection.test.ts",
+    "integration/t304-loopback-review-receipt-replay.test.ts",
+    "integration/t307-loopback-unitmajor-replay.test.ts",
     "integration/t21b.test.ts",
     "integration/t31-help.test.ts",
     "integration/t32-stage-graph-consistency.test.ts",
@@ -973,7 +980,9 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t290-code-gen-unit-test-instructions-coverage.test.ts",
     "unit/t291-review-receipt-recovery.test.ts",
     "unit/t302-protocol-modules.test.ts",
+    "unit/t304-pipeline-link-receipts.test.ts",
     "unit/t255-workspace-sync.test.ts",
+    "unit/t304-source-freshness-receipts.test.ts",
     "unit/t27.test.ts",
     "unit/t29.test.ts",
     "unit/t30-hook-session-end.test.ts",

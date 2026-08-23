@@ -78,41 +78,41 @@ describe("sdk-drive calibration (known-answer)", () => {
   // CALIBRATION 1 — canUseTool fires for AskUserQuestion.
   //   harness-instrument:sdk-drive-canusetool
   //
-  // Planted truth: a seeded in-progress workflow + /aidlc --resume MUST pose
-  // the resume gate (an AskUserQuestion), and the driver's canUseTool MUST
+  // Planted truth: rich freeform prose in a fresh workspace MUST reach Branch
+  // 8's compose offer (an AskUserQuestion), and the driver's canUseTool MUST
   // answer it (capturing it in askedQuestions) — NOT let it be auto-denied the
   // way headless `claude -p` does. This is a boundary smoke, not a workflow
   // drive: stopAfterAskUserQuestion returns immediately after the first gate is
   // captured/answered so a fixture mismatch cannot turn the calibration into a
-  // long live stage run.
+  // long live composer run.
   // -------------------------------------------------------------------------
   test(
     "1. canUseTool answers the AskUserQuestion gate (not auto-denied)",
     async () => {
-      const proj = setupIntegrationProject({
-        withState: "state-mid-ideation.md",
-        withAudit: true,
-      });
+      const proj = setupIntegrationProject();
       try {
-        const r = await driveAidlc("/aidlc --resume", {
-          projectDir: proj,
-          timeoutMs: DRIVE_TIMEOUT_MS,
-          stopAfterAskUserQuestion: true,
-        });
+        const r = await driveAidlc(
+          '/aidlc "build a distributed cache layer with consistency guarantees"',
+          {
+            projectDir: proj,
+            timeoutMs: DRIVE_TIMEOUT_MS,
+            stopAfterAskUserQuestion: true,
+          },
+        );
 
-        // The resume gate must have been captured. If canUseTool never fired
+        // The compose offer must have been captured. If canUseTool never fired
         // (or the gate was denied), askedQuestions would be empty here.
         expect(r.askedQuestions.length).toBeGreaterThanOrEqual(1);
 
-        // Prove WHICH gate fired without scraping the TUI: the first menu is
-        // the resume gate. assertAskedQuestion fails loudly if absent.
-        assertAskedQuestion(r, "proceed");
+        // Prove WHICH gate fired without scraping the TUI: Branch 8's
+        // engine-fixed question names "compose".
+        assertAskedQuestion(r, "compose");
 
         // The driver records the answer it handed back to the SDK. For a
         // captured-and-answered gate this is a real option label, not empty —
         // that is the positive proof the question was ANSWERED, not denied.
-        const firstMenu = r.askedQuestions[0];
-        const handedBack = Object.values(firstMenu.answers);
+        const composeMenu = r.askedQuestions[0];
+        const handedBack = Object.values(composeMenu.answers);
         expect(handedBack.length).toBeGreaterThanOrEqual(1);
         for (const a of handedBack) {
           const asStr = Array.isArray(a) ? a.join("") : a;
@@ -126,12 +126,12 @@ describe("sdk-drive calibration (known-answer)", () => {
         // returns a non-error tool_result from AskUserQuestion.
         expect(askToolResult?.isError).toBe(false);
 
-        // The default script takes option 1; the option the driver chose must
-        // be one the menu actually offered (structure-resolved, never invented).
-        const offered = firstMenu.questions[0].options.map((o) => o.label);
-        const chosen = Object.values(firstMenu.answers)[0] as string;
+        // The default option must be one the menu actually offered
+        // (structure-resolved, never invented). Calibration 1 only proves the
+        // canUseTool boundary; it does not depend on model-authored labels.
+        const offered = composeMenu.questions[0].options.map((o) => o.label);
+        const chosen = Object.values(composeMenu.answers)[0] as string;
         expect(offered).toContain(chosen);
-
       } finally {
         cleanupTestProject(proj);
       }
@@ -221,28 +221,65 @@ describe("sdk-drive calibration (known-answer)", () => {
   // CALIBRATION 3 — a SCRIPTED non-default answer reaches the model.
   //   harness-instrument:sdk-drive-scripted-answer
   //
-  // Planted truth: on a seeded in-progress workflow, /aidlc --resume poses the
-  // resume gate. Its DEFAULT (option 1) is "Resume from last checkpoint". We
-  // script the NON-default "Start fresh" option and stop immediately after the
-  // AskUserQuestion tool_result arrives. That tool_result is the synthetic user
-  // message handed back to the model, so its bytes prove the scripted answer
-  // crossed the SDK boundary without letting the calibration continue into a
-  // full live restart workflow.
+  // Planted truth: rich freeform prose in a fresh workspace poses Branch 8's
+  // compose offer. We script option index 1 (the second option) and stop
+  // immediately after the AskUserQuestion tool_result arrives. That
+  // tool_result is the synthetic user message handed back to the model, so its
+  // bytes prove the scripted answer crossed the SDK boundary without letting
+  // the calibration continue into a live composer run.
   //
-  // Why the resume gate and not the freeform scope-confirmation gate: the
-  // resume menu's option SET is framework-fixed ("Resume / Redo / Jump / Start
-  // fresh", SKILL.md:311-314) and appears stably run-to-run, whereas the
-  // freeform scope-confirmation gate's ALTERNATIVE scopes are LLM-authored and
-  // vary (a "security-patch" alternative is offered some runs, absent others —
-  // observed empirically). A non-default calibration must target a guaranteed
-  // option; otherwise `labelContains` correctly falls back to option 1 and the
-  // calibration measures the LLM's menu-authoring whim, not the instrument.
-  //
-  // We use `sequence` (keyed on menu ORDER, fully deterministic) + the robust
-  // `labelContains` spec, since the exact label wording is LLM-authored.
+  // The option labels are model-rendered. Index selection deliberately tests
+  // the driver's structural non-default path without assuming either label
+  // contains a particular word.
   // -------------------------------------------------------------------------
   test(
     "3. scripted non-default answer reaches the model via AskUserQuestion tool_result bytes",
+    async () => {
+      const proj = setupIntegrationProject();
+      try {
+        const r = await driveAidlc(
+          '/aidlc "build a distributed cache layer with consistency guarantees"',
+          {
+            projectDir: proj,
+            timeoutMs: DRIVE_TIMEOUT_MS,
+            stopAfterAskUserQuestion: true,
+            answerScript: {
+              kind: "sequence",
+              specs: [{ optionIndex: 1 }],
+            },
+          },
+        );
+
+        // The compose offer must have fired and been answered (canUseTool path).
+        expect(r.askedQuestions.length).toBe(1);
+
+        // The second offered option must be what was handed to the model,
+        // proving the scripted answer reached it rather than silently falling
+        // back to the default first option.
+        const composeMenu = r.askedQuestions[0];
+        const composeOffered = composeMenu.questions[0].options.map(
+          (o) => o.label,
+        );
+        expect(composeOffered.length).toBeGreaterThan(1);
+        const secondOption = composeOffered[1];
+        const composeHanded = Object.values(composeMenu.answers)[0] as string;
+        expect(composeHanded).toBe(secondOption);
+        // It is NOT the default first option — the non-default truly drove.
+        expect(composeHanded).not.toBe(composeOffered[0]);
+        assertToolResultContains(r, "AskUserQuestion", secondOption);
+      } finally {
+        cleanupTestProject(proj);
+      }
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  // Product regression for #794. Unlike the three instrument calibrations
+  // above, this pins the live harness behavior that motivated the change:
+  // explicit --resume must reach continuation routing without opening the
+  // session re-entry menu.
+  test(
+    "explicit --resume reaches load-steering without AskUserQuestion",
     async () => {
       const proj = setupIntegrationProject({
         withState: "state-mid-ideation.md",
@@ -252,33 +289,15 @@ describe("sdk-drive calibration (known-answer)", () => {
         const r = await driveAidlc("/aidlc --resume", {
           projectDir: proj,
           timeoutMs: DRIVE_TIMEOUT_MS,
-          stopAfterAskUserQuestion: true,
-          answerScript: {
-            kind: "sequence",
-            // Menu 1 (resume) -> "Start fresh" (non-default).
-            specs: [{ labelContains: "Start fresh" }],
+          stopAfterToolResult: {
+            toolName: "Bash",
+            resultIncludes: '"kind":"load-steering"',
           },
         });
-
-        // The resume gate must have fired and been answered (canUseTool path).
-        expect(r.askedQuestions.length).toBe(1);
-
-        // Menu 1: the non-default "Start fresh" option must be what was handed
-        // to the model — proving the scripted answer reached it, NOT a silent
-        // fallback to option 1 ("Resume from last checkpoint").
-        const resumeMenu = r.askedQuestions[0];
-        const resumeOffered = resumeMenu.questions[0].options.map(
-          (o) => o.label,
-        );
-        const startFreshOpt = resumeOffered.find((l) =>
-          l.includes("Start fresh"),
-        );
-        expect(startFreshOpt).toBeDefined();
-        const resumeHanded = Object.values(resumeMenu.answers)[0] as string;
-        expect(resumeHanded).toBe(startFreshOpt!);
-        // It is NOT the default first option — the non-default truly drove.
-        expect(resumeHanded).not.toBe(resumeOffered[0]);
-        assertToolResultContains(r, "AskUserQuestion", startFreshOpt!);
+        expect(r.stoppedAfterToolResult).toBe(true);
+        expect(r.askedQuestions).toHaveLength(0);
+        assertToolResultContains(r, "Bash", '"kind":"load-steering"');
+        assertToolResultContains(r, "Bash", '"stage":"feasibility"');
       } finally {
         cleanupTestProject(proj);
       }

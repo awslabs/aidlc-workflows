@@ -88,8 +88,9 @@ or focused scan overwrites those nine files
 (`reverse-engineering-timestamp.md` records when the last scan ran and what
 it covered). Intents therefore read the newest scan of the repo, not the one
 taken when their own record dir was created. What the record dir does get is
-the stage's own `memory.md` diary — created on demand when the stage runs
-(see **Per-stage memory diary** below) — so an `inception/reverse-engineering/`
+the stage's own `memory.md` diary — created by the engine when it emits the
+run-stage directive (see **Per-stage memory diary** below) — so an
+`inception/reverse-engineering/`
 directory can appear there, holding the diary and nothing else. Codekb writes
 are audit-logged with a `codekb > <repo> > <name>` breadcrumb, so the
 per-intent trail still records what changed and when.
@@ -104,11 +105,11 @@ under an optional `aidlc-shared/` and per-agent subdirectories. See
 **Per-stage memory diary.** Each executed stage also keeps a committed
 `memory.md` alongside its artifacts (e.g.
 `<record>/inception/requirements-analysis/memory.md`). It is the
-stage's observation diary — auto-created from a template at stage start,
-maintained by the orchestrator during the stage, and read by the §13
-Learnings Ritual at the approval gate. It is never hand-edited. See
-[Rules and the Learning Loop](09-rules-and-the-learning-loop.md) for how
-the diary feeds the learning loop.
+stage's observation diary — created by the engine from a template when it emits
+the run-stage directive, maintained by the orchestrator during the stage, and
+read by the §13 Learnings Ritual at the approval gate. It is never hand-edited.
+See [Rules and the Learning Loop](09-rules-and-the-learning-loop.md) for how the
+diary feeds the learning loop.
 
 **Code lives in sibling repos, not the record dir.** The `aidlc/` tree holds only
 method, state, audit, and artifacts — never application code. Generated code lands

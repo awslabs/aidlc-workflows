@@ -58,9 +58,13 @@ stage that does not apply reports
 Every stage keeps an observation diary at the `memory_path` the `run-stage`
 directive carries (`<record>/<phase>/<stage>/memory.md`):
 
-1. At stage start, if `memory.md` does not exist at that path, copy
-   `.kiro/knowledge/aidlc-shared/memory-template.md` to it. Idempotent —
-   never overwrite; re-entry or resume must keep accumulated entries.
+1. The engine creates `memory.md` from
+   `.kiro/knowledge/aidlc-shared/memory-template.md` when it emits the
+   directive. NEVER probe for `memory.md`, or any other maybe-absent file, with a
+   read tool: reading an absent path is a failed tool call. In the rare case an
+   append finds the diary missing, bootstrap it with exactly one idempotent POSIX
+   command: `mkdir -p "$(dirname "<memory_path>")" && { [ -f "<memory_path>" ] || cp ".kiro/knowledge/aidlc-shared/memory-template.md" "<memory_path>"; }`.
+   Never overwrite; re-entry or resume must keep accumulated entries.
 2. During the stage, append timestamped bullets under the matching canonical
    heading as observations arise — Interpretation, Deviation, Tradeoff, or Open
    question. This is your diary-keeping (see `stage-protocol.md` §13); the four
@@ -87,7 +91,8 @@ vs *within* a stage (you loop on your own). Inside one stage you still own:
   with them whether to keep the artifact as-is, modify it in place, or redo the
   stage from scratch (discard partial artifacts), then re-run the relevant part
   and re-present the gate. The loop stays within the current stage but reports
-  through the engine at each turn: `report --result rejected` records the
+  through the engine at each turn: `report --result rejected --user-input
+  "Request Changes" --reason "<feedback>"` records the
   feedback, and after the revision (re-running the `stage-protocol-reviewer.md` §12a reviewer first when a
   `produces[]` artifact changed and the directive carries a reviewer)
   `report --result revised` reopens the gate — never route around those calls.

@@ -236,6 +236,8 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     const sel = join(pd, "sel1.json");
     writeJson(sel, {
       stage_slug: "user-stories",
+      space: DEFAULT_SPACE,
+      intent: DEFAULT_RECORD_DIR,
       selections: [
         {
           candidate_id: "c1",
@@ -256,7 +258,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
       ],
     });
     expect(persist(pd, sel).status).toBe(0);
-    expect(readFileSync(projectPractices(pd), "utf-8")).toContain("cid:user-stories:c1");
+    expect(readFileSync(projectPractices(pd), "utf-8")).toContain(`cid:${DEFAULT_RECORD_DIR}:user-stories:`);
   }, TIMEOUT);
 
   test("Case 1: team-scoped pick lands as a practice in team.md [.sh 3]", () => {
@@ -265,6 +267,8 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     const sel = join(pd, "sel1.json");
     writeJson(sel, {
       stage_slug: "user-stories",
+      space: DEFAULT_SPACE,
+      intent: DEFAULT_RECORD_DIR,
       selections: [
         {
           candidate_id: "c1",
@@ -285,7 +289,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
       ],
     });
     expect(persist(pd, sel).status).toBe(0);
-    expect(readFileSync(teamPractices(pd), "utf-8")).toContain("cid:user-stories:c2");
+    expect(readFileSync(teamPractices(pd), "utf-8")).toContain(`cid:${DEFAULT_RECORD_DIR}:user-stories:`);
   }, TIMEOUT);
 
   test("Case 1: two RULE_LEARNED audit rows [.sh 4]", () => {
@@ -294,6 +298,8 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     const sel = join(pd, "sel1.json");
     writeJson(sel, {
       stage_slug: "user-stories",
+      space: DEFAULT_SPACE,
+      intent: DEFAULT_RECORD_DIR,
       selections: [
         {
           candidate_id: "c1",
@@ -330,6 +336,8 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     const sel = join(pd, "sel3.json");
     writeJson(sel, {
       stage_slug: "user-stories",
+      space: DEFAULT_SPACE,
+      intent: DEFAULT_RECORD_DIR,
       selections: [
         {
           candidate_id: "c5",
@@ -423,7 +431,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     seedMemoryMixed(pd);
     // Reject verdict: the conflicting candidate was dropped pre-write → empty.
     const sel = join(pd, "sel3b-reject.json");
-    writeJson(sel, { stage_slug: "user-stories", selections: [] });
+    writeJson(sel, { stage_slug: "user-stories", space: DEFAULT_SPACE, intent: DEFAULT_RECORD_DIR, selections: [] });
     expect(persist(pd, sel).status).toBe(0);
     // The failure event (a write) MUST NOT fire: zero RULE_LEARNED rows.
     expect(ruleLearnedRows(pd)).toBe(0);
@@ -436,6 +444,8 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     const sel = join(pd, "sel3b-escalate.json");
     writeJson(sel, {
       stage_slug: "user-stories",
+      space: DEFAULT_SPACE,
+      intent: DEFAULT_RECORD_DIR,
       selections: [
         {
           candidate_id: "c_escalated",
@@ -448,7 +458,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
       ],
     });
     expect(persist(pd, sel).status).toBe(0);
-    expect(readFileSync(projectPractices(pd), "utf-8")).toContain("cid:user-stories:c_escalated");
+    expect(readFileSync(projectPractices(pd), "utf-8")).toContain(`cid:${DEFAULT_RECORD_DIR}:user-stories:`);
   }, TIMEOUT);
 
   // ===========================================================================
@@ -460,6 +470,8 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     const sel = join(pd, "sel4.json");
     writeJson(sel, {
       stage_slug: "user-stories",
+      space: DEFAULT_SPACE,
+      intent: DEFAULT_RECORD_DIR,
       selections: [
         {
           candidate_id: "c1",
@@ -474,7 +486,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     expect(persist(pd, sel).status).toBe(0);
     expect(persist(pd, sel).status).toBe(0);
     expect(ruleLearnedRows(pd)).toBe(1);
-    expect(countLines(projectPractices(pd), "cid:user-stories:c1")).toBe(1);
+    expect(countLines(projectPractices(pd), `cid:${DEFAULT_RECORD_DIR}:user-stories:`)).toBe(1);
   }, TIMEOUT);
 
   // ===========================================================================
@@ -488,6 +500,8 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     const sel = join(pd, "sel5.json");
     writeJson(sel, {
       stage_slug: "user-stories",
+      space: DEFAULT_SPACE,
+      intent: DEFAULT_RECORD_DIR,
       selections: [
         {
           candidate_id: "c1",
@@ -511,7 +525,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     });
     await Promise.all([a.exited, b.exited]);
     expect(ruleLearnedRows(pd)).toBe(1);
-    expect(countLines(projectPractices(pd), "cid:user-stories:c1")).toBe(1);
+    expect(countLines(projectPractices(pd), `cid:${DEFAULT_RECORD_DIR}:user-stories:`)).toBe(1);
   }, TIMEOUT);
 
   // ===========================================================================
@@ -524,6 +538,8 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     const sel = join(pd, "sel6.json");
     writeJson(sel, {
       stage_slug: "user-stories",
+      space: DEFAULT_SPACE,
+      intent: DEFAULT_RECORD_DIR,
       selections: [
         {
           candidate_id: "c1",
@@ -540,14 +556,14 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     const lf = projectPractices(pd);
     const stripped = readFileSync(lf, "utf-8")
       .split("\n")
-      .filter((l) => !l.includes("cid:user-stories:c1"))
+      .filter((l) => !l.includes(`cid:${DEFAULT_RECORD_DIR}:user-stories:`))
       .join("\n");
     writeFileSync(lf, stripped);
     const r = persist(pd, sel);
     // .sh: EC:ROWS:LINES === "0:1:1".
     expect(r.status).toBe(0);
     expect(ruleLearnedRows(pd)).toBe(1);
-    expect(countLines(lf, "cid:user-stories:c1")).toBe(1);
+    expect(countLines(lf, `cid:${DEFAULT_RECORD_DIR}:user-stories:`)).toBe(1);
   }, TIMEOUT);
 
   // ===========================================================================

@@ -193,7 +193,8 @@ Use stage-protocol.md completion template with completion emoji: :books:
 
 STOP for the human response. Report **Approve** with
 `--result approved --user-input "<exact choice>"`; report
-**Request Changes** with `--result rejected --user-input "<feedback>"`, run the
+**Request Changes** with `--result rejected --user-input "Request Changes"
+--reason "<feedback>"`, run the
 revision loop, and report `--result revised` before re-presenting. The engine
 owns every lifecycle transition and advancement.
 

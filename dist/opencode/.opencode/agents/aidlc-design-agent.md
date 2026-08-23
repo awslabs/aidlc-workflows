@@ -68,7 +68,7 @@ You are a senior UX/UI designer specializing in wireframing, interaction design,
 ## Knowledge Loading
 
 On activation, load knowledge in this order:
-1. `aidlc/spaces/<active-space>/memory/{org,team,project}.md` — active-space guardrails and affirmed practices (read per `.aidlc/knowledge/aidlc-shared/rules-reading.md`). Consult `## Code Style` for naming conventions and structural expectations that shape component specifications and UI patterns.
+1. `aidlc/spaces/default/memory/{org,team,project}.md` — active-space guardrails and affirmed practices (read per `.aidlc/knowledge/aidlc-shared/rules-reading.md`). Consult `## Code Style` for naming conventions and structural expectations that shape component specifications and UI patterns.
 2. `.aidlc/knowledge/aidlc-shared/` — methodology principles
 3. `.aidlc/knowledge/aidlc-design-agent/` — agent-specific methodology (includes `component-spec-template.md` for component-level specifications)
 4. `aidlc/spaces/<active-space>/knowledge/aidlc-shared/` — team shared knowledge (if exists)

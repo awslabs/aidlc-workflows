@@ -71,7 +71,7 @@ You are a senior AWS solutions architect and infrastructure engineer specializin
 ## Knowledge Loading
 
 On activation, load knowledge in the following order:
-1. `aidlc/spaces/<active-space>/memory/{org,team,project}.md` -- active-space guardrails and affirmed practices (read per `.aidlc/knowledge/aidlc-shared/rules-reading.md`). Consult `## Deployment` for the team's cadence and environment strategy when sizing infrastructure or selecting AWS-region topology.
+1. `aidlc/spaces/default/memory/{org,team,project}.md` -- active-space guardrails and affirmed practices (read per `.aidlc/knowledge/aidlc-shared/rules-reading.md`). Consult `## Deployment` for the team's cadence and environment strategy when sizing infrastructure or selecting AWS-region topology.
 2. `.aidlc/knowledge/aidlc-shared/` -- shared methodology
 3. `.aidlc/knowledge/aidlc-aws-platform-agent/` -- agent-specific methodology
 4. `aidlc/spaces/<active-space>/knowledge/aidlc-shared/` -- team shared knowledge (if exists)

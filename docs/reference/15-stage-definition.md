@@ -141,16 +141,23 @@ their `single-stage:<slug>` workflow identity.
 Boolean, default `false`. Set `true` on stages that must write **source code to
 the workspace root**, not just planning documents under the per-intent record dir.
 
-Why it exists: a stage's `produces[]` artifacts always resolve to markdown under
-the record dir (the only place the path resolver writes them). So a "do the
-produces exist?" check is satisfied by a `code-generation` stage that wrote its
-`code-generation-plan.md`, `unit-test-instructions.md`, and `code-summary.md`
-but never emitted a line of actual code (issue #366).
+Why it exists: a stage's `produces[]` artifacts normally resolve under the
+record dir, except for space-level stores such as Reverse Engineering's
+per-repository codekb. So a "do the produces exist?" check is satisfied by a
+`code-generation` stage that wrote its `code-generation-plan.md`,
+`unit-test-instructions.md`, and `code-summary.md` but never emitted a line of
+actual code (issue #366).
 `workspace_requires: true` closes that gap: the
 stage-completion artifact guard (`aidlc-state.ts` approve/advance/finalize/
 complete-workflow) additionally requires evidence of real source work outside
 the `aidlc/` workspace tree and the harness directory before the stage may
 complete.
+
+For codekb stages, the same guard follows the active intent's recorded
+repository set. Every recorded repository must have at least one declared
+artifact in its canonical `aidlc/spaces/<space>/codekb/<repo>/` directory;
+misnamed or unrecorded directories do not count. An intent with no recorded
+repositories keeps the legacy any-repo-directory fallback.
 
 How "source work" is detected depends on the workspace:
 - **Git workspace** - the guard asks git, so it can tell this session's code

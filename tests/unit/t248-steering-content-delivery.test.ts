@@ -379,7 +379,7 @@ describe("t248 deterministic steering delivery", () => {
     expect(otherKey).not.toBe(encodedKey);
   });
 
-  test("sessionless continuation remains deliberately stateless for the same token", () => {
+  test("sessionless continuation consumes the same token exactly once", () => {
     const proj = setupIntegrationProject({ withState: "state-brownfield-feature.md" });
     projects.push(proj);
     const orgPath = join(proj, "aidlc", "spaces", "default", "memory", "org.md");
@@ -393,10 +393,13 @@ describe("t248 deterministic steering delivery", () => {
     const token = first.continue_token ?? "";
     const once = invoke(proj, "continue", [token]).directive;
     const twice = invoke(proj, "continue", [token]).directive;
-    expect(twice).toEqual(once);
+    expect(once.kind).not.toBe("error");
+    expect(twice.kind).toBe("error");
+    expect(twice.message).toContain("no longer current");
     const marker = JSON.parse(
       readFileSync(join(seededRecordDir(proj), ".aidlc-active-directive.json"), "utf-8"),
-    ) as { owner_session?: string };
+    ) as { cursor_harness?: string; owner_session?: string };
+    expect(marker.cursor_harness).toBe("claude");
     expect(marker.owner_session).toStartWith("sessionless:");
   });
 

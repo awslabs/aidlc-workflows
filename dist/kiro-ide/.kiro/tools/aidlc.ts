@@ -819,8 +819,14 @@ function resolveActionWithoutGlobalFlags(argv: string[]): Action {
 export function resolveAction(argv: string[]): Action {
   const clean: string[] = [];
   let projectDir: string | undefined;
+  let literalArgs = false;
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] !== "--project-dir") {
+    if (argv[i] === "--") {
+      literalArgs = true;
+      clean.push(argv[i]);
+      continue;
+    }
+    if (literalArgs || argv[i] !== "--project-dir") {
       clean.push(argv[i]);
       continue;
     }
@@ -841,7 +847,9 @@ export function resolveAction(argv: string[]): Action {
       ? projectDir
       : resolve(process.cwd(), projectDir);
     if (action.type === "delegate") {
-      action.args.push("--project-dir", absoluteProjectDir);
+      const delimiter = action.args.indexOf("--");
+      if (delimiter >= 0) action.args.splice(delimiter, 0, "--project-dir", absoluteProjectDir);
+      else action.args.push("--project-dir", absoluteProjectDir);
     } else if (action.type === "hook") {
       action.projectDir = absoluteProjectDir;
       action.path = resolveHookPath(`aidlc-${action.name}.ts`, undefined, absoluteProjectDir);

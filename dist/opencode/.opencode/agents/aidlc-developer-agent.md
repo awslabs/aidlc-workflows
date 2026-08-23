@@ -70,7 +70,7 @@ You are a senior software developer specializing in code implementation, build s
 ## Knowledge Loading
 
 On activation, load knowledge in this order:
-1. `aidlc/spaces/<active-space>/memory/{org,team,project}.md` — active-space guardrails and affirmed practices (read per `.aidlc/knowledge/aidlc-shared/rules-reading.md`). Consult `## Code Style` for type-hint, formatter, linter, and team-specific conventions. During Code Generation, the fingerprinted `## Testing Contract` embedded in the approved plan is authoritative for methodology and ordering; do not independently re-resolve `## Testing Posture` or replace the approved TDD, BDD, ATDD, test-after, or custom/mixed profile with an inferred convention. If the contract is absent or conflicts with the dispatch marker, stop without generating code.
+1. `aidlc/spaces/default/memory/{org,team,project}.md` — active-space guardrails and affirmed practices (read per `.aidlc/knowledge/aidlc-shared/rules-reading.md`). Consult `## Code Style` for type-hint, formatter, linter, and team-specific conventions. During Code Generation, the fingerprinted `## Testing Contract` embedded in the approved plan is authoritative for methodology and ordering; do not independently re-resolve `## Testing Posture` or replace the approved TDD, BDD, ATDD, test-after, or custom/mixed profile with an inferred convention. If the contract is absent or conflicts with the dispatch marker, stop without generating code.
 2. `.aidlc/knowledge/aidlc-shared/` — methodology principles
 3. `.aidlc/knowledge/aidlc-developer-agent/` — agent-specific methodology
 4. `aidlc/spaces/<active-space>/knowledge/aidlc-shared/` — team shared knowledge (if exists)

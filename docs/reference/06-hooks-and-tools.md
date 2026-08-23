@@ -170,6 +170,90 @@ See [Sensor System](07-sensor-system.md) for the manifest schema and the fire li
 
 Marker writers serialize through a record-local `.aidlc-active-directive.lock/` whose owner stamp follows the audit-lock dead-owner, unstamped-grace, live-over-age, CAS-reclaim, and exit-cleanup conventions. The canonical marker remains readable while a writer prepares a sibling candidate, and publish, clear, and release are fenced to the exact acquisition token. A waiter or `/aidlc --doctor` CAS-reclaims stamped dead owners, safely fenced over-age owners, and lock directories that remain unstamped beyond the acquisition grace window. Legacy `.aidlc-active-directive.json.transaction` debris still requires quiescent manual recovery because it has no owner identity to reverify.
 
+#### Atomic continuation cursor
+
+The active-directive marker is also the authoritative single-use steering
+continuation cursor for every shipped harness. Cursor identity is the canonical
+project, active space/record path, intent UUID, complete state SHA-256 plus
+presence, and the installed harness name from
+`tools/data/harness.json`. Harness directories alone are not identities: Kiro
+and Kiro IDE share `.kiro`, while Copilot and opencode share `.aidlc`.
+New marker publications record the harness as `cursor_harness`; existing v2
+markers without that field remain readable for migration.
+
+`continue` first performs the unchanged native token checks: decode, MAC,
+state, and route validation. It then takes the existing active-directive lock,
+revalidates the target and state, hashes every byte of the complete presented
+token, and compares that digest with the validated complete current token in
+the marker. While still holding that lock it atomically replaces the cursor
+with the exact prepared successor: another complete `load-steering` token, or a
+tokenless `run-stage`. Only after rename and lock release does the engine write
+stdout. Two processes racing the same current token therefore have exactly one
+winner; later contenders see the successor and receive a stale-token error.
+
+Fresh `next` uses the same lock and must publish its first work directive before
+stdout on all harnesses. It is an explicit reset. Because steering tokens are
+deterministic, a reset may reauthorize the same token bytes: if `next` commits
+before a concurrent `continue`, that continuation may consume the reset token;
+if `continue` commits first, the later `next` supersedes its successor and
+restores the first directive. Commit order, not process start time, is
+authoritative. Marker contention produces an error directive and no
+unrecorded work directive.
+
+Crash and retry behavior:
+
+| Boundary | Cursor and retry |
+| --- | --- |
+| Before marker rename | The old token remains current. A dead owner is reclaimed by the existing lock reaper; retry the same token. |
+| After rename, before stdout | The successor is current and the old token is stale across restart. Run fresh `next` to rehydrate; the cursor is at-most-once, not exactly-once delivery. |
+| After stdout begins or completes | The successor is current. If receipt of the complete directive is uncertain, run fresh `next`; never replay the old token. |
+| Final `run-stage` | The marker carries no continuation token, so the final steering token is stale on every retry. |
+
+Compatibility recovery remains atomic. Missing, malformed, oversized, and v1
+markers permit one natively validated continuation to bootstrap and publish its
+successor under the lock; concurrent recovery callers then see that successor
+and lose. A pre-change v2 marker without `cursor_harness`, or one written by a
+different installed harness, migrates only when its exact project, intent,
+state, and current-token digest match. A mismatch is stale. Fresh `next` is the
+universal reset. Hook marker reads remain fail-open for their advisory purpose,
+and Post/host hooks may read or enrich delivery evidence but never authorize
+replay.
+
+Upgrade and rollback must be quiescent: replace the engine, library, hooks, and
+generated harness tree together while no AI-DLC command or hook is running.
+Run fresh `next` after upgrade, rollback, or re-upgrade unless intentionally
+migrating a matching in-flight token. Older releases ignore
+`cursor_harness`, but rolling back restores their historical sessionless
+replay behavior until the fixed release is reinstalled. Mixed old/new tool
+files are unsupported.
+
+The exactly-one-winner claim requires one local filesystem with coherent
+cross-process visibility, exclusive directory creation, stable regular-file
+reads, and atomic same-filesystem rename for the marker and lock paths.
+NFS/SMB/FUSE/object-synchronized folders that do not honor those primitives
+are unsupported. The implementation does not `fsync` the candidate or parent
+directory, so sudden power-loss durability is outside the claim.
+
+Harness-specific residuals remain outside cursor authority. Pre-state
+continuations use the same cursor under the active space's `bare-space` bucket,
+with `state_present: false`, `intent_uuid: null`, and the SHA-256 of empty state.
+They therefore retain the same one-winner guarantee before an intent exists.
+
+| Harness | Residual host behavior |
+| --- | --- |
+| Claude | Stop retention, transcript reading, compaction, and session ownership remain hook-owned. |
+| Codex | Resume, compaction, and delivery behavior remain Codex-owned; the cursor creates no host correlation. |
+| Copilot | Adapter claims, Post settlement, Resume, ownership, conversation, delivery evidence, and Stop counts remain Copilot-only marker enrichment. |
+| Cursor | Hook correlation and subagent ledgers remain advisory and cannot authorize replay. |
+| Kiro CLI | Transcript-free Stop/conversation markers remain hook-owned. |
+| Kiro IDE | Modern and legacy IDE event/session differences remain adapter-owned. |
+| opencode | Plugin and session lifecycle evidence remains host-specific and read-only for replay. |
+
+The cursor guarantees one successful token consumption. It does not guarantee
+exactly-once `run-stage`, `report`, or `park` execution and does not change
+Cancel, prompt, compaction, TUI, Stop retention, Resume, ownership,
+conversation, or count semantics.
+
 ### PostToolUse: rebuild-stage-graph.ts
 
 **Source:** `.claude/hooks/aidlc-rebuild-stage-graph.ts`
@@ -214,9 +298,9 @@ See [Runtime Graph](13-runtime-graph.md) for the compile lifecycle and the locke
 **Processing steps:**
 
 1. **Project directory resolution:** Same multi-fallback pattern as write-audit-log.ts.
-2. **Health heartbeat:** Writes to `.aidlc-hooks-health/log-subagent.last`.
-3. **JSON parsing:** Extracts `agent_type` (defaults to `"unknown"`), `agent_id`, and `last_assistant_message` (truncated to 200 characters).
-4. **Audit file guard:** Exits silently if the `audit/` shard does not exist.
+2. **Workflow-state guard:** Exits silently unless the active intent's `aidlc-state.md` has `Status: Running`.
+3. **Health heartbeat:** Writes to `.aidlc-hooks-health/log-subagent.last`.
+4. **JSON parsing:** Extracts `agent_type` (defaults to `"unknown"`), `agent_id`, and `last_assistant_message` (truncated to 200 characters).
 5. **Entry assembly:** Emits canonical `SUBAGENT_COMPLETED` event via `appendAuditEntry`. Fields: Timestamp, Event, Agent Type, and optionally Agent ID and truncated Message.
 6. **Atomic locking:** Same `mkdir`-based pattern as write-audit-log.ts (unified in `lib.ts`) but with a separate lock name to avoid contention.
 
@@ -244,7 +328,7 @@ This is one of the framework's five flow-altering hooks, alongside the four PreT
 3. **Compose the engine:** Runs `bun .claude/tools/aidlc-orchestrate.ts next --project-dir <dir>` and parses the directive `kind`. It does not re-derive state — it composes the engine.
 4. **`done` → allow:** If the directive is `done`, the workflow is complete; the hook emits nothing and exits 0 (the precedent non-blocking pattern), then clears the recursion counter.
 5. **`parked` -> allow:** If the directive is `parked`, the workflow was intentionally parked mid-flow for a later session (`aidlc-orchestrate park`); the hook allows the stop and clears the counter, exactly like `done`. This is the supported multi-session exit: without it, the only clean stop is `done`, which an agent on a long workflow can only reach by rubber-stamping the remaining stages (#367). **Autonomy guard (#365):** the `parked` allow is suppressed under autonomous Construction (`Construction Autonomy Mode: autonomous`), so a `parked` directive there falls through to the cap-bounded block and the loop keeps moving.
-6. **Human-wait -> allow:** If the directive is pending but the conductor is correctly parked on the human (or simply chatting), the hook allows the stop and records a drop rather than spamming the nudge. Five cases qualify: the current stage's checkbox is positively `[?]` awaiting-approval, `[R]` revising, `[-]` in-progress **with** an unanswered `[Answer]:` tag in its `<slug>-questions.md`, `[-]` in-progress with a current-stage `DECISION_RECORDED` that has no later `QUESTION_ANSWERED`, or the ending turn was conversational. Logged decisions and conversational turns are suppressed under autonomous Construction; file-backed questions are also suppressed except for unit-major code-generation's exact mandatory Plan Approval question. Positive-confirmation only: any other state, no checkbox row, no open file/logged question, no transcript / no human prompt / any engine call in the responding turn, or a parse error falls through to the block below. See "Human-wait carve-out" below.
+6. **Human-wait -> allow:** If the conductor is correctly parked on the human (or simply chatting), the hook allows the stop and records a drop rather than spamming the nudge. Six cases qualify: a state-bound sessionless Resume marker is `ask` + `waiting`, the current stage's checkbox is positively `[?]` awaiting-approval, `[R]` revising, `[-]` in-progress **with** an unanswered `[Answer]:` tag in its `<slug>-questions.md`, `[-]` in-progress with a current-stage `DECISION_RECORDED` that has no later `QUESTION_ANSWERED`, or the ending turn was conversational. Resume, logged-decision, and conversational waits are suppressed under autonomous Construction; file-backed questions are also suppressed except for unit-major code-generation's exact mandatory Plan Approval question. Positive-confirmation only: any other state, no matching Resume latch, no checkbox row, no open file/logged question, no transcript / no human prompt / any engine call in the responding turn, or a parse error falls through to the block below. See "Human-wait carve-out" below.
 7. **Pending -> block and inject:** For any other (pending) directive - `run-stage`, `dispatch-subagent`, `invoke-swarm`, `present-gate`, `ask`, `print`, `error` - it prints `{"decision":"block","reason":<on-task continuation>}`, so the same session resumes with the next move injected. The injected `reason` also names `aidlc-orchestrate park` as the clean-pause alternative, so a conductor that wants to stop a long workflow parks rather than advancing.
 8. **Fail open:** Any unexpected failure (unreadable state, an engine that exits non-zero or returns no parseable directive, malformed stdin) allows the stop and records a drop. Failing open is the only safe failure mode for a hook that can otherwise trap a turn.
 
@@ -263,15 +347,16 @@ returns bounded fresh-`next` recovery and never replays an old continuation.
 **Recursion guard — a stuck block can never trap the session.** A block that re-fires forever is the one way a hook could trap a turn, so recursion is bounded two ways, both native:
 
 - **`stop_hook_active`** — Claude Code sets this true when the current stop is itself the product of a prior Stop-hook block. The hook reads it as a signal that it is already inside a blocked sequence.
-- **A no-progress counter** - the hook persists a bounded recursion record. On Copilot, the session-scoped coordination marker keys that record on workflow and directive progress rather than audit length: active stage and Unit, directive kind and part position, complete continuation-token hash, workflow-state digest, owner epoch, and active Resume status. A `report`, directive transition, or real takeover changes that signature, so a healthy loop resets while audit-only traffic cannot manufacture progress. Other harnesses retain their existing bounded guard file and progress signature. When the signature is unchanged across consecutive blocks, the counter increments. Once the no-progress streak reaches the ceiling - `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`, whose default is **run-mode aware: 2 in an interactive run and 8 under autonomous Construction** (interactive 2 so a chatting or pausing human is released after one nudge; autonomous 8 so an unattended loop, with no human to release it, runs to completion before letting go) - the hook **releases** the turn (allows the stop), so a stuck loop always lets go. An explicit `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` overrides both defaults.
+- **A no-progress counter** - the hook persists a bounded recursion record keyed on workflow and directive progress rather than audit length, so audit-only traffic cannot manufacture progress. The shared signature includes current stage, a workflow-state digest that excludes volatile `Last Updated` metadata, and a kind-specific directive identity: stage/Unit, load-steering part/token/content, run-stage wave, swarm units, and dispatched worker/repo. Copilot's session-scoped coordination marker adds the complete continuation-token hash, owner epoch, and active Resume status. A `report`, directive transition, or real takeover changes the applicable signature and resets a healthy loop; timestamp-only status synchronization does not. When the signature is unchanged across consecutive blocks, the counter increments. Once the no-progress streak reaches the ceiling - `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`, whose default is **run-mode aware: 2 in an interactive run and 8 under autonomous Construction** (interactive 2 so a chatting or pausing human is released after one nudge; autonomous 8 so an unattended loop, with no human to release it, runs to completion before letting go) - the hook **releases** the turn (allows the stop), so a stuck loop always lets go. An explicit `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` overrides both defaults.
 
-**Human-wait carve-out - an interactive gate is not punished.** Five cases where the conductor ends its turn *because* it is waiting on the human (or is simply conversational) are handled so the hook never spams the nudge:
+**Human-wait carve-out - an interactive gate is not punished.** Six cases where the conductor ends its turn *because* it is waiting on the human (or is simply conversational) are handled so the hook never spams the nudge:
 
 - **Esc is free.** Stop hooks do not fire on user interrupt (Esc), so a manual interrupt can never be trapped — no code is needed for that case.
 - **The approval gate is not free.** The Stop hook *does* fire when the conductor ends its turn to await an `AskUserQuestion` answer. At an approval gate (the current stage is `[?]` awaiting-approval) or in the Request-Changes loop (`[R]` revising) the engine still re-emits a pending `run-stage` for the in-flight stage, so without a carve-out the hook would block and re-inject the forwarding-loop nudge until the cap bled out — confusing at an interactive gate. So when the current stage's checkbox is positively `[?]`/`[R]`, the hook allows the stop. This is **positive-confirmation only and fail-open**: it only ever releases more readily, never blocks more; a missing checkbox row and any parse error fall through to the cap-bounded block, so a genuine mid-stage quit is still nudged.
 - **A mid-stage clarifying question is not free either.** Such a question parks the stage at `[-]` in-progress — the same checkbox state as a lazy quit, so `[-]` alone cannot be carved out. But the conductor must create a `<slug>-questions.md` with blank `[Answer]:` tags before asking (stage protocol §3), so an unanswered tag is a positive signal that a question is pending. The hook checks the canonical `<record>/<phase>/<slug>/` directory, or for a per-unit Construction directive, the exact `<record>/construction/<unit>/<slug>/` named by `next`; it does not accept a stale question from another unit. When the current `[-]` stage's questions file has an unanswered tag, the hook allows the stop. This is **strictly gated** under autonomous Construction (`Construction Autonomy Mode: autonomous`): only unit-major code-generation's exact, visible Plan Approval section with a blank/underscore-only answer tag is allowed to stop; a generic clarification question keeps the unattended loop running. Every other miss — no file, all answered, another unit, or a read/parse error — falls through to the cap-bounded block, so a genuine mid-stage quit is still nudged. (Immediate mitigation for any residual case: `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP=1`.)
 - **A logged structured question is also a human wait.** Some non-gate prompts, especially the §13 learnings questions, do not add a blank tag to the stage questions file. Their required audit handshake supplies the equivalent positive signal: `DECISION_RECORDED` opens the current-stage question and `QUESTION_ANSWERED` closes it. While that decision remains unresolved and the current stage is `[-]`, the hook allows the stop so prose-rendering harnesses can wait for the next human message. A resolved or different-stage decision does not qualify, and autonomous Construction suppresses this carve-out.
 - **A conversational turn is not free either.** During an active workflow a human who just wants to chat (ask a question, discuss a decision) should not be nudged back into the loop. The hook allows the stop when the most recent genuine human prompt was answered with **no** workflow-engine engagement - the conductor ran neither `aidlc-orchestrate` nor `aidlc-state` since that prompt. A read-only query (`--status`, `--doctor`, `--help`, `--version`) does **not** count as engagement, so "what stage am I on?" answered with `--status` still qualifies as chat. This is **strictly gated and fail-closed**: it never fires under autonomous Construction, and missing or unreadable evidence, no human prompt found, or any engine call in the responding turn falls through to the cap-bounded block, so a conductor that engaged the workflow and then quit mid-loop is still nudged. It only ever ALLOWS - it can never block more.
+- **A pending Resume choice is a human wait.** `next --resume` writes a state-bound active-directive marker with `kind: "ask"` and `resume.status: "waiting"`. On the shared non-Copilot path the Stop hook reads that latch before its own `next` probe can replace the sessionless marker, and allows the turn to end while the human chooses how to resume. A state change or delivered non-`ask` directive closes the latch. Autonomous Construction suppresses this carve-out and continues through the bounded enforcement path.
 
   **One predicate, two evidence sources.** The question is identical on every harness; only the evidence differs.
 
@@ -313,7 +398,7 @@ returns bounded fresh-`next` recovery and never replays an old continuation.
 
 The orchestration engine already delivers substantive rules to the conductor through bounded `load-steering` chunks. This hook closes the next boundary: it resolves the dispatch stage from a valid explicit stage-file path first, then the state file's `Current Stage`, and finally a unique slug mention when no live stage is available. An unknown path-shaped reference does not suppress the live-stage fallback. It reads the same active-space rule roster as the engine and appends the exact file contents in a digest-marked bundle. Only that complete generated block counts as already delivered, so markerless copies or prose that reframes the rules do not bypass injection and retries remain idempotent. Every installed agent-roster entry except the composer participates, including plugin-owned agents; targets outside the roster pass unchanged.
 
-Claude and Codex consume `hookSpecificOutput.updatedInput`; the opencode adapter applies that rewrite to `output.args`. The hook serializes the complete response before writing and refuses an oversized response with repair guidance, so a transport ceiling cannot turn it into truncated JSON. Kiro CLI exposes subagent arguments but has no rewrite channel, so its adapter observes the proposed rewrite and emits an advisory warning while allowing dispatch; its agent-v1 `resources` preload the memory tree. A valid bundle that exceeds the rewrite limit also proceeds through that native preload, while a missing, unreadable, or invalid UTF-8 required rule still blocks with repair guidance. Kiro IDE exposes no tool arguments to hooks and does not register this hook; `.kiro/steering/aidlc-active-memory.md` is always included and uses live file references to preload the active memory tree for the conductor and delegated agents.
+Claude and Codex consume `hookSpecificOutput.updatedInput`; the opencode adapter applies that rewrite to `output.args`. The hook serializes the complete response before writing and refuses an oversized response with repair guidance, so a transport ceiling cannot turn it into truncated JSON. Kiro CLI exposes subagent arguments but has no rewrite channel, so its adapter observes the proposed rewrite and emits an advisory warning while allowing dispatch; its agent-v1 `resources` preload the memory tree. A valid bundle that exceeds the rewrite limit also proceeds through that native preload, while a missing, unreadable, or invalid UTF-8 required rule still blocks with repair guidance. Kiro IDE does not register this hook because tool-argument delivery is not uniform across supported generations; `.kiro/steering/aidlc-active-memory.md` is always included and uses live file references to preload the active memory tree for the conductor and delegated agents.
 
 ---
 
@@ -385,9 +470,9 @@ This is one of the framework's five flow-altering hooks and one of its four `Pre
 **Trigger:** Before file-write and shell tool calls (`Write`, `Edit`, `MultiEdit`, `NotebookEdit`, `Bash`; registered in the shared PreToolUse matcher group, self-filtering to mutation-capable calls)
 **Purpose:** Enforce the reviewer-module terminal-receipt ordering deterministically - the write-freeze between a terminal review receipt and the gate
 
-This is one of the framework's five flow-altering hooks and one of its four `PreToolUse` controls. Each `REVIEW_COMPLETED` row records a SHA-256 fingerprint of the declared artifact paths and bytes. The completion precondition accepts the receipt only while that fingerprint still matches, independent of which harness or tool changed the file; the existing audit-event floor remains an early invalidation signal. Autonomous swarm finalization also requires every applicable required artifact to exist as a file in the Bolt worktree (an absent optional output remains a valid fingerprint entry). Field traces showed prose losing the ordering contest: a conductor applied reviewer suggestions AFTER recording the terminal receipt, voided its own receipt, re-reviewed, re-edited, and oscillated until the live session wedged at the gate. This hook refuses recognizable writes before they happen, while the content fingerprint is the harness-independent correctness floor.
+This is one of the framework's five flow-altering hooks and one of its four `PreToolUse` controls. Each `REVIEW_COMPLETED` row records a SHA-256 fingerprint of the declared artifact paths and bytes. The gate/completion precondition accepts the receipt only while that fingerprint still matches, independent of which harness or tool changed the file; the existing audit-event floor remains an early invalidation signal. Autonomous swarm finalization also requires every applicable required artifact to exist as a file in the Bolt worktree (an absent optional output remains a valid fingerprint entry). Field traces showed prose losing the ordering contest: a conductor applied reviewer suggestions AFTER recording the terminal receipt, voided its own receipt, re-reviewed, re-edited, and oscillated until the live session wedged at the gate. This hook refuses recognizable writes before they happen, while the content fingerprint is the harness-independent correctness floor.
 
-**Decision.** For each write target the hook checks, against every reviewer-bearing stage that is not yet completed or skipped in the state file: does the path match a declared `produces[]`/`optional_produces[]` artifact (the engine's own suffix matcher, `producesArtifactUnit`), and does a fresh terminal receipt currently cover it (`freshReviewReceipts` - the SAME scan the engine's completion precondition reads, shared in `aidlc-lib.ts` so the freeze window and the refusal window cannot diverge)? Freshness requires both the audit chronology and an exact current artifact fingerprint. Per-unit stages freeze only the reviewed unit's artifacts; an ambiguous per-unit path freezes if any unit holds a terminal receipt. A below-cap adversarial NOT-READY remains nonterminal so the repair loop can edit; terminal NOT-READY under the effective class freezes like READY because no later review pass follows it. A recorded gate rejection, jump, workflow restart, audited write, or content mismatch invalidates the receipt. Blocks emit a `REVIEW_FREEZE_BLOCKED` audit row (Tool, Target, Stage, optional Unit) and signal via **exit 2 + a redirecting stderr reason** that names the sanctioned routes: present the gate and quote suggestions there, or reject at the gate to reopen the artifact.
+**Decision.** For each write target the hook checks, against every reviewer-bearing stage that is not yet completed or skipped in the state file: does the path match a declared `produces[]`/`optional_produces[]` artifact (the engine's own suffix matcher, `producesArtifactUnit`), and does a fresh terminal receipt currently cover it (`freshReviewReceipts` - the SAME scan the engine's gate/completion precondition reads, shared in `aidlc-lib.ts` so the freeze window and the refusal window cannot diverge)? Freshness requires both the audit chronology and an exact current artifact fingerprint. Per-unit stages freeze only the reviewed unit's artifacts; an ambiguous per-unit path freezes if any unit holds a terminal receipt. A below-cap adversarial NOT-READY remains nonterminal so the repair loop can edit; terminal NOT-READY under the effective class freezes like READY because no later review pass follows it. A recorded gate rejection, jump, workflow restart, audited write, or content mismatch invalidates the receipt. Blocks emit a `REVIEW_FREEZE_BLOCKED` audit row (Tool, Target, Stage, optional Unit) and signal via **exit 2 + a redirecting stderr reason** that names the sanctioned routes: present the gate and quote suggestions there, or reject at the gate to reopen the artifact.
 
 **Shell writes.** The write-audit-log hook that feeds the engine's invalidation scan is a Write/Edit PostToolUse hook, so a file mutation delivered as a shell command would otherwise be invisible and leave a stale terminal receipt covering changed bytes. The freeze therefore extracts output-redirection targets and operands of common mutation commands before Bash executes. Read-only shell calls produce no targets and pass.
 
@@ -480,7 +565,7 @@ The audit trail (the intent's `audit/` shards) uses the event taxonomy defined i
 | **Stage** | 6 | `STAGE_STARTED`, `STAGE_AWAITING_APPROVAL`, `STAGE_REVISING`, `STAGE_COMPLETED`, `STAGE_SKIPPED`, `STAGE_JUMPED` | `aidlc-orchestrate.ts report` (internal state emitters), `aidlc-jump.ts` |
 | **Initialization** | 3 | `WORKSPACE_SCAFFOLDED`, `WORKSPACE_SCANNED`, `WORKSPACE_INITIALISED` | `aidlc-utility.ts intent-create` |
 | **Navigation** | 4 | `SCOPE_CHANGED`, `SCOPE_DETECTED`, `DEPTH_CHANGED`, `TEST_STRATEGY_CHANGED` | `aidlc-utility.ts` |
-| **Interaction** | 7 | `DECISION_RECORDED`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `SUMMARY_CONFIRMATION_RECORDED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED` | `aidlc-log.ts`, `aidlc-state.ts` |
+| **Interaction** | 8 | `DECISION_RECORDED`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `SUMMARY_CONFIRMATION_RECORDED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED` | `aidlc-log.ts`, `aidlc-state.ts` |
 | **Artifact** | 3 | `ARTIFACT_CREATED`, `ARTIFACT_UPDATED`, `ARTIFACT_REUSED` | write-audit-log hook, `aidlc-state.ts reuse-artifact` |
 | **Subagent** | 1 | `SUBAGENT_COMPLETED` | log-subagent hook |
 | **Reviewer enforcement** | 2 | `REVIEWER_SCOPE_BLOCKED`, `REVIEW_FREEZE_BLOCKED` | reviewer-scope hook, review-freeze hook |
@@ -525,7 +610,7 @@ A stage reported as skipped emits `STAGE_SKIPPED` instead of
 | Source | Events | When |
 |--------|--------|------|
 | `write-audit-log.ts` | `ARTIFACT_CREATED` / `ARTIFACT_UPDATED` | Every Write/Edit to the intent's record dir (except the `audit/` shards) |
-| `log-subagent.ts` | `SUBAGENT_COMPLETED` | Any subagent stop |
+| `log-subagent.ts` | `SUBAGENT_COMPLETED` | Any subagent stop while the active workflow has `Status: Running` |
 | `reviewer-scope.ts` | `REVIEWER_SCOPE_BLOCKED` | A per-unit reviewer's tool call refused for sibling-unit access (PreToolUse) |
 | `review-freeze.ts` | `REVIEW_FREEZE_BLOCKED` | A `produces[]` write refused for voiding a fresh terminal review receipt before the gate (PreToolUse) |
 | `plan-approval-guard.ts` | `PLAN_APPROVAL_BLOCKED` | A code-generation developer dispatch refused before the plan is approved (PreToolUse) |
@@ -655,9 +740,9 @@ The tool-as-actor half of the stage-protocol §13 learning ritual. `surface` rea
 | Subcommand | Purpose | Emits |
 |------------|---------|-------|
 | `surface --slug <stage-slug>` | Read-only. Partition `memory.md` entries into keep-candidates (Interpretations / Deviations / Tradeoffs) and parked open questions; print a structured JSON candidate set | — |
-| `persist --slug <stage-slug> --selections-json <path>` | Write each confirmed learning as a practice (default scope project) to `aidlc/spaces/<active-space>/memory/project.md` / `memory/team.md` as dated entries; for a Sensor-binding learning, scaffold a project-tier manifest and append its id to the originating stage's `sensors:` frontmatter — both writes inside one `withAuditLock` | `RULE_LEARNED`, `SENSOR_PROPOSED` |
+| `persist --slug <stage-slug> --selections-json <path>` | Write each confirmed learning as a dated practice (default scope project) to the `project.md` / `team.md` memory file in the space bound when `surface` ran, with audit and locking pinned to that same surface-time space/intent; for a Sensor-binding learning, scaffold a project-tier manifest and append its id to the originating stage's `sensors:` frontmatter — both writes inside one `withAuditLock` | `RULE_LEARNED`, `SENSOR_PROPOSED` |
 
-Both subcommands accept `--project-dir <path>`. `persist` never judges — it receives only conflict-clear or user-escalated selections — and dedups per `(Stage, Candidate-ID)` against a fresh in-lock read of the audit, so a same-day re-run is a no-op rather than a double-append.
+Both subcommands accept `--project-dir <path>`. `persist` never judges — it receives only conflict-clear or user-escalated selections — and rejects a CLI slug that differs from the selections file's surface-time stage. Inside the lock it verifies that the pinned space and non-null intent still exist, then dedups learning rows per `(Stage, Content-Hash)` against both the fresh audit read and rows emitted earlier in the same batch. `Content-Hash` is the full SHA-256 digest; pre-upgrade candidate-id and 8-hex-hash rows/markers retain text-gated compatibility. The sensor branch dedups `SENSOR_PROPOSED` per `(Stage, Sensor ID)`. A same selection replay is therefore a no-op rather than a double-append.
 
 ### `aidlc-runtime.ts` — Runtime-graph compiler + reader
 

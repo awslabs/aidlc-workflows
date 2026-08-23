@@ -211,7 +211,8 @@ Run the section 13 learnings ritual, then:
 4. STOP and wait for the human response.
 5. Carry the exact answer only into the matching `report` or promotion path
    below; never call `aidlc-log.ts answer` for this gate.
-6. On Request Changes, report `--result rejected --user-input "<feedback>"`,
+6. On Request Changes, report `--result rejected --user-input "Request Changes"
+   --reason "<feedback>"`,
    revise through the lead (and re-run a support only when its evidence must be
    refreshed), then report `--result revised` before re-presenting the gate.
    A rejection invalidates any earlier promotion receipt: the engine refuses

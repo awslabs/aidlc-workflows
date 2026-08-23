@@ -185,12 +185,6 @@ function projectWithReadyReview(): { project: string; artifact: string } {
     AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
     AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
   };
-  const gate = spawnSync(
-    "bun",
-    [STATE_TOOL, "gate-start", "requirements-analysis", "--project-dir", project],
-    { encoding: "utf-8", env },
-  );
-  if (gate.status !== 0) throw new Error(`gate-start failed: ${gate.stdout}${gate.stderr}`);
   const args = [
     LOG_TOOL,
     "review",
@@ -209,6 +203,12 @@ function projectWithReadyReview(): { project: string; artifact: string } {
       throw new Error(`review log failed: ${review.stdout}${review.stderr}`);
     }
   }
+  const gate = spawnSync(
+    "bun",
+    [STATE_TOOL, "gate-start", "requirements-analysis", "--project-dir", project],
+    { encoding: "utf-8", env },
+  );
+  if (gate.status !== 0) throw new Error(`gate-start failed: ${gate.stdout}${gate.stderr}`);
   return { project, artifact };
 }
 

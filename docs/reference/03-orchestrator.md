@@ -74,7 +74,7 @@ When the argument is freeform text (not a known scope keyword):
 
 The compose surfaces (a leading `compose` verb, `--new-scope`, or `--report <path>`) make the engine emit a composer-dispatch `print` instead of a scope confirm. The verb is deliberately NOT a workspace verb (workspace verbs are terminal utility commands the Kiro seam runs off-band; compose is workflow work the conductor dispatches). Two modes split on the state file:
 
-1. **Front / report (no workflow yet):** the conductor dispatches `aidlc-composer-agent`, which runs the read-only `detect --json` scan, estimates the five implementation-entropy components (CodeKB MCP evidence when configured, the workspace scan otherwise), and returns a structured proposal (`mode matched|custom`, an `ars` block with the component scores and evidence method, `arsRationale`, the grid, per-SKIP rationale, a `summary` copied verbatim from the validator, plus two pre-rendered markdown tables: ARS scores with bands, and per-stage decisions with reasoning) validated by `aidlc-graph.ts validate-grid`. Validation requires the exact compiled stage set and returns the grid's stage/gate/per-unit `summary` plus `nearest_stock`, with composer-authored scopes excluded and missing or extra keys counted as differences. The composer routes matched-vs-custom solely on the final proposal's `nearest_stock[0].diff <= 2`; the mechanical ARS screen distance is advisory. When it adopts a stock grid it revalidates that final grid, replaces the summary/distance, and rebuilds every affected decision-table row before returning. The conductor never re-derives the verdict. It renders the approve/edit/reject gate as three blocks: the validator's summary line (`N stages EXECUTE / M SKIP, G approval gates`), then the composer's stage-decision table verbatim, then its ARS score table verbatim under "Scoring detail (advisory)". An edit to a matched stock grid converts the revised proposal to custom and repeats validation/table rendering, because matched approval writes no scope data. On approve a stock match births directly; a custom grid is authored as scope data (`scopes/aidlc-<name>.md` + a `scope-grid.json` entry, `keywords: []` by default) and the birth continues in the same turn.
+1. **Front / report (no workflow yet):** the conductor dispatches `aidlc-composer-agent`, which runs the read-only `detect --json` scan, estimates the five implementation-entropy components (CodeKB MCP evidence when configured, the workspace scan otherwise), and returns a structured proposal (`mode matched|custom`, a required nonblank `birthDescription`, an `ars` block with the component scores and evidence method, `arsRationale`, the grid, per-SKIP rationale, a `summary` copied verbatim from the validator, plus two pre-rendered markdown tables: ARS scores with bands, and per-stage decisions with reasoning) validated by `aidlc-graph.ts validate-grid`. Validation requires the exact compiled stage set and returns the grid's stage/gate/per-unit `summary` plus `nearest_stock`, with composer-authored scopes excluded and missing or extra keys counted as differences. The composer routes matched-vs-custom solely on the final proposal's `nearest_stock[0].diff <= 2`; the mechanical ARS screen distance is advisory. When it adopts a stock grid it revalidates that final grid, replaces the summary/distance, and rebuilds every affected decision-table row before returning. The conductor never re-derives the verdict. It renders the approve/edit/reject gate as three blocks: the validator's summary line (`N stages EXECUTE / M SKIP, G approval gates`), then the composer's stage-decision table verbatim, then its ARS score table verbatim under "Scoring detail (advisory)". An edit to a matched stock grid converts the revised proposal to custom and repeats validation/table rendering, because matched approval writes no scope data. On approve a stock match births directly; a custom grid is authored as scope data (`scopes/aidlc-<name>.md` + a `scope-grid.json` entry, `keywords: []` by default) and the birth continues in the same turn. Task-backed composition copies the original task into `birthDescription` verbatim; report-only and task-less composition derives it from the approved report/plan. The birth passes that value after the literal `--` delimiter as one shell-safe argv value, never through shell double quotes and never as a scope-only command.
 2. **In-flight (workflow running):** the composer re-estimates the entropy components from what completed stages actually resolved and returns `mode: in-flight` with the current scope, the preserved full effective grid, and exact `changes.skip` / `changes.add` arrays for PENDING, ahead-of-cursor stages. It never adopts a nearby stock grid, changes scope/depth, or rewrites completed/in-progress/skipped actions; both stock-distance lists are advisory in this branch. Each flip's rationale names the completed-stage evidence that moved the score, and validation runs `--strict` so a starved flip is caught before the gate. The conductor writes the pending-proposal marker (`aidlc/.aidlc-compose-pending`) before the gate (the Stop hook honours it as a turn-stop signal) and deletes it on resolve; on approve it passes those exact arrays to `aidlc-utility.ts recompose --skip <slugs> --add <slugs>`, which flips the plan suffixes under the audit lock, strict-validates against new starvation, rebuilds the derived fields, and emits `RECOMPOSED`. No scope registry file is written. The marker is bounded: the Stop hook honours it only while it is fresh (younger than 24h by its mtime), and an older orphan (a session that crashed between the write and the resolve) is ignored and best-effort deleted, so a stranded marker cannot silently disable forwarding-loop enforcement; `--doctor` also reports a present marker with its age (fresh = advisory pass, stale = fail). `recompose` refuses under autonomous Construction (it needs a human at the gate) - switch to gated first, or let the swarm finish. Detection is chat-first: the conductor's pre-forward judgment step (the same one that spots new-work) classifies a plain-chat reshape request ("can we skip market research?") and routes it as `next compose "<their words>"` rather than forwarding it verbatim (a verbatim forward would fall through to Branch 10 and run the current stage). When the request names specific stages imperatively, the conductor may skip the composer dispatch and present the gate itself, running `recompose` directly on approve - sound because the verb rejects starved/frozen/behind-cursor/skeleton-gate flips (and any autonomous-Construction call) no matter who calls it; the human gate and the marker discipline are identical on both paths.
 
 ### `/aidlc --status` -- Progress Check
@@ -131,12 +131,14 @@ There is no separate scaffold command (the earlier `init` flag was retired; the 
 
 ### Resume (State File Exists)
 
-When the active intent's `aidlc-state.md` exists and the user invokes `/aidlc`, the engine's `next` detects the existing state, runs the resume/recovery guard, and emits an `ask` directive carrying the resume-options question. The conductor renders it via `AskUserQuestion` and feeds the choice back on `report --user-input`. The conductor does not branch on state-file existence itself; the guard logic below runs in the engine:
+When the active intent's `aidlc-state.md` exists and a new harness session re-enters with bare `/aidlc`, the session-start context tells the conductor to present the standard Resume / Redo / Jump / Start Fresh menu. The conductor feeds that choice to `report --result resumed --user-input`; the engine keeps the per-choice routing deterministic.
 
-1. The engine reads the state file and prepares a status summary.
-2. It checks for `.aidlc-recovery.md` (in the intent's record dir). If it exists, it compares its "Current stage" field with `aidlc-state.md` to detect possible compaction-related state corruption.
-3. It emits the `ask` directive with the resume options; the conductor renders them via `AskUserQuestion`.
-4. On the answer, the conductor recreates stage-level tasks matching the current workflow state.
+1. The session-start hook reads the state file and injects the persisted scope, phase, stage, status, agent, and next action.
+2. It flags `.aidlc-recovery.md` (in the intent's record dir) when present so the conductor can check for compaction-related state corruption.
+3. On bare `/aidlc` re-entry, the conductor presents the four-option menu.
+4. The engine routes the reported choice; Resume re-runs normal `next`, while Redo, Jump, and Start Fresh return the exact follow-up move.
+
+Explicit `/aidlc --resume` is different: the dispatcher calls `next --resume`, which skips the menu and falls through to the same continuation route as bare `next`. A parked workflow still emits the unpark instruction first, no state still errors, and `/aidlc --resume --stage <slug>` takes the explicit jump route.
 
 ---
 
@@ -144,37 +146,37 @@ When the active intent's `aidlc-state.md` exists and the user invokes `/aidlc`, 
 
 ### Session Resume Flow
 
-The branching below is the **engine's** `next` decision logic — the argument, init, and state-file checks all run inside `aidlc-orchestrate next`, which emits one directive (status `print`, scaffold `print`, an `ask` for the resume menu, or a `run-stage` to begin work). The conductor's own flow is just the forwarding loop: call `next`, act on the directive, `report`, repeat.
+Bare session re-entry and explicit resume intentionally diverge. The conductor owns the four-option menu on bare `/aidlc`; explicit `--resume` expresses the choice up front and enters the engine's normal continuation routing.
 
 ```mermaid
 flowchart TD
     START(["/aidlc invoked"])
-    ARG_CHECK{"Arguments\nprovided?"}
-    STATUS_CHECK{"Argument =\n--status?"}
+    MODE{"Invocation"}
     STATE_EXISTS{"Active intent\nexists?"}
     RECOVERY_CHECK{".aidlc-recovery.md\nexists?"}
     CORRUPTION{"State matches\nrecovery file?"}
     WARN["Warn user about\npossible corruption"]
-
     RESUME_MENU["AskUserQuestion:\nResume Options"]
     OPT_RESUME["Resume from\nlast checkpoint"]
     OPT_REDO["Redo\ncurrent stage"]
     OPT_JUMP["Jump to\nspecific stage"]
     OPT_FRESH["Start fresh\n(archive existing)"]
-
-    STATUS_DISPLAY["Display read-only\nstatus summary"]
+    RESUME_STATE{"State exists?"}
+    PARKED{"Workflow parked?"}
+    UNPARK["Print unpark command"]
+    CONTINUE["Normal next routing:\nload-steering / run-stage"]
+    JUMP["Explicit stage jump"]
+    NO_STATE["Error: no workflow state"]
     SCOPE_DETECT{"Known scope\nor freeform text?"}
     KNOWN_SCOPE["Use explicit scope"]
     FREEFORM["Auto-detect scope\nfrom keywords"]
     CONFIRM_SCOPE["Confirm scope\nwith user"]
     BIRTH["Birth the intent:\nmint record dir,\nstate + audit, begin\nfirst stage"]
 
-    START --> ARG_CHECK
-    ARG_CHECK -->|Yes| STATUS_CHECK
-    ARG_CHECK -->|No| STATE_EXISTS
-
-    STATUS_CHECK -->|Yes| STATUS_DISPLAY
-    STATUS_CHECK -->|No| STATE_EXISTS
+    START --> MODE
+    MODE -->|"bare /aidlc"| STATE_EXISTS
+    MODE -->|"/aidlc --resume"| RESUME_STATE
+    MODE -->|"/aidlc --resume --stage"| JUMP
 
     STATE_EXISTS -->|Yes| RECOVERY_CHECK
     STATE_EXISTS -->|No| SCOPE_DETECT
@@ -189,6 +191,11 @@ flowchart TD
     RESUME_MENU --> OPT_JUMP
     RESUME_MENU --> OPT_FRESH
 
+    RESUME_STATE -->|No| NO_STATE
+    RESUME_STATE -->|Yes| PARKED
+    PARKED -->|Yes| UNPARK --> CONTINUE
+    PARKED -->|No| CONTINUE
+
     OPT_FRESH -->|"archive + confirm"| BIRTH
 
     SCOPE_DETECT -->|"Known scope"| KNOWN_SCOPE --> CONFIRM_SCOPE
@@ -197,8 +204,10 @@ flowchart TD
 
     style START fill:#e1bee7,stroke:#7b1fa2
     style RESUME_MENU fill:#bbdefb,stroke:#1565c0
+    style CONTINUE fill:#c8e6c9,stroke:#388e3c
     style BIRTH fill:#c8e6c9,stroke:#388e3c
     style WARN fill:#ffcdd2,stroke:#c62828
+    style NO_STATE fill:#ffcdd2,stroke:#c62828
 ```
 
 ### State File Schema
@@ -235,7 +244,7 @@ On session resume, the orchestrator compares the breadcrumb's "Current stage" wi
 
 ### Resume Options
 
-When a state file is detected, the orchestrator presents four options. The conductor reports the human's answer via `report --result resumed --user-input "<answer>"`; the engine matches the choice and returns a per-choice directive naming the exact move (an unrecognized answer errors with the accepted choices):
+On bare `/aidlc` session re-entry, the conductor presents four options. The conductor reports the human's answer via `report --result resumed --user-input "<answer>"`; the engine matches the choice and returns a per-choice directive naming the exact move (an unrecognized answer errors with the accepted choices). Explicit `/aidlc --resume` skips this menu and performs option 1 directly:
 
 **1. Resume from last checkpoint** -- Continues from the in-progress stage: re-run `next`, which reads `aidlc-state.md` to determine completed/in-progress/not-started stages.
 
@@ -407,7 +416,9 @@ The 6-step process:
    the prompt.
 4. **Apply the topology.** Use blind spokes for subagent supports, ordered links
    for pipeline, and blind support contributions plus the bounded objection
-   round for mob.
+   round for mob. After each pipeline return, mint the current-attempt
+   `PIPELINE_LINK_COMPLETED` receipt before dispatching the next link; resume
+   from `directive.pipeline.completed`, and add `--single` on an isolated run.
 5. **Collect durable output.** The lead owns `produces[]`; dispatched
    subagent/mob supports each write an identity-marked contribution file.
 6. **Complete through the engine.** Verify artifacts/evidence and present the
@@ -418,7 +429,7 @@ The 6-step process:
 Some stages involve multiple agents: a lead agent and one or more support agents. The coordination pattern follows `directive.mode` — the stage's communication topology — and is always orchestrator-mediated:
 
 1. Execute the lead agent's work first, producing primary artifacts.
-2. Bring in each support agent per the topology. On an `inline` stage the orchestrator reads every lead/support entry in `directive.inline_context_paths` and adopts those perspectives rather than dispatching them. On `mob`, it reads the lead-only roster and performs the lead work inline, while each support is a real dispatch. On `subagent` (hub-and-spoke) and `pipeline` (chain), the lead and supports are dispatched: mutually-blind spokes on subagent, ordered enrichment hops on pipeline, and parallel blind contributions plus a bounded objection round on mob (`stage-protocol-ensemble.md`).
+2. Bring in each support agent per the topology. On an `inline` stage the orchestrator reads every lead/support entry in `directive.inline_context_paths` and adopts those perspectives rather than dispatching them. On `mob`, it reads the lead-only roster and performs the lead work inline, while each support is a real dispatch. On `subagent` (hub-and-spoke) and `pipeline` (chain), the lead and supports are dispatched: mutually-blind spokes on subagent, ordered enrichment hops on pipeline, and parallel blind contributions plus a bounded objection round on mob (`stage-protocol-ensemble.md`). Every returned pipeline hop is recorded with `aidlc-log.ts link`; multi-repo chains include `--repo`, isolated runs include `--single`, and repo-scoped reuse rows suppress dispatch for reused stores.
 3. Synthesize all agent outputs into the final stage artifacts — dispatched support agents write contribution files (Contribution + Positions, `stage-protocol-ensemble.md` §11) that the lead integrates; the lead alone edits the `produces[]` artifacts (pipeline links advance them directly); unresolved mob judgment calls surface to the human mid-stage, and maintained dissent is quoted verbatim at the gate.
 4. Agents do NOT invoke each other -- only the orchestrator delegates. Enforced by `disallowedTools: Task` on all agent files.
 
@@ -441,6 +452,8 @@ Reverse Engineering checks each brownfield repository's shared codekb before
 scanning. A verified-current store may be reused by human choice; stale,
 unverified, legacy, or intent-mismatched coverage is rescanned. Multi-repo
 intents resolve every repository decision before the stage reports or advances.
+Each scanned repo has its own two-link receipt chain; artifacts without both
+current-attempt receipts cannot enter or complete approval.
 
 ### Construction Execution <a id="construction-execution"></a>
 
@@ -546,7 +559,7 @@ The orchestration engine owns every transition above. The conductor reports outc
 
 4. **Record the user's response**:
    - **Approve** -> `bun .claude/tools/aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"`. Emits any missing gate row, then `GATE_APPROVED` + `STAGE_COMPLETED`, and advances. Refuses with a missing-produced-artifact error if the stage's `produces` outputs are absent.
-   - **Request Changes** → `bun .claude/tools/aidlc-orchestrate.ts report --stage <slug> --result rejected --user-input "<text>"`. The engine emits `GATE_REJECTED` + `STAGE_REVISING`, marks `[?]` → `[R]`, and increments Revision Count.
+   - **Request Changes** → `bun .claude/tools/aidlc-orchestrate.ts report --stage <slug> --result rejected --user-input "Request Changes" --reason "<feedback>"`. The engine emits `GATE_REJECTED` + `STAGE_REVISING`, marks `[?]` → `[R]`, and increments Revision Count.
    - After re-running work for a `[R]` stage, call `bun .claude/tools/aidlc-orchestrate.ts report --stage <slug> --result revised` to re-enter the gate (emits a fresh `STAGE_AWAITING_APPROVAL`, marks `[R]` → `[?]`).
 
 5. **Advance to the next stage**: the approval report in step 4 also advances. The engine derives the next in-scope stage from the state file's EXECUTE/SKIP suffix (set by `init`) plus the compiled scope grid (`scope-grid.json`). It marks `[x]` on completed, `[-]` on next, updates Current Stage / Lifecycle Phase / Active Agent / Next Stage / Last Completed Stage / Last Updated / Completed count, and emits `STAGE_STARTED` for the next stage. At a phase boundary it additionally emits `PHASE_COMPLETED` + `PHASE_VERIFIED` + `PHASE_STARTED` atomically.
@@ -758,7 +771,7 @@ The framework hooks are registered project-wide in `settings.json` (the v0.6.0 h
 
 - **Matcher**: (empty -- matches all subagent completions)
 - **Trigger**: When any subagent finishes execution.
-- **Behavior**: Emits a canonical `SUBAGENT_COMPLETED` audit event via `appendAuditEntry` (replacing the earlier free-form `## Subagent Completed` markdown write). Fields: agent type, agent ID, and truncated message (first 200 characters). Uses `mkdir`-based locking via `lib.ts`.
+- **Behavior**: Exits silently unless the active workflow state has `Status: Running`. Otherwise emits a canonical `SUBAGENT_COMPLETED` audit event via `appendAuditEntry` (replacing the earlier free-form `## Subagent Completed` markdown write). Fields: agent type, agent ID, and truncated message (first 200 characters). Uses `mkdir`-based locking via `lib.ts`.
 
 These hooks are TypeScript and run via `bun`. They do not require `jq`.
 
@@ -836,7 +849,19 @@ Options:
 
 ### NO EMERGENT BEHAVIOR RULE
 
-Construction and Operation stages MUST use standardized 2-option completion messages. The orchestrator must NOT create 3-option menus or other emergent navigation patterns for these phases. Only Ideation and Inception stages may conditionally include a 3rd option (to add a previously skipped stage). The sole exception is the revision loop escape hatch (3+ revision cycles).
+Construction and Operation stages MUST use standardized 2-option completion messages. The orchestrator must NOT create 3-option menus or other emergent navigation patterns for these phases. Only Ideation and Inception stages may conditionally include a 3rd option (to add a previously skipped stage). Two sanctioned exceptions exist: the revision loop escape hatch (3+ revision cycles) and the Build-and-Test failure loop-back in the construction protocol module (`aidlc-common/protocols/stage-protocol-construction.md`) with its impact-estimated halt-and-ask question.
+
+The loop-back replay is settlement-aware. Artifact-only Code Generation
+workflows may return directly to the all-covered gate; sticky receipt-mode
+workflows re-emit per-Unit directives and re-mint `unit start` / `unit
+complete`. Both routes apply the planned fix and deterministic Artifact Re-use
+decisions before the gate, then invoke the declared reviewer for every
+applicable Unit to record fresh current-attempt `REVIEW_COMPLETED` receipts:
+the jump invalidates every prior review and approval refuses without
+replacements. Unit-major uses this serial per-Unit route and never invokes the
+autonomous swarm. The replay repairs the already-approved plan, so its Plan
+Approval answer remains intact; a gated "Retry with fix" is the re-approval of
+the revised approach.
 
 ---
 

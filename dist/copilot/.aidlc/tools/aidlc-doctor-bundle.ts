@@ -55,7 +55,6 @@ import {
   activeSpace,
   auditBlockField,
   auditShardDir,
-  docsRoot,
   harnessDir,
   hooksHealthDir,
   isoTimestamp,
@@ -1482,8 +1481,8 @@ function readMarkers(projectDir: string): NormalizedEvidence["markers"] {
     }
   }
   const stopDir = stopHookDir(projectDir);
-  const turnCounterPath = join(docsRoot(projectDir), ".aidlc-turn-counter");
-  const latchPath = join(docsRoot(projectDir), ".aidlc-readonly-latch");
+  const turnCounterPath = join(projectDir, "aidlc", ".aidlc-turn-counter");
+  const latchPath = join(projectDir, "aidlc", ".aidlc-readonly-latch");
   return {
     planExists,
     planParseable,

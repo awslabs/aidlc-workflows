@@ -40,9 +40,9 @@
 //                                   :88-93 emit failure non-fatal
 //   hooks/aidlc-statusline.ts     :193 TTY -> "" stdin; :195-199 malformed JSON
 //                                   swallowed; :208-211 no state -> "[AIDLC] ready"
-//   hooks/aidlc-log-subagent.ts   :28 TTY exit0; :34-37 bad-JSON exit0;
-//                                   :40-42 agent_* ?? defaults; :45 no-audit exit0;
-//                                   :53-58 emit failure -> recordHookDrop + exit0
+//   hooks/aidlc-log-subagent.ts   : no-state exit0 before heartbeat; TTY exit0;
+//                                   bad-JSON exit0; agent_* ?? defaults; emit
+//                                   failure -> recordHookDrop + exit0
 //   hooks/aidlc-run-sensors.ts    :17 "always exit 0" contract; :53 TTY exit0;
 //                                   :61-67 bad-JSON exit0; :74 empty path exit0;
 //                                   :90 no-audit exit0
@@ -116,12 +116,13 @@ const HOOK_RUNTIME = join(AIDLC_SRC, "hooks", "aidlc-rebuild-stage-graph.ts");
 
 // P9 per-intent layout: the audit-logger now gates on the file_path being UNDER
 // the active intent's record root (docsRoot()), not on a bare "aidlc-docs/"
-// substring; and the audit-emitting hooks self-gate on their resolved shard
-// existing. So injection/space/unicode artifacts are written UNDER the seeded
-// record (keeping the adversarial token as an INNER path segment), and the
-// audit-emitting cases pin a clone-id + create the resolved shard. The
-// adversarial CONTRACT (always exit 0, token never executed) is unchanged — only
-// the path the artifact lives under moved from aidlc-docs/ to the record dir.
+// substring; and the audit-emitting hooks self-gate on workflow state and/or
+// their resolved shard existing. So injection/space/unicode artifacts are
+// written UNDER the seeded record (keeping the adversarial token as an INNER
+// path segment), and the audit-emitting cases pin a clone-id + create the
+// resolved shard. The adversarial CONTRACT (always exit 0, token never executed)
+// is unchanged — only the path the artifact lives under moved from aidlc-docs/
+// to the record dir.
 const PINNED_CLONE_ID = "testcloneid13";
 function pinnedShardName(): string {
   const host =
@@ -154,8 +155,8 @@ function seedShell(proj: string, space = DEFAULT_SPACE): void {
   );
 }
 
-/** Pin the clone-id + create the resolved empty audit shard so the audit-emitting
- *  hooks' "shard exists" gate passes. Returns the audit DIR. */
+/** Pin the clone-id + create the resolved empty audit shard for hooks that require
+ *  it and for deterministic log-subagent reads. Returns the audit DIR. */
 function seedAuditShard(proj: string): string {
   writeFileSync(join(proj, "aidlc", ".aidlc-clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
   const auditDir = seededAuditDir(proj);
@@ -305,7 +306,10 @@ describe("t13 hook input robustness (mechanism cli — spawned hooks + adversari
   });
 
   test("log-subagent: survives shell injection (exit 0, token verbatim) [.sh test 5]", () => {
-    writeState(proj, "# AI-DLC State Tracking\n## Current Status\n## Stage Progress\n");
+    writeState(
+      proj,
+      "# AI-DLC State Tracking\n## Current Status\n- **Status**: Running\n## Stage Progress\n",
+    );
     seedAuditShard(proj);
     const r = fireStdin(
       HOOK_SUBAGENT,
@@ -373,7 +377,10 @@ describe("t13 hook input robustness (mechanism cli — spawned hooks + adversari
 
   test("log-subagent: handles a project dir with spaces (exit 0) [.sh test 10]", () => {
     const spaced = makeSpacedProject();
-    writeState(spaced, "# AI-DLC State Tracking\n## Current Status\n## Stage Progress\n");
+    writeState(
+      spaced,
+      "# AI-DLC State Tracking\n## Current Status\n- **Status**: Running\n## Stage Progress\n",
+    );
     seedAuditShard(spaced);
     expect(
       fireStdin(
@@ -402,7 +409,10 @@ describe("t13 hook input robustness (mechanism cli — spawned hooks + adversari
   });
 
   test("log-subagent: handles empty JSON {} (exit 0) [.sh test 12]", () => {
-    writeState(proj, "# AI-DLC State Tracking\n## Current Status\n## Stage Progress\n");
+    writeState(
+      proj,
+      "# AI-DLC State Tracking\n## Current Status\n- **Status**: Running\n## Stage Progress\n",
+    );
     seedAuditShard(proj);
     expect(fireStdin(HOOK_SUBAGENT, "{}", proj).exitCode).toBe(0);
     // {} is a valid ClaudeCodeHookInput shape -> agent fields default; the audit

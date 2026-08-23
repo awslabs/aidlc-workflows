@@ -116,16 +116,10 @@ function walkStage(proj: string, slug: string): void {
   const env = {
     ...process.env,
     AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+    AIDLC_SKIP_SOURCE_FRESHNESS: "1",
   };
-  const gs = spawnSync(BUN, [STATE, "gate-start", slug, "--project-dir", proj], {
-    encoding: "utf-8",
-    env,
-  });
-  if ((gs.status ?? -1) !== 0) {
-    throw new Error(`gate-start ${slug} failed (status ${gs.status}): ${gs.stdout ?? ""}${gs.stderr ?? ""}`);
-  }
-  // Reviewer-bearing stages need a terminal REVIEW_COMPLETED before approve
-  // commits (§12a gate precondition), recorded by the stage's DECLARED reviewer.
+  // Reviewer-bearing stages need a terminal REVIEW_COMPLETED before gate-start
+  // (§12a), recorded by the stage's DECLARED reviewer.
   // Record one for the two reviewer-bearing stages this walk crosses; a
   // no-reviewer stage ignores the extra row. This walk drives transitions to
   // accumulate the audit trail, not to test the reviewer gate.
@@ -136,6 +130,13 @@ function walkStage(proj: string, slug: string): void {
   if (reviewerFor[slug]) {
     spawnSync(BUN, [LOG, "review", "--stage", slug, "--reviewer", reviewerFor[slug], "--iteration", "1", "--project-dir", proj], { encoding: "utf-8" });
     spawnSync(BUN, [LOG, "review", "--stage", slug, "--reviewer", reviewerFor[slug], "--iteration", "1", "--verdict", "READY", "--project-dir", proj], { encoding: "utf-8" });
+  }
+  const gs = spawnSync(BUN, [STATE, "gate-start", slug, "--project-dir", proj], {
+    encoding: "utf-8",
+    env,
+  });
+  if ((gs.status ?? -1) !== 0) {
+    throw new Error(`gate-start ${slug} failed (status ${gs.status}): ${gs.stdout ?? ""}${gs.stderr ?? ""}`);
   }
   const ap = spawnSync(BUN, [STATE, "approve", slug, "--user-input", "approve", "--project-dir", proj], {
     encoding: "utf-8",
