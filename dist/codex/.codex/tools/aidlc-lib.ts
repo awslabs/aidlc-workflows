@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { accessSync, appendFileSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, appendFileSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -5509,10 +5509,87 @@ export function reviewArtifactFingerprint(
 // over precise. Unit-major construction may author a later stage's per-unit
 // artifacts before that stage's STAGE_STARTED row exists, so its floor
 // ignores STAGE_STARTED; stage-major and non-per-unit flows floor on it.
-function hasModernSourceBindingEvidence(
-  rows: ReadonlyArray<{ event: string; block: string }>,
+function hasDurableSourceBindingEvidence(
+  projectDir: string,
+  intent?: string,
+  space?: string,
 ): boolean {
-  return rows.some((row) => {
+  const record = recordDir(projectDir, intent, space);
+  if (record !== null) {
+    const snapshots = join(record, ".aidlc-source-review");
+    const hasSnapshot = (dir: string): boolean => {
+      let entries: Dirent[];
+      try {
+        entries = readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return false;
+      }
+      return entries.some((entry) =>
+        entry.isFile() && entry.name.endsWith(".tsv")
+          ? true
+          : entry.isDirectory() && hasSnapshot(join(dir, entry.name))
+      );
+    };
+    if (hasSnapshot(snapshots)) return true;
+    const construction = join(record, "construction");
+    let units: string[] = [];
+    try {
+      units = readdirSync(construction);
+    } catch {
+      // No construction artifacts.
+    }
+    if (
+      units.some((unit) =>
+        existsSync(
+          join(
+            construction,
+            unit,
+            "code-generation",
+            "source-manifest.json",
+          ),
+        )
+      )
+    ) {
+      return true;
+    }
+  }
+
+  const expectedIntent = relativeRecordDir(projectDir, intent, space);
+  if (expectedIntent === null) return false;
+  const candidates = [
+    join(projectDir, ".aidlc", "worktree-meta.json"),
+  ];
+  const worktrees = join(projectDir, ".aidlc", "worktrees");
+  try {
+    for (const entry of readdirSync(worktrees, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        candidates.push(
+          join(worktrees, entry.name, ".aidlc", "worktree-meta.json"),
+        );
+      }
+    }
+  } catch {
+    // No worktree metadata.
+  }
+  return candidates.some((path) => {
+    try {
+      const parsed = JSON.parse(readFileSync(path, "utf-8")) as {
+        intentRecord?: unknown;
+      };
+      return parsed.intentRecord === expectedIntent;
+    } catch {
+      return false;
+    }
+  });
+}
+
+function hasModernSourceBindingEvidence(
+  projectDir: string,
+  rows: ReadonlyArray<{ event: string; block: string }>,
+  intent?: string,
+  space?: string,
+): boolean {
+  if (rows.some((row) => {
     if (auditBlockField(row.block, "Source Baseline") !== null) return true;
     if (
       row.event === "REVIEW_COMPLETED" &&
@@ -5537,7 +5614,8 @@ function hasModernSourceBindingEvidence(
       return true;
     }
     return row.event === "SWARM_SOURCE_MERGED";
-  });
+  })) return true;
+  return hasDurableSourceBindingEvidence(projectDir, intent, space);
 }
 
 function sourceBaselineBoundaryValue(
@@ -5632,7 +5710,7 @@ export function freshReviewReceipts(
   ]);
   const allEvents = readAuditShardEvents(projectDir);
   const modernSourceBindingEvidence =
-    hasModernSourceBindingEvidence(allEvents);
+    hasModernSourceBindingEvidence(projectDir, allEvents);
   const events = allEvents
     .filter((row) => RELEVANT.has(row.event))
     .sort((a, b) => {
@@ -5643,7 +5721,12 @@ export function freshReviewReceipts(
       if (a.shard === b.shard) return a.pos - b.pos;
       return a.shardIndex - b.shardIndex;
     });
-  if (events.length === 0) return empty;
+  if (events.length === 0) {
+    if (stage.workspace_requires === true && modernSourceBindingEvidence) {
+      empty.sourceBaseline = { state: "invalid" };
+    }
+    return empty;
+  }
   const eventIsCrossShardTied = (index: number): boolean => {
     return auditEventIsCrossShardTied(events, index);
   };
@@ -7131,6 +7214,142 @@ function ignoredSourceClaimReason(
   }
 }
 
+function manifestClaimSymlinkPaths(
+  sourceRepoDir: string,
+  literalPath: string,
+  prefix: boolean,
+): string[] | null {
+  const root = join(sourceRepoDir, literalPath);
+  try {
+    const rootStat = lstatSync(root);
+    if (!prefix) return rootStat.isSymbolicLink() ? [literalPath] : [];
+    if (!rootStat.isDirectory()) return [];
+  } catch {
+    return [];
+  }
+  const links: string[] = [];
+  const walk = (dir: string): boolean => {
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return false;
+    }
+    for (const entry of entries) {
+      const path = join(dir, entry.name);
+      let stat: ReturnType<typeof lstatSync>;
+      try {
+        stat = lstatSync(path);
+      } catch {
+        return false;
+      }
+      if (stat.isSymbolicLink()) {
+        links.push(relative(sourceRepoDir, path).replaceAll("\\", "/"));
+      } else if (stat.isDirectory() && !walk(path)) {
+        return false;
+      }
+    }
+    return true;
+  };
+  return walk(root) ? links.sort() : null;
+}
+
+function symlinkClaimTargetReason(
+  sourceRepoDir: string,
+  claimPath: string,
+  prefix: boolean,
+  carriesWorkspaceShell: boolean,
+): string | null {
+  const links = manifestClaimSymlinkPaths(
+    sourceRepoDir,
+    claimPath.replace(/\/+$/, ""),
+    prefix,
+  );
+  if (links === null) {
+    return `could not enumerate symlinks below ${JSON.stringify(claimPath)}`;
+  }
+  let repoRoot: string;
+  try {
+    repoRoot = realpathSync(sourceRepoDir);
+  } catch (error) {
+    return `cannot resolve repository root (${errorMessage(error)})`;
+  }
+  const remedy =
+    "Source claims bind link text, not target bytes; claim the target path instead, or restructure the link.";
+  for (const link of links) {
+    let current = join(sourceRepoDir, link);
+    const visited = new Set<string>();
+    let targetDisplay = "";
+    for (let hop = 0; hop < 40; hop++) {
+      const key = resolvePath(current);
+      if (visited.has(key)) {
+        return `${JSON.stringify(claimPath)} contains symlink ${JSON.stringify(link)} whose target contains a cycle. ${remedy}`;
+      }
+      visited.add(key);
+      let target: string;
+      try {
+        target = readlinkSync(current);
+      } catch (error) {
+        return `${JSON.stringify(claimPath)} contains symlink ${JSON.stringify(link)} whose target cannot be read (${errorMessage(error)}). ${remedy}`;
+      }
+      const next = isAbsolute(target)
+        ? resolvePath(target)
+        : resolvePath(dirname(current), target);
+      targetDisplay = relative(repoRoot, next).replaceAll("\\", "/") || ".";
+      const lexicalRelative = relative(repoRoot, next);
+      if (
+        lexicalRelative === ".." ||
+        lexicalRelative.startsWith(`..${sep}`) ||
+        isAbsolute(lexicalRelative)
+      ) {
+        return `${JSON.stringify(claimPath)} contains symlink ${JSON.stringify(link)} whose fully resolved target ${JSON.stringify(next)} is outside the repository. ${remedy}`;
+      }
+      let stat: ReturnType<typeof lstatSync>;
+      try {
+        stat = lstatSync(next);
+      } catch {
+        return `${JSON.stringify(claimPath)} contains symlink ${JSON.stringify(link)} whose fully resolved target ${JSON.stringify(targetDisplay)} does not exist. ${remedy}`;
+      }
+      if (stat.isSymbolicLink()) {
+        current = next;
+        continue;
+      }
+      let resolved: string;
+      try {
+        resolved = realpathSync(next);
+      } catch {
+        return `${JSON.stringify(claimPath)} contains symlink ${JSON.stringify(link)} whose fully resolved target ${JSON.stringify(targetDisplay)} does not exist. ${remedy}`;
+      }
+      const resolvedRelative = relative(repoRoot, resolved);
+      if (
+        resolvedRelative === ".." ||
+        resolvedRelative.startsWith(`..${sep}`) ||
+        isAbsolute(resolvedRelative)
+      ) {
+        return `${JSON.stringify(claimPath)} contains symlink ${JSON.stringify(link)} whose fully resolved target ${JSON.stringify(resolved)} is outside the repository. ${remedy}`;
+      }
+      const repoRelative = resolvedRelative.replaceAll("\\", "/");
+      if (sourcePathIsExcluded(repoRelative, carriesWorkspaceShell)) {
+        return `${JSON.stringify(claimPath)} contains symlink ${JSON.stringify(link)} whose fully resolved target ${JSON.stringify(repoRelative)} is excluded from source evidence. ${remedy}`;
+      }
+      const ignored = ignoredSourceClaimReason(
+        sourceRepoDir,
+        repoRelative,
+        false,
+      );
+      if (ignored !== null) {
+        return `${JSON.stringify(claimPath)} contains symlink ${JSON.stringify(link)} whose fully resolved target ${JSON.stringify(repoRelative)} is ignored by Git. ${remedy}`;
+      }
+      targetDisplay = "";
+      break;
+    }
+    if (targetDisplay !== "") {
+      return `${JSON.stringify(claimPath)} contains symlink ${JSON.stringify(link)} whose target exceeds 40 symlink hops. ${remedy}`;
+    }
+  }
+  return null;
+}
+
 /** Strictly read and validate a unit's engine-required source-manifest.json. */
 export function readUnitSourceManifest(
   projectDir: string,
@@ -7222,6 +7441,15 @@ export function readUnitSourceManifest(
     );
     if (ignoredReason !== null) {
       return { ok: false, reason: `writes[${index}].path: ${ignoredReason}` };
+    }
+    const symlinkReason = symlinkClaimTargetReason(
+      sourceRepoDir,
+      normalized.path,
+      normalized.prefix,
+      carriesWorkspaceShell,
+    );
+    if (symlinkReason !== null) {
+      return { ok: false, reason: `writes[${index}].path: ${symlinkReason}` };
     }
     const key = sourcePathKey(canonicalRepo ?? "", normalized.path);
     if (seen.has(key)) return { ok: false, reason: `writes[${index}] duplicates a normalized source claim` };
@@ -7413,7 +7641,7 @@ export function currentStageSourceBaseline(
 ): SourceBaselineResult {
   const allEvents = readAuditShardEvents(projectDir, intent, space);
   const modernSourceBindingEvidence =
-    hasModernSourceBindingEvidence(allEvents);
+    hasModernSourceBindingEvidence(projectDir, allEvents, intent, space);
   const events = allEvents
     .filter((row) =>
       row.event === "WORKFLOW_STARTED" ||

@@ -19,7 +19,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -331,6 +331,82 @@ describe("t305 strict source-manifest validation", () => {
     expect(
       workspaceSourceListing(project)?.has("\0force-dir/key.secret"),
     ).toBe(false);
+  });
+
+  test("validates fully resolved symlink targets for exact and directory claims", () => {
+    const { project, record } = fixture();
+    writeFileSync(join(project, ".gitignore"), "private/*.ts\n");
+    mkdirSync(join(project, "private"), { recursive: true });
+    writeFileSync(join(project, "private", "secret.ts"), "secret\n");
+    symlinkSync("private/secret.ts", join(project, "ignored-link.ts"));
+    manifest(record, "alpha", {
+      stage: "code-generation",
+      unit: "alpha",
+      version: 1,
+      writes: [{ path: "ignored-link.ts" }],
+    });
+    const exactIgnored = readUnitSourceManifest(project, "code-generation", "alpha");
+    expect(exactIgnored.ok).toBe(false);
+    if (!exactIgnored.ok) {
+      expect(exactIgnored.reason).toContain("ignored-link.ts");
+      expect(exactIgnored.reason).toContain("private/secret.ts");
+      expect(exactIgnored.reason).toContain("ignored by Git");
+    }
+
+    mkdirSync(join(project, "src"), { recursive: true });
+    symlinkSync("../private/secret.ts", join(project, "src", "ignored-link.ts"));
+    manifest(record, "alpha", {
+      stage: "code-generation",
+      unit: "alpha",
+      version: 1,
+      writes: [{ path: "src/" }],
+    });
+    const directoryIgnored = readUnitSourceManifest(project, "code-generation", "alpha");
+    expect(directoryIgnored.ok).toBe(false);
+    if (!directoryIgnored.ok) {
+      expect(directoryIgnored.reason).toContain("src/ignored-link.ts");
+      expect(directoryIgnored.reason).toContain("ignored by Git");
+    }
+
+    symlinkSync("../outside.ts", join(project, "outside-link.ts"));
+    manifest(record, "alpha", {
+      stage: "code-generation",
+      unit: "alpha",
+      version: 1,
+      writes: [{ path: "outside-link.ts" }],
+    });
+    expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(false);
+
+    symlinkSync("missing.ts", join(project, "dangling-link.ts"));
+    manifest(record, "alpha", {
+      stage: "code-generation",
+      unit: "alpha",
+      version: 1,
+      writes: [{ path: "dangling-link.ts" }],
+    });
+    expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(false);
+
+    symlinkSync("cycle-b", join(project, "cycle-a"));
+    symlinkSync("cycle-a", join(project, "cycle-b"));
+    manifest(record, "alpha", {
+      stage: "code-generation",
+      unit: "alpha",
+      version: 1,
+      writes: [{ path: "cycle-a" }],
+    });
+    expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(false);
+
+    writeFileSync(join(project, "tracked-target.ts"), "tracked\n");
+    symlinkSync("tracked-target.ts", join(project, "tracked-link.ts"));
+    git(project, ["add", "--", ".gitignore", "tracked-target.ts", "tracked-link.ts"]);
+    git(project, ["commit", "-qm", "track bindable symlink target"]);
+    manifest(record, "alpha", {
+      stage: "code-generation",
+      unit: "alpha",
+      version: 1,
+      writes: [{ path: "tracked-link.ts" }],
+    });
+    expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(true);
   });
 });
 
@@ -921,6 +997,34 @@ describe("t305 real receipt and guard flows", () => {
     expect(refused.out).toContain("Invalidated receipts: alpha");
   }, 30000);
 
+  test("retargeting a reviewed in-repo symlink invalidates its owning receipt", () => {
+    const { project, record } = runtimeFixture();
+    writeFileSync(join(project, "target-a.ts"), "a\n");
+    writeFileSync(join(project, "target-b.ts"), "b\n");
+    symlinkSync("target-a.ts", join(project, "tracked-link.ts"));
+    git(project, ["add", "--", "target-a.ts", "target-b.ts", "tracked-link.ts"]);
+    git(project, ["commit", "-qm", "commit tracked symlink and targets"]);
+    const alpha = review(
+      project,
+      record,
+      "alpha",
+      [{ path: "tracked-link.ts" }, { path: "target-a.ts" }],
+    );
+    expect(alpha.verdict.rc, alpha.verdict.out).toBe(0);
+    rmSync(join(project, "tracked-link.ts"));
+    symlinkSync("target-b.ts", join(project, "tracked-link.ts"));
+    const beta = review(
+      project,
+      record,
+      "beta",
+      [{ path: "target-b.ts" }],
+    );
+    expect(beta.verdict.rc, beta.verdict.out).toBe(0);
+    const refused = approve(project);
+    expect(refused.rc).toBe(1);
+    expect(refused.out).toContain("Invalidated receipts: alpha");
+  }, 30000);
+
   test("4 newest claimant shields overlap, but a stale newer claimant invalidates both", () => {
     const pass = runtimeFixture(); writeFileSync(join(pass.project, "shared.ts"), "export const s=1\n");
     review(pass.project, pass.record, "alpha", [{ path: "shared.ts" }]); writeFileSync(join(pass.project, "shared.ts"), "export const s=2\n"); review(pass.project, pass.record, "beta", [{ path: "shared.ts" }]); expect(approve(pass.project).rc).toBe(0);
@@ -1027,6 +1131,22 @@ describe("t305 real receipt and guard flows", () => {
     stripAuditFields(legacy.project, "WORKFLOW_STARTED", ["Source Baseline"]);
     stripAuditFields(legacy.project, "STAGE_STARTED", ["Source Baseline"]);
     stripUnitBindings(legacy.project);
+    rmSync(
+      join(legacy.record, ".aidlc-source-review"),
+      { recursive: true, force: true },
+    );
+    for (const unit of ["alpha", "beta"]) {
+      rmSync(
+        join(
+          legacy.record,
+          "construction",
+          unit,
+          "code-generation",
+          "source-manifest.json",
+        ),
+        { force: true },
+      );
+    }
     const legacyState = readFileSync(
       join(legacy.record, "aidlc-state.md"),
       "utf-8",
@@ -1048,6 +1168,105 @@ describe("t305 real receipt and guard flows", () => {
       }).sourceBaseline.state,
     ).toBe("legacy");
     expect(approve(legacy.project).rc).toBe(0);
+  }, 30000);
+
+  test("durable source artifacts preserve modernity after whole audit-row deletion and stay intent-scoped", () => {
+    const modern = runtimeFixture();
+    review(modern.project, modern.record, "alpha", [{ path: "app.ts" }]);
+    const modernAudit = join(modern.record, "audit");
+    for (const file of readdirSync(modernAudit)) {
+      writeFileSync(
+        join(modernAudit, file),
+        "# AI-DLC Audit Log\n",
+      );
+    }
+    expect(
+      currentStageSourceBaseline(
+        modern.project,
+        "code-generation",
+        false,
+      ).state,
+    ).toBe("invalid");
+
+    const isolated = fixture();
+    const other = join(
+      isolated.project,
+      "aidlc",
+      "spaces",
+      "default",
+      "intents",
+      "other-intent",
+    );
+    mkdirSync(
+      join(other, ".aidlc-source-review", "code-generation"),
+      { recursive: true },
+    );
+    writeFileSync(
+      join(
+        other,
+        ".aidlc-source-review",
+        "code-generation",
+        "baseline-deadbeef.tsv",
+      ),
+      "other\n",
+    );
+    mkdirSync(
+      join(other, "construction", "other", "code-generation"),
+      { recursive: true },
+    );
+    writeFileSync(
+      join(
+        other,
+        "construction",
+        "other",
+        "code-generation",
+        "source-manifest.json",
+      ),
+      "{}\n",
+    );
+    const otherWorktree = join(
+      isolated.project,
+      ".aidlc",
+      "worktrees",
+      "bolt-other",
+      ".aidlc",
+    );
+    mkdirSync(otherWorktree, { recursive: true });
+    writeFileSync(
+      join(otherWorktree, "worktree-meta.json"),
+      `${JSON.stringify({
+        version: 1,
+        boltSlug: "other",
+        baseCommit: "a".repeat(40),
+        baseSourceListing: `sha256:${"b".repeat(64)}`,
+        intentRecord:
+          "aidlc/spaces/default/intents/other-intent",
+      })}\n`,
+    );
+    expect(
+      currentStageSourceBaseline(
+        isolated.project,
+        "code-generation",
+        false,
+        "fixture-intent",
+      ).state,
+    ).toBe("legacy");
+    const matchingMeta = join(otherWorktree, "worktree-meta.json");
+    writeFileSync(
+      matchingMeta,
+      readFileSync(matchingMeta, "utf-8").replace(
+        "aidlc/spaces/default/intents/other-intent",
+        "aidlc/spaces/default/intents/fixture-intent",
+      ),
+    );
+    expect(
+      currentStageSourceBaseline(
+        isolated.project,
+        "code-generation",
+        false,
+        "fixture-intent",
+      ).state,
+    ).toBe("invalid");
   }, 30000);
 
   test("field-free cross-shard baseline ties stay legacy while bound ties refuse", () => {
@@ -1578,6 +1797,7 @@ describe("t305 healthy settled-swarm source completion", () => {
     );
     const project = swarmFixture((root) => {
       writeFileSync(join(root, "shared.ts"), `${baseLines.join("\n")}\n`);
+      writeFileSync(join(root, ".gitattributes"), "shared.ts merge=union\n");
     });
     const units = ["alpha", "beta"];
     seedBoltDag(
@@ -1680,6 +1900,81 @@ describe("t305 healthy settled-swarm source completion", () => {
     expect(readAllAuditShards(project)).toContain(
       "**Event**: STAGE_COMPLETED",
     );
+  }, 120000);
+
+  test("configured merge drivers are refused before main mutation", () => {
+    const project = swarmFixture((root) => {
+      writeFileSync(join(root, "driver-target.ts"), "export const base = true;\n");
+      writeFileSync(
+        join(root, ".gitattributes"),
+        "driver-target.ts merge=evil\n",
+      );
+    });
+    const driverDir = mkdtempSync(join(tmpdir(), "aidlc-merge-driver-"));
+    dirs.push(driverDir);
+    const driver = join(driverDir, "evil-merge.sh");
+    const marker = join(driverDir, "evil-driver-ran");
+    writeFileSync(
+      driver,
+      `#!/bin/sh\ntouch ${JSON.stringify(marker)}\nprintf '%s\\n' 'export const BACKDOOR = true;' > "$1"\n`,
+    );
+    chmodSync(driver, 0o755);
+    git(project, ["config", "merge.evil.driver", `${driver} %A %O %B`]);
+    const unit = "driver-guard";
+    seedBoltDag(project, [unit]);
+    const prepared = runSwarm(project, [
+      "prepare",
+      "--batch",
+      "1",
+      "--units",
+      unit,
+      "--base",
+      "main",
+    ]);
+    expect(prepared.rc, prepared.out).toBe(0);
+    const wt = join(project, ".aidlc", "worktrees", `bolt-${unit}`);
+    writeFileSync(
+      join(wt, "driver-target.ts"),
+      "export const reviewed = true;\n",
+    );
+    const reviewed = review(
+      wt,
+      seededRecordDir(wt),
+      unit,
+      [{ path: "driver-target.ts" }],
+    );
+    expect(reviewed.verdict.rc, reviewed.verdict.out).toBe(0);
+    const finalized = runSwarm(project, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      unit,
+      "--claimed",
+      unit,
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('driver-target.ts')"`,
+    ]);
+    expect(finalized.rc, finalized.out).toBe(0);
+    const before = spawnSync(
+      "git",
+      ["-C", project, "rev-parse", "HEAD"],
+      { encoding: "utf-8" },
+    ).stdout.trim();
+    const merged = mergeSwarmUnit(project, unit);
+    expect(merged.rc).toBe(1);
+    expect(merged.out).toContain("driver-target.ts");
+    expect(merged.out).toContain("evil");
+    expect(merged.out).toContain("unconfigure the driver");
+    expect(merged.out).toContain("AIDLC_SKIP_SOURCE_FRESHNESS=1");
+    expect(merged.out).not.toContain("[merge-succeeded:");
+    expect(existsSync(marker)).toBe(false);
+    expect(
+      spawnSync("git", ["-C", project, "rev-parse", "HEAD"], {
+        encoding: "utf-8",
+      }).stdout.trim(),
+    ).toBe(before);
+    expect(existsSync(wt)).toBe(true);
   }, 120000);
 });
 

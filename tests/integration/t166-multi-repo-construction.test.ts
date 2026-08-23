@@ -216,6 +216,15 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
     test("create --repo repo-a exits 0 and produces the worktree dir", () => {
       expect(created.status).toBe(0);
       expect(existsSync(worktreeDir(proj, "alpha"))).toBe(true);
+      const meta = JSON.parse(
+        readFileSync(
+          join(worktreeDir(proj, "alpha"), ".aidlc", "worktree-meta.json"),
+          "utf-8",
+        ),
+      ) as { repoSelector?: unknown; gitCommonDir?: unknown };
+      expect(meta.repoSelector).toBe("repo-a");
+      expect(meta.gitCommonDir).toBeString();
+      expect(readAllAuditShards(proj)).toContain("**Repo**: repo-a");
     });
     test("the bolt branch lives in repo-a's ref namespace, NOT repo-b's", () => {
       // Only true if `git worktree add` ran with cwd = repo-a (the P7 re-anchor),
@@ -282,6 +291,99 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
     test("the worktree + bolt branch are cleaned up in repo-a", () => {
       expect(existsSync(wt)).toBe(false);
       expect(hasBoltBranch(proj, "repo-a", "delta")).toBe(false);
+    });
+  });
+
+  describe("multi-repo: merge refuses a reachable Bolt branch in the wrong repo", () => {
+    const proj = freshWorkspace();
+    const repoA = makeSiblingRepo(proj, "repo-a");
+    const repoB = makeSiblingRepo(proj, "repo-b");
+    runUtil(proj, "intent-create", "--scope", "feature", "--repos", "repo-a,repo-b");
+    runWorktree(
+      proj,
+      "create",
+      "--slug",
+      "wrong-repo",
+      "--base",
+      "main",
+      "--repo",
+      "repo-a",
+    );
+    const wt = worktreeDir(proj, "wrong-repo");
+    writeFileSync(join(wt, "wrong-repo.txt"), "reviewed\n");
+    git(wt, "add", "--", "wrong-repo.txt");
+    git(wt, "commit", "-q", "-m", "reviewed wrong-repo source");
+    git(
+      repoB,
+      "fetch",
+      repoA,
+      "bolt-wrong-repo:refs/heads/bolt-wrong-repo",
+    );
+    const beforeA = git(repoA, "rev-parse", "main").out.trim();
+    const beforeB = git(repoB, "rev-parse", "main").out.trim();
+    const merged = runWorktree(
+      proj,
+      "merge",
+      "--slug",
+      "wrong-repo",
+      "--target",
+      "main",
+      "--strategy",
+      "squash",
+      "--repo",
+      "repo-b",
+    );
+
+    test("refuses before mutation with creating-repository values", () => {
+      expect(merged.status).not.toBe(0);
+      expect(merged.out).toContain("does not match creating repository");
+      expect(merged.out).toContain("repo-a");
+      expect(merged.out).toContain("repo-b");
+      expect(git(repoA, "rev-parse", "main").out.trim()).toBe(beforeA);
+      expect(git(repoB, "rev-parse", "main").out.trim()).toBe(beforeB);
+      expect(existsSync(wt)).toBe(true);
+      expect(readAllAuditShards(proj)).not.toContain(
+        "**Event**: WORKTREE_MERGED",
+      );
+    });
+  });
+
+  describe("multi-repo: discard is bound to the creating repository", () => {
+    const proj = freshWorkspace();
+    makeSiblingRepo(proj, "repo-a");
+    makeSiblingRepo(proj, "repo-b");
+    runUtil(proj, "intent-create", "--scope", "feature", "--repos", "repo-a,repo-b");
+    runWorktree(
+      proj,
+      "create",
+      "--slug",
+      "discard-repo",
+      "--base",
+      "main",
+      "--repo",
+      "repo-a",
+    );
+    const wrong = runWorktree(
+      proj,
+      "discard",
+      "--slug",
+      "discard-repo",
+      "--repo",
+      "repo-b",
+    );
+    const recovered = runWorktree(
+      proj,
+      "discard",
+      "--slug",
+      "discard-repo",
+    );
+
+    test("wrong selector refuses and selector-free retry uses the creating repo", () => {
+      expect(wrong.status).not.toBe(0);
+      expect(wrong.out).toContain("does not match creating repository");
+      expect(recovered.status, recovered.out).toBe(0);
+      expect(existsSync(worktreeDir(proj, "discard-repo"))).toBe(false);
+      expect(hasBoltBranch(proj, "repo-a", "discard-repo")).toBe(false);
     });
   });
 

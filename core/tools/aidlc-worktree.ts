@@ -147,18 +147,34 @@ function retainedSourceRefs(repoCwd: string, slug: string): RetainedSourceRef[] 
 function recordedWorktreeSelector(
   pd: string,
   slug: string,
-): { intent: string; space: string } | null {
+): { intent: string; space: string; repoSelector?: string | null } | null {
   const path = join(worktreePath(pd, slug), ".aidlc", WORKTREE_META_FILENAME);
   if (!existsSync(path)) return null;
   try {
     const parsed = JSON.parse(readFileSync(path, "utf-8")) as {
       intentRecord?: unknown;
+      repoSelector?: unknown;
     };
     if (typeof parsed.intentRecord !== "string") return null;
     const matched = /^aidlc\/spaces\/([^/]+)\/intents\/([^/]+)$/.exec(
       parsed.intentRecord,
     );
-    return matched === null ? null : { space: matched[1], intent: matched[2] };
+    if (
+      "repoSelector" in parsed &&
+      parsed.repoSelector !== null &&
+      typeof parsed.repoSelector !== "string"
+    ) {
+      return null;
+    }
+    return matched === null
+      ? null
+      : {
+          space: matched[1],
+          intent: matched[2],
+          ...("repoSelector" in parsed
+            ? { repoSelector: parsed.repoSelector as string | null }
+            : {}),
+        };
   } catch {
     return null;
   }
@@ -216,6 +232,17 @@ function canonicalise(p: string): string {
     return realpathSync(p);
   } catch {
     return p;
+  }
+}
+
+function gitCommonDirRealpath(cwd: string): string | null {
+  const top = runGit(["rev-parse", "--show-toplevel"], cwd);
+  const common = runGit(["rev-parse", "--git-common-dir"], cwd);
+  if (!top.ok || !common.ok) return null;
+  try {
+    return realpathSync(resolve(top.stdout.trim(), common.stdout.trim()));
+  } catch {
+    return null;
   }
 }
 
@@ -345,6 +372,10 @@ function handleCreate(args: string[]): void {
   // legacy single-repo intent). The guard is evaluated against that same checkout.
   const repoTarget = resolveRepoTarget(pd, flags, slug);
   const repoCwd = repoTarget.cwd;
+  const creatingGitCommonDir = gitCommonDirRealpath(repoCwd);
+  if (creatingGitCommonDir === null) {
+    errorWithSlug(slug, "Cannot resolve the creating repository common dir.");
+  }
   assertNotSiblingWorktree(repoCwd);
 
   // Pre-audit checks: every failure here exits without emitting.
@@ -398,6 +429,7 @@ function handleCreate(args: string[]): void {
       "Base branch": flags.base,
       "Base commit": baseCommit,
       "Base Source Listing": rawBase.hash,
+      Repo: repoTarget.repo ?? "-",
       ...(intentRecord ? { "Intent record": intentRecord } : {}),
       ...(swarm
         ? {
@@ -437,6 +469,8 @@ function handleCreate(args: string[]): void {
           baseBranch: flags.base,
           baseCommit,
           baseSourceListing: rawBase.hash,
+          repoSelector: repoTarget.repo,
+          gitCommonDir: creatingGitCommonDir,
           ...(intentRecord ? { intentRecord } : {}),
           ...(swarm
             ? {
@@ -561,6 +595,7 @@ function convergedSourceRecord(
   repoCwd: string,
   intent?: string,
   space?: string,
+  selectedRepo: string | null = null,
 ): ConvergedSourceRecord | null {
   const wtPath = worktreePath(pd, slug);
   let worktreeMeta: {
@@ -572,6 +607,8 @@ function convergedSourceRecord(
     swarmBatch?: string;
     swarmStage?: string;
     swarmFloor?: string;
+    repoSelector?: string | null;
+    gitCommonDir?: string;
   } | null = null;
   const metaPath = join(wtPath, ".aidlc", WORKTREE_META_FILENAME);
   if (existsSync(metaPath)) {
@@ -603,6 +640,15 @@ function convergedSourceRecord(
       baseSourceListing: (parsed as Record<string, string>).baseSourceListing,
       ...(typeof (parsed as Record<string, unknown>).intentRecord === "string"
         ? { intentRecord: (parsed as Record<string, string>).intentRecord }
+        : {}),
+      ...("repoSelector" in (parsed as Record<string, unknown>)
+        ? {
+            repoSelector: (parsed as Record<string, unknown>)
+              .repoSelector as string | null,
+          }
+        : {}),
+      ...(typeof (parsed as Record<string, unknown>).gitCommonDir === "string"
+        ? { gitCommonDir: (parsed as Record<string, string>).gitCommonDir }
         : {}),
       ...(typeof (parsed as Record<string, unknown>).swarmUnit === "string"
         ? {
@@ -775,6 +821,38 @@ function convergedSourceRecord(
       errorWithSlug(
         slug,
         "refusing to merge: current worktree metadata is missing",
+      );
+    }
+    if (
+      !("repoSelector" in worktreeMeta) ||
+      typeof worktreeMeta.gitCommonDir !== "string"
+    ) {
+      errorWithSlug(
+        slug,
+        "refusing to merge: durable modern worktree evidence lacks creating-repository binding; restart the Bolt attempt",
+      );
+    }
+    const selectedCommonDir = gitCommonDirRealpath(repoCwd);
+    const worktreeCommonDir = gitCommonDirRealpath(wtPath);
+    if (
+      worktreeMeta.repoSelector !== selectedRepo ||
+      selectedCommonDir === null ||
+      worktreeCommonDir === null ||
+      pathKey(worktreeMeta.gitCommonDir) !== pathKey(selectedCommonDir) ||
+      pathKey(worktreeMeta.gitCommonDir) !== pathKey(worktreeCommonDir)
+    ) {
+      errorWithSlug(
+        slug,
+        `refusing to merge: selected repository ${JSON.stringify(selectedRepo ?? "-")} / ${JSON.stringify(selectedCommonDir)} does not match creating repository ${JSON.stringify(worktreeMeta.repoSelector ?? "-")} / ${JSON.stringify(worktreeMeta.gitCommonDir)}; retry with the creating --repo selector`,
+      );
+    }
+    if (
+      auditBlockField(creation.block, "Repo") !==
+      (worktreeMeta.repoSelector ?? "-")
+    ) {
+      errorWithSlug(
+        slug,
+        "refusing to merge: WORKTREE_CREATED repository selector does not match worktree metadata",
       );
     }
     if (
@@ -1240,6 +1318,72 @@ function renderSourcePathKeys(keys: Iterable<string>): string {
     .join(", ");
 }
 
+function refuseConfiguredMergeDrivers(
+  slug: string,
+  repoCwd: string,
+  record: ConvergedSourceRecord | null,
+  carriesWorkspaceShell: boolean,
+): void {
+  if (
+    record?.kind !== "bound" ||
+    process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1"
+  ) {
+    return;
+  }
+  const base = gitCommitSourceListing(
+    repoCwd,
+    record.baseCommit,
+    carriesWorkspaceShell,
+  );
+  const source = gitCommitSourceListing(
+    repoCwd,
+    record.commit,
+    carriesWorkspaceShell,
+  );
+  if (base === null || source === null) {
+    errorWithSlug(
+      slug,
+      "refusing to merge: reviewed source delta cannot be reconstructed for merge-driver verification",
+    );
+  }
+  const paths = [...changedSourceListingKeys(base, source)]
+    .map((key) => key.slice(key.indexOf("\0") + 1))
+    .sort();
+  for (const path of paths) {
+    const attr = runGit(
+      ["check-attr", "-z", "merge", "--", path],
+      repoCwd,
+    );
+    if (!attr.ok) {
+      errorWithSlug(
+        slug,
+        `refusing to merge: cannot resolve the merge attribute for reviewed path ${JSON.stringify(path)}`,
+      );
+    }
+    const fields = attr.stdout.split("\0");
+    const value = fields[2] ?? "unspecified";
+    if (value === "set" || value === "unset") continue;
+    let driverName = value;
+    if (value === "unspecified") {
+      const configuredDefault = runGit(
+        ["config", "--get", "merge.default"],
+        repoCwd,
+      );
+      if (!configuredDefault.ok || !configuredDefault.stdout.trim()) continue;
+      driverName = configuredDefault.stdout.trim();
+    }
+    const configuredDriver = runGit(
+      ["config", "--get", `merge.${driverName}.driver`],
+      repoCwd,
+    );
+    if (!configuredDriver.ok || !configuredDriver.stdout.trim()) continue;
+    errorWithSlug(
+      slug,
+      `refusing to merge: reviewed path ${JSON.stringify(path)} resolves configured merge driver ${JSON.stringify(driverName)}; unconfigure the driver for this path, or retry with AIDLC_SKIP_SOURCE_FRESHNESS=1`,
+    );
+  }
+}
+
 function handleMerge(args: string[]): void {
   const flags = parseFlags(args);
   const slug = validateSlug(flags.slug);
@@ -1253,6 +1397,12 @@ function handleMerge(args: string[]): void {
     if (recorded !== null) {
       flags.intent = recorded.intent;
       flags.space = recorded.space;
+      if (
+        flags.repo === undefined &&
+        typeof recorded.repoSelector === "string"
+      ) {
+        flags.repo = recorded.repoSelector;
+      }
     }
   }
   // P7: anchor every git op to the target sibling repo. The merge runs IN that
@@ -1289,6 +1439,7 @@ function handleMerge(args: string[]): void {
     repoCwd,
     flags.intent,
     flags.space,
+    repoTarget.repo,
   );
   const aggregateBefore = assertAggregateSourceBeforeMerge(
     pd,
@@ -1335,6 +1486,12 @@ function handleMerge(args: string[]): void {
       );
     }
   }
+  refuseConfiguredMergeDrivers(
+    slug,
+    repoCwd,
+    sourceRecord,
+    repoTarget.repo === null,
+  );
 
   // Rebase requires a remote for <target>. The remote-existence check is
   // a pre-audit guard (no state change). The actual `git fetch` is post-
@@ -1594,6 +1751,7 @@ function handleMerge(args: string[]): void {
           "Source Fingerprint": aggregateAfter.fingerprint,
           "Source Commit": sourceRecord.commit,
           "Merge commit": commitSha,
+          Repo: repoTarget.repo ?? "-",
         },
         flags.intent,
         flags.space,
@@ -1807,6 +1965,24 @@ function handleDiscard(args: string[]): void {
   const flags = parseFlags(args);
   const slug = validateSlug(flags.slug);
   const pd = resolveProjectDir(projectDir);
+  const recorded = recordedWorktreeSelector(pd, slug);
+  if (
+    flags.repo === undefined &&
+    recorded !== null &&
+    typeof recorded.repoSelector === "string"
+  ) {
+    flags.repo = recorded.repoSelector;
+  }
+  if (
+    flags.repo !== undefined &&
+    recorded?.repoSelector !== undefined &&
+    flags.repo !== recorded.repoSelector
+  ) {
+    errorWithSlug(
+      slug,
+      `refusing to discard: selected repository ${JSON.stringify(flags.repo)} does not match creating repository ${JSON.stringify(recorded.repoSelector ?? "-")}`,
+    );
+  }
   // P7: anchor every git op to the target sibling repo (or projectDir for legacy).
   const repoCwd = resolveRepoCwd(pd, flags, slug);
   assertNotSiblingWorktree(repoCwd);
