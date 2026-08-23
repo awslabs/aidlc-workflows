@@ -62,7 +62,7 @@ function emitRunStage(project: string): Record<string, unknown> {
   return result.directive ?? {};
 }
 
-describe("t304 run-stage memory bootstrap", () => {
+describe("t316 run-stage memory bootstrap", () => {
   test("directive emission creates memory.md with the exact template bytes", () => {
     const project = installedProject();
     const directive = emitRunStage(project);

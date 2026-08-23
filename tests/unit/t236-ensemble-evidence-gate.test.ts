@@ -9,7 +9,7 @@
 // refuses `--result approved` while any is missing or malformed, naming the
 // gap and the remediation; AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1 is the escape
 // hatch; inline stages carry no requirement (pipeline receipts are covered by
-// t304); an already-[x]
+// t315); an already-[x]
 // stage is an idempotent replay and is never blocked.
 //
 // SOURCE UNDER TEST: the ensemble-evidence guard in handleReport

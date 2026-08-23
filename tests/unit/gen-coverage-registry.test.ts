@@ -822,10 +822,10 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     // tests stayed green. A journey through the documented workflow cannot be
     // run in-process without bypassing the exact layer under test.
     "unit/t293-knowledge-journey.test.ts",
-    // t304 spawns the real directive-emitting CLI because memory bootstrap is
+    // t316 spawns the real directive-emitting CLI because memory bootstrap is
     // observable only at the process boundary where projectDir and the shipped
     // harness template are both present.
-    "unit/t304-run-stage-memory-bootstrap.test.ts",
+    "unit/t316-run-stage-memory-bootstrap.test.ts",
     // t301 spawns `aidlc.ts knowledge summarize` through the compiled
     // dispatcher (same §8.12 discipline as t293), and its two ACTION-only
     // probes drive real concurrent subprocesses (a race between two
@@ -992,7 +992,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t291-review-receipt-recovery.test.ts",
     "unit/t302-protocol-modules.test.ts",
     "unit/t317-gate-pending-doctor.test.ts",
-    "unit/t304-pipeline-link-receipts.test.ts",
+    "unit/t315-pipeline-link-receipts.test.ts",
     "unit/t313-plugin-doctor-checks.test.ts",
     "unit/t320-review-confirmation-deadlock.test.ts",
     "unit/t321-source-recovery-freeze.test.ts",
@@ -1000,7 +1000,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t323-review-verdict-closure.test.ts",
     "unit/t312-orchestrate-session-binding.test.ts",
     "unit/t255-workspace-sync.test.ts",
-    "unit/t304-source-freshness-receipts.test.ts",
+    "unit/t314-source-freshness-receipts.test.ts",
     // t305 runs the shipped review/state tools because source-attribution
     // acceptance depends on actual audit receipts and completion refusals.
     "unit/t305-per-unit-attribution-receipts.test.ts",

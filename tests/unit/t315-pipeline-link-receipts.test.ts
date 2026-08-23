@@ -135,7 +135,7 @@ function rewriteIntentRepos(proj: string, repos: string[]): void {
   writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`);
 }
 
-describe("t304 pipeline link receipts", () => {
+describe("t315 pipeline link receipts", () => {
   test("emits the ordered tool-owned receipt fields", () => {
     const proj = pipelineProject();
     appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, proj);
