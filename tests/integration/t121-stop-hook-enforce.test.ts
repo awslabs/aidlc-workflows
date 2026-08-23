@@ -19,7 +19,7 @@
 //   :97  allowStop()       — emit nothing, exit 0 (the precedent non-blocking pattern)
 //   :104 blockStop(reason) — console.log({decision:"block",reason}); exit 0
 //   :129 guardFilePath()   — aidlc-docs/.aidlc-stop-hook/block-count.json
-//   :137 progressSignature(state, directive) — Current Stage + state digest +
+//   :247 progressSignature(state, directive) - Current Stage + state digest +
 //          directive position (kind/stage/Unit/part)
 //   :204 decideBlock(state, directive, stopHookActive) — the no-progress counter + cap logic:
 //          - sameSignature  → nextCount = prior.count + 1
