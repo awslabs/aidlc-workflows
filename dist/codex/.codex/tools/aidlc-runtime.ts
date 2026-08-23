@@ -41,6 +41,7 @@ import {
   readStateFile,
   relativeMemoryPath,
   relativeRecordDir,
+  resolveAuditWorktreePath,
   resolveProjectDir,
   runtimeGraphPath,
   stateFilePath,
@@ -480,7 +481,8 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
       const wt = fieldFromBlock(ev.block, "Worktree path");
       if (!slug) continue;
       slugsInWindow.set(slug, {
-        worktree: wt ?? "",
+        worktree:
+          wt === null ? "" : resolveAuditWorktreePath(projectDir, wt),
         started_at: ev.timestamp,
       });
     }

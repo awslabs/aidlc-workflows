@@ -12,6 +12,7 @@
 // checkout.
 
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { appendAuditEntry } from "./aidlc-audit.ts";
@@ -38,6 +39,7 @@ import {
   relativeRecordDir,
   repoDir,
   reviewedSourceRefPrefix,
+  resolveAuditWorktreePath,
   resolveBoltDag,
   resolveConstructionRepo,
   resolveProjectDir,
@@ -268,6 +270,14 @@ function pathKey(p: string): string {
   return process.platform === "win32" ? normalised.toLowerCase() : normalised;
 }
 
+function gitCommonDirHash(path: string): string {
+  return createHash("sha256").update(pathKey(path)).digest("hex");
+}
+
+function auditWorktreePath(pd: string, path: string): string {
+  return relative(pd, path).replaceAll("\\", "/");
+}
+
 // --- Validation helpers ---
 
 function validateSlug(slug: string | undefined): string {
@@ -441,7 +451,7 @@ function handleCreate(args: string[]): void {
   try {
     auditTs = emitAudit(pd, "WORKTREE_CREATED", {
       "Bolt slug": slug,
-      "Worktree path": wtPath,
+      "Worktree path": auditWorktreePath(pd, wtPath),
       "Branch name": branchName,
       "Base branch": flags.base,
       "Base commit": baseCommit,
@@ -503,7 +513,7 @@ function handleCreate(args: string[]): void {
           baseCommit,
           baseSourceListing: rawBase.hash,
           repoSelector: repoTarget.repo,
-          gitCommonDir: creatingGitCommonDir,
+          gitCommonDirHash: gitCommonDirHash(creatingGitCommonDir),
           ...(intentRecord ? { intentRecord } : {}),
           ...(swarm
             ? {
@@ -789,7 +799,8 @@ function discardCreationAuthority(
     const branch = auditBlockField(row.block, "Branch name");
     return (
       recordedPath !== null &&
-      pathKey(recordedPath) === pathKey(worktreePath(pd, slug)) &&
+      pathKey(resolveAuditWorktreePath(pd, recordedPath)) ===
+        pathKey(worktreePath(pd, slug)) &&
       branch === `bolt-${slug}`
     );
   });
@@ -1021,6 +1032,7 @@ function convergedSourceRecord(
     swarmFloor?: string;
     repoSelector?: string | null;
     gitCommonDir?: string;
+    gitCommonDirHash?: string;
   } | null = null;
   const metaPath = join(wtPath, ".aidlc", WORKTREE_META_FILENAME);
   if (existsSync(metaPath)) {
@@ -1061,6 +1073,12 @@ function convergedSourceRecord(
         : {}),
       ...(typeof (parsed as Record<string, unknown>).gitCommonDir === "string"
         ? { gitCommonDir: (parsed as Record<string, string>).gitCommonDir }
+        : {}),
+      ...(typeof (parsed as Record<string, unknown>).gitCommonDirHash === "string"
+        ? {
+            gitCommonDirHash: (parsed as Record<string, string>)
+              .gitCommonDirHash,
+          }
         : {}),
       ...(typeof (parsed as Record<string, unknown>).swarmUnit === "string"
         ? {
@@ -1139,7 +1157,11 @@ function convergedSourceRecord(
         auditBlockField(row.block, "Bolt slug") === slug &&
         (() => {
           const recordedPath = auditBlockField(row.block, "Worktree path");
-          return recordedPath !== null && pathKey(recordedPath) === pathKey(wtPath);
+          return (
+            recordedPath !== null &&
+            pathKey(resolveAuditWorktreePath(pd, recordedPath)) ===
+              pathKey(wtPath)
+          );
         })(),
     ),
     (row) =>
@@ -1239,7 +1261,10 @@ function convergedSourceRecord(
     }
     if (
       !("repoSelector" in worktreeMeta) ||
-      typeof worktreeMeta.gitCommonDir !== "string"
+      (
+        typeof worktreeMeta.gitCommonDir !== "string" &&
+        typeof worktreeMeta.gitCommonDirHash !== "string"
+      )
     ) {
       errorWithSlug(
         slug,
@@ -1248,12 +1273,20 @@ function convergedSourceRecord(
     }
     const selectedCommonDir = gitCommonDirRealpath(repoCwd);
     const worktreeCommonDir = gitCommonDirRealpath(wtPath);
+    const metadataCommonDirHash =
+      typeof worktreeMeta.gitCommonDirHash === "string" &&
+      /^[0-9a-f]{64}$/.test(worktreeMeta.gitCommonDirHash)
+        ? worktreeMeta.gitCommonDirHash
+        : typeof worktreeMeta.gitCommonDir === "string"
+          ? gitCommonDirHash(worktreeMeta.gitCommonDir)
+          : null;
     if (
       worktreeMeta.repoSelector !== selectedRepo ||
       selectedCommonDir === null ||
       worktreeCommonDir === null ||
-      pathKey(worktreeMeta.gitCommonDir) !== pathKey(selectedCommonDir) ||
-      pathKey(worktreeMeta.gitCommonDir) !== pathKey(worktreeCommonDir)
+      metadataCommonDirHash === null ||
+      metadataCommonDirHash !== gitCommonDirHash(selectedCommonDir) ||
+      metadataCommonDirHash !== gitCommonDirHash(worktreeCommonDir)
     ) {
       errorWithSlug(
         slug,
@@ -1904,7 +1937,7 @@ function handleMerge(args: string[]): void {
   try {
     auditTs = emitAudit(pd, "WORKTREE_MERGED", {
       "Bolt slug": slug,
-      "Worktree path": wtPath,
+      "Worktree path": auditWorktreePath(pd, wtPath),
       "Target branch": flags.target,
       Strategy: strategy,
     }, flags.intent, flags.space);
@@ -2453,7 +2486,7 @@ function handleDiscard(args: string[]): void {
   try {
     auditTs = emitAudit(pd, "WORKTREE_DISCARDED", {
       "Bolt slug": slug,
-      "Worktree path": wtPath,
+      "Worktree path": auditWorktreePath(pd, wtPath),
       Reason: "agent-discard",
     }, flags.intent, flags.space);
   } catch (e) {
@@ -2678,8 +2711,9 @@ function handleInfo(args: string[]): void {
   // Absence of the file or the field both resolve to merge_held=false — the
   // resume-path check is "do not dispatch a merge that's actively held",
   // not "every Bolt has had its hold state explicitly initialised".
+  const resolvedWorktreePath = resolveAuditWorktreePath(pd, pathMatch[1]);
   let mergeHeld = false;
-  const wtStatePath = worktreeStateFilePath(pathMatch[1]);
+  const wtStatePath = worktreeStateFilePath(resolvedWorktreePath);
   if (existsSync(wtStatePath)) {
     const wtContent = readFileSync(wtStatePath, "utf-8");
     mergeHeld = getField(wtContent, "Merge-Held") === "true";
@@ -2688,7 +2722,7 @@ function handleInfo(args: string[]): void {
   console.log(
     JSON.stringify({
       slug,
-      path: pathMatch[1],
+      path: resolvedWorktreePath,
       branch_name: branchMatch[1],
       audit_timestamp: match.timestamp,
       merge_held: mergeHeld,

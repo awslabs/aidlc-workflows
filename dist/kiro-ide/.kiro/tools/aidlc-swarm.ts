@@ -100,6 +100,7 @@ import {
   relativeRecordDir,
   reviewArtifactFingerprint,
   reviewedSourceRef,
+  resolveAuditWorktreePath,
   resolveBoltDag,
   resolveConstructionRepo,
   resolveProjectDir,
@@ -351,7 +352,13 @@ function reviewerReceiptError(
       (row) =>
         row.event === "WORKTREE_CREATED" &&
         auditBlockField(row.block, "Bolt slug") === boltSlug &&
-        auditBlockField(row.block, "Worktree path") === wt,
+        (
+          auditBlockField(row.block, "Worktree path") !== null &&
+          resolveAuditWorktreePath(
+            projectDir,
+            auditBlockField(row.block, "Worktree path") as string,
+          ) === wt
+        ),
     )
     .sort((a, b) => {
       if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;

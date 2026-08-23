@@ -299,4 +299,29 @@ describe("aidlc-audit CLI shell (Bun.spawnSync env seam)", () => {
       expect(body.includes("## Custom Event")).toBe(true);
     });
   });
+
+  test("append-raw redacts project-prefixed paths in headings and bodies", () => {
+    withProject((proj) => {
+      const r = Bun.spawnSync({
+        cmd: [
+          "bun",
+          TOOL,
+          "append-raw",
+          `Note ${proj}`,
+          `**Details**: ${proj}/private.txt`,
+          "--project-dir",
+          proj,
+        ],
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(r.exitCode).toBe(0);
+      const body = readAllAuditShards(proj);
+      expect(body).not.toContain(proj);
+      expect(body).toContain("## Note <project-dir>");
+      expect(body).toContain(
+        "**Details**: <project-dir>/private.txt",
+      );
+    });
+  });
 });

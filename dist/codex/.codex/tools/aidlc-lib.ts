@@ -4898,7 +4898,8 @@ export function checkSummaryConfirmationEvidence(
           return false;
         }
         const file = auditBlockField(entry.block, "File");
-        return file !== null && resolvePath(projectDir, file) === artifactAbs;
+        return file !== null &&
+          resolveAuditProjectPath(projectDir, file) === artifactAbs;
       });
       const writeAfterReceipt = writes.some((entry) => {
         if (entry.shard === receipt.shard) return entry.pos > receipt.pos;
@@ -5167,6 +5168,32 @@ export function readAuditShardEvents(
 
 export function worktreePath(projectDir: string, boltSlug: string): string {
   return join(projectDir, ".aidlc", "worktrees", `bolt-${boltSlug}`);
+}
+
+export function resolveAuditProjectPath(
+  projectDir: string,
+  recordedPath: string,
+): string {
+  if (recordedPath === "<project-dir>") return resolvePath(projectDir);
+  if (
+    recordedPath.startsWith("<project-dir>/") ||
+    recordedPath.startsWith("<project-dir>\\")
+  ) {
+    return resolvePath(
+      projectDir,
+      recordedPath.slice("<project-dir>".length + 1),
+    );
+  }
+  return isAbsolute(recordedPath)
+    ? recordedPath
+    : resolvePath(projectDir, recordedPath);
+}
+
+export function resolveAuditWorktreePath(
+  projectDir: string,
+  recordedPath: string,
+): string {
+  return resolveAuditProjectPath(projectDir, recordedPath);
 }
 
 // --- Fresh review receipts (the §12a completion precondition's scan) -----------
@@ -5653,16 +5680,25 @@ function sourceBaselineBoundaryValue(
     : undefined;
 }
 
-function auditEventIsCrossShardTied(
-  events: ReadonlyArray<Pick<AuditShardEvent, "timestamp" | "shard">>,
+function auditEventIsCrossShardTied<
+  T extends Pick<AuditShardEvent, "timestamp" | "shard">,
+>(
+  events: ReadonlyArray<T>,
   index: number,
+  boundaryValue?: (event: T) => string | null | undefined,
 ): boolean {
   const event = events[index];
+  const eventValue = boundaryValue?.(event);
   return events.some(
     (candidate, otherIndex) =>
       otherIndex !== index &&
       candidate.timestamp === event.timestamp &&
-      candidate.shard !== event.shard,
+      candidate.shard !== event.shard &&
+      (boundaryValue === undefined ||
+        (
+          boundaryValue(candidate) !== undefined &&
+          boundaryValue(candidate) !== eventValue
+        )),
   );
 }
 
@@ -6218,7 +6254,19 @@ export function freshReviewReceipts(
         unitMajor,
       );
       if (field === undefined) continue;
-      if (field !== null && eventIsCrossShardTied(i)) {
+      if (
+        field !== null &&
+        auditEventIsCrossShardTied(
+          events,
+          i,
+          (candidate) =>
+            sourceBaselineBoundaryValue(
+              candidate,
+              stage.slug,
+              unitMajor,
+            ),
+        )
+      ) {
         baselineField = UNBINDABLE_FINGERPRINT;
       } else {
         baselineField = field;
@@ -7041,16 +7089,30 @@ function isBoltWorktreeProjectDir(projectDir: string): boolean {
   return existsSync(join(projectDir, ".aidlc", "worktree-meta.json"));
 }
 
+interface GitPathModeIndex {
+  env: NodeJS.ProcessEnv;
+  indexFile: string;
+}
+
+type GitPathModeIndexCache = Map<string, GitPathModeIndex | null>;
+
 function currentGitPathMode(
   sourceRepoDir: string,
   literalPath: string,
+  indexes: GitPathModeIndexCache,
 ): { ok: boolean; mode: string | null } {
-  const indexFile = join(
-    tmpdir(),
-    `aidlc-claim-mode-${process.pid}-${randomUUID().slice(0, 8)}`,
-  );
-  const env = { ...process.env, GIT_INDEX_FILE: indexFile };
+  let repoKey: string;
   try {
+    repoKey = realpathSync(sourceRepoDir);
+  } catch {
+    repoKey = resolvePath(sourceRepoDir);
+  }
+  if (!indexes.has(repoKey)) {
+    const indexFile = join(
+      tmpdir(),
+      `aidlc-claim-mode-${process.pid}-${randomUUID().slice(0, 8)}`,
+    );
+    const env = { ...process.env, GIT_INDEX_FILE: indexFile };
     const seeded = spawnSync("git", ["-C", sourceRepoDir, "read-tree", "HEAD"], {
       env,
       encoding: "utf-8",
@@ -7062,44 +7124,90 @@ function currentGitPathMode(
         ["-C", sourceRepoDir, "read-tree", "--empty"],
         { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
       );
-      if (empty.status !== 0) return { ok: false, mode: null };
+      if (empty.status !== 0) {
+        rmSync(indexFile, { force: true });
+        indexes.set(repoKey, null);
+      } else {
+        indexes.set(repoKey, { env, indexFile });
+      }
+    } else {
+      indexes.set(repoKey, { env, indexFile });
     }
-    const added = spawnSync(
-      "git",
-      ["-C", sourceRepoDir, "add", "--", `./${literalPath}`],
-      {
-        env,
-        encoding: "utf-8",
-        maxBuffer: 512 * 1024 * 1024,
-      },
-    );
-    if (added.status !== 0) return { ok: false, mode: null };
-    const listed = spawnSync(
-      "git",
-      ["-C", sourceRepoDir, "ls-files", "-s", "-z", "--", `./${literalPath}`],
-      { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
-    );
-    if (listed.status !== 0) return { ok: false, mode: null };
-    for (const record of listed.stdout.split("\0")) {
-      const tab = record.indexOf("\t");
-      if (tab === -1 || record.slice(tab + 1) !== literalPath) continue;
-      const mode = /^(\d{6}) /.exec(record.slice(0, tab))?.[1] ?? null;
-      return { ok: mode !== null, mode };
-    }
-    return { ok: true, mode: null };
-  } finally {
-    rmSync(indexFile, { force: true });
   }
+  const index = indexes.get(repoKey);
+  if (index === null || index === undefined) {
+    return { ok: false, mode: null };
+  }
+  // The cache accumulates prior single-path additions, but each probe stages
+  // and reads only its exact literal path. An earlier path cannot create or
+  // change that exact index entry; ordinary directories still have no exact
+  // entry, while embedded repositories remain mode 160000.
+  const added = spawnSync(
+    "git",
+    ["-C", sourceRepoDir, "add", "--", `./${literalPath}`],
+    {
+      env: index.env,
+      encoding: "utf-8",
+      maxBuffer: 512 * 1024 * 1024,
+    },
+  );
+  if (added.status !== 0) return { ok: false, mode: null };
+  const listed = spawnSync(
+    "git",
+    ["-C", sourceRepoDir, "ls-files", "-s", "-z", "--", `./${literalPath}`],
+    {
+      env: index.env,
+      encoding: "utf-8",
+      maxBuffer: 512 * 1024 * 1024,
+    },
+  );
+  if (listed.status !== 0) return { ok: false, mode: null };
+  for (const record of listed.stdout.split("\0")) {
+    const tab = record.indexOf("\t");
+    if (tab === -1 || record.slice(tab + 1) !== literalPath) continue;
+    const mode = /^(\d{6}) /.exec(record.slice(0, tab))?.[1] ?? null;
+    return { ok: mode !== null, mode };
+  }
+  return { ok: true, mode: null };
+}
+
+function symlinkedParentComponent(
+  sourceRepoDir: string,
+  literalPath: string,
+): string | null {
+  const segments = literalPath.split("/");
+  let current = sourceRepoDir;
+  for (let index = 0; index < segments.length - 1; index++) {
+    current = join(current, segments[index]);
+    try {
+      const stat = lstatSync(current);
+      if (stat.isSymbolicLink()) {
+        return segments.slice(0, index + 1).join("/");
+      }
+      if (!stat.isDirectory()) return null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 function ignoredSourceClaimReason(
   sourceRepoDir: string,
   path: string,
   prefix: boolean,
+  pathModeIndexes: GitPathModeIndexCache,
 ): string | null {
   if (!isGitRepoDir(sourceRepoDir)) return null;
   const literalPath = path.replace(/\/+$/, "");
   const literalPathspec = `./${literalPath}`;
+  const symlinkedParent = symlinkedParentComponent(
+    sourceRepoDir,
+    literalPath,
+  );
+  if (symlinkedParent !== null) {
+    return `${JSON.stringify(path)} traverses symlinked directory ${JSON.stringify(symlinkedParent)}. Source claims bind link text, not target bytes; claim the link itself or the real target path instead.`;
+  }
 
   let currentExists = false;
   let currentIsDirectory = false;
@@ -7166,7 +7274,11 @@ function ignoredSourceClaimReason(
     return `Git could not verify ignore rules for ${JSON.stringify(path)}`;
   }
   if (!prefix && currentIsDirectory) {
-    const currentMode = currentGitPathMode(sourceRepoDir, literalPath);
+    const currentMode = currentGitPathMode(
+      sourceRepoDir,
+      literalPath,
+      pathModeIndexes,
+    );
     if (!currentMode.ok) {
       return `Git could not verify the current path type for ${JSON.stringify(path)}`;
     }
@@ -7274,6 +7386,7 @@ function symlinkClaimTargetReason(
   claimPath: string,
   prefix: boolean,
   carriesWorkspaceShell: boolean,
+  pathModeIndexes: GitPathModeIndexCache,
 ): string | null {
   const links = manifestClaimSymlinkPaths(
     sourceRepoDir,
@@ -7365,6 +7478,7 @@ function symlinkClaimTargetReason(
         sourceRepoDir,
         repoRelative,
         false,
+        pathModeIndexes,
       );
       if (ignored !== null) {
         return `${JSON.stringify(claimPath)} contains symlink ${JSON.stringify(link)} whose fully resolved target is not bindable: ${ignored}. ${remedy}`;
@@ -7427,7 +7541,9 @@ export function readUnitSourceManifest(
   const prefixes: string[] = [];
   const seen = new Set<string>();
   const writes: UnitSourceManifestWrite[] = [];
+  const pathModeIndexes: GitPathModeIndexCache = new Map();
 
+  try {
   for (let index = 0; index < value.writes.length; index++) {
     const write = value.writes[index];
     if (!isPlainObject(write)) return { ok: false, reason: `writes[${index}] must be an object` };
@@ -7467,6 +7583,7 @@ export function readUnitSourceManifest(
       sourceRepoDir,
       normalized.path,
       normalized.prefix,
+      pathModeIndexes,
     );
     if (ignoredReason !== null) {
       return { ok: false, reason: `writes[${index}].path: ${ignoredReason}` };
@@ -7476,6 +7593,7 @@ export function readUnitSourceManifest(
       normalized.path,
       normalized.prefix,
       carriesWorkspaceShell,
+      pathModeIndexes,
     );
     if (symlinkReason !== null) {
       return { ok: false, reason: `writes[${index}].path: ${symlinkReason}` };
@@ -7496,6 +7614,11 @@ export function readUnitSourceManifest(
     prefixes,
     rawBytesSha256: createHash("sha256").update(rawBytes).digest("hex"),
   };
+  } finally {
+    for (const index of pathModeIndexes.values()) {
+      if (index !== null) rmSync(index.indexFile, { force: true });
+    }
+  }
 }
 
 /** True when a canonical path is claimed exactly or by a directory prefix. */
@@ -7721,7 +7844,16 @@ export function currentStageSourceBaseline(
     if (candidate === undefined) continue;
     if (
       candidate !== null &&
-      auditEventIsCrossShardTied(events, index)
+      auditEventIsCrossShardTied(
+        events,
+        index,
+        (other) =>
+          sourceBaselineBoundaryValue(
+            other,
+            stageSlug,
+            unitMajor,
+          ),
+      )
     ) {
       field = UNBINDABLE_FINGERPRINT;
     } else {
@@ -12411,7 +12543,10 @@ import type {
   appendAuditEntryUnlocked as AppendAuditEntryUnlocked,
 } from "./aidlc-audit.ts";
 
-function redactProjectDirPrefix(value: string, projectDir: string): string {
+export function redactProjectDirPrefix(
+  value: string,
+  projectDir: string,
+): string {
   const variants = new Set<string>([resolvePath(projectDir)]);
   try {
     variants.add(realpathSync(projectDir));

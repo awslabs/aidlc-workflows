@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
@@ -4399,7 +4399,7 @@ function handleFork(args: string[]): void {
     try {
       appendAuditEntryUnlocked("STATE_FORKED", {
         "Bolt slug": slug,
-        "Worktree path": wtPath,
+        "Worktree path": relative(pd, wtPath).replaceAll("\\", "/"),
         "Source state hash": sha,
         "Target state hash": sha, // fork = byte-identical copy
       }, pd, resolvedIntent, space);
@@ -4577,7 +4577,7 @@ function handleMerge(args: string[]): void {
     try {
       appendAuditEntryUnlocked("STATE_MERGED", {
         "Bolt slug": slug,
-        "Worktree path": wtPath,
+        "Worktree path": relative(pd, wtPath).replaceAll("\\", "/"),
         "Source state hash": wtSha,
         "Target state hash": postMergeSha,
         "Conflict resolution": conflictResolutionField,

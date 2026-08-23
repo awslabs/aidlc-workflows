@@ -225,9 +225,13 @@ Emitted only during Phase 3 (Construction). A Bolt is one execution of stages 3.
 
 Emitted during Phase 3 (Construction) when Bolts run inside per-Bolt git worktrees. Worktree primitive emits `WORKTREE_*`; state fork/merge subcommands emit `STATE_*`; audit fork/merge subcommands emit `AUDIT_*`.
 
+`Worktree path` values are project-relative (`.aidlc/worktrees/bolt-<slug>`) in
+new rows. Readers resolve them against the project root and remain compatible
+with legacy absolute values.
+
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
-| `WORKTREE_CREATED` | Per-Bolt git worktree created from main on Bolt start | Timestamp, Bolt slug, Worktree path, Branch name, Base branch, Base commit, Base Source Listing (`sha256:<hash>` over the raw-aware source listing computed from the immutable base before the audit-first create), Repo (recorded selector or `-` for the workspace root), optional Intent record and Swarm Unit/Batch/Stage/Run floor provenance | `tools/aidlc-worktree.ts` (`create`) |
+| `WORKTREE_CREATED` | Per-Bolt git worktree created from main on Bolt start | Timestamp, Bolt slug, project-relative Worktree path, Branch name, Base branch, Base commit, Base Source Listing (`sha256:<hash>` over the raw-aware source listing computed from the immutable base before the audit-first create), Repo (recorded selector or `-` for the workspace root), optional Intent record and Swarm Unit/Batch/Stage/Run floor provenance | `tools/aidlc-worktree.ts` (`create`) |
 | `WORKTREE_MERGED` | Bolt's worktree merged back to main on gate approval | Timestamp, Bolt slug, Worktree path, Target branch, Strategy | `tools/aidlc-worktree.ts` (`merge`) |
 | `WORKTREE_DISCARDED` | Aborted Bolt's worktree explicitly removed | Timestamp, Bolt slug, Worktree path, Reason | `tools/aidlc-worktree.ts` (`discard`) |
 | `STATE_FORKED` | State file forked to worktree on Bolt start | Timestamp, Bolt slug, Worktree path, Source state hash, Target state hash | `tools/aidlc-state.ts` (`fork`) |

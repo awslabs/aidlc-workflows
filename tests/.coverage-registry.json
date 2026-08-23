@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 629,
+    "total": 632,
     "enumeratedByClass": {
-      "function": 366,
+      "function": 369,
       "audit": 87,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 185,
+      "function": 188,
       "audit": 45,
       "scope": 11,
       "stage": 11,
@@ -3436,6 +3436,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:redactProjectDirPrefix",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t166-multi-repo-construction.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:refreshActiveDirectiveMarker",
       "minMechanism": "none",
       "coveredBy": [
@@ -3588,6 +3600,30 @@
         },
         {
           "file": "tests/unit/t229-workspace-parser.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:resolveAuditProjectPath",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t166-multi-repo-construction.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:resolveAuditWorktreePath",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t166-multi-repo-construction.test.ts",
           "mechanism": "cli"
         }
       ],

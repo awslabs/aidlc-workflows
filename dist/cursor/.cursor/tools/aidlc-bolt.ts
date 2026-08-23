@@ -54,6 +54,7 @@ import {
   auditBlockField,
   relativeRecordDir,
   readStateFile,
+  resolveAuditWorktreePath,
   resolveProjectDir,
   setFieldStrict,
   setOrInsertField,
@@ -192,7 +193,13 @@ function latestWorktreeCreationFields(
       (row) =>
         row.event === "WORKTREE_CREATED" &&
         auditBlockField(row.block, "Bolt slug") === slug &&
-        auditBlockField(row.block, "Worktree path") === currentWorktreePath,
+        (
+          auditBlockField(row.block, "Worktree path") !== null &&
+          resolveAuditWorktreePath(
+            projectDir,
+            auditBlockField(row.block, "Worktree path") as string,
+          ) === currentWorktreePath
+        ),
     )
     .sort((a, b) => {
       if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
@@ -242,6 +249,7 @@ function worktreeBaseFields(
     "intentRecord",
     "repoSelector",
     "gitCommonDir",
+    "gitCommonDirHash",
     "swarmUnit",
     "swarmBatch",
     "swarmStage",

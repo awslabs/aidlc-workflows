@@ -1,4 +1,7 @@
 // covers: subcommand:aidlc-worktree:create, subcommand:aidlc-worktree:merge, subcommand:aidlc-swarm:prepare, function:resolveConstructionRepo, function:repoDir, function:intentRepos
+// covers: function:redactProjectDirPrefix
+// covers: function:resolveAuditProjectPath
+// covers: function:resolveAuditWorktreePath
 //
 // Mechanism: cli (spawned dist tools) + real git. P7 — multi-repo construction:
 // `aidlc-worktree create/merge` thread `--repo <name>` so `git worktree add` and
@@ -26,7 +29,7 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { AIDLC_SRC, cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
@@ -221,9 +224,14 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
           join(worktreeDir(proj, "alpha"), ".aidlc", "worktree-meta.json"),
           "utf-8",
         ),
-      ) as { repoSelector?: unknown; gitCommonDir?: unknown };
+      ) as {
+        repoSelector?: unknown;
+        gitCommonDir?: unknown;
+        gitCommonDirHash?: unknown;
+      };
       expect(meta.repoSelector).toBe("repo-a");
-      expect(meta.gitCommonDir).toBeString();
+      expect(meta.gitCommonDir).toBeUndefined();
+      expect(meta.gitCommonDirHash).toMatch(/^[0-9a-f]{64}$/);
       expect(readAllAuditShards(proj)).toContain("**Repo**: repo-a");
     });
     test("the bolt branch lives in repo-a's ref namespace, NOT repo-b's", () => {
@@ -231,6 +239,63 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
       // not the workspace root or repo-b.
       expect(hasBoltBranch(proj, "repo-a", "alpha")).toBe(true);
       expect(hasBoltBranch(proj, "repo-b", "alpha")).toBe(false);
+    });
+  });
+
+  describe("legacy plaintext common-dir metadata remains merge-compatible", () => {
+    const proj = freshWorkspace();
+    const repoA = makeSiblingRepo(proj, "repo-a");
+    makeSiblingRepo(proj, "repo-b");
+    runUtil(
+      proj,
+      "intent-create",
+      "--scope",
+      "feature",
+      "--repos",
+      "repo-a,repo-b",
+    );
+    runWorktree(
+      proj,
+      "create",
+      "--slug",
+      "legacy-common-dir",
+      "--base",
+      "main",
+      "--repo",
+      "repo-a",
+    );
+    const wt = worktreeDir(proj, "legacy-common-dir");
+    const metadataPath = join(wt, ".aidlc", "worktree-meta.json");
+    const metadata = JSON.parse(
+      readFileSync(metadataPath, "utf-8"),
+    ) as Record<string, unknown>;
+    delete metadata.gitCommonDirHash;
+    metadata.gitCommonDir = realpathSync(join(repoA, ".git"));
+    writeFileSync(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`);
+    writeFileSync(join(wt, "legacy-common-dir.txt"), "legacy metadata\n");
+    git(wt, "add", "-A");
+    git(wt, "commit", "-q", "-m", "legacy metadata source");
+    const merged = runWorktree(
+      proj,
+      "merge",
+      "--slug",
+      "legacy-common-dir",
+      "--target",
+      "main",
+      "--strategy",
+      "squash",
+      "--repo",
+      "repo-a",
+    );
+
+    test("old gitCommonDir metadata is hashed for comparison and still merges", () => {
+      expect(merged.status, merged.out).toBe(0);
+      expect(
+        readFileSync(
+          join(repoA, "legacy-common-dir.txt"),
+          "utf-8",
+        ),
+      ).toContain("legacy metadata");
     });
   });
 
@@ -1218,6 +1283,51 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
     });
   });
 
+  describe("legacy absolute Worktree path rows remain readable", () => {
+    const proj = freshWorkspace();
+    runUtil(proj, "intent-create", "--scope", "feature");
+    const legacyPath = join(
+      proj,
+      ".aidlc",
+      "worktrees",
+      "bolt-legacy-audit-path",
+    );
+    appendAuditEntry(
+      "WORKTREE_CREATED",
+      {
+        "Bolt slug": "legacy-audit-path",
+        "Worktree path": legacyPath,
+        "Branch name": "bolt-legacy-audit-path",
+        "Base branch": "main",
+      },
+      proj,
+    );
+    const auditDir = join(activeRecord(proj), "audit");
+    for (const file of readdirSync(auditDir)) {
+      const path = join(auditDir, file);
+      writeFileSync(
+        path,
+        readFileSync(path, "utf-8").replace(
+          "<project-dir>/.aidlc/worktrees/bolt-legacy-audit-path",
+          legacyPath,
+        ),
+      );
+    }
+    const info = runWorktree(
+      proj,
+      "info",
+      "--slug",
+      "legacy-audit-path",
+    );
+
+    test("info resolves a legacy absolute audit path without rewriting it", () => {
+      expect(info.status, info.out).toBe(0);
+      expect(
+        (JSON.parse(info.stdout.trim()) as { path: string }).path,
+      ).toBe(legacyPath);
+    });
+  });
+
   // ===========================================================================
   // Single-repo intent: the lone repo is inferred — no --repo needed.
   // ===========================================================================
@@ -1376,6 +1486,28 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
     const approved = reviewed.status === 0
       ? runState(proj, "approve", "code-generation", "--user-input", "ship")
       : { status: -1, out: reviewed.out, stdout: "" };
+    const discardCreated = approved.status === 0
+      ? runWorktree(
+          proj,
+          "create",
+          "--slug",
+          "audit-discard",
+          "--base",
+          "main",
+          "--repo",
+          "repo-a",
+        )
+      : { status: -1, out: approved.out, stdout: "" };
+    const discarded = discardCreated.status === 0
+      ? runWorktree(
+          proj,
+          "discard",
+          "--slug",
+          "audit-discard",
+          "--repo",
+          "repo-a",
+        )
+      : { status: -1, out: discardCreated.out, stdout: "" };
 
     test("prepare --repo repo-a exits 0", () => {
       expect(prepared.status).toBe(0);
@@ -1390,6 +1522,21 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
       expect(reviewed.status, reviewed.out).toBe(0);
       expect(approved.status, approved.out).toBe(0);
       expect(readAllAuditShards(proj)).toContain("**Event**: STAGE_COMPLETED");
+    });
+    test("the complete create/merge/discard audit ledger carries no absolute project path", () => {
+      expect(discardCreated.status, discardCreated.out).toBe(0);
+      expect(discarded.status, discarded.out).toBe(0);
+      const audit = readAllAuditShards(proj);
+      expect(audit).not.toContain(proj);
+      const worktreePaths = audit
+        .split(/\r?\n/)
+        .filter((line) => line.startsWith("**Worktree path**:"));
+      expect(worktreePaths.length).toBeGreaterThan(0);
+      expect(
+        worktreePaths.every((line) =>
+          line.includes("**Worktree path**: .aidlc/worktrees/bolt-")
+        ),
+      ).toBe(true);
     });
   });
 

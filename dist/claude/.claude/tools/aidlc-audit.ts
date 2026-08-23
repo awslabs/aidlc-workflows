@@ -23,6 +23,7 @@ import {
   hasUnsafeSingleLineCharacter,
   isoTimestamp,
   parseFieldArgs,
+  redactProjectDirPrefix,
   relativeRecordDir,
   readRegularFileNoFollowOrThrow,
   releaseAuditLock,
@@ -491,6 +492,7 @@ function validateAuditEntry(entry: AuditEntryInput): void {
 function renderAuditBlock(
   entry: AuditEntryInput,
   timestamp: string,
+  projectDir: string,
 ): string {
   const heading = EVENT_HEADINGS[entry.eventType] || entry.eventType;
   let block = `\n## ${heading}\n`;
@@ -502,7 +504,10 @@ function renderAuditBlock(
     if (EMITTER_OWNED_FIELD_KEYS.has(key)) continue;
     // Escape every JavaScript line terminator in values so a malicious or
     // malformed input cannot forge a second audit field or event line.
-    const safeValue = String(value).replace(/\r\n?|\n|\u2028|\u2029/g, "\\n");
+    const safeValue = redactProjectDirPrefix(
+      String(value),
+      projectDir,
+    ).replace(/\r\n?|\n|\u2028|\u2029/g, "\\n");
     block += `**${key}**: ${safeValue}\n`;
   }
   return `${block}\n---\n`;
@@ -576,7 +581,7 @@ export function appendAuditEntryUnlocked(
   appendAuditBlockAtPath(
     projectDir,
     auditFilePath(projectDir, intent, space),
-    renderAuditBlock(entry, ts),
+    renderAuditBlock(entry, ts, projectDir),
   );
 
   tapAuditMetric(eventType, fields, projectDir);
@@ -763,7 +768,11 @@ export function appendAuditEntryAtPathUnlocked(
   const entry = { eventType, fields };
   validateAuditEntry(entry);
   const ts = isoTimestamp();
-  appendAuditBlockAtPath(projectDir, shardPath, renderAuditBlock(entry, ts));
+  appendAuditBlockAtPath(
+    projectDir,
+    shardPath,
+    renderAuditBlock(entry, ts, projectDir),
+  );
   tapAuditMetric(eventType, fields, projectDir);
   return { appended: true, event: eventType, timestamp: ts };
 }
@@ -790,7 +799,9 @@ export function appendAuditEntries(
   try {
     const timestamps = entries.map(() => isoTimestamp());
     const payload = entries
-      .map((entry, index) => renderAuditBlock(entry, timestamps[index]))
+      .map((entry, index) =>
+        renderAuditBlock(entry, timestamps[index], projectDir)
+      )
       .join("");
     appendAuditBlockAtPath(projectDir, auditFilePath(projectDir, intent, space), payload);
     for (const entry of entries) {
@@ -884,7 +895,11 @@ function handleAppendRaw(
   // reader, timestamp and all. Refuse taxonomy names outright (canonical events
   // go through `append`, which validates ownership); non-taxonomy Event lines
   // (custom diagnostics) stay allowed — no query resolves them to authority.
-  const expandedBody = body.replace(/\\n/g, "\n");
+  const expandedBody = redactProjectDirPrefix(
+    body.replace(/\\n/g, "\n"),
+    projectDir,
+  );
+  const safeHeading = redactProjectDirPrefix(heading, projectDir);
   for (const raw of expandedBody.split(/\r\n?|\n|\u2028|\u2029/)) {
     const line = raw.startsWith("- ") ? raw.slice(2) : raw;
     if (!line.startsWith("**Event**:")) continue;
@@ -906,7 +921,7 @@ function handleAppendRaw(
 
   try {
     // Interpret literal \n sequences in the body as actual newlines
-    let block = `\n## ${heading}\n`;
+    let block = `\n## ${safeHeading}\n`;
     block += `**Timestamp**: ${ts}\n`;
     block += `${expandedBody}\n`;
     block += `\n---\n`;
@@ -1209,7 +1224,7 @@ function handleAuditFork(args: string[], projectDir: string): void {
       appendAuditBlockAtPath(
         projectDir,
         mainAuditPath,
-        renderAuditBlock(forkEntry, auditTs),
+        renderAuditBlock(forkEntry, auditTs, projectDir),
         {
           ...before.identity,
           prefixLength: boundary,
@@ -1470,7 +1485,7 @@ function handleAuditMerge(args: string[], projectDir: string): void {
       appendAuditBlockAtPath(
         projectDir,
         mainAuditPath,
-        delta + renderAuditBlock(mergedEntry, mergedTimestamp),
+        delta + renderAuditBlock(mergedEntry, mergedTimestamp, projectDir),
         {
           ...mainSnapshot.identity,
           prefixLength: boundary,

@@ -570,6 +570,33 @@ describe("t305 strict source-manifest validation", () => {
         'directory claims must end with "/"',
       );
     }
+
+    manifest(record, "alpha", {
+      stage: "code-generation",
+      unit: "alpha",
+      version: 1,
+      writes: [{ path: "linked-directory/inner.ts" }],
+    });
+    const throughLinkedDirectory = readUnitSourceManifest(
+      project,
+      "code-generation",
+      "alpha",
+    );
+    expect(throughLinkedDirectory.ok).toBe(false);
+    if (!throughLinkedDirectory.ok) {
+      expect(throughLinkedDirectory.reason).toContain(
+        'traverses symlinked directory "linked-directory"',
+      );
+      expect(throughLinkedDirectory.reason).toContain(
+        "Source claims bind link text, not target bytes",
+      );
+      expect(throughLinkedDirectory.reason).toContain(
+        "claim the link itself or the real target path",
+      );
+      expect(throughLinkedDirectory.reason).not.toContain(
+        "Git could not verify ignore rules",
+      );
+    }
   });
 });
 
@@ -1432,7 +1459,7 @@ describe("t305 real receipt and guard flows", () => {
     ).toBe("invalid");
   }, 30000);
 
-  test("field-free cross-shard baseline ties stay legacy while bound ties refuse", () => {
+  test("cross-shard baseline ties accept identical values and refuse differing values", () => {
     const stage = {
       slug: "code-generation",
       phase: "construction",
@@ -1451,11 +1478,16 @@ describe("t305 real receipt and guard flows", () => {
     const writeTiedRows = (
       record: string,
       baseline?: string,
+      secondBaseline = baseline,
     ): void => {
       const auditDir = join(record, "audit");
       mkdirSync(auditDir, { recursive: true });
-      const baselineLine =
+      const firstBaselineLine =
         baseline === undefined ? "" : `**Source Baseline**: ${baseline}\n`;
+      const secondBaselineLine =
+        secondBaseline === undefined
+          ? ""
+          : `**Source Baseline**: ${secondBaseline}\n`;
       writeFileSync(
         join(auditDir, "a.md"),
         [
@@ -1464,7 +1496,7 @@ describe("t305 real receipt and guard flows", () => {
           `**Timestamp**: ${timestamp}`,
           "**Event**: WORKFLOW_STARTED",
           "**Scope**: feature",
-          baselineLine.trimEnd(),
+          firstBaselineLine.trimEnd(),
           "",
           "---",
           "",
@@ -1481,7 +1513,7 @@ describe("t305 real receipt and guard flows", () => {
           "**Event**: STAGE_STARTED",
           "**Stage**: code-generation",
           "**Agent**: aidlc-developer-agent",
-          baselineLine.trimEnd(),
+          secondBaselineLine.trimEnd(),
           "",
           "---",
           "",
@@ -1532,10 +1564,170 @@ describe("t305 real receipt and guard flows", () => {
         modernState,
         stage,
       ).sourceBaseline.state,
-    ).toBe("unbindable");
+    ).toBe("ready");
     expect(
       currentStageSourceBaseline(
         modern.project,
+        "code-generation",
+        false,
+      ).state,
+    ).toBe("ready");
+
+    const differing = fixture();
+    const differingListing = workspaceSourceListing(differing.project);
+    expect(differingListing).not.toBeNull();
+    if (differingListing === null) return;
+    const firstBaseline = writeBaselineSourceSnapshot(
+      differing.project,
+      "code-generation",
+      differingListing,
+    );
+    writeFileSync(
+      join(differing.project, "different.ts"),
+      "different\n",
+    );
+    const changedListing = workspaceSourceListing(differing.project);
+    expect(changedListing).not.toBeNull();
+    if (changedListing === null) return;
+    const secondBaseline = writeBaselineSourceSnapshot(
+      differing.project,
+      "code-generation",
+      changedListing,
+    );
+    writeTiedRows(differing.record, firstBaseline, secondBaseline);
+    const differingState = readFileSync(
+      join(differing.record, "aidlc-state.md"),
+      "utf-8",
+    );
+    expect(
+      freshReviewReceipts(
+        differing.project,
+        differingState,
+        stage,
+      ).sourceBaseline.state,
+    ).toBe("unbindable");
+    expect(
+      currentStageSourceBaseline(
+        differing.project,
+        "code-generation",
+        false,
+      ).state,
+    ).toBe("unbindable");
+
+    const writeJumpTie = (
+      record: string,
+      baseline: string,
+      foreignBaseline: string,
+    ): void => {
+      const auditDir = join(record, "audit");
+      mkdirSync(auditDir, { recursive: true });
+      const timestamp = "2026-08-22T12:30:00Z";
+      const writeBoundary = (
+        file: string,
+        event: "STAGE_JUMPED" | "STAGE_STARTED" | "WORKFLOW_STARTED",
+        value: string,
+      ) => {
+        writeFileSync(
+          join(auditDir, file),
+          [
+            "# AI-DLC Audit Log",
+            "## Boundary",
+            `**Timestamp**: ${timestamp}`,
+            `**Event**: ${event}`,
+            ...(event === "STAGE_STARTED"
+              ? [
+                  "**Stage**: code-generation",
+                  "**Agent**: aidlc-developer-agent",
+                ]
+              : event === "STAGE_JUMPED"
+                ? ["**Target**: code-generation"]
+                : ["**Scope**: feature"]),
+            `**Source Baseline**: ${value}`,
+            "",
+            "---",
+            "",
+          ].join("\n"),
+        );
+      };
+      writeBoundary("a.md", "STAGE_JUMPED", baseline);
+      writeBoundary("b.md", "STAGE_STARTED", baseline);
+      writeBoundary("c.md", "WORKFLOW_STARTED", foreignBaseline);
+    };
+
+    const sameJump = fixture();
+    const sameJumpListing = workspaceSourceListing(sameJump.project);
+    expect(sameJumpListing).not.toBeNull();
+    if (sameJumpListing === null) return;
+    const sameJumpBaseline = writeBaselineSourceSnapshot(
+      sameJump.project,
+      "code-generation",
+      sameJumpListing,
+    );
+    writeJumpTie(
+      sameJump.record,
+      sameJumpBaseline,
+      sameJumpBaseline,
+    );
+    const sameJumpState = readFileSync(
+      join(sameJump.record, "aidlc-state.md"),
+      "utf-8",
+    );
+    expect(
+      freshReviewReceipts(
+        sameJump.project,
+        sameJumpState,
+        stage,
+      ).sourceBaseline.state,
+    ).toBe("ready");
+    expect(
+      currentStageSourceBaseline(
+        sameJump.project,
+        "code-generation",
+        false,
+      ).state,
+    ).toBe("ready");
+
+    const differingJump = fixture();
+    const differingJumpListing = workspaceSourceListing(
+      differingJump.project,
+    );
+    expect(differingJumpListing).not.toBeNull();
+    if (differingJumpListing === null) return;
+    const jumpBaseline = writeBaselineSourceSnapshot(
+      differingJump.project,
+      "code-generation",
+      differingJumpListing,
+    );
+    writeFileSync(join(differingJump.project, "jump-different.ts"), "x\n");
+    const differingJumpChanged = workspaceSourceListing(
+      differingJump.project,
+    );
+    expect(differingJumpChanged).not.toBeNull();
+    if (differingJumpChanged === null) return;
+    const foreignBaseline = writeBaselineSourceSnapshot(
+      differingJump.project,
+      "code-generation",
+      differingJumpChanged,
+    );
+    writeJumpTie(
+      differingJump.record,
+      jumpBaseline,
+      foreignBaseline,
+    );
+    const differingJumpState = readFileSync(
+      join(differingJump.record, "aidlc-state.md"),
+      "utf-8",
+    );
+    expect(
+      freshReviewReceipts(
+        differingJump.project,
+        differingJumpState,
+        stage,
+      ).sourceBaseline.state,
+    ).toBe("unbindable");
+    expect(
+      currentStageSourceBaseline(
+        differingJump.project,
         "code-generation",
         false,
       ).state,
