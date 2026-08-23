@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.64] - 2026-08-23
+
+The Kiro IDE distribution now ships only IDE-native agent and permission surfaces. **Upgrade:** re-copy `dist/kiro-ide/` into your project, then remove any `.kiro/agents/aidlc.json`, `.kiro/agents/aidlc-*-agent.json`, and `.kiro/settings/cli.json` files left by an older overlay copy.
+
+* Kiro IDE now ships the conductor as `.kiro/agents/aidlc.md` and all 14 personas as Markdown with native `tools:` grants and `permissions.rules`; CLI agent-v1 JSON and `settings/cli.json` files are no longer included.
+* `/aidlc --doctor` accepts either the Kiro CLI JSON conductor or Kiro IDE Markdown conductor and checks `settings/cli.json` only for CLI-shaped installs.
+* Plugin composition validates Kiro IDE dispatch targets by their installed Markdown capability grants, rejecting empty or malformed permissions with actionable remediation while leaving Kiro CLI trust checks unchanged.
+
 ## [2.6.62] - 2026-08-23
 
 Completed-stage artifact drift is now detected through optional audit receipts and surfaced as an advisory without changing workflow routing. Existing workflows require no migration: receipt-less completions remain untracked and fail open, while stages become tracked on their next normal completion. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
@@ -9,7 +17,6 @@ Completed-stage artifact drift is now detected through optional audit receipts a
 * Completion tools capture report-time schema-2 structure/content fingerprints for resolved artifact instances. Capture failures still complete the stage, record a visible `Validation Warning`, and leave that completion untracked.
 * Artifact filenames and CodeKB ownership now come from one shared vocabulary, including `build-test-results` and `load-test-results` resolving to `test-results.md` and `traceability` resolving to `traceability.json`.
 * Public audit append commands refuse `STAGE_COMPLETED`; the owning single-stage report path retains its internal atomic lifecycle pair.
-
 
 ## [2.6.61] - 2026-08-23
 

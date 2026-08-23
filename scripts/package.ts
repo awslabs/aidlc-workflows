@@ -329,13 +329,21 @@ function applyFrontmatterAdditions(
     );
   }
   const fm = m[1];
+  const added = new Set<string>();
   for (const line of lines) {
+    if (/^\s/.test(line)) continue;
     const key = line.split(":")[0]?.trim();
     if (!key || !/^[A-Za-z_][\w-]*$/.test(key)) {
       throw new Error(
         `frontmatterAdditions: line "${line}" for ${file} does not start with a YAML key.`,
       );
     }
+    if (added.has(key)) {
+      throw new Error(
+        `frontmatterAdditions: ${file} declares "${key}:" more than once in additions.`,
+      );
+    }
+    added.add(key);
     if (new RegExp(`^${key}:`, "m").test(fm)) {
       throw new Error(
         `frontmatterAdditions: ${file} already declares "${key}:" in core - ` +
@@ -593,7 +601,6 @@ function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): strin
         `${fmMissed.join(", ")} - fix the path(s) in the manifest.`,
     );
   }
-
   // 2. Copy authored harness surfaces (token substitution on .md). projectRoot
   //    files land beside the harness dir (e.g. dist/kiro/AGENTS.md), the rest
   //    inside <harnessDir>/. On the kiro harnesses two authored JSON surfaces

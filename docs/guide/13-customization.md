@@ -6,8 +6,9 @@ AI-DLC is designed to adapt to your team's needs. This chapter covers settings o
 > configuration, stage depth, knowledge, and rules — apply on every harness. The
 > mechanism-level config in this chapter (`settings.json` / `settings.local.json`,
 > the statusline command, `$CLAUDE_PROJECT_DIR`, tool-permission blocks) is
-> **Claude Code-specific**. Kiro configures the equivalents in
-> `.kiro/settings/cli.json` + its agent config, Codex in `.codex/config.toml`
+> **Claude Code-specific**. Kiro CLI configures the equivalents in
+> `.kiro/settings/cli.json` + its agent config; Kiro IDE uses agent Markdown
+> `tools:` and `permissions.rules`. Codex uses `.codex/config.toml`
 > + Starlark rules, Cursor in `.cursor/hooks.json` + `.cursor/cli.json`
 > (permissions only), opencode in the project-root `opencode.json`, and Copilot
 > in `.github/hooks/aidlc.json` (hook wiring) + `~/.copilot/config.json`

@@ -33,6 +33,11 @@ tier: judgment                      # judgment | balanced | templated (see Agent
 | `disallowedTools` | Yes in authored core | Must include `Task` -- only the conductor delegates. The packager removes or translates this Claude-dialect key when a harness uses a different native tool-policy surface |
 | `tier` | Yes | `judgment`, `balanced`, or `templated`. The AUTHORED dial: the packager projects it into each harness's native model/effort keys (see Agent Tiers below). Raw `model:`/`effort:` never appear in authored frontmatter -- they are projection OUTPUTS in `dist/<harness>/` |
 
+Kiro IDE projects this core contract differently: it removes
+`disallowedTools`, adds `tools: ["read", "write", "shell"]`, and adds
+capability-scoped `permissions.rules`. Omitting `subagent` from `tools:` carries
+the same no-nested-delegation constraint in the IDE's native vocabulary.
+
 ### Markdown Body Sections
 
 Below the frontmatter, the markdown body defines:
@@ -91,7 +96,7 @@ The authored dial on every agent is `tier:` -- it names the KIND of work the per
 
 The projection per harness (`core/tools/aidlc-tiers.ts` is the single source of truth):
 
-| Tier | Claude Code (.md frontmatter) | Codex CLI (.toml) | Kiro CLI/IDE (agent JSON `"model"`, CLI / `.md` frontmatter `model:`, IDE) | Kiro cli.json `chat.modelDefaults` | opencode (.md frontmatter) | Copilot (.md frontmatter) | Cursor (.md frontmatter) |
+| Tier | Claude Code (.md frontmatter) | Codex CLI (.toml) | Kiro CLI agent JSON / Kiro IDE `.md` | Kiro CLI cli.json `chat.modelDefaults` | opencode (.md frontmatter) | Copilot (.md frontmatter) | Cursor (.md frontmatter) |
 |------|-------------------------------|-------------------|--------------------------------------|-------------------------------------|-----------------------------|-----------------------------|--------------------------|
 | `judgment` | `model: inherit`, no `effort:` line | no `model`/`model_reasoning_effort` keys (config.toml session defaults apply) | field OMITTED (schema fallback: the user's default model) | no tier entry | no `model:`/`variant:` keys (opencode.json session defaults apply) | omitted (inherits session model) | `model:` OMITTED (inherits the session model) |
 | `balanced` | `model: sonnet`, no `effort:` line | `model = "openai.gpt-5.6-terra"`, no effort key | field OMITTED (see below) | no tier entry | `model: amazon-bedrock/global.anthropic.claude-sonnet-4-6`, no variant key | omitted (inherits session model) | `model:` OMITTED (see below) |
@@ -99,7 +104,7 @@ The projection per harness (`core/tools/aidlc-tiers.ts` is the single source of 
 
 Key facts behind the table:
 
-- **Omission is the inherit mechanism.** On Claude Code an agent .md with no `effort:` key inherits the session effort, and a pinned `effort:` overrides the session in BOTH directions (a pin is a cap, not a floor) -- so absence is the contract for judgment and balanced. On Codex a role TOML without `model` spawns on the shipped `.codex/config.toml` session defaults (verified live on codex-cli 0.139.0 and 0.142.5; the current doctor-enforced minimum is 0.145.0 for immediate compact-session reload). On Kiro the agent-v1 schema documents the absent-`"model"` fallback: "If not specified, uses the default model" (the `/model` persisted preference).
+- **Omission is the inherit mechanism.** On Claude Code an agent .md with no `effort:` key inherits the session effort, and a pinned `effort:` overrides the session in BOTH directions (a pin is a cap, not a floor) -- so absence is the contract for judgment and balanced. On Codex a role TOML without `model` spawns on the shipped `.codex/config.toml` session defaults (verified live on codex-cli 0.139.0 and 0.142.5; the current doctor-enforced minimum is 0.145.0 for immediate compact-session reload). On Kiro CLI the agent-v1 schema documents the absent-`"model"` fallback: "If not specified, uses the default model"; Kiro IDE likewise inherits when its agent `.md` omits `model:`.
 - **Kiro never pins a model.** A shipped Kiro model ID resolves only when that model is enabled on the user's install; a session running any other model rejects every delegated spawn with `Invalid model ID`, and Kiro rejects the Claude-dialect tier aliases (`opus`/`sonnet`) outright -- so there is no universally safe pinnable value. Every Kiro tier therefore omits `"model"` (and the `.md` frontmatter `model:` line): all agents inherit the session model. The kiro slots in `TIER_PROJECTIONS` and the `kiroModelDefaults()` machinery remain in place, dormant, should a resolvable per-install pinning mechanism appear.
 - **Kiro has NO per-agent effort surface.** kiro-cli fail-closes on any effort-like key in agent JSON, so a per-model effort default can only ride on `settings/cli.json` `chat.modelDefaults[<modelId>].output_config.effort`. With no tier pinning a model, only the authored conditional entry ships (`claude-opus-4.8` -> `xhigh`, applied only when the session actually runs that model). That file is CLI-only: the Kiro IDE ignores cli.json entirely and applies its extension-embedded per-model default (or the user's `/effort` session state).
 - **Cursor never pins a model either.** Model availability on Cursor is plan-dependent (a Free account rejects every named model and can only run `Auto`), so a pinned agent model would hard-fail installs on lower plans. Every Cursor tier therefore omits the `.md` frontmatter `model:` line (Cursor has no per-agent effort key -- effort rides the model-id suffix), and all agents inherit the session model; the cursor slots in `TIER_PROJECTIONS` are model-only, dormant, should a plan-independent pinning mechanism appear.

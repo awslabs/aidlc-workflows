@@ -11,7 +11,7 @@ A native implementation of the **AI-DLC methodology** (AI-Driven Development Lif
 
 The methodology lives once, in a harness-neutral `core/`; each harness adds a thin surface that decides how it shows up on that harness. So you edit the methodology in one place, and every harness distribution is generated from it — no harness gets special treatment. (See [Repository layout](#repository-layout) for how the pieces fit together.)
 
-![version](https://img.shields.io/badge/version-2.6.62-blue)
+![version](https://img.shields.io/badge/version-2.6.64-blue)
 ![license](https://img.shields.io/badge/license-MIT--0-green)
 ![Kiro IDE](https://img.shields.io/badge/harness-Kiro%20IDE-orange)
 ![Kiro CLI](https://img.shields.io/badge/harness-Kiro%20CLI-orange)
@@ -135,7 +135,7 @@ cp dist/kiro-ide/AGENTS.md your-project/AGENTS.md   # merge if you already have 
 
 The `aidlc/` shell ships the pre-built `aidlc/spaces/default/memory/` method tree the engine reads; `/aidlc --doctor` fails its "workspace shell ready" check without it.
 
-Open `your-project/` in Kiro IDE. The `/aidlc` command loads the shipped conductor skill (the bundled `.kiro/settings/cli.json` is a Kiro CLI-only compatibility surface — the IDE ignores it and does not select a default agent from it). The install registers the framework hooks in both formats: `.kiro/hooks/aidlc-*.json` (v2 schema for IDE >= 1.0) and `.kiro/hooks/aidlc-*.kiro.hook` (legacy format for pre-1.0 IDEs). In the chat panel, run `/aidlc --doctor` to verify, then `/aidlc <description>` to start.
+Open `your-project/` in Kiro IDE. The `/aidlc` command loads the shipped conductor skill, and `.kiro/agents/aidlc.md` exposes the conductor in the IDE agent selector. Agents are Markdown-only in this distribution; Kiro CLI's agent-v1 JSON files and `settings/cli.json` do not ship. The install registers the framework hooks in both formats: `.kiro/hooks/aidlc-*.json` (v2 schema for IDE >= 1.0) and `.kiro/hooks/aidlc-*.kiro.hook` (legacy format for pre-1.0 IDEs). In the chat panel, run `/aidlc --doctor` to verify, then `/aidlc <description>` to start.
 
 > [!NOTE]
 > AI-DLC on Kiro works best with **Claude Opus 4.8**, which requires a **paid Kiro plan**. On weaker models the conductor may skip optional stage steps (reviewer pass, learnings ritual) or rush approval gates.
@@ -372,7 +372,7 @@ aidlc-claude/
 │
 ├── harness/                    # thin per-harness authored surfaces — small, divergent by design
 │   ├── claude/                 #   manifest.ts · orchestrator skill · settings.json · onboarding fills
-│   ├── kiro-ide/               #   manifest.ts · orchestrator · agent JSONs · v2 .json + legacy .kiro.hook files · settings · onboarding fills
+│   ├── kiro-ide/               #   manifest.ts · orchestrator · conductor Markdown · v2 .json + legacy .kiro.hook files · onboarding fills
 │   ├── kiro/                   #   manifest.ts · orchestrator · agent JSONs · settings · onboarding fills (CLI — agent-JSON hooks)
 │   ├── codex/                  #   manifest.ts · emit.ts (Codex-only emissions) · orchestrator · hooks adapter
 │   ├── cursor/                 #   manifest.ts · orchestrator · hooks adapter · installer · rules · onboarding fills

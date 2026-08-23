@@ -44,7 +44,7 @@ import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-const HARNESSES = ["kiro", "kiro-ide"] as const;
+const HARNESSES = ["kiro"] as const;
 
 const PERSONAS = [
   "aidlc-architect-agent.json",

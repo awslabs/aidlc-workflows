@@ -189,6 +189,7 @@ function directCompose(
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     AIDLC_HARNESS_DIR: harnessDir,
+    AIDLC_HARNESS_NAME: harness,
   };
   if (harness === "claude" || harness === "codex" || harness === "kiro" || harness === "kiro-ide") {
     env.CLAUDE_PLUGIN_ROOT = pluginBuilt;
@@ -197,7 +198,6 @@ function directCompose(
     env.PLUGIN_ROOT = pluginBuilt;
     env.AIDLC_PROJECT_DIR = projectDir;
   }
-  if (harness === "copilot") env.AIDLC_HARNESS_NAME = "copilot";
   Object.assign(env, envOverrides);
 
   const compose = spawnSync(BUN, [join(pluginBuilt, "hooks", "compose.ts")], {

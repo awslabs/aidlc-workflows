@@ -337,18 +337,24 @@ same-plugin copy from the pre-projection composer; edited or foreign files retai
 no-clobber behavior. An already-composed unsupported value is left in place with
 a degraded diagnostic that names the file to remove before re-compose.
 
-On Kiro CLI/IDE, Codex, and OpenCode, a Markdown persona in the engine roster
-is available only for `mode: inline`. Native dispatch also requires a
-per-harness dispatch surface — a hand-authored agent-v1 JSON plus registration
-in the conductor's `trustedAgents` list on Kiro, an agent config TOML (the
-shipped `aidlc-*-agent.toml` shape) on Codex, a native `.opencode/agents/`
-subagent file on OpenCode. Compose therefore rejects a plugin stage whose
+On Kiro CLI, Codex, and OpenCode, a Markdown persona in the engine roster is
+available only for `mode: inline`. Native dispatch also requires a per-harness
+dispatch surface — a hand-authored agent-v1 JSON plus registration in the
+conductor's `trustedAgents` list on Kiro CLI, an agent config TOML (the shipped
+`aidlc-*-agent.toml` shape) on Codex, or a native `.opencode/agents/` subagent
+file on OpenCode. Kiro IDE instead dispatches the installed agent Markdown
+itself, but only when `tools:` is non-empty and `permissions.rules` contains at
+least one well-formed `capability`/`effect`/`match` entry; empty permissions,
+missing or empty rules, and malformed entries are rejected. Compose therefore
+rejects a plugin stage whose
 dispatched topology (`mob`, `pipeline`, or `subagent` for the lead and
 supports; a `reviewer:` on any gated stage regardless of mode) names an agent
 without the complete installed dispatch surface, and records the stage, agent,
-and remediation in the compose drops log. On Kiro, the JSON and `trustedAgents`
-registration are checked independently: having only one still rejects the
-stage. On OpenCode — the one harness whose native surface compose itself emits
+and remediation in the compose drops log. On Kiro CLI, the JSON and
+`trustedAgents` registration are checked independently: having only one still
+rejects the stage. On Kiro IDE, author the installed `.md` with both required
+blocks or change the stage to `mode: inline`; the IDE path never reads
+`aidlc.json`. On OpenCode — the one harness whose native surface compose itself emits
 — a plugin-shipped persona counts as the surface when it would survive the
 native-twin emission (closed frontmatter, no un-projectable
 `disallowedTools`); Kiro/Codex surfaces are always hand-authored, so a

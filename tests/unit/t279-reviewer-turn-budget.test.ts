@@ -195,12 +195,10 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
   });
 
   test("kiro agent JSONs never receive the cap key (kiro-cli fail-closes on unknown agent-JSON fields)", () => {
-    for (const distName of ["kiro", "kiro-ide"]) {
-      const rosterDir = join(REPO_ROOT, "dist", distName, ".kiro", "agents");
-      for (const f of readdirSync(rosterDir).filter((n) => n.endsWith(".json"))) {
-        const body = readFileSync(join(rosterDir, f), "utf-8");
-        expect(body, `dist/${distName} ${f}`).not.toContain("maxTurns");
-      }
+    const rosterDir = join(REPO_ROOT, "dist", "kiro", ".kiro", "agents");
+    for (const f of readdirSync(rosterDir).filter((n) => n.endsWith(".json"))) {
+      const body = readFileSync(join(rosterDir, f), "utf-8");
+      expect(body, `dist/kiro ${f}`).not.toContain("maxTurns");
     }
   });
 

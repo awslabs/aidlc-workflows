@@ -9,6 +9,17 @@ description: >
   Leads Observability Setup, Incident Response, and Feedback & Optimization stages.
   Supports Performance Validation.
 tools: ["read", "write", "shell"]
+permissions:
+  rules:
+    - capability: shell
+      effect: allow
+      match:
+        - "bun .kiro/tools/aidlc-*"
+        - "date -u *"
+    - capability: filesystem
+      effect: allow
+      match:
+        - "aidlc/spaces/**"
 ---
 
 **IMPORTANT: Do NOT use the Task tool. You operate as a delegated agent and must not spawn sub-agents.**

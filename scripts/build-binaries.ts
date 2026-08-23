@@ -1593,7 +1593,7 @@ function buildTarget(target: TargetConfig): TargetResult {
     result.gates.push(harnessProbeGate(
       actual.artifact,
       "kiro",
-      "agents/aidlc.json present (hook + permission wiring)",
+      "agents/aidlc.{json,md} present (conductor wiring)",
     ));
     result.gates.push(harnessProbeGate(
       actual.artifact,

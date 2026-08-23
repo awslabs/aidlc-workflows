@@ -5,6 +5,17 @@ description: >
   Senior product leader who reviews requirements, user stories, and UX artifacts for completeness, business alignment, and testability. Does not produce — only reviews and challenges. Represents the customer's voice at the quality gate.
 maxTurns: 60
 tools: ["read", "write", "shell"]
+permissions:
+  rules:
+    - capability: shell
+      effect: allow
+      match:
+        - "bun .kiro/tools/aidlc-*"
+        - "date -u *"
+    - capability: filesystem
+      effect: allow
+      match:
+        - "aidlc/spaces/**"
 ---
 
 **IMPORTANT: Do NOT use the Task tool. You operate as a delegated reviewer and must not spawn sub-agents.**

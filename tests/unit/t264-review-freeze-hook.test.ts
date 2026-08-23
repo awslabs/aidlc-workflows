@@ -535,12 +535,12 @@ describe("t264 (c) harness registration", () => {
       existsSync(join(REPO_ROOT, "harness", "kiro-ide", "hooks", "aidlc-review-freeze.kiro.hook")),
     ).toBe(false);
     const ideConductor = readFileSync(
-      join(REPO_ROOT, "harness", "kiro-ide", "agents", "aidlc.json"),
+      join(REPO_ROOT, "harness", "kiro-ide", "agents", "aidlc.md"),
       "utf-8",
     );
     expect(ideConductor).not.toContain("review-freeze");
     for (const name of readdirSync(join(REPO_ROOT, "harness", "kiro-ide", "agents"))) {
-      if (!name.endsWith("-agent.json")) continue;
+      if (!name.endsWith("-agent.md")) continue;
       expect(
         readFileSync(join(REPO_ROOT, "harness", "kiro-ide", "agents", name), "utf-8"),
         name,

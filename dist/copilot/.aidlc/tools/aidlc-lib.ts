@@ -8956,7 +8956,9 @@ export function loadAgents(): AgentMetadata[] {
     const dir = agentsDir();
     const slugToFile = new Map<string, string>();
     const agents: AgentMetadata[] = [];
-    const files = readdirSync(dir).filter((f) => f.endsWith(".md")).sort();
+    const files = readdirSync(dir)
+      .filter((f) => f.endsWith(".md") && f !== "aidlc.md")
+      .sort();
     for (const f of files) {
       const filePath = join(dir, f);
       const agent = parseAgentFrontmatter(filePath);

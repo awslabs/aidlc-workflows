@@ -45,6 +45,7 @@ const PLUGIN = "test-pro";
 const CLAUDE_DIST = join(REPO_ROOT, "dist", "claude", ".claude");
 const OPENCODE_DIST = join(REPO_ROOT, "dist", "opencode");
 const KIRO_DIST = join(REPO_ROOT, "dist", "kiro", ".kiro");
+const KIRO_IDE_DIST = join(REPO_ROOT, "dist", "kiro-ide", ".kiro");
 const CODEX_DIST = join(REPO_ROOT, "dist", "codex", ".codex");
 const CURSOR_DIST = join(REPO_ROOT, "dist", "cursor");
 const CURSOR_INSTALLER_SOURCE = join(REPO_ROOT, "harness", "cursor", "install.ts");
@@ -1474,17 +1475,24 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
   function composeSynthetic(
     name: string,
     files: Record<string, string>,
-    harnessLeaf: ".claude" | ".kiro" | ".codex" | ".aidlc" = ".claude",
+    harness: ".claude" | ".kiro" | ".codex" | ".aidlc" | "kiro-ide" = ".claude",
     mutateInstall?: (proj: string, harnessDir: string) => void,
   ): { drops: string; proj: string } {
     const proj = mkdtempSync(join(tmp, `syn-${name}-`));
+    const harnessLeaf = harness === "kiro-ide" ? ".kiro" : harness;
     if (harnessLeaf === ".aidlc") {
       // OpenCode's dist is a whole-project shape (.aidlc + .opencode +
       // opencode.json), unlike the single-dir harness dists.
       cpSync(OPENCODE_DIST, proj, { recursive: true });
     } else {
       const baseDist =
-        harnessLeaf === ".kiro" ? KIRO_DIST : harnessLeaf === ".codex" ? CODEX_DIST : CLAUDE_DIST;
+        harness === "kiro-ide"
+          ? KIRO_IDE_DIST
+          : harnessLeaf === ".kiro"
+            ? KIRO_DIST
+            : harnessLeaf === ".codex"
+              ? CODEX_DIST
+              : CLAUDE_DIST;
       cpSync(baseDist, join(proj, harnessLeaf), { recursive: true });
     }
     const harnessDir = join(proj, harnessLeaf);
@@ -1492,7 +1500,13 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     const root = prepareSyntheticPlugin(proj, name, files);
     const r = spawnSync(BUN, [join(root, "hooks", "compose.ts")], {
       cwd: proj, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000,
-      env: { ...process.env, CLAUDE_PLUGIN_ROOT: root, CLAUDE_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: harnessLeaf },
+      env: {
+        ...process.env,
+        CLAUDE_PLUGIN_ROOT: root,
+        CLAUDE_PROJECT_DIR: proj,
+        AIDLC_HARNESS_DIR: harnessLeaf,
+        ...(harness === "kiro-ide" ? { AIDLC_HARNESS_NAME: "kiro-ide" } : {}),
+      },
     });
     expect(r.status).toBe(0); // compose is fail-open — never breaks the session
     // Drops files are per-plugin (`plugin-compose-<key>.drops`) — aggregate any
@@ -1794,6 +1808,134 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(drops).toContain('agent "aidlc-design-agent"');
     expect(drops).toContain("toolsSettings.subagent.trustedAgents");
     expect(drops).not.toContain("aidlc-design-agent.json (agent-v1 JSON)");
+  });
+
+  test("Kiro IDE accepts only installed Markdown agents with complete dispatch grants", () => {
+    const variants = [
+      {
+        label: "valid",
+        grant: [
+          'tools: ["read", "write", "shell"]',
+          "permissions:",
+          "  rules:",
+          "    - capability: shell",
+          "      effect: allow",
+          "      match:",
+          '        - "bun .kiro/tools/aidlc-*"',
+        ],
+        accepted: true,
+      },
+      {
+        label: "reordered-rule",
+        grant: [
+          'tools: ["read", "write", "shell"]',
+          "permissions:",
+          "  rules:",
+          "    - effect: allow",
+          "      match:",
+          '        - "bun .kiro/tools/aidlc-*"',
+          "      capability: shell",
+        ],
+        accepted: true,
+      },
+      {
+        label: "empty-tools",
+        grant: [
+          "tools: []",
+          "permissions:",
+          "  rules:",
+          "    - capability: shell",
+          "      effect: allow",
+          "      match:",
+          '        - "bun .kiro/tools/aidlc-*"',
+        ],
+        accepted: false,
+      },
+      {
+        label: "empty-permissions",
+        grant: ['tools: ["read"]', "permissions: {}"],
+        accepted: false,
+      },
+      {
+        label: "empty-rules",
+        grant: ['tools: ["read"]', "permissions:", "  rules: []"],
+        accepted: false,
+      },
+      {
+        label: "malformed-rule",
+        grant: [
+          'tools: ["read"]',
+          "permissions:",
+          "  rules:",
+          "    - capability: shell",
+          "      effect: allow",
+        ],
+        accepted: false,
+      },
+    ] as const;
+
+    for (const variant of variants) {
+      const plugin = `syn-kiro-ide-${variant.label}`;
+      const agent = `${plugin}-agent`;
+      const stage = [
+        "---",
+        `slug: ${plugin}-stage`,
+        `plugin: ${plugin}`,
+        "phase: inception",
+        "execution: ALWAYS",
+        "condition: always",
+        `lead_agent: ${agent}`,
+        "support_agents: []",
+        "mode: subagent",
+        "produces: []",
+        "consumes: []",
+        "requires_stage: []",
+        "inputs: x",
+        "outputs: y",
+        "---",
+        "",
+        `# ${plugin}`,
+        "",
+      ].join("\n");
+      const composed = composeSynthetic(
+        plugin,
+        { [`stages/inception/${plugin}-stage.md`]: stage },
+        "kiro-ide",
+        (_proj, harnessDir) => {
+          writeFileSync(
+            join(harnessDir, "agents", `${agent}.md`),
+            [
+              "---",
+              `name: ${agent}`,
+              `display_name: ${variant.label}`,
+              "examples: []",
+              ...variant.grant,
+              "---",
+              "",
+              `# ${variant.label}`,
+              "",
+            ].join("\n"),
+          );
+        },
+      );
+      const stagePath = join(
+        composed.proj,
+        ".kiro",
+        "aidlc-common",
+        "stages",
+        "inception",
+        `${plugin}-stage.md`,
+      );
+      expect(existsSync(stagePath), variant.label).toBe(variant.accepted);
+      if (variant.accepted) {
+        expect(composed.drops, variant.label).not.toContain(`agent "${agent}"`);
+      } else {
+        expect(composed.drops, variant.label).toContain(`agent "${agent}"`);
+        expect(composed.drops, variant.label).toContain("permissions.rules");
+        expect(composed.drops, variant.label).toContain("mode to inline");
+        expect(composed.drops, variant.label).not.toContain("trustedAgents");
+      }
+    }
   });
 
   // OpenCode dispatches from the native roster .opencode/agents/<a>.md. A

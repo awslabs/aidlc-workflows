@@ -940,9 +940,153 @@ function pluginShipsViableNativeAgent(agent: string): boolean {
   return !collidingFile || collidingFile === join(rosterDir, `${agent}.md`);
 }
 
-// Kiro, Codex, OpenCode, and Copilot cannot dispatch a Markdown-only persona
-// from the engine roster. Reject any dispatched stage whose lead, support, or
-// reviewer lacks the harness-native surface.
+function yamlIndent(line: string): number {
+  return line.match(/^\s*/)?.[0].length ?? 0;
+}
+
+function inlineYamlListHasValue(raw: string): boolean {
+  const value = raw.trim();
+  if (!value.startsWith("[") || !value.endsWith("]")) return false;
+  return value.slice(1, -1).split(",").some((item) => {
+    const parsed = yamlScalarValue(item);
+    return parsed !== null && parsed !== "null" && parsed !== "~";
+  });
+}
+
+function blockYamlListHasValue(
+  lines: string[],
+  start: number,
+  parentIndent: number,
+  end = lines.length,
+): boolean {
+  for (let i = start; i < end; i++) {
+    const line = lines[i];
+    if (!line.trim() || line.trimStart().startsWith("#")) continue;
+    const indent = yamlIndent(line);
+    if (indent <= parentIndent) break;
+    const item = line.trimStart().match(/^-\s+(.+)$/)?.[1];
+    if (item && yamlScalarValue(item)) return true;
+  }
+  return false;
+}
+
+function validIdePermissionRule(
+  lines: string[],
+  start: number,
+  end: number,
+  itemIndent: number,
+): boolean {
+  let capability: string | null = null;
+  let effect: string | null = null;
+  let match = false;
+  let mappingIndent: number | null = null;
+  for (let i = start; i < end; i++) {
+    const line = lines[i];
+    if (!line.trim() || line.trimStart().startsWith("#")) continue;
+    let field = line.trimStart();
+    let indent = yamlIndent(line);
+    if (i === start) {
+      const item = field.match(/^-\s*(.*)$/);
+      if (!item) return false;
+      field = item[1];
+      if (!field) continue;
+      indent = itemIndent + 2;
+    } else if (indent <= itemIndent) {
+      return false;
+    }
+    if (mappingIndent === null) mappingIndent = indent;
+    if (indent < mappingIndent) return false;
+    if (indent > mappingIndent) continue;
+
+    const capabilityLine = field.match(/^capability:\s*(.*)$/);
+    if (capabilityLine) {
+      capability = yamlScalarValue(capabilityLine[1]);
+      continue;
+    }
+    const effectLine = field.match(/^effect:\s*(.*)$/);
+    if (effectLine) {
+      effect = yamlScalarValue(effectLine[1]);
+      continue;
+    }
+    const matchLine = field.match(/^match:\s*(.*)$/);
+    if (matchLine) {
+      match = matchLine[1].trim()
+        ? inlineYamlListHasValue(matchLine[1])
+        : blockYamlListHasValue(lines, i + 1, indent, end);
+    }
+  }
+  return Boolean(capability && (effect === "allow" || effect === "deny") && match);
+}
+
+// Kiro IDE dispatches Markdown agents only when their frontmatter carries a
+// non-empty tools grant and a permissions.rules list made entirely of
+// capability/effect/match entries. Fail closed on empty maps/lists and partial
+// entries: those files exist but do not grant a usable dispatch surface.
+function installedIdeAgentIsDispatchable(agentsDir: string, agent: string): boolean {
+  let content = "";
+  try {
+    content = readFileSync(join(agentsDir, `${agent}.md`), "utf-8");
+  } catch {
+    return false;
+  }
+  const fm = frontmatter(content);
+  if (!fm) return false;
+  const lines = fm.split(/\r?\n/);
+  const toolsIndex = lines.findIndex((line) => /^tools:\s*/.test(line));
+  if (toolsIndex < 0) return false;
+  const toolsValue = lines[toolsIndex].replace(/^tools:\s*/, "");
+  const toolsGranted = toolsValue.trim()
+    ? inlineYamlListHasValue(toolsValue)
+    : blockYamlListHasValue(lines, toolsIndex + 1, 0);
+  if (!toolsGranted) return false;
+
+  const permissionsIndex = lines.findIndex((line) => /^permissions:\s*/.test(line));
+  if (permissionsIndex < 0) return false;
+  if (lines[permissionsIndex].replace(/^permissions:\s*/, "").trim()) return false;
+  const permissionsEnd = lines.findIndex(
+    (line, index) => index > permissionsIndex && /^[A-Za-z_][\w.-]*\s*:/.test(line),
+  );
+  const blockEnd = permissionsEnd < 0 ? lines.length : permissionsEnd;
+  const rulesIndex = lines.findIndex(
+    (line, index) =>
+      index > permissionsIndex &&
+      index < blockEnd &&
+      /^\s+rules:\s*/.test(line),
+  );
+  if (rulesIndex < 0) return false;
+  const rulesValue = lines[rulesIndex].replace(/^\s+rules:\s*/, "");
+  if (rulesValue.trim()) return false;
+
+  const rulesIndent = yamlIndent(lines[rulesIndex]);
+  let itemIndent = -1;
+  const itemIndexes: number[] = [];
+  for (let i = rulesIndex + 1; i < blockEnd; i++) {
+    const line = lines[i];
+    if (!line.trim() || line.trimStart().startsWith("#")) continue;
+    const indent = yamlIndent(line);
+    if (indent <= rulesIndent) return false;
+    if (line.trimStart().startsWith("-")) {
+      if (itemIndent < 0) itemIndent = indent;
+      if (indent === itemIndent) itemIndexes.push(i);
+    } else if (itemIndent < 0 || indent <= itemIndent) {
+      return false;
+    }
+  }
+  if (itemIndexes.length === 0) return false;
+  return itemIndexes.every((start, index) =>
+    validIdePermissionRule(
+      lines,
+      start,
+      itemIndexes[index + 1] ?? blockEnd,
+      itemIndent,
+    )
+  );
+}
+
+// Kiro CLI, Kiro IDE, Codex, OpenCode, and Copilot each require a native
+// dispatch surface. The two Kiro variants share .kiro but are distinguished by
+// the recorded harness name: CLI uses agent-v1 JSON + trustedAgents, while IDE
+// uses capability-bearing Markdown and never reads the CLI conductor JSON.
 async function kiroPluginAgentPrechecks(): Promise<KiroPluginAgentPrechecks | null> {
   if (
     HARNESS_LEAF !== ".kiro" &&
@@ -951,16 +1095,20 @@ async function kiroPluginAgentPrechecks(): Promise<KiroPluginAgentPrechecks | nu
   ) {
     return null;
   }
-  const surfaceExt = HARNESS_LEAF === ".kiro"
-    ? ".json"
-    : HARNESS_LEAF === ".codex"
-      ? ".toml"
-      : ".md";
+  const isKiroIde = HARNESS_NAME === "kiro-ide";
+  const isKiroCli = HARNESS_LEAF === ".kiro" && !isKiroIde;
+  const surfaceExt = isKiroIde
+    ? ".md"
+    : HARNESS_LEAF === ".kiro"
+      ? ".json"
+      : HARNESS_LEAF === ".codex"
+        ? ".toml"
+        : ".md";
   const surfaceDir = HARNESS_LEAF === ".aidlc"
     ? nativeAgentsDir()
     : join(HARNESS_DIR, "agents");
   const trustedAgents = new Set<string>();
-  if (HARNESS_LEAF === ".kiro") {
+  if (isKiroCli) {
     try {
       const conductor = JSON.parse(
         readFileSync(join(HARNESS_DIR, "agents", "aidlc.json"), "utf-8"),
@@ -986,13 +1134,15 @@ async function kiroPluginAgentPrechecks(): Promise<KiroPluginAgentPrechecks | nu
     const requirements: string[] = [];
     if (gap.missingSurface) {
       requirements.push(
-        HARNESS_LEAF === ".kiro"
-          ? `author ${HARNESS_LEAF}/agents/${gap.agent}.json (agent-v1 JSON)`
-          : HARNESS_LEAF === ".codex"
-            ? `author ${HARNESS_LEAF}/agents/${gap.agent}.toml (the shipped aidlc-*-agent.toml shape)`
-            : IS_COPILOT
-              ? `author .github/agents/${gap.agent}.md (a Copilot custom agent with closed frontmatter)`
-              : `author .opencode/agents/${gap.agent}.md (an OpenCode subagent with closed frontmatter)`,
+        isKiroIde
+          ? `author ${HARNESS_LEAF}/agents/${gap.agent}.md with a non-empty tools: grant and well-formed permissions.rules capability/effect/match entries`
+          : HARNESS_LEAF === ".kiro"
+            ? `author ${HARNESS_LEAF}/agents/${gap.agent}.json (agent-v1 JSON)`
+            : HARNESS_LEAF === ".codex"
+              ? `author ${HARNESS_LEAF}/agents/${gap.agent}.toml (the shipped aidlc-*-agent.toml shape)`
+              : IS_COPILOT
+                ? `author .github/agents/${gap.agent}.md (a Copilot custom agent with closed frontmatter)`
+                : `author .opencode/agents/${gap.agent}.md (an OpenCode subagent with closed frontmatter)`,
       );
     }
     if (gap.missingTrust) {
@@ -1096,9 +1246,11 @@ async function kiroPluginAgentPrechecks(): Promise<KiroPluginAgentPrechecks | nu
       if (!agent || gaps.has(agent)) continue;
       const gap = {
         agent,
-        missingSurface: !existsSync(join(surfaceDir, `${agent}${surfaceExt}`)) &&
-          !(HARNESS_LEAF === ".aidlc" && pluginShipsViableNativeAgent(agent)),
-        missingTrust: HARNESS_LEAF === ".kiro" && !trustedAgents.has(agent),
+        missingSurface: isKiroIde
+          ? !installedIdeAgentIsDispatchable(surfaceDir, agent)
+          : !existsSync(join(surfaceDir, `${agent}${surfaceExt}`)) &&
+            !(HARNESS_LEAF === ".aidlc" && pluginShipsViableNativeAgent(agent)),
+        missingTrust: isKiroCli && !trustedAgents.has(agent),
       };
       if (gap.missingSurface || gap.missingTrust) gaps.set(agent, gap);
     }

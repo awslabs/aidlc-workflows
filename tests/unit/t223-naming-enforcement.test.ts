@@ -185,6 +185,30 @@ describe("t223 naming enforcement", () => {
     });
   });
 
+  test("loadAgents skips the IDE conductor aidlc.md", () => {
+    const dir = tempDir("aidlc-t223-agent-conductor-");
+    writeAgent(dir, "fixture-agent.md", "fixture-agent");
+    writeFileSync(
+      join(dir, "aidlc.md"),
+      [
+        "---",
+        "name: aidlc",
+        "description: IDE conductor without persona metadata",
+        'tools: ["read", "write", "shell", "subagent"]',
+        "---",
+        "",
+        "Conductor body.",
+        "",
+      ].join("\n"),
+    );
+
+    withEnvAndFreshCaches({ AIDLC_AGENTS_DIR: dir }, () => {
+      expect(loadAgents()).toEqual([
+        { slug: "fixture-agent", display_name: "fixture-agent", examples: [] },
+      ]);
+    });
+  });
+
   test("doctor reports a scope filename/name stem mismatch as advisory", () => {
     const project = createTestProject();
     projects.push(project);

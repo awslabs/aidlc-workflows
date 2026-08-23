@@ -886,6 +886,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "integration/t99-learnings-gate-flow.test.ts",
     "smoke/t05-run-tests-parallel.test.ts",
     "smoke/t130-scope-runners.test.ts",
+    "smoke/t148-kiro-file-structure.test.ts",
     "smoke/t86-stage-protocol-section-13.test.ts",
     "e2e/t-exec-codex-journey-workspace.serial.test.ts",
     "e2e/t-ide-kiro-checkpoint.serial.test.ts",
