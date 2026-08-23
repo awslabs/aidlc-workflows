@@ -405,6 +405,35 @@ describe("t247 claim-sources sensor", () => {
     expect(result.findings.join("\n")).toContain("## Sources is missing [scope]");
   });
 
+  test("inline comments on the Sources heading do not discard the source register", () => {
+    const dir = makeStageDir();
+    replaceInFile(dir, "intent-capture-questions.md", "## Sources", "## Sources <!-- note -->");
+    const result = run(dir);
+    expect(result.pass).toBe(true);
+    expect(result.findings).toEqual([]);
+  });
+
+  test("inline comments on assumption confirmation remain visible to the acceptance gate", () => {
+    const dir = makeStageDir();
+    for (const file of ["intent-statement.md", "stakeholder-map.md"]) {
+      replaceInFile(
+        dir,
+        file,
+        "## Assumptions & Open Questions\n\nNone.",
+        "## Assumptions & Open Questions\n\n- A procurement reviewer may be needed. [assumption]",
+      );
+    }
+    const questions = join(dir, "intent-capture-questions.md");
+    writeFileSync(
+      questions,
+      `${readFileSync(questions, "utf-8")}\n## Assumption Confirmation <!-- note -->\n\n- A procurement reviewer may be needed. [assumption]\n\nA. Accept assumptions\nB. Convert to follow-up questions\n\n[Answer]: A. Accept assumptions <!-- recorded -->\n`,
+      "utf-8",
+    );
+    const result = run(dir);
+    expect(result.pass).toBe(true);
+    expect(result.findings).toEqual([]);
+  });
+
   test("question headings and answers inside comments and fences are ignored", () => {
     const dir = makeStageDir();
     replaceInFile(

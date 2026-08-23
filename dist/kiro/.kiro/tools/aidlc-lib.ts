@@ -3973,10 +3973,19 @@ export const SUMMARY_CONFIRMATION_HASH_SCOPE = "confirmed-content-v1";
 // required whitespace boundary in `##<!-- comment --> Heading` while allowing
 // comments inside a valid heading title.
 const INVISIBLE_COMMENT_MARKER = "\u0000";
-const RAW_INVISIBLE_COMMENT_MARKER_ESCAPE = "\u0001";
+const INVISIBLE_LINE_MARKER = "\u0001";
+const RAW_INVISIBLE_COMMENT_MARKER_ESCAPE = "\u0002";
 
 function stripInvisibleCommentMarkers(line: string): string {
   return line.replaceAll(INVISIBLE_COMMENT_MARKER, "");
+}
+
+function restoreVisibleMarkdownMarkers(line: string): string {
+  if (line.startsWith(INVISIBLE_LINE_MARKER)) return "";
+  return line
+    .replaceAll(INVISIBLE_COMMENT_MARKER, "")
+    .replaceAll(INVISIBLE_LINE_MARKER, "")
+    .replaceAll(RAW_INVISIBLE_COMMENT_MARKER_ESCAPE, INVISIBLE_COMMENT_MARKER);
 }
 
 function isEscapedAt(line: string, offset: number): boolean {
@@ -4802,8 +4811,9 @@ export function checkSummaryConfirmationEvidence(
     const hashScope = auditBlockField(receipt.block, "Hash Scope");
     const recovery = workflow === undefined
       ? (
-        "First repair the questions file: remove or repair every unsupported post-summary " +
-        "section and reset the consolidated-summary `[Answer]:` to blank. Re-present the " +
+        "First repair the questions file: reset the existing consolidated-summary " +
+        "`[Answer]:` tag to blank and remove or repair every invalid or duplicate " +
+        "post-summary section named by the validation error. Only then re-present the " +
         "consolidated summary and record a fresh confirmation with " +
         `\`aidlc-log.ts decision --checkpoint summary-confirmation --stage "${stage.slug}" ` +
         `${question.unit ? `--unit "${question.unit}" ` : ""}` +
@@ -4821,8 +4831,9 @@ export function checkSummaryConfirmationEvidence(
         "re-save the artifacts, rerun the reviewer, and report `--result revised`."
       )
       : (
-        "First repair the questions file: remove or repair every unsupported post-summary " +
-        "section and reset the consolidated-summary `[Answer]:` to blank. Re-present the " +
+        "First repair the questions file: reset the existing consolidated-summary " +
+        "`[Answer]:` tag to blank and remove or repair every invalid or duplicate " +
+        "post-summary section named by the validation error. Only then re-present the " +
         "consolidated summary in the isolated run and record a fresh confirmation with " +
         `\`aidlc-log.ts decision --checkpoint summary-confirmation --stage "${stage.slug}" ` +
         "--questions-file \"<path>\" --single --decision \"Does this all look correct?\"`; " +
@@ -10903,7 +10914,7 @@ export function visibleMarkdownLines(
       }
     }
     const continuedHtmlTag = htmlTagOpen;
-    let line = continuedHtmlTag ? RAW_INVISIBLE_COMMENT_MARKER_ESCAPE : "";
+    let line = continuedHtmlTag ? INVISIBLE_LINE_MARKER : "";
     let cursor = 0;
     let continuedCodeSpan = false;
     if (codeSpanEnd !== null) {
@@ -10916,7 +10927,7 @@ export function visibleMarkdownLines(
       continuedCodeSpan = true;
       // This line is still paragraph continuation even after the delimiter.
       // Keep it ineligible for block-heading recognition.
-      line = RAW_INVISIBLE_COMMENT_MARKER_ESCAPE;
+      line = INVISIBLE_LINE_MARKER;
     }
 
     const rawOpening = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(
@@ -10995,7 +11006,7 @@ export function visibleMarkdownLines(
           cursor = end.offset;
           continue;
         }
-        line += RAW_INVISIBLE_COMMENT_MARKER_ESCAPE;
+        line += INVISIBLE_LINE_MARKER;
         codeSpanEnd = end;
         cursor = rawLine.length;
         continue;
@@ -11045,7 +11056,7 @@ export function visibleMarkdownLines(
     visible.push(
       options.preserveCommentBoundaries
         ? line
-        : stripInvisibleCommentMarkers(line),
+        : restoreVisibleMarkdownMarkers(line),
     );
   }
 

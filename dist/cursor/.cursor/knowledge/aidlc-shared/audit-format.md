@@ -111,10 +111,11 @@ original order of the preamble and confirmed sections, and trims trailing
 whitespace from the resulting canonical content. It includes every visible
 Q<n> section and each `Requested Changes Feedback` section, including follow-up
 questions added after an assumption decision. Exactly one visible top-level
-`Assumption Confirmation` section after the summary is excluded, along with its
-contents; a same-named pre-summary section remains part of the confirmed digest.
-The excluded section's assumptions and answer remain subject to the stage's
-existing decision/answer and sensor checks. Any other visible Markdown or
+`Assumption Confirmation` section is valid only after the summary and is
+excluded, along with its contents; a same-named pre-summary section remains part
+of the confirmed digest. The excluded section's assumptions and answer are not
+covered by the digest and remain subject to the stage's existing decision/answer
+and sensor checks. Any other visible Markdown or
 raw-HTML heading after the summary is invalid. Heading-like text in HTML
 comments, code spans, fenced or indented code, and HTML attribute values is not
 a section.

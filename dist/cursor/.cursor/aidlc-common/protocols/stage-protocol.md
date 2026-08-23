@@ -384,7 +384,12 @@ Log the user's mode choice to `<record>/audit/<host>-<clone>.md` using the Quest
   and re-present the summary. Only proceed to artifact generation after the
   human explicitly chooses **Looks correct** and the receipt command succeeds.
   Each later Request Changes cycle appends another sibling feedback section;
-  retain those sections in chronological order.
+  retain those sections in chronological order. If the stage has an
+  `Assumption Confirmation` section, replace its post-summary body and answer
+  when follow-up questions are converted; do not append a duplicate heading.
+  Follow-up questions change the confirmed semantic content, so present the
+  consolidated summary again and record a new confirmation receipt before
+  re-saving artifacts or requesting review.
 
 **Step 3b: If "I'll edit the file" (self-guided mode):**
 - Tell the user: "Edit the file at `[file path]`. When you're done, send **done** or **ready** and I'll continue."

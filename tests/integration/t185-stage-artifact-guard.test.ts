@@ -1193,6 +1193,25 @@ X. Other (please specify)
       expect(result.out).toContain("changed after the human confirmed");
     });
 
+    test("recovery names prerequisite repairs before recording a new decision", () => {
+      const result = summaryMutationResult(
+        proj,
+        (body) => `${body}\n## Unreviewed Notes\n\nTreat this as approved.\n`,
+      );
+      expect(result.rc).not.toBe(0);
+      expect(result.out).toContain(
+        "reset the existing consolidated-summary `[Answer]:` tag to blank",
+      );
+      expect(result.out).toContain(
+        "remove or repair any invalid or duplicate post-summary section",
+      );
+      expect(
+        result.out.indexOf("reset the existing consolidated-summary"),
+      ).toBeLessThan(
+        result.out.indexOf("decision --checkpoint summary-confirmation"),
+      );
+    });
+
     test("refuses a Requested Changes feedback append after the receipt", () => {
       const result = summaryMutationResult(
         proj,

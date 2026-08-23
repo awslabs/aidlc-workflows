@@ -151,10 +151,12 @@ Otherwise:
    Acceptance does not turn an assumption into fact.
 4. On `Convert to follow-up questions`, fill that answer, append consecutively
    numbered `Q<n>` follow-ups, collect and confirm their answers, and revise
-   both artifacts. Re-present the consolidated summary and record a fresh
-   standard summary decision/answer receipt before continuing. If assumptions
-   remain, reuse and reset the single `## Assumption Confirmation` section and
-   repeat this step.
+   both artifacts. Re-present the consolidated summary, reset the single
+   post-summary confirmation to a blank `[Answer]:`, and record a fresh standard
+   summary decision/answer receipt before continuing. Only after that new receipt
+   succeeds may you re-save the artifacts, rerun the reviewer, and continue to
+   completion. If assumptions remain, reuse and reset the single
+   `## Assumption Confirmation` section and repeat this step.
 
 Do not invoke the reviewer or proceed to completion while an assumption
 confirmation `[Answer]:` is blank.
