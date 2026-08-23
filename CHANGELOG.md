@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.75] - 2026-08-24
+
+Shared write hooks now normalize project-relative file payloads before applying audit and sensor path logic, enforcing the hooks' absolute-path invariant even if an adapter boundary is bypassed. **Upgrade:** refresh your `dist/<harness>/` shell; existing workflows require no migration.
+
+* Artifact audit logging resolves relative record paths before its path gates while preserving project-prefix redaction in the recorded `File` value.
+* Sensor dispatch resolves relative paths before its recursion guard, glob match, and `--output-path` argument while preserving gate-only sensor isolation.
+
 ## [2.6.74] - 2026-08-24
 
 Defined quality targets now remain binding from Code Generation through Build and Test: every measurable target is inventoried from NFR Requirements, NFR Design, and the approved Testing Contract, then finalized with evidence before the stage can succeed. **Upgrade:** refresh your `dist/<harness>/` shell so the updated Construction stage and protocol guidance are installed.
