@@ -31,11 +31,11 @@ For design philosophy and rationale, see the
 
 ## Shared Configuration
 
-All 14 agents share a common configuration baseline defined in their frontmatter. None declares a `tools:` allowlist, so every agent inherits the **full session toolset** — all of Claude Code's built-in tools plus any MCP tools provisioned to the session. The one shipped restriction is `disallowedTools: Task`. The two review-only agents additionally carry `maxTurns: 60` - a hard turn backstop enforced natively where the harness has a lever: on Claude Code the frontmatter key is binding (the sub-agent is stopped mid-task, no final message), and on opencode the packager projects it to the native per-agent `steps: 60` (the runner grants one final text-only turn - a summary can return, but no tool call can write the review). Codex TOML personas carry the number as prose only (a TOML persona has no frontmatter, so the emit rewrites the citation), and Cursor, Copilot, and Kiro expose no per-agent cap key (the inert `maxTurns:` key still ships on the .md surfaces that tolerate unknown keys; the kiro agent JSONs never receive it). Section 12a's incomplete-attempt guard turns a review cut off at the cap into one retried dispatch and then a NOT-READY finding instead of a silently missing verdict - and the conductor deletes any pre-existing `## Review` section before every dispatch, so a stale verdict can never stand in for a missing one.
+All 14 authored agents share a common frontmatter baseline. On Claude Code, none declares a `tools:` allowlist, so every agent inherits the **full session toolset** plus provisioned MCP tools, with `disallowedTools: Task` as the nested-delegation denial. Other harnesses project that intent into native policy: Kiro agent Markdown omits the unsupported key, while Kiro CLI JSON and Kiro IDE `tools:` grants exclude `subagent` from delegates. The two review-only agents additionally carry `maxTurns: 60` - a hard turn backstop enforced natively where the harness has a lever: on Claude Code the frontmatter key is binding (the sub-agent is stopped mid-task, no final message), and on opencode the packager projects it to the native per-agent `steps: 60` (the runner grants one final text-only turn - a summary can return, but no tool call can write the review). Codex TOML personas carry the number as prose only (a TOML persona has no frontmatter, so the emit rewrites the citation), and Cursor, Copilot, and Kiro expose no per-agent cap key (the inert `maxTurns:` key still ships on the .md surfaces that tolerate unknown keys; the kiro agent JSONs never receive it). Section 12a's incomplete-attempt guard turns a review cut off at the cap into one retried dispatch and then a NOT-READY finding instead of a silently missing verdict - and the conductor deletes any pre-existing `## Review` section before every dispatch, so a stale verdict can never stand in for a missing one.
 
-### The session toolset (inherited by every agent)
+### The Claude Code session toolset
 
-Every agent inherits the built-in Claude Code tools, including:
+Every Claude Code agent inherits the built-in tools, including:
 
 | Claude Code Tool | Purpose |
 |------------------|---------|
@@ -50,11 +50,11 @@ Every agent inherits the built-in Claude Code tools, including:
 
 | Claude Code Tool | Reason |
 |------------------|--------|
-| Task | Agents operate as delegated workers. The conductor (the live `/aidlc` session) performs the `Task` call that runs an agent; agents themselves never spawn subagents. `disallowedTools: Task` avoids cascading subagent chains. |
+| Task | Agents operate as delegated workers. The conductor performs the `Task` call; Claude enforces `disallowedTools: Task`, while other harnesses use their native deny/allowlist equivalent. |
 
 ### Tools each persona is expected to exercise
 
-Every agent *can* reach Bash and WebSearch by inheritance; the table records which personas the methodology **expects** to use them, not a per-agent grant. To genuinely restrict a persona, add an optional `tools:` allowlist (which drops inherited MCP unless `mcp__<server>__<tool>` ids are also listed) — this implementation ships no such restrictions.
+On Claude Code, every agent *can* reach Bash and WebSearch by inheritance; the table records which personas the methodology **expects** to use them, not a per-agent grant. To genuinely restrict a Claude persona, add an optional `tools:` allowlist (which drops inherited MCP unless `mcp__<server>__<tool>` ids are also listed).
 
 | Claude Code Tool | Expected to exercise it |
 |------------------|---------------------|

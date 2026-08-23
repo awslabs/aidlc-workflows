@@ -11,7 +11,6 @@ description: >
   indexed; only falls back to bounded workspace analysis when CodeKB is absent
   or not ready.
   Dispatched by the /aidlc orchestrator; never invoked directly by a stage.
-disallowedTools: Task
 tools: ["read", "write", "shell"]
 ---
 

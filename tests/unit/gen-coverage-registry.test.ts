@@ -820,6 +820,10 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     // stayed green. A journey through the documented workflow cannot be run
     // in-process without bypassing the exact layer under test.
     "unit/t293-knowledge-journey.test.ts",
+    // t304 spawns the real directive-emitting CLI because memory bootstrap is
+    // observable only at the process boundary where projectDir and the shipped
+    // harness template are both present.
+    "unit/t304-run-stage-memory-bootstrap.test.ts",
     "integration/t102.test.ts",
     "integration/t104.test.ts",
     "integration/t105.test.ts",

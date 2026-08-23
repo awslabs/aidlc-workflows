@@ -82,7 +82,10 @@ delegated workers; the conductor (the live `/aidlc` session) performs the `Task`
 call when the engine's `run-stage` directive carries `mode: subagent`. Allowing
 `Task` would let an agent spawn its own subagents, cascading delegation chains
 the framework is built to prevent. Every shipped agent disallows `Task`, and so
-must yours.
+must yours. The Kiro projections remove this Claude-only frontmatter key and
+enforce the same no-nested-delegation boundary through Kiro's native agent tool
+configuration; any other `disallowedTools` value fails packaging or is
+drop-logged during plugin compose.
 
 **`tier` names the kind of work; the packager projects it into per-harness
 model/effort keys.** You never author raw `model:` or `effort:` in core agent

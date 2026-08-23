@@ -64,11 +64,12 @@ sections alike.
 
 Whenever this protocol or a stage file says **present a structured question**,
 render the question through the harness's question-rendering annex —
-`question-rendering.md` beside the orchestrator SKILL.md. Question specs in
-this protocol are written as fenced ` ```question ` blocks (`prompt`, `header`,
-`multiSelect`, `options[].label`, `options[].description`); the annex is the
-single place that binds that spec to the harness's question rendering. Stage
-files and this protocol never name a harness tool.
+`question-rendering.md` in the SAME directory as the orchestrator `SKILL.md`,
+NOT under `aidlc-common/protocols/`. Question specs in this protocol are written
+as fenced ` ```question ` blocks (`prompt`, `header`, `multiSelect`,
+`options[].label`, `options[].description`); the annex is the single place that
+binds that spec to the harness's question rendering. Stage files and this
+protocol never name a harness tool.
 
 **A ` ```question ` fence is a SPEC to be rendered THROUGH the annex-defined
 mechanism: a native question tool when one is available, or the annex's
@@ -984,7 +985,7 @@ Trigger after Step N-1 (completion message rendered) and before Step N (approval
 
 ### The ritual
 
-1. **Maintain a per-stage memory file as you work.** Append entries to `<record>/<phase>/<stage>/memory.md` (created at stage start if absent). Use four standard H2 headings:
+1. **Maintain a per-stage memory file as you work.** Append entries to `<record>/<phase>/<stage>/memory.md` (created by the engine from the shipped template when it emits the run-stage directive). Use four standard H2 headings:
    - **Interpretations** — choices made where the stage prose was ambiguous
    - **Deviations** — places where you intentionally departed from the stage prose, and why
    - **Tradeoffs** — alternatives considered and why you picked what you did

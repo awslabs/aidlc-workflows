@@ -33,7 +33,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
-import { delimiter, dirname, join } from "node:path";
+import { delimiter, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createIntent,
@@ -55,6 +55,11 @@ const KIRO_TREE = join(REPO_ROOT, "dist", "kiro", ".kiro");
 const FIXTURES = JSON.parse(
   readFileSync(join(REPO_ROOT, "tests", "fixtures", "kiro-hook-payloads", "payloads.json"), "utf-8"),
 ) as Record<string, unknown>;
+const ADAPTER_TOOL_NAMES = FIXTURES._adapter_tool_names as {
+  writes: string[];
+  deletes: string[];
+  reads: string[];
+};
 
 // P9 per-intent layout: the core hooks the Kiro adapter shims to resolve state
 // via stateFilePath() and the audit trail via auditFilePath() — under the active
@@ -252,6 +257,11 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
           task: "AIDLC-UNIT: todo-core\nImplement todo-core",
           stages: [
             {
+              name: "review_todo_core",
+              role: "aidlc-quality-agent",
+              prompt_template: "AIDLC-UNIT: unrelated-unit\nReview another unit",
+            },
+            {
               name: "implement_todo_core",
               role: "aidlc-developer-agent",
               prompt_template: "AIDLC-UNIT: todo-core\nImplement todo-core",
@@ -261,6 +271,148 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       });
       expect(r.code).toBe(2);
       expect(r.stderr).toContain("plan-approval guard");
+      expect(r.stderr).toContain("unit todo-core");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("1c: plan-approval guard normalizes defensive direct dispatch shapes", () => {
+    const dir = scratchProject(true);
+    try {
+      seedUnapprovedCodeGeneration(dir, "todo-core");
+      for (const [index, payload] of [
+        FIXTURES.preToolUse_invoke_sub_agent,
+        {
+          hook_event_name: "preToolUse",
+          tool_name: "subagent",
+          tool_input: {
+            name: "aidlc-developer-agent",
+            prompt: "AIDLC-UNIT: todo-core\nImplement todo-core",
+          },
+        },
+        {
+          hook_event_name: "preToolUse",
+          tool_name: "subagent",
+          tool_input: {
+            name: "aidlc-developer-agent",
+            prompt: "AIDLC-UNIT: todo-core\nImplement todo-core",
+            stages: [],
+          },
+        },
+        {
+          hook_event_name: "preToolUse",
+          tool_name: "subagent",
+          tool_input: {
+            name: "aidlc-developer-agent",
+            prompt: "AIDLC-UNIT: todo-core\nImplement todo-core",
+            stages: [{}],
+          },
+        },
+        {
+          hook_event_name: "preToolUse",
+          tool_name: "subagent_aidlc-developer-agent",
+          tool_input: {
+            prompt: "AIDLC-UNIT: todo-core\nImplement todo-core",
+          },
+        },
+        {
+          hook_event_name: "preToolUse",
+          tool_name: "invoke_sub_agent",
+          tool_input: {
+            name: "",
+            subagent_type: "aidlc-developer-agent",
+            prompt: "",
+            task: "AIDLC-UNIT: todo-core\nImplement todo-core",
+          },
+        },
+        {
+          hook_event_name: "preToolUse",
+          tool_name: "invoke_sub_agent",
+          tool_input: {
+            name: "   ",
+            subagent_type: " aidlc-developer-agent ",
+            prompt: "   ",
+            task: "AIDLC-UNIT: todo-core\nImplement todo-core",
+          },
+        },
+      ].entries()) {
+        const r = runAdapter(dir, "plan-approval-guard", {
+          ...payload as Record<string, unknown>,
+          cwd: dir,
+        });
+        expect(r.code, `payload-${index}`).toBe(2);
+        expect(r.stderr, `payload-${index}`).toContain("plan-approval guard");
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("1d: malformed crew stages fail open without bypassing a valid developer stage", () => {
+    const dir = scratchProject(true);
+    try {
+      seedUnapprovedCodeGeneration(dir, "todo-core");
+      const r = runAdapter(dir, "plan-approval-guard", {
+        hook_event_name: "preToolUse",
+        cwd: dir,
+        tool_name: "subagent",
+        tool_input: {
+          task: "Implement todo-core",
+          stages: [null, {
+            role: "aidlc-developer-agent",
+            prompt_template: "AIDLC-UNIT: todo-core\nImplement todo-core",
+          }],
+        },
+      });
+      expect(r.code).toBe(2);
+      expect(r.stderr).toContain("plan-approval guard");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("1e: mixed alias payloads preserve a direct developer identity for plan approval", () => {
+    const dir = scratchProject(true);
+    try {
+      seedUnapprovedCodeGeneration(dir, "todo-core");
+      const r = runAdapter(dir, "plan-approval-guard", {
+        hook_event_name: "preToolUse",
+        cwd: dir,
+        tool_name: "subagent",
+        tool_input: {
+          name: "aidlc-developer-agent",
+          prompt: "AIDLC-UNIT: todo-core\nImplement todo-core",
+          task: "",
+          stages: [{
+            role: "aidlc-quality-agent",
+            prompt_template: "Review todo-core",
+          }],
+        },
+      });
+      expect(r.code).toBe(2);
+      expect(r.stderr).toContain("plan-approval guard");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("1f: response shells stay inert for pre-dispatch hooks", () => {
+    const dir = scratchProject(true);
+    try {
+      seedUnapprovedCodeGeneration(dir, "todo-core");
+      const payload = {
+        hook_event_name: "preToolUse",
+        cwd: dir,
+        tool_name: "subagent_response",
+        tool_input: { subagent_type: "aidlc-developer-agent" },
+      };
+      for (const target of ["deliver-stage-rules", "plan-approval-guard"]) {
+        const r = runAdapter(dir, target, payload);
+        expect(r.code, target).toBe(0);
+        expect(r.stdout, target).toBe("");
+        expect(r.stderr, target).toBe("");
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -421,6 +573,32 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       );
       expect(complete.code, complete.stderr).toBe(0);
       expect(complete.stdout).toBe("");
+
+      const direct = runAdapter(dir, "deliver-stage-rules", {
+        ...FIXTURES.preToolUse_invoke_sub_agent as Record<string, unknown>,
+        cwd: dir,
+        tool_input: { name: "aidlc-product-agent", prompt: basePrompt },
+      });
+      expect(direct.code).toBe(0);
+      expect(direct.stderr).toContain(
+        "did not carry the active-stage rule bundle verbatim",
+      );
+
+      const blankPrompt = runAdapter(dir, "deliver-stage-rules", {
+        ...FIXTURES.preToolUse_invoke_sub_agent as Record<string, unknown>,
+        cwd: dir,
+        tool_name: "subagent",
+        tool_input: {
+          name: "aidlc-product-agent",
+          prompt: "",
+          task: basePrompt,
+          stages: [],
+        },
+      });
+      expect(blankPrompt.code, blankPrompt.stderr).toBe(0);
+      expect(blankPrompt.stderr).toContain(
+        "did not carry the active-stage rule bundle verbatim",
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -553,6 +731,97 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
+  test("5f: defensive read and mutation shapes reach the scoped guard adapters", () => {
+    const dir = scratchProject(true);
+    try {
+      const healthDir = join(seededRecordDir(dir), ".aidlc-hooks-health");
+      writeFileSync(
+        join(seededRecordDir(dir), ".aidlc-reviewer-dispatch.json"),
+        JSON.stringify({
+          reviewer: "aidlc-architecture-reviewer-agent",
+          stage: "nfr-design",
+          unit: "todo-core",
+          exempt: [],
+        }),
+        "utf-8",
+      );
+      const reviewerHeartbeat = join(healthDir, "reviewer-scope.last");
+      for (const tool_name of ADAPTER_TOOL_NAMES.reads) {
+        rmSync(reviewerHeartbeat, { force: true });
+        const r = runAdapter(
+          dir,
+          "reviewer-scope",
+          {
+            hook_event_name: "preToolUse",
+            cwd: dir,
+            tool_name,
+            tool_input: tool_name === "read_files"
+              ? { paths: [null, "construction/sibling-unit/design.md"] }
+              : { path: "construction/sibling-unit/design.md" },
+          },
+          ["aidlc-architecture-reviewer-agent"],
+        );
+        expect(r.code, tool_name).toBe(2);
+        expect(r.stderr, tool_name).toContain("reviewer read-scope");
+        expect(existsSync(reviewerHeartbeat), tool_name).toBe(true);
+      }
+
+      for (const tool_name of [
+        ...ADAPTER_TOOL_NAMES.writes,
+        ...ADAPTER_TOOL_NAMES.deletes,
+      ]) {
+        rmSync(reviewerHeartbeat, { force: true });
+        const r = runAdapter(
+          dir,
+          "reviewer-scope",
+          {
+            hook_event_name: "preToolUse",
+            cwd: dir,
+            tool_name,
+            tool_input: { path: "construction/sibling-unit/design.md" },
+          },
+          ["aidlc-architecture-reviewer-agent"],
+        );
+        expect(r.code, tool_name).toBe(2);
+        expect(r.stderr, tool_name).toContain("reviewer read-scope");
+        expect(existsSync(reviewerHeartbeat), tool_name).toBe(true);
+      }
+
+      const freezeHeartbeat = join(healthDir, "review-freeze.last");
+      for (const tool_name of [
+        ...ADAPTER_TOOL_NAMES.writes,
+        ...ADAPTER_TOOL_NAMES.deletes,
+      ]) {
+        rmSync(freezeHeartbeat, { force: true });
+        const r = runAdapter(dir, "review-freeze", {
+          hook_event_name: "preToolUse",
+          cwd: dir,
+          tool_name,
+          tool_input: { path: "construction/todo-core/design.md" },
+        });
+        expect(r.code, tool_name).toBe(0);
+        expect(existsSync(freezeHeartbeat), tool_name).toBe(true);
+      }
+
+      const operations = runAdapter(
+        dir,
+        "reviewer-scope",
+        {
+          ...(FIXTURES.preToolUse_fs_read as Record<string, unknown>),
+          cwd: dir,
+          tool_input: {
+            operations: [null, { path: "construction/sibling-unit/design.md" }],
+          },
+        },
+        ["aidlc-architecture-reviewer-agent"],
+      );
+      expect(operations.code).toBe(2);
+      expect(operations.stderr).toContain("reviewer read-scope");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("6: log-subagent emits SUBAGENT_COMPLETED to the audit", () => {
     const dir = scratchProject(true);
     try {
@@ -566,15 +835,114 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
-  test("7: write-event target normalizes path→file_path and exits 0 (advisory)", () => {
+  test("6a: direct dispatch completions log identity and response events stay inert", () => {
     const dir = scratchProject(true);
     try {
-      const r = runAdapter(dir, "audit-and-sensors", FIXTURES.postToolUse_write);
+      const r = runAdapter(dir, "log-subagent", {
+        hook_event_name: "postToolUse",
+        cwd: dir,
+        tool_name: "subagent",
+        tool_input: {
+          name: "aidlc-developer-agent",
+          prompt: "Implement the unit",
+          stages: [],
+        },
+      });
       expect(r.code).toBe(0);
+      const before = readAudit(dir);
+      expect(before.match(/SUBAGENT_COMPLETED/g)?.length).toBe(1);
+      expect(before).toContain("aidlc-developer-agent");
+
+      const response = runAdapter(dir, "log-subagent", {
+        hook_event_name: "postToolUse",
+        cwd: dir,
+        tool_name: "subagent_response",
+        tool_input: { subagent_type: "aidlc-developer-agent" },
+      });
+      expect(response.code).toBe(0);
+      expect(readAudit(dir)).toBe(before);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test("7: write-like adapter inputs reach audit and sensors while delete stays out", () => {
+    const dir = scratchProject(true);
+    try {
+      const healthDir = join(seededRecordDir(dir), ".aidlc-hooks-health");
+      const auditHeartbeat = join(healthDir, "write-audit-log.last");
+      const sensorHeartbeat = join(healthDir, "run-sensors.last");
+      for (const tool_name of ADAPTER_TOOL_NAMES.writes) {
+        rmSync(auditHeartbeat, { force: true });
+        rmSync(sensorHeartbeat, { force: true });
+        const r = runAdapter(dir, "audit-and-sensors", {
+          ...(FIXTURES.postToolUse_write as Record<string, unknown>),
+          cwd: dir,
+          tool_name,
+          tool_input: {
+            path: join(seededRecordDir(dir), "inception", "requirements.md"),
+          },
+        });
+        expect(r.code, tool_name).toBe(0);
+        expect(existsSync(auditHeartbeat), tool_name).toBe(true);
+        expect(existsSync(sensorHeartbeat), tool_name).toBe(true);
+      }
+
+      for (const command of ["str_replace", "append"]) {
+        const before = readAudit(dir);
+        const edited = runAdapter(dir, "audit-and-sensors", {
+          ...(FIXTURES.postToolUse_fs_write_str_replace as Record<string, unknown>),
+          cwd: dir,
+          tool_input: {
+            ...(FIXTURES.postToolUse_fs_write_str_replace as {
+              tool_input: Record<string, unknown>;
+            }).tool_input,
+            command,
+            path: join(seededRecordDir(dir), "inception", "requirements.md"),
+          },
+        });
+        expect(edited.code, command).toBe(0);
+        expect(readAudit(dir).slice(before.length), command).toContain("**Tool**: Edit");
+      }
+
+      const batchPaths = [
+        join(seededRecordDir(dir), "inception", "requirements.md"),
+        join(seededRecordDir(dir), "inception", "constraints.md"),
+      ];
+      mkdirSync(join(seededRecordDir(dir), "inception"), { recursive: true });
+      for (const path of batchPaths) writeFileSync(path, "draft\n", "utf-8");
+      const beforeBatch = readAudit(dir);
+      const batch = runAdapter(dir, "audit-and-sensors", {
+        hook_event_name: "postToolUse",
+        cwd: dir,
+        tool_name: "fs_write",
+        tool_input: {
+          operations: batchPaths.map((path) => ({ path: relative(dir, path) })),
+        },
+      });
+      const batchAudit = readAudit(dir).slice(beforeBatch.length);
+      expect(batch.code).toBe(0);
+      expect(batchAudit.match(/\*\*Event\*\*: ARTIFACT_(?:CREATED|UPDATED)/g)).toHaveLength(2);
+      expect(batchAudit.match(/\*\*Event\*\*: SENSOR_FIRED/g)).toHaveLength(4);
+      for (const path of batchPaths) {
+        expect(batchAudit).toContain(path.replace(/\\/g, "/"));
+      }
+      expect(existsSync(sensorHeartbeat)).toBe(true);
+
+      for (const tool_name of ADAPTER_TOOL_NAMES.deletes) {
+        rmSync(auditHeartbeat, { force: true });
+        const deleted = runAdapter(dir, "audit-and-sensors", {
+          cwd: dir,
+          tool_name,
+          tool_input: { path: "construction/todo-core/design.md" },
+        });
+        expect(deleted.code, tool_name).toBe(0);
+        expect(existsSync(auditHeartbeat), tool_name).toBe(false);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 15_000);
 
   test("8: rebuild-stage-graph target accepts the alias shell payload and exits 0", () => {
     const dir = scratchProject(true);

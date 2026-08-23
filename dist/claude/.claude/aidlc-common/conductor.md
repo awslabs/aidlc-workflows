@@ -17,10 +17,11 @@ it for the whole run.
 For an `inline` stage, load the lead agent's flat file (e.g.
 `agents/aidlc-architect-agent.md`) and adopt its voice for the stage body — you
 are speaking as that domain expert. Load knowledge per `stage-protocol.md` §5
-knowledge-loading order. For a `subagent` stage, the `Task` boundary loads the
-persona and enforces the agent's `disallowedTools`/`model` - pass
-context in the prompt (subagents cannot see conversation history), never inject
-the persona text yourself.
+knowledge-loading order. For a `subagent` stage, the harness's native dispatch
+boundary loads the persona and enforces its projected model/tool policy
+(`disallowedTools: Task` on Claude; delegate allowlists without `subagent` on
+Kiro). Pass context in the prompt (subagents cannot see conversation history);
+never inject the persona text yourself.
 
 For a multi-agent stage, load `stage-protocol-ensemble.md` when the directive
 names that module. It is the single contract for topology behavior,
@@ -58,9 +59,13 @@ stage that does not apply reports
 Every stage keeps an observation diary at the `memory_path` the `run-stage`
 directive carries (`<record>/<phase>/<stage>/memory.md`):
 
-1. At stage start, if `memory.md` does not exist at that path, copy
-   `.claude/knowledge/aidlc-shared/memory-template.md` to it. Idempotent —
-   never overwrite; re-entry or resume must keep accumulated entries.
+1. The engine creates `memory.md` from
+   `.claude/knowledge/aidlc-shared/memory-template.md` when it emits the
+   directive. NEVER probe for `memory.md`, or any other maybe-absent file, with a
+   read tool: reading an absent path is a failed tool call. In the rare case an
+   append finds the diary missing, bootstrap it with exactly one idempotent POSIX
+   command: `mkdir -p "$(dirname "<memory_path>")" && { [ -f "<memory_path>" ] || cp ".claude/knowledge/aidlc-shared/memory-template.md" "<memory_path>"; }`.
+   Never overwrite; re-entry or resume must keep accumulated entries.
 2. During the stage, append timestamped bullets under the matching canonical
    heading as observations arise — Interpretation, Deviation, Tradeoff, or Open
    question. This is your diary-keeping (see `stage-protocol.md` §13); the four

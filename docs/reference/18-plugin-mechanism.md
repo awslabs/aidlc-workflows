@@ -292,7 +292,14 @@ without clobbering core or another plugin; an identical file is an idempotent
 skip, and different content at the same destination is drop-logged. On
 OpenCode, compose also emits a native `.opencode/agents/` twin with
 `mode: subagent`, `permission.task: deny`, and OpenCode-valid model/memory
-frontmatter.
+frontmatter. On Kiro, compose removes the unsupported `disallowedTools: Task`
+line from the `.kiro/agents/` persona while Kiro's native agent tool
+configuration keeps nested delegation unavailable; a different
+`disallowedTools` value is drop-logged and the persona is not copied. Re-compose
+also migrates an existing persona only when it is an exact, unchanged,
+same-plugin copy from the pre-projection composer; edited or foreign files retain
+no-clobber behavior. An already-composed unsupported value is left in place with
+a degraded diagnostic that names the file to remove before re-compose.
 
 On Kiro CLI/IDE, Codex, and OpenCode, a Markdown persona in the engine roster
 is available only for `mode: inline`. Native dispatch also requires a
