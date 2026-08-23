@@ -6967,11 +6967,15 @@ function currentGitPathMode(
       );
       if (empty.status !== 0) return { ok: false, mode: null };
     }
-    const added = spawnSync("git", ["-C", sourceRepoDir, "add", "-A"], {
-      env,
-      encoding: "utf-8",
-      maxBuffer: 512 * 1024 * 1024,
-    });
+    const added = spawnSync(
+      "git",
+      ["-C", sourceRepoDir, "add", "--", `./${literalPath}`],
+      {
+        env,
+        encoding: "utf-8",
+        maxBuffer: 512 * 1024 * 1024,
+      },
+    );
     if (added.status !== 0) return { ok: false, mode: null };
     const listed = spawnSync(
       "git",
