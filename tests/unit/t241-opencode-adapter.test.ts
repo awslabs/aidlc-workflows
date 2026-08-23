@@ -175,6 +175,7 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
     const root = freshProject();
     copyCore(root, "hooks/aidlc-rebuild-stage-graph.ts");
     copyCore(root, "tools/aidlc-lib.ts");
+    copyCore(root, "tools/aidlc-artifact-vocabulary.ts");
     copyCore(root, "tools/aidlc-runtime-paths.ts");
     mkdirSync(join(root, "aidlc"), { recursive: true });
     writeFileSync(join(root, "aidlc", ".aidlc-hook-debug"), "", "utf-8");
@@ -241,6 +242,7 @@ describe("t241 OpenCode adapter reviewer scope", () => {
     copyCore(root, "hooks/aidlc-reviewer-scope.ts");
     copyCore(root, "tools/aidlc-audit.ts");
     copyCore(root, "tools/aidlc-lib.ts");
+    copyCore(root, "tools/aidlc-artifact-vocabulary.ts");
     copyCore(root, "tools/aidlc-runtime-paths.ts");
 
     const recordRoot = join(root, "aidlc", "spaces", "default", "intents");
@@ -298,6 +300,7 @@ describe("t241 OpenCode adapter state-transition guard", () => {
     const root = freshProject();
     copyCore(root, "hooks/aidlc-state-transition-guard.ts");
     copyCore(root, "tools/aidlc-lib.ts");
+    copyCore(root, "tools/aidlc-artifact-vocabulary.ts");
     copyCore(root, "tools/aidlc-runtime-paths.ts");
 
     const { client } = fakeClient();
@@ -330,6 +333,7 @@ describe("t241 OpenCode adapter state-transition guard", () => {
     const root = freshProject();
     copyCore(root, "hooks/aidlc-state-transition-guard.ts");
     copyCore(root, "tools/aidlc-lib.ts");
+    copyCore(root, "tools/aidlc-artifact-vocabulary.ts");
     copyCore(root, "tools/aidlc-runtime-paths.ts");
 
     const { client } = fakeClient({ worker: "main" });

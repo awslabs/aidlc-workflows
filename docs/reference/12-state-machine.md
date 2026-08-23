@@ -611,8 +611,9 @@ separate ownership and observation contracts.
 
 Receipt lookup starts at the latest `WORKFLOW_STARTED` event in the selected
 intent audit. Historical ledgers from releases that supported forced re-init
-may contain a new boundary from `--init --force`; completions before that
-boundary read as untracked and fail open until their stages complete again.
+may contain a new boundary from a forced re-init in those releases; completions
+before that boundary read as untracked and fail open until their stages
+complete again.
 
 Known limitation: artifact resolution is scope-blind. The express scope runs
 Code Generation and Build and Test with stage-level artifact paths and no Unit
