@@ -7222,7 +7222,8 @@ function manifestClaimSymlinkPaths(
   const root = join(sourceRepoDir, literalPath);
   try {
     const rootStat = lstatSync(root);
-    if (!prefix) return rootStat.isSymbolicLink() ? [literalPath] : [];
+    if (rootStat.isSymbolicLink()) return [literalPath];
+    if (!prefix) return [];
     if (!rootStat.isDirectory()) return [];
   } catch {
     return [];
@@ -7296,14 +7297,6 @@ function symlinkClaimTargetReason(
         ? resolvePath(target)
         : resolvePath(dirname(current), target);
       targetDisplay = relative(repoRoot, next).replaceAll("\\", "/") || ".";
-      const lexicalRelative = relative(repoRoot, next);
-      if (
-        lexicalRelative === ".." ||
-        lexicalRelative.startsWith(`..${sep}`) ||
-        isAbsolute(lexicalRelative)
-      ) {
-        return `${JSON.stringify(claimPath)} contains symlink ${JSON.stringify(link)} whose fully resolved target ${JSON.stringify(next)} is outside the repository. ${remedy}`;
-      }
       let stat: ReturnType<typeof lstatSync>;
       try {
         stat = lstatSync(next);
@@ -7338,7 +7331,7 @@ function symlinkClaimTargetReason(
         false,
       );
       if (ignored !== null) {
-        return `${JSON.stringify(claimPath)} contains symlink ${JSON.stringify(link)} whose fully resolved target ${JSON.stringify(repoRelative)} is ignored by Git. ${remedy}`;
+        return `${JSON.stringify(claimPath)} contains symlink ${JSON.stringify(link)} whose fully resolved target is not bindable: ${ignored}. ${remedy}`;
       }
       targetDisplay = "";
       break;

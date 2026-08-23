@@ -147,7 +147,11 @@ function retainedSourceRefs(repoCwd: string, slug: string): RetainedSourceRef[] 
 function recordedWorktreeSelector(
   pd: string,
   slug: string,
-): { intent: string; space: string; repoSelector?: string | null } | null {
+): {
+  intent?: string;
+  space?: string;
+  repoSelector?: string | null;
+} | null {
   const path = join(worktreePath(pd, slug), ".aidlc", WORKTREE_META_FILENAME);
   if (!existsSync(path)) return null;
   try {
@@ -155,26 +159,33 @@ function recordedWorktreeSelector(
       intentRecord?: unknown;
       repoSelector?: unknown;
     };
-    if (typeof parsed.intentRecord !== "string") return null;
-    const matched = /^aidlc\/spaces\/([^/]+)\/intents\/([^/]+)$/.exec(
-      parsed.intentRecord,
-    );
+    const matched =
+      typeof parsed.intentRecord === "string"
+        ? /^aidlc\/spaces\/([^/]+)\/intents\/([^/]+)$/.exec(
+            parsed.intentRecord,
+          )
+        : null;
     if (
       "repoSelector" in parsed &&
       parsed.repoSelector !== null &&
       typeof parsed.repoSelector !== "string"
     ) {
-      return null;
+      return matched === null
+        ? null
+        : { space: matched[1], intent: matched[2] };
     }
-    return matched === null
-      ? null
-      : {
-          space: matched[1],
-          intent: matched[2],
-          ...("repoSelector" in parsed
-            ? { repoSelector: parsed.repoSelector as string | null }
-            : {}),
-        };
+    if (matched === null && !("repoSelector" in parsed)) return null;
+    return {
+      ...(matched === null
+        ? {}
+        : {
+            space: matched[1],
+            intent: matched[2],
+          }),
+      ...("repoSelector" in parsed
+        ? { repoSelector: parsed.repoSelector as string | null }
+        : {}),
+    };
   } catch {
     return null;
   }
@@ -582,6 +593,47 @@ function latestUnambiguousRow(
   return latest.at(-1) ?? null;
 }
 
+function recordedWorktreeCreationRepo(
+  pd: string,
+  slug: string,
+  intent?: string,
+  space?: string,
+): string | null | undefined {
+  let rows: WorktreeAuditRow[];
+  try {
+    rows = readAuditShardEvents(pd, intent, space);
+  } catch {
+    return undefined;
+  }
+  const matches = rows.filter(
+    (row) =>
+      row.event === "WORKTREE_CREATED" &&
+      auditBlockField(row.block, "Bolt slug") === slug,
+  );
+  if (matches.length === 0) return undefined;
+  sortWorktreeAuditRows(matches);
+  const latestTimestamp = matches.at(-1)?.timestamp as string;
+  const latest = matches.filter((row) => row.timestamp === latestTimestamp);
+  const selectors = new Set(
+    latest.map((row) => auditBlockField(row.block, "Repo") ?? ""),
+  );
+  if (
+    new Set(latest.map((row) => row.shard)).size > 1 &&
+    selectors.size !== 1
+  ) {
+    errorWithSlug(
+      slug,
+      "refusing to discard: same-second cross-shard WORKTREE_CREATED repository authority is ambiguous",
+    );
+  }
+  const selector = auditBlockField(
+    (latest.at(-1) as WorktreeAuditRow).block,
+    "Repo",
+  );
+  if (selector === null || selector === "") return undefined;
+  return selector === "-" ? null : selector;
+}
+
 function rowAfter(candidate: WorktreeAuditRow, boundary: WorktreeAuditRow): boolean {
   if (candidate.timestamp !== boundary.timestamp) {
     return candidate.timestamp > boundary.timestamp;
@@ -843,7 +895,7 @@ function convergedSourceRecord(
     ) {
       errorWithSlug(
         slug,
-        `refusing to merge: selected repository ${JSON.stringify(selectedRepo ?? "-")} / ${JSON.stringify(selectedCommonDir)} does not match creating repository ${JSON.stringify(worktreeMeta.repoSelector ?? "-")} / ${JSON.stringify(worktreeMeta.gitCommonDir)}; retry with the creating --repo selector`,
+        `refusing to merge: selected repository ${JSON.stringify(selectedRepo ?? "-")} does not match creating repository ${JSON.stringify(worktreeMeta.repoSelector ?? "-")}; retry with the creating --repo selector`,
       );
     }
     if (
@@ -1322,7 +1374,6 @@ function refuseConfiguredMergeDrivers(
   slug: string,
   repoCwd: string,
   record: ConvergedSourceRecord | null,
-  carriesWorkspaceShell: boolean,
 ): void {
   if (
     record?.kind !== "bound" ||
@@ -1330,58 +1381,29 @@ function refuseConfiguredMergeDrivers(
   ) {
     return;
   }
-  const base = gitCommitSourceListing(
+  const configured = runGit(
+    ["config", "--get-regexp", "^merge\\..*\\.driver$"],
     repoCwd,
-    record.baseCommit,
-    carriesWorkspaceShell,
   );
-  const source = gitCommitSourceListing(
-    repoCwd,
-    record.commit,
-    carriesWorkspaceShell,
-  );
-  if (base === null || source === null) {
+  if (!configured.ok && configured.code === 1) return;
+  if (!configured.ok) {
     errorWithSlug(
       slug,
-      "refusing to merge: reviewed source delta cannot be reconstructed for merge-driver verification",
+      "refusing to merge: cannot inspect effective repository merge-driver configuration",
     );
   }
-  const paths = [...changedSourceListingKeys(base, source)]
-    .map((key) => key.slice(key.indexOf("\0") + 1))
-    .sort();
-  for (const path of paths) {
-    const attr = runGit(
-      ["check-attr", "-z", "merge", "--", path],
-      repoCwd,
-    );
-    if (!attr.ok) {
-      errorWithSlug(
-        slug,
-        `refusing to merge: cannot resolve the merge attribute for reviewed path ${JSON.stringify(path)}`,
-      );
-    }
-    const fields = attr.stdout.split("\0");
-    const value = fields[2] ?? "unspecified";
-    if (value === "set" || value === "unset") continue;
-    let driverName = value;
-    if (value === "unspecified") {
-      const configuredDefault = runGit(
-        ["config", "--get", "merge.default"],
-        repoCwd,
-      );
-      if (!configuredDefault.ok || !configuredDefault.stdout.trim()) continue;
-      driverName = configuredDefault.stdout.trim();
-    }
-    const configuredDriver = runGit(
-      ["config", "--get", `merge.${driverName}.driver`],
-      repoCwd,
-    );
-    if (!configuredDriver.ok || !configuredDriver.stdout.trim()) continue;
-    errorWithSlug(
-      slug,
-      `refusing to merge: reviewed path ${JSON.stringify(path)} resolves configured merge driver ${JSON.stringify(driverName)}; unconfigure the driver for this path, or retry with AIDLC_SKIP_SOURCE_FRESHNESS=1`,
-    );
-  }
+  const keys = [
+    ...new Set(
+      configured.stdout
+        .split(/\r?\n/)
+        .map((line) => line.trim().split(/\s+/, 1)[0])
+        .filter(Boolean),
+    ),
+  ].sort();
+  errorWithSlug(
+    slug,
+    `refusing to merge: repository merge-driver configuration is present (${keys.join(", ")}); remove the merge.<name>.driver configuration, or retry with AIDLC_SKIP_SOURCE_FRESHNESS=1`,
+  );
 }
 
 function handleMerge(args: string[]): void {
@@ -1392,18 +1414,22 @@ function handleMerge(args: string[]): void {
   const message = flags.message ?? `Bolt ${slug}`;
 
   const pd = resolveProjectDir(projectDir);
+  const recorded = recordedWorktreeSelector(pd, slug);
   if (flags.intent === undefined && flags.space === undefined) {
-    const recorded = recordedWorktreeSelector(pd, slug);
-    if (recorded !== null) {
+    if (
+      recorded !== null &&
+      recorded.intent !== undefined &&
+      recorded.space !== undefined
+    ) {
       flags.intent = recorded.intent;
       flags.space = recorded.space;
-      if (
-        flags.repo === undefined &&
-        typeof recorded.repoSelector === "string"
-      ) {
-        flags.repo = recorded.repoSelector;
-      }
     }
+  }
+  if (
+    flags.repo === undefined &&
+    typeof recorded?.repoSelector === "string"
+  ) {
+    flags.repo = recorded.repoSelector;
   }
   // P7: anchor every git op to the target sibling repo. The merge runs IN that
   // repo's main checkout (squash/merge/ff/commit/worktree-remove/branch-D); the
@@ -1486,12 +1512,7 @@ function handleMerge(args: string[]): void {
       );
     }
   }
-  refuseConfiguredMergeDrivers(
-    slug,
-    repoCwd,
-    sourceRecord,
-    repoTarget.repo === null,
-  );
+  refuseConfiguredMergeDrivers(slug, repoCwd, sourceRecord);
 
   // Rebase requires a remote for <target>. The remote-existence check is
   // a pre-audit guard (no state change). The actual `git fetch` is post-
@@ -1967,20 +1988,29 @@ function handleDiscard(args: string[]): void {
   const pd = resolveProjectDir(projectDir);
   const recorded = recordedWorktreeSelector(pd, slug);
   if (
-    flags.repo === undefined &&
-    recorded !== null &&
-    typeof recorded.repoSelector === "string"
+    flags.intent === undefined &&
+    flags.space === undefined &&
+    recorded?.intent !== undefined &&
+    recorded.space !== undefined
   ) {
-    flags.repo = recorded.repoSelector;
+    flags.intent = recorded.intent;
+    flags.space = recorded.space;
+  }
+  const creatingRepo =
+    recorded?.repoSelector !== undefined
+      ? recorded.repoSelector
+      : recordedWorktreeCreationRepo(pd, slug, flags.intent, flags.space);
+  if (flags.repo === undefined && typeof creatingRepo === "string") {
+    flags.repo = creatingRepo;
   }
   if (
     flags.repo !== undefined &&
-    recorded?.repoSelector !== undefined &&
-    flags.repo !== recorded.repoSelector
+    creatingRepo !== undefined &&
+    flags.repo !== creatingRepo
   ) {
     errorWithSlug(
       slug,
-      `refusing to discard: selected repository ${JSON.stringify(flags.repo)} does not match creating repository ${JSON.stringify(recorded.repoSelector ?? "-")}`,
+      `refusing to discard: selected repository ${JSON.stringify(flags.repo)} does not match creating repository ${JSON.stringify(creatingRepo ?? "-")}`,
     );
   }
   // P7: anchor every git op to the target sibling repo (or projectDir for legacy).
@@ -2345,7 +2375,12 @@ function errorWithSlug(slug: string, msg: string): never {
 
 function error(msg: string): never {
   const pd = resolveProjectDir(projectDir);
-  const command = `aidlc-worktree ${process.argv.slice(2).join(" ")}`.trim();
+  const commandArgs = process.argv.slice(2);
+  const projectDirIndex = commandArgs.indexOf("--project-dir");
+  if (projectDirIndex !== -1 && projectDirIndex + 1 < commandArgs.length) {
+    commandArgs[projectDirIndex + 1] = "<project-dir>";
+  }
+  const command = `aidlc-worktree ${commandArgs.join(" ")}`.trim();
   emitError(pd, "aidlc-worktree", command, msg);
 }
 

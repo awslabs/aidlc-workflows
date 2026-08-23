@@ -242,8 +242,6 @@ function worktreeBaseFields(
     "intentRecord",
     "repoSelector",
     "gitCommonDir",
-    "repoSelector",
-    "gitCommonDir",
     "swarmUnit",
     "swarmBatch",
     "swarmStage",

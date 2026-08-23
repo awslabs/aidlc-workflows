@@ -342,9 +342,15 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
       expect(git(repoA, "rev-parse", "main").out.trim()).toBe(beforeA);
       expect(git(repoB, "rev-parse", "main").out.trim()).toBe(beforeB);
       expect(existsSync(wt)).toBe(true);
-      expect(readAllAuditShards(proj)).not.toContain(
+      const audit = readAllAuditShards(proj);
+      expect(audit).not.toContain(
         "**Event**: WORKTREE_MERGED",
       );
+      const errorBlock = audit.slice(audit.lastIndexOf("## Error Logged"));
+      expect(errorBlock).toContain("--project-dir <project-dir>");
+      expect(errorBlock).not.toContain(proj);
+      expect(errorBlock).not.toContain(repoA);
+      expect(errorBlock).not.toContain(repoB);
     });
   });
 
@@ -384,6 +390,148 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
       expect(recovered.status, recovered.out).toBe(0);
       expect(existsSync(worktreeDir(proj, "discard-repo"))).toBe(false);
       expect(hasBoltBranch(proj, "repo-a", "discard-repo")).toBe(false);
+    });
+  });
+
+  describe("multi-repo: discard falls back to WORKTREE_CREATED repository authority", () => {
+    const strippedProj = freshWorkspace();
+    makeSiblingRepo(strippedProj, "repo-a");
+    makeSiblingRepo(strippedProj, "repo-b");
+    runUtil(
+      strippedProj,
+      "intent-create",
+      "--scope",
+      "feature",
+      "--repos",
+      "repo-a,repo-b",
+    );
+    runWorktree(
+      strippedProj,
+      "create",
+      "--slug",
+      "audit-stripped",
+      "--base",
+      "main",
+      "--repo",
+      "repo-a",
+    );
+    const strippedMetaPath = join(
+      worktreeDir(strippedProj, "audit-stripped"),
+      ".aidlc",
+      "worktree-meta.json",
+    );
+    const strippedMeta = JSON.parse(
+      readFileSync(strippedMetaPath, "utf-8"),
+    ) as Record<string, unknown>;
+    delete strippedMeta.repoSelector;
+    writeFileSync(
+      strippedMetaPath,
+      `${JSON.stringify(strippedMeta, null, 2)}\n`,
+    );
+    const strippedWrong = runWorktree(
+      strippedProj,
+      "discard",
+      "--slug",
+      "audit-stripped",
+      "--repo",
+      "repo-b",
+    );
+
+    const removedProj = freshWorkspace();
+    makeSiblingRepo(removedProj, "repo-a");
+    const removedRepoB = makeSiblingRepo(removedProj, "repo-b");
+    runUtil(
+      removedProj,
+      "intent-create",
+      "--scope",
+      "feature",
+      "--repos",
+      "repo-a,repo-b",
+    );
+    runWorktree(
+      removedProj,
+      "create",
+      "--slug",
+      "audit-removed",
+      "--base",
+      "main",
+      "--repo",
+      "repo-a",
+    );
+    git(removedRepoB, "branch", "bolt-audit-removed");
+    rmSync(worktreeDir(removedProj, "audit-removed"), {
+      recursive: true,
+      force: true,
+    });
+    const removedWrong = runWorktree(
+      removedProj,
+      "discard",
+      "--slug",
+      "audit-removed",
+      "--repo",
+      "repo-b",
+    );
+
+    test("stripped metadata cannot redirect discard away from the creating repo", () => {
+      expect(strippedWrong.status).not.toBe(0);
+      expect(strippedWrong.out).toContain("does not match creating repository");
+      expect(hasBoltBranch(strippedProj, "repo-a", "audit-stripped")).toBe(
+        true,
+      );
+    });
+
+    test("a removed worktree directory cannot erase the creating-repo binding", () => {
+      expect(removedWrong.status).not.toBe(0);
+      expect(removedWrong.out).toContain("does not match creating repository");
+      expect(hasBoltBranch(removedProj, "repo-b", "audit-removed")).toBe(true);
+    });
+  });
+
+  describe("merge with explicit intent selectors still recovers the creating repo", () => {
+    const proj = freshWorkspace();
+    const repoA = makeSiblingRepo(proj, "repo-a");
+    makeSiblingRepo(proj, "repo-b");
+    runUtil(
+      proj,
+      "intent-create",
+      "--scope",
+      "feature",
+      "--repos",
+      "repo-a,repo-b",
+    );
+    const record = activeRecord(proj);
+    runWorktree(
+      proj,
+      "create",
+      "--slug",
+      "explicit-intent",
+      "--base",
+      "main",
+      "--repo",
+      "repo-a",
+    );
+    const wt = worktreeDir(proj, "explicit-intent");
+    writeFileSync(join(wt, "explicit-intent.txt"), "bound repo\n");
+    git(wt, "add", "--", "explicit-intent.txt");
+    git(wt, "commit", "-q", "-m", "explicit intent source");
+    const merged = runWorktree(
+      proj,
+      "merge",
+      "--slug",
+      "explicit-intent",
+      "--target",
+      "main",
+      "--strategy",
+      "squash",
+      "--space",
+      "default",
+      "--intent",
+      basename(record),
+    );
+
+    test("the recorded repository is used even when intent and space are explicit", () => {
+      expect(merged.status, merged.out).toBe(0);
+      expect(existsSync(join(repoA, "explicit-intent.txt"))).toBe(true);
     });
   });
 

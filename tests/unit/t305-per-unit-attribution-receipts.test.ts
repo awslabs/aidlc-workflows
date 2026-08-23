@@ -407,6 +407,43 @@ describe("t305 strict source-manifest validation", () => {
       writes: [{ path: "tracked-link.ts" }],
     });
     expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(true);
+
+    const projectAlias = `${project}-alias`;
+    symlinkSync(
+      project,
+      projectAlias,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    dirs.push(projectAlias);
+    expect(
+      readUnitSourceManifest(projectAlias, "code-generation", "alpha").ok,
+    ).toBe(true);
+
+    mkdirSync(join(project, "real-directory"), { recursive: true });
+    writeFileSync(join(project, "real-directory", "inner.ts"), "inner\n");
+    symlinkSync(
+      "real-directory",
+      join(project, "linked-directory"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    manifest(record, "alpha", {
+      stage: "code-generation",
+      unit: "alpha",
+      version: 1,
+      writes: [{ path: "linked-directory/" }],
+    });
+    const linkedDirectory = readUnitSourceManifest(
+      project,
+      "code-generation",
+      "alpha",
+    );
+    expect(linkedDirectory.ok).toBe(false);
+    if (!linkedDirectory.ok) {
+      expect(linkedDirectory.reason).toContain("linked-directory");
+      expect(linkedDirectory.reason).toContain(
+        'directory claims must end with "/"',
+      );
+    }
   });
 });
 
@@ -1790,14 +1827,17 @@ describe("t305 healthy settled-swarm source completion", () => {
     );
   }, 120000);
 
-  test("two reviewed Units can merge non-overlapping shared-file edits and approve", () => {
+  for (const mergeMode of ["default", "union"] as const) {
+    test(`two reviewed Units can merge non-overlapping shared-file edits with the ${mergeMode} text driver and approve`, () => {
     const baseLines = Array.from(
       { length: 40 },
       (_, index) => `export const line${index} = ${index};`,
     );
     const project = swarmFixture((root) => {
       writeFileSync(join(root, "shared.ts"), `${baseLines.join("\n")}\n`);
-      writeFileSync(join(root, ".gitattributes"), "shared.ts merge=union\n");
+      if (mergeMode === "union") {
+        writeFileSync(join(root, ".gitattributes"), "shared.ts merge=union\n");
+      }
     });
     const units = ["alpha", "beta"];
     seedBoltDag(
@@ -1900,14 +1940,16 @@ describe("t305 healthy settled-swarm source completion", () => {
     expect(readAllAuditShards(project)).toContain(
       "**Event**: STAGE_COMPLETED",
     );
-  }, 120000);
+    }, 120000);
+  }
 
-  test("configured merge drivers are refused before main mutation", () => {
+  for (const driverName of ["evil", "set", "unset", "unspecified"] as const) {
+    test(`configured merge driver ${driverName} is refused before main mutation`, () => {
     const project = swarmFixture((root) => {
       writeFileSync(join(root, "driver-target.ts"), "export const base = true;\n");
       writeFileSync(
         join(root, ".gitattributes"),
-        "driver-target.ts merge=evil\n",
+        `driver-target.ts merge=${driverName}\n`,
       );
     });
     const driverDir = mkdtempSync(join(tmpdir(), "aidlc-merge-driver-"));
@@ -1919,8 +1961,12 @@ describe("t305 healthy settled-swarm source completion", () => {
       `#!/bin/sh\ntouch ${JSON.stringify(marker)}\nprintf '%s\\n' 'export const BACKDOOR = true;' > "$1"\n`,
     );
     chmodSync(driver, 0o755);
-    git(project, ["config", "merge.evil.driver", `${driver} %A %O %B`]);
-    const unit = "driver-guard";
+    git(project, [
+      "config",
+      `merge.${driverName}.driver`,
+      `${driver} %A %O %B`,
+    ]);
+    const unit = `driver-guard-${driverName}`;
     seedBoltDag(project, [unit]);
     const prepared = runSwarm(project, [
       "prepare",
@@ -1963,9 +2009,8 @@ describe("t305 healthy settled-swarm source completion", () => {
     ).stdout.trim();
     const merged = mergeSwarmUnit(project, unit);
     expect(merged.rc).toBe(1);
-    expect(merged.out).toContain("driver-target.ts");
-    expect(merged.out).toContain("evil");
-    expect(merged.out).toContain("unconfigure the driver");
+    expect(merged.out).toContain(`merge.${driverName}.driver`);
+    expect(merged.out).toContain("remove the merge.<name>.driver configuration");
     expect(merged.out).toContain("AIDLC_SKIP_SOURCE_FRESHNESS=1");
     expect(merged.out).not.toContain("[merge-succeeded:");
     expect(existsSync(marker)).toBe(false);
@@ -1975,7 +2020,8 @@ describe("t305 healthy settled-swarm source completion", () => {
       }).stdout.trim(),
     ).toBe(before);
     expect(existsSync(wt)).toBe(true);
-  }, 120000);
+    }, 120000);
+  }
 });
 
 describe("t305 post-merge source authority failure", () => {
