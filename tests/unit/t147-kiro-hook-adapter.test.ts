@@ -925,7 +925,9 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       expect(batchAudit.match(/\*\*Event\*\*: ARTIFACT_(?:CREATED|UPDATED)/g)).toHaveLength(2);
       expect(batchAudit.match(/\*\*Event\*\*: SENSOR_FIRED/g)).toHaveLength(4);
       for (const path of batchPaths) {
-        expect(batchAudit).toContain(path.replace(/\\/g, "/"));
+        expect(batchAudit).toContain(
+          `<project-dir>/${relative(dir, path).replace(/\\/g, "/")}`,
+        );
       }
       expect(existsSync(sensorHeartbeat)).toBe(true);
 
