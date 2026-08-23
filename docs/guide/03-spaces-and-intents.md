@@ -192,9 +192,10 @@ environments with no binding therefore behave exactly as before.
 
 On Windows, PID ancestry resolution returns no session identity. Shared-process
 harnesses also cannot distinguish chats that use one process, including Kiro
-IDE multi-chat and multi-session opencode. Spawned tools in those cases fall
-back to the shared cursors unless the harness process has a valid
-`AIDLC_SESSION_OVERRIDE`.
+IDE multi-chat and multi-session opencode. Children of payload-bearing hooks
+follow the payload session; tools without that parent still fall back to the
+shared cursors when ancestry is unavailable unless the harness process has a
+valid `AIDLC_SESSION_OVERRIDE`.
 
 Known limitation: hook writes and the intent and space switch verbs on those
 platforms retain the pre-existing v2 shared-cursor and `.current-session`

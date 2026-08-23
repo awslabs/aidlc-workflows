@@ -2491,25 +2491,25 @@ export function resolveSessionIdFromAncestry(projectDir: string): string | null 
 }
 
 // Build a hook-spawned child's environment from authoritative payload identity.
-// Shared-process harnesses can report a payload session that differs from the
-// process ancestry owner. In that case the child must inherit neither identity:
-// it falls back to the same shared-cursor behavior v2 used instead of triggering
-// the env-vs-ancestry refusal and making an enforcement hook fail open.
+// A valid divergent payload carries a private source marker so the selection
+// chokepoint can let payload identity win without weakening bare env refusal.
 export function hookChildEnv(
   projectDir: string,
   payloadSessionId: string | undefined,
-  extra: Record<string, string> = {},
+  extra: Record<string, string | undefined> = {},
 ): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = {
     ...process.env,
     ...extra,
   };
-  delete env.AIDLC_SESSION_OVERRIDE;
   const payloadSession = validSessionId(payloadSessionId);
   if (!payloadSession) return env;
+  env.AIDLC_SESSION_OVERRIDE = payloadSession;
   const ancestrySession = resolveSessionIdFromAncestry(projectDir);
-  if (ancestrySession === null || ancestrySession === payloadSession) {
-    env.AIDLC_SESSION_OVERRIDE = payloadSession;
+  if (ancestrySession !== null && ancestrySession !== payloadSession) {
+    env.AIDLC_SESSION_OVERRIDE_SOURCE = "payload";
+  } else {
+    delete env.AIDLC_SESSION_OVERRIDE_SOURCE;
   }
   return env;
 }
@@ -2562,11 +2562,15 @@ export function resolveWorkflowSelection(
     sessionId = explicitSession;
   } else {
     const envSession = validSessionId(process.env.AIDLC_SESSION_OVERRIDE);
+    const payloadOverride =
+      envSession !== null &&
+      process.env.AIDLC_SESSION_OVERRIDE_SOURCE === "payload";
     const ancestrySession = resolveSessionIdFromAncestry(projectDir);
     if (
       envSession &&
       ancestrySession &&
-      envSession !== ancestrySession
+      envSession !== ancestrySession &&
+      !payloadOverride
     ) {
       throw new SessionResolutionConflictError(envSession, ancestrySession);
     }

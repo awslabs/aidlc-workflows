@@ -8,6 +8,7 @@ import { copyFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import {
   createIntent,
+  hookChildEnv,
   readAllAuditShards,
   sessionPidMapDir,
   setActiveIntentCursor,
@@ -32,6 +33,7 @@ let secondDir = "";
 function cleanEnv(): Record<string, string | undefined> {
   const env = { ...process.env };
   delete env.AIDLC_SESSION_OVERRIDE;
+  delete env.AIDLC_SESSION_OVERRIDE_SOURCE;
   return env;
 }
 
@@ -123,6 +125,45 @@ describe("t312 orchestrate session binding", () => {
     expect(result.exitCode, result.stderr.toString()).toBe(0);
     expect(readFileSync(statePath(firstDir), "utf-8")).toBe(firstBefore);
     expect(readFileSync(statePath(secondDir), "utf-8")).toContain("- **Parked**:");
+  });
+
+  test("absent payload keeps an inherited override for the spawned engine", () => {
+    writeSessionBinding(proj, "session-a", "default", firstDir);
+    rmSync(sessionPidMapDir(proj), { recursive: true, force: true });
+
+    const result = next(
+      hookChildEnv(proj, undefined, {
+        ...cleanEnv(),
+        AIDLC_SESSION_OVERRIDE: "session-a",
+      }),
+    );
+
+    expect(result.status, result.out).toBe(0);
+    expect(result.out).toContain('"stage":"feasibility"');
+    expect(result.out).toContain(firstDir);
+    expect(result.out).not.toContain(secondDir);
+  });
+
+  test("payload source selects payload A over ancestry B and cursor C", () => {
+    const ancestry = createIntent(
+      proj,
+      "ancestry-work",
+      "default",
+      "feature",
+    );
+    setActiveIntentCursor(proj, secondDir, "default");
+    writeSessionBinding(proj, "session-a", "default", firstDir);
+    writeSessionBinding(proj, "session-b", "default", ancestry.dirName);
+    writeSessionPidEntry(proj, process.pid, "session-b");
+    writeSessionPidEntry(proj, process.ppid, "session-b");
+
+    const result = next(hookChildEnv(proj, "session-a", cleanEnv()));
+
+    expect(result.status, result.out).toBe(0);
+    expect(result.out).toContain('"stage":"feasibility"');
+    expect(result.out).toContain(firstDir);
+    expect(result.out).not.toContain(ancestry.dirName);
+    expect(result.out).not.toContain(secondDir);
   });
 
   test("divergent environment and ancestry refuse before any workflow write", () => {

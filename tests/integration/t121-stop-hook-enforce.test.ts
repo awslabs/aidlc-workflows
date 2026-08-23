@@ -316,6 +316,8 @@ try {
     JSON.stringify({
       probe: process.env.AIDLC_STOP_HOOK_PROBE ?? null,
       sessionOverride: process.env.AIDLC_SESSION_OVERRIDE ?? null,
+      sessionOverrideSource:
+        process.env.AIDLC_SESSION_OVERRIDE_SOURCE ?? null,
     }),
     "utf-8",
   );
@@ -1956,7 +1958,11 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     // child, so deleting the marking now fails this test.
     const witness = JSON.parse(
       readFileSync(join(proj, ".probe-env-witness.json"), "utf-8"),
-    ) as { probe: string | null; sessionOverride: string | null };
+    ) as {
+      probe: string | null;
+      sessionOverride: string | null;
+      sessionOverrideSource: string | null;
+    };
     expect(witness.probe).toBe("1");
 
     // Retained as a regression guard on the mock's own inertness: if the mock is
@@ -1964,7 +1970,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect(statSync(enginePath).mtimeMs).toBe(before);
   }, 30000);
 
-  test("(f2) divergent payload and ancestry omit the child override without failing open", () => {
+  test("(f2) divergent payload marker avoids refusal fail-open", () => {
     const proj = makeProject();
     seedActive(proj, "requirements-analysis");
     writeSessionPidEntry(proj, process.pid, "ancestry-session");
@@ -1982,9 +1988,14 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
     const witness = JSON.parse(
       readFileSync(join(proj, ".probe-env-witness.json"), "utf-8"),
-    ) as { probe: string | null; sessionOverride: string | null };
+    ) as {
+      probe: string | null;
+      sessionOverride: string | null;
+      sessionOverrideSource: string | null;
+    };
     expect(witness.probe).toBe("1");
-    expect(witness.sessionOverride).toBeNull();
+    expect(witness.sessionOverride).toBe("payload-session");
+    expect(witness.sessionOverrideSource).toBe("payload");
   }, 30000);
 
   test("(f2) the probe mark is scoped to the engine consultation, not leaked into the hook's own process", () => {

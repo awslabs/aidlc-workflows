@@ -29,9 +29,12 @@ import { cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
 
 let proj = "";
 const originalSessionOverride = process.env.AIDLC_SESSION_OVERRIDE;
+const originalSessionOverrideSource =
+  process.env.AIDLC_SESSION_OVERRIDE_SOURCE;
 
 beforeEach(() => {
   delete process.env.AIDLC_SESSION_OVERRIDE;
+  delete process.env.AIDLC_SESSION_OVERRIDE_SOURCE;
   proj = createTestProject();
 });
 
@@ -40,6 +43,12 @@ afterEach(() => {
     delete process.env.AIDLC_SESSION_OVERRIDE;
   } else {
     process.env.AIDLC_SESSION_OVERRIDE = originalSessionOverride;
+  }
+  if (originalSessionOverrideSource === undefined) {
+    delete process.env.AIDLC_SESSION_OVERRIDE_SOURCE;
+  } else {
+    process.env.AIDLC_SESSION_OVERRIDE_SOURCE =
+      originalSessionOverrideSource;
   }
   cleanupTestProject(proj);
   proj = "";
@@ -125,23 +134,33 @@ describe("t310 session binding helpers", () => {
     ).toBe(second.dirName);
   });
 
-  test("hook child env pins only absent or matching ancestry", () => {
+  test("hook child env preserves inherited identity and marks only divergent payloads", () => {
     process.env.AIDLC_SESSION_OVERRIDE = "inherited-session";
     rmSync(sessionPidMapDir(proj), { recursive: true, force: true });
+    expect(hookChildEnv(proj, undefined).AIDLC_SESSION_OVERRIDE).toBe(
+      "inherited-session",
+    );
+    expect(hookChildEnv(proj, " session").AIDLC_SESSION_OVERRIDE).toBe(
+      "inherited-session",
+    );
     expect(
       hookChildEnv(proj, "payload-session", { AIDLC_TEST_EXTRA: "kept" }),
     ).toMatchObject({
       AIDLC_SESSION_OVERRIDE: "payload-session",
       AIDLC_TEST_EXTRA: "kept",
     });
+    expect(
+      hookChildEnv(proj, "payload-session").AIDLC_SESSION_OVERRIDE_SOURCE,
+    ).toBeUndefined();
 
     writeSessionPidEntry(proj, process.ppid, "payload-session");
-    expect(hookChildEnv(proj, "payload-session").AIDLC_SESSION_OVERRIDE).toBe(
-      "payload-session",
-    );
-    expect(
-      hookChildEnv(proj, "different-session").AIDLC_SESSION_OVERRIDE,
-    ).toBeUndefined();
+    const matching = hookChildEnv(proj, "payload-session");
+    expect(matching.AIDLC_SESSION_OVERRIDE).toBe("payload-session");
+    expect(matching.AIDLC_SESSION_OVERRIDE_SOURCE).toBeUndefined();
+
+    const divergent = hookChildEnv(proj, "different-session");
+    expect(divergent.AIDLC_SESSION_OVERRIDE).toBe("different-session");
+    expect(divergent.AIDLC_SESSION_OVERRIDE_SOURCE).toBe("payload");
   });
 
   test("hostile session ids and invalid pids cannot escape the sessions dir", () => {
