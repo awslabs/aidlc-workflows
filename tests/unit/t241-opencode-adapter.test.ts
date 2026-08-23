@@ -16,7 +16,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import createAdapter, {
   type PluginInput,
 } from "../../harness/opencode/plugin/aidlc-opencode-adapter.ts";
@@ -28,6 +28,9 @@ import {
   seededRecordDir,
   seedStateFile,
 } from "../harness/fixtures.ts";
+import {
+  writeSessionBinding,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const TEST_ENTRYPOINTS = new Set([
@@ -605,6 +608,14 @@ writeFileSync(${JSON.stringify(stopInput)}, await Bun.stdin.text(), "utf-8");
       { parts: [{ type: "text", text: "start a workflow" }] },
     );
     seedStateFile(root, "state-init-active.md");
+    // The direct fixture write stands in for intent-create, so mirror the
+    // production writer that replaces the cold intent:null binding.
+    writeSessionBinding(
+      root,
+      "main",
+      "default",
+      basename(seededRecordDir(root)),
+    );
     await adapter.event({
       event: {
         type: "session.idle",

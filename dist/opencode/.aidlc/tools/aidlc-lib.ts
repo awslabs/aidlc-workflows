@@ -1340,7 +1340,7 @@ export function intentsDir(projectDir: string, space?: string): string {
 // engine's per-agent METHODOLOGY knowledge at <harness>/knowledge/ (shipped,
 // untouched). Created lazily by ensure-exists, never by SEED.
 export function knowledgeDir(projectDir: string, space?: string): string {
-  const sp = space ?? activeSpace(projectDir);
+  const sp = resolveWorkflowSelection(projectDir, { space }).space;
   return join(workspaceRoot(projectDir), "spaces", sp, "knowledge");
 }
 
@@ -1421,8 +1421,9 @@ export function recordDir(
   intent?: string,
   space?: string,
 ): string | null {
-  const sp = space ?? activeSpace(projectDir);
-  const slug = activeIntent(projectDir, sp, intent);
+  const selection = resolveWorkflowSelection(projectDir, { space, intent });
+  const sp = selection.space;
+  const slug = selection.intent;
   if (slug === null) return null;
   return join(intentsDir(projectDir, sp), slug);
 }
@@ -1440,8 +1441,9 @@ export function relativeRecordDir(
   intent?: string,
   space?: string,
 ): string | null {
-  const sp = space ?? activeSpace(projectDir);
-  const slug = activeIntent(projectDir, sp, intent);
+  const selection = resolveWorkflowSelection(projectDir, { space, intent });
+  const sp = selection.space;
+  const slug = selection.intent;
   if (slug === null) return null;
   return `aidlc/spaces/${sp}/intents/${slug}`;
 }
@@ -1452,7 +1454,7 @@ export function relativeRecordDir(
 // by repo and shared across every intent in the space, so it must NOT carry the
 // intents/<slug> tail. Mirrors knowledgeDir's space-aware shape.
 export function codekbDir(projectDir: string, repo: string, space?: string): string {
-  const sp = space ?? activeSpace(projectDir);
+  const sp = resolveWorkflowSelection(projectDir, { space }).space;
   return join(workspaceRoot(projectDir), "spaces", sp, "codekb", repo);
 }
 
@@ -1461,7 +1463,7 @@ export function codekbDir(projectDir: string, repo: string, space?: string): str
 // can read the active-space cursor — NOT relativeSpaceRecordPrefix, which is
 // pinned to the default space).
 export function relativeCodekbDir(projectDir: string, repo: string, space?: string): string {
-  const sp = space ?? activeSpace(projectDir);
+  const sp = resolveWorkflowSelection(projectDir, { space }).space;
   return `aidlc/spaces/${sp}/codekb/${repo}`;
 }
 
@@ -1471,8 +1473,17 @@ export function relativeCodekbDir(projectDir: string, repo: string, space?: stri
 //   >1 recorded      -> caller loops per repo (this returns basename as a safe
 //                       default; callers that know the repo pass --repo explicitly).
 // basename done here (lib has basename imported) so callers never inline it.
-export function codekbRepoName(projectDir: string, space?: string): string {
-  const repos = intentRepos(projectDir, undefined, space);
+export function codekbRepoName(
+  projectDir: string,
+  space?: string,
+  intent?: string,
+): string {
+  const selection = resolveWorkflowSelection(projectDir, { space, intent });
+  const repos = intentRepos(
+    projectDir,
+    selection.intent ?? undefined,
+    selection.space,
+  );
   return repos.length === 1 ? repos[0] : basename(projectDir);
 }
 
@@ -1977,8 +1988,8 @@ export interface SpaceInfo {
 // active per the active-space cursor. "default" is always reported even when no
 // spaces dir exists yet (the resolver treats it as always-valid — activeSpace()
 // returns it), so the listing never claims zero spaces on a fresh shell.
-export function listSpaces(projectDir: string): SpaceInfo[] {
-  const active = activeSpace(projectDir);
+export function listSpaces(projectDir: string, activeOverride?: string): SpaceInfo[] {
+  const active = activeOverride ?? activeSpace(projectDir);
   const names = new Set<string>([DEFAULT_SPACE]);
   try {
     for (const name of readdirSync(spacesRoot(projectDir))) {
@@ -2006,12 +2017,19 @@ export interface IntentInfo {
 // suffix so a registry row resolves to its record dir even when the slug was
 // later renamed. A record dir with no registry row (a hand-created or migrated
 // orphan) is appended so the listing never hides an on-disk intent.
-export function listIntents(projectDir: string, space?: string): IntentInfo[] {
+export function listIntents(
+  projectDir: string,
+  space?: string,
+  activeIntentOverride?: string | null,
+): IntentInfo[] {
   const sp = space ?? activeSpace(projectDir);
   const registry = readIntentRegistry(projectDir, sp);
   const dirs = listIntentDirs(projectDir, sp);
   // activeIntent() returns the record DIR NAME of the active intent (or null).
-  const activeDir = activeIntent(projectDir, sp);
+  const activeDir =
+    activeIntentOverride === undefined
+      ? activeIntent(projectDir, sp)
+      : activeIntentOverride;
   const claimedDirs = new Set<string>();
   const infos: IntentInfo[] = registry.map((entry) => {
     // Match the row to its record dir via the shared join rule (stored dirName,
@@ -2115,10 +2133,379 @@ export function sessionsDir(projectDir: string): string {
 // The per-session record file: `aidlc/.aidlc-sessions/<session-id>`. The
 // session id is normalised to the slug shape so a host-supplied id can never
 // escape the sessions dir (path traversal / separators); an empty id yields "".
+function safeSessionId(sessionId: string): string {
+  const safe = sessionId
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 180);
+  if (!safe || safe === "." || safe === "..") return "";
+  return safe;
+}
+
 function sessionRecordPath(projectDir: string, sessionId: string): string {
-  const safe = sessionId.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  const safe = safeSessionId(sessionId);
   if (!safe) return "";
   return join(sessionsDir(projectDir), safe);
+}
+
+export interface SessionBinding {
+  space: string;
+  intent: string | null;
+  boundAt: string;
+}
+
+function sessionBindingPath(projectDir: string, sessionId: string): string {
+  const recordPath = sessionRecordPath(projectDir, sessionId);
+  return recordPath ? `${recordPath}.binding.json` : "";
+}
+
+function safeIntentRecordName(value: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value) && value !== "." && value !== "..";
+}
+
+// Read a session's pinned workflow selection. Malformed, unsafe, or stale
+// records degrade to no binding so cursor behavior remains the fallback.
+export function readSessionBinding(projectDir: string, sessionId: string): SessionBinding | null {
+  const path = sessionBindingPath(projectDir, sessionId);
+  if (!path) return null;
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
+    if (parsed === null || typeof parsed !== "object") return null;
+    const candidate = parsed as Partial<SessionBinding>;
+    if (
+      typeof candidate.space !== "string" ||
+      !SPACE_NAME_REGEX.test(candidate.space) ||
+      (candidate.intent !== null &&
+        (typeof candidate.intent !== "string" || !safeIntentRecordName(candidate.intent))) ||
+      typeof candidate.boundAt !== "string" ||
+      candidate.boundAt.length === 0
+    ) {
+      return null;
+    }
+    if (
+      candidate.intent !== null &&
+      !existsSync(join(intentsDir(projectDir, candidate.space), candidate.intent, "aidlc-state.md"))
+    ) {
+      return null;
+    }
+    return candidate as SessionBinding;
+  } catch {
+    return null;
+  }
+}
+
+// Pin a session to one space and optional intent record. This is machine-local
+// runtime state, so any write failure silently falls back to shared cursors.
+export function writeSessionBinding(
+  projectDir: string,
+  sessionId: string,
+  space: string,
+  intent: string | null,
+): void {
+  const path = sessionBindingPath(projectDir, sessionId);
+  if (
+    !path ||
+    !SPACE_NAME_REGEX.test(space) ||
+    (intent !== null && !safeIntentRecordName(intent))
+  ) {
+    return;
+  }
+  try {
+    mkdirSync(sessionsDir(projectDir), { recursive: true });
+    const binding: SessionBinding = { space, intent, boundAt: isoTimestamp() };
+    writeFileSync(path, `${JSON.stringify(binding)}\n`, "utf-8");
+  } catch {
+    /* per-user runtime state; best-effort */
+  }
+}
+
+interface SessionPidEntry {
+  sessionId: string;
+  startTime: string | null;
+}
+
+interface ProcessIdentity {
+  ppid: number;
+  startTime: string | null;
+}
+
+const SESSION_ANCESTRY_BUDGET_MS = 50;
+const SESSION_ANCESTRY_MAX_DEPTH = 64;
+const SESSION_ANCESTRY_CACHE_MS = 1000;
+const sessionAncestryCache = new Map<
+  string,
+  { sessionId: string | null; expiresAt: number }
+>();
+
+export function sessionPidMapDir(projectDir: string): string {
+  return join(sessionsDir(projectDir), "pids");
+}
+
+function sessionPidEntryPath(projectDir: string, pid: number): string {
+  if (!Number.isSafeInteger(pid) || pid <= 1) return "";
+  return join(sessionPidMapDir(projectDir), String(pid));
+}
+
+function linuxProcessIdentity(pid: number): ProcessIdentity | null {
+  try {
+    const raw = readFileSync(`/proc/${pid}/stat`, "utf-8");
+    const close = raw.lastIndexOf(")");
+    if (close < 0) return null;
+    const fields = raw.slice(close + 1).trim().split(/\s+/);
+    const ppid = Number.parseInt(fields[1] ?? "", 10);
+    const startTime = fields[19] ?? "";
+    if (!Number.isSafeInteger(ppid) || ppid < 0 || startTime.length === 0) return null;
+    return { ppid, startTime };
+  } catch {
+    return null;
+  }
+}
+
+function macProcessIdentity(pid: number, deadlineMs: number): ProcessIdentity | null {
+  const timeout = Math.max(1, deadlineMs - Date.now());
+  if (timeout <= 1) return null;
+  try {
+    const result = spawnSync("ps", ["-o", "ppid=,lstart=", "-p", String(pid)], {
+      encoding: "utf-8",
+      timeout,
+    });
+    if (result.status !== 0) return null;
+    const match = /^\s*(\d+)\s+(.+?)\s*$/.exec(result.stdout ?? "");
+    if (!match) return null;
+    const ppid = Number.parseInt(match[1], 10);
+    return Number.isSafeInteger(ppid) ? { ppid, startTime: match[2] } : null;
+  } catch {
+    return null;
+  }
+}
+
+function processIdentity(pid: number, deadlineMs: number): ProcessIdentity | null {
+  if (!Number.isSafeInteger(pid) || pid <= 1 || Date.now() >= deadlineMs) return null;
+  if (process.platform === "linux") return linuxProcessIdentity(pid);
+  if (process.platform === "darwin") return macProcessIdentity(pid, deadlineMs);
+  // Windows process ancestry is optional in this increment. Returning null
+  // preserves cursor behavior without paying for a PowerShell process.
+  return null;
+}
+
+function processIsAlive(pid: number): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 1) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+function readSessionPidEntry(projectDir: string, pid: number): SessionPidEntry | null {
+  const path = sessionPidEntryPath(projectDir, pid);
+  if (!path) return null;
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
+    if (parsed === null || typeof parsed !== "object") return null;
+    const candidate = parsed as Partial<SessionPidEntry>;
+    if (
+      typeof candidate.sessionId !== "string" ||
+      !safeSessionId(candidate.sessionId) ||
+      (candidate.startTime !== null && typeof candidate.startTime !== "string")
+    ) {
+      return null;
+    }
+    return candidate as SessionPidEntry;
+  } catch {
+    return null;
+  }
+}
+
+// Write one PID ownership record. Exported for deterministic ancestry tests;
+// production callers normally use writeSessionPidAncestry().
+export function writeSessionPidEntry(
+  projectDir: string,
+  pid: number,
+  sessionId: string,
+): void {
+  sessionAncestryCache.delete(projectDir);
+  const path = sessionPidEntryPath(projectDir, pid);
+  if (!path || !safeSessionId(sessionId) || !processIsAlive(pid)) return;
+  const identity = processIdentity(pid, Date.now() + SESSION_ANCESTRY_BUDGET_MS);
+  try {
+    mkdirSync(sessionPidMapDir(projectDir), { recursive: true });
+    const entry: SessionPidEntry = {
+      sessionId,
+      startTime: identity?.startTime ?? null,
+    };
+    writeFileSync(path, `${JSON.stringify(entry)}\n`, "utf-8");
+  } catch {
+    /* per-user runtime state; best-effort */
+  }
+}
+
+function gcSessionPidEntries(projectDir: string): void {
+  let names: string[];
+  try {
+    names = readdirSync(sessionPidMapDir(projectDir));
+  } catch {
+    return;
+  }
+  const deadline = Date.now() + SESSION_ANCESTRY_BUDGET_MS;
+  for (const name of names) {
+    if (Date.now() >= deadline || !/^\d+$/.test(name)) continue;
+    const pid = Number.parseInt(name, 10);
+    const entry = readSessionPidEntry(projectDir, pid);
+    const identity = processIdentity(pid, deadline);
+    const stale =
+      !entry ||
+      !processIsAlive(pid) ||
+      (entry.startTime !== null &&
+        (identity?.startTime === null ||
+          identity?.startTime === undefined ||
+          identity.startTime !== entry.startTime));
+    if (!stale) continue;
+    try {
+      unlinkSync(join(sessionPidMapDir(projectDir), name));
+    } catch {
+      /* raced with another hook or cleanup */
+    }
+  }
+}
+
+// Map the harness process and each ancestor to the current session. The hook
+// process itself is intentionally excluded because later tool subprocesses are
+// siblings, not descendants, of that short-lived hook.
+export function writeSessionPidAncestry(projectDir: string, sessionId: string): void {
+  sessionAncestryCache.delete(projectDir);
+  if (!safeSessionId(sessionId) || process.platform === "win32") return;
+  gcSessionPidEntries(projectDir);
+  const deadline = Date.now() + SESSION_ANCESTRY_BUDGET_MS;
+  const seen = new Set<number>();
+  let pid = process.ppid;
+  for (let depth = 0; depth < SESSION_ANCESTRY_MAX_DEPTH; depth++) {
+    if (pid <= 1 || seen.has(pid) || Date.now() >= deadline) break;
+    seen.add(pid);
+    const identity = processIdentity(pid, deadline);
+    if (!identity) break;
+    writeSessionPidEntry(projectDir, pid, sessionId);
+    pid = identity.ppid;
+  }
+}
+
+// Resolve the nearest mapped ancestor of the calling process. Every failure is
+// a silent miss so tools retain cursor behavior when process metadata is absent.
+export function resolveSessionIdFromAncestry(projectDir: string): string | null {
+  const cached = sessionAncestryCache.get(projectDir);
+  if (cached && cached.expiresAt > Date.now()) return cached.sessionId;
+  const resolved = resolveSessionIdFromAncestryUncached(projectDir);
+  if (resolved === null) {
+    sessionAncestryCache.set(projectDir, {
+      sessionId: null,
+      expiresAt: Date.now() + SESSION_ANCESTRY_CACHE_MS,
+    });
+  } else {
+    sessionAncestryCache.delete(projectDir);
+  }
+  return resolved;
+}
+
+function resolveSessionIdFromAncestryUncached(projectDir: string): string | null {
+  if (process.platform === "win32") return null;
+  if (!existsSync(sessionPidMapDir(projectDir))) return null;
+  const deadline = Date.now() + SESSION_ANCESTRY_BUDGET_MS;
+  const seen = new Set<number>();
+  let pid = process.ppid;
+  for (let depth = 0; depth < SESSION_ANCESTRY_MAX_DEPTH; depth++) {
+    if (pid <= 1 || seen.has(pid) || Date.now() >= deadline) return null;
+    seen.add(pid);
+    const identity = processIdentity(pid, deadline);
+    if (!identity || !processIsAlive(pid)) return null;
+    const entry = readSessionPidEntry(projectDir, pid);
+    if (
+      entry &&
+      (entry.startTime === null || entry.startTime === identity.startTime)
+    ) {
+      return entry.sessionId;
+    }
+    pid = identity.ppid;
+  }
+  return null;
+}
+
+export interface WorkflowSelection {
+  space: string;
+  intent: string | null;
+  sessionId: string | null;
+  binding: SessionBinding | null;
+}
+
+export interface WorkflowSelectionOptions {
+  space?: string;
+  intent?: string;
+  sessionId?: string;
+}
+
+let processSessionResolutionOverride: string | undefined;
+
+// Pin library resolution for one CLI invocation. The engine sets this while it
+// handles an explicit --session call so nested helpers cannot fall back to a
+// different cursor. Clearing restores ancestry and cursor behavior.
+export function setSessionResolutionOverride(sessionId?: string): void {
+  const candidate = sessionId?.trim() ?? "";
+  processSessionResolutionOverride =
+    candidate && safeSessionId(candidate) ? candidate : undefined;
+}
+
+// Resolve one stable workflow target for an operation. Explicit selectors win,
+// then the session binding, then the legacy cursor and lone-intent rules.
+export function resolveWorkflowSelection(
+  projectDir: string,
+  options: WorkflowSelectionOptions = {},
+): WorkflowSelection {
+  const explicitSession =
+    options.sessionId?.trim() ??
+    processSessionResolutionOverride ??
+    "";
+  const sessionId =
+    (explicitSession && safeSessionId(explicitSession) ? explicitSession : null) ??
+    resolveSessionIdFromAncestry(projectDir);
+  const binding = sessionId ? readSessionBinding(projectDir, sessionId) : null;
+  const space = options.space ?? binding?.space ?? activeSpace(projectDir);
+  let intent: string | null;
+  if (options.intent !== undefined) {
+    intent = options.intent;
+  } else if (binding && binding.space === space) {
+    intent = binding.intent;
+  } else {
+    intent = activeIntent(projectDir, space);
+  }
+  return { space, intent, sessionId, binding };
+}
+
+export function stateFilePathForSelection(
+  projectDir: string,
+  selection: WorkflowSelection,
+): string {
+  const root =
+    selection.intent === null
+      ? intentsDir(projectDir, selection.space)
+      : join(intentsDir(projectDir, selection.space), selection.intent);
+  return join(root, "aidlc-state.md");
+}
+
+export function relativeRecordDirForSelection(selection: WorkflowSelection): string | null {
+  if (selection.intent === null) return null;
+  return `aidlc/spaces/${selection.space}/intents/${selection.intent}`;
+}
+
+export function intentUuidForSelection(
+  projectDir: string,
+  selection: WorkflowSelection,
+): string | null {
+  if (selection.intent === null) return null;
+  return (
+    listIntents(projectDir, selection.space).find(
+      (entry) => entry.dirName === selection.intent,
+    )?.uuid ?? null
+  );
 }
 
 // Read the intent UUID this conversation last stamped, or null. Best-effort.
@@ -2340,6 +2727,7 @@ export function createIntent(
   space: string,
   scope?: string,
   repos?: string[],
+  sessionId?: string,
 ): BornIntent {
   const uuid = uuidv7();
   const intentsRoot = intentsDir(projectDir, space);
@@ -2379,6 +2767,12 @@ export function createIntent(
     space,
   );
   setActiveIntentCursor(projectDir, dirName, space);
+  const creatingSession =
+    (sessionId?.trim() ? sessionId : null) ??
+    resolveSessionIdFromAncestry(projectDir);
+  if (creatingSession) {
+    writeSessionBinding(projectDir, creatingSession, space, dirName);
+  }
   return { uuid, slug, dirName, recordDir: recordPath, space };
 }
 
@@ -2649,8 +3043,12 @@ function resolveActiveDirectiveTarget(
   space?: string,
 ): ActiveDirectiveTarget {
   const canonicalProjectDir = realpathSync(resolvePath(projectDir));
-  const resolvedSpace = space ?? activeSpace(canonicalProjectDir);
-  const recordDirName = activeIntent(canonicalProjectDir, resolvedSpace, intent);
+  const selection = resolveWorkflowSelection(canonicalProjectDir, {
+    space,
+    intent,
+  });
+  const resolvedSpace = selection.space;
+  const recordDirName = selection.intent;
   const recordsRoot = intentsDir(canonicalProjectDir, resolvedSpace);
   const root = recordDirName === null
     ? spaceRecordRoot(canonicalProjectDir, resolvedSpace)
@@ -8358,8 +8756,13 @@ export function intentRepos(
   intentDirName?: string | null,
   space?: string,
 ): string[] {
-  const sp = space ?? activeSpace(projectDir);
-  const dirName = intentDirName ?? activeIntent(projectDir, sp);
+  if (intentDirName === null) return [];
+  const selection = resolveWorkflowSelection(projectDir, {
+    space,
+    intent: intentDirName,
+  });
+  const sp = selection.space;
+  const dirName = selection.intent;
   if (!dirName) return [];
   for (const entry of readIntentRegistry(projectDir, sp)) {
     if (!recordDirMatches(entry, dirName)) continue;

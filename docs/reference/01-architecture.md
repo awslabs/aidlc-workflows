@@ -423,18 +423,26 @@ aidlc/                                    # neutral, harness-independent, commit
                 +-- <phase>/<stage>/*.md    # artifacts + the per-stage memory.md diary
 ```
 
-**Resolution.** Two per-user cursors select context; neither ever errors (a
-missing cursor falls back to a default):
+**Resolution.** Explicit selectors and a machine-local session binding precede
+the two shared per-user cursors. A missing binding or cursor falls back without
+error:
 
-- **Space** — `aidlc/active-space`, precedence `explicit arg > cursor > "default"`
+- **Space** - precedence `explicit arg > session binding > aidlc/active-space
+  cursor > "default"`
   (`DEFAULT_SPACE`, `core/tools/aidlc-lib.ts:285`; resolver `activeSpace()`,
   `aidlc-lib.ts:354-366`). `listSpaces()` always reports `default` even with
   nothing on disk (`aidlc-lib.ts:713-728`).
-- **Intent** — `aidlc/spaces/<space>/intents/active-intent`, precedence
-  `explicit arg > cursor (if it names a real record holding aidlc-state.md) >
-  lone-intent > null` (`activeIntent`, `aidlc-lib.ts:411-435`). A `null` intent
-  means "no record yet" — the signal the orchestrator uses to auto-birth the
+- **Intent** - precedence `explicit arg > session binding >
+  aidlc/spaces/<space>/intents/active-intent cursor (if it names a real record
+  holding aidlc-state.md) > lone-intent > null`. A `null` intent
+  means "no record yet" - the signal the orchestrator uses to auto-birth the
   first intent.
+
+Session bindings live at
+`aidlc/.aidlc-sessions/<safe-session-id>.binding.json`. Spawned tools discover
+their session through the nearest live entry in
+`aidlc/.aidlc-sessions/pids/<pid>`. Both stores are gitignored and best-effort;
+the cursors remain the write-through fallback.
 
 The path helpers — `intentsDir`, `knowledgeDir`, `codekbDir` (`aidlc-lib.ts`),
 and `memoryDirFor` (`aidlc-graph.ts:234`) — all default their space argument to

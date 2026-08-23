@@ -44,10 +44,13 @@ import {
   readSessionIntentUuid,
   recordHookDrop,
   recoveryFilePath,
+  resolveWorkflowSelection,
   resolveProjectDirFromHook,
-  stateFilePath,
+  stateFilePathForSelection,
   writeCurrentSessionId,
+  writeSessionBinding,
   writeSessionIntentUuid,
+  writeSessionPidAncestry,
 } from "../tools/aidlc-lib.ts";
 import { writeCurrentTranscriptPath } from "../tools/aidlc-usage.ts";
 
@@ -106,7 +109,23 @@ try {
 // Record the live conversation on EVERY fire, including a pre-workflow start.
 // intent-birth reads this marker and binds an unstamped session to the first
 // intent it creates. Separate from the per-session intent stamp below.
-if (sessionId) writeCurrentSessionId(projectDir, sessionId);
+if (sessionId) {
+  writeCurrentSessionId(projectDir, sessionId);
+  writeSessionPidAncestry(projectDir, sessionId);
+}
+
+// Resolve one session-local workflow target before any state read. An existing
+// binding wins; a first-seen session inherits the shared cursors and records
+// that fallback immediately, including an intent:null cold workspace.
+const selection = resolveWorkflowSelection(projectDir, { sessionId });
+if (sessionId) {
+  writeSessionBinding(
+    projectDir,
+    sessionId,
+    selection.space,
+    selection.intent,
+  );
+}
 
 // Atomically materialize a clone's missing gitignored cursor, then align the
 // harness-native includes before the no-workflow early exit.
@@ -117,13 +136,17 @@ try {
   // non-fatal — includes self-heal on the next /aidlc / switch / --doctor
 }
 
-const stateFile = stateFilePath(projectDir);
+const stateFile = stateFilePathForSelection(projectDir, selection);
 
 // No workflow active — retain only the session identity recorded above.
 if (!existsSync(stateFile)) return 0;
 
 // Write health heartbeat
-const healthDir = hooksHealthDir(projectDir);
+const healthDir = hooksHealthDir(
+  projectDir,
+  selection.intent ?? undefined,
+  selection.space,
+);
 mkdirSync(healthDir, { recursive: true });
 writeFileSync(join(healthDir, "session-start.last"), isoTimestamp(), "utf-8");
 
@@ -140,7 +163,13 @@ if (!rebindCheckOnly) {
 
 if (eventType) {
   try {
-    appendAuditEntry(eventType, { Source: source }, projectDir);
+    appendAuditEntry(
+      eventType,
+      { Source: source },
+      projectDir,
+      selection.intent ?? undefined,
+      selection.space,
+    );
   } catch (e) {
     recordHookDrop(projectDir, "session-start", errorMessage(e));
     // Non-fatal — continue with context injection
@@ -246,7 +275,11 @@ const unitLine = activeUnit
   : "";
 
 // Check for compaction recovery breadcrumb
-const recoveryFile = recoveryFilePath(projectDir);
+const recoveryFile = recoveryFilePath(
+  projectDir,
+  selection.intent ?? undefined,
+  selection.space,
+);
 const recovery = existsSync(recoveryFile)
   ? "NOTE: A compaction recovery breadcrumb exists at .aidlc-recovery.md — check if state was preserved correctly.\n"
   : "";

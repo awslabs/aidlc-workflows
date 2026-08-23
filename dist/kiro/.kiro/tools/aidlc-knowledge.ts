@@ -62,8 +62,6 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
-  activeIntent,
-  activeSpace,
   assertNoSymlinkInChainOrThrow,
   auditBlockField,
   auditShardName,
@@ -78,6 +76,7 @@ import {
   listSpaces,
   readAtomicReplacedFileNoFollowOrThrow,
   readRegularFileNoFollowOrThrow,
+  resolveWorkflowSelection,
   readAuditShardEvents,
   redactProjectDirPrefix,
   removeTreeSync,
@@ -1104,7 +1103,7 @@ export function resolveSpaceFlag(raw: string | undefined, projectDir: string): s
   // for the other ~14 call sites across the framework that read it, which is a
   // larger, separately-owned change.
   const raw_ = raw === undefined;
-  const candidate = raw ?? activeSpace(projectDir);
+  const candidate = raw ?? resolveWorkflowSelection(projectDir).space;
   const valid = validSpaceFlag(candidate);
   if (valid === null) {
     throw new Error(
@@ -3329,7 +3328,7 @@ export function resolveIntentFlag(
     // The bare flag means "the active one". An absent cursor is a refusal rather
     // than a guess: silently picking an intent would scope a document to whichever
     // one happened to be lying around.
-    const activeDir = activeIntent(projectDir, space);
+    const activeDir = resolveWorkflowSelection(projectDir, { space }).intent;
     if (activeDir === null) {
       throw new Error(
         `--intent was given with no value and this space has no active intent. Pass ` +

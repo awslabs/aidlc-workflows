@@ -989,6 +989,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t321-source-recovery-freeze.test.ts",
     "unit/t322-fix-round-hardening.test.ts",
     "unit/t323-review-verdict-closure.test.ts",
+    "unit/t312-orchestrate-session-binding.test.ts",
     "unit/t255-workspace-sync.test.ts",
     "unit/t304-source-freshness-receipts.test.ts",
     // t305 runs the shipped review/state tools because source-attribution
@@ -1022,6 +1023,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t94-sensor-fire-hook.test.ts",
     "unit/t96.test.ts",
     "unit/t97.test.ts",
+    "integration/t311-session-binding-writers.test.ts",
     "e2e/t113.test.ts",
     "e2e/t122-stop-hook-e2e.test.ts",
     "e2e/t126-emitter-pairing-cofire.test.ts",

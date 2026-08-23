@@ -20,9 +20,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { hostname, userInfo } from "node:os";
 import { fileURLToPath } from "node:url";
 import {
-  activeSpace,
   getField,
   harnessDir,
+  resolveWorkflowSelection,
   stateFilePath,
 } from "./aidlc-lib.ts";
 import { compiledExecutable } from "./aidlc-runtime-paths.ts";
@@ -94,7 +94,7 @@ function resolveContext(
 
   let space = "unknown";
   try {
-    space = activeSpace(projectDir);
+    space = resolveWorkflowSelection(projectDir).space;
   } catch { /* pre-init */ }
 
   const stage = fields.Stage ?? null;

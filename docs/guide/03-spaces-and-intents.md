@@ -153,14 +153,33 @@ List the intents in your space, then switch to one by name (its slug):
 /aidlc intent export-bug          Switch the active intent to "export-bug"
 ```
 
-Switching moves the `active-intent` cursor. The next `/aidlc` resumes that intent
-right where it stopped — same stage, same state, same audit trail. You can carry
+Switching updates the invoking session's binding and writes through to the
+`active-intent` cursor. The next `/aidlc` in that session resumes the intent
+right where it stopped - same stage, same state, same audit trail. You can carry
 any number of intents at once and move between them freely; each is an independent
 run.
 
 > Bare `/aidlc intent` is read-only — it just lists. Add `--json` for
 > machine-readable output. See [CLI Commands](12-cli-commands.md) for the full
 > flag reference.
+
+### Concurrent sessions in one checkout
+
+Each live session keeps a machine-local binding at
+`aidlc/.aidlc-sessions/<session-id>.binding.json`. The binding records the
+session's space and intent, so another terminal or IDE window can move the shared
+cursors without silently moving this session's workflow.
+
+Resolution follows one order:
+
+1. An explicit space or intent selector.
+2. The session binding, identified by `--session <id>` on the engine or by the
+   spawned tool's process ancestry.
+3. The shared `active-space` and `active-intent` cursors, including the existing
+   lone-intent and empty-workspace fallbacks.
+
+The cursors remain write-through compatibility state. Older or unsupported
+environments with no binding therefore behave exactly as before.
 
 ---
 
@@ -283,7 +302,7 @@ repo. Two kinds of file are deliberately **gitignored** instead:
 | Gitignored (per-user, machine-local) | Why |
 |---|---|
 | `aidlc/active-space`, `…/intents/active-intent` | Cursors — "where am I right now." Committing them would turn per-user navigation into shared repository state and have teammates fight over intent births and cursor switches. |
-| `…/intents/<id>/runtime-graph.json`, `.aidlc-*`, `aidlc/.aidlc-sessions/`, `aidlc/.aidlc-active-space-*.tmp` | Derived, machine-local runtime state. |
+| `.../intents/<id>/runtime-graph.json`, `.aidlc-*`, `aidlc/.aidlc-sessions/`, `aidlc/.aidlc-active-space-*.tmp` | Derived, machine-local runtime state, including per-session bindings and PID ancestry entries. |
 | `…/knowledge/documentkb/.journal/` | One directory per in-flight document transaction. Transient and per-clone; a committed journal would be a merge conflict on every concurrent `sync`. |
 | `…/knowledge/.sources.local.json` | Where *this machine* resolves documents linked from outside the repo. The path is machine-specific by definition, so committing it would break every teammate's checkout. |
 

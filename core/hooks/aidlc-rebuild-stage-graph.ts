@@ -24,8 +24,6 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  activeIntent,
-  activeSpace,
   auditShards,
   classifyRuntimeCompileCommand,
   type ClaudeCodeHookInput,
@@ -38,10 +36,12 @@ import {
   readAllAuditShards,
   readSessionIntentUuid,
   recordHookDrop,
+  resolveWorkflowSelection,
   resolveProjectDirFromHook,
   runtimeGraphPath,
   harnessDir,
   writeSessionIntentHandoff,
+  writeSessionBinding,
   writeSessionIntentUuid,
 } from "../tools/aidlc-lib.ts";
 
@@ -89,6 +89,7 @@ function bindCreatedIntentToInvokingSession(
     existingUuid: existingUuid ?? "",
   });
   if (!created?.uuid) return;
+  writeSessionBinding(projectDir, sessionId, space, dirName);
   if (existingUuid) {
     writeSessionIntentHandoff(projectDir, sessionId, existingUuid, created.uuid);
     return;
@@ -156,8 +157,11 @@ if (!ideAuditMode) {
 //    would never refresh after a transition (the major). Resolve the active
 //    intent (cursor / lone-intent → null = flat-legacy) and glob-merge its
 //    shards. Exit cleanly before init (no audit yet → "").
-const space = activeSpace(projectDir);
-const intent = activeIntent(projectDir, space) ?? undefined;
+const selection = resolveWorkflowSelection(projectDir, {
+  sessionId: parsed.session_id,
+});
+const space = selection.space;
+const intent = selection.intent ?? undefined;
 const audit = readAllAuditShards(projectDir, intent, space).replace(/\r\n/g, "\n");
 if (audit.length === 0) {
   hookDebug(projectDir, "rebuild-stage-graph", "exit: audit empty");
@@ -168,7 +172,7 @@ if (audit.length === 0) {
 //    Kept at the bare (workspace-level) health dir to match where --doctor reads
 //    it (aidlc-utility.ts) and where recordHookDrop writes drops — the heartbeat
 //    is a per-hook liveness probe, not per-intent state.
-const healthDir = hooksHealthDir(projectDir);
+const healthDir = hooksHealthDir(projectDir, intent, space);
 mkdirSync(healthDir, { recursive: true });
 writeFileSync(join(healthDir, "rebuild-stage-graph.last"), isoTimestamp(), "utf-8");
 

@@ -21,7 +21,6 @@ import {
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
-  activeIntent,
   activeUnitCheckpoint,
   appendSlug,
   appendUnderHeading,
@@ -85,6 +84,7 @@ import {
   reviewArtifactFingerprint,
   reviewerGateGuardDisabled,
   resolveReviewClass,
+  resolveWorkflowSelection,
   sourceClaimCovers,
   sourceBaselineAuditFields,
   sourceListingEntriesEqual,
@@ -3408,8 +3408,16 @@ function handleCompleteWorkflow(
   // automatic inference from state, so a crashed run never self-completes. Runs
   // under the workspace lock already held (every intents.json mutation takes the
   // sentinel bucket). No-op for the legacy flat record (no registry row).
-  const completedIntentDir = activeIntent(pd);
-  if (completedIntentDir) updateIntentStatus(pd, completedIntentDir, "complete");
+  const completedSelection = resolveWorkflowSelection(pd);
+  const completedIntentDir = completedSelection.intent;
+  if (completedIntentDir) {
+    updateIntentStatus(
+      pd,
+      completedIntentDir,
+      "complete",
+      completedSelection.space,
+    );
+  }
   console.log(
     JSON.stringify({
       completed: completedSlug,
@@ -4302,9 +4310,15 @@ function handleSkip(args: string[]): void {
 
   writeStateFile(pd, content);
   if (!nextStage) {
-    const completedIntentDir = activeIntent(pd);
+    const completedSelection = resolveWorkflowSelection(pd);
+    const completedIntentDir = completedSelection.intent;
     if (completedIntentDir) {
-      updateIntentStatus(pd, completedIntentDir, "complete");
+      updateIntentStatus(
+        pd,
+        completedIntentDir,
+        "complete",
+        completedSelection.space,
+      );
     }
   }
   console.log(JSON.stringify({
@@ -5019,8 +5033,12 @@ function handleFork(args: string[]): void {
   // omitted -> default-resolution (the active cursor / lone intent). The SAME
   // selector threads main-side state/audit/lock AND the worktree mirror, and
   // MUST match what merge resolves so they touch one record.
-  const intent = flags.intent;
-  const space = flags.space;
+  const selection = resolveWorkflowSelection(pd, {
+    intent: flags.intent,
+    space: flags.space,
+  });
+  const intent = selection.intent ?? undefined;
+  const space = selection.space;
   // recordPrefix is the worktree mirror's relative record dir (null -> the flat
   // legacy mirror, today's behaviour); wtRecord is the resolved record-dir NAME
   // the worktree state file lives under (null -> flat). Resolved on the MAIN
@@ -5038,7 +5056,7 @@ function handleFork(args: string[]): void {
   // `resolvedIntent` for the wrapping lock AND every main-side read/write/audit
   // below. `wtRecord` is the same value (kept as a distinct name for the
   // worktree-mirror write, whose null->flat semantics read clearer there).
-  const resolvedIntent = activeIntent(pd, space, intent) ?? undefined;
+  const resolvedIntent = selection.intent ?? undefined;
   const wtRecord = resolvedIntent;
   // Publish the resolved lock context so any errorWithSlug fired inside the
   // per-intent withAuditLock below routes ERROR_LOGGED to the bucket we hold
@@ -5186,8 +5204,12 @@ function handleMerge(args: string[]): void {
 
   // Same selector the fork used -> the SAME intent record on both ends (vision
   // §5). recordPrefix pins the worktree mirror; wtRecord is its record-dir NAME.
-  const intent = flags.intent;
-  const space = flags.space;
+  const selection = resolveWorkflowSelection(pd, {
+    intent: flags.intent,
+    space: flags.space,
+  });
+  const intent = selection.intent ?? undefined;
+  const space = selection.space;
   const recordPrefix = relativeRecordDir(pd, intent, space);
   // Resolve the intent ONCE before locking (same rationale as handleFork):
   // activeIntent maps an omitted selector to the active record, so resolvedIntent
@@ -5196,7 +5218,7 @@ function handleMerge(args: string[]): void {
   // even when --intent is omitted; raw flags.intent would key the sentinel while
   // the writes hit the per-intent shard (lost-update race). wtRecord is the same
   // value, named for the worktree-mirror read where null->flat reads clearer.
-  const resolvedIntent = activeIntent(pd, space, intent) ?? undefined;
+  const resolvedIntent = selection.intent ?? undefined;
   const wtRecord = resolvedIntent;
   // Publish the lock context for the in-transaction error path (see error()).
   lockIntent = resolvedIntent;
