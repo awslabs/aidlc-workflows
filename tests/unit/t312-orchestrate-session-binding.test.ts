@@ -148,7 +148,7 @@ describe("t312 orchestrate session binding", () => {
     expect(result.out).toContain("--session requires a nonblank session id");
   });
 
-  test("explicit session B reaches the state child despite ancestry session A", () => {
+  test("explicit session B is refused when ancestry owns session A", () => {
     writeSessionBinding(proj, "session-a", "default", firstDir);
     writeSessionBinding(proj, "session-b", "default", secondDir);
     writeSessionPidEntry(proj, process.pid, "session-a");
@@ -163,8 +163,24 @@ describe("t312 orchestrate session binding", () => {
       cwd: proj,
       env: { ...process.env },
     });
-    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr.toString()).toContain("conflicts with the owning conversation");
     expect(readFileSync(firstPath, "utf-8")).toBe(firstBefore);
+    expect(readFileSync(secondPath, "utf-8")).not.toContain("- **Parked**:");
+  });
+
+  test("headless explicit session B reaches the state child", () => {
+    writeSessionBinding(proj, "session-b", "default", secondDir);
+    rmSync(sessionPidMapDir(proj), { recursive: true, force: true });
+    const secondPath = join(proj, "aidlc", "spaces", "default", "intents", secondDir, "aidlc-state.md");
+    const result = Bun.spawnSync({
+      cmd: [process.execPath, ORCH, "park", "--session", "session-b", "--project-dir", proj],
+      stdout: "pipe",
+      stderr: "pipe",
+      cwd: proj,
+      env: { ...process.env },
+    });
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
     expect(readFileSync(secondPath, "utf-8")).toContain("- **Parked**:");
   });
 });

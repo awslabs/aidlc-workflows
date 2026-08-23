@@ -156,6 +156,7 @@ import {
   resolveWorkflowSelection,
   scopeCostSummary,
   selectionAwareDefaultScope,
+  sessionConflict,
   setSessionResolutionOverride,
   resolveDefaultScope,
   DEFAULT_SCOPE,
@@ -2315,6 +2316,9 @@ function buildRunStageDirective(
   const directive: RunStageDirective = {
     kind: "run-stage",
     stage: node.slug,
+    report_command:
+      `bun ./${harnessDir()}/tools/aidlc-orchestrate.ts report ` +
+      `--stage ${node.slug} --result <outcome>${engineSessionSuffix()}`,
     phase: node.phase,
     lead_agent: node.lead_agent,
     support_agents: node.support_agents ?? [],
@@ -6451,6 +6455,14 @@ export function main(argv: string[]): void {
   const subArgs = filteredArgs.slice(1);
   if (conflictingSessionId) {
     throw new Error("Conflicting --session values are not allowed.");
+  }
+  const ancestryOwner = sessionId
+    ? sessionConflict(resolveProjectDir(projectDir), sessionId)
+    : null;
+  if (ancestryOwner) {
+    throw new Error(
+      `Session "${sessionId}" conflicts with the owning conversation "${ancestryOwner}". Work from the owning conversation, or rebind this session with the intent/space switch verbs.`,
+    );
   }
   if (engineInvocation !== null) throw new Error("Nested aidlc-orchestrate dispatch is not supported");
   engineSessionId = sessionId;

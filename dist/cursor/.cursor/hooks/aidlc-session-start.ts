@@ -30,6 +30,7 @@ import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import { stageGraphDrift } from "../tools/aidlc-graph.ts";
 import { repointHarnessIncludes } from "../tools/aidlc-includes.ts";
 import {
+  activeIntent,
   activeIntentUuid,
   activeSpace,
   clearSessionIntentUuid,
@@ -202,6 +203,7 @@ if (eventType) {
 //     path); on Yes, the named intent-switch command moves both cursor and stamp
 //     back together. No session_id (TTY/empty stdin) → no-op.
 const activeSp = activeSpace(projectDir);
+const liveDir = activeIntent(projectDir, activeSp);
 const liveUuid = activeIntentUuid(projectDir, activeSp);
 const binding = preExistingBinding;
 const selectedUuid = intentUuidForSelection(projectDir, selection);
@@ -215,7 +217,8 @@ if (sessionId) {
     if (ownedUuid && ownedUuid !== liveUuid) {
       const was = findIntentByUuid(projectDir, ownedUuid);
       if (was) {
-        const signature = `${was.space}/${was.dirName}/${liveUuid ?? "(none)"}`;
+        const signature =
+          `${was.space}/${was.dirName}->${activeSp}/${liveDir ?? "(none)"}`;
         const alreadyOffered =
           readSessionRebindOffer(projectDir, sessionId) === signature;
         const live = liveUuid ? findIntentByUuid(projectDir, liveUuid) : null;
@@ -246,6 +249,8 @@ if (sessionId) {
       writeSessionIntentUuid(projectDir, sessionId, selectedUuid);
     } else if (binding && stampedUuid) {
       clearSessionIntentUuid(projectDir, sessionId);
+    } else if (stampedTarget && selectedUuid) {
+      writeSessionIntentUuid(projectDir, sessionId, selectedUuid);
     } else if (liveUuid) {
       writeSessionIntentUuid(projectDir, sessionId, liveUuid);
     } else if (stampedUuid) {

@@ -80,6 +80,7 @@ import {
   removeSlug,
   replaceSection,
   selfAttributedDecisionMarker,
+  sessionConflict,
   resolveBoltDag,
   reviewArtifactFingerprint,
   reviewerGateGuardDisabled,
@@ -541,10 +542,21 @@ let projectDir: string | undefined;
 // (undefined), so error() keys the sentinel for them — correct.
 let lockIntent: string | undefined;
 let lockSpace: string | undefined;
+let stateSessionOverride: string | undefined;
 
 export function main(argv: string[]): void {
   const args = [...argv];
   const sessionIdx = args.indexOf("--session");
+  if (
+    sessionIdx >= 0 &&
+    (
+      args[sessionIdx + 1] === undefined ||
+      args[sessionIdx + 1].startsWith("--") ||
+      validSessionId(args[sessionIdx + 1]) === null
+    )
+  ) {
+    error("--session requires a safe, nonblank session id.");
+  }
   const sessionFlag =
     sessionIdx >= 0 ? validSessionId(args[sessionIdx + 1]) : null;
   if (sessionIdx >= 0) args.splice(sessionIdx, 2);
@@ -557,6 +569,17 @@ export function main(argv: string[]): void {
   if (pdIdx !== -1 && pdIdx + 1 < args.length) {
     projectDir = args[pdIdx + 1];
     args.splice(pdIdx, 2);
+  }
+  const appliedSession =
+    sessionFlag ?? validSessionId(process.env.AIDLC_SESSION_OVERRIDE) ?? undefined;
+  stateSessionOverride = appliedSession;
+  const ancestryOwner = appliedSession
+    ? sessionConflict(resolveProjectDir(projectDir), appliedSession)
+    : null;
+  if (ancestryOwner) {
+    error(
+      `Session "${appliedSession}" conflicts with the owning conversation "${ancestryOwner}". Work from the owning conversation, or rebind this session with the intent/space switch verbs.`,
+    );
   }
 
   const subcommand = args[0];
@@ -1142,7 +1165,13 @@ function requireEngineRoutedUnit(pd: string, stage: string, unit: string): void 
     const result = spawnSync(command[0], command.slice(1), {
       cwd: pd,
       encoding: "utf-8",
-      env: { ...process.env, AIDLC_PROJECT_DIR: pd },
+      env: {
+        ...process.env,
+        AIDLC_PROJECT_DIR: pd,
+        ...(stateSessionOverride
+          ? { AIDLC_SESSION_OVERRIDE: stateSessionOverride }
+          : {}),
+      },
       timeout: 30_000,
     });
     if (result.status !== 0) {
@@ -1216,7 +1245,13 @@ function requireEngineRoutedWaveUnit(
     const result = spawnSync(command[0], command.slice(1), {
       cwd: pd,
       encoding: "utf-8",
-      env: { ...process.env, AIDLC_PROJECT_DIR: pd },
+      env: {
+        ...process.env,
+        AIDLC_PROJECT_DIR: pd,
+        ...(stateSessionOverride
+          ? { AIDLC_SESSION_OVERRIDE: stateSessionOverride }
+          : {}),
+      },
       timeout: 30_000,
     });
     if (result.status !== 0) {

@@ -3805,6 +3805,16 @@ let projectDir: string | undefined;
 export function main(argv: string[]): void {
   const args = [...argv];
   const sessionIdx = args.indexOf("--session");
+  if (
+    sessionIdx >= 0 &&
+    (
+      args[sessionIdx + 1] === undefined ||
+      args[sessionIdx + 1].startsWith("--") ||
+      validSessionId(args[sessionIdx + 1]) === null
+    )
+  ) {
+    error("--session requires a safe, nonblank session id.");
+  }
   const sessionFlag =
     sessionIdx >= 0 ? validSessionId(args[sessionIdx + 1]) : null;
   setSessionResolutionOverride(

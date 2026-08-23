@@ -148,6 +148,7 @@ import {
   _resetScopeMappingForTests,
   _resetStageGraphForTests,
   classifyStateVersion,
+  clearSessionRebindOffer,
   CURRENT_STATE_VERSION,
   type AuditShardEvent,
 } from "./aidlc-lib.ts";
@@ -5231,6 +5232,7 @@ function handleIntent(
     readCurrentSessionId(projectDir);
   if (sid) {
     writeSessionBinding(projectDir, sid, space, match.dirName);
+    clearSessionRebindOffer(projectDir, sid);
     if (match.uuid) writeSessionIntentUuid(projectDir, sid, match.uuid);
   }
   process.stdout.write(`Active intent → ${match.dirName} (space: ${space})\n`);
@@ -5289,6 +5291,7 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
   if (sessionId) {
     const targetIntent = activeIntent(projectDir, target);
     writeSessionBinding(projectDir, sessionId, target, targetIntent);
+    clearSessionRebindOffer(projectDir, sessionId);
     if (targetIntent) {
       const uuid = listIntents(projectDir, target).find(
         (entry) => entry.dirName === targetIntent,
@@ -6711,6 +6714,9 @@ export async function main(argv: string[]): Promise<void> {
   const rawArgs = argv;
   errorArgs = [...rawArgs];
   const { positional, flags, bareFlags, blankFlags } = parseArgs(rawArgs);
+  if (flags.session !== undefined && validSessionId(flags.session) === null) {
+    die("--session requires a safe, nonblank session id.");
+  }
   setSessionResolutionOverride(
     validSessionId(flags.session) ??
       validSessionId(process.env.AIDLC_SESSION_OVERRIDE) ??

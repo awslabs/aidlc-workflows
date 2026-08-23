@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 660,
+    "total": 661,
     "enumeratedByClass": {
-      "function": 396,
+      "function": 397,
       "audit": 87,
       "scope": 11,
       "stage": 33,
@@ -4079,6 +4079,13 @@
     {
       "unitClass": "function",
       "unitId": "function:SESSION_INTENT_HANDOFF_TTL_MS",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:sessionConflict",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"

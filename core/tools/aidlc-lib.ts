@@ -2144,7 +2144,16 @@ function safeSessionId(sessionId: string): string {
 
 export function validSessionId(sessionId: string | undefined): string | null {
   const candidate = sessionId?.trim() ?? "";
-  return candidate && safeSessionId(candidate) ? candidate : null;
+  return candidate && safeSessionId(candidate) === candidate ? candidate : null;
+}
+
+export function sessionConflict(
+  projectDir: string,
+  explicitSessionId: string | undefined,
+): string | null {
+  const explicit = validSessionId(explicitSessionId);
+  const ancestry = resolveSessionIdFromAncestry(projectDir);
+  return explicit && ancestry && explicit !== ancestry ? ancestry : null;
 }
 
 function sessionRecordPath(projectDir: string, sessionId: string): string {

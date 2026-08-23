@@ -50,7 +50,7 @@ unchanged to the first `next`, which continues directly.
 Loop:
   1. directive = `bun .aidlc/tools/aidlc-orchestrate.ts next $ARGUMENTS`
   2. act on directive.kind (see "Acting on a directive" below)
-  3. After acting on a stage-work directive, run `bun .aidlc/tools/aidlc-orchestrate.ts report --stage <directive.stage> --result <outcome> [--user-input "<text>"]`; omit `--stage` only for non-stage report round-trips. A `load-steering` directive is transport, not stage work: continue it immediately and never report it.
+  3. After acting on a stage-work directive, replace `<outcome>` in `directive.report_command` with the real outcome and run that exact command; non-stage report round-trips remain engine-authored print directives. A `load-steering` directive is transport, not stage work: continue it immediately and never report it.
   4. repeat unless directive.kind == done
 ```
 

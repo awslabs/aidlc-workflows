@@ -128,6 +128,7 @@ describe("t169 session-start resume rebind (mechanism cli — spawned hook + cur
     expect(resumed.context).toContain("INTENT REBIND OFFER");
     expect(resumed.context).toContain("upgrade-first");
     expect(readSessionBinding(proj, "UPGRADE")?.intent).toBe(first.dirName);
+    expect(readSessionIntentUuid(proj, "UPGRADE")).toBe(first.uuid);
   });
 
   test("cross-space rebind emits two sequential skill invocations", () => {
