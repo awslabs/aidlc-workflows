@@ -723,7 +723,7 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
     });
     git(migrationRepoB, "branch", "bolt-migration-ambiguous");
     stripCreationRepoField(migrationAmbiguousProj);
-    const migrationAmbiguous = runWorktree(
+    const migrationWrongRepo = runWorktree(
       migrationAmbiguousProj,
       "discard",
       "--slug",
@@ -731,6 +731,102 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
       "--repo",
       "repo-b",
     );
+    const migrationSelectorFree = runWorktree(
+      migrationAmbiguousProj,
+      "discard",
+      "--slug",
+      "migration-ambiguous",
+    );
+    const migrationCreatingRepo = runWorktree(
+      migrationAmbiguousProj,
+      "discard",
+      "--slug",
+      "migration-ambiguous",
+      "--repo",
+      "repo-a",
+    );
+
+    const lostCorroborationProj = freshWorkspace();
+    makeSiblingRepo(lostCorroborationProj, "repo-a");
+    const lostRepoB = makeSiblingRepo(lostCorroborationProj, "repo-b");
+    runUtil(
+      lostCorroborationProj,
+      "intent-create",
+      "--scope",
+      "feature",
+      "--repos",
+      "repo-a,repo-b",
+    );
+    runWorktree(
+      lostCorroborationProj,
+      "create",
+      "--slug",
+      "lost-corroboration",
+      "--base",
+      "main",
+      "--repo",
+      "repo-a",
+    );
+    rmSync(worktreeDir(lostCorroborationProj, "lost-corroboration"), {
+      recursive: true,
+      force: true,
+    });
+    git(lostRepoB, "branch", "bolt-lost-corroboration");
+    const legitimateDiscard = runWorktree(
+      lostCorroborationProj,
+      "discard",
+      "--slug",
+      "lost-corroboration",
+    );
+    const lostCorroboration = runWorktree(
+      lostCorroborationProj,
+      "discard",
+      "--slug",
+      "lost-corroboration",
+      "--repo",
+      "repo-b",
+    );
+
+    const unreadableProj = freshWorkspace();
+    makeSiblingRepo(unreadableProj, "repo-a");
+    const unreadableRepoB = makeSiblingRepo(unreadableProj, "repo-b");
+    runUtil(
+      unreadableProj,
+      "intent-create",
+      "--scope",
+      "feature",
+      "--repos",
+      "repo-a,repo-b",
+    );
+    runWorktree(
+      unreadableProj,
+      "create",
+      "--slug",
+      "unreadable-authority",
+      "--base",
+      "main",
+      "--repo",
+      "repo-a",
+    );
+    rmSync(worktreeDir(unreadableProj, "unreadable-authority"), {
+      recursive: true,
+      force: true,
+    });
+    git(unreadableRepoB, "branch", "bolt-unreadable-authority");
+    const unreadableAuditDir = join(activeRecord(unreadableProj), "audit");
+    const unreadableShards = readdirSync(unreadableAuditDir).map((file) =>
+      join(unreadableAuditDir, file),
+    );
+    for (const shard of unreadableShards) chmodSync(shard, 0o000);
+    const unreadableAuthority = runWorktree(
+      unreadableProj,
+      "discard",
+      "--slug",
+      "unreadable-authority",
+      "--repo",
+      "repo-b",
+    );
+    for (const shard of unreadableShards) chmodSync(shard, 0o600);
 
     test("an uncorroborated phantom row cannot override the real creating repo", () => {
       expect(trueRepo.created.status).toBe(0);
@@ -797,22 +893,77 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
       expect(
         hasBoltBranch(migrationProj, "repo-a", "migration-single"),
       ).toBe(false);
-      expect(migrationAmbiguous.status).not.toBe(0);
-      expect(migrationAmbiguous.out).toContain(
-        "pre-upgrade Bolt evidence spans multiple repositories",
-      );
+      for (const refusal of [
+        migrationWrongRepo,
+        migrationSelectorFree,
+      ]) {
+        expect(refusal.status).not.toBe(0);
+        expect(refusal.out).toContain("repo-a");
+        expect(refusal.out).toContain("repo-b");
+        expect(refusal.out).toContain(
+          "Delete the stray bolt-migration-ambiguous branch",
+        );
+        expect(refusal.out).toContain(
+          "retry with --repo <creating-repo>",
+        );
+      }
+      expect(
+        migrationCreatingRepo.status,
+        migrationCreatingRepo.out,
+      ).toBe(0);
       expect(
         hasBoltBranch(
           migrationAmbiguousProj,
           "repo-a",
           "migration-ambiguous",
         ),
-      ).toBe(true);
+      ).toBe(false);
       expect(
         hasBoltBranch(
           migrationAmbiguousProj,
           "repo-b",
           "migration-ambiguous",
+        ),
+      ).toBe(true);
+    });
+
+    test("lost corroboration and unreadable authority have distinct remedies", () => {
+      expect(legitimateDiscard.status, legitimateDiscard.out).toBe(0);
+      expect(lostCorroboration.status).not.toBe(0);
+      expect(lostCorroboration.out).toContain(
+        "a readable WORKTREE_CREATED record names",
+      );
+      expect(lostCorroboration.out).toContain("repo-a");
+      expect(lostCorroboration.out).toContain(
+        "If this Bolt was already discarded, this is expected",
+      );
+      expect(lostCorroboration.out).toContain(
+        "otherwise inspect",
+      );
+      expect(lostCorroboration.out).toContain(
+        "bolt-lost-corroboration branch",
+      );
+      expect(lostCorroboration.out).not.toContain("unreadable");
+
+      expect(unreadableAuthority.status).not.toBe(0);
+      expect(unreadableAuthority.out).toContain(
+        "WORKTREE_CREATED Repo authority is unreadable",
+      );
+      expect(unreadableAuthority.out).toContain(
+        "restore readable audit shards and retry",
+      );
+      expect(
+        hasBoltBranch(
+          unreadableProj,
+          "repo-a",
+          "unreadable-authority",
+        ),
+      ).toBe(true);
+      expect(
+        hasBoltBranch(
+          unreadableProj,
+          "repo-b",
+          "unreadable-authority",
         ),
       ).toBe(true);
     });
@@ -950,6 +1101,62 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
     test("the recorded repository is used even when intent and space are explicit", () => {
       expect(merged.status, merged.out).toBe(0);
       expect(existsSync(join(repoA, "explicit-intent.txt"))).toBe(true);
+    });
+  });
+
+  describe("merge recovery hints require a complete recorded intent selector", () => {
+    const proj = freshWorkspace();
+    makeSiblingRepo(proj, "repo-a");
+    makeSiblingRepo(proj, "repo-b");
+    runUtil(
+      proj,
+      "intent-create",
+      "--scope",
+      "feature",
+      "--repos",
+      "repo-a,repo-b",
+    );
+    const intent = basename(activeRecord(proj));
+    runWorktree(
+      proj,
+      "create",
+      "--slug",
+      "invalid-intent-hint",
+      "--base",
+      "main",
+      "--repo",
+      "repo-a",
+    );
+    const metadataPath = join(
+      worktreeDir(proj, "invalid-intent-hint"),
+      ".aidlc",
+      "worktree-meta.json",
+    );
+    const metadata = JSON.parse(
+      readFileSync(metadataPath, "utf-8"),
+    ) as Record<string, unknown>;
+    metadata.intentRecord = "garbage-not-a-record-path";
+    writeFileSync(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`);
+    const merged = runWorktree(
+      proj,
+      "merge",
+      "--slug",
+      "invalid-intent-hint",
+      "--target",
+      "main",
+      "--strategy",
+      "squash",
+      "--space",
+      "default",
+      "--intent",
+      intent,
+    );
+
+    test("an incomplete recovery selector never renders undefined flags", () => {
+      expect(merged.status).not.toBe(0);
+      expect(merged.out).toContain("does not match worktree provenance");
+      expect(merged.out).not.toContain("undefined");
+      expect(merged.out).not.toContain("Retry with --space");
     });
   });
 

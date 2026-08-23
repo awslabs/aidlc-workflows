@@ -882,9 +882,22 @@ function discardCreationAuthority(
   const retainedEvidence = [...evidence.values()].some(
     (value) => value.retained,
   );
-  const durableRepos = [...evidence.entries()]
-    .filter(([, value]) => value.durable)
-    .map(([key]) => key);
+  const durableRepoEntries = [...evidence.entries()].filter(
+    ([, value]) => value.durable,
+  );
+  const durableRepos = durableRepoEntries.map(([key]) => key);
+  const readableCreationRepos = [
+    ...new Set(
+      creationRows
+        .map((row) => auditBlockField(row.block, "Repo"))
+        .filter((repo): repo is string => repo !== null)
+        .map((repo) => (repo === "-" ? null : repo))
+        .filter(
+          (repo): repo is string | null =>
+            repo === null || isValidRepoName(repo),
+        ),
+    ),
+  ];
   const modernAuthority =
     recorded?.repoSelector !== undefined ||
     hasRepoRow ||
@@ -894,17 +907,57 @@ function discardCreationAuthority(
     auditRepo === undefined &&
     modernAuthority
   ) {
+    if (audit.unreadableShards.length > 0) {
+      errorWithSlug(
+        slug,
+        "refusing to discard: durable Bolt evidence exists, but WORKTREE_CREATED Repo authority is unreadable; restore readable audit shards and retry",
+      );
+    }
+    if (readableCreationRepos.length > 0) {
+      const repos = readableCreationRepos
+        .map(repoSelectorLabel)
+        .sort()
+        .map((repo) => JSON.stringify(repo))
+        .join(", ");
+      errorWithSlug(
+        slug,
+        `refusing to discard: a readable WORKTREE_CREATED record names ${repos}, but no worktree registration, bolt-${slug} branch, or retained reviewed-source ref remains there to corroborate it. If this Bolt was already discarded, this is expected; otherwise inspect ${repos} for the bolt-${slug} branch`,
+      );
+    }
     errorWithSlug(
       slug,
-      "refusing to discard: durable Bolt evidence exists, but no readable corroborated WORKTREE_CREATED Repo authority is available",
+      "refusing to discard: durable Bolt evidence exists, but no corroborated WORKTREE_CREATED Repo authority is available",
     );
   }
   if (auditRepo === undefined && !modernAuthority) {
     if (durableRepos.length > 1) {
-      errorWithSlug(
-        slug,
-        "refusing to discard: pre-upgrade Bolt evidence spans multiple repositories and has no WORKTREE_CREATED Repo authority",
+      const repos = durableRepoEntries
+        .map(([key]) => repoSelectorLabel(selectors.get(key) ?? null))
+        .sort();
+      const selectedKey =
+        explicitRepo === undefined
+          ? undefined
+          : repoSelectorKey(explicitRepo);
+      const selectedEvidence =
+        selectedKey === undefined
+          ? undefined
+          : evidence.get(selectedKey);
+      const creatingCandidates = durableRepoEntries.filter(
+        ([, value]) => value.registered || value.retained,
       );
+      if (
+        selectedKey === undefined ||
+        selectedEvidence === undefined ||
+        !selectedEvidence.durable ||
+        creatingCandidates.length !== 1 ||
+        creatingCandidates[0][0] !== selectedKey
+      ) {
+        const labels = repos.map((repo) => JSON.stringify(repo)).join(", ");
+        errorWithSlug(
+          slug,
+          `refusing to discard: pre-upgrade Bolt evidence spans repositories ${labels} without WORKTREE_CREATED Repo authority. Delete the stray bolt-${slug} branch in the repository that is not the creating one, then retry with --repo <creating-repo>`,
+        );
+      }
     }
     if (
       explicitRepo !== undefined &&
@@ -1033,7 +1086,9 @@ function convergedSourceRecord(
         worktreeMeta.intentRecord !== relativeRecordDir(pd, intent, space))
     ) {
       const expected = recordedWorktreeSelector(pd, slug);
-      const recovery = expected
+      const recovery =
+        typeof expected?.space === "string" &&
+        typeof expected.intent === "string"
         ? ` Retry with --space ${expected.space} --intent ${expected.intent}.`
         : "";
       errorWithSlug(
