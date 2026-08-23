@@ -68,6 +68,9 @@ The active `Test Strategy` still applies in every scope and determines test
 volume/types. Scope floors are additive; they never reduce or replace the
 selected strategy.
 
+Build and Test verifies defined coverage floors and affirmed quality targets;
+they may not be weakened to make a step pass.
+
 Affirm a stricter posture in `team.md` if the team commits to one.
 
 ## Deployment

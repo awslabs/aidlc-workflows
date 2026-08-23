@@ -491,6 +491,8 @@ When contradictions are detected:
   - "Whatever you think is best" or "up to you" — ask what outcome they care about most
   - Contradictory signals between different answers
   - Answers that dodge the question or change the subject
+  - Relaxing, lowering, or disabling a previously defined quality target (e.g.
+    a test coverage threshold) instead of meeting it
 - When a user defers to AI judgment, reframe: "I want to make sure the design reflects YOUR priorities. Could you tell me [specific aspect]?"
 
 ### Plan and question file location

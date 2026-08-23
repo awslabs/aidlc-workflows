@@ -72,6 +72,10 @@ MANDATORY: Follow stage-protocol.md for approval gates, question format, and com
 - Brownfield: modify files in-place. NEVER create duplicates like ClassName_modified.java
 - Add data-testid attributes to interactive UI elements for test automation
 - Before review, write `source-manifest.json` listing every application-source path this unit created, modified, or deleted, including shell-, scaffolding-, and generator-written files
+- Measurable quality targets from NFR Requirements, NFR Design, and the Testing
+  Contract coverage floor are inputs, not suggestions. NEVER relax, lower, or
+  disable a defined target, including threshold settings in test or build
+  configuration, to make a step pass; surface the gap instead.
 
 ### Step 1: Read All Unit Artifacts
 
@@ -249,6 +253,11 @@ Include in the delegation prompt:
   reinterpret memory. TDD records each Red command's failing output before
   Green; BDD and ATDD follow their scenario/acceptance-first cross-layer
   profiles; custom/mixed follows the exact approved ordering.
+- The instruction that measurable quality targets from NFR Requirements, NFR
+  Design, and the Testing Contract coverage floor are inputs, not suggestions.
+  The subagent must NEVER relax, lower, or disable a defined target, including
+  threshold settings in test or build configuration, to make a step pass; it
+  must surface the gap instead.
 
 The subagent generates all code, test files, and configuration artifacts in the workspace.
 

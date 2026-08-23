@@ -433,7 +433,9 @@ ask targeted follow-up. Do NOT proceed until resolved.
 **Overconfidence prevention:**
 - Default to asking, not assuming. Never proceed with ambiguity.
 - Red flags requiring follow-up: single-word answers to open-ended questions;
-  "whatever you think" / "up to you"; contradictory signals; question-dodging
+  "whatever you think" / "up to you"; contradictory signals; question-dodging;
+  relaxing, lowering, or disabling a previously defined quality target (for
+  example, a test coverage threshold) instead of meeting it
 - When user defers to AI: "I want to make sure the design reflects YOUR
   priorities. Could you tell me [specific aspect]?"
 

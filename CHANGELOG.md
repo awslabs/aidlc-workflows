@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.74] - 2026-08-24
+
+Defined quality targets now remain binding from Code Generation through Build and Test: every measurable target is inventoried from NFR Requirements, NFR Design, and the approved Testing Contract, then finalized with evidence before the stage can succeed. **Upgrade:** refresh your `dist/<harness>/` shell so the updated Construction stage and protocol guidance are installed.
+
+* Code Generation treats measurable quality targets as required inputs and forbids lowering, relaxing, or disabling a target to manufacture a pass.
+* Build and Test executes every applicable generated check, permits deployed-environment deferral only to a named owning validation stage, and keeps deferred or missing evidence visibly `Unverified`.
+* The target matrix records target ID and source, expected and actual values, evidence, owning stage, and a final `Met`, `Not Met`, or `Unverified` verdict on every exit path; `N/A` is valid only when no target applies.
+* `Not Met` and `Unverified` targets now enter the same bounded Build-and-Test failure-escalation ladder as command failures, preserving the Code Generation loop-back added in 2.6.20.
+
 ## [2.6.73] - 2026-08-24
 
 Scope cost previews now describe the workflow the engine will actually run, and approval gates expose how long the current gate attempt has been waiting for a person. **Upgrade:** refresh your `dist/<harness>/` shell to install the corrected preview, status, and doctor behavior; existing workflow records need no migration.
