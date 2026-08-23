@@ -166,7 +166,7 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
     expect(orchestrator).toContain("numbered prose");
     expect(orchestrator).toContain("picker results do not fire");
     expect(orchestrator).toContain("| `load-steering` |");
-    expect(orchestrator).toContain("directive.continue_token");
+    expect(orchestrator).toContain("directive.continue_command");
     expect(orchestrator).toContain("The orchestration engine emits eight kinds today");
     expect(orchestrator).toContain("stage-protocol-ensemble.md");
     const ensembleProtocol = readFileSync(

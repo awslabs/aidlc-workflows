@@ -2324,11 +2324,19 @@ export function writeSessionPidEntry(
   projectDir: string,
   pid: number,
   sessionId: string,
+  deadlineMs: number = Date.now() + SESSION_ANCESTRY_BUDGET_MS,
 ): void {
   sessionAncestryCache.delete(projectDir);
   const path = sessionPidEntryPath(projectDir, pid);
-  if (!path || !safeSessionId(sessionId) || !processIsAlive(pid)) return;
-  const identity = processIdentity(pid, Date.now() + SESSION_ANCESTRY_BUDGET_MS);
+  if (
+    Date.now() >= deadlineMs ||
+    !path ||
+    !safeSessionId(sessionId) ||
+    !processIsAlive(pid)
+  ) {
+    return;
+  }
+  const identity = processIdentity(pid, deadlineMs);
   try {
     mkdirSync(sessionPidMapDir(projectDir), { recursive: true });
     const entry: SessionPidEntry = {
@@ -2341,19 +2349,18 @@ export function writeSessionPidEntry(
   }
 }
 
-function gcSessionPidEntries(projectDir: string): void {
+function gcSessionPidEntries(projectDir: string, deadlineMs: number): void {
   let names: string[];
   try {
     names = readdirSync(sessionPidMapDir(projectDir));
   } catch {
     return;
   }
-  const deadline = Date.now() + SESSION_ANCESTRY_BUDGET_MS;
   for (const name of names) {
-    if (Date.now() >= deadline || !/^\d+$/.test(name)) continue;
+    if (Date.now() >= deadlineMs || !/^\d+$/.test(name)) continue;
     const pid = Number.parseInt(name, 10);
     const entry = readSessionPidEntry(projectDir, pid);
-    const identity = processIdentity(pid, deadline);
+    const identity = processIdentity(pid, deadlineMs);
     const stale =
       !entry ||
       !processIsAlive(pid) ||
@@ -2376,8 +2383,8 @@ function gcSessionPidEntries(projectDir: string): void {
 export function writeSessionPidAncestry(projectDir: string, sessionId: string): void {
   sessionAncestryCache.delete(projectDir);
   if (!safeSessionId(sessionId) || process.platform === "win32") return;
-  gcSessionPidEntries(projectDir);
   const deadline = Date.now() + SESSION_ANCESTRY_BUDGET_MS;
+  gcSessionPidEntries(projectDir, deadline);
   const seen = new Set<number>();
   let pid = process.ppid;
   for (let depth = 0; depth < SESSION_ANCESTRY_MAX_DEPTH; depth++) {
@@ -2385,7 +2392,7 @@ export function writeSessionPidAncestry(projectDir: string, sessionId: string): 
     seen.add(pid);
     const identity = processIdentity(pid, deadline);
     if (!identity) break;
-    writeSessionPidEntry(projectDir, pid, sessionId);
+    writeSessionPidEntry(projectDir, pid, sessionId, deadline);
     pid = identity.ppid;
   }
 }

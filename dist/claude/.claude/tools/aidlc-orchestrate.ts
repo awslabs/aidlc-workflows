@@ -309,6 +309,18 @@ function engineSessionSuffix(): string {
   return engineSessionId ? ` --session ${shellArg(engineSessionId)}` : "";
 }
 
+function engineChildEnv(
+  extra: Record<string, string> = {},
+): Record<string, string | undefined> {
+  return {
+    ...process.env,
+    ...extra,
+    ...(engineSessionId
+      ? { AIDLC_SESSION_OVERRIDE: engineSessionId }
+      : {}),
+  };
+}
+
 // Print exactly one directive as JSON to stdout, after validating it against
 // the frozen contract. A malformed directive is a hard error (clean
 // boundaries), never a silent miss — we exit non-zero so a wiring bug surfaces
@@ -473,6 +485,7 @@ interface ToolRun {
 function runTool(toolFile: string, args: string[]): ToolRun {
   const proc = Bun.spawnSync({
     cmd: toolCommand(toolFile, args),
+    env: engineChildEnv(),
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -1035,7 +1048,7 @@ function createPrintDirective(
         `Nothing is lost: the intent is saved on disk and resumes on the next \`next\`.`,
       )
     : printDirective(
-      `${runCmd} to start the workflow${cost}, then re-run \`next\` to continue.${labelHint}`,
+      `${runCmd} to start the workflow${cost}, then re-run \`next${engineSessionSuffix()}\` to continue.${labelHint}`,
     );
   // The user named a scope (or one was inferred and confirmed), so the spoken
   // line can say what is being set up and how much process that means, with the
@@ -1156,7 +1169,7 @@ function intentPickPromptIfRecordsExist(
     `This project already has ${intents.length} piece${intents.length === 1 ? "" : "s"} of work in progress${spaceLabel}, and none is currently selected ` +
       `(which one you are on is tracked per-person and does not travel with the repo). ` +
       `Pick the one to work on with \`/aidlc intent <slug>\`: ${list}. ` +
-      "That selects it; re-run `next` afterward to carry on where it left off.",
+      `That selects it; re-run \`next${engineSessionSuffix()}\` afterward to carry on where it left off.`,
   );
 }
 
@@ -2798,6 +2811,9 @@ function transportRunStage(
     parts: chunks.length,
     rules_content: chunks[index],
     continue_token: encoded.token,
+    continue_command:
+      `bun ./${harnessDir()}/tools/aidlc-orchestrate.ts continue ` +
+      `${shellArg(encoded.token)}${engineSessionSuffix()}`,
   };
   if (Buffer.byteLength(JSON.stringify(load), "utf-8") > DIRECTIVE_MAX_BYTES) {
     return errorDirective(
@@ -2982,7 +2998,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     const [verb, ...tail] = argv;
     const suffix = tail.length > 0 ? ` ${tail.map(shellArg).join(" ")}` : "";
     emit(printDirective(
-      `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${verb}${suffix}\`, print its output verbatim, then stop. This is a terminal utility, NOT workflow work: do NOT run \`next\` and do NOT advance, resume, or run any workflow stage.`,
+      `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${verb}${suffix}${engineSessionSuffix()}\`, print its output verbatim, then stop. This is a terminal utility, NOT workflow work: do NOT run \`next${engineSessionSuffix()}\` and do NOT advance, resume, or run any workflow stage.`,
     ));
     return;
   }
@@ -3001,7 +3017,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     const [verb, ...tail] = argv;
     const suffix = tail.length > 0 ? ` ${tail.map(shellArg).join(" ")}` : "";
     emit(printDirective(
-      `Run \`bun ${harnessDir()}/tools/aidlc-knowledge.ts ${verb}${suffix}\`, print its output verbatim, then stop. This is a terminal utility, NOT workflow work: do NOT run \`next\` and do NOT advance, resume, or run any workflow stage.`,
+      `Run \`bun ${harnessDir()}/tools/aidlc-knowledge.ts ${verb}${suffix}${engineSessionSuffix()}\`, print its output verbatim, then stop. This is a terminal utility, NOT workflow work: do NOT run \`next${engineSessionSuffix()}\` and do NOT advance, resume, or run any workflow stage.`,
     ));
     return;
   }
@@ -3093,8 +3109,8 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     (getField(stateContent, "Parked") ?? "").trim().length > 0
   ) {
     emit(printDirective(
-      `This workflow is parked. Run \`bun ${harnessDir()}/tools/aidlc-state.ts unpark\` ` +
-        "to clear the park marker, then re-run `next --resume` to continue.",
+      `This workflow is parked. Run \`bun ${harnessDir()}/tools/aidlc-state.ts unpark${engineSessionSuffix()}\` ` +
+        `to clear the park marker, then re-run \`next --resume${engineSessionSuffix()}\` to continue.`,
     ));
     return;
   }
@@ -3523,8 +3539,8 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     emit(printDirective(
       `Stage "${currentSlug}" is SKIP in the approved workflow plan but is still the active cursor. ` +
         `Do not run this stage. Run \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts report ` +
-        `--stage ${shellArg(currentSlug)} --result skipped --reason ${shellArg(reason)}\` ` +
-        "to recover the stale pointer, then re-run `next` to continue.",
+        `--stage ${shellArg(currentSlug)} --result skipped --reason ${shellArg(reason)}${engineSessionSuffix()}\` ` +
+        `to recover the stale pointer, then re-run \`next${engineSessionSuffix()}\` to continue.`,
     ));
     return;
   }
@@ -4819,7 +4835,7 @@ function emitJumpDirective(
     // conductor runs it, the NEXT `next` sees the pivoted state and emits the
     // run-stage for the now-current target.
     emit(printDirective(
-      `Run \`bun ${harnessDir()}/tools/aidlc-jump.ts execute --target ${targetSlug} --direction ${direction} --scope ${scope}\` to perform the jump, then re-run \`next\` to continue from the jump target.`,
+      `Run \`bun ${harnessDir()}/tools/aidlc-jump.ts execute --target ${targetSlug} --direction ${direction} --scope ${scope}${engineSessionSuffix()}\` to perform the jump, then re-run \`next${engineSessionSuffix()}\` to continue from the jump target.`,
     ));
     return;
   }
@@ -5126,10 +5142,9 @@ function spawnState(
       ];
   const result = Bun.spawnSync({
     cmd: command,
-    env: {
-      ...process.env,
+    env: engineChildEnv({
       AIDLC_STATE_TRANSITION_OWNER: `orchestrate:${process.pid}`,
-    },
+    }),
     stdout: "pipe",
     stderr: "pipe",
   });

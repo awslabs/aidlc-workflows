@@ -98,14 +98,11 @@ describe("t169 session-start resume rebind (mechanism cli — spawned hook + cur
     const resumed = fire(proj, "resume", "S1");
     expect(resumed.exitCode).toBe(0);
     expect(resumed.context).toContain("INTENT REBIND OFFER");
-    expect(resumed.context).toContain("was working auth-service");
-    expect(resumed.context).toContain("active intent is export-bug");
-    // The offer names the cursor-correction command, not a session rebuild.
+    expect(resumed.context).toContain("bound to auth-service");
+    expect(resumed.context).toContain("shared cursor names export-bug");
     expect(resumed.context).toContain("/aidlc intent auth-service");
-    expect(resumed.context).toContain("never rebuilds the conversation");
-    // Until the user accepts the offered switch, a decline continues on the
-    // live intent and usage must not remain stamped to the old workflow.
-    expect(readSessionIntentUuid(proj, "S1")).toBe(b.uuid);
+    expect(resumed.context).toContain("on No, keep working auth-service");
+    expect(readSessionIntentUuid(proj, "S1")).toBe(a.uuid);
   });
 
   test("resume with the cursor UNCHANGED offers nothing (no false positive)", () => {
@@ -178,8 +175,8 @@ describe("t169 session-start resume rebind (mechanism cli — spawned hook + cur
     const resumed = fire(proj, "resume", "S4");
     expect(resumed.exitCode).toBe(0);
     expect(resumed.context).toContain("INTENT REBIND OFFER");
-    expect(resumed.context).toContain("active intent is (none)");
-    expect(readSessionIntentUuid(proj, "S4")).toBeNull();
+    expect(resumed.context).toContain("shared cursor names (none)");
+    expect(readSessionIntentUuid(proj, "S4")).toBe(old.uuid);
   });
 
   test("resume after the prior intent was deleted restamps the live workflow", () => {

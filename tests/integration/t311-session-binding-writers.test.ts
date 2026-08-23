@@ -28,6 +28,7 @@ import {
 
 const BUN = process.execPath;
 const HOOK = join(AIDLC_SRC, "hooks", "aidlc-session-start.ts");
+const REBUILD = join(AIDLC_SRC, "hooks", "aidlc-rebuild-stage-graph.ts");
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 
 let proj = "";
@@ -52,6 +53,17 @@ function fireSessionStart(sessionId: string): number {
     env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
   });
   return result.exitCode;
+}
+
+function fireSession(source: string, sessionId: string): { status: number; stdout: string } {
+  const result = Bun.spawnSync({
+    cmd: [BUN, HOOK],
+    stdin: new TextEncoder().encode(JSON.stringify({ source, session_id: sessionId })),
+    stdout: "pipe",
+    stderr: "pipe",
+    env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+  });
+  return { status: result.exitCode, stdout: result.stdout.toString() };
 }
 
 function util(args: string[]): { status: number; stdout: string; stderr: string } {
@@ -152,5 +164,44 @@ describe("t311 session binding writers", () => {
       space: "default",
       intent: first.dirName,
     });
+  });
+
+  test("PostToolUse binds the exact invoking session", () => {
+    const created = createIntent(proj, "post-tool", "default", "feature");
+    const result = Bun.spawnSync({
+      cmd: [BUN, REBUILD],
+      stdin: new TextEncoder().encode(JSON.stringify({
+        hook_event_name: "PostToolUse",
+        session_id: "exact-session",
+        tool_name: "Bash",
+        tool_input: { command: "bun .claude/tools/aidlc-utility.ts intent-create --scope feature" },
+        tool_response: `Intent created: ${created.dirName} (space: default)\n`,
+      })),
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+    });
+    expect(result.exitCode).toBe(0);
+    expect(readSessionBinding(proj, "exact-session")?.intent).toBe(created.dirName);
+  });
+
+  test("resume No stays bound and Yes moves cursor, binding, and stamp together", () => {
+    const first = createIntent(proj, "resume-first", "default", "feature");
+    const second = createIntent(proj, "resume-second", "default", "feature");
+    setActiveIntentCursor(proj, first.dirName, "default");
+    expect(fireSession("startup", "resume-session").status).toBe(0);
+    setActiveIntentCursor(proj, second.dirName, "default");
+
+    const resumed = fireSession("resume", "resume-session");
+    expect(resumed.status).toBe(0);
+    expect(resumed.stdout).toContain("on No, keep working resume-first");
+    expect(readSessionBinding(proj, "resume-session")?.intent).toBe(first.dirName);
+    expect(readSessionIntentUuid(proj, "resume-session")).toBe(first.uuid);
+
+    writeSessionPidEntry(proj, process.pid, "resume-session");
+    expect(util(["intent", first.slug]).status).toBe(0);
+    expect(activeIntent(proj, "default")).toBe(first.dirName);
+    expect(readSessionBinding(proj, "resume-session")?.intent).toBe(first.dirName);
+    expect(readSessionIntentUuid(proj, "resume-session")).toBe(first.uuid);
   });
 });

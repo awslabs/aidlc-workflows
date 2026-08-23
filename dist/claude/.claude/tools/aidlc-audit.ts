@@ -28,6 +28,7 @@ import {
   readRegularFileNoFollowOrThrow,
   releaseAuditLock,
   resolveProjectDir,
+  setSessionResolutionOverride,
   validateBoltSlug,
   worktreeAuditFilePath,
   worktreePath,
@@ -1538,6 +1539,7 @@ function handleAuditMerge(args: string[], projectDir: string): void {
 // --- CLI entry point ---
 
 export function main(argv: string[]): void {
+  setSessionResolutionOverride(process.env.AIDLC_SESSION_OVERRIDE);
   const rawArgs = argv;
 
   // Extract --project-dir before general parsing

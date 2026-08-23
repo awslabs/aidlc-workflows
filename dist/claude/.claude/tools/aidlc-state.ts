@@ -95,6 +95,7 @@ import {
   setFieldStrict,
   setOrInsertField,
   setPhaseProgress,
+  setSessionResolutionOverride,
   stagesInScope,
   swarmConvergedUnits,
   updateIntentStatus,
@@ -541,6 +542,7 @@ let lockIntent: string | undefined;
 let lockSpace: string | undefined;
 
 export function main(argv: string[]): void {
+  setSessionResolutionOverride(process.env.AIDLC_SESSION_OVERRIDE);
   const args = [...argv];
 
   // Extract --project-dir flag

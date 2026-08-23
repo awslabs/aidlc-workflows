@@ -95,6 +95,7 @@ export interface LoadSteeringDirective {
   parts: number;
   rules_content: Array<{ path: string; text: string }>;
   continue_token: string;
+  continue_command: string;
 }
 
 export type WaveReviewState =
@@ -494,6 +495,7 @@ const LOAD_STEERING_FIELDS = [
   "parts",
   "rules_content",
   "continue_token",
+  "continue_command",
 ] as const;
 
 // dispatch-subagent = shared run-stage fields + `worker`; the isolated-run
@@ -619,6 +621,7 @@ export function validateDirective(obj: unknown): ValidationResult {
       checkPositiveInteger(o, "parts", kind, errors);
       checkPathTextArray(o, "rules_content", kind, errors);
       checkString(o, "continue_token", kind, errors);
+      checkString(o, "continue_command", kind, errors);
       if (
         typeof o.part === "number" &&
         typeof o.parts === "number" &&
@@ -1327,6 +1330,8 @@ if (import.meta.main) {
         { path: "aidlc-org.md", text: "## Testing Posture\n\nTests are first-class.\n" },
       ],
       continue_token: "opaque-token",
+      continue_command:
+        'bun .claude/tools/aidlc-orchestrate.ts continue "opaque-token"',
     },
     {
       kind: "run-stage",

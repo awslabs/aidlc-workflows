@@ -56,6 +56,10 @@ describe("t310 session binding helpers", () => {
     expect(
       resolveWorkflowSelection(proj, { sessionId: "session-a" }).intent,
     ).toBe(first.dirName);
+    writeSessionBinding(proj, "session-null", "default", null);
+    expect(
+      resolveWorkflowSelection(proj, { sessionId: "session-null" }).intent,
+    ).toBeNull();
     expect(
       resolveWorkflowSelection(proj, {
         sessionId: "session-a",

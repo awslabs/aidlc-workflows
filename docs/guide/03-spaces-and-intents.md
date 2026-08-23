@@ -181,6 +181,10 @@ Resolution follows one order:
 The cursors remain write-through compatibility state. Older or unsupported
 environments with no binding therefore behave exactly as before.
 
+On Windows, PID ancestry resolution returns no session identity in this
+increment. Spawned tools without an explicit `--session` therefore fall back to
+the shared cursors, so two native Windows sessions are not isolated yet.
+
 ---
 
 ## Spaces — one per team

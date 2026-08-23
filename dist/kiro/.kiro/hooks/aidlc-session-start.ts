@@ -41,6 +41,8 @@ import {
   hooksHealthDir,
   isClaudeCodeHookInput,
   isoTimestamp,
+  intentUuidForSelection,
+  readSessionBinding,
   readSessionIntentUuid,
   recordHookDrop,
   recoveryFilePath,
@@ -191,19 +193,17 @@ if (eventType) {
 //     back together. No session_id (TTY/empty stdin) → no-op.
 const activeSp = activeSpace(projectDir);
 const liveUuid = activeIntentUuid(projectDir, activeSp);
+const binding = sessionId ? readSessionBinding(projectDir, sessionId) : null;
+const selectedUuid = intentUuidForSelection(projectDir, selection);
 let rebindOffer = "";
 if (sessionId) {
   const stampedUuid = readSessionIntentUuid(projectDir, sessionId);
   if (eventType === "SESSION_STARTED") {
-    // Stamp the intent this conversation is bound to (only when one resolves —
-    // a flat-legacy / pre-birth project has no uuid to stamp).
-    if (liveUuid) writeSessionIntentUuid(projectDir, sessionId, liveUuid);
+    if (selectedUuid) writeSessionIntentUuid(projectDir, sessionId, selectedUuid);
   } else if (source === "resume") {
-    // Offer ONLY on a real drift: a stamp exists, it differs from the live
-    // cursor, and it still resolves to a known intent (a stale stamp from a
-    // since-deleted intent names nothing → no offer).
-    if (stampedUuid && stampedUuid !== liveUuid) {
-      const was = findIntentByUuid(projectDir, stampedUuid);
+    const ownedUuid = binding ? selectedUuid : stampedUuid;
+    if (ownedUuid && ownedUuid !== liveUuid) {
+      const was = findIntentByUuid(projectDir, ownedUuid);
       if (was) {
         const live = liveUuid ? findIntentByUuid(projectDir, liveUuid) : null;
         const liveSlug = live ? live.slug : "(none)";
@@ -216,27 +216,25 @@ if (sessionId) {
             ? `run \`${entrySkill} intent ${was.slug}\``
             : `first run \`${entrySkill} space ${was.space}\`; after it completes, run \`${entrySkill} intent ${was.slug}\``;
         rebindOffer =
-          `INTENT REBIND OFFER: This conversation was working ${was.slug}, but the active intent is ${liveSlug}. ` +
-          `Switch back to ${was.slug}? [Y/n] — on Yes, ${switchInstruction} to move the cursor; ` +
-          `on No, keep working ${liveSlug}. This corrects the per-user cursor only; it never rebuilds the conversation.\n`;
-        // Until the user accepts the offered switch, this resumed conversation
-        // is operating on the live intent. Stamp that ownership now so a
-        // decline cannot leave usage attached to the old workflow. A Yes path
-        // runs the switch command above, whose utility handler re-stamps the
-        // session back to `was`.
+          `INTENT REBIND OFFER: This conversation is bound to ${was.slug}, but the shared cursor names ${liveSlug}. ` +
+          `Move the shared cursor back to ${was.slug}? [Y/n] - on Yes, ${switchInstruction}; ` +
+          `on No, keep working ${was.slug} through this session binding. This changes only machine-local navigation.\n`;
       }
     }
 
-    // A resume binds to the live intent by default. If the former intent was
-    // deleted and there is no live UUID, clear the stale ownership stamp.
-    if (liveUuid) {
+    // A binding owns attribution. Without one, preserve the legacy stamp that
+    // follows the live cursor after the offer.
+    if (binding && selectedUuid) {
+      writeSessionIntentUuid(projectDir, sessionId, selectedUuid);
+    } else if (binding && stampedUuid) {
+      clearSessionIntentUuid(projectDir, sessionId);
+    } else if (liveUuid) {
       writeSessionIntentUuid(projectDir, sessionId, liveUuid);
     } else if (stampedUuid) {
       clearSessionIntentUuid(projectDir, sessionId);
     }
-  } else if (!stampedUuid && liveUuid) {
-    // Compact/unknown session events still need stable SessionEnd attribution.
-    writeSessionIntentUuid(projectDir, sessionId, liveUuid);
+  } else if (!stampedUuid && selectedUuid) {
+    writeSessionIntentUuid(projectDir, sessionId, selectedUuid);
   }
 }
 
@@ -246,7 +244,11 @@ if (sessionId) {
 // live intent (No) instead of receiving the same warning forever.
 if (rebindCheckOnly) {
   if (rebindOffer) {
-    if (liveUuid) writeSessionIntentUuid(projectDir, sessionId, liveUuid);
+    if (binding && selectedUuid) {
+      writeSessionIntentUuid(projectDir, sessionId, selectedUuid);
+    } else if (liveUuid) {
+      writeSessionIntentUuid(projectDir, sessionId, liveUuid);
+    }
     process.stdout.write(`${JSON.stringify({ additionalContext: rebindOffer })}\n`);
   }
   return 0;
