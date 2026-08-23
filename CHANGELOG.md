@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 
 Scope cost previews now describe the workflow the engine will actually run, and approval gates expose how long the current gate attempt has been waiting for a person. **Upgrade:** refresh your `dist/<harness>/` shell to install the corrected preview, status, and doctor behavior; existing workflow records need no migration.
 
-* Scope confirms and birth messages omit the "per unit of work" clause when `units-generation` is skipped, because those Construction stages run once without a Unit DAG.
+* Scope confirm and intent-creation messages omit the "per unit of work" clause when `units-generation` is skipped, because those Construction stages run once without a Unit DAG.
 * Cold-start previews apply the same Greenfield reverse-engineering skip as intent creation, so their stage and approval-gate counts match the generated workflow.
 * `/aidlc --status` shows the current attempt's organic approval-gate timestamp and pending duration when the current stage is awaiting approval; resolved, recovered, revalidated, prior-attempt, and causally ambiguous cross-shard ledger rows do not create or replace a waiting timestamp.
 * `/aidlc --doctor` adds a passing advisory for current-attempt approval gates open longer than 24 hours, identifying them as waiting for a human rather than stuck and directing operators to `/aidlc --status`.

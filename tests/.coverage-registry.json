@@ -7177,7 +7177,7 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/unit/t304-gate-pending-doctor.test.ts",
+          "file": "tests/unit/t317-gate-pending-doctor.test.ts",
           "mechanism": "cli"
         },
         {

@@ -1,6 +1,6 @@
 // covers: subcommand:aidlc-utility:doctor
 //
-// t304 - doctor distinguishes a long-open human approval gate from a stuck
+// t317 - doctor distinguishes a long-open human approval gate from a stuck
 // workflow. The probe is advisory: a stale organic gate-open row adds a PASS
 // line with its duration and /aidlc --status guidance, while fresh, resolved,
 // recovered-only, and absent gates stay silent. The advisory never changes the
@@ -87,7 +87,7 @@ function runDoctor(proj: string): { status: number; out: string } {
   };
 }
 
-describe("t304 doctor gate-pending advisory", () => {
+describe("t317 doctor gate-pending advisory", () => {
   test("stale organic gate renders an advisory PASS without changing exit code", () => {
     const baseline = projectAtGate();
     const baselineRun = runDoctor(baseline);
