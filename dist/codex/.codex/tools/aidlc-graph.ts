@@ -65,6 +65,7 @@ import {
   loadAgents,
   loadScopeMapping,
   loadScopeMetadata,
+  loadScopeMetadataAll,
   harnessDir,
   PHASES,
   type Phase,
@@ -1042,7 +1043,7 @@ export function nearestStockScopes(
  *  numeric order, shaped `{slug, phase, action}` — byte-identical to
  *  lib.ts's stagesInScope() / the legacy scope-mapping-derived plan. The
  *  `aidlc-graph resolve` subcommand writes this to .aidlc-plan.json. The
- *  parity test asserts this matches the legacy plan across all 9 scopes. */
+ *  parity test asserts this matches the legacy plan across all 11 scopes. */
 export function resolvePlanForScope(
   scope: string
 ): Array<{ slug: string; phase: string; action: "EXECUTE" | "SKIP" }> {
@@ -1425,8 +1426,14 @@ export function canonicalScopeGridJson(grid: ScopeGrid): string {
  *  all-SKIP, an emptied plan with no diagnostic. Any on-disk entry whose
  *  scope name the transpose does not produce survives the recompile; keys
  *  re-sort so the canonical emitter stays deterministic. Unparseable or
- *  malformed on-disk grids contribute nothing (fresh wins). */
-export function mergeComposedScopes(fresh: ScopeGrid, onDiskJson: string | null): ScopeGrid {
+ *  malformed on-disk grids contribute nothing (fresh wins). When
+ *  `preserveNames` is supplied, an orphan grid column with no matching scope
+ *  identity file is dropped rather than mistaken for a composed scope. */
+export function mergeComposedScopes(
+  fresh: ScopeGrid,
+  onDiskJson: string | null,
+  preserveNames?: ReadonlySet<string>,
+): ScopeGrid {
   if (!onDiskJson) return fresh;
   let onDisk: unknown;
   try {
@@ -1438,6 +1445,7 @@ export function mergeComposedScopes(fresh: ScopeGrid, onDiskJson: string | null)
   const merged: ScopeGrid = { ...fresh };
   for (const [name, entry] of Object.entries(onDisk as Record<string, unknown>)) {
     if (name in merged) continue;
+    if (preserveNames !== undefined && !preserveNames.has(name)) continue;
     if (
       typeof entry === "object" && entry !== null && !Array.isArray(entry) &&
       typeof (entry as { stages?: unknown }).stages === "object"
@@ -1931,7 +1939,12 @@ export function compileStageGraph(): {
     /* first compile: no grid on disk yet */
   }
   const selectedScopeNames = enabledScopeNames();
-  const composedNames = composedScopeNames(onDiskGrid, stockScopeNames);
+  const installedScopeNames = new Set(Object.keys(loadScopeMetadataAll()));
+  const composedNames = new Set(
+    [...composedScopeNames(onDiskGrid, stockScopeNames)].filter((name) =>
+      installedScopeNames.has(name),
+    ),
+  );
   const seededScopeNames =
     selectedScopeNames === null
       ? undefined
@@ -1946,6 +1959,7 @@ export function compileStageGraph(): {
             seededScopeNames,
           ),
           onDiskGrid,
+          composedNames,
         ),
         selectedScopeNames,
         composedNames,

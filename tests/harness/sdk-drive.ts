@@ -426,7 +426,7 @@ function writeSdkTrace(
  *   assertToolResultContains(r, "Bash", "AI-DLC Health Check");
  *
  * @example  scripted gates
- *   const r = await driveAidlc("/aidlc workshop Build a todo app", {
+ *   const r = await driveAidlc("/aidlc --scope classic Build a todo app", {
  *     projectDir: proj,
  *     answerScript: { kind: "sequence", specs: [{ label: "Greenfield" }] },
  *   });

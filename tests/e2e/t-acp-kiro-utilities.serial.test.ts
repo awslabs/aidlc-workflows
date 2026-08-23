@@ -150,7 +150,7 @@ describe("t-acp-kiro-utilities (single-turn utility contracts over ACP)", () => 
         // never fire); the conductor only relays prose. Drive to the natural
         // end_turn and assert the deterministic surfaces: clean turn end + the
         // on-disk no-op (no state births from a help run). The verbatim usage
-        // sections + the nine scopes are covered by the SDK twin t23 + the CLI
+        // sections + the ten scopes are covered by the SDK twin t23 + the CLI
         // twins t27/t31 (see header).
         const r = await driveKiroAcp({
           projectDir: proj,

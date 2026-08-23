@@ -14,7 +14,7 @@ review_cap: advisory
 # workshop scope
 
 Standard depth for a facilitated group session with mandatory gates, but
-with a Minimal test strategy — the `testStrategy` override that keeps the
+with a Minimal test strategy - the `testStrategy` override that keeps the
 test floor light for a teaching context. It runs the inception,
 construction, and operation arc end to end (so participants see the whole
 lifecycle) while skipping the ideation discovery stages that a facilitator

@@ -81,9 +81,10 @@ All framework hooks are registered project-wide in `settings.json` (the workflow
 
 ### Companion Files
 
-SKILL.md references two companion file sets in `.claude/skills/aidlc/`:
+SKILL.md references the shared protocol family and stage files:
 
-- **`stage-protocol.md`** -- Mandatory protocol for all 33 stages (approval gates, question formatting, audit logging rules, completion messages, phase-boundary verification).
+- **`aidlc-common/protocols/stage-protocol.md`** -- Mandatory static protocol for all 33 stages.
+- **Conditional protocol modules** -- reviewer, ensemble, Construction, swarm, recovery, and governance files loaded only when their trigger fires.
 - **Stage files** in `stages/initialization/`, `stages/ideation/`, `stages/inception/`, `stages/construction/`, `stages/operation/` -- 33 individual stage definitions.
 
 ---
@@ -351,7 +352,7 @@ An MCP server appearing in the session is a function of `.mcp.json` plus availab
 | Agents (dispatched) | `.claude/agents/*.md` | Task tool delegation | 4 stages (2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent): isolated execution |
 | Knowledge (Tier 1) | `.claude/knowledge/` | Persona activation (steps 2-3) | 56 methodology reference files |
 | Knowledge (Tier 2) | space-level `aidlc/knowledge/` (sibling of `intents/`) | Persona activation (steps 4-5) | Team-managed customization |
-| Stage protocol | `stage-protocol.md` | Every stage execution | Mandatory behavioral contract |
+| Stage protocol | `stage-protocol.md` + conditional modules | Static core every stage; modules on trigger | Mandatory behavioral contract |
 | Stage files | `stages/**/*.md` | Engine routing | 33 individual stage definitions |
 | State file | `aidlc-state.md` | Session start + throughout | Persistent workflow state |
 | Audit file | `audit.md` | Throughout execution | Append-only audit trail |

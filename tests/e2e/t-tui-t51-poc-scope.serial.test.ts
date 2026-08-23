@@ -194,8 +194,8 @@ describe("t-tui-t51-poc-scope (answering gates advances poc Ideation on disk)", 
         // scope word; send literally with no auto-Enter, then Enter as a named key
         // (the template's exact two-step, robust for slash commands).
         // Use EXPLICIT `--scope poc`, not bare freeform `poc`. The shipped
-        // settings.json pins AWS_AIDLC_DEFAULT_SCOPE=workshop, so bare `/aidlc poc`
-        // is a freeform-vs-env CONFLICT (poc vs workshop) → a scope disambiguation
+        // settings.json pins AWS_AIDLC_DEFAULT_SCOPE=classic, so bare `/aidlc poc`
+        // is a freeform-vs-env CONFLICT (poc vs classic) → a scope disambiguation
         // gate at workflow START that stalls the phase-wait below (the t50 finding,
         // 2026-06-06). `--scope poc` wins silently+gatelessly (SKILL.md:105 explicit
         // flag wins + :170a auto-confirm; proven live by t29's override case), so

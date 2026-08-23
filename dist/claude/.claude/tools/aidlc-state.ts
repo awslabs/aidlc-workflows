@@ -13,6 +13,7 @@ import {
   type CheckboxState,
   checkSummaryConfirmationEvidence,
   codekbDir,
+  codekbRepoName,
   countCheckboxes,
   emitError,
   errorMessage,
@@ -21,6 +22,7 @@ import {
   findStageBySlug,
   findAllEvents,
   firstInScopeStageOfPhase,
+  formatReceivedReply,
   freshReviewReceipts,
   getField,
   hasUnsafeSingleLineCharacter,
@@ -44,6 +46,7 @@ import {
   parseMemoryEntries,
   parseRefsList,
   parseStateStageSuffixes,
+  pipelineLinkEvidence,
   producesArtifactFile,
   readAllAuditShards,
   readStateFile,
@@ -56,6 +59,7 @@ import {
   selfAttributedDecisionMarker,
   resolveBoltDag,
   reviewArtifactFingerprint,
+  reviewerGateGuardDisabled,
   resolveReviewClass,
   resolveProjectDir,
   resolveStage,
@@ -325,7 +329,7 @@ function auditTailHasFields(
 //
 // The HUMAN_TURN pivot in conjunct 4 is load-bearing: the reviewer appends its
 // `## Review` section to the primary artifact BEFORE the human responds at the
-// gate (stage-protocol.md §12a), firing an ARTIFACT_UPDATED on a produces file.
+// gate (stage-protocol-reviewer.md §12a), firing an ARTIFACT_UPDATED on a produces file.
 // Anchoring the artifact window at the first post-anchor human turn (not the gate
 // open) excludes that legitimate pre-response append, so the reviewer's edit is
 // never mistaken for a human-driven revision.
@@ -1400,9 +1404,12 @@ function artifactGuardDisabled(): boolean {
   return process.env.AIDLC_SKIP_ARTIFACT_GUARD === "1";
 }
 
-// Mirrors aidlc-orchestrate.ts isAutonomousSwarmCandidate for the lifecycle
-// writer. A missing scope fails closed for a subagent stage: without it, this
-// tool cannot prove that the stage is the non-swarm skeleton gate.
+// Mirrors both aidlc-orchestrate.ts isAutonomousSwarmCandidate and the
+// unit-major suppression at eligibleAutonomousSwarmBatches. Under unit-major
+// the WALK owns per-unit work inline and needs the interactive lifecycle
+// ledger, so its `unit start` must not be refused as swarm-owned. A missing
+// scope fails closed for a subagent stage: without it, this tool cannot prove
+// that the stage is the non-swarm skeleton gate.
 function autonomousSwarmOwnsStage(
   stage: { slug: string; phase: string; for_each?: string; mode?: string },
   stateContent: string,
@@ -1410,6 +1417,9 @@ function autonomousSwarmOwnsStage(
   if (stage.phase !== "construction") return false;
   if (stage.for_each !== "unit-of-work" || stage.mode !== "subagent") return false;
   if (!isAutonomousMode(stateContent)) return false;
+  if (getField(stateContent, "Construction Iteration")?.trim() === "unit-major") {
+    return false;
+  }
   const scope = getField(stateContent, "Scope");
   if (!scope) return true;
   const first = firstInScopeStageOfPhase("construction", scope);
@@ -1453,9 +1463,9 @@ function revisionBackstopDisabled(): boolean {
 // Resolve the directories a stage's produces[] artifacts would live under,
 // mirroring aidlc-orchestrate.ts's resolveArtifactPath against the v2 per-intent
 // seams. Three placement classes:
-//   - codekb (reverse-engineering): the produces live DIRECTLY under each repo
-//     dir beneath the space-level codekb root (no <slug> subdir - see the codekb
-//     arm of resolveArtifactPath). We glob every repo dir under the codekb root.
+//   - codekb (reverse-engineering): the produces live DIRECTLY under each
+//     registered repo dir beneath the space-level codekb root (no <slug> subdir
+//     - see the codekb arm of resolveArtifactPath).
 //   - per-unit Construction (for_each: unit-of-work): the {unit} segment is
 //     unknown at approve/advance time, so we glob every
 //     <record>/construction/<unit>/<slug>/ instead of resolving one.
@@ -1468,26 +1478,23 @@ function producesDirsForStage(
   stage: { slug: string; phase: string; for_each?: string }
 ): string[] {
   if (KNOWN_CODEKB_STAGES.has(stage.slug)) {
-    // codekbDir(pd, "<repo>") is `<pd>/aidlc/spaces/<space>/codekb/<repo>`; its
-    // parent is the codekb root we glob. Built off the seam so the path is not
-    // re-hardcoded here.
-    const codekbRoot = join(codekbDir(pd, "_"), "..");
-    if (!existsSync(codekbRoot)) return [];
-    const dirs: string[] = [];
-    for (const repo of readdirSync(codekbRoot)) {
-      const d = join(codekbRoot, repo);
-      try {
-        if (statSync(d).isDirectory()) dirs.push(d);
-      } catch {
-        /* unreadable entry - skip */
-      }
-    }
-    return dirs;
+    const repos = intentRepos(pd);
+    const resolved = repos.length > 0 ? repos : [codekbRepoName(pd)];
+    return resolved.map((repo) => codekbDir(pd, repo));
   }
   const rec = recordDir(pd);
   if (rec === null) return [];
   const perUnit = stage.for_each === "unit-of-work";
   if (perUnit) {
+    const resolution = resolveBoltDag(pd);
+    const stateContent = readStateFile(pd);
+    const scope = getField(stateContent, "Scope");
+    const unitProducerAction =
+      parseStateStageSuffixes(stateContent).get("units-generation") ??
+      (scope ? loadScopeMapping()[scope]?.stages["units-generation"] : undefined);
+    if (resolution.state === "none" && unitProducerAction !== "EXECUTE") {
+      return [join(rec, "construction", stage.slug)];
+    }
     const ctorRoot = join(rec, "construction");
     if (!existsSync(ctorRoot)) return [];
     const dirs: string[] = [];
@@ -1531,7 +1538,15 @@ function producesArtifactsExist(
       if (allVacuous) return true;
     }
   }
-  for (const dir of producesDirsForStage(pd, stage)) {
+  const dirs = producesDirsForStage(pd, stage);
+  if (KNOWN_CODEKB_STAGES.has(stage.slug)) {
+    return dirs.length > 0 && dirs.every((dir) =>
+      produces.every((name) =>
+        isRegularFile(join(dir, artifactFilename(name)))
+      )
+    );
+  }
+  for (const dir of dirs) {
     for (const name of produces) {
       if (isRegularFile(join(dir, artifactFilename(name)))) return true;
     }
@@ -1739,13 +1754,15 @@ function verifySummaryConfirmationPrecondition(
 
 // --- Reviewer precondition (§12a / RFC Track 1) -----------------------------
 //
-// A stage that declares a `reviewer` cannot be approved until the reviewer step
-// actually ran — proven by a terminal REVIEW_COMPLETED row (written by the tool
-// actor `aidlc-log.ts review --verdict`). Hard on the review HAVING HAPPENED,
-// soft on the verdict (a NOT-READY-after-cap still lets the human approve).
+// A stage that declares a `reviewer` cannot open its approval gate or complete
+// until the reviewer step actually ran — proven by a terminal REVIEW_COMPLETED
+// row (written by the tool actor `aidlc-log.ts review --verdict`). Hard on the
+// review HAVING HAPPENED, soft on the verdict (a NOT-READY-after-cap still lets
+// the human approve).
 //
-// This lives beside the artifact guard in all four completing handlers, not in
-// orchestrate's report: direct recovery calls must not bypass it (issue #366).
+// This lives beside the artifact guard in both gate-opening handlers and all
+// four completing handlers, not in orchestrate's report: direct recovery calls
+// must not bypass it (issues #366 and #551).
 //
 // The audit read is FLOORED (mirrors swarmConvergedUnits / hasStageAuditEvent):
 // only REVIEW_COMPLETED rows recorded AFTER the stage's latest STAGE_STARTED,
@@ -1759,6 +1776,17 @@ function verifySummaryConfirmationPrecondition(
 // stages (for_each: unit-of-work) one review per stage is not enough: the
 // Review accounting is per Unit, so EVERY unit must carry its own terminal review.
 //
+type ReviewerPreconditionAction = "complete" | "present-approval-gate";
+
+function reviewerPreconditionPrefix(
+  slug: string,
+  action: ReviewerPreconditionAction,
+): string {
+  return action === "present-approval-gate"
+    ? `Refusing to present the approval gate for "${slug}"`
+    : `Refusing to complete "${slug}"`;
+}
+
 function verifyReviewerPrecondition(
   pd: string,
   content: string,
@@ -1771,10 +1799,13 @@ function verifyReviewerPrecondition(
     reviewer?: string;
     reviewer_max_iterations?: number;
     review_class?: "adversarial" | "advisory";
+    workspace_requires?: boolean;
     produces?: string[];
     optional_produces?: string[];
     produces_kinds?: Record<string, string[]>;
-  }
+  },
+  action: ReviewerPreconditionAction = "complete",
+  requireReceiptExistence = true,
 ): void {
   if (!stage.reviewer) return; // stage declares no reviewer — nothing to enforce
 
@@ -1797,9 +1828,6 @@ function verifyReviewerPrecondition(
   }
 
   const reviewer = stage.reviewer;
-  if (readAllAuditShards(pd).length === 0) {
-    reviewerPreconditionError(stage.slug, reviewer);
-  }
 
   // The fresh-receipt scan lives in aidlc-lib.ts (freshReviewReceipts) so the
   // review-freeze PreToolUse hook and this precondition read the SAME window:
@@ -1808,6 +1836,33 @@ function verifyReviewerPrecondition(
   // and per-unit write invalidation are all documented there.
   const receipts = freshReviewReceipts(pd, content, stage, { reviewClass });
   const perUnit = stage.for_each === "unit-of-work";
+
+  // Source-state equality composes with v2's bounded stale-receipt recovery:
+  // the newest modern binding is reconciled once for the workspace. A mismatch
+  // blocks every completion route and exposes one Recovery: stale-receipt pass,
+  // even when the normal iteration budget is exhausted. One fresh receipt
+  // against the current tree restores the collected per-unit receipts. This is
+  // deliberately not per-unit attribution; see RFC #662.
+  const sourceFreshnessOff =
+    process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1";
+  const settledSwarm = isSettledSwarmForArtifactGuard(pd, stage, content);
+  const staleSource =
+    stage.workspace_requires === true &&
+    !sourceFreshnessOff &&
+    !settledSwarm &&
+    receipts.sourceStale;
+  if (staleSource) {
+    staleSourcePreconditionError(
+      stage.slug,
+      reviewer,
+      receipts.sourceStaleProgress?.recoverySpent === true,
+    );
+  }
+
+  // Already-[x] recovery skips only existence/cardinality. A modern binding was
+  // still compared above, so crash-window recovery cannot ship changed source.
+  if (!requireReceiptExistence) return;
+
   const sawStageReview = receipts.stageVerdict !== null;
   const reviewedUnits = new Set(receipts.unitVerdicts.keys());
 
@@ -1818,9 +1873,10 @@ function verifyReviewerPrecondition(
           stage.slug,
           reviewer,
           receipts.stageStaleProgress?.recoverySpent === true,
+          action,
         );
       }
-      reviewerPreconditionError(stage.slug, reviewer);
+      reviewerPreconditionError(stage.slug, reviewer, action);
     }
     return;
   }
@@ -1828,13 +1884,16 @@ function verifyReviewerPrecondition(
   const resolution = resolveBoltDag(pd);
   if (resolution.state === "malformed") {
     error(
-      `Refusing to complete "${stage.slug}": its per-unit review set cannot be ` +
+      `${reviewerPreconditionPrefix(stage.slug, action)}: its per-unit review set cannot be ` +
         `resolved because unit-of-work-dependency.md is ${resolution.reason} ` +
-        `(${resolution.detail}). Fix the fenced units block before completing.`,
+        `(${resolution.detail}). Fix the fenced units block before ` +
+        `${action === "complete" ? "completing" : "presenting the approval gate"}.`,
     );
   }
   if (resolution.state === "none" || resolution.units.length === 0) {
-    if (!sawStageReview) reviewerPreconditionError(stage.slug, reviewer);
+    if (!sawStageReview) {
+      reviewerPreconditionError(stage.slug, reviewer, action);
+    }
     return;
   }
 
@@ -1894,7 +1953,7 @@ function verifyReviewerPrecondition(
       );
     }
     error(
-      `Refusing to complete "${stage.slug}": it declares a reviewer (${reviewer}) but ` +
+      `${reviewerPreconditionPrefix(stage.slug, action)}: it declares a reviewer (${reviewer}) but ` +
         `${missing.length} of ${reviewUnits.length} applicable units have no fresh recorded ` +
         `review (${missing.join(", ")}). Invalidated receipts: ` +
         `${stale.length > 0 ? stale.join(", ") : "none"}. Never reviewed: ` +
@@ -1904,14 +1963,68 @@ function verifyReviewerPrecondition(
   }
 }
 
-function staleReviewPreconditionError(
+function staleSourcePreconditionError(
   slug: string,
   reviewer: string,
   recoverySpent: boolean,
 ): never {
   if (recoverySpent) {
     error(
-      `Refusing to complete "${slug}": its stale-receipt recovery review from ` +
+      `Refusing to complete "${slug}": the workspace source no longer matches ` +
+        `the stale-receipt recovery review (source-fingerprint mismatch). ` +
+        `Present this at the approval gate. Only a human Request Changes decision ` +
+        `resets the review attempt; do not record it on the human's behalf.`,
+    );
+  }
+  error(
+    `Refusing to complete "${slug}": the workspace source no longer matches the ` +
+      `state of the most recent recorded review (source-fingerprint mismatch). ` +
+      `Re-invoke ${reviewer} against the current source, record the one bounded ` +
+      `stale-receipt recovery REVIEW_REQUESTED/REVIEW_COMPLETED pair, or revert ` +
+      `the source edit. The recovery pass remains available after the normal ` +
+      `review iteration budget is exhausted.`,
+  );
+}
+
+function verifyPipelineLinkPrecondition(
+  pd: string,
+  stage: {
+    slug: string;
+    name: string;
+    mode?: string;
+    lead_agent: string;
+    support_agents: string[];
+  },
+): void {
+  if (
+    stage.mode !== "pipeline" ||
+    process.env.AIDLC_DISABLE_ENSEMBLE_EVIDENCE === "1"
+  ) {
+    return;
+  }
+  const evidence = pipelineLinkEvidence(pd, stage);
+  if (evidence.missing.length === 0) return;
+  const missing = evidence.missing.map(({ link, repo }) =>
+    repo ? `${repo}:${link}` : link
+  );
+  error(
+    `Refusing to complete "${stage.slug}": mode: pipeline requires a current-attempt ` +
+      `PIPELINE_LINK_COMPLETED receipt for every declared link. Missing: ${missing.join(", ")}. ` +
+      `Run aidlc-log.ts link after each link returns` +
+      `${evidence.repos.length > 0 ? " with --repo <repo>" : ""}, or set ` +
+      `AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1 only to recover a legitimately-run in-flight pipeline.`,
+  );
+}
+
+function staleReviewPreconditionError(
+  slug: string,
+  reviewer: string,
+  recoverySpent: boolean,
+  action: ReviewerPreconditionAction = "complete",
+): never {
+  if (recoverySpent) {
+    error(
+      `${reviewerPreconditionPrefix(slug, action)}: its stale-receipt recovery review from ` +
         `${reviewer} was invalidated by another later write to a declared ` +
         `produces[] artifact. Present the situation to the human at the approval ` +
         `gate. Only a human Request Changes decision resets the review attempt; ` +
@@ -1919,7 +2032,7 @@ function staleReviewPreconditionError(
     );
   }
   error(
-    `Refusing to complete "${slug}": its terminal review receipt from ${reviewer} ` +
+    `${reviewerPreconditionPrefix(slug, action)}: its terminal review receipt from ${reviewer} ` +
       `was invalidated by a later write to a declared produces[] artifact. Run ` +
       `one recovery review pass with \`aidlc-log.ts review --stage ${slug} ` +
       `--reviewer ${reviewer} --iteration <next ordinal>\`, then record the verdict ` +
@@ -1931,11 +2044,29 @@ function staleReviewPreconditionError(
   );
 }
 
-function reviewerPreconditionError(slug: string, reviewer: string): never {
+function reviewerPreconditionError(
+  slug: string,
+  reviewer: string,
+  action: ReviewerPreconditionAction = "complete",
+): never {
+  if (action === "present-approval-gate") {
+    error(
+      `Refusing to present the approval gate for "${slug}": it declares a reviewer ` +
+        `(${reviewer}) but no fresh REVIEW_COMPLETED is recorded for it. Run the ` +
+        `reviewer first (stage-protocol-reviewer.md §12a); its findings are the ` +
+        `human's decision support at the gate. Record the verdict with ` +
+        `\`aidlc-log.ts review --stage ${slug} --reviewer ${reviewer} --verdict ` +
+        `<READY|NOT-READY>\` before presenting the gate. Terminal ordering: apply ` +
+        `any fixes FIRST, then run the reviewer, record the receipt, and stop editing ` +
+        `produces[] artifacts - a later write to one invalidates the receipt and ` +
+        `re-opens this refusal. Do not apply suggestions riding on a READY verdict; ` +
+        `surface them at the gate instead.`,
+    );
+  }
   error(
     `Refusing to complete "${slug}": it declares a reviewer (${reviewer}) but no ` +
       `fresh REVIEW_COMPLETED is recorded for it. Invoke the reviewer ` +
-      `(stage-protocol §12a) and record the verdict with \`aidlc-log.ts review --stage ` +
+      `(stage-protocol-reviewer.md §12a) and record the verdict with \`aidlc-log.ts review --stage ` +
       `${slug} --reviewer ${reviewer} --verdict <READY|NOT-READY>\` before completing. ` +
       `Terminal ordering: apply any fixes FIRST, then run the reviewer, record the ` +
       `receipt, and stop editing produces[] artifacts - a later write to one ` +
@@ -1960,6 +2091,8 @@ function reviewRecoverySpentInCurrentAttempt(
       );
   if (reviewClass === "none") return false;
   const receipts = freshReviewReceipts(pd, content, stage, { reviewClass });
+  if (receipts.sourceRecoverySpent) return true;
+  if (receipts.sourceStaleProgress?.recoverySpent === true) return true;
   if (receipts.stageStaleProgress?.recoverySpent === true) return true;
   for (const progress of receipts.unitStaleProgress.values()) {
     if (progress.recoverySpent) return true;
@@ -2101,16 +2234,23 @@ function handleAdvance(args: string[]): void {
     return;
   }
 
+  // A true replay above is already fully applied and remains idempotent. A
+  // crash-window partial approval does not satisfy all replay predicates, so it
+  // still reaches the source comparison. Already-[x] recovery may lack review
+  // receipts, but any modern source binding still has to match.
+  verifyReviewerPrecondition(
+    pd,
+    content,
+    completedStage,
+    "complete",
+    !alreadyMarkedCompleted,
+  );
+
   // Artifact guard (issue #366). Only enforce when THIS advance is the
-  // transition that completes the stage - i.e. it was not already [x]. When
-  // approve delegates here the slug is already [x] and approve ran the guard
-  // itself, so skip to avoid a double check. A direct `advance <active-slug>`
-  // (the gate-skipping attack path) is NOT alreadyMarkedCompleted, so it is
-  // guarded. Runs before any mutation; error() exits leaving state untouched.
   if (!alreadyMarkedCompleted) {
     verifyStageArtifacts(pd, completedStage);
     verifySummaryConfirmationPrecondition(pd, content, completedStage);
-    verifyReviewerPrecondition(pd, content, completedStage);
+    verifyPipelineLinkPrecondition(pd, completedStage);
   }
 
   // Detect phase boundary (for PHASE_COMPLETED/VERIFIED/STARTED emissions)
@@ -2223,10 +2363,17 @@ function handleFinalize(args: string[]): void {
   const alreadyMarkedCompleted =
     parseCheckboxes(content).find((c) => c.slug === completedSlug)?.state ===
     "completed";
+  verifyReviewerPrecondition(
+    pd,
+    content,
+    completedStage,
+    "complete",
+    !alreadyMarkedCompleted,
+  );
   if (!alreadyMarkedCompleted) {
     verifyStageArtifacts(pd, completedStage);
     verifySummaryConfirmationPrecondition(pd, content, completedStage);
-    verifyReviewerPrecondition(pd, content, completedStage);
+    verifyPipelineLinkPrecondition(pd, completedStage);
   }
 
   // 1. Mark completed
@@ -2343,10 +2490,17 @@ function handleCompleteWorkflow(args: string[]): void {
   // itself, so this skips the double-check on that path while still refusing a
   // direct `complete-workflow <active-slug>` that never produced artifacts. Runs
   // before any mutation so a refusal leaves state untouched.
+  verifyReviewerPrecondition(
+    pd,
+    content,
+    completedStage,
+    "complete",
+    !alreadyMarkedCompleted,
+  );
   if (!alreadyMarkedCompleted) {
     verifyStageArtifacts(pd, completedStage);
     verifySummaryConfirmationPrecondition(pd, content, completedStage);
-    verifyReviewerPrecondition(pd, content, completedStage);
+    verifyPipelineLinkPrecondition(pd, completedStage);
   }
 
   // 1. Mark completed
@@ -2455,6 +2609,9 @@ function validateSlugInState(
 }
 
 // gate-start <slug> — transition [-] → [?], emit STAGE_AWAITING_APPROVAL.
+// On an existing [?] gate, re-run every opening guard without emitting or
+// writing another transition. This lets report revalidate legacy/recovered
+// gates instead of treating their persisted checkbox as proof of validity.
 // --recovered marks a BACKFILLED gate row (the engine opening a gate the
 // conductor skipped, e.g. report's explicit-stage recovery) with
 // Recovered=true so audit consumers can tell backfills from organic opens.
@@ -2476,9 +2633,25 @@ function handleGateStart(args: string[]): void {
 
   const stage = findStageBySlug(slug);
   if (!stage) error(`Unknown stage: ${slug}`);
-  validateSlugInState(content, slug, "in-progress");
+  validateSlugInState(content, slug, ["in-progress", "awaiting-approval"]);
+  const alreadyAwaiting = getSlugState(content, slug) === "awaiting-approval";
   verifyStageArtifacts(pd, stage);
   verifySummaryConfirmationPrecondition(pd, content, stage);
+  verifyPipelineLinkPrecondition(pd, stage);
+  if (!reviewerGateGuardDisabled()) {
+    verifyReviewerPrecondition(pd, content, stage, "present-approval-gate");
+  }
+  if (alreadyAwaiting) {
+    console.log(
+      JSON.stringify({
+        slug,
+        new_state: "awaiting-approval",
+        already_awaiting_approval: true,
+        revalidated: true,
+      }),
+    );
+    return;
+  }
 
   content = setCheckbox(content, slug, "awaiting-approval");
   const timestamp = isoTimestamp();
@@ -2498,7 +2671,7 @@ function handleGateStart(args: string[]): void {
   });
 }
 
-// approve <slug> [--user-input <text>]
+// approve <slug> [--user-input <exact-choice>]
 // Transition: [?] → [x] AND auto-advance to the next in-scope stage (or
 // complete the workflow if this was the final stage). Human judgment ends
 // at the gate response; everything after is deterministic bookkeeping, so
@@ -2533,30 +2706,6 @@ function handleApprove(args: string[]): void {
   const autonomousDecision = isAutonomousConstructionDecision(content, stage.phase);
   validateSlugInState(content, slug, "awaiting-approval");
   const approvalInput = userInput?.trim();
-  if (
-    !autonomousDecision &&
-    !humanPresenceGuardDisabled() &&
-    !approvalInput
-  ) {
-    error(
-      `Refusing to approve "${slug}": --user-input must contain the human's exact approval choice.`,
-    );
-  }
-  // Cancellation boilerplate is not an approval choice: a dismissed/timed-out
-  // question widget can surface as a completed-looking answer ("Cancelled"),
-  // and passing that through --user-input would commit a gate no human
-  // approved. Same vocabulary as the interview path (aidlc-log answer).
-  if (
-    !autonomousDecision &&
-    !humanPresenceGuardDisabled() &&
-    isNonAnswer(approvalInput)
-  ) {
-    error(
-      `Refusing to approve "${slug}": --user-input "${approvalInput}" is cancellation boilerplate, ` +
-        "not an approval. If the human dismissed the gate question, re-present it and wait for a " +
-        "real choice; a dismissal is not consent.",
-    );
-  }
   // Nor is the conductor's OWN decision an approval. The presence guard below
   // proves a human is in the session; it cannot prove this choice is theirs, so
   // a self-attributed approval ("CONDUCTOR DEFAULT, session unattended") would
@@ -2575,6 +2724,25 @@ function handleApprove(args: string[]): void {
         "let them answer; if a completion precondition is blocking you, surface that blocker at " +
         "the gate instead of recording a decision on their behalf.",
     );
+  }
+  if (!autonomousDecision && !humanPresenceGuardDisabled()) {
+    const rawRevisionCount = getField(content, "Revision Count");
+    const parsedRevisionCount = rawRevisionCount ? parseInt(rawRevisionCount, 10) : 0;
+    const revisionCount = Number.isFinite(parsedRevisionCount) ? parsedRevisionCount : 0;
+    const matchesOfferedApproval =
+      approvalInput === "Approve" ||
+      (approvalInput === "Accept as-is" && revisionCount >= 3);
+    if (!matchesOfferedApproval) {
+      const cancellation = isNonAnswer(approvalInput)
+        ? " The reply is cancellation boilerplate, not consent."
+        : "";
+      error(
+        `Refusing to approve "${slug}": received reply ${formatReceivedReply(approvalInput)} ` +
+          `did not match an offered choice at the held gate.${cancellation} ` +
+          "Re-present the original held gate with every offered choice and wait for the human " +
+          "to choose one.",
+      );
+    }
   }
 
   // Artifact guard (issue #366): a stage cannot be approved without evidence of
@@ -2614,17 +2782,13 @@ function handleApprove(args: string[]): void {
   // open gate but never recorded (it skipped the `reject` verb). When the ledger
   // proves the human revised this stage's artifact at the open gate with no
   // recorded reject (unrecordedRevisionSinceGateOpen), backfill the missing
-  // GATE_REJECTED + STAGE_REVISING pair (tagged Recovered) and re-open the gate,
-  // then fall through to the normal approve below. RECONCILIATION, never refusal:
-  // a forced retroactive reject would consume the human-presence freshness
-  // boundary (the HUMAN_TURN this gate's approval depends on) and refuse the
-  // approval the human already gave, so we record the missing history and honour
-  // the approval unless another completion precondition refuses it. The
-  // intermediate [R] checkbox never hits disk; a reviewer refusal persists the
-  // incremented revision count while leaving the gate at its existing [?].
+  // GATE_REJECTED + STAGE_REVISING pair (tagged Recovered) and persist [R].
+  // A reviewer-bearing stage must then obtain a fresh post-rejection receipt
+  // before this command may emit the recovered gate re-entry. When that guard
+  // refuses, the durable [R] state routes the conductor through normal `revise`
+  // after review instead of leaving an invalid [?] gate open.
   // Skipped under the off-switch and in autonomous Construction (no human at the
   // gate, so no human-driven revision to reconcile).
-  let recoveredRevision = false;
   if (
     !revisionBackstopDisabled() &&
     !autonomousDecision &&
@@ -2634,6 +2798,8 @@ function handleApprove(args: string[]): void {
     const priorParsed = priorCount ? parseInt(priorCount, 10) : 0;
     const revCount = (Number.isFinite(priorParsed) ? priorParsed : 0) + 1;
     content = setField(content, "Revision Count", String(revCount));
+    content = setCheckbox(content, slug, "revising");
+    content = setField(content, "Last Updated", isoTimestamp());
     // Audit-first: a failed emission aborts before any state write (matches the
     // GATE_APPROVED/STAGE_COMPLETED try/catch below).
     try {
@@ -2649,24 +2815,46 @@ function handleApprove(args: string[]): void {
         "Revision count": String(revCount),
         Recovered: "true",
       });
+    } catch (e) {
+      error(`Audit emission failed: ${errorMessage(e)}`);
+    }
+    writeStateFile(pd, content);
+    verifySummaryConfirmationPrecondition(pd, content, stage);
+    if (!reviewerGateGuardDisabled()) {
+      verifyReviewerPrecondition(pd, content, stage, "present-approval-gate");
+    }
+    try {
       emitAudit(pd, "STAGE_AWAITING_APPROVAL", {
         Stage: slug,
         Recovered: "true",
         Details: "Re-entering gate after backfilled revision",
       });
-      recoveredRevision = true;
     } catch (e) {
       error(`Audit emission failed: ${errorMessage(e)}`);
     }
+    content = setCheckbox(content, slug, "awaiting-approval");
+    content = setField(content, "Last Updated", isoTimestamp());
+    writeStateFile(pd, content);
   }
 
-  // Run after the revision backstop: a recovered GATE_REJECTED invalidates the
-  // receipt that preceded the unrecorded artifact revision. The backfilled audit
-  // rows and revision count remain as the consistent reopened-gate state if
-  // this check refuses.
-  if (recoveredRevision) writeStateFile(pd, content);
   verifySummaryConfirmationPrecondition(pd, content, stage);
+  verifyPipelineLinkPrecondition(pd, stage);
   verifyReviewerPrecondition(pd, content, stage);
+
+  // Scope is required for next-stage derivation. Validate it before persisting
+  // approval: a post-write routing failure would otherwise leave `[x]` as a
+  // durable but incomplete approval and make crash recovery security-sensitive.
+  const scope = getField(content, "Scope");
+  if (!scope) {
+    error(
+      `State file has no Scope field. Refusing to advance after approve — fix the state file first.`,
+    );
+  }
+  if (!validScopes().has(scope)) {
+    error(
+      `State file has invalid Scope "${scope}". Valid scopes: ${[...validScopes()].join(", ")}.`,
+    );
+  }
 
   const timestamp = isoTimestamp();
 
@@ -2695,20 +2883,6 @@ function handleApprove(args: string[]): void {
   }
 
   writeStateFile(pd, content);
-
-  // Auto-advance or complete-workflow. Scope is required for next-stage
-  // derivation; refuse silent fallback (matches handleAdvance/handleCompleteWorkflow).
-  const scope = getField(content, "Scope");
-  if (!scope) {
-    error(
-      `State file has no Scope field. Refusing to advance after approve — fix the state file first.`
-    );
-  }
-  if (!validScopes().has(scope)) {
-    error(
-      `State file has invalid Scope "${scope}". Valid scopes: ${[...validScopes()].join(", ")}.`
-    );
-  }
 
   // No explicit consume step (ledger-event design): the GATE_APPROVED
   // emitted by this commit IS the freshness boundary for the next gate. A second
@@ -2755,30 +2929,24 @@ function parseApproveFlags(args: string[]): { userInput?: string } {
   };
 }
 
-// reject <slug> [--feedback <text>] — transition [?] → [R], emit GATE_REJECTED + STAGE_REVISING, increment Revision Count.
-// Also accepts [-]: gate-start is optional before the human prompt, so a
-// rejection may arrive with no open gate. The reject self-heals by emitting
-// the missing STAGE_AWAITING_APPROVAL (tagged Recovered=true) ahead of the
-// rejection pair — mirroring report's approve-side gate backfill.
+// reject <slug> [--user-input <exact-choice>] [--feedback <text>] — transition
+// [?] or [-] → [R], emit GATE_REJECTED + STAGE_REVISING, and increment Revision
+// Count. The direct Active → Revising path deliberately does not fabricate a
+// recovered approval gate: a persisted rejection is valid when gate-start was
+// skipped, while STAGE_AWAITING_APPROVAL describes only a gate that passed its
+// opening guards.
 function handleReject(args: string[]): void {
-  if (args.length < 1) error("Usage: aidlc-state.ts reject <slug> [--feedback <text>]");
+  if (args.length < 1) {
+    error(
+      'Usage: aidlc-state.ts reject <slug> [--user-input "Request Changes"] ' +
+        "[--feedback <text>]",
+    );
+  }
   const slug = args[0];
-  const feedback = getFlagValue(args.slice(1), "--feedback")?.trim();
-  if (!feedback) {
-    error(
-      `Refusing to reject "${slug}": --feedback must contain the human's requested changes.`,
-    );
-  }
-  // Same non-answer floor as approve: a dismissed gate question is neither an
-  // approval nor a change request — it must not commit GATE_REJECTED and spin
-  // the revision loop on cancellation boilerplate.
-  if (isNonAnswer(feedback)) {
-    error(
-      `Refusing to reject "${slug}": --feedback "${feedback}" is cancellation boilerplate, not a ` +
-        "change request. If the human dismissed the gate question, re-present it and wait for a " +
-        "real choice.",
-    );
-  }
+  const decision = getFlagValue(args.slice(1), "--user-input")?.trim();
+  const feedback =
+    (getFlagValue(args.slice(1), "--feedback") ??
+      getFlagValue(args.slice(1), "--reason"))?.trim();
 
   const pd = resolveProjectDir(projectDir);
   // C2b lost-update safety: validate→increment Revision Count→emit-audit→write
@@ -2794,7 +2962,34 @@ function handleReject(args: string[]): void {
   if (!stage) error(`Unknown stage: ${slug}`);
   const autonomousDecision = isAutonomousConstructionDecision(content, stage.phase);
   validateSlugInState(content, slug, ["awaiting-approval", "in-progress"]);
-  const gateWasMissing = getSlugState(content, slug) === "in-progress";
+  if (
+    !autonomousDecision &&
+    !humanPresenceGuardDisabled() &&
+    decision !== "Request Changes"
+  ) {
+    const cancellation = isNonAnswer(decision)
+      ? " The reply is cancellation boilerplate, not a decision."
+      : "";
+    error(
+      `Refusing to reject "${slug}": received reply ${formatReceivedReply(decision)} did not ` +
+        `match an offered choice at the held gate.${cancellation} ` +
+        "Re-present the original held gate with every offered choice and wait for the human " +
+        "to choose one.",
+    );
+  }
+  if (!feedback) {
+    error(
+      `Refusing to reject "${slug}": Request Changes requires nonblank revision feedback in ` +
+        "--feedback (or --reason through aidlc-orchestrate.ts report).",
+    );
+  }
+  if (isNonAnswer(feedback)) {
+    error(
+      `Refusing to reject "${slug}": revision feedback ${formatReceivedReply(feedback)} is ` +
+        "cancellation boilerplate. Re-present the original held gate with every offered choice " +
+        "and wait for the human to choose one.",
+    );
+  }
 
   const autonomousMode = isAutonomousMode(content);
   const recoveryResetNeedsHuman =
@@ -2853,16 +3048,6 @@ function handleReject(args: string[]): void {
   content = setField(content, "Last Updated", timestamp);
 
   try {
-    if (gateWasMissing) {
-      // Backfill the gate row the optional gate-start would have written, so
-      // the audit trail keeps its STAGE_AWAITING_APPROVAL → GATE_REJECTED
-      // order. The intermediate [?] never needs to hit disk — one state write
-      // below lands the final [R].
-      emitAudit(pd, "STAGE_AWAITING_APPROVAL", {
-        Stage: slug,
-        Recovered: "true",
-      });
-    }
     const rejFields: Record<string, string> = {
       Stage: slug,
       Feedback: feedback,
@@ -2897,6 +3082,9 @@ function handleRevise(args: string[]): void {
   validateSlugInState(content, slug, "revising");
   verifyStageArtifacts(pd, stage);
   verifySummaryConfirmationPrecondition(pd, content, stage);
+  if (!reviewerGateGuardDisabled()) {
+    verifyReviewerPrecondition(pd, content, stage, "present-approval-gate");
+  }
 
   content = setCheckbox(content, slug, "awaiting-approval");
   const timestamp = isoTimestamp();
@@ -3655,13 +3843,15 @@ function handlePracticesPromote(args: string[]): void {
 }
 
 // reuse-artifact <slug> --decision <keep|modify|redo> --artifacts <csv>
+//   [--repo <repo>]
 function handleReuseArtifact(args: string[]): void {
   if (args.length < 1)
-    error("Usage: aidlc-state.ts reuse-artifact <slug> --decision <keep|modify|redo> --artifacts <csv>");
+    error("Usage: aidlc-state.ts reuse-artifact <slug> --decision <keep|modify|redo> --artifacts <csv> [--repo <repo>]");
   const slug = args[0];
   const rest = args.slice(1);
   const decision = getFlagValue(rest, "--decision");
   const artifacts = getFlagValue(rest, "--artifacts");
+  const repo = getFlagValue(rest, "--repo");
   if (!decision) error("Missing --decision <keep|modify|redo>");
   if (!artifacts) error("Missing --artifacts <csv>");
 
@@ -3678,16 +3868,24 @@ function handleReuseArtifact(args: string[]): void {
   const pd = resolveProjectDir(projectDir);
 
   try {
-    emitAudit(pd, "ARTIFACT_REUSED", {
+    const fields: Record<string, string> = {
       Stage: slug,
       Decision: decision,
       Artifacts: artifacts,
-    });
+    };
+    if (repo) fields.Repo = repo;
+    emitAudit(pd, "ARTIFACT_REUSED", fields);
   } catch (e) {
     error(`Audit emission failed: ${errorMessage(e)}`);
   }
 
-  console.log(JSON.stringify({ slug, decision, artifacts, emitted: "ARTIFACT_REUSED" }));
+  console.log(JSON.stringify({
+    slug,
+    decision,
+    artifacts,
+    ...(repo ? { repo } : {}),
+    emitted: "ARTIFACT_REUSED",
+  }));
 }
 
 function handleLookup(args: string[]): void {

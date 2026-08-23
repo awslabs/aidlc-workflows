@@ -45,6 +45,7 @@ scopes:
   - feature
   - mvp
   - infra
+  - classic
   - workshop
 inputs: <record>/aidlc-state.md + (brownfield) reverse-engineering evidence
 outputs: "team-practices.md, discovered-rules.md, evidence.md, practices-discovery-timestamp.md, plus one contribution file per support agent. On affirmation, content is promoted to aidlc/spaces/<active-space>/memory/team.md and project.md."
@@ -119,8 +120,8 @@ Each support agent writes:
 `<record>/inception/practices-discovery/contributions/<agent-slug>.md`
 
 The first line must be `**Collaborator:** <agent-slug>`, followed by
-`## Contribution` and `## Positions` as defined by `stage-protocol.md` section
-11. Collect all three files before the interview. Their presence and identity
+`## Contribution` and `## Positions` as defined by
+`stage-protocol-ensemble.md` §11. Collect all three files before the interview. Their presence and identity
 markers are deterministic completion evidence checked by the engine.
 
 ### Step 4: Interview (Always)
@@ -210,7 +211,8 @@ Run the section 13 learnings ritual, then:
 4. STOP and wait for the human response.
 5. Carry the exact answer only into the matching `report` or promotion path
    below; never call `aidlc-log.ts answer` for this gate.
-6. On Request Changes, report `--result rejected --user-input "<feedback>"`,
+6. On Request Changes, report `--result rejected --user-input "Request Changes"
+   --reason "<feedback>"`,
    revise through the lead (and re-run a support only when its evidence must be
    refreshed), then report `--result revised` before re-presenting the gate.
    A rejection invalidates any earlier promotion receipt: the engine refuses

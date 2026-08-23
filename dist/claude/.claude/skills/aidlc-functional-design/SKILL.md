@@ -31,7 +31,14 @@ that flag without this skill.
    exactly as the directive describes; do not load the conductor persona by hand,
    the engine delivers it.
 
-2. When the stage's work is done, commit the single-stage record:
+2. Before acting on the directive, read
+   `.claude/aidlc-common/protocols/stage-protocol.md`. Then read every
+   `.claude/aidlc-common/protocols/stage-protocol-<module>.md` named by
+   `directive.protocol_modules`. Load every listed module before reading the
+   stage body or running its topology; skip only a module already loaded earlier
+   in this session.
+
+3. When the stage's work is done, commit the single-stage record:
 
    ```bash
    bun .claude/tools/aidlc-orchestrate.ts report --single --stage functional-design --result completed

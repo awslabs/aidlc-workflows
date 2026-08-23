@@ -1,7 +1,7 @@
 // t221-reviewer-scope-hook: the deterministic PreToolUse enforcement of the
-// per-unit reviewer read-scope bound (stage-protocol 12a).
+// per-unit reviewer read-scope bound (stage-protocol-reviewer.md §12a).
 //
-// covers: hook:aidlc-reviewer-scope, file:aidlc-common/protocols/stage-protocol.md §12a,
+// covers: hook:aidlc-reviewer-scope, file:aidlc-common/protocols/stage-protocol-reviewer.md §12a,
 // file:harness/kiro/hooks/aidlc-kiro-adapter.ts, file:skills/aidlc/SKILL.md reviewer bullet
 //
 // Three layers, matching the hook's structure:
@@ -681,9 +681,14 @@ describe("t221 (c) harness registration and protocol prose", () => {
     }
   });
 
-  test("stage-protocol 12a carries the dispatch-record write (step 1) and delete (step 3)", () => {
+  test("reviewer protocol module carries the dispatch-record write and delete", () => {
     const body = readFileSync(
-      join(AIDLC_SRC, "aidlc-common", "protocols", "stage-protocol.md"),
+      join(
+        AIDLC_SRC,
+        "aidlc-common",
+        "protocols",
+        "stage-protocol-reviewer.md",
+      ),
       "utf-8",
     );
     expect(body).toContain(".aidlc-reviewer-dispatch.json");
@@ -696,14 +701,13 @@ describe("t221 (c) harness registration and protocol prose", () => {
     expect(body).toMatch(/Read verdict.*delete `<record>\/\.aidlc-reviewer-dispatch\.json`/s);
   });
 
-  test("harnesses with reviewer-scope enforcement carry the dispatch-record instruction", () => {
+  test("harnesses with reviewer-scope enforcement point at the shared module", () => {
     for (const harness of HARNESS_MATRIX.filter(
       (entry) => entry.capabilities.reviewerScopeRegistration !== "unsupported",
     )) {
       const body = readFileSync(join(harness.authoredRoot, "skills", "aidlc", "SKILL.md"), "utf-8");
       const labelled = `harness ${harness.name}: ${body}`;
-      expect(labelled).toContain(".aidlc-reviewer-dispatch.json");
-      expect(labelled).toContain("Delete the dispatch record");
+      expect(labelled).toContain("stage-protocol-reviewer.md");
     }
   });
 
@@ -712,9 +716,7 @@ describe("t221 (c) harness registration and protocol prose", () => {
       join(REPO_ROOT, "harness", "kiro-ide", "skills", "aidlc", "SKILL.md"),
       "utf-8",
     );
-    expect(body).toContain("read-scope bound is prose-only on this harness");
-    expect(body).toContain("no IDE reviewer-scope hook consumes that record");
-    expect(body).toContain("shared protocol makes its dispatch-record steps conditional");
+    expect(body).toContain("stage-protocol-reviewer.md");
     expect(body).not.toContain(".aidlc-reviewer-dispatch.json");
     expect(body).not.toContain("reviewer-scope PreToolUse hook enforces");
   });

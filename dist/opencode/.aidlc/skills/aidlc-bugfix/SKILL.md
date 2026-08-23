@@ -20,7 +20,14 @@ engine owns all routing; the conductor persona arrives on the first directive's
 ## The loop
 
 1. `directive = bun .aidlc/tools/aidlc-orchestrate.ts next --scope bugfix $ARGUMENTS`
-2. Act on `directive.kind` exactly as the orchestrator does (run-stage / ask / print / error / done) — see `aidlc-common/protocols/stage-protocol.md`.
+2. Before acting on each directive, read
+   `.aidlc/aidlc-common/protocols/stage-protocol.md` once per session,
+   then read every
+   `.aidlc/aidlc-common/protocols/stage-protocol-<module>.md` named by
+   `directive.protocol_modules`. Load every listed module before acting; skip
+   only a module already loaded earlier in this session. Then act on
+   `directive.kind` exactly as the orchestrator does (run-stage / invoke-swarm /
+   ask / print / error / done).
 3. `bun .aidlc/tools/aidlc-orchestrate.ts report --stage <directive.stage> --result <outcome> [--user-input "<text>"]` when the directive names a stage; omit `--stage` only for non-stage report round-trips.
 4. Repeat from step 1 until `directive.kind == done`.
 

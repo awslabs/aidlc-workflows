@@ -115,7 +115,7 @@ current batch until every applicable Unit has all of that evidence, then permits
 a dependent batch or the single stage gate. Waves never apply under
 `Construction Iteration: unit-major`; harnesses without a parallel dispatch
 primitive process the entries serially. See
-`stage-protocol.md` §3 "Per-unit batch waves" for the full contract.
+`stage-protocol-construction.md` § "Per-unit batch waves" for the full contract.
 
 **Parallel batches.** When two or more Units share dependency-satisfaction
 and don't depend on each other, the conductor dispatches their Code
@@ -129,7 +129,7 @@ a default gated run does not record them.
 of autonomy mode. Options are retry (re-run just the failed Bolt), skip
 (mark `[S]` and continue — dependent Bolts may also fail), or abort.
 Successful siblings in a parallel batch keep their `[x]` status and
-artifacts. See `stage-protocol.md` §1 "Construction Bolt gates" and
+artifacts. See `stage-protocol-construction.md` § "Construction Bolt gates" and
 SKILL.md §CONSTRUCTION Flow for the canonical specification.
 
 ---
@@ -940,15 +940,69 @@ with the aidlc-devsecops-agent providing security testing expertise.
        - Test results (total, passed, failed, skipped)
        - Failure details (test name, assertion, stack trace)
        - Coverage report (if test framework supports it)
+       - `## Loop-Back Log` (only when the failure ladder's rung 3 or 4 fires
+         a loop-back): one `### Loop-back N -- <ISO timestamp>` entry per
+         attempt (Diagnosis / Root-cause stage / Planned fix / Estimated impact).
+         Append-only; survives re-runs (Modify, never Redo, on loop-back
+         re-entry).
 
-    **Failure diagnosis loop (2 attempts):** On failure, if build or tests
-    fail, attempt to diagnose and fix the issue:
-    - Read the error output
-    - Identify the failing code
-    - Apply the fix
-    - Re-run the failing step
-    - If unable to fix after 2 attempts, log the failure in test-results.md
-      and present the issue to the user at the approval gate
+    **Failure-escalation ladder:** On failure, if build or tests fail:
+
+    1. **In-stage fix (max 2 attempts)** -- for root causes inside this
+       stage's own remit (test config, build scripts, environment setup):
+       read the error output, identify the failing configuration or
+       scaffolding, apply the fix, re-run the failing step.
+    2. **Classify and estimate impact** -- when in-stage attempts are exhausted or the
+       diagnosis points upstream: decide whether the root cause lies in
+       generated source or test code -- regardless of defect size -- or a
+       code-generation approach choice (library/version, container image,
+       instance type, algorithm, flag); find a fix in a swappable dimension
+       and ESTIMATE ITS IMPACT (effort, financial cost, risk). Never declare a
+       feasible path out of scope on an impact-unestimated effort assumption.
+    3. **Autonomous bounded loop-back** -- if `Construction Autonomy Mode:
+       autonomous`, an impact-estimated fix exists, and fewer than 3 entries exist under
+       `## Loop-Back Log`: record the diagnosis + impact-estimated fix, jump
+       back to code-generation via the engine, and replay forward through its
+       settlement-aware route per the construction protocol module
+       (`aidlc-common/protocols/stage-protocol-construction.md`),
+       "Build-and-Test failure loop-back". The failed run's gate is not
+       presented; its learnings ritual defers to the eventual passing run.
+    4. **Halt-and-ask** -- gated/unset mode, bound exhausted, or no
+       identifiable fix: log the failure and present the halt-and-ask
+       question from the construction protocol module
+       (`aidlc-common/protocols/stage-protocol-construction.md`) -- the
+       impact-estimated 3-option variant (Retry with fix [estimated impact] /
+       Accept failure / Abort) when a candidate fix exists, or the no-fix
+       2-option variant (Accept failure / Abort) when rung 2 found none.
+
+    **Loop-back replay routing:** If Code Generation never used unit lifecycle
+    receipts, preserved artifacts can take the all-covered `gate: true` fast
+    path; apply the planned fix and deterministic Modify/Keep decisions before
+    that gate. Once any lifecycle row exists, receipt mode is sticky and the
+    jump re-emits per-Unit work: re-mint `unit start` / `unit complete`, apply
+    Modify to targeted Units and Keep to the rest, and run the declared reviewer
+    per Unit. Both paths MUST record a fresh current-attempt
+    `REVIEW_COMPLETED` for every applicable Unit before the settle/approval
+    gate because `STAGE_JUMPED` invalidates all earlier reviews. Under
+    unit-major the autonomous swarm never fires; the replay follows the serial
+    per-Unit walk and still needs no extra human turn.
+
+    The replay repairs the already-approved Code Generation plan. Preserve its
+    Plan Approval `[Answer]:`, record the delta in the Loop-Back Log, and treat
+    gated "Retry with fix" as the human's re-approval of the revised approach.
+
+    **Swarm cheap path:** A jump creates a new exact stage-attempt `Run floor`
+    boundary token, so stale convergence rows cannot count. Discard stale
+    worktrees/branches and run a fresh `prepare`; they cannot be adopted into
+    the new attempt because `finalize` requires its current prepare stamp. Run
+    `check` first. A green Unit can skip a builder turn, but it still needs a
+    terminal current-attempt reviewer receipt in the fresh worktree before it
+    enters `finalize --claimed`; `finalize` verifies that receipt's current
+    artifact fingerprint as well as the attempt stamp.
+
+    Single-stage runs (`--single`) stop at rung 2 -- there is no
+    main-workflow position to move; the impact-estimated options are logged and
+    presented in that run's isolated-run summary.
 
     **On success:** Update the Build and Test Summary with actual results (not
     just instructions).
@@ -982,10 +1036,16 @@ Strictly 2-option: Approve / Request Changes.
   instructions -- it actually runs the build and test commands via Bash and
   captures real results. This is one of the few stages that executes
   real commands against the codebase.
-- **Failure diagnosis loop**: The stage attempts to automatically diagnose and
-  fix failures, with a maximum of 2 attempts. If the fix fails after 2
-  attempts, the failure is logged and surfaced to the user at the approval
-  gate.
+- **Failure-escalation ladder**: In-stage fixes are bounded at 2 attempts;
+  when the root cause lies upstream in generated code or a code-generation
+  approach choice, the stage classifies and estimates the impact of a fix, then either runs
+  the bounded autonomous loop-back to code-generation (max 3, counted by the
+  append-only `## Loop-Back Log` in test-results.md) or presents the impact-estimated
+  halt-and-ask question. See the construction protocol module
+  (`aidlc-common/protocols/stage-protocol-construction.md`),
+  "Build-and-Test failure loop-back". Re-entry is settlement-aware, preserves
+  the approved plan, and cannot reach its gate until every applicable Code
+  Generation Unit has a fresh current-attempt review.
 - **Conditional test types**: Performance tests, security tests, contract
   tests, E2E tests, and accessibility tests are only generated when relevant
   conditions are met (NFR requirements exist, microservice architecture,

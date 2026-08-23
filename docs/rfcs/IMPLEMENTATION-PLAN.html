@@ -141,7 +141,7 @@ build all dists + <code>--check</code>, (5) commit with a specific message + pus
 <div class="steps">
 <ul>
   <li><strong>Context</strong>: units-generation outputs (<code>unit-of-work</code>, <code>unit-of-work-dependency</code>), delivery-planning (shifts to 2.9), CONDITIONAL skip mechanics, rework branch's contract-design.</li>
-  <li><strong>Implement</strong>: new <code>contract-design.md</code> — <code>phase: inception</code>, <code>execution: CONDITIONAL</code> (skip single-unit), <code>reviewer: aidlc-architecture-reviewer-agent</code>, <code>requires_stage: [units-generation]</code>, <code>produces: [contracts, contract-summary, contract-design-questions]</code>, <code>consumes</code>: units-generation outputs + components/requirements, <code>scopes: [enterprise, feature, mvp, workshop]</code>. Renumber delivery-planning 2.8 → 2.9; pre-seed contract-design 2.8. Add contract-design to functional-design.requires_stage.</li>
+  <li><strong>Implement</strong>: new <code>contract-design.md</code> — <code>phase: inception</code>, <code>execution: CONDITIONAL</code> (skip single-unit), <code>reviewer: aidlc-architecture-reviewer-agent</code>, <code>requires_stage: [units-generation]</code>, <code>produces: [contracts, contract-summary, contract-design-questions]</code>, <code>consumes</code>: units-generation outputs + components/requirements, <code>scopes: [enterprise, feature, mvp, classic, workshop]</code>. Renumber delivery-planning 2.8 → 2.9; pre-seed contract-design 2.8. Add contract-design to functional-design.requires_stage.</li>
   <li><strong>Test</strong>: t01/t30/t32; contract-design presence + scope test.</li>
   <li><strong>Commit</strong>: <code>feat: add contract-design stage (inter-unit contracts, inception)</code>.</li>
 </ul>

@@ -1,4 +1,4 @@
-// covers: scope:bugfix, scope:workshop, subcommand:aidlc-utility:scope-table
+// covers: scope:bugfix, scope:classic, subcommand:aidlc-utility:scope-table
 //
 // t30 — Scope-to-Stage Mapping consistency. Migrated from
 // tests/integration/t30-scope-stage-mapping.sh (TAP plan 17). The .sh had no
@@ -7,7 +7,7 @@
 // `aidlc-utility.ts scope-table`), scope-grid.json (the transpose), and
 // stage-graph.json (phase membership) — so the covers ids name the
 // scope-table subcommand that emits the table and the two scopes whose
-// phase-presence shape the .sh load-bears on (bugfix, workshop).
+// phase-presence shape the .sh load-bears on (bugfix, classic).
 //
 // Mechanism: none. Every assertion is a pure structural / data check —
 // read the SHIPPED files (dist/claude/.claude/...), parse JSON / slice the
@@ -42,13 +42,13 @@
 //     .sh 4 (| EXECUTE / Total column)   -> "A4: region carries the | EXECUTE / Total column"
 //   Section B (row count, 1 assert):
 //     .sh 5 (row count == JSON keys)     -> "B: region row count matches scope-grid.json key count"
-//   Section C (per-scope EXECUTE, 9 asserts):
+//   Section C (per-scope EXECUTE, 10 asserts):
 //     .sh 6-14 (one per scope, alpha)    -> "C: <scope> EXECUTE cell matches scope-grid.json"
 //       (one test() per scope: bugfix, enterprise, feature, infra, mvp, poc,
-//        refactor, security-patch, workshop — same 9, same order)
+//        refactor, security-patch, classic, express — same 10, same order)
 //   Section D (phase-presence semantics, 3 asserts):
 //     .sh 15 (bugfix 0 ideation EXEC)    -> "D1: bugfix executes zero ideation-phase stages"
-//     .sh 16 (workshop 0 ideation EXEC)  -> "D2: workshop executes zero ideation-phase stages"
+//     .sh 16 (classic 0 ideation EXEC)  -> "D2: classic executes zero ideation-phase stages"
 //     .sh 17 (bugfix 0 operation EXEC)   -> "D3: bugfix executes zero operation-phase stages"
 //
 // STRONGER than the .sh (kept, not weakened):
@@ -80,10 +80,12 @@ const STAGE_GRAPH_PATH = join(AIDLC_SRC, "tools", "data", "stage-graph.json");
 const BEGIN = "<!-- BEGIN: compiled scope grid";
 const END = "<!-- END: compiled scope grid -->";
 
-// The nine scopes the .sh iterated, in the SAME alphabetical order.
+// The eleven scopes the suite iterates, in alphabetical order.
 const SCOPES = [
   "bugfix",
+  "classic",
   "enterprise",
+  "express",
   "feature",
   "infra",
   "mvp",
@@ -168,13 +170,13 @@ describe("t30 Section B — table row count matches scope-grid.json", () => {
       .filter((l) => /^\| [a-z-]+ /.test(l)).length;
     const jsonCount = Object.keys(readGrid()).length;
     expect(rowCount).toBe(jsonCount);
-    // Cross-check: the data rows are exactly the nine scopes we iterate below.
+    // Cross-check: the data rows are exactly the eleven scopes we iterate below.
     expect(jsonCount).toBe(SCOPES.length);
   });
 });
 
 // =============================================================================
-// Section C — per-scope EXECUTE counts: table cell == grid truth (9 asserts)
+// Section C — per-scope EXECUTE counts: table cell == grid truth (10 asserts)
 // =============================================================================
 describe("t30 Section C — each scope's EXECUTE cell matches scope-grid.json", () => {
   for (const scope of SCOPES) {
@@ -225,7 +227,7 @@ describe("t30 Section D — scope phase-presence semantics (read JSON directly)"
     expect(execCount).toBe(0);
   });
 
-  test("D2: workshop executes zero ideation-phase stages [.sh 16]", () => {
+  test("D2: classic executes zero ideation-phase stages [.sh 16]", () => {
     const grid = readGrid();
     const graph = readGraph();
     const ideationSlugs = graph
@@ -233,9 +235,21 @@ describe("t30 Section D — scope phase-presence semantics (read JSON directly)"
       .map((s) => s.slug);
     expect(ideationSlugs.length).toBeGreaterThan(0);
     const execCount = ideationSlugs.filter(
-      (s) => grid.workshop.stages[s] === "EXECUTE",
+      (s) => grid.classic.stages[s] === "EXECUTE",
     ).length;
     expect(execCount).toBe(0);
+  });
+
+  test("D2b: express executes exactly three operation stages", () => {
+    const grid = readGrid();
+    const graph = readGraph();
+    const operationSlugs = graph
+      .filter((s) => s.phase === "operation")
+      .map((s) => s.slug);
+    const execCount = operationSlugs.filter(
+      (s) => grid.express.stages[s] === "EXECUTE",
+    ).length;
+    expect(execCount).toBe(3);
   });
 
   test("D3: bugfix executes zero operation-phase stages [.sh 17]", () => {

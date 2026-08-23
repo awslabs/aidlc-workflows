@@ -141,16 +141,23 @@ their `single-stage:<slug>` workflow identity.
 Boolean, default `false`. Set `true` on stages that must write **source code to
 the workspace root**, not just planning documents under the per-intent record dir.
 
-Why it exists: a stage's `produces[]` artifacts always resolve to markdown under
-the record dir (the only place the path resolver writes them). So a "do the
-produces exist?" check is satisfied by a `code-generation` stage that wrote its
-`code-generation-plan.md`, `unit-test-instructions.md`, and `code-summary.md`
-but never emitted a line of actual code (issue #366).
+Why it exists: a stage's `produces[]` artifacts normally resolve under the
+record dir, except for space-level stores such as Reverse Engineering's
+per-repository codekb. So a "do the produces exist?" check is satisfied by a
+`code-generation` stage that wrote its `code-generation-plan.md`,
+`unit-test-instructions.md`, and `code-summary.md` but never emitted a line of
+actual code (issue #366).
 `workspace_requires: true` closes that gap: the
 stage-completion artifact guard (`aidlc-state.ts` approve/advance/finalize/
 complete-workflow) additionally requires evidence of real source work outside
 the `aidlc/` workspace tree and the harness directory before the stage may
 complete.
+
+For codekb stages, the same guard follows the active intent's recorded
+repository set. Every recorded repository must have at least one declared
+artifact in its canonical `aidlc/spaces/<space>/codekb/<repo>/` directory;
+misnamed or unrecorded directories do not count. An intent with no recorded
+repositories keeps the legacy any-repo-directory fallback.
 
 How "source work" is detected depends on the workspace:
 - **Git workspace** - the guard asks git, so it can tell this session's code
@@ -235,10 +242,9 @@ not a global assertion that the artifact always exists somewhere:
 > consume of that producer's artifacts becomes moot — there is
 > nothing to require.
 
-**Why the scoped reading.** Every scope except the `all`-execute ones
-(`enterprise`, `feature`, `workshop`) deliberately skips upstream
-stages. A flat global `required: true` would make those scopes
-structurally invalid, which is wrong — they're legitimate operating
+**Why the scoped reading.** Only `enterprise` and `feature` execute every stage;
+all other scopes deliberately skip upstream stages. A flat global
+`required: true` would make those scopes structurally invalid, which is wrong — they're legitimate operating
 modes. The real contract is conditional: "if upstream runs, feed me
 downstream." The stage body already handles the absence case
 gracefully (prose instructions like "if available" or fallbacks from
@@ -345,7 +351,7 @@ On every topology the conductor is the bus: agents never invoke each other —
 only the conductor delegates. The writing model mirrors a real working
 session: everyone writes their own work, the owner collates and edits. Each
 dispatched support agent writes a contribution file
-(`contributions/<agent-slug>.md`, stage-protocol §11 shape with the
+(`contributions/<agent-slug>.md`, `stage-protocol-ensemble.md` §11 shape with the
 identity-marker first line); the lead alone edits the stage's `produces[]`
 artifacts; pipeline links advance the artifacts directly instead. On mob and
 subagent-with-supports stages the contribution files are the completion
@@ -413,9 +419,9 @@ not a stage value — a stage that wants no review deletes its `reviewer:` line;
 `none` exists on the scope `review_cap` and the per-run `--review` override,
 which can silence a declared reviewer without editing stages. The effective
 class at runtime is the LOWEST of stage declaration, the active scope's
-`review_cap` (the shipped `bugfix`, `poc`, and `workshop` scopes cap to
-`advisory`), and the per-run override — a cap or override can lower a class but
-never raise one. Autonomous swarm reviews are exempt from caps and overrides:
+`review_cap` (the shipped `bugfix`, `poc`, `classic`, and `workshop` scopes cap to
+`advisory`, while `express` caps to `none`), and the per-run override — a cap
+or override can lower a class but never raise one. Autonomous swarm reviews are exempt from caps and overrides:
 inside a Bolt the reviewer is the only pre-merge verification, so the declared
 class always applies there. Like the cap, `review_class` requires a `reviewer`
 (schema error `review_class requires a reviewer`).

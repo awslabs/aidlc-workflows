@@ -88,7 +88,7 @@ flowchart TD
     style START fill:#e1bee7,stroke:#7b1fa2
 ```
 
-<!-- Text fallback: Starting a new workflow: use /aidlc feature (known scope) or /aidlc Build a payments API (auto-detect; the first intent auto-births). Managing an existing workflow: /aidlc (resume), /aidlc --status (view progress), /aidlc --stage (jump to stage), /aidlc --phase (jump to phase). Verify setup: /aidlc --doctor (health check). -->
+<!-- Text fallback: Starting a new workflow: use /aidlc classic (known scope) or /aidlc Build a payments API (auto-detect; the first intent auto-births). Managing an existing workflow: /aidlc (resume), /aidlc --status (view progress), /aidlc --stage (jump to stage), /aidlc --phase (jump to phase). Verify setup: /aidlc --doctor (health check). -->
 
 ---
 
@@ -96,7 +96,7 @@ flowchart TD
 
 ### `/aidlc [scope]` — Start with explicit scope
 
-Start a new workflow with one of the enabled scopes. Core ships 9 named scopes; plugins can add more, and `select-plugins` can hide disabled plugin/core scopes from runtime.
+Start a new workflow with one of the enabled scopes. Core ships 11 named scopes; plugins can add more, and `select-plugins` can hide disabled plugin/core scopes from runtime.
 
 **Syntax:**
 
@@ -155,7 +155,7 @@ Force the composer even when a stock scope would match. Works in three moments:
 /aidlc compose            (mid-workflow: re-shape the pending stages)
 ```
 
-**Behavior:** the conductor dispatches the composer agent, which reads your task (or the scan report, or the running workflow's state), runs the read-only `detect` scan, estimates the five implementation-entropy components (intent ambiguity, structural uncertainty, verification entropy, risk, unresolved assumptions - grounded in CodeKB MCP analysis when configured, the workspace scan otherwise), and proposes the minimum viable EXECUTE/SKIP grid with the score breakdown and a reason for every EXECUTE and SKIP. You approve, edit, or reject at a gate. On approve: a stock match births directly; a custom grid is authored as a real scope (two files in the installed tree) and the workflow births on it in the same turn; an in-flight proposal lands as pending-stage suffix flips via the `recompose` verb (under the audit lock, strict-validated, `RECOMPOSED` audited). `--new-scope` forces synthesis; `--report <path>` seeds the triaged findings into the intent. The `/aidlc-compose` skill is a typeable shortcut over the same path. Mid-workflow you can also just say it in chat ("can we skip market research?") - the conductor recognizes a reshape request and routes it through the same gate and verb, no literal `compose` needed (on the non-Claude harnesses the literal verb remains the documented reliable path).
+**Behavior:** the conductor dispatches the composer agent, which reads your task (or the scan report, or the running workflow's state), runs the read-only `detect` scan, estimates the five implementation-entropy components (intent ambiguity, structural uncertainty, verification entropy, risk, unresolved assumptions - grounded in CodeKB MCP analysis when configured, the workspace scan otherwise), and proposes the minimum viable EXECUTE/SKIP grid with the score breakdown and a reason for every EXECUTE and SKIP. You approve, edit, or reject at a gate. On approve: a stock match births directly; a custom grid is authored as a real scope (two files in the installed tree) and the workflow births on it in the same turn. Every front/report proposal carries a nonblank `birthDescription`: exact original task text when supplied, otherwise a report/plan-grounded description. The birth passes it after `--` as one shell-safe argv value; scope-only compose births are forbidden. An in-flight proposal lands as pending-stage suffix flips via the `recompose` verb (under the audit lock, strict-validated, `RECOMPOSED` audited). `--new-scope` forces synthesis; `--report <path>` seeds the triaged findings into the intent. The `/aidlc-compose` skill is a typeable shortcut over the same path. Mid-workflow you can also just say it in chat ("can we skip market research?") - the conductor recognizes a reshape request and routes it through the same gate and verb, no literal `compose` needed (on the non-Claude harnesses the literal verb remains the documented reliable path).
 
 See [Scopes and Depth - The Adaptive Composer](05-scopes-and-depth.md#the-adaptive-composer) for the full flow.
 
@@ -172,6 +172,8 @@ Run with no arguments when a state file exists to resume.
 ```
 
 **Behavior:** Reads `aidlc-state.md`, checks `.aidlc-recovery.md` for corruption, then presents four resume options: resume from checkpoint, redo current stage, jump to stage, or start fresh. See [Session Management](11-session-management.md) for details.
+
+Use `/aidlc --resume` to skip the menu and continue directly from the saved checkpoint. Add `--stage <slug>` when the explicit target should win and route through the normal jump behavior.
 
 If no state file exists, the framework treats this as a new workflow and asks for scope/description.
 
@@ -192,7 +194,8 @@ intent's `aidlc-state.md` with the scope plan.
 It logs the init-sequence events (`WORKFLOW_STARTED`, `WORKSPACE_SCAFFOLDED`,
 `WORKSPACE_SCANNED`, `WORKSPACE_INITIALISED`, plus per-stage
 `STAGE_STARTED`/`STAGE_COMPLETED`). Naming a scope (`/aidlc --scope feature`)
-seeds the initial scope; absent one it defaults to `poc`. To add team knowledge
+seeds the initial scope; absent one it resolves `AWS_AIDLC_DEFAULT_SCOPE`, then
+defaults to `classic`. To add team knowledge
 or guardrails before the first run, edit the shipped `aidlc/spaces/default/memory/`
 files; the space-level `aidlc/knowledge/` directory is created (empty) once the
 first intent exists, and you add free-form files to it from there.
@@ -390,7 +393,7 @@ When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** sect
 ✓ Orphan stage files: 33 graph entries all have files
 ✓ Uncompiled stage files: 0 stage files missing from the compiled graph
 ✓ Enabled plugins: all enabled (no selection); enabled stage counts: aidlc=33
-✓ Scope validation: 9 scopes valid (29 advisories)
+✓ Scope validation: 11 scopes valid
 ✓ Schema validation: 33/33 stages valid
 ✓ Graph references: 122 artifacts + edges resolved
 ✓ Keyword overlap: no conflicts
@@ -588,7 +591,7 @@ Override the test volume strategy independently of depth.
 /aidlc --test-strategy comprehensive
 ```
 
-**Behavior:** Defaults to the current depth level when not specified, unless the scope declares its own default (e.g., workshop defaults to Minimal). When set independently, allows combinations like Standard depth (full artifacts) with Minimal testing (Nyquist model). Updates the `Test Strategy` field in `aidlc-state.md` and logs a `TEST_STRATEGY_CHANGED` audit event.
+**Behavior:** Defaults to the current depth level when not specified, unless the scope declares its own override. When set independently, allows combinations like Standard depth (full artifacts) with Minimal testing (Nyquist model). Updates the `Test Strategy` field in `aidlc-state.md` and logs a `TEST_STRATEGY_CHANGED` audit event.
 
 **Valid values:** `minimal`, `standard`, `comprehensive` (case-insensitive).
 
@@ -627,9 +630,10 @@ frontmatter — `adversarial` (the reviewer refutes the artifact and the lead
 fixes findings across up to `reviewer_max_iterations` passes) or `advisory`
 (one normal-flow review pass; findings are quoted verbatim at the approval gate
 for you to triage). The effective class per stage is the LOWEST of the stage's
-declaration, the scope's `review_cap` (bugfix, poc, and workshop cap to
-`advisory`), and this override — so `--review advisory` turns every remaining
-adversarial loop into a single normal-flow decision-support pass, `--review none` skips
+declaration, the scope's `review_cap` (bugfix, poc, classic, and workshop cap to
+`advisory`; express caps to `none`), and this override — so
+`--review advisory` turns every remaining adversarial loop into a single
+normal-flow decision-support pass, `--review none` skips
 reviewer dispatch entirely, and `--review adversarial` clears the override
 (it cannot raise a class above the stage declaration or the scope cap).
 Autonomous swarm construction is exempt: inside a Bolt the reviewer is the
@@ -908,12 +912,12 @@ Pre-set the default scope for a project. Read from `.claude/settings.json` `env`
 ```json
 {
   "env": {
-    "AWS_AIDLC_DEFAULT_SCOPE": "workshop"
+    "AWS_AIDLC_DEFAULT_SCOPE": "classic"
   }
 }
 ```
 
-**Valid values:** `enterprise`, `feature`, `mvp`, `poc`, `bugfix`, `refactor`, `infra`, `security-patch`, `workshop`.
+**Valid values:** `enterprise`, `feature`, `mvp`, `poc`, `bugfix`, `refactor`, `infra`, `security-patch`, `classic`, `workshop`, `express`.
 
 **Precedence:** explicit CLI flag > keyword detection > `AWS_AIDLC_DEFAULT_SCOPE` > hard-coded fallback.
 

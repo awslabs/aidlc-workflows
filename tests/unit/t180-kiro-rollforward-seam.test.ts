@@ -22,9 +22,10 @@
 // WHY SUBPROCESS. The seam IS a subprocess shim — it reads/writes files under
 // <cwd>/aidlc/ and signals Kiro purely via stdout + exit code. In-process
 // testing would bypass the exact surface being contracted. No live LLM: the
-// verb-intercept args are recovered deterministically from the expanded prompt
-// body (the `aidlc-orchestrate.ts next <ARGS>` forwarding anchor), and
-// pretool-block reads only the counter/latch files we seed.
+// verb-intercept args are recovered deterministically from either the expanded
+// prompt body's `aidlc-orchestrate.ts next <ARGS>` forwarding anchor or a raw
+// leading `/aidlc` prompt, and pretool-block reads only the counter/latch files
+// we seed.
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -114,6 +115,30 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
     }
   });
 
+  test("1a: raw /aidlc --status dispatches and stamps the read-only-flag latch", () => {
+    const dir = scratchProject();
+    try {
+      const r = runAdapter(dir, "verb-intercept", {
+        prompt: "/aidlc --status",
+        cwd: dir,
+      });
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("SYSTEM (deterministic harness dispatch)");
+      expect(r.stdout).toContain("/aidlc --status");
+      expect(readFileSync(counterPath(dir), "utf-8").trim()).toBe("1");
+      const latch = JSON.parse(readFileSync(latchPath(dir), "utf-8")) as {
+        turn?: number;
+        flag?: string;
+        source?: string;
+      };
+      expect(latch.turn).toBe(1);
+      expect(latch.source).toBe("read-only-flag");
+      expect(latch.flag).toBe("status");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("2: workspace verb (space-create teamB) stamps the workspace-verb latch", () => {
     const dir = scratchProject();
     try {
@@ -121,6 +146,28 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
       expect(r.code).toBe(0);
       expect(r.stdout).toContain("SYSTEM (deterministic harness dispatch)");
       expect(readFileSync(counterPath(dir), "utf-8").trim()).toBe("1");
+      const latch = JSON.parse(readFileSync(latchPath(dir), "utf-8")) as {
+        turn?: number;
+        flag?: string;
+        source?: string;
+      };
+      expect(latch.turn).toBe(1);
+      expect(latch.source).toBe("workspace-verb");
+      expect(latch.flag).toBe("space-create teamB");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("2a: raw /aidlc space-create teamB stamps the workspace-verb latch", () => {
+    const dir = scratchProject();
+    try {
+      const r = runAdapter(dir, "verb-intercept", {
+        prompt: "/aidlc space-create teamB",
+        cwd: dir,
+      });
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("SYSTEM (deterministic harness dispatch)");
       const latch = JSON.parse(readFileSync(latchPath(dir), "utf-8")) as {
         turn?: number;
         flag?: string;
@@ -282,7 +329,32 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
     }
   });
 
-  test("3a: intent creation is not executed off-band without a session id", () => {
+  test("3a: raw non-terminal freeform input preserves the exact forwarding argv", () => {
+    const dir = scratchProject();
+    try {
+      const raw = "add a login page";
+      const r = runAdapter(dir, "verb-intercept", {
+        prompt: `/aidlc ${raw}`,
+        cwd: dir,
+      });
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("SYSTEM (deterministic argument forwarding)");
+      expect(r.stdout).toContain(
+        `bun .kiro/tools/aidlc-orchestrate.ts next ${raw}`,
+      );
+      expect(existsSync(latchPath(dir))).toBe(false);
+      const forwarding = JSON.parse(
+        readFileSync(forwardingPath(dir), "utf-8"),
+      ) as { turn?: number; raw?: string; args?: string[] };
+      expect(forwarding.turn).toBe(1);
+      expect(forwarding.raw).toBe(raw);
+      expect(forwarding.args).toEqual(["add", "a", "login", "page"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("3b: intent creation is not executed off-band without a session id", () => {
     const dir = scratchProject();
     try {
       const raw = 'intent create --scope poc --arguments "build auth"';
@@ -303,7 +375,7 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
     }
   });
 
-  test("3b: positional scope input stamps the complete forwarding vector", () => {
+  test("3c: positional scope input stamps the complete forwarding vector", () => {
     const dir = scratchProject();
     try {
       const raw = 'bugfix "Fix duplicate todos"';
@@ -324,7 +396,7 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
     }
   });
 
-  test("3c: fresh-workspace --scope input is pre-dispatched with exact argv", () => {
+  test("3d: fresh-workspace --scope input is pre-dispatched with exact argv", () => {
     const dir = scratchProject();
     try {
       const raw = '--scope feature "build auth across both repos"';
@@ -347,7 +419,7 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
     }
   });
 
-  test("3d: compose is pre-dispatched instead of relying on a guarded retry", () => {
+  test("3e: compose is pre-dispatched instead of relying on a guarded retry", () => {
     const dir = scratchProject();
     try {
       const r = runAdapter(dir, "verb-intercept", {
@@ -365,7 +437,7 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
     }
   });
 
-  test("3e: explicit stage runner flags are pre-dispatched", () => {
+  test("3f: explicit stage runner flags are pre-dispatched", () => {
     const dir = scratchProject();
     try {
       const r = runAdapter(dir, "verb-intercept", {
@@ -380,6 +452,71 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
       expect(r.stdout).toContain('"stage":"requirements-analysis"');
       expect(r.stdout).toContain('"continue_token"');
       expect(existsSync(forwardingPath(dir))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("3g: raw explicit stage flags are pre-dispatched via the compiled executable", () => {
+    const dir = scratchProject();
+    try {
+      const executable = fakeCompiledExecutable(dir);
+      const r = runAdapter(
+        dir,
+        "verb-intercept",
+        {
+          prompt: "/aidlc --stage reverse-engineering --single",
+          cwd: dir,
+        },
+        { AIDLC_COMPILED_EXECUTABLE: executable },
+      );
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("SYSTEM (deterministic engine pre-dispatch)");
+      expect(r.stdout).toContain("next --stage reverse-engineering --single");
+      expect(existsSync(forwardingPath(dir))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("3h: ordinary and mid-sentence slash text remain inert", () => {
+    for (const prompt of [
+      "Say exactly HELLO and nothing else.",
+      "Explain why /aidlc --status is useful.",
+    ]) {
+      const dir = scratchProject();
+      try {
+        const r = runAdapter(dir, "verb-intercept", { prompt, cwd: dir });
+        expect(r.code, prompt).toBe(0);
+        expect(r.stdout, prompt).toBe("");
+        expect(readFileSync(counterPath(dir), "utf-8").trim(), prompt).toBe(
+          "1",
+        );
+        expect(existsSync(latchPath(dir)), prompt).toBe(false);
+        expect(existsSync(forwardingPath(dir)), prompt).toBe(false);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("3i: expanded-body anchor takes precedence over a leading raw /aidlc line", () => {
+    const dir = scratchProject();
+    try {
+      const r = runAdapter(dir, "verb-intercept", {
+        prompt: `/aidlc --status\n${promptWithNext("space-create teamB")}`,
+        cwd: dir,
+      });
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("SYSTEM (deterministic harness dispatch)");
+      expect(r.stdout).toContain("/aidlc space-create teamB");
+      expect(r.stdout).not.toContain("/aidlc --status");
+      const latch = JSON.parse(readFileSync(latchPath(dir), "utf-8")) as {
+        flag?: string;
+        source?: string;
+      };
+      expect(latch.source).toBe("workspace-verb");
+      expect(latch.flag).toBe("space-create teamB");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

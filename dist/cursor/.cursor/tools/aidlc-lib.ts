@@ -95,8 +95,8 @@ export function isPerUnitStage(e: { slug: string; for_each?: string }): boolean 
 export interface ScopeDefinition {
   depth: string;
   stages: Record<string, "EXECUTE" | "SKIP">;
-  // Optional fields from scope-mapping.json. `testStrategy` is on
-  // workshop; `keywords` drives NL scope inference (see
+  // Optional fields from scope-mapping.json. `testStrategy` can override
+  // the depth-derived default; `keywords` drives NL scope inference (see
   // aidlc-utility.ts inferScopeFromText); `description` is a one-line
   // scope summary rendered into HELP_TEXT.
   testStrategy?: string;
@@ -2579,6 +2579,7 @@ interface ActiveDirectiveResume {
 export interface ActiveDirectiveMarker {
   version: 1 | 2; stage: string; unit?: string; state_sha256: string;
   revision?: number; project_sha256?: string; intent_uuid?: string | null; state_present?: boolean;
+  cursor_harness?: string;
   owner_session?: string; owner_epoch?: number; context_epoch?: number; kind?: ActiveDirectiveKind;
   part?: number; parts?: number; continue_token?: string; continue_token_sha256?: string;
   delivery?: "issued" | "delivered" | "consumed" | "superseded"; needs_rehydrate?: boolean;
@@ -2691,6 +2692,8 @@ function parseActiveDirectiveMarker(parsed: unknown): ActiveDirectiveMarker | nu
   if (
     parsed.version !== 2 || !/^[0-9a-f]{64}$/.test(String(parsed.project_sha256 ?? "")) ||
     (parsed.intent_uuid !== null && typeof parsed.intent_uuid !== "string") || typeof parsed.state_present !== "boolean" ||
+    ("cursor_harness" in parsed &&
+      (typeof parsed.cursor_harness !== "string" || !/^[a-z0-9][a-z0-9._-]*$/i.test(parsed.cursor_harness))) ||
     typeof parsed.owner_session !== "string" || parsed.owner_session.length === 0 ||
     !integer(parsed.revision) || !integer(parsed.owner_epoch) || !integer(parsed.context_epoch) ||
     !integer(parsed.event_sequence) || !integer(parsed.human_sequence) || !integer(parsed.engine_sequence) ||
@@ -2846,10 +2849,12 @@ function freshActiveDirectiveMarker(
   stage: string,
 ): ActiveDirectiveMarker {
   const context = activeDirectiveContext(target, stateContent);
+  const cursorHarness = installedHarnessName(target);
   const owner = `sessionless:${context.projectSha256.slice(0, 16)}`;
   return {
     version: 2, revision: 0, project_sha256: context.projectSha256,
     intent_uuid: context.intentUuid, state_present: context.statePresent, state_sha256: context.stateSha256,
+    ...(cursorHarness ? { cursor_harness: cursorHarness } : {}),
     owner_session: owner, owner_epoch: 0, context_epoch: 0, kind: "error", stage,
     delivery: "superseded", needs_rehydrate: true,
     active_attempt: {
@@ -2888,7 +2893,6 @@ export function writeActiveDirectiveMarker(
     commandKind?: CopilotCommandClaim["commandKind"];
     commandSha256?: string;
     resultSha256?: string;
-    requireCopilotCommit?: boolean;
   },
 ): ActiveDirectiveWriteResult {
   if (!/^[a-z][a-z0-9-]*$/.test(marker.stage)) {
@@ -2903,10 +2907,8 @@ export function writeActiveDirectiveMarker(
   return transactActiveDirective(projectDir, (current, target) => {
     const stateContent = existsSync(target.statePath) ? readFileSync(target.statePath, "utf-8") : null;
     const context = activeDirectiveContext(target, stateContent);
+    const cursorHarness = installedHarnessName(target);
     const copilotOwned = exactCopilotMarker(current, target, context);
-    if (invocation?.requireCopilotCommit && !copilotOwned) {
-      return { marker: current, result: "preserved" as const, preserve: true };
-    }
     const attempt = current?.version === 2 ? current.active_attempt : undefined;
     const matchingAttempt = copilotOwned && attempt?.status === "pending" && invocation?.attemptId !== undefined &&
       attempt.id === invocation.attemptId && attempt.command_kind === invocation.commandKind &&
@@ -2942,6 +2944,7 @@ export function writeActiveDirectiveMarker(
     const next: ActiveDirectiveMarker = {
       ...base,
       revision: nextRevision,
+      ...(cursorHarness ? { cursor_harness: cursorHarness } : {}),
       state_present: context.statePresent,
       state_sha256: marker.state_sha256,
       kind: marker.kind,
@@ -2998,13 +3001,34 @@ export function readActiveDirectiveMarker(
   }
 }
 
-export interface CopilotContinuationSnapshot {
+// Read the shared/sessionless resume wait under the active-directive lock. The
+// marker is read before state while refreshActiveDirectiveMarker uses the same
+// lock after writing state, so a concurrent state transition either linearizes
+// after this evidence or makes the marker/state digest mismatch and fails closed.
+export function hasCurrentSharedResumeWait(projectDir: string): boolean {
+  return transactActiveDirective(projectDir, (marker, target) => {
+    let stateContent: string;
+    try {
+      stateContent = readFileSync(target.statePath, "utf-8");
+    } catch {
+      return { marker, result: false, preserve: true };
+    }
+    const waiting =
+      marker?.version === 2 &&
+      marker.owner_session?.startsWith("sessionless:") === true &&
+      marker.state_sha256 === stateContentSha256(stateContent) &&
+      marker.kind === "ask" &&
+      marker.resume?.status === "waiting" &&
+      getField(stateContent, "Construction Autonomy Mode")?.trim() !== "autonomous";
+    return { marker, result: waiting, preserve: true };
+  });
+}
+
+export interface ContinuationCursorSnapshot {
   target: ActiveDirectiveTarget;
-  authority: "stateless" | "current" | "superseded";
   stateSha256: string;
   statePresent: boolean;
-  markerBytesSha256: string | null;
-  copilotInstalled: boolean;
+  cursorHarness: string | null;
 }
 
 function exactCopilotMarker(
@@ -3013,63 +3037,52 @@ function exactCopilotMarker(
   context: ReturnType<typeof activeDirectiveContext>,
 ): marker is ActiveDirectiveMarker & { version: 2 } {
   return installedHarnessName(target) === "copilot" && marker?.version === 2 &&
+    (marker.cursor_harness === undefined || marker.cursor_harness === "copilot") &&
     !marker.owner_session?.startsWith("sessionless:") &&
     marker.project_sha256 === context.projectSha256 && marker.intent_uuid === context.intentUuid &&
     marker.state_sha256 === context.stateSha256 && marker.state_present === context.statePresent;
 }
 
 function installedHarnessName(target: ActiveDirectiveTarget): string | null {
+  const explicit = process.env.AIDLC_HARNESS_NAME?.trim();
+  if (explicit && /^[a-z0-9][a-z0-9._-]*$/i.test(explicit)) return explicit;
   try {
     const parsed = JSON.parse(readFileSync(
       join(target.canonicalProjectDir, harnessDir(), "tools", "data", "harness.json"),
       "utf-8",
     )) as { name?: unknown };
     return typeof parsed.name === "string" && parsed.name.trim() ? parsed.name.trim() : null;
-  } catch { return null; }
+  } catch {
+    const dir = harnessDir();
+    if (dir === ".aidlc") return "opencode";
+    if (dir === ".kiro") return "kiro";
+    return /^\.[a-z0-9][a-z0-9._-]*$/i.test(dir) ? dir.slice(1) : null;
+  }
 }
 
-export function copilotDirectiveCommitRequired(projectDir: string, stateSha256: string): boolean {
-  try {
-    const target = resolveActiveDirectiveTarget(projectDir);
-    const stateContent = existsSync(target.statePath) ? readFileSync(target.statePath, "utf-8") : null;
-    const context = activeDirectiveContext(target, stateContent);
-    return context.stateSha256 === stateSha256 &&
-      exactCopilotMarker(readActiveDirectiveMarkerRaw(target.markerPath), target, context);
-  } catch { return false; }
-}
-
-export function inspectCopilotContinuation(
+export function inspectContinuationCursor(
   projectDir: string,
   stateContent: string | null,
-  presentedToken: string,
-): CopilotContinuationSnapshot {
+): ContinuationCursorSnapshot {
   const target = resolveActiveDirectiveTarget(projectDir);
   const context = activeDirectiveContext(target, stateContent);
-  const markerSnapshot = readActiveDirectiveMarkerSnapshot(target.markerPath);
-  const marker = markerSnapshot.marker;
-  const copilotInstalled = installedHarnessName(target) === "copilot";
-  const exact = copilotInstalled && exactCopilotMarker(marker, target, context);
-  const current = exact && marker.kind === "load-steering" &&
-    marker.continue_token_sha256 === stateContentSha256(presentedToken);
   return {
     target,
-    authority: !exact ? "stateless" : current ? "current" : "superseded",
     stateSha256: context.stateSha256,
     statePresent: context.statePresent,
-    markerBytesSha256: markerSnapshot.bytesSha256,
-    copilotInstalled,
+    cursorHarness: installedHarnessName(target),
   };
 }
 
-export function advanceCopilotContinuation(
-  snapshot: CopilotContinuationSnapshot,
+export function advanceContinuationCursor(
+  snapshot: ContinuationCursorSnapshot,
   presentedToken: string,
   successor: Omit<CopilotDirectiveMetadata, "continueToken" | "stage"> & {
     stage: string; continue_token?: string; state_sha256: string;
   },
   resultSha256: string,
   attemptId?: string,
-): "advanced" | "stateless" | "superseded" | "drift" {
+): "advanced" | "superseded" | "drift" {
   if (!/^[0-9a-f]{64}$/.test(resultSha256) || successor.state_sha256 !== snapshot.stateSha256) {
     return "drift";
   }
@@ -3083,47 +3096,35 @@ export function advanceCopilotContinuation(
     if (context.stateSha256 !== snapshot.stateSha256 || context.statePresent !== snapshot.statePresent) {
       return { marker: current, result: "drift" as const, preserve: true };
     }
-    if (snapshot.authority === "superseded") {
-      return { marker: current, result: "superseded" as const, preserve: true };
+    const cursorHarness = installedHarnessName(target);
+    if (!cursorHarness || cursorHarness !== snapshot.cursorHarness) {
+      return { marker: current, result: "drift" as const, preserve: true };
     }
-    if (snapshot.authority === "stateless") {
-      if (readActiveDirectiveMarkerSnapshot(target.markerPath).bytesSha256 !== snapshot.markerBytesSha256 && exactCopilotMarker(current, target, context)) {
-        return { marker: current, result: "drift" as const, preserve: true };
-      }
-      const base = current?.version === 2 && current.project_sha256 === context.projectSha256 && current.intent_uuid === context.intentUuid
-        ? current
-        : freshActiveDirectiveMarker(target, stateContent, successor.stage);
-      const token = successor.continue_token;
-      const next: ActiveDirectiveMarker = {
-        ...base,
-        revision: (base.revision ?? 0) + 1,
-        state_present: context.statePresent,
-        state_sha256: successor.state_sha256,
-        kind: successor.kind,
-        stage: successor.stage,
-        ...(successor.unit ? { unit: successor.unit } : { unit: undefined }),
-        ...(successor.part ? { part: successor.part } : { part: undefined }),
-        ...(successor.parts ? { parts: successor.parts } : { parts: undefined }),
-        ...(token ? { continue_token: token, continue_token_sha256: stateContentSha256(token) } : { continue_token: undefined, continue_token_sha256: undefined }),
-        delivery: "issued",
-        needs_rehydrate: !base.owner_session?.startsWith("sessionless:"),
-      };
-      return { marker: next, result: "stateless" as const };
-    }
-    if (!exactCopilotMarker(current, target, context) || current.kind !== "load-steering" ||
-      current.continue_token_sha256 !== stateContentSha256(presentedToken)) {
-      return { marker: current, result: "superseded" as const, preserve: true };
-    }
-    const nextRevision = (current.revision ?? 0) + 1;
-    const pending = current.active_attempt;
+    const exactContext = current?.version === 2 &&
+      current.project_sha256 === context.projectSha256 &&
+      current.intent_uuid === context.intentUuid &&
+      current.state_sha256 === context.stateSha256 &&
+      current.state_present === context.statePresent;
     const inputSha256 = stateContentSha256(presentedToken);
+    if (exactContext && (current.kind !== "load-steering" ||
+      current.continue_token_sha256 !== inputSha256)) {
+      return { marker: current, result: "superseded" as const, preserve: true };
+    }
+    const base = exactContext && current
+      ? current
+      : freshActiveDirectiveMarker(target, stateContent, successor.stage);
+    const nextRevision = (base.revision ?? 0) + 1;
+    const pending = exactContext && current ? current.active_attempt : undefined;
     const matchingAttempt = pending?.status === "pending" && attemptId !== undefined && pending.id === attemptId &&
       pending.command_kind === "continue" && pending.cursor_input_sha256 === inputSha256 &&
-      pending.owner_epoch === current.owner_epoch && pending.context_epoch === current.context_epoch;
+      pending.owner_epoch === base.owner_epoch && pending.context_epoch === base.context_epoch;
     const token = successor.continue_token;
     const next: ActiveDirectiveMarker = {
-      ...current,
+      ...base,
       revision: nextRevision,
+      cursor_harness: cursorHarness,
+      state_present: context.statePresent,
+      state_sha256: successor.state_sha256,
       kind: successor.kind,
       stage: successor.stage,
       ...(successor.unit ? { unit: successor.unit } : { unit: undefined }),
@@ -3131,53 +3132,12 @@ export function advanceCopilotContinuation(
       ...(successor.parts ? { parts: successor.parts } : { parts: undefined }),
       ...(token ? { continue_token: token, continue_token_sha256: stateContentSha256(token) } : { continue_token: undefined, continue_token_sha256: undefined }),
       delivery: "issued",
-      needs_rehydrate: true,
+      needs_rehydrate: !base.owner_session?.startsWith("sessionless:"),
       ...(pending ? { active_attempt: matchingAttempt
         ? { ...pending, result_sha256: resultSha256, result_revision: nextRevision }
         : pending.status === "pending" ? { ...pending, status: "failed" } : pending } : {}),
     };
     return { marker: next, result: "advanced" as const };
-  });
-}
-
-export function markActiveDirectiveResumeWaiting(
-  projectDir: string,
-  stateContent: string,
-  stage: string,
-): boolean {
-  return transactActiveDirective(projectDir, (current, target) => {
-    const context = activeDirectiveContext(target, stateContent);
-    if (current?.version === 2 && !current.owner_session?.startsWith("sessionless:") &&
-      (current.active_attempt?.status !== "pending" || current.active_attempt?.resume_request !== true)) {
-      return { marker: current, result: false, preserve: true };
-    }
-    const marker = current?.version === 2 ? current : freshActiveDirectiveMarker(target, stateContent, stage);
-    const session = marker.active_attempt?.session_id ?? marker.owner_session ?? "sessionless";
-    return {
-      marker: {
-        ...marker,
-        revision: (marker.revision ?? 0) + 1,
-        kind: "ask",
-        stage,
-        unit: undefined,
-        part: undefined,
-        parts: undefined,
-        continue_token: undefined,
-        continue_token_sha256: undefined,
-        state_sha256: context.stateSha256,
-        state_present: true,
-        delivery: "issued",
-        needs_rehydrate: false,
-        resume: {
-          status: "waiting",
-          issuing_stage: stage,
-          issuing_state_sha256: context.stateSha256,
-          issuing_session: session,
-          issuing_intent_uuid: context.intentUuid,
-        },
-      },
-      result: true,
-    };
   });
 }
 
@@ -3436,15 +3396,7 @@ export function settleCopilotCommand(
     if (input.commandKind === "report" && attempt.resume_action && (!canSelectResume || directive.kind === "error")) {
       return { marker: { ...invalidateActiveDirectiveDelivery(base), active_attempt: { ...attempt, status: "failed" } }, result: "settled" as const };
     }
-    if (input.resumeRequest && directive.kind === "ask") {
-      resume = {
-        status: "waiting",
-        issuing_stage: directive.stage ?? marker.stage,
-        issuing_state_sha256: context.stateSha256,
-        issuing_session: input.sessionId,
-        issuing_intent_uuid: context.intentUuid,
-      };
-    } else if (canSelectResume) {
+    if (canSelectResume) {
       resume = {
         status: "selected",
         action: attempt.resume_action,
@@ -3847,6 +3799,16 @@ export function isNonAnswer(text: string | undefined | null): boolean {
   return t.length === 0 || NON_ANSWER_RE.test(t);
 }
 
+const RECEIVED_REPLY_DISPLAY_LIMIT = 120;
+export function formatReceivedReply(text: string | undefined | null): string {
+  const normalized = (text ?? "").trim().replace(/\s+/g, " ") || "(empty)";
+  const display =
+    normalized.length <= RECEIVED_REPLY_DISPLAY_LIMIT
+      ? normalized
+      : `${normalized.slice(0, RECEIVED_REPLY_DISPLAY_LIMIT - 3)}...`;
+  return JSON.stringify(display);
+}
+
 // HUMAN_TURN proves only that a prompt-submit seam fired after the previous
 // resolution. Several harnesses do not expose trusted prompt text, so the
 // framework cannot prove that --user-input/--feedback/--details came from the
@@ -4000,6 +3962,12 @@ export const SUMMARY_CONFIRMATION_CHECKPOINT =
 
 export function summaryConfirmationGuardDisabled(): boolean {
   return process.env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD === "1";
+}
+
+// Test-only bypass for synthetic gate-transition fixtures that intentionally
+// omit reviewer evidence. Completion paths never honor this variable.
+export function reviewerGateGuardDisabled(): boolean {
+  return process.env.AIDLC_SKIP_REVIEWER_GATE_GUARD === "1";
 }
 
 type SummaryConfirmationStage = Pick<
@@ -4764,12 +4732,8 @@ export interface StaleReviewProgress {
 }
 
 export interface FreshReviewReceipts {
-  /** Verdict of the last fresh terminal receipt for the stage (any receipt,
-   *  unit-scoped included), or null when none survives. For NON-per-unit
-   *  stages a later declared-artifact write clears it; for per-unit stages it
-   *  mirrors the historical sawStageReview flag and is NOT cleared by unit
-   *  writes (only the floor resets it) - per-unit freshness lives in
-   *  unitVerdicts. */
+  /** Verdict of the last fresh terminal receipt without a Unit field, or null
+   *  when none survives. Per-unit receipts live only in unitVerdicts. */
   stageVerdict: ReviewVerdict | null;
   /** A terminal stage-level receipt existed in the current attempt but was
    *  invalidated by a later declared-artifact write or fingerprint mismatch. */
@@ -4778,6 +4742,20 @@ export interface FreshReviewReceipts {
    *  artifacts deletes the entry; an ambiguous matching path fails closed by
    *  clearing every unit entry. */
   unitVerdicts: Map<string, ReviewVerdict>;
+  /** Newest Source Fingerprint carried by a receipt with a syntactically valid
+   *  Artifact Fingerprint. Current artifact equality still controls verdict
+   *  freshness independently; fieldless migration receipts do not erase an
+   *  earlier fingerprinted receipt. */
+  newestSourceFingerprint: string | null;
+  /** Unit on the newest terminal source-bound receipt, or null for stage-level. */
+  newestSourceUnit: string | null;
+  /** The newest modern source binding no longer proves the current workspace. */
+  sourceStale: boolean;
+  /** Recovery ordinal/budget state associated with the newest source binding. */
+  sourceStaleProgress: StaleReviewProgress | null;
+  /** A workspace-global source-staleness recovery request has been emitted in
+   *  this attempt. Source binding is global even when receipts are per-unit. */
+  sourceRecoverySpent: boolean;
   /** Units whose terminal receipt was invalidated in the current attempt. */
   unitStale: Set<string>;
   /** Next request ordinal and recovery availability for a stale stage receipt. */
@@ -4974,6 +4952,7 @@ export function freshReviewReceipts(
     reviewer?: string;
     reviewer_max_iterations?: number;
     review_class?: "adversarial" | "advisory";
+    workspace_requires?: boolean;
     produces?: string[];
     optional_produces?: string[];
     produces_kinds?: Record<string, string[]>;
@@ -4987,6 +4966,11 @@ export function freshReviewReceipts(
     stageVerdict: null,
     stageStale: false,
     unitVerdicts: new Map(),
+    newestSourceFingerprint: null,
+    newestSourceUnit: null,
+    sourceStale: false,
+    sourceStaleProgress: null,
+    sourceRecoverySpent: false,
     unitStale: new Set(),
     stageStaleProgress: null,
     unitStaleProgress: new Map(),
@@ -5056,9 +5040,18 @@ export function freshReviewReceipts(
   const unitPending = new Map<string, PendingReviewProgress>();
   const pendingRequests = new Map<
     string,
-    { unit: string | undefined; iteration: number; recovery: boolean }
+    {
+      unit: string | undefined;
+      iteration: number;
+      recovery: boolean;
+      fingerprint: string | null;
+    }
   >();
   let stageVerdict: ReviewVerdict | null = null;
+  let newestSourceFingerprint: string | null = null;
+  let newestSourceUnit: string | null = null;
+  let newestSourceProgress: StaleReviewProgress | null = null;
+  let sourceRecoverySpent = false;
   let stageStale = false;
   let stageStaleProgress: StaleReviewProgress | null = null;
   let stageIteration: number | null = null;
@@ -5082,27 +5075,39 @@ export function freshReviewReceipts(
         stageVerdict = null;
         stageIteration = null;
         stageReceiptRecovery = false;
-      } else if (targetUnit === null) {
-        for (const unit of unitVerdicts.keys()) {
-          unitStale.add(unit);
-          unitStaleProgress.set(unit, {
-            nextIteration: (unitIterations.get(unit) ?? 0) + 1,
-            recoverySpent: unitReceiptRecovery.get(unit) ?? false,
-          });
-        }
-        unitVerdicts.clear();
-        unitIterations.clear();
-        unitReceiptRecovery.clear();
       } else {
-        if (unitVerdicts.delete(targetUnit)) {
-          unitStale.add(targetUnit);
-          unitStaleProgress.set(targetUnit, {
-            nextIteration: (unitIterations.get(targetUnit) ?? 0) + 1,
-            recoverySpent: unitReceiptRecovery.get(targetUnit) ?? false,
-          });
+        if (stageVerdict !== null) {
+          stageStale = true;
+          stageStaleProgress = {
+            nextIteration: (stageIteration ?? 0) + 1,
+            recoverySpent: stageReceiptRecovery,
+          };
         }
-        unitIterations.delete(targetUnit);
-        unitReceiptRecovery.delete(targetUnit);
+        stageVerdict = null;
+        stageIteration = null;
+        stageReceiptRecovery = false;
+        if (targetUnit === null) {
+          for (const unit of unitVerdicts.keys()) {
+            unitStale.add(unit);
+            unitStaleProgress.set(unit, {
+              nextIteration: (unitIterations.get(unit) ?? 0) + 1,
+              recoverySpent: unitReceiptRecovery.get(unit) ?? false,
+            });
+          }
+          unitVerdicts.clear();
+          unitIterations.clear();
+          unitReceiptRecovery.clear();
+        } else {
+          if (unitVerdicts.delete(targetUnit)) {
+            unitStale.add(targetUnit);
+            unitStaleProgress.set(targetUnit, {
+              nextIteration: (unitIterations.get(targetUnit) ?? 0) + 1,
+              recoverySpent: unitReceiptRecovery.get(targetUnit) ?? false,
+            });
+          }
+          unitIterations.delete(targetUnit);
+          unitReceiptRecovery.delete(targetUnit);
+        }
       }
       continue;
     }
@@ -5122,12 +5127,15 @@ export function freshReviewReceipts(
     const requestKey = `${unit ?? ""}\u0000${iterationField}`;
     if (e.event === "REVIEW_REQUESTED") {
       const previous = pendingRequests.get(requestKey);
+      const recovery =
+        previous?.recovery === true ||
+        auditBlockField(e.block, "Recovery") === "stale-receipt";
+      if (recovery) sourceRecoverySpent = true;
       pendingRequests.set(requestKey, {
         unit,
         iteration,
-        recovery:
-          previous?.recovery === true ||
-          auditBlockField(e.block, "Recovery") === "stale-receipt",
+        recovery,
+        fingerprint: auditBlockField(e.block, "Artifact Fingerprint"),
       });
       continue;
     }
@@ -5136,6 +5144,13 @@ export function freshReviewReceipts(
     const request = pendingRequests.get(requestKey);
     if (!request || !pendingRequests.delete(requestKey)) continue;
     const recordedFingerprint = auditBlockField(e.block, "Artifact Fingerprint");
+    const requestedFingerprint = request.fingerprint;
+    const artifactFingerprintUsable =
+      requestedFingerprint !== null &&
+      /^sha256:[0-9a-f]{64}$/.test(requestedFingerprint) &&
+      recordedFingerprint !== null &&
+      /^sha256:[0-9a-f]{64}$/.test(recordedFingerprint) &&
+      recordedFingerprint === requestedFingerprint;
     const currentFingerprint = reviewArtifactFingerprint(
       projectDir,
       stage,
@@ -5143,11 +5158,9 @@ export function freshReviewReceipts(
       { boltDag: options.boltDag },
     );
     const fingerprintUsable =
-      recordedFingerprint !== null &&
-      /^sha256:[0-9a-f]{64}$/.test(recordedFingerprint) &&
-      currentFingerprint !== null;
+      artifactFingerprintUsable && currentFingerprint !== null;
     const fingerprintMatches =
-      fingerprintUsable && recordedFingerprint === currentFingerprint;
+      fingerprintUsable && requestedFingerprint === currentFingerprint;
     const terminalVerdict = request.recovery
       ? verdict
       : terminalReviewVerdict(
@@ -5156,18 +5169,34 @@ export function freshReviewReceipts(
           reviewClass,
           maxIterations,
         );
+    if (artifactFingerprintUsable && terminalVerdict !== null) {
+      // A syntactically valid artifact binding on a TERMINAL receipt makes this
+      // real post-migration source evidence, even if artifacts later changed.
+      // A below-cap NOT-READY is repair progress, not a freshness boundary;
+      // otherwise the expected repair edit would consume recovery prematurely.
+      const sourceFingerprint = auditBlockField(e.block, "Source Fingerprint");
+      if (sourceFingerprint) {
+        newestSourceFingerprint = sourceFingerprint;
+        newestSourceUnit = unit ?? null;
+        newestSourceProgress = {
+          nextIteration: iteration + 1,
+          recoverySpent: request.recovery,
+        };
+      }
+    }
     if (terminalVerdict === null) {
       if (verdict !== "NOT-READY" || !fingerprintUsable) continue;
       const pending: PendingReviewProgress = fingerprintMatches
         ? { state: "repair-required", iteration }
         : { state: "outstanding", iteration: iteration + 1 };
-      stageVerdict = null;
-      stageIteration = null;
-      stagePending = pending;
       if (unit) {
         unitVerdicts.delete(unit);
         unitIterations.delete(unit);
         unitPending.set(unit, pending);
+      } else {
+        stageVerdict = null;
+        stageIteration = null;
+        stagePending = pending;
       }
       continue;
     }
@@ -5189,10 +5218,6 @@ export function freshReviewReceipts(
       }
       continue;
     }
-    stageVerdict = terminalVerdict;
-    stageIteration = iteration;
-    stageReceiptRecovery = request.recovery;
-    stagePending = null;
     if (unit) {
       unitVerdicts.set(unit, terminalVerdict);
       unitStale.delete(unit);
@@ -5201,6 +5226,10 @@ export function freshReviewReceipts(
       unitReceiptRecovery.set(unit, request.recovery);
       unitPending.delete(unit);
     } else {
+      stageVerdict = terminalVerdict;
+      stageIteration = iteration;
+      stageReceiptRecovery = request.recovery;
+      stagePending = null;
       stageStale = false;
       stageStaleProgress = null;
     }
@@ -5211,20 +5240,43 @@ export function freshReviewReceipts(
       state: "retry-required",
       iteration: request.iteration,
     };
-    stageVerdict = null;
-    stageIteration = null;
-    stagePending = pending;
     if (request.unit) {
       unitVerdicts.delete(request.unit);
       unitIterations.delete(request.unit);
       unitPending.set(request.unit, pending);
+    } else {
+      stageVerdict = null;
+      stageIteration = null;
+      stagePending = pending;
     }
   }
+
+  const currentSourceFingerprint =
+    stage.workspace_requires === true && newestSourceFingerprint !== null
+      ? workspaceSourceFingerprint(projectDir)
+      : null;
+  const sourceStale =
+    newestSourceFingerprint !== null &&
+    (newestSourceFingerprint === UNBINDABLE_FINGERPRINT ||
+      currentSourceFingerprint === null ||
+      currentSourceFingerprint !== newestSourceFingerprint);
 
   return {
     stageVerdict,
     stageStale,
     unitVerdicts,
+    newestSourceFingerprint,
+    newestSourceUnit,
+    sourceStale,
+    sourceStaleProgress: sourceStale
+      ? newestSourceProgress === null
+        ? null
+        : {
+            ...newestSourceProgress,
+            recoverySpent: sourceRecoverySpent,
+          }
+      : null,
+    sourceRecoverySpent,
     unitStale,
     stageStaleProgress,
     unitStaleProgress,
@@ -5233,6 +5285,17 @@ export function freshReviewReceipts(
     stagePending,
     unitPending,
   };
+}
+
+// Private refs keep reviewed-source commits reachable until the Bolt is merged
+// or discarded. The commit suffix matters: a later finalize retry must not move
+// the only ref away from an earlier commit already named by an audit row.
+export function reviewedSourceRefPrefix(boltSlug: string): string {
+  return `refs/aidlc/reviewed-source/${boltSlug}/`;
+}
+
+export function reviewedSourceRef(boltSlug: string, commit: string): string {
+  return `${reviewedSourceRefPrefix(boltSlug)}${commit}`;
 }
 
 // --- Multi-repo: repos are siblings of the workspace ----------------------------
@@ -5261,6 +5324,358 @@ export function isValidRepoName(name: string): boolean {
 export function repoDir(projectDir: string, repoName: string): string {
   return join(projectDir, repoName);
 }
+
+// --- Workspace source fingerprint (#629) -----------------------------------
+//
+// A reviewer receipt for a `workspace_requires` stage (code-generation) must be
+// bound to the SOURCE STATE the reviewer actually inspected: workspace writes
+// deliberately emit no audit events (aidlc-audit-logger.ts excludes them), so
+// without a binding a post-review source edit leaves the receipt satisfying the
+// completion guard for code nobody re-reviewed. The binding is a git-native
+// content fingerprint: per repo, a `git write-tree` over a TEMPORARY index
+// seeded from HEAD with `git add -A` applied — the exact tracked + untracked
+// (gitignore-respecting) content state, computed without touching the real
+// index or worktree. Reverting an edit restores the original fingerprint
+// (content-addressed), so an undone change does not strand a receipt.
+//
+// Multi-repo: the intent's recorded repo set (intentRepos), each resolved via
+// repoDir(); no recorded repos = the legacy single-repo default (projectDir).
+// Returns null when ANY target dir is not a usable git checkout. New receipts
+// record that explicitly as `unbindable` and completion fails closed; only a
+// legacy receipt with no fingerprint field keeps the migration fail-open.
+
+// The record tree and the CLI/IDE workspace shell are anchored at the top level
+// of the dir that CARRIES the shell: the workspace roof, or a Bolt worktree
+// (which holds its own record mirror). For a multi-repo intent `aidlc/` is a
+// SIBLING of the repo dirs (resolveConstructionRepo / repoDir) and
+// `.aidlc/worktrees/` (worktreePath) hangs off the roof - neither is ever
+// legitimately inside a fingerprinted repo or submodule, where a directory of
+// those names is application source (#646 review). The trailing slash keeps the
+// pathspec a directory match, so a root FILE named `aidlc` stays in the walk.
+const AIDLC_SHELL_DIR_NAMES = ["aidlc/", ".aidlc/"];
+
+// The sensor cache is the one member of the family that is NOT root-anchored:
+// the type-check sensor anchors `.aidlc-sensors/.tsbuildinfo` at the tsconfig
+// dir (core/tools/aidlc-sensor-type-check.ts's `sensorsDir`), which a
+// monorepo's per-package tsconfig can put anywhere under repoDir. So this one
+// needs a depth-tolerant pathspec while the shell names stay root-anchored.
+//
+// #646 review - the shell/any-depth split is deliberate, not an oversight: an
+// earlier fix applied `**/<name>/**` to ALL four names to close a *reported*
+// nested-.aidlc-sensors leak, but that pathspec matches the literal directory
+// name at ANY depth - including a directory that is genuinely part of the
+// application, coincidentally named `aidlc`/`.aidlc` for reasons unrelated to
+// this framework's own shell (e.g. `src/aidlc/parser.ts`, a real feature named
+// after the methodology). That silently dropped real source from the
+// fingerprint - reproduced: `workspaceSourceFingerprint` was unchanged after
+// adding tracked content under `src/aidlc/`.
+//
+// Depth tolerance is NOT permission to match the leaf name alone (#646 review,
+// later round): a bare `**/.aidlc-sensors/**` excludes ANY directory of that
+// name, so an application tracking source under a dot-prefixed,
+// framework-named directory (`src/.aidlc-sensors/shipped.ts`) could be edited
+// or deleted without moving the fingerprint. Match the cache by the path the
+// engine actually writes instead of by its leaf. Every writer resolves through
+// `sensorsDir()` -> `docsRoot()` -> `intentsDir()` -> `workspaceRoot()`, so the
+// cache is always `<anchor>/aidlc/spaces/<space>/intents[/<record>]/
+// .aidlc-sensors/` - the `<anchor>` is what varies (roof, Bolt worktree, or a
+// monorepo package's tsconfig dir), which is exactly what the leading `**/`
+// absorbs. The inner `/**/` also matches zero directories, covering the flat
+// (no active record) form the type-check anchor produces.
+const AIDLC_SENSOR_CACHE_GLOBS = [
+  ":(glob)**/aidlc/spaces/*/intents/**/.aidlc-sensors/**",
+];
+
+// Git runs a configured `clean` filter as content enters the index, so the tree
+// written below hashes the FILTERED bytes - not the bytes sitting in the
+// worktree. A lossy filter therefore maps two different worktrees onto one
+// fingerprint (#646 review, reproduced: two `app.ts` contents, one tree), and
+// the stage executes against the bytes the reviewer read, so those are what the
+// receipt has to bind. Fold a raw (`--no-filters`) hash of exactly the paths a
+// clean driver touches into the fingerprint.
+//
+// Scoped by attribute AND configured driver, because both are required for a
+// filter to run at all: a `.gitattributes` naming `filter=tidy` is inert unless
+// `filter.tidy.clean` exists in the reader's own config (probed - the trees
+// differ once the driver is removed). That is also why this is not injectable
+// by someone pushing to the repository, and why the scan costs one `check-attr`
+// on a repo that filters nothing. `hash-object` runs WITHOUT `-w`: the oid is
+// computed, never written into the caller's object store.
+//
+// Not covered, deliberately: end-of-line conversion (`core.autocrlf`, `text`,
+// `eol`). It is the one lossy transform that is ubiquitous, and the bytes it
+// hides are line terminators - a semantically null delta - so paying a raw hash
+// for every text file in the tree to bind it is not a trade worth making here.
+function cleanFilteredRawLines(
+  repoDir: string,
+  env: NodeJS.ProcessEnv,
+  paths: string[],
+): { lines: string[]; entries: { path: string; sha: string }[] } | null {
+  if (paths.length === 0) return { lines: [], entries: [] };
+  // Ask Git directly for the effective attributes of every indexed path. A
+  // filesystem pre-scan cannot be authoritative: `.gitattributes` may itself
+  // be ignored while still affecting the worktree, and info/global attributes
+  // live outside the indexed path list. The large buffer matches `ls-files`
+  // below; failure is unbindable, never "no filtered paths".
+  const attr = spawnSync(
+    "git",
+    ["-C", repoDir, "check-attr", "-z", "--stdin", "filter", "ident"],
+    {
+      env,
+      input: paths.join("\0"),
+      encoding: "utf-8",
+      maxBuffer: 512 * 1024 * 1024,
+    },
+  );
+  if (attr.status !== 0) return null;
+  // `-z` output is a flat NUL-separated stream of <path> <attr> <value> triples.
+  const fields = attr.stdout.split("\0");
+  const driverRuns = new Map<string, boolean>();
+  const converted = new Set<string>();
+  for (let i = 0; i + 2 < fields.length; i += 3) {
+    const path = fields[i];
+    const name = fields[i + 1];
+    const value = fields[i + 2];
+    if (!path) continue;
+    if (name === "ident") {
+      // Git's built-in `$Id$` conversion. There is no driver to configure, so
+      // `set` alone means two worktree values collapse onto one indexed blob.
+      if (value === "set") converted.add(path);
+      continue;
+    }
+    // `unspecified`/`unset` mean no driver; `set` is `filter` with no name, so
+    // it names no driver either. Anything else is a driver name.
+    if (value === "unspecified" || value === "unset" || value === "set") continue;
+    let runs = driverRuns.get(value);
+    if (runs === undefined) {
+      const configured = (key: "clean" | "process"): boolean | null => {
+        const cfg = spawnSync(
+          "git",
+          ["-C", repoDir, "config", "--get", `filter.${value}.${key}`],
+          { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+        );
+        if (cfg.status === 0) return cfg.stdout.trim().length > 0;
+        if (cfg.status === 1) return false; // key is simply absent
+        return null;
+      };
+      const clean = configured("clean");
+      const processDriver = configured("process");
+      if (clean === null || processDriver === null) return null;
+      runs = clean || processDriver;
+      driverRuns.set(value, runs);
+    }
+    if (runs) converted.add(path);
+  }
+  const filtered = [...converted];
+  if (filtered.length === 0) return { lines: [], entries: [] };
+  // `--stdin-paths` is newline-delimited with no `-z` counterpart, so a path
+  // containing a newline cannot go through the batch. Those hash one at a time
+  // rather than being dropped - dropping one would restore the very blind spot
+  // this closes.
+  const batch = filtered.filter((p) => !p.includes("\n"));
+  const lines: string[] = [];
+  const entries: { path: string; sha: string }[] = [];
+  if (batch.length > 0) {
+    const raw = spawnSync(
+      "git",
+      ["-C", repoDir, "hash-object", "--no-filters", "--stdin-paths"],
+      {
+        env,
+        input: `${batch.join("\n")}\n`,
+        encoding: "utf-8",
+        maxBuffer: 512 * 1024 * 1024,
+      },
+    );
+    if (raw.status !== 0) return null;
+    const shas = raw.stdout.split("\n").filter((l) => l.length > 0);
+    // A short read means the pairing is ambiguous; binding the wrong sha to a
+    // path is worse than the mismatch a null fingerprint produces.
+    if (shas.length !== batch.length) return null;
+    for (let i = 0; i < batch.length; i++) {
+      lines.push(`raw:${batch[i]}=${shas[i]}`);
+      entries.push({ path: batch[i], sha: shas[i] });
+    }
+  }
+  for (const p of filtered) {
+    if (!p.includes("\n")) continue;
+    const one = spawnSync(
+      "git",
+      ["-C", repoDir, "hash-object", "--no-filters", "--", p],
+      { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+    );
+    if (one.status !== 0) return null;
+    const sha = one.stdout.trim();
+    if (sha.length === 0) return null;
+    lines.push(`raw:${p}=${sha}`);
+    entries.push({ path: p, sha });
+  }
+  return { lines, entries };
+}
+
+// Return the effective filtered paths and their raw worktree blob ids for a
+// caller-owned temporary index. The swarm snapshot uses this to replace the
+// filtered index blobs with the exact bytes the reviewer saw before creating
+// its immutable Source Commit.
+export function filteredRawIndexEntries(
+  repoDir: string,
+  indexFile: string,
+): { path: string; sha: string }[] | null {
+  const env = { ...process.env, GIT_INDEX_FILE: indexFile };
+  const listed = spawnSync("git", ["-C", repoDir, "ls-files", "-s", "-z"], {
+    env,
+    encoding: "utf-8",
+    maxBuffer: 512 * 1024 * 1024,
+  });
+  if (listed.status !== 0) return null;
+  const paths: string[] = [];
+  for (const record of listed.stdout.split("\0")) {
+    const tab = record.indexOf("\t");
+    // Clean/process filters transform regular file content only. Passing a
+    // symlink through `hash-object --no-filters -- <path>` follows its target,
+    // replacing Git's mode-120000 link-text blob with the target file's bytes.
+    // Leave symlinks (and gitlinks) exactly as `git add -A` staged them.
+    if (tab === -1 || !/^100(?:644|755) /.test(record)) continue;
+    const path = record.slice(tab + 1);
+    if (path) paths.push(path);
+  }
+  return cleanFilteredRawLines(repoDir, env, paths)?.entries ?? null;
+}
+
+// `carriesWorkspaceShell` is REQUIRED, never defaulted: a new call site must
+// decide, so the shell exclusion cannot leak into a derived dir by omission.
+function gitTreeFingerprint(repoDir: string, carriesWorkspaceShell: boolean): string | null {
+  if (!isGitRepoDir(repoDir)) return null;
+  const idx = join(
+    tmpdir(),
+    `aidlc-src-fp-${process.pid}-${randomUUID().slice(0, 8)}`,
+  );
+  const env = { ...process.env, GIT_INDEX_FILE: idx };
+  try {
+    // Seed from HEAD so deletions of tracked files change the tree. An unborn
+    // HEAD (fresh init) fails read-tree; the empty temp index is then correct.
+    spawnSync("git", ["-C", repoDir, "read-tree", "HEAD"], { env, encoding: "utf-8" });
+    const add = spawnSync("git", ["-C", repoDir, "add", "-A"], { env, encoding: "utf-8" });
+    if (add.status !== 0) return null;
+    // Drop the aidlc workspace family from the fingerprint, at ANY depth: the
+    // record tree is COMMITTED by design and mutates on every engine action
+    // (the very REVIEW_COMPLETED append this fingerprint is stamped into,
+    // gate rows, state updates), so including it would make every receipt
+    // stale by the time the completion guard recomputes. Record-artifact
+    // freshness is already covered by the audit-event invalidation; this
+    // fingerprint is the APPLICATION SOURCE binding. --ignore-unmatch keeps
+    // this a no-op when nothing matches (sibling repos with no aidlc tree).
+    const excluded = [
+      ...(carriesWorkspaceShell ? AIDLC_SHELL_DIR_NAMES : []),
+      ...AIDLC_SENSOR_CACHE_GLOBS,
+    ];
+    if (excluded.length > 0) {
+      spawnSync(
+        "git",
+        ["-C", repoDir, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", ...excluded],
+        { env, encoding: "utf-8" },
+      );
+    }
+    const wt = spawnSync("git", ["-C", repoDir, "write-tree"], { env, encoding: "utf-8" });
+    if (wt.status !== 0) return null;
+    const sha = wt.stdout.trim();
+    if (sha.length === 0) return null;
+
+    // A submodule is recorded in the tree above as a gitlink (its checked-out
+    // commit sha), so editing its tracked source WITHOUT committing inside the
+    // submodule leaves the gitlink - and therefore `sha` above - unchanged,
+    // shipping a reviewed-then-edited submodule as if nothing had changed.
+    // Fold each INITIALIZED submodule's own fingerprint (recursive - a
+    // submodule can itself nest submodules) into the parent's. An
+    // uninitialized submodule has no materialized content in the workspace,
+    // so it contributes nothing to bind. Gitlinks are read straight off the
+    // temp index (mode 160000 in `ls-files -s`) rather than via `git submodule
+    // status`, which spawns the submodule subsystem and measured 1s+ per call
+    // on Windows - a cost this fingerprint (recomputed on every completion
+    // route) cannot afford.
+    //
+    // `-z` is required, not cosmetic (#646 review): without
+    // it, git's default `core.quotePath` wraps a path containing a non-ASCII
+    // byte or other "unusual" character in double quotes and C-escapes it
+    // (e.g. `"vendor/caf\303\251"` for `vendor/café`) - parsed as a literal
+    // string, that quoted-and-escaped text never resolves to the real
+    // on-disk path, so `isGitRepoDir` silently reports "not a submodule" and
+    // the fingerprint drops it entirely (a reviewed-then-edited submodule at
+    // such a path would ship unreviewed). `-z` disables quoting and
+    // NUL-terminates each record instead of newline-terminating it, so the
+    // path bytes come back exactly as they are on disk.
+    // A large index overruns the default buffer: the call then fails with
+    // ENOBUFS, and every submodule and clean-filtered path drops out of the
+    // fingerprint while the bare tree sha is still returned as if the repo had
+    // neither (#646 review - reproduced at 8,000 tracked paths / 1.68 MB of
+    // listing). Sized well past any index this is expected to meet.
+    const lsFiles = spawnSync("git", ["-C", repoDir, "ls-files", "-s", "-z"], { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 });
+    // Fail closed. A listing that could not be read is not evidence that the
+    // repository has no submodules and no filtered paths, and the caller reads
+    // null as "cannot bind this workspace" rather than as a clean tree.
+    if (lsFiles.status !== 0) return null;
+    const subLines: string[] = [];
+    // The same listing feeds the clean-filter scan below, so binding raw bytes
+    // costs no extra walk of the index.
+    const blobPaths: string[] = [];
+    for (const record of lsFiles.stdout.split("\0")) {
+      const tabIdx = record.indexOf("\t");
+      if (tabIdx === -1) continue;
+      const entryPath = record.slice(tabIdx + 1);
+      if (!entryPath) continue;
+      if (!record.startsWith("160000 ")) {
+        // Attribute filters apply to regular blobs, not mode-120000 symlinks.
+        // Hashing a symlink path with `hash-object --no-filters` follows its
+        // destination, making external target bytes part of the fingerprint.
+        if (/^100(?:644|755) /.test(record)) blobPaths.push(entryPath);
+        continue;
+      }
+      const subDir = join(repoDir, entryPath);
+      if (!isGitRepoDir(subDir)) continue;
+      // A submodule's own `aidlc/` is the submodule's application source.
+      const subFp = gitTreeFingerprint(subDir, false);
+      if (subFp === null) return null;
+      subLines.push(`${entryPath}=${subFp}`);
+    }
+    const raw = cleanFilteredRawLines(repoDir, env, blobPaths);
+    if (raw === null) return null;
+    const rawLines = raw.lines;
+    // A repo with neither submodules nor clean-filtered paths keeps returning
+    // the bare tree sha, so the common workspace's fingerprint is unchanged by
+    // this and receipts stamped before it stay comparable.
+    if (subLines.length === 0 && rawLines.length === 0) return sha;
+    subLines.sort();
+    rawLines.sort();
+    // `raw:` prefixes the filtered-content rows so they cannot be confused with
+    // a submodule row whose path and sha happen to line up.
+    return createHash("sha256")
+      .update([sha, ...subLines, ...rawLines].join("\n"))
+      .digest("hex");
+  } finally {
+    rmSync(idx, { force: true });
+  }
+}
+
+// Recorded in place of a fingerprint when one cannot be computed, so a receipt
+// written against an unbindable workspace stays distinguishable from a
+// pre-#629 receipt that carries no field at all (#646 review).
+export const UNBINDABLE_FINGERPRINT = "unbindable";
+
+export function workspaceSourceFingerprint(projectDir: string): string | null {
+  const repos = intentRepos(projectDir);
+  // No recorded repos: projectDir IS the checkout (legacy single-repo, or a Bolt
+  // worktree - see aidlc-swarm.ts finalize) and carries the shell at its top.
+  if (repos.length === 0) return gitTreeFingerprint(projectDir, true);
+  const lines: string[] = [];
+  for (const name of [...repos].sort()) {
+    // A sibling repo is a child of the roof; the shell is its SIBLING, never
+    // nested inside it, so nothing there belongs to the framework.
+    const sha = gitTreeFingerprint(repoDir(projectDir, name), false);
+    if (sha === null) return null;
+    lines.push(`${name}=${sha}`);
+  }
+  return createHash("sha256").update(lines.join("\n")).digest("hex");
+}
+
 
 // True iff `dir` looks like a git checkout: it holds a `.git` (a directory for a
 // normal clone, OR a file for a submodule / linked worktree). Workspace-internal
@@ -5638,7 +6053,7 @@ export function turnMarkersShowConversational(
 }
 
 // `<root>/.aidlc-reviewer-dispatch.json` — the per-unit reviewer dispatch
-// record. The conductor writes it at stage-protocol 12a step 1 (per-unit
+// record. The conductor writes it at stage-protocol-reviewer.md §12a step 1 (per-unit
 // stages only) before invoking the reviewer sub-agent, and deletes it at step
 // 3 the moment the verdict is read. The reviewer-scope PreToolUse hook reads
 // it back to learn WHICH unit is under review and which contract paths are
@@ -7376,6 +7791,228 @@ export function latestMainWorkflowStageStarted(
   return since;
 }
 
+export interface PipelineLinkReceipt {
+  link: string;
+  repo: string | null;
+  position: string | null;
+  timestamp: string;
+}
+
+export interface PipelineLinkEvidence {
+  links: string[];
+  repos: string[];
+  receipts: PipelineLinkReceipt[];
+  reusedRepos: string[];
+  completed: string[];
+  missing: Array<{ link: string; repo: string | null }>;
+}
+
+export function pipelineLinks(
+  stage: Pick<StageEntry, "lead_agent" | "support_agents">,
+): string[] {
+  return [stage.lead_agent, ...(stage.support_agents ?? [])];
+}
+
+interface OrderedPipelineEvidenceEvent {
+  block: string;
+  position: number;
+  event: string;
+  timestamp: string;
+}
+
+function orderedPipelineEvidenceEvents(
+  projectDir: string,
+): OrderedPipelineEvidenceEvent[] {
+  const audit = readAllAuditShards(projectDir);
+  if (audit.length === 0) return [];
+  return audit
+    .replace(/\r\n/g, "\n")
+    .split(/\n---\n/)
+    .map((block, position): OrderedPipelineEvidenceEvent | null => {
+      const event = auditBlockField(block, "Event");
+      if (!event) return null;
+      return {
+        block,
+        position,
+        event,
+        timestamp: auditBlockField(block, "Timestamp") ?? "",
+      };
+    })
+    .filter((entry): entry is OrderedPipelineEvidenceEvent => entry !== null)
+    .sort((a, b) =>
+      a.timestamp !== b.timestamp
+        ? (a.timestamp < b.timestamp ? -1 : 1)
+        : a.position - b.position
+    );
+}
+
+function pipelineAttemptFloor(
+  events: OrderedPipelineEvidenceEvent[],
+  stageSlug: string,
+  singleRun: boolean,
+): number {
+  const workflow = `single-stage:${stageSlug}`;
+  let floor = -1;
+  for (let i = 0; i < events.length; i++) {
+    const entry = events[i];
+    const eventWorkflow = auditBlockField(entry.block, "Workflow");
+    if (
+      !singleRun &&
+      (
+        entry.event === "WORKFLOW_STARTED" ||
+        entry.event === "STAGE_JUMPED" ||
+        (
+          entry.event === "GATE_REJECTED" &&
+          auditBlockField(entry.block, "Stage") === stageSlug
+        )
+      ) &&
+      !eventWorkflow?.startsWith("single-stage:")
+    ) {
+      floor = i;
+      continue;
+    }
+    if (
+      entry.event === "STAGE_STARTED" &&
+      auditBlockField(entry.block, "Stage") === stageSlug &&
+      (
+        singleRun
+          ? eventWorkflow === workflow
+          : !eventWorkflow?.startsWith("single-stage:")
+      )
+    ) {
+      floor = i;
+    }
+  }
+  return floor;
+}
+
+// Current-attempt pipeline receipts are scoped to either the main workflow or
+// one isolated `--single` stream. A later matching STAGE_STARTED resets that
+// scope; rows from the other scope never participate in order or duplicate
+// checks and can never satisfy its completion guard.
+export function currentPipelineLinkReceipts(
+  projectDir: string,
+  stageSlug: string,
+  options: { singleRun?: boolean } = {},
+): PipelineLinkReceipt[] {
+  const events = orderedPipelineEvidenceEvents(projectDir);
+  const singleRun = options.singleRun === true;
+  const workflow = `single-stage:${stageSlug}`;
+  const floor = pipelineAttemptFloor(events, stageSlug, singleRun);
+  const receipts: PipelineLinkReceipt[] = [];
+  for (let i = floor + 1; i < events.length; i++) {
+    const entry = events[i];
+    const eventWorkflow = auditBlockField(entry.block, "Workflow");
+    if (
+      entry.event !== "PIPELINE_LINK_COMPLETED" ||
+      auditBlockField(entry.block, "Stage") !== stageSlug ||
+      (
+        singleRun
+          ? eventWorkflow !== workflow
+          : eventWorkflow?.startsWith("single-stage:") === true
+      )
+    ) {
+      continue;
+    }
+    const link = auditBlockField(entry.block, "Link");
+    if (!link) continue;
+    receipts.push({
+      link,
+      repo: auditBlockField(entry.block, "Repo"),
+      position: auditBlockField(entry.block, "Position"),
+      timestamp: entry.timestamp,
+    });
+  }
+  return receipts;
+}
+
+function currentPipelineReusedRepos(
+  projectDir: string,
+  stageSlug: string,
+): string[] {
+  const events = orderedPipelineEvidenceEvents(projectDir);
+  const floor = pipelineAttemptFloor(events, stageSlug, false);
+  const reused = new Set<string>();
+  for (let i = floor + 1; i < events.length; i++) {
+    const entry = events[i];
+    if (
+      entry.event !== "ARTIFACT_REUSED" ||
+      auditBlockField(entry.block, "Stage") !== stageSlug ||
+      auditBlockField(entry.block, "Decision") !== "keep" ||
+      auditBlockField(entry.block, "Workflow")?.startsWith("single-stage:")
+    ) {
+      continue;
+    }
+    const repo = auditBlockField(entry.block, "Repo");
+    if (repo) reused.add(repo);
+  }
+  return [...reused];
+}
+
+// Registered multi-repo intents run one independent receipt chain per repo.
+// A current-attempt per-repo reuse row satisfies that repo without dispatch.
+// Single/unrecorded intents retain one chain and may omit Repo on every row.
+export function pipelineLinkEvidence(
+  projectDir: string,
+  stage: Pick<StageEntry, "slug" | "lead_agent" | "support_agents">,
+  options: { singleRun?: boolean } = {},
+): PipelineLinkEvidence {
+  const links = pipelineLinks(stage);
+  const registeredRepos = intentRepos(projectDir);
+  const repos = registeredRepos.length > 1 ? registeredRepos : [];
+  const singleRun = options.singleRun === true;
+  const receipts = currentPipelineLinkReceipts(
+    projectDir,
+    stage.slug,
+    { singleRun },
+  );
+  const reusedRepos = singleRun
+    ? []
+    : currentPipelineReusedRepos(projectDir, stage.slug)
+      .filter((repo) => repos.includes(repo));
+  const missing: Array<{ link: string; repo: string | null }> = [];
+
+  if (repos.length > 0) {
+    for (const repo of repos) {
+      if (reusedRepos.includes(repo)) continue;
+      for (const link of links) {
+        if (!receipts.some((receipt) =>
+          receipt.repo === repo && receipt.link === link
+        )) {
+          missing.push({ link, repo });
+        }
+      }
+    }
+  } else {
+    for (const link of links) {
+      if (!receipts.some((receipt) => receipt.link === link)) {
+        missing.push({ link, repo: null });
+      }
+    }
+  }
+
+  // The directive keeps the compact link-name form for a single chain. A
+  // multi-repo stage qualifies each completed entry so resume can distinguish
+  // independent chains without adding another wire field.
+  const completed = repos.length > 0
+    ? repos.flatMap((repo) =>
+        reusedRepos.includes(repo)
+          ? links.map((link) => `${repo}:${link}`)
+          : links
+            .filter((link) =>
+              receipts.some((receipt) =>
+                receipt.repo === repo && receipt.link === link
+              )
+            )
+            .map((link) => `${repo}:${link}`)
+      )
+    : links.filter((link) =>
+        receipts.some((receipt) => receipt.link === link)
+      );
+
+  return { links, repos, receipts, reusedRepos, completed, missing };
+}
+
 // Exact identity for the current main-workflow attempt of one stage. The token
 // names the latest relevant boundary plus its matching-event ordinal, so two
 // boundaries emitted in the same second still receive different floors.
@@ -7933,7 +8570,7 @@ interface ScopeMetadata {
    *  resolveReviewClass. */
   reviewCap?: "adversarial" | "advisory" | "none";
   /** When true, this scope is the enabled plugin's freeform/default fallback
-   *  (plugin-only installs where the core `feature`/`poc` defaults are
+   *  (plugin-only installs where the core `classic` default is
    *  deselected). At most one enabled scope should set this. */
   freeformDefault?: boolean;
 }
@@ -8049,7 +8686,7 @@ export function loadScopeMetadataAll(): Record<string, ScopeMetadata> {
   return out;
 }
 
-// --- Review-class resolution (stage-protocol §12a) ---
+// --- Review-class resolution (stage-protocol-reviewer §12a) ---
 //
 // Three inputs, one effective class, resolved LOW-WINS along the same
 // precedence idea as the tier cap (aidlc-tiers.ts): the stage declares its
@@ -8216,7 +8853,26 @@ export interface DefaultScopeResolution {
   note?: string;
 }
 
-export function selectionAwareDefaultScope(preferred = "feature"): DefaultScopeResolution {
+// The framework's single hard-coded default scope — the bottom of every
+// default ladder (the engine's scope resolution, `/aidlc-init`, the low-level
+// `intent-create` fallback, and the help-text "(default)" marker). Exactly two
+// things control the implicit default: the AWS_AIDLC_DEFAULT_SCOPE env var
+// (which overrides when set) and this constant (when the var is unset).
+export const DEFAULT_SCOPE = "classic";
+
+// AWS_AIDLC_DEFAULT_SCOPE resolved with the engine ladder's semantics: unset →
+// null; a valid scope → itself; an installed-but-disabled scope → the
+// selection-aware rescue; an unknown value → returned verbatim so the caller's
+// own validation owns the canonical `Unknown scope` error.
+export function envDefaultScope(): string | null {
+  const envScope = (process.env.AWS_AIDLC_DEFAULT_SCOPE || "").trim();
+  if (envScope.length === 0) return null;
+  if (validScopes().has(envScope)) return envScope;
+  if (loadScopeMetadataAll()[envScope] === undefined) return envScope;
+  return selectionAwareDefaultScope(envScope).scope;
+}
+
+export function selectionAwareDefaultScope(preferred: string = DEFAULT_SCOPE): DefaultScopeResolution {
   const scopes = [...validScopes()];
   if (scopes.includes(preferred)) return { scope: preferred };
 
@@ -8270,7 +8926,8 @@ export function selectionAwareDefaultScope(preferred = "feature"): DefaultScopeR
 /**
  * Thin string-returning wrapper over {@link selectionAwareDefaultScope} for
  * callers that just need the resolved scope name. `preferred` is the caller's
- * core-era literal ("feature" for freeform inference, "poc" for intent birth).
+ * core-era literal (DEFAULT_SCOPE, "classic", for both freeform inference and
+ * intent birth).
  * When `preferred` is enabled it wins (stock behaviour preserved); otherwise
  * the nominated freeform default (or the sole enabled plugin's first scope) is
  * returned, falling back to `preferred` when nothing can be chosen.
@@ -8375,11 +9032,12 @@ export function scalarField(fm: string, key: string): string {
   return raw;
 }
 
-// List field parser. Bounds list items strictly to indented `- ` lines so
-// a following `description: >` folded block cannot leak its continuation
-// lines into this list. Requires at least one space after the dash — YAML
-// syntax demands it, and accepting `-foo` silently as `foo` masks user
-// error when adding new agents.
+// List field parser. Accepts block sequences and single-line flow sequences.
+// Bounds block list items strictly to indented `- ` lines so a following
+// `description: >` folded block cannot leak its continuation lines into this
+// list. Requires at least one space after the dash — YAML syntax demands it,
+// and accepting `-foo` silently as `foo` masks user error when adding new
+// agents.
 //
 // Exported so aidlc-rule-schema.ts can reuse the zero-dep YAML primitive
 // (rule frontmatter's `paths:` is a YAML list of strings).
@@ -8389,14 +9047,22 @@ export function listField(fm: string, key: string): string[] {
     "m"
   );
   const m = fm.match(re);
-  if (!m) return [];
-  return m[1]
-    .split(/\r?\n/)
-    .map((l) => {
-      const match = l.match(/^\s*-[ \t]+(.+?)\s*$/);
-      return match ? match[1].replace(/^["']|["']$/g, "") : "";
-    })
-    .filter(Boolean);
+  if (m) {
+    return m[1]
+      .split(/\r?\n/)
+      .map((l) => {
+        const match = l.match(/^\s*-[ \t]+(.+?)\s*$/);
+        return match ? match[1].replace(/^["']|["']$/g, "") : "";
+      })
+      .filter(Boolean);
+  }
+
+  const flowRe = new RegExp(
+    `^${key}:[ \\t]*(\\[[^\\r\\n]*)$`,
+    "m"
+  );
+  const flow = fm.match(flowRe);
+  return flow ? parseInlineDepsList(flow[1]) : [];
 }
 
 // --- Stage frontmatter parse / emit ---
@@ -9038,7 +9704,7 @@ export function nextInScopeStage(
   // take precedence over scope-mapping. The common case (no overrides,
   // or only SKIP overrides) produces byte-identical output to
   // subgraphForScope-based iteration — proven by t66 walk parity across
-  // all 9 scopes. The uncommon case (a hand-edited state file promoting
+  // all 11 scopes. The uncommon case (a hand-edited state file promoting
   // a scope-SKIP stage to EXECUTE) is the power-user escape hatch
   // aidlc-state.ts:276-284's explicit-advance path also honours; keeping
   // both callers consistent on the same input.
@@ -9362,7 +10028,17 @@ export function parseArgs(args: string[]): {
   let i = 0;
   while (i < args.length) {
     if (args[i].startsWith("--")) {
-      const key = args[i].slice(2);
+      const token = args[i].slice(2);
+      const equals = token.indexOf("=");
+      if (equals >= 0) {
+        const key = token.slice(0, equals);
+        const value = token.slice(equals + 1);
+        flags[key] = value;
+        if (value.trim().length === 0) blankFlags.add(key);
+        i++;
+        continue;
+      }
+      const key = token;
       if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
         flags[key] = args[i + 1];
         if (args[i + 1].trim().length === 0) blankFlags.add(key);
@@ -9576,12 +10252,49 @@ function unquoteScalar(s: string): string {
 function parseInlineDepsList(raw: string): string[] {
   const t = raw.trim();
   if (t === "" || t === "[]") return [];
-  if (t.startsWith("[") && t.endsWith("]")) {
-    return t
-      .slice(1, -1)
-      .split(",")
-      .map((s) => unquoteScalar(s))
-      .filter((s) => s !== "");
+  if (t.startsWith("[")) {
+    let close = -1;
+    let quote: "\"" | "'" | null = null;
+    for (let i = 1; i < t.length; i++) {
+      const char = t[i];
+      if (quote !== null) {
+        if (quote === "\"" && char === "\\") {
+          i++;
+        } else if (char === quote) {
+          quote = null;
+        }
+      } else if (char === "\"" || char === "'") {
+        quote = char;
+      } else if (char === "]") {
+        close = i;
+        break;
+      }
+    }
+    if (quote !== null || close === -1) return [];
+    if (!/^[ \t]*(?:#[^\r\n]*)?$/.test(t.slice(close + 1))) return [];
+
+    const body = t.slice(1, close);
+    const items: string[] = [];
+    let start = 0;
+    quote = null;
+    for (let i = 0; i < body.length; i++) {
+      const char = body[i];
+      if (quote !== null) {
+        if (quote === "\"" && char === "\\") {
+          i++;
+        } else if (char === quote) {
+          quote = null;
+        }
+      } else if (char === "\"" || char === "'") {
+        quote = char;
+      } else if (char === ",") {
+        items.push(body.slice(start, i));
+        start = i + 1;
+      }
+    }
+    if (quote !== null) return [];
+    items.push(body.slice(start));
+    return items.map((item) => unquoteScalar(item)).filter((item) => item !== "");
   }
   // Bare scalar (rare) — treat as a one-item list.
   return [unquoteScalar(t)];
@@ -9782,14 +10495,19 @@ function boltDagMatches(a: ResolvedBoltDag, b: ResolvedBoltDag): boolean {
   return true;
 }
 
-// Resolve the active intent's unit DAG. The authored dependency artifact is
-// authoritative whenever it exists: a valid cache is accepted only when its
-// batches and unit kinds still match that artifact. Callers must keep the three
-// states distinct: "none" is a real no-DAG workflow, while "malformed" means
-// the unit set is unknowable and must fail closed.
-export function resolveBoltDag(projectDir: string): BoltDagResolution {
+// Resolve the selected intent's unit DAG (the active intent when no selectors
+// are supplied). The authored dependency artifact is authoritative whenever it
+// exists: a valid cache is accepted only when its batches and unit kinds still
+// match that artifact. Callers must keep the three states distinct: "none" is a
+// real no-DAG workflow, while "malformed" means the unit set is unknowable and
+// must fail closed.
+export function resolveBoltDag(
+  projectDir: string,
+  intent?: string,
+  space?: string,
+): BoltDagResolution {
   let cached: ResolvedBoltDag | null = null;
-  const graphPath = runtimeGraphPath(projectDir);
+  const graphPath = runtimeGraphPath(projectDir, intent, space);
   if (existsSync(graphPath)) {
     try {
       const graph: unknown = JSON.parse(readFileSync(graphPath, "utf-8"));
@@ -9843,7 +10561,7 @@ export function resolveBoltDag(projectDir: string): BoltDagResolution {
     }
   }
 
-  const dependencyPath = unitDependencyPath(projectDir);
+  const dependencyPath = unitDependencyPath(projectDir, intent, space);
   if (!existsSync(dependencyPath)) return cached ?? { state: "none" };
 
   let body: string;

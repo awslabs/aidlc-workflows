@@ -1,9 +1,9 @@
 # Stage Protocol Reference
 
-Human-readable restructuring of the machine-oriented
-`dist/claude/.claude/aidlc-common/protocols/stage-protocol.md`. Preserves all
-rules, conditions, and behaviors while reorganizing for developer consumption.
-Section references (e.g., "Protocol Section 1") map to the source file.
+Human-readable restructuring of the machine-oriented protocol family under
+`dist/claude/.claude/aidlc-common/protocols/`. Preserves all rules, conditions,
+and behaviors while reorganizing for developer consumption. Section references
+map to the static protocol or the named conditional module.
 
 > For stage file *format* (YAML frontmatter, body conventions), see
 > [Stage Definition](15-stage-definition.md). This chapter covers runtime
@@ -21,14 +21,18 @@ Section references (e.g., "Protocol Section 1") map to the source file.
 
 ## Protocol File Structure
 
-The stage protocol is split across three files, loaded conditionally by the
+The stage protocol is split across seven files, loaded conditionally by the
 conductor based on workflow context:
 
 | File | Contents | When Loaded |
 |------|----------|-------------|
-| `stage-protocol.md` | Core protocol: approval gates, completion messages, question flow, state tracking, agent persona loading, depth guidance, terminology, content validation, subagent return formats, and the §13 Learnings Ritual | Every stage (mandatory) |
+| `stage-protocol.md` | Core protocol: approval gates, completion messages, question flow, state tracking, agent persona loading, depth guidance, terminology, content validation, and the §13 Learnings Ritual | Every stage (mandatory) |
 | `stage-protocol-recovery.md` | Error Recovery + Change Handling | On session resume, or when a change event is detected mid-stage |
 | `stage-protocol-governance.md` | Phase Boundary Verification (§13) | At phase boundaries (1.7->2.1, 2.9->3.1, 3.7->4.1) |
+| `stage-protocol-reviewer.md` | Reviewer dispatch, receipts, read scope, terminal ordering, and NOT-READY loop | When the directive names an effective reviewer |
+| `stage-protocol-ensemble.md` | Ensemble topology, subagent returns, contribution files, and objection triage | For subagent, pipeline, mob, or support-agent stages |
+| `stage-protocol-construction.md` | Bolt gates, the Build-and-Test failure loop-back, Construction questions, per-unit iteration, receipts, and waves | On the first Construction directive of the session and every invoke-swarm |
+| `stage-protocol-swarm.md` | Harness-specific autonomous fan-out, convergence, finalize, and reviewer boundary | Every invoke-swarm |
 
 ### Conditional Loading Logic (from SKILL.md Routing)
 
@@ -43,11 +47,22 @@ The conductor's Routing section defines the loading rules:
   (1.7->2.1, 2.9->3.1, 3.7->4.1) to run the Phase Boundary Verification
   traceability check. This limits governance overhead to the points where it
   is needed.
+- **`stage-protocol-reviewer.md`**: load when `protocol_modules` includes
+  `reviewer`, or when the directive carries a reviewer.
+- **`stage-protocol-ensemble.md`**: load when `protocol_modules` includes
+  `ensemble`; the fallback trigger is a dispatched topology or support agents.
+- **`stage-protocol-construction.md`**: load on the first Construction
+  directive of the session and every invoke-swarm.
+- **`stage-protocol-swarm.md`**: load for invoke-swarm.
 
-The split reduces context size during normal stage execution while ensuring
-recovery and governance rules are available when relevant. Capturing in-stage
-corrections as durable Rules is handled by the §13 Learnings Ritual in
-`stage-protocol.md` (loaded every stage), not by a separate governance flow.
+Before running the stage body, the conductor reads every module named by
+`directive.protocol_modules` and skips modules already loaded in the session.
+
+The split reduces fixed context during normal stage execution while ensuring
+rare-path reviewer, ensemble, Construction, swarm, recovery, and governance
+rules are loaded when relevant. Capturing in-stage corrections as durable Rules
+is handled by the §13 Learnings Ritual in `stage-protocol.md` (loaded every
+stage), not by a separate governance flow.
 
 ---
 
@@ -61,9 +76,9 @@ personas; the protocol stays independent of phase and agent, defining
 the structural rules that wrap around any stage's domain-specific work.
 
 The protocol covers: approval gates, completion messages, question flow, state
-tracking, agent persona loading, error recovery, change handling, depth
-guidance, content validation, subagent return formats, the §13 Learnings
-Ritual, and phase boundary verification.
+tracking, agent persona loading, conditional reviewer/ensemble/Construction/
+swarm behavior, error recovery, change handling, depth guidance, content
+validation, the §13 Learnings Ritual, and phase boundary verification.
 
 ### Critical Compliance Checklist
 
@@ -79,7 +94,7 @@ with a fresh timestamp.
 |---|-------|
 | 1 | At the approval gate, call `bun .claude/tools/aidlc-orchestrate.ts report --stage <slug> --result awaiting-approval`. The engine flips state from `[-]` to `[?]` AwaitingApproval and emits `STAGE_AWAITING_APPROVAL` atomically, so status shows the held gate while the prompt is open. (`STAGE_STARTED` / the `[-]` transition was emitted when the stage became active.) |
 | 2 | For non-gate questions, log options BEFORE calling `AskUserQuestion` via `bun .claude/tools/aidlc-log.ts decision` (not by hand-writing to the `audit/` shards), then log the exact response via `aidlc-log.ts answer`. |
-| 3 | After an approval-gate response, call `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"` for approval or `aidlc-orchestrate.ts report --stage <slug> --result rejected --user-input "<feedback>"` for request-changes. Never call `aidlc-log.ts decision` or `aidlc-log.ts answer` for the gate. After revision work, report `--result revised` before re-presenting it. |
+| 3 | After an approval-gate response, call `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"` for approval or `aidlc-orchestrate.ts report --stage <slug> --result rejected --user-input "Request Changes" --reason "<feedback>"` for request-changes. Never call `aidlc-log.ts decision` or `aidlc-log.ts answer` for the gate. After revision work, report `--result revised` before re-presenting it. |
 | 4 | Never summarize user input -- pass exact option labels to the owning log or report tool; for automated stages use `N/A -- [reason]` |
 | 5 | One audit entry per interaction -- the log/state tools enforce single-event emission; never merge multiple events into one call |
 | 6 | At stage end, call `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"` (gated stages) or `report --stage <slug> --result completed` (Initialization). The engine flips `[?]`/`[-]` to `[x]`, emits `GATE_APPROVED` when gated, and emits `STAGE_COMPLETED` atomically through the state tool |
@@ -123,9 +138,33 @@ field (the display name of the next in-scope stage, computed by the engine at
 emit time), or `Complete workflow` when `next_stage` is null. The conductor
 never guesses the next stage.
 
+If a reply matches none of the choices currently shown, the conductor quotes
+the received reply briefly, says that it did not match an offered choice, and
+re-presents every valid choice in the same turn. It does not report a lifecycle
+transition, record a decision, or consume the gate turn for that reply.
+
 **No Emergent Behavior Rule:** Construction and Operation stages (phases 3-4)
 must always use this 2-option format. They must never introduce additional
-navigation options.
+navigation options. Two sanctioned carve-outs exist: the revision escape
+hatch (below) and the Build-and-Test failure loop-back in the construction
+protocol module (`aidlc-common/protocols/stage-protocol-construction.md`,
+"Build-and-Test failure loop-back" -- the bounded 3.6 to 3.5 repair loop with
+its impact-estimated halt-and-ask question).
+
+The loop-back has two deterministic re-entry routes. If Code Generation has
+never used lifecycle receipts, preserved artifacts can settle every Unit and
+the engine may emit the all-covered `gate: true` fast path. Once any lifecycle
+row exists, receipt mode is sticky: the jump invalidates the old settlement
+receipts and the engine re-emits per-Unit work so `unit start` / `unit complete`
+are minted again. Both routes apply the planned fix and deterministic
+Modify/Keep decisions before the gate and MUST produce a fresh
+`REVIEW_COMPLETED` for every applicable Unit, because `STAGE_JUMPED` invalidates
+all earlier reviews and the completion precondition refuses stale coverage.
+Under unit-major the replay stays on this serial walk and never swarms.
+
+Plan Approval is not reopened for this repair. The approved answer and non-empty
+plan survive the jump, the Loop-Back Log records the plan delta, and a gated
+"Retry with fix" answer is the human's re-approval of that revised approach.
 
 ### Conditional 3rd Option
 
@@ -327,7 +366,9 @@ Log the mode choice to the `audit/` shards. Users can switch modes mid-stage.
   matching `aidlc-log.ts answer` command. The receipt binds the human turn to
   the exact questions-file digest. On **Request changes**, ask **"What should
   change?"** and stop again before editing any answer; after feedback and
-  revision, reset the confirmation to blank before re-prompting.
+  revision, reset the confirmation to blank before re-prompting. Any other
+  reply is acknowledged as not matching an offered choice, both valid choices
+  are re-presented in the same turn, and neither the tag nor receipt is written.
 
 #### Edit File (Self-Guided Mode)
 
@@ -550,7 +591,7 @@ Each stage specifies lead and optional support agents. Personas load through
 a 6-step knowledge order building from broad context to stage-specific
 artifacts.
 
-*(Protocol Section 5)*
+*(Static protocol: `stage-protocol.md`, Section 5)*
 
 ### 6-Step Knowledge Loading Order
 
@@ -582,6 +623,8 @@ dynamic per workflow position.
 
 ### Multi-Agent Stages (Ensemble Topologies)
 
+*(Conditional module: `stage-protocol-ensemble.md`, Section 5)*
+
 *How* the conductor brings support agents in follows `directive.mode` — the stage's
 communication topology: on an `inline` stage the support agents are personas the
 conductor loads into its own context (voices, not dispatches); on `subagent`
@@ -595,7 +638,7 @@ them complete. Who sees what differs per topology — spokes are mutually blind,
 links see all upstream work, mob objectors get one confirm-or-maintain round while
 judgment-call objections surface to the human mid-stage — but on every topology the
 conductor performs every delegation; agents never spawn subagents. See
-stage-protocol.md §5 "Multi-agent stages" for the full contract.
+`stage-protocol-ensemble.md` for the full contract.
 
 Example: Feasibility uses `aidlc-architect-agent` (lead) + `aidlc-aws-platform-agent` +
 `aidlc-compliance-agent`, all inline. The mob showcase is `user-stories`: the
@@ -783,20 +826,22 @@ and problem complexity.
 | refactor | Minimal | Minimal | 8 | Targeted |
 | infra | Standard | Standard | ~13 | Infra-focused |
 | security-patch | Minimal | Minimal | ~10 | Security-focused |
-| workshop | Standard | **Minimal** | 26 | Standard depth for learning; Nyquist testing for pace |
+| classic | Standard | Standard | 26 | Default v1-style lifecycle without Ideation |
+| workshop | Standard | Minimal | 26 | Facilitated lifecycle with teaching test floor |
+| express | Minimal | Minimal | 10 | Requirements to conditional deploy, reviewers disabled |
 
 User can override depth or test strategy at any approval gate.
 
 ### Three Depth Levels
 
-**Minimal** (poc, bugfix, refactor, security-patch) -- minimal artifacts,
+**Minimal** (poc, bugfix, refactor, security-patch, express) -- minimal artifacts,
 brief analysis, skip optional stages:
 - Requirements: 5-10 items, brief descriptions, minimal NFRs
 - App Design: single component diagram, basic data model, no ADRs
 - Functional Design: brief business rules, simple entities, skip
   `frontend-components.md`
 
-**Standard** (feature, mvp, infra) -- full artifacts at moderate detail:
+**Standard** (feature, mvp, infra, classic, workshop) -- full artifacts at moderate detail:
 - Requirements: 15-30 with acceptance criteria, moderate NFRs
 - App Design: component diagrams with interactions, relationships, 2-3 ADRs
 - Functional Design: detailed business logic, comprehensive rules, entity
@@ -821,7 +866,7 @@ brief analysis, skip optional stages:
 | **AI-DLC** | AI-Driven Development Life Cycle -- the methodology this system implements |
 | **Phase** | Top-level grouping: Initialization, Ideation, Inception, Construction, Operation |
 | **Stage** | A discrete step within a phase (e.g., Intent Capture, Code Generation) |
-| **Scope** | Controls which stages execute and at what depth (enterprise, feature, mvp, poc, bugfix, refactor, infra, security-patch, workshop) |
+| **Scope** | Controls which stages execute and at what depth (enterprise, feature, mvp, poc, bugfix, refactor, infra, security-patch, classic, workshop, express) |
 | **Depth** | Artifact detail scale: Minimal, Standard, or Comprehensive |
 | **Unit of Work** | An independently implementable package of features; the Construction iteration unit. One pass through stages 3.1-3.7. |
 | **Service** | A deployable process or container (API server, worker, frontend app) |
@@ -888,7 +933,7 @@ Reference patterns:
 When a subagent completes, it must return a structured summary to the
 conductor to ensure no context is lost.
 
-*(Protocol Section 11)*
+*(Conditional module: `stage-protocol-ensemble.md`, Section 11)*
 
 ### Required Format
 
@@ -934,7 +979,7 @@ artifacts and before the §13 Learnings Ritual and the approval gate. The stage
 ritual sequence in full: questions → artifact → reviewer (if declared) →
 learnings → gate.
 
-*(Protocol Section 12a)*
+*(Conditional module: `stage-protocol-reviewer.md`, Section 12a)*
 
 The directive's `review_class` field selects the contract, resolved by the
 engine from three inputs (low-wins): the stage's declared class, the active

@@ -130,6 +130,7 @@ export function withEnvAndFreshCaches<T>(
  */
 export function resetAidlcEnv(): void {
   delete process.env.AWS_AIDLC_DEFAULT_SCOPE;
+  delete process.env.AIDLC_SKIP_SOURCE_FRESHNESS;
 }
 
 /**
@@ -206,7 +207,7 @@ export function runOrchestrateNext(
     env?: Record<string, string | undefined>;
   } = {},
 ): OrchestrateTestResult {
-  let command = ["next", ...args, "--project-dir", proj];
+  let command = ["next", "--project-dir", proj, ...args];
   let stderr = "";
   const steering: Record<string, unknown>[] = [];
 

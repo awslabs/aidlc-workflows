@@ -39,6 +39,7 @@ scopes:
   - enterprise
   - feature
   - mvp
+  - classic
   - workshop
 inputs: <record>/inception/requirements-analysis/requirements.md, RE artifacts (if brownfield)
 outputs: stories.md, personas.md, user-stories-assessment.md, traceability.json (under this stage's record dir, engine-resolved)
@@ -56,7 +57,7 @@ Read every path in `directive.inline_context_paths` per the stage protocol. For
 this mob the roster contains the aidlc-product-agent persona and its shared/role
 knowledge only; the product manager owns the inline draft and integration work.
 
-This stage runs `mode: mob` (stage-protocol.md §5 "Multi-agent stages"): the support agents (aidlc-design-agent for user experience, aidlc-developer-agent for implementability, aidlc-quality-agent for testability) are NOT voices to adopt — they are dispatched as independent participants during PART 2. Do not load their personas into your own context.
+This stage runs `mode: mob` (stage-protocol-ensemble.md §5 "Multi-agent stages"): the support agents (aidlc-design-agent for user experience, aidlc-developer-agent for implementability, aidlc-quality-agent for testability) are NOT voices to adopt — they are dispatched as independent participants during PART 2. Do not load their personas into your own context.
 
 ### Step 2: Validate User Stories Are Needed
 
@@ -119,7 +120,7 @@ If the user interjects with feedback before generation completes, treat it as a 
 
 This is the mob-elaboration ritual: the Product Manager (lead) owns the
 draft, Developers and QA (and Design) collaborate as independent
-participants, and the Product Leader reviews afterwards (§12a).
+participants, and the Product Leader reviews afterwards (`stage-protocol-reviewer.md` §12a).
 
 **Round 0 — lead drafts.** As the lead, based on the approved plan, draft:
 
@@ -134,7 +135,7 @@ participants, and the Product Leader reviews afterwards (§12a).
 - Story dependencies and relationships
 - INVEST compliance notes
 
-**Round 1 — dispatch the mob.** Per stage-protocol.md §5 `mode: mob`,
+**Round 1 — dispatch the mob.** Per stage-protocol-ensemble.md §5 `mode: mob`,
 dispatch all three support agents in parallel against the draft (artifacts
 by path: the two draft artifacts, the Q&A file, requirements.md; rules as the
 accumulated steering bundle), mutually blind. Each WRITES its contribution file at
@@ -144,7 +145,7 @@ persona fidelity, developer on implementability and story sizing, quality on
 testability of the acceptance criteria.
 
 **Integrate and triage.** As the lead, fold the contributions into the two
-artifacts, then triage unresolved objections per §5: a judgment call (both
+artifacts, then triage unresolved objections per stage-protocol-ensemble.md §5: a judgment call (both
 positions legitimate) goes to the user NOW as a structured question (add it
 to the questions file first, blank `[Answer]:` tag); a knowledge dispute
 goes to **round 2** — re-dispatch only the objecting agent(s) with the
@@ -192,7 +193,8 @@ Use stage-protocol.md completion template with completion emoji: :books:
 
 STOP for the human response. Report **Approve** with
 `--result approved --user-input "<exact choice>"`; report
-**Request Changes** with `--result rejected --user-input "<feedback>"`, run the
+**Request Changes** with `--result rejected --user-input "Request Changes"
+--reason "<feedback>"`, run the
 revision loop, and report `--result revised` before re-presenting. The engine
 owns every lifecycle transition and advancement.
 

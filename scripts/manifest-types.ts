@@ -70,6 +70,13 @@ export type HarnessManifest = {
   /** The harness directory the token substitutes to (".claude" | ".kiro" | ".codex" | ".aidlc" | ".cursor"). */
   harnessDir: string;
   /**
+   * Project-root-relative path to the emitted orchestrator SKILL.md. Defaults
+   * to <harnessDir>/skills/aidlc/SKILL.md; emit-owned harnesses that place
+   * skills elsewhere declare their emitted location explicitly (for example
+   * Codex under .agents/skills/).
+   */
+  orchestratorSkillPath?: string;
+  /**
    * Which tier-projection flavor this harness's agent surfaces use
    * (core/tools/aidlc-tiers.ts TIER_PROJECTIONS column). Declared here so a
    * new harness picks its projection shape in its manifest - the packager
@@ -145,14 +152,15 @@ export type HarnessManifest = {
    * `harnessDir` (manifestDir = "<harnessDir>-plugin", kind = "store"), so a
    * NEW harness added per the one-core-many-harnesses promise automatically
    * gets a plugin projection instead of being silently skipped. A harness with
-   * no host plugin store (folder-drop + hook, like Kiro) sets kind "kiro".
-   * Cursor sets kind "cursor" for its flat camelCase hook schema.
+   * no host plugin store uses a folder-drop projection: Kiro CLI sets kind
+   * "kiro" and relies on the explicit composer, while Kiro IDE sets kind
+   * "kiro-ide" for its v2 SessionStart registration. Cursor sets kind "cursor"
+   * for its flat camelCase hook schema.
    */
   plugin?: {
-    /** Host plugin-manifest dir name (for example ".claude-plugin", ".plugin", ".kiro-plugin"). */
     /** Host plugin-manifest dir name (for example ".claude-plugin" or ".cursor-plugin"). */
     manifestDir: string;
     /** Host-specific plugin hook projection shape. */
-    kind: "store" | "kiro" | "cursor";
+    kind: "store" | "kiro" | "kiro-ide" | "cursor";
   };
 };

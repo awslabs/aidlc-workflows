@@ -5,7 +5,8 @@
 // build-and-test must consume the artifact from a real producer.
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   loadGraph,
@@ -233,8 +234,82 @@ describe("t290 code-generation coverage requires per-unit test instructions", ()
     expect(codeGeneration).toContain(
       "A bare project-wide command like\n`npm test` is not acceptable",
     );
-    expect(buildAndTest).toContain("deduplicate identical commands");
+    expect(buildAndTest).toContain("Deduplicate identical commands");
     expect(buildAndTest).toContain("run each distinct command ONCE");
-    expect(buildAndTest).toContain("run it once, never N");
+    expect(buildAndTest).toContain("run that command\n   once, never N");
+  });
+
+  test("Express stage-level test instructions execute and traceability joins the final gate", () => {
+    const proj = createTestProject();
+    tempDirs.push(proj);
+    const codeDir = join(seededRecordDir(proj), "construction", "code-generation");
+    const sourceDir = join(proj, "src");
+    mkdirSync(codeDir, { recursive: true });
+    mkdirSync(sourceDir, { recursive: true });
+
+    const marker = "express-stage-level-test-ran.txt";
+    const instructionsPath = join(codeDir, "unit-test-instructions.md");
+    writeFileSync(
+      instructionsPath,
+      `# Express Unit Test Instructions
+
+\`\`\`bash
+${process.execPath} -e 'await Bun.write("${marker}", "passed")'
+\`\`\`
+`,
+    );
+    writeFileSync(join(sourceDir, "express.ts"), "export const express = true;\n");
+
+    const traceabilityPath = join(codeDir, "traceability.json");
+    writeFileSync(
+      traceabilityPath,
+      `${JSON.stringify({
+        stage: "code-generation",
+        upstream_ids: ["FR1"],
+        coverage: [{ id: "FR1", status: "OK", target: "src/express.ts" }],
+      }, null, 2)}\n`,
+    );
+
+    const buildAndTest = readFileSync(
+      join(
+        REPO_ROOT,
+        "core",
+        "aidlc-common",
+        "stages",
+        "construction",
+        "build-and-test.md",
+      ),
+      "utf-8",
+    );
+    expect(buildAndTest).toContain(
+      "<record>/construction/code-generation/unit-test-instructions.md",
+    );
+    expect(buildAndTest).toContain(
+      "<record>/construction/*/code-generation/unit-test-instructions.md",
+    );
+    expect(buildAndTest).toContain(
+      "<record>/construction/code-generation/traceability.json",
+    );
+    expect(buildAndTest).toContain(
+      "<record>/construction/*/code-generation/traceability.json",
+    );
+
+    const command = readFileSync(instructionsPath, "utf-8")
+      .match(/```bash\n([\s\S]*?)\n```/)?.[1]
+      .trim();
+    expect(command).toBeTruthy();
+    const executed = spawnSync("bash", ["-lc", command!], {
+      cwd: proj,
+      encoding: "utf-8",
+    });
+    expect(executed.status, `${executed.stdout}\n${executed.stderr}`).toBe(0);
+    expect(readFileSync(join(proj, marker), "utf-8")).toBe("passed");
+
+    const traceability = JSON.parse(readFileSync(traceabilityPath, "utf-8")) as {
+      coverage: Array<{ id: string; status: string; target: string }>;
+    };
+    const fr1 = traceability.coverage.find((entry) => entry.id === "FR1");
+    expect(fr1?.status).toBe("OK");
+    expect(existsSync(join(proj, fr1!.target))).toBe(true);
   });
 });

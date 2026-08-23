@@ -16,7 +16,7 @@ In human software teams, a mob of 3-5 people covers an entire feature from requi
 
 - **Fewer agents means fewer handoffs.** Every agent boundary is a potential information loss point. When the same aidlc-architect-agent leads both Domain Design and Functional Design, it retains context naturally instead of requiring an explicit handoff artifact.
 
-- **Support roles enable collaboration without proliferation.** Rather than creating a "security-reviewer-agent" and a "compliance-reviewer-agent" and a "cost-reviewer-agent," the aidlc-devsecops-agent and aidlc-compliance-agent participate as support agents in stages led by others. HOW they participate is the stage's `mode` — its communication topology: on an `inline` stage the conductor adopts each support agent as a persona in its own context; on `subagent` (hub-and-spoke) and `mob` (mesh) stages each support agent is dispatched as a real, independent collaborator that writes its own contribution file for the lead to integrate (everyone writes, the lead owns the final artifacts; user-stories ships as the mob showcase), and on `pipeline` (chain) stages the links advance the artifacts directly in sequence (reverse-engineering is the shipped chain). On every topology the conductor performs every delegation — agents never invoke each other.
+- **Support roles enable collaboration without proliferation.** Rather than creating a "security-reviewer-agent" and a "compliance-reviewer-agent" and a "cost-reviewer-agent," the aidlc-devsecops-agent and aidlc-compliance-agent participate as support agents in stages led by others. HOW they participate is the stage's `mode` — its communication topology: on an `inline` stage the conductor adopts each support agent as a persona in its own context; on `subagent` (hub-and-spoke) and `mob` (mesh) stages each support agent is dispatched as a real, independent collaborator that writes its own contribution file for the lead to integrate (everyone writes, the lead owns the final artifacts; user-stories ships as the mob showcase), and on `pipeline` (chain) stages the links advance the artifacts directly in sequence and each return is recorded as ordered completion evidence (reverse-engineering is the shipped chain). On every topology the conductor performs every delegation — agents never invoke each other.
 
 - **Knowledge loading is per-agent.** Each agent loads methodology knowledge from `.claude/knowledge/<agent-name>/` and team knowledge from the space-level `aidlc/knowledge/<agent-name>/` (if the team created it). Fewer agents means fewer knowledge directories to manage and fewer opportunities for contradictory guidance.
 
@@ -302,9 +302,10 @@ at the gate instead of a missing verdict. Before every dispatch the conductor
 deletes any leftover `## Review` section, so a stale pre-revision verdict can
 never be misread as covering new work.
 
-The scope can cap the class (`bugfix`, `poc`, and `workshop` cap every stage to
-advisory) and `/aidlc --review <class>` caps it per run. Either way the
-reviewer never blocks — the human always has final say.
+The scope can cap the class (`bugfix`, `poc`, `classic`, and `workshop` cap
+every stage to advisory; `express` caps reviews to none) and
+`/aidlc --review <class>` caps it per run. Either way the reviewer never blocks
+— the human always has final say.
 
 (IMPORTANT: use plain agent names in backticks as shown — do NOT make them markdown links; per-agent reviewer doc pages do not exist yet.)
 

@@ -80,6 +80,9 @@ interface Directive {
   reviewer?: string;
   review_class?: string;
   reviewer_max_iterations?: number;
+  protocol_modules?: string[];
+  swarm_settled?: boolean;
+  continue_token?: string;
   message?: string;
   [k: string]: unknown;
 }
@@ -249,6 +252,20 @@ function runNext(
   return r.directive as Directive;
 }
 
+function runRawDirective(proj: string, args: string[]): Directive {
+  const env = { ...process.env };
+  delete env.AWS_AIDLC_DEFAULT_SCOPE;
+  const r = spawnSync(
+    BUN,
+    [ORCH, ...args, "--project-dir", proj],
+    { encoding: "utf-8", env },
+  );
+  if ((r.status ?? -1) !== 0) {
+    throw new Error(`raw directive failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
+  }
+  return JSON.parse((r.stdout ?? "").trim()) as Directive;
+}
+
 function runReport(proj: string): Directive {
   const r = spawnSync(BUN, [
     ORCH,
@@ -349,6 +366,37 @@ describe("t201 autonomous swarm advances through every Bolt batch (issue headlin
     expect(d.kind).not.toBe("invoke-swarm");
     expect(d.unit).toBe("api"); // the last unit in topological order
     expect(d.gate).toBe(true);
+    expect(d.swarm_settled).toBe(true);
+    expect(d.protocol_modules).toEqual(["construction", "swarm"]);
+    expect(d.reviewer).toBeUndefined();
+    expect(d.review_class).toBeUndefined();
+    expect(d.reviewer_max_iterations).toBeUndefined();
+  }, 30000);
+
+  test("3b: settled shape survives the load-steering continue round trip", () => {
+    const proj = seedProject();
+    seedBoltDagBatches(proj, [["auth"], ["api"]]);
+    seedConverged(proj, ["auth", "api"]);
+
+    let directive = runRawDirective(proj, ["next"]);
+    expect(directive.kind).toBe("load-steering");
+    let continueCalls = 0;
+    while (directive.kind === "load-steering") {
+      expect(directive.continue_token).toBeString();
+      directive = runRawDirective(proj, [
+        "continue",
+        directive.continue_token ?? "",
+      ]);
+      continueCalls++;
+    }
+
+    expect(continueCalls).toBeGreaterThan(0);
+    expect(directive.kind).toBe("run-stage");
+    expect(directive.reviewer).toBeUndefined();
+    expect(directive.review_class).toBeUndefined();
+    expect(directive.reviewer_max_iterations).toBeUndefined();
+    expect(directive.protocol_modules).toEqual(["construction", "swarm"]);
+    expect(directive.swarm_settled).toBe(true);
   }, 30000);
 
   // 4: a batch with a PARTIAL pass -> the engine re-fans only that batch's

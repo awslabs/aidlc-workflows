@@ -1,4 +1,4 @@
-// covers: file:tools/aidlc-testing-posture.ts, file:aidlc-common/stages/construction/code-generation.md, file:aidlc-common/stages/inception/practices-discovery.md, file:aidlc-common/protocols/stage-protocol.md, file:agents/aidlc-developer-agent.md, file:memory/org.md
+// covers: file:tools/aidlc-testing-posture.ts, file:aidlc-common/stages/construction/code-generation.md, file:aidlc-common/stages/inception/practices-discovery.md, file:aidlc-common/protocols/stage-protocol-construction.md, file:aidlc-common/protocols/stage-protocol-swarm.md, file:agents/aidlc-developer-agent.md, file:memory/org.md
 //
 // t299 - TESTING POSTURE CONTRACT. Deterministic behavior tests for additive
 // posture resolution, methodology-specific plan profiles, strategy/scope
@@ -28,15 +28,20 @@ import {
   type TestStrategy,
   type TestingMethodology,
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
+import { extractMarkdownSection } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
 const STAGE_REL = "core/aidlc-common/stages/construction/code-generation.md";
 const PRACTICES_REL =
   "core/aidlc-common/stages/inception/practices-discovery.md";
-const PROTOCOL_REL =
-  "core/aidlc-common/protocols/stage-protocol.md";
+const CONSTRUCTION_PROTOCOL_REL =
+  "core/aidlc-common/protocols/stage-protocol-construction.md";
+const SWARM_PROTOCOL_REL =
+  "core/aidlc-common/protocols/stage-protocol-swarm.md";
 const AGENT_REL = "core/agents/aidlc-developer-agent.md";
 const ORG_REL = "core/memory/org.md";
+const TEAM_REL = "core/memory/team.md";
+const PROJECT_REL = "core/memory/project.md";
 
 function read(rel: string): string {
   return readFileSync(join(REPO_ROOT, rel), "utf-8");
@@ -76,6 +81,276 @@ function resolve(
 }
 
 describe("t299 (1) additive methodology resolution", () => {
+  test("shipped commented examples fall through to the org default", () => {
+    const sections = {
+      org: extractMarkdownSection(read(ORG_REL), "## Testing Posture"),
+      team: extractMarkdownSection(read(TEAM_REL), "## Testing Posture"),
+      project: extractMarkdownSection(read(PROJECT_REL), "## Testing Posture"),
+    };
+    const contract = resolve(sections);
+
+    expect(contract.methodology).toBe("test-after");
+    expect(contract.source).toBe("org");
+    expect(contract.applicable_notes.map((note) => note.layer)).toEqual([
+      "org",
+    ]);
+  });
+
+  test("visible structured fields remain authoritative beside comments", () => {
+    const contract = resolve({
+      org: ORG,
+      team: [
+        "<!-- Example: Methodology: bdd -->",
+        "- **Methodology**: tdd",
+        "- **Ordering**: tests first, then implementation.",
+      ].join("\n"),
+    });
+
+    expect(contract.methodology).toBe("tdd");
+    expect(contract.source).toBe("team");
+    expect(contract.ordering).toBe("tests first, then implementation.");
+  });
+
+  test("multi-line comments cannot affirm a methodology", () => {
+    const contract = resolve({
+      org: ORG,
+      team: [
+        "<!-- Example posture:",
+        "We use BDD scenarios before implementation.",
+        "Unit tests use TDD.",
+        "-->",
+      ].join("\n"),
+    });
+
+    expect(contract.methodology).toBe("test-after");
+    expect(contract.source).toBe("org");
+    expect(contract.applicable_notes.map((note) => note.layer)).toEqual([
+      "org",
+    ]);
+  });
+
+  test("a fence inside a multi-line comment cannot expose hidden methodology", () => {
+    const contract = resolve({
+      org: ORG,
+      team: [
+        "<!-- Hidden example:",
+        "```yaml",
+        "Methodology: bdd",
+        "```",
+        "-->",
+        "- **Methodology**: tdd",
+        "- **Ordering**: tests first.",
+      ].join("\n"),
+    });
+
+    expect(contract.methodology).toBe("tdd");
+    expect(contract.source).toBe("team");
+  });
+
+  test("an HTML comment token in a fence info string stays literal", () => {
+    const contract = resolve({
+      org: ORG,
+      team: [
+        "~~~text <!-- literal token",
+        "example content",
+        "~~~",
+        "- **Methodology**: tdd",
+        "- **Ordering**: tests first.",
+      ].join("\n"),
+    });
+
+    expect(contract.methodology).toBe("tdd");
+    expect(contract.source).toBe("team");
+    expect(contract.applicable_notes.find((note) => note.layer === "team")?.text)
+      .toContain("<!-- literal token");
+  });
+
+  test("visible fenced notes remain in applicable_notes", () => {
+    const contract = resolve({
+      org: ORG,
+      project: [
+        "Run the package-specific test command:",
+        "```bash",
+        "bun test packages/payments",
+        "```",
+      ].join("\n"),
+    });
+
+    expect(
+      contract.applicable_notes.find((note) => note.layer === "project")?.text,
+    ).toContain("bun test packages/payments");
+  });
+
+  test("a fenced methodology example remains a note but does not affirm the methodology", () => {
+    const contract = resolve({
+      org: ORG,
+      team: [
+        "Example only:",
+        "~~~yaml",
+        "Methodology: bdd",
+        "Ordering: scenarios before implementation",
+        "~~~",
+      ].join("\n"),
+    });
+
+    expect(contract.methodology).toBe("test-after");
+    expect(contract.source).toBe("org");
+    expect(contract.applicable_notes.find((note) => note.layer === "team")?.text)
+      .toContain("Methodology: bdd");
+  });
+
+  test("HTML comment tokens inside inline code remain visible and do not hide later fields", () => {
+    const contract = resolve({
+      org: ORG,
+      team: [
+        "Snapshot the literal `<!--` and `-->` tokens in parser tests.",
+        "- **Methodology**: tdd",
+        "- **Ordering**: tests first.",
+      ].join("\n"),
+    });
+
+    expect(contract.methodology).toBe("tdd");
+    expect(contract.source).toBe("team");
+    expect(contract.applicable_notes.find((note) => note.layer === "team")?.text)
+      .toContain("`<!--`");
+  });
+
+  test("mixed fence markers do not close a fenced methodology example", () => {
+    const contract = resolve({
+      org: ORG,
+      team: [
+        "~~~~yaml",
+        "Example setup",
+        "~~~~`",
+        "Methodology: bdd",
+        "~~~~",
+      ].join("\n"),
+    });
+
+    expect(contract.methodology).toBe("test-after");
+    expect(contract.source).toBe("org");
+  });
+
+  test("unmatched backticks and escaped comment openers do not hide later fields", () => {
+    const contract = resolve({
+      org: ORG,
+      team: [
+        "Document the unmatched ` marker.",
+        "Snapshot the escaped \\<!-- token.",
+        "- **Methodology**: tdd",
+        "- **Ordering**: tests first.",
+      ].join("\n"),
+    });
+
+    expect(contract.methodology).toBe("tdd");
+    expect(contract.source).toBe("team");
+    expect(contract.applicable_notes.find((note) => note.layer === "team")?.text)
+      .toContain("\\<!--");
+  });
+
+  test("escaped backticks do not turn a real HTML comment into inline code", () => {
+    const contract = resolve({
+      org: ORG,
+      team: [
+        "Escaped delimiters \\` <!-- Methodology: bdd --> \\` stay prose.",
+        "- **Methodology**: tdd",
+        "- **Ordering**: tests first.",
+      ].join("\n"),
+    });
+
+    expect(contract.methodology).toBe("tdd");
+    expect(contract.source).toBe("team");
+    expect(contract.applicable_notes.find((note) => note.layer === "team")?.text)
+      .not.toContain("Methodology: bdd");
+  });
+
+  test("an invalid backtick fence info string does not hide visible methodology", () => {
+    const contract = resolve({
+      org: ORG,
+      team: [
+        "```bad`info",
+        "- **Methodology**: tdd",
+        "- **Ordering**: tests first.",
+      ].join("\n"),
+    });
+
+    expect(contract.methodology).toBe("tdd");
+    expect(contract.source).toBe("team");
+  });
+
+  test("comment removal cannot synthesize a fence that hides later fields", () => {
+    const contract = resolve({
+      org: ORG,
+      team: [
+        "<!-- hidden prefix -->```yaml",
+        "example: true",
+        "- **Methodology**: tdd",
+        "- **Ordering**: tests first.",
+      ].join("\n"),
+    });
+
+    expect(contract.methodology).toBe("tdd");
+    expect(contract.source).toBe("team");
+  });
+
+  test("commented headings cannot select or truncate the visible Testing Posture section", () => {
+    const project = mkdtempSync(join(tmpdir(), "t299-comment-heading-"));
+    try {
+      const memoryDir = join(project, "aidlc", "spaces", "default", "memory");
+      mkdirSync(memoryDir, { recursive: true });
+      writeFileSync(
+        join(memoryDir, "org.md"),
+        `# Org\n\n## Testing Posture\n\n${ORG}\n`,
+      );
+      writeFileSync(
+        join(memoryDir, "team.md"),
+        [
+          "# Team",
+          "",
+          "<!-- Hidden example section:",
+          "## Testing Posture -->",
+          "- **Methodology**: bdd",
+          "",
+          "## Testing Posture <!-- real section -->",
+          "",
+          "<!-- Hidden nested example:",
+          "## Example",
+          "- **Methodology**: bdd",
+          "-->",
+          "<!-- hidden prefix -->## Deployment",
+          "- **Methodology**: tdd",
+          "- **Ordering**: tests first, then implementation.",
+          "",
+          "## Deployment <!-- next section -->",
+          "- **Methodology**: bdd",
+        ].join("\n"),
+      );
+      writeFileSync(join(memoryDir, "project.md"), "# Project\n");
+
+      const contract = resolveTestingPosture(project);
+      expect(contract.methodology).toBe("tdd");
+      expect(contract.source).toBe("team");
+      expect(contract.ordering).toBe("tests first, then implementation.");
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  test("comment-only changes alter input_sha256 without entering applicable_notes", () => {
+    const first = resolve({
+      org: ORG,
+      team: "<!-- alpha -->\n- **Methodology**: tdd\n- **Ordering**: tests first.",
+    });
+    const second = resolve({
+      org: ORG,
+      team: "<!-- beta -->\n- **Methodology**: tdd\n- **Ordering**: tests first.",
+    });
+
+    expect(second.methodology).toBe("tdd");
+    expect(second.applicable_notes).toEqual(first.applicable_notes);
+    expect(second.input_sha256).not.toBe(first.input_sha256);
+  });
+
   test("a project coverage note does not erase team TDD", () => {
     const contract = resolve({
       org: ORG,
@@ -416,9 +691,13 @@ describe("t299 (5) authored consumers use the same contract", () => {
   });
 
   test("the shared protocol and every harness require approved swarm worker markers", () => {
-    const protocol = read(PROTOCOL_REL);
-    expect(protocol).toContain("## 12b. Autonomous Code Generation Plan Contract");
-    expect(protocol).toContain("AIDLC-TESTING-CONTRACT: <contract_sha256");
+    const construction = read(CONSTRUCTION_PROTOCOL_REL);
+    expect(construction).toContain("## 12b. Autonomous Code Generation Plan Contract");
+    expect(construction).toContain("AIDLC-TESTING-CONTRACT: <contract_sha256");
+    const swarm = read(SWARM_PROTOCOL_REL);
+    expect(swarm).toContain(
+      'stage-protocol-construction.md` §12b "Autonomous Code Generation Plan Contract"',
+    );
     for (const harness of [
       "claude",
       "kiro",
@@ -430,7 +709,7 @@ describe("t299 (5) authored consumers use the same contract", () => {
     ]) {
       const skill = read(`harness/${harness}/skills/aidlc/SKILL.md`);
       expect(skill, harness).toContain(
-        '§12b "Autonomous Code Generation Plan Contract"',
+        "stage-protocol-construction.md` — load on the first Construction directive of the session and on every `invoke-swarm`",
       );
     }
   });

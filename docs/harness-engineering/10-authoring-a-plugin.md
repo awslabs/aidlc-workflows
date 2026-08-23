@@ -270,7 +270,7 @@ projection remains deferred (doc 18 §8 Status).
   filename prefix, and the filename stem must equal frontmatter `name` (for
   example, `scopes/test-pro-validation.md` has `name: test-pro-validation`).
   Set `freeform_default: true` to nominate a plugin scope as the fallback when
-  the core `feature`/`poc` default is disabled; at most one enabled scope across
+  the core `classic` default is disabled; at most one enabled scope across
   the selected core/plugin set may claim it, and graph compilation rejects an
   ambiguous set. Membership for plugin-authored stages is their `scopes:`
   frontmatter list; a contribution's `adds.scopes` (§3) adds YOUR scope to an
@@ -316,9 +316,12 @@ AIDLC_PLUGIN_ROOT="<plugin-root>" AIDLC_PROJECT_DIR="<project>" \
 # open in Kiro IDE or kiro-cli chat → /aidlc
 ```
 
-> **Kiro note.** The emitted `.kiro.hook` still depends on host support for
-> plugin-root env vars. Use `aidlc plugin sync` with `AIDLC_PLUGIN_ROOT` when the binary is available, or
-> the explicit `bun compose.ts` invocation above as the fallback.
+> **Kiro note.** Use the `kiro-ide` projection for Kiro IDE >= 1.0; its folder-drop
+> includes a v2 `.kiro/hooks/aidlc-<plugin>-compose.json` SessionStart registration
+> that runs the cross-platform `hooks/aidlc-plugin-compose.ts` Bun launcher from
+> the workspace root. The `kiro` projection for Kiro CLI emits no hook registration,
+> so run one of the explicit composer commands above. Neither projection emits the
+> retired `.kiro.hook` plugin registration.
 
 ### Trust
 

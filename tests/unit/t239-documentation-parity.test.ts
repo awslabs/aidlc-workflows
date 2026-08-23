@@ -127,7 +127,7 @@ const engineCommands = [...engineMain.matchAll(/case "([^"]+)":/g)].map((match) 
 
 describe("documentation parity derives current behavior from authored implementation", () => {
   test("event count and user-guide taxonomy match VALID_EVENT_TYPES", () => {
-    expect(eventTypes.length).toBe(85);
+    expect(eventTypes.length).toBe(86);
 
     const guide = read("docs", "guide", "10-state-and-audit.md");
     const guideTaxonomy = sliceBetween(
@@ -235,6 +235,12 @@ describe("documentation parity derives current behavior from authored implementa
 
   test("Kiro IDE documentation names only IDE-native enforcement and configuration surfaces", () => {
     const skill = read("harness", "kiro-ide", "skills", "aidlc", "SKILL.md");
+    const reviewerProtocol = read(
+      "core",
+      "aidlc-common",
+      "protocols",
+      "stage-protocol-reviewer.md",
+    );
     const questionRendering = read(
       "harness",
       "kiro-ide",
@@ -246,7 +252,10 @@ describe("documentation parity derives current behavior from authored implementa
 
     expect(existsSync(join(ideHooks, "aidlc-reviewer-scope.kiro.hook"))).toBe(false);
     expect(existsSync(join(ideHooks, "aidlc-reviewer-scope.json"))).toBe(false);
-    expect(skill).toContain("read-scope bound is prose-only on this harness");
+    expect(skill).toContain("stage-protocol-reviewer.md");
+    expect(reviewerProtocol).toContain(
+      "On a harness without reviewer-scope enforcement (Kiro IDE today)",
+    );
     expect(skill).not.toContain(".aidlc-reviewer-dispatch.json");
     expect(skill).not.toContain("kiro-cli");
     expect(questionRendering).toContain("Kiro IDE has no structured-question tool");

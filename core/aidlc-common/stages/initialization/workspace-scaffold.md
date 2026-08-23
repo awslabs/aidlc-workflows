@@ -19,7 +19,9 @@ scopes:
   - refactor
   - infra
   - security-patch
+  - classic
   - workshop
+  - express
 inputs: none (first stage after session start)
 outputs: the per-intent record tree (one dir per in-scope phase + verification dir) and the space-level knowledge/ dir
 ---

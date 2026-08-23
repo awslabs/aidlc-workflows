@@ -1,5 +1,5 @@
 // covers: subcommand:aidlc-orchestrate:next, function:validateDirective,
-// file:aidlc-common/protocols/stage-protocol.md §3 §5,
+// file:aidlc-common/protocols/stage-protocol-construction.md,
 // file:skills/aidlc/SKILL.md per-unit wave paragraph
 //
 // t278 - engine-emitted, receipt-settled waves for stage-major per-unit design.
@@ -9,8 +9,15 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
 import {
   artifactFilename,
   readAllAuditShards,
@@ -713,6 +720,18 @@ describe("t278 engine-emitted wave contract", () => {
 
   test("large independent batches emit deterministic same-batch prefixes below the transport cap", () => {
     const proj = project();
+    const installedTemplate = join(
+      proj,
+      ".claude",
+      "knowledge",
+      "aidlc-shared",
+      "memory-template.md",
+    );
+    mkdirSync(dirname(installedTemplate), { recursive: true });
+    copyFileSync(
+      join(AIDLC_SRC, "knowledge", "aidlc-shared", "memory-template.md"),
+      installedTemplate,
+    );
     const units = Array.from({ length: 100 }, (_, index) => ({
       name: `unit-${index.toString().padStart(3, "0")}`,
       kind: "service",
@@ -727,6 +746,17 @@ describe("t278 engine-emitted wave contract", () => {
     expect(Buffer.byteLength(result.stdout.trim(), "utf-8")).toBeLessThanOrEqual(
       28 * 1024,
     );
+    const emitted = new Set(entries.map((entry) => entry.unit));
+    for (const unit of units) {
+      const memory = join(
+        seededRecordDir(proj),
+        "construction",
+        unit.name,
+        "functional-design",
+        "memory.md",
+      );
+      expect(existsSync(memory)).toBe(emitted.has(unit.name));
+    }
   }, 30000);
 
   test("an unmatched paired review request is re-emitted as retry-required", () => {
@@ -871,7 +901,7 @@ describe("t278 wave protocol parity", () => {
         "core",
         "aidlc-common",
         "protocols",
-        "stage-protocol.md",
+        "stage-protocol-construction.md",
       ),
       "utf-8",
     );

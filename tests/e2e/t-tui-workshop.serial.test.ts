@@ -118,7 +118,7 @@ describe("t-tui-workshop (answering AUQ gates advances disk state)", () => {
       // setupTuiProject copies the distributable AND the sibling aidlc/ memory
       // shell (the rule layers live there post-P5) and seeds the per-intent
       // workspace shell; noAidlcDocs strips the seeded record so the live
-      // `/aidlc --scope workshop` auto-births its own intent (the `ready`
+      // `/aidlc --scope classic` auto-births its own intent (the `ready`
       // baseline below holds because no intent resolves until birth).
       const sandbox = setupTuiProject({ noAidlcDocs: true });
       // The render value-add: we tail the grid during the run to prove the
@@ -153,7 +153,7 @@ describe("t-tui-workshop (answering AUQ gates advances disk state)", () => {
         expect(waitFor(session, "\\[AIDLC\\].*ready", 45000, 800)).toBe(true);
 
         // --- submit the workshop prompt ---------------------------------------
-        // Use EXPLICIT `--scope workshop`, not bare freeform `workshop`, so this
+        // Use EXPLICIT `--scope classic`, not bare freeform `workshop`, so this
         // journey always proves the workshop lifecycle rather than env/default
         // routing. Slash command has spaces -> send literally with no auto-Enter,
         // then Enter as a named key.
@@ -162,7 +162,7 @@ describe("t-tui-workshop (answering AUQ gates advances disk state)", () => {
           "--session",
           session,
           "--keys",
-          "/aidlc --scope workshop Build a simple React todo app",
+          "/aidlc --scope classic Build a simple React todo app",
           "--literal",
           "--no-enter",
         ]);

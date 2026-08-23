@@ -37,7 +37,7 @@ The delivery vehicle is the **host's own plugin system**, not a bespoke AIDLC in
 - **Trust is host-native.** Org restrictions use the host's managed allowlist (Claude `strictKnownMarketplaces`, unoverridable by users; Codex hash-pinned trust). AIDLC builds no trust layer.
 - **The composer runs on install, triggered by a host hook.** No pre-built per-combination tree; the SessionStart hook composes the chosen set locally.
 
-> **Security note — Kiro's folder-drop has no install-time trust gate.** Claude and Codex mediate a plugin through their own trust prompts (managed marketplace / hash-pinned approval) *before* its hooks can run. Kiro has no plugin store, so the folder-drop path copies the plugin's files — including the `.kiro.hook` that runs `compose.ts` on the next prompt — with **no equivalent gate**: dropping the tree *is* the trust decision. Treat a Kiro plugin drop like `git clone && run`: only install plugins from a source you would run code from, review the diff the drop introduces, and pin the plugin repo to a reviewed tag rather than tracking a moving branch. The composer itself is additive and never edits `core/`, but the hook it installs executes with your shell's privileges.
+> **Security note — Kiro's folder-drop has no install-time trust gate.** Claude and Codex mediate a plugin through their own trust prompts (managed marketplace / hash-pinned approval) *before* its hooks can run. Kiro has no plugin store, so the folder-drop path copies executable plugin files with **no equivalent gate**: dropping the tree *is* the trust decision. The Kiro IDE projection includes a v2 SessionStart registration that runs the cross-platform Bun launcher at `hooks/aidlc-plugin-compose.ts`; the Kiro CLI projection leaves composition to the command you run explicitly. Treat either Kiro plugin drop like `git clone && run`: only install plugins from a source you would run code from, review the diff the drop introduces, and pin the plugin repo to a reviewed tag rather than tracking a moving branch. The composer itself is additive and never edits `core/`, but it executes with the user's process privileges.
 
 The contribution seam (§6) is why this matters: it is structurally VS Code's `contributes` + Cargo's additive feature-union — the best-composing model in the field — and it is available to *every* plugin, first- and third-party alike, with no gatekeeping.
 
@@ -171,8 +171,8 @@ disabled plugins remain on disk, but they are not valid runtime scopes until the
 plugin is selected again. If core is disabled and exactly one plugin scope owner
 is enabled, freeform/default scope fallback uses that plugin's first scope
 alphabetically. If multiple plugin scope owners are enabled and core's
-`feature` fallback is unavailable, the orchestrator errors and asks for an
-explicit `--scope`.
+preferred `classic` fallback is unavailable, the orchestrator errors and
+asks for an explicit `--scope`.
 
 Disabling a plugin also removes what it merged into core stages, not just its
 own files. Compose records the structural adds it actually applied (produces /
@@ -333,7 +333,7 @@ under `scopes/<plugin>-<name>.md`, with frontmatter `name` equal to the filename
 stem and `plugin: <plugin>`. Compose copies it into `<harness>/scopes/` without
 clobbering. Membership on plugin-authored stages works through those stages'
 `scopes:` frontmatter. A plugin scope may set `freeform_default: true` to
-nominate itself when the preferred core default is disabled; at most one
+nominate itself when the preferred core `classic` default is disabled; at most one
 enabled scope may claim the nomination, and graph compilation rejects an
 ambiguous selected set. Adding a plugin scope to an existing core stage works
 through a contribution's `adds.scopes` (§6) — own-plugin scopes only, and the
@@ -374,7 +374,9 @@ Cursor's emitted hook uses Cursor's flat camelCase schema
 (`hooks.sessionStart[].command`) and invokes
 `./hooks/aidlc-plugin-compose.ts .cursor`. That Bun launcher uses `Bun.which`
 and `process.execPath` to probe `aidlc` and run the sibling `compose.ts`
-portably, without a `sh -c` dependency on native Windows.
+portably, without a `sh -c` dependency on native Windows. Kiro IDE's v2
+SessionStart registration uses the same launcher with `.kiro kiro-ide` after
+the projection is folder-dropped into the workspace root.
 
 **Install, per host:**
 

@@ -53,7 +53,9 @@ scopes:
   - bugfix
   - refactor
   - security-patch
+  - classic
   - workshop
+  - express
 inputs: ALL prior design artifacts for this unit
 outputs: application code + code-generation-plan.md, code-generation-questions.md, unit-test-instructions.md, code-summary.md, traceability.json (under this stage's per-unit record dir, engine-resolved)
 ---
@@ -83,7 +85,18 @@ Read all design artifacts for the current unit:
 - Story map from `<record>/inception/units-generation/unit-of-work-story-map.md` (if exists)
 - Requirements from `<record>/inception/requirements-analysis/requirements.md` (if exists)
 
-Incremental scopes (bugfix, poc, refactor, security-patch) skip units-generation and domain-design by design; when those inputs are absent, scope the work from the requirements and, on brownfield, the reverse-engineered code knowledge base at `aidlc/spaces/<active-space>/codekb/<repo>/` — never invent the content of a missing artifact.
+Incremental scopes (bugfix, poc, refactor, security-patch) and the zero-Unit
+`express` scope skip Units Generation by design. When those inputs are absent,
+scope the work from Requirements Analysis and the workspace; on brownfield, also
+use the reverse-engineered code knowledge base at
+`aidlc/spaces/<active-space>/codekb/<repo>/`. Never invent the content of a
+missing artifact.
+
+For a zero-Unit directive (`directive.unit` absent and no Unit DAG), run exactly
+one implementation iteration and write this stage's artifacts under
+`<record>/construction/code-generation/` with no synthetic Unit segment. This is
+ordinary stage work: no Bolt, walking-skeleton, ladder, per-Unit receipt, or
+swarm ceremony applies.
 
 ### Step 2: PART 1 — Planning
 
@@ -198,6 +211,15 @@ begin Step 4, dispatch the developer agent, or infer approval from a
 forwarding-loop continuation. Only an explicit "Approve Plan" response
 authorizes generation from the exact fingerprinted files and contract.
 
+> **Build-and-Test loop-back exception:** The loop-back in the construction
+> protocol module (`aidlc-common/protocols/stage-protocol-construction.md`)
+> repairs the already-approved plan. Do not blank the Plan Approval `[Answer]:`
+> when applying that revision; record the plan delta in the Loop-Back Log
+> instead. In gated mode, the human's "Retry with fix" answer is the re-approval
+> of the revised approach and is recorded through `--user-input` on the replayed
+> approval report. The plan-approval guard's evidence survives the jump because
+> the non-empty plan and approved questions file are preserved.
+
 ### Step 4: PART 2 — Generation
 
 Before delegating, display to the user:
@@ -278,7 +300,7 @@ Summary of code produced (files, tests, key decisions), then:
 
 Approval gate: strictly 2-option (Approve / Request Changes).
 
-> **Note — orchestrator-managed completion gating.** Step 3 Plan Approval is a mandatory hard stop in every execution mode, including during a Bolt: generation must never begin before the human chooses "Approve Plan". Only the Step 7 completion approval gate is suppressed by the orchestrator during normal Construction. A single stage-level gate (or batch-level gate for a parallel Unit batch) covers completion for the Units in that batch. The completion gate still exists here for direct-invocation use (e.g., `/aidlc --stage code-generation` re-running a single Unit), and subagents invoked via Task must NOT invoke that completion gate themselves — the orchestrator owns completion-gate presentation across the batch.
+> **Note — orchestrator-managed completion gating.** Step 3 Plan Approval is a mandatory hard stop in every execution mode, including Bolt execution, except for the explicit Build-and-Test loop-back replay carve-out above: generation must never begin before the human chooses "Approve Plan", and the carve-out reuses that preserved approval rather than inferring a new one. Only the Step 7 completion approval gate is suppressed by the orchestrator during normal Bolt execution. A single Bolt-level gate (or batch-level gate for parallel Bolt batches) covers completion for all Units in the Bolt. The completion gate still exists here for direct-invocation use (e.g., `/aidlc --stage code-generation` re-running a single Unit), and subagents invoked via Task must NOT invoke that completion gate themselves — the orchestrator owns completion-gate presentation across the batch.
 
 ## Sensors
 

@@ -38,6 +38,7 @@ import onboardingFills from "./onboarding.fills.ts";
 const manifest: HarnessManifest = {
   name: "cursor",
   harnessDir: ".cursor",
+  orchestratorSkillPath: ".cursor/skills/aidlc/SKILL.md",
   tierFlavor: "cursor",
 
   // Same core projection as claude, into .cursor/.

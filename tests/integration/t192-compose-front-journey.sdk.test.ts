@@ -57,7 +57,7 @@ const STOP_AFTER_INIT = { toolName: "Bash", resultIncludes: INIT_STATE_SUMMARY }
 
 // A task built to NOT fit any stock grid: it needs deployment/observability
 // (operation stages) against an existing system but no ideation and no new
-// product surface - none of the 9 stock scopes covers that shape. The prompt
+// product surface - none of the 11 stock scopes covers that shape. The prompt
 // explicitly asks for a custom plan so a stock match is a live failure signal.
 const TASK =
   "harden the deployment pipeline and add observability for our existing service - no new features, compose a custom plan for exactly this";
@@ -72,7 +72,7 @@ const APPROVE_ALL = {
 
 const STOCK_SCOPES = new Set([
   "bugfix", "enterprise", "feature", "infra", "mvp", "poc", "refactor",
-  "security-patch", "workshop",
+  "security-patch", "classic", "workshop", "express",
 ]);
 
 describe("t192 front composer journey (/aidlc compose -> approve -> write -> birth, sdk live)", () => {
@@ -86,7 +86,7 @@ describe("t192 front composer journey (/aidlc compose -> approve -> write -> bir
       try {
         const scopesDir = join(proj, ".claude", "scopes");
         const gridPath = join(proj, ".claude", "tools", "data", "scope-grid.json");
-        expect(readdirSync(scopesDir).filter((f) => f.endsWith(".md")).length).toBe(9);
+        expect(readdirSync(scopesDir).filter((f) => f.endsWith(".md")).length).toBe(11);
 
         const r = await driveAidlc(`/aidlc compose "${TASK}"`, {
           projectDir: proj,
@@ -101,17 +101,17 @@ describe("t192 front composer journey (/aidlc compose -> approve -> write -> bir
         // (b) the birth ran in the SAME drive (one /aidlc invocation).
         assertToolResultContains(r, "Bash", INIT_STATE_SUMMARY);
 
-        // (c) BOTH scope files landed: a 10th .md + a 10th grid key.
+        // (c) BOTH scope files landed: a 12th .md + a 12th grid key.
         const scopeFiles = readdirSync(scopesDir).filter(
           (f) => f.startsWith("aidlc-") && f.endsWith(".md"),
         );
-        expect(scopeFiles.length).toBe(10);
+        expect(scopeFiles.length).toBe(12);
         const grid = JSON.parse(readFileSync(gridPath, "utf-8")) as Record<
           string,
           { stages?: Record<string, string> }
         >;
         const gridKeys = Object.keys(grid);
-        expect(gridKeys.length).toBe(10);
+        expect(gridKeys.length).toBe(12);
         const composedName = gridKeys.find((k) => !STOCK_SCOPES.has(k));
         expect(composedName).toBeDefined();
         // The grid entry is a real stages map, not an empty stub.
@@ -126,6 +126,10 @@ describe("t192 front composer journey (/aidlc compose -> approve -> write -> bir
         const rec = readFileSync(join(intentsDir, "active-intent"), "utf-8").trim();
         const state = readFileSync(join(intentsDir, rec, "aidlc-state.md"), "utf-8");
         expect(state).toContain(`- **Scope**: ${composedName}`);
+        const projectLine = state
+          .split("\n")
+          .find((line) => line.startsWith("- **Project**:"));
+        expect(projectLine).toBe(`- **Project**: ${TASK}`);
 
         // (e) keyword hygiene: the composed .md ships keywords: [] (no
         // keyword entries - inferability is an explicit gate choice).

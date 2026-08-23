@@ -110,7 +110,7 @@ with a specific message + push.
     `requires_stage: [units-generation]`,
     `produces: [contracts, contract-summary, contract-design-questions]`,
     `consumes: units-generation outputs + components/requirements`,
-    `scopes: [enterprise, feature, mvp, workshop]`. Body in v2 step style.
+    `scopes: [enterprise, feature, mvp, classic, workshop]`. Body in v2 step style.
   - Renumber delivery-planning 2.8 → 2.9; pre-seed contract-design 2.8 in
     stage-graph.json.
   - Add `contract-design` to `functional-design.requires_stage`.

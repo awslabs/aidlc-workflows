@@ -4,7 +4,7 @@
 // The unit under test is a HOOK — aidlc-log-subagent.ts, the SubagentStop hook
 // that emits SUBAGENT_COMPLETED. Hooks are mechanism=none: they receive a
 // Claude Code JSON payload on stdin and resolve the project dir from the
-// CLAUDE_PROJECT_DIR env var (aidlc-lib.ts:114-116). There is no exported pure
+// CLAUDE_PROJECT_DIR env var. There is no exported pure
 // function to import — the hook's contract is "JSON on stdin + env -> audit row
 // + heartbeat file + clean exit". So every .sh assertion is preserved by
 // SPAWNING the hook via node:child_process spawnSync with controlled stdin and
@@ -12,14 +12,14 @@
 // bun "$HOOK"`. We assert on res.status (the .sh's $? in tests 3 + 5) and on the
 // audit.md / heartbeat the hook writes (the .sh's assert_grep / assert_file_exists).
 //
-// AUDIT-ROW SHAPE (aidlc-log-subagent.ts:40-58 + aidlc-audit.ts:256-267): the
+// AUDIT-ROW SHAPE (aidlc-log-subagent.ts + aidlc-audit.ts): the
 // hook calls appendAuditEntry("SUBAGENT_COMPLETED", fields, projectDir) where
 // fields = { "Agent Type": agentType, ["Agent ID"]: agentId?, Message: msg? }.
 // appendAuditEntryUnlocked renders each as `**<key>**: <value>` under a
 // `## Subagent Completed` heading with `**Event**: SUBAGENT_COMPLETED`. Message
-// is sliced to the first 200 chars (hook line 42) — the truncation the .sh's
+// is sliced to the first 200 chars — the truncation the .sh's
 // test 6 asserts. agentType defaults to "unknown", agentId defaults to ""
-// (omitted when falsy, hook line 50).
+// (omitted when falsy).
 //
 // SEED BASELINE (load-bearing for parity strength). The .sh seeds audit-sample.md
 // (fixtures.sh seed_audit_file) which ALREADY CONTAINS one SUBAGENT_COMPLETED
@@ -42,16 +42,18 @@
 //       AND no Agent ID / Message line in that block (the .sh comment "no Agent ID
 //       line" asserted by absence — STRONGER than the original which only grepped
 //       the type was present).
-//   - .sh Test 3  no audit.md -> exits silently, audit.md NOT created  -> Test 3:
-//       res.status === 0 (the hook's process.exit(0), STRONGER than the .sh which
-//       only checked the file's absence) + audit.md still absent.
+//   - .sh Test 3  no active workflow -> exits silently, audit.md NOT created ->
+//       Tests 3a-3b: no state exits 0 without changing an existing shard or
+//       creating a shard/heartbeat. Tests 3c-3e prove completed and malformed
+//       state also fail closed. Test 3f proves that running state opens the gate:
+//       appendAuditEntry creates a missing shard.
 //   - .sh Test 4  assert_file_exists .aidlc-hooks-health/log-subagent.last -> Test 4:
 //       heartbeat file exists (same observable) + STRONGER: its contents are an
-//       ISO timestamp (the hook writes isoTimestamp(), aidlc-log-subagent.ts:24).
+//       ISO timestamp (the hook writes isoTimestamp()).
 //   - .sh Test 5  empty stdin -> exit 0 ($RC == 0)                     -> Test 5:
 //       res.status === 0 (same observable) + STRONGER: audit.md byte-unchanged
 //       (empty stdin -> JSON.parse("") throws -> process.exit(0) BEFORE any
-//       append, hook lines 30-38; the .sh captured BEFORE but never compared it).
+//       append; the .sh captured BEFORE but never compared it).
 //   - .sh Test 6a assert_grep audit.md "developer" (entry written)    -> Test 6a:
 //       new block Agent Type === "developer" (STRONGER, exact + block-scoped).
 //   - .sh Test 6b assert_not_grep audit.md "A\{500\}" (truncated)     -> Test 6b:
@@ -61,8 +63,8 @@
 //       new block's heading line is exactly `**Event**: SUBAGENT_COMPLETED`
 //       (block-scoped via the canonical-event count delta, STRONGER).
 //
-// 8 .sh asserts -> 8 expect()-bearing test() cases here (test 6's two asserts
-// kept as 6a + 6b to keep one observable per case, matching the .sh's two lines).
+// 8 .sh asserts map to the parity cases below (test 6's two asserts remain 6a +
+// 6b), with additional #710 gate-regression cases around original Test 3.
 //
 // FIXTURE DISCIPLINE (mirrors the .sh's create_test_project + seed_audit_file +
 // cleanup_test_project per case): each case uses a FRESH temp project dir
@@ -124,19 +126,32 @@ function pinnedShardName(): string {
 }
 
 /**
- * Fresh project seeded for the per-intent audit layout: state (so the
- * active-intent cursor resolves and docsRoot()/auditFilePath() point at the
- * record), a baseline seed shard carrying the audit-sample.md SUBAGENT_COMPLETED
- * block (when `seed`), and the empty pinned shard the hook resolves so its
- * "shard exists" gate passes. When `seed` is false, NO shard is created (test 3's
- * no-trail path). The clone-id token is pinned on disk for the spawned hook.
+ * Fresh project seeded for the per-intent audit layout. State is optional so
+ * the hook's workflow-state gate can be tested independently from audit-shard
+ * presence. When `audit` is true, a baseline shard carries the audit-sample.md
+ * SUBAGENT_COMPLETED block and the hook's pinned shard starts empty. The
+ * clone-id token is pinned on disk for deterministic shard resolution.
  */
-function proj(seed = true): string {
+type StateFixture = "running" | "completed" | "malformed" | false;
+
+function proj(
+  {
+    state = "running",
+    audit = true,
+  }: { state?: StateFixture; audit?: boolean } = {},
+): string {
   const p = createTestProject();
   tempDirs.push(p);
-  seedStateFile(p, join(FIXTURES_DIR, "state-mid-ideation.md"));
+  if (state === "running") {
+    seedStateFile(p, join(FIXTURES_DIR, "state-mid-ideation.md"));
+  } else if (state === "completed") {
+    seedStateFile(p, join(FIXTURES_DIR, "state-completed.md"));
+  } else if (state === "malformed") {
+    seedStateFile(p, join(FIXTURES_DIR, "state-mid-ideation.md"));
+    writeFileSync(join(seededRecordDir(p), "aidlc-state.md"), "# malformed\n", "utf-8");
+  }
   writeFileSync(join(p, "aidlc", ".aidlc-clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
-  if (seed) {
+  if (audit) {
     const auditDir = seededAuditDir(p);
     mkdirSync(auditDir, { recursive: true });
     // Baseline (sorts first): the audit-sample.md SUBAGENT_COMPLETED block.
@@ -195,7 +210,7 @@ function subagentCompletedCount(body: string): number {
 
 /**
  * Field values from the LAST audit block whose `**Event**:` is SUBAGENT_COMPLETED.
- * The seed already has one such block (audit-sample.md:19-26); the hook appends a
+ * The seed already has one such block; the hook appends a
  * NEW one at end-of-file, so "last" isolates the row the hook just wrote — the
  * block-scoped equivalent of the .sh's file-wide grep, but pinned to the new row.
  * Splits `**label**: value` on the literal `**: ` separator (mirrors auditField in
@@ -234,7 +249,7 @@ function bodyContains(body: string, needle: string): boolean {
   return body.includes(needle);
 }
 
-describe("t09 aidlc-log-subagent hook (migrated from t09-hook-log-subagent.sh, plan 8)", () => {
+describe("t09 aidlc-log-subagent hook (migrated from t09-hook-log-subagent.sh + #710 regressions)", () => {
   test("1: logs subagent completion as SUBAGENT_COMPLETED event", () => {
     const p = proj();
     const before = subagentCompletedCount(readShards(p)); // seed baseline = 1
@@ -258,30 +273,95 @@ describe("t09 aidlc-log-subagent hook (migrated from t09-hook-log-subagent.sh, p
     const blk = lastSubagentBlock(readShards(p));
     // .sh grepped only that the type was present; here block-scoped exact value.
     expect(blk["Agent Type"]).toBe("developer");
-    // STRONGER: the hook omits Agent ID (and Message) when falsy (hook lines 50-51),
+    // STRONGER: the hook omits Agent ID (and Message) when falsy,
     // so the NEW block carries neither. The .sh comment named "no Agent ID line".
     expect(blk["Agent ID"]).toBeUndefined();
     expect(blk.Message).toBeUndefined();
   });
 
-  test("3: exits silently when no audit trail (status 0, trail not created)", () => {
-    const p = proj(false);
-    // No audit shard (proj seeded state but no trail).
+  test("3a: no state leaves an existing audit shard byte-identical", () => {
+    const p = proj({ state: false });
+    const shard = join(auditDirOf(p), pinnedShardName());
+    const before = readFileSync(shard);
+    const r = runHook(
+      '{"agent_type":"architect","agent_id":"abc-123","last_assistant_message":"Done"}',
+      p,
+    );
+    expect(r.status).toBe(0);
+    expect(readFileSync(shard)).toEqual(before);
+    expect(existsSync(heartbeatPath(p))).toBe(false);
+  });
+
+  test("3b: no state and no shard exits without creating hook artifacts", () => {
+    const p = proj({ state: false, audit: false });
     expect(existsSync(auditDirOf(p))).toBe(false);
     const r = runHook(
       '{"agent_type":"architect","agent_id":"abc-123","last_assistant_message":"Done"}',
       p,
     );
-    // STRONGER: the .sh only checked the trail's absence; we also pin the clean exit.
     expect(r.status).toBe(0);
     expect(existsSync(auditDirOf(p))).toBe(false);
+    expect(existsSync(heartbeatPath(p))).toBe(false);
+  });
+
+  test("3c: completed state leaves an existing audit shard byte-identical", () => {
+    const p = proj({ state: "completed" });
+    const shard = join(auditDirOf(p), pinnedShardName());
+    const before = readFileSync(shard);
+    const r = runHook(
+      '{"agent_type":"architect","agent_id":"abc-123","last_assistant_message":"Done"}',
+      p,
+    );
+    expect(r.status).toBe(0);
+    expect(readFileSync(shard)).toEqual(before);
+    expect(existsSync(heartbeatPath(p))).toBe(false);
+  });
+
+  test("3d: completed state and no shard exits without creating hook artifacts", () => {
+    const p = proj({ state: "completed", audit: false });
+    expect(existsSync(auditDirOf(p))).toBe(false);
+    const r = runHook(
+      '{"agent_type":"architect","agent_id":"abc-123","last_assistant_message":"Done"}',
+      p,
+    );
+    expect(r.status).toBe(0);
+    expect(existsSync(auditDirOf(p))).toBe(false);
+    expect(existsSync(heartbeatPath(p))).toBe(false);
+  });
+
+  test("3e: malformed state fails closed without creating hook artifacts", () => {
+    const p = proj({ state: "malformed", audit: false });
+    expect(existsSync(auditDirOf(p))).toBe(false);
+    const r = runHook(
+      '{"agent_type":"architect","agent_id":"abc-123","last_assistant_message":"Done"}',
+      p,
+    );
+    expect(r.status).toBe(0);
+    expect(existsSync(auditDirOf(p))).toBe(false);
+    expect(existsSync(heartbeatPath(p))).toBe(false);
+  });
+
+  test("3f: running state and no shard creates the shard and appends", () => {
+    const p = proj({ audit: false });
+    expect(existsSync(auditDirOf(p))).toBe(false);
+    const r = runHook(
+      '{"agent_type":"architect","agent_id":"abc-123","last_assistant_message":"Done"}',
+      p,
+    );
+    expect(r.status).toBe(0);
+    expect(existsSync(join(auditDirOf(p), pinnedShardName()))).toBe(true);
+    expect(subagentCompletedCount(readShards(p))).toBe(1);
+    const blk = lastSubagentBlock(readShards(p));
+    expect(blk["Agent Type"]).toBe("architect");
+    expect(blk["Agent ID"]).toBe("abc-123");
+    expect(blk.Message).toBe("Done");
   });
 
   test("4: writes heartbeat (ISO timestamp)", () => {
     const p = proj();
     runHook('{"agent_type":"quality"}', p);
     expect(existsSync(heartbeatPath(p))).toBe(true);
-    // STRONGER: the heartbeat carries an ISO timestamp (hook line 24).
+    // STRONGER: the heartbeat carries an ISO timestamp.
     const ts = readFileSync(heartbeatPath(p), "utf-8").trim();
     expect(ts).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
   });
@@ -314,7 +394,7 @@ describe("t09 aidlc-log-subagent hook (migrated from t09-hook-log-subagent.sh, p
       `{"agent_type":"developer","agent_id":"xyz","last_assistant_message":"${longMsg}"}`,
       p,
     );
-    // STRONGER: pins the exact 200-char slice boundary (hook line 42), not merely
+    // STRONGER: pins the exact 200-char slice boundary, not merely
     // "the 500-run is absent". The Message field is exactly 200 'A's...
     const blk = lastSubagentBlock(readShards(p));
     expect(blk.Message).toBe("A".repeat(200));

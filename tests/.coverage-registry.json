@@ -20,23 +20,23 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 592,
+    "total": 607,
     "enumeratedByClass": {
-      "function": 334,
-      "audit": 85,
-      "scope": 9,
+      "function": 345,
+      "audit": 86,
+      "scope": 11,
       "stage": 33,
       "hook": 17,
-      "subcommand": 107,
+      "subcommand": 108,
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 165,
-      "audit": 43,
-      "scope": 9,
+      "function": 171,
+      "audit": 44,
+      "scope": 11,
       "stage": 11,
       "hook": 17,
-      "subcommand": 95,
+      "subcommand": 96,
       "render-surface": 7
     }
   },
@@ -311,6 +311,18 @@
     },
     {
       "unitClass": "audit",
+      "unitId": "PIPELINE_LINK_COMPLETED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t304-pipeline-link-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
       "unitId": "PLAN_APPROVAL_BLOCKED",
       "minMechanism": "none",
       "coveredBy": [
@@ -406,6 +418,14 @@
       "coveredBy": [
         {
           "file": "tests/integration/t135-invoke-swarm.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t304-loopback-review-receipt-replay.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t307-loopback-unitmajor-replay.test.ts",
           "mechanism": "cli"
         },
         {
@@ -575,6 +595,14 @@
         {
           "file": "tests/e2e/t57-workflow-backward-jump.test.ts",
           "mechanism": "sdk"
+        },
+        {
+          "file": "tests/integration/t304-loopback-review-receipt-replay.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t307-loopback-unitmajor-replay.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -757,6 +785,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t307-loopback-unitmajor-replay.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
           "mechanism": "cli"
         }
@@ -792,6 +824,10 @@
       "unitId": "UNIT_STARTED",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t307-loopback-unitmajor-replay.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
           "mechanism": "cli"
@@ -1033,7 +1069,7 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:advanceCopilotContinuation",
+      "unitId": "function:advanceContinuationCursor",
       "minMechanism": "none",
       "coveredBy": [
         {
@@ -1533,13 +1569,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:copilotDirectiveCommitRequired",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:copilotStopEvidence",
       "minMechanism": "none",
       "coveredBy": [
@@ -1589,6 +1618,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:currentPipelineLinkReceipts",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t304-pipeline-link-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:currentUnitLifecycleMode",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1604,6 +1645,13 @@
     {
       "unitClass": "function",
       "unitId": "function:DEFAULT_LOCK_STALE_MS",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:DEFAULT_SCOPE",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -1745,6 +1793,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:envDefaultScope",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:errorMessage",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1795,6 +1850,13 @@
     {
       "unitClass": "function",
       "unitId": "function:FILE_CHANGED_DURING_READ",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:filteredRawIndexEntries",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -1872,6 +1934,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:formatReceivedReply",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t261-audit-authority-floor.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:frameworkMemorySeedDir",
       "minMechanism": "none",
       "coveredBy": [
@@ -1899,6 +1973,10 @@
       "unitId": "function:freshReviewReceipts",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t304-loopback-review-receipt-replay.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t264-review-freeze-hook.test.ts",
           "mechanism": "cli"
@@ -1955,6 +2033,18 @@
         {
           "file": "tests/unit/t153-engine-directive-harness-seam.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:hasCurrentSharedResumeWait",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t121-stop-hook-enforce.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -2093,7 +2183,7 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:inspectCopilotContinuation",
+      "unitId": "function:inspectContinuationCursor",
       "minMechanism": "none",
       "coveredBy": [
         {
@@ -2399,8 +2489,13 @@
       "unitClass": "function",
       "unitId": "function:listField",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t309-listfield-flow-sequence.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -2587,18 +2682,6 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:markActiveDirectiveResumeWaiting",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t249-copilot-adapter.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -2973,6 +3056,30 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:pipelineLinkEvidence",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t304-pipeline-link-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:pipelineLinks",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t304-pipeline-link-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -3498,6 +3605,20 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:reviewedSourceRef",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:reviewedSourceRefPrefix",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:REVIEWER_DISPATCH_TTL_MS",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3506,6 +3627,13 @@
     {
       "unitClass": "function",
       "unitId": "function:reviewerDispatchPath",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:reviewerGateGuardDisabled",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -4002,6 +4130,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:UNBINDABLE_FINGERPRINT",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:UNIT_KINDS",
       "minMechanism": "none",
       "coveredBy": [],
@@ -4212,6 +4347,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t229-workspace-parser.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:workspaceSourceFingerprint",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t304-source-freshness-receipts.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -4844,12 +4991,52 @@
     },
     {
       "unitClass": "scope",
+      "unitId": "classic",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/e2e/t-tui-t58-workshop-scope.serial.test.ts",
+          "mechanism": "tui"
+        },
+        {
+          "file": "tests/e2e/t301-express-scope-routing.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t30-scope-stage-mapping.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "scope",
       "unitId": "enterprise",
       "minMechanism": "none",
       "coveredBy": [
         {
           "file": "tests/integration/t141-enterprise-scope-routing.test.ts",
           "mechanism": "sdk"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "scope",
+      "unitId": "express",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/e2e/t301-express-scope-routing.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t130-scope-runners.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/smoke/t130-scope-runners.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -4952,12 +5139,8 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/e2e/t-tui-t58-workshop-scope.serial.test.ts",
-          "mechanism": "tui"
-        },
-        {
-          "file": "tests/integration/t30-scope-stage-mapping.test.ts",
-          "mechanism": "none"
+          "file": "tests/unit/t125-scope-files.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -5642,6 +5825,14 @@
           "mechanism": "sdk"
         },
         {
+          "file": "tests/integration/t304-loopback-review-receipt-replay.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t307-loopback-unitmajor-replay.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t19.test.ts",
           "mechanism": "cli"
         },
@@ -5822,6 +6013,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t306-learnings-cid-collision-followup.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t97.test.ts",
           "mechanism": "cli"
         }
@@ -5839,6 +6034,10 @@
         },
         {
           "file": "tests/unit/t199-learnings-memory-path.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t306-learnings-cid-collision-followup.test.ts",
           "mechanism": "cli"
         },
         {
@@ -5874,9 +6073,29 @@
     },
     {
       "unitClass": "subcommand",
+      "unitId": "aidlc-log link",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t304-pipeline-link-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
       "unitId": "aidlc-log review",
       "minMechanism": "cli",
       "coveredBy": [
+        {
+          "file": "tests/integration/t304-loopback-review-receipt-replay.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t307-loopback-unitmajor-replay.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t115.test.ts",
           "mechanism": "cli"
@@ -6372,6 +6591,10 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
+          "file": "tests/integration/t307-loopback-unitmajor-replay.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
           "mechanism": "cli"
         }
@@ -6483,6 +6706,10 @@
       "unitId": "aidlc-utility detect-scope",
       "minMechanism": "cli",
       "coveredBy": [
+        {
+          "file": "tests/e2e/t301-express-scope-routing.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t27.test.ts",
           "mechanism": "cli"
@@ -6673,6 +6900,10 @@
         },
         {
           "file": "tests/e2e/t-exec-codex-journey-workspace.serial.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/e2e/t301-express-scope-routing.test.ts",
           "mechanism": "cli"
         },
         {

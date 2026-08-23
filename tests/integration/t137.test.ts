@@ -103,6 +103,7 @@ const REPO_ROOT = join(import.meta.dir, "..", "..");
 const TOOLS = join(REPO_ROOT, "dist", "claude", ".claude", "tools");
 const UTIL = join(TOOLS, "aidlc-utility.ts");
 const STATE = join(TOOLS, "aidlc-state.ts");
+const LOG = join(TOOLS, "aidlc-log.ts");
 
 // On native Windows, chmod 0444 doesn't actually deny writes, so the three
 // permission-injection cases cannot be exercised faithfully. Gate them.
@@ -209,15 +210,41 @@ function init(p: string): CliResult {
 }
 
 /** Spawn `bun aidlc-state.ts <args...> --project-dir <p>`. Mirrors `bun "$STATE" ...`. */
-function state(args: string[], p: string): CliResult {
+function state(
+  args: string[],
+  p: string,
+  extraEnv: Record<string, string> = {},
+): CliResult {
   const res = spawnSync(BUN, [STATE, ...args, "--project-dir", p], {
     encoding: "utf-8",
     env: {
       ...process.env,
       AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+      ...extraEnv,
     },
   });
   return { status: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
+}
+
+function recordRequirementsReview(p: string): void {
+  const args = [
+    LOG,
+    "review",
+    "--stage",
+    "requirements-analysis",
+    "--reviewer",
+    "aidlc-product-lead-agent",
+    "--iteration",
+    "1",
+    "--project-dir",
+    p,
+  ];
+  for (const suffix of [[], ["--verdict", "READY"]]) {
+    const r = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
+    if ((r.status ?? -1) !== 0) {
+      throw new Error(`review log failed: ${r.stdout}${r.stderr}`);
+    }
+  }
 }
 
 /**
@@ -341,7 +368,11 @@ describe("t137 F2 — missing audit shard (ensureAuditFile recovers)", () => {
       rmSync(auditDirOf(p), { recursive: true, force: true });
       expect(existsSync(auditDirOf(p))).toBe(false); // precondition
 
-      const r = state(["gate-start", "requirements-analysis"], p);
+      const r = state(
+        ["gate-start", "requirements-analysis"],
+        p,
+        { AIDLC_SKIP_REVIEWER_GATE_GUARD: "1" },
+      );
 
       // .sh Test 3: assert_eq 0 $rc — ensureAuditFile recovers, no crash.
       expect(r.status).toBe(0);
@@ -424,6 +455,7 @@ describe("t137 F4 — read-only state.md (ERROR_LOGGED emitted)", () => {
 
       // Count pre-existing ERROR_LOGGED rows (0 on a clean init).
       const errorBefore = errorLoggedCount(readAudit(p));
+      recordRequirementsReview(p);
 
       chmodSync(state2, 0o444);
       let r: CliResult;
