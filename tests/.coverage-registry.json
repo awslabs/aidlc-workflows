@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 656,
+    "total": 660,
     "enumeratedByClass": {
-      "function": 392,
+      "function": 396,
       "audit": 87,
       "scope": 11,
       "stage": 33,
@@ -1488,6 +1488,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:clearSessionRebindOffer",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -3437,6 +3444,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:readSessionRebindOffer",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:readStateFile",
       "minMechanism": "none",
       "coveredBy": [],
@@ -4722,6 +4736,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:validSessionId",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:validSpaceFlag",
       "minMechanism": "none",
       "coveredBy": [
@@ -5003,6 +5024,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:writeSessionRebindOffer",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",

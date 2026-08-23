@@ -822,7 +822,7 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       expect(ctx).toContain("$aidlc intent intent-a");
       expect(ctx).not.toContain("/aidlc intent intent-a");
       expect(ctx).not.toContain("&&");
-      expect(readFileSync(stampPath, "utf-8").trim()).toBe(b.uuid);
+      expect(readFileSync(stampPath, "utf-8").trim()).toBe(a.uuid);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

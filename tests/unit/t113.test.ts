@@ -49,6 +49,8 @@ function loadSteering(): Record<string, unknown> {
       { path: "aidlc/spaces/default/memory/org.md", text: "# Organization\n" },
     ],
     continue_token: "opaque-token",
+    continue_command:
+      'bun ./.claude/tools/aidlc-orchestrate.ts continue "opaque-token"',
   };
 }
 
@@ -190,6 +192,12 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
 
   test("load-steering well-formed -> VALID", () => {
     expect(validateDirective(loadSteering()).valid).toBe(true);
+  });
+
+  test("load-steering without continue_command -> INVALID", () => {
+    const directive = loadSteering();
+    delete directive.continue_command;
+    expect(validateDirective(directive).valid).toBe(false);
   });
 
   test("run-stage well-formed -> VALID", () => {

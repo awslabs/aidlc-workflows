@@ -84,6 +84,7 @@ import {
   resolveProjectDir,
   setSessionResolutionOverride,
   uuidv7,
+  validSessionId,
   validSpaceFlag,
   withAuditLock,
   writeBufferAtomic,
@@ -3804,8 +3805,12 @@ let projectDir: string | undefined;
 export function main(argv: string[]): void {
   const args = [...argv];
   const sessionIdx = args.indexOf("--session");
+  const sessionFlag =
+    sessionIdx >= 0 ? validSessionId(args[sessionIdx + 1]) : null;
+  setSessionResolutionOverride(
+    sessionFlag ?? validSessionId(process.env.AIDLC_SESSION_OVERRIDE) ?? undefined,
+  );
   if (sessionIdx >= 0) {
-    setSessionResolutionOverride(args[sessionIdx + 1]);
     args.splice(sessionIdx, 2);
   }
   const pdIdx = args.indexOf("--project-dir");

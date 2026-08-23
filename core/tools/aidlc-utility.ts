@@ -134,6 +134,7 @@ import {
   sourceBaselineAuditFields,
   withAuditLock,
   validateBoltSlug,
+  validSessionId,
   validScopes,
   worktreeAuditFilePath,
   worktreePath,
@@ -6707,10 +6708,14 @@ function handleResolveEnvScope(): void {
 // ---------------------------------------------------------------------------
 
 export async function main(argv: string[]): Promise<void> {
-  setSessionResolutionOverride(process.env.AIDLC_SESSION_OVERRIDE);
   const rawArgs = argv;
   errorArgs = [...rawArgs];
   const { positional, flags, bareFlags, blankFlags } = parseArgs(rawArgs);
+  setSessionResolutionOverride(
+    validSessionId(flags.session) ??
+      validSessionId(process.env.AIDLC_SESSION_OVERRIDE) ??
+      undefined,
+  );
   const subcommand = positional[0];
   if (
     (subcommand === "intent-create" || subcommand === "init") &&

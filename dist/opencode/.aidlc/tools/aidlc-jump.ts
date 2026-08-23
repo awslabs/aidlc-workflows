@@ -19,6 +19,7 @@ import {
   resolveProjectDir,
   resolveStage,
   type StageEntry,
+  validSessionId,
   setCheckbox,
   setField,
   setPhaseProgress,
@@ -55,8 +56,14 @@ function emitAudit(
 let projectDir: string | undefined;
 
 export function main(argv: string[]): void {
-  setSessionResolutionOverride(process.env.AIDLC_SESSION_OVERRIDE);
-  const rawArgs = argv;
+  const rawArgs = [...argv];
+  const sessionIdx = rawArgs.indexOf("--session");
+  const sessionFlag =
+    sessionIdx >= 0 ? validSessionId(rawArgs[sessionIdx + 1]) : null;
+  if (sessionIdx >= 0) rawArgs.splice(sessionIdx, 2);
+  setSessionResolutionOverride(
+    sessionFlag ?? validSessionId(process.env.AIDLC_SESSION_OVERRIDE) ?? undefined,
+  );
 
   // Extract --project-dir
   const filteredArgs: string[] = [];

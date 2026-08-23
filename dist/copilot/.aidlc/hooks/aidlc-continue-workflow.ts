@@ -896,6 +896,7 @@ interface EngineDirective {
   stage?: string;
   unit?: string;
   continueToken?: string;
+  continueCommand?: string;
   part?: number;
   parts?: number;
   units?: string[];
@@ -913,7 +914,10 @@ interface EngineDirective {
 // because we will not trap a turn on the engine's behalf when we cannot read a
 // directive. We pass --project-dir explicitly so the engine resolves the same
 // workspace regardless of the spawned process's cwd.
-function runEngineNextDirective(projectDir: string): EngineDirective | null {
+function runEngineNextDirective(
+  projectDir: string,
+  sessionId: string,
+): EngineDirective | null {
   const enginePath = join(projectDir, harnessDir(), "tools", "aidlc-orchestrate.ts");
   if (!existsSync(enginePath)) return null;
   // The spawn MUST be time-bounded. Without a timeout a hung `next` (an engine
@@ -932,7 +936,14 @@ function runEngineNextDirective(projectDir: string): EngineDirective | null {
   // forever: tier 3 would look implemented and never fire. markEngineTouch() is a
   // no-op when it sees this env var (aidlc-lib.ts).
   const proc = Bun.spawnSync({
-    cmd: ["bun", enginePath, "next", "--project-dir", projectDir],
+    cmd: [
+      "bun",
+      enginePath,
+      "next",
+      "--project-dir",
+      projectDir,
+      ...(sessionId ? ["--session", sessionId] : []),
+    ],
     stdout: "pipe",
     stderr: "pipe",
     timeout: ENGINE_TIMEOUT_MS,
@@ -962,6 +973,11 @@ function runEngineNextDirective(projectDir: string): EngineDirective | null {
         "continue_token" in parsed &&
           typeof (parsed as { continue_token?: unknown }).continue_token === "string"
           ? (parsed as { continue_token: string }).continue_token.trim()
+          : "";
+      const continueCommand =
+        "continue_command" in parsed &&
+          typeof (parsed as { continue_command?: unknown }).continue_command === "string"
+          ? (parsed as { continue_command: string }).continue_command.trim()
           : "";
       const part =
         "part" in parsed &&
@@ -1011,6 +1027,7 @@ function runEngineNextDirective(projectDir: string): EngineDirective | null {
         ...(stage.length > 0 ? { stage } : {}),
         ...(unit.length > 0 ? { unit } : {}),
         ...(continueToken.length > 0 ? { continueToken } : {}),
+        ...(continueCommand.length > 0 ? { continueCommand } : {}),
         ...(part !== undefined ? { part } : {}),
         ...(parts !== undefined ? { parts } : {}),
         ...(units ? { units } : {}),
@@ -1035,6 +1052,7 @@ function continuationReason(
   kind: string,
   stage: string,
   continueToken?: string,
+  continueCommand?: string,
   rulesContent?: Array<{ path: string; text: string }>,
   retained = false,
 ): string {
@@ -1043,7 +1061,9 @@ function continuationReason(
     return `AI-DLC coordination evidence is missing or stale. Run one fresh \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts next\`; do not reuse an earlier continuation token.`;
   }
   if (retained && kind === "load-steering" && continueToken) {
-    return `The delivered AIDLC steering part${where} is still active. Apply every path/text entry from its already-delivered \`rules_content\`, then run \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts continue "${continueToken}"\`. Keep applying and continuing every returned load-steering part until \`run-stage\`; do not restart at part 1, and do not summarise or narrate rule chunks to the user.`;
+    const command = continueCommand ??
+      `bun ${harnessDir()}/tools/aidlc-orchestrate.ts continue "${continueToken}"`;
+    return `The delivered AIDLC steering part${where} is still active. Apply every path/text entry from its already-delivered \`rules_content\`, then run \`${command}\`. Keep applying and continuing every returned load-steering part until \`run-stage\`; do not restart at part 1, and do not summarise or narrate rule chunks to the user.`;
   }
   if (retained && kind === "run-stage") {
     return `The exact delivered AIDLC run-stage${where} is still active. Complete that exact stage, then use \`report\` for the real outcome; use \`park\` for a clean pause. Never rubber-stamp approval or revision gates.`;
@@ -1056,7 +1076,7 @@ function continuationReason(
     return (
       `The AIDLC workflow still has rules to load${where}. ` +
       "Preserve this step-two continuation command, but do not run it yet: " +
-      `\`bun ${harnessDir()}/tools/aidlc-orchestrate.ts continue "${continueToken}"\` ` +
+      `\`${continueCommand ?? `bun ${harnessDir()}/tools/aidlc-orchestrate.ts continue "${continueToken}"`}\` ` +
       "First, apply every path/text entry in the exact `rules_content` payload below. " +
       "Second, run the preserved command and keep following each load-steering step it " +
       "returns, applying its rule chunk before every continuation, until it answers " +
@@ -1237,7 +1257,7 @@ const directive: EngineDirective | null = copilotEvidence
   ? retainedDirective
     ? { ...retainedDirective, retained: true }
     : { kind: "rehydrate", retained: true }
-  : runEngineNextDirective(projectDir);
+  : runEngineNextDirective(projectDir, sessionId);
 if (directive === null) {
   recordHookDrop(projectDir, HOOK_NAME, "engine next returned no parseable directive; allowing stop");
   return allowStop();
@@ -1415,6 +1435,7 @@ return blockStop(
     kind,
     activeStage ?? currentStageSlug(stateContent),
     directive.continueToken,
+    directive.continueCommand,
     directive.rulesContent,
     directive.retained,
   ),

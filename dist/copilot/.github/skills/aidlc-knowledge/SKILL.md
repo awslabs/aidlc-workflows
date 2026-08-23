@@ -60,6 +60,8 @@ bun .aidlc/tools/aidlc-knowledge.ts <verb> [args]
 
 Shared flags: `--space <name>` targets a space other than the active
 one; `--json` gives the machine-readable form of `list` and `show`.
+`--session <id>` pins the per-session space and intent selection used by the
+orchestration engine.
 
 There is deliberately **no `remove`**. Deleting a document means
 deleting the user's own file and then running `sync` — the tool never

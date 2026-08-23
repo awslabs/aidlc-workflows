@@ -43,6 +43,7 @@ import {
   isoTimestamp,
   intentUuidForSelection,
   readSessionBinding,
+  readSessionRebindOffer,
   readSessionIntentUuid,
   recordHookDrop,
   recoveryFilePath,
@@ -53,6 +54,8 @@ import {
   writeSessionBinding,
   writeSessionIntentUuid,
   writeSessionPidAncestry,
+  writeSessionRebindOffer,
+  clearSessionRebindOffer,
 } from "../tools/aidlc-lib.ts";
 import { writeCurrentTranscriptPath } from "../tools/aidlc-usage.ts";
 
@@ -119,15 +122,22 @@ if (sessionId) {
 // Resolve one session-local workflow target before any state read. An existing
 // binding wins; a first-seen session inherits the shared cursors and records
 // that fallback immediately, including an intent:null cold workspace.
-const selection = resolveWorkflowSelection(projectDir, { sessionId });
-if (sessionId) {
-  writeSessionBinding(
-    projectDir,
-    sessionId,
-    selection.space,
-    selection.intent,
-  );
-}
+const preExistingBinding =
+  sessionId ? readSessionBinding(projectDir, sessionId) : null;
+const preExistingStamp =
+  sessionId ? readSessionIntentUuid(projectDir, sessionId) : null;
+const stampedTarget =
+  source === "resume" && !preExistingBinding && preExistingStamp
+    ? findIntentByUuid(projectDir, preExistingStamp)
+    : null;
+const selection = stampedTarget
+  ? {
+      space: stampedTarget.space,
+      intent: stampedTarget.dirName,
+      sessionId,
+      binding: null,
+    }
+  : resolveWorkflowSelection(projectDir, { sessionId });
 
 // Atomically materialize a clone's missing gitignored cursor, then align the
 // harness-native includes before the no-workflow early exit.
@@ -193,11 +203,11 @@ if (eventType) {
 //     back together. No session_id (TTY/empty stdin) → no-op.
 const activeSp = activeSpace(projectDir);
 const liveUuid = activeIntentUuid(projectDir, activeSp);
-const binding = sessionId ? readSessionBinding(projectDir, sessionId) : null;
+const binding = preExistingBinding;
 const selectedUuid = intentUuidForSelection(projectDir, selection);
 let rebindOffer = "";
 if (sessionId) {
-  const stampedUuid = readSessionIntentUuid(projectDir, sessionId);
+  const stampedUuid = preExistingStamp;
   if (eventType === "SESSION_STARTED") {
     if (selectedUuid) writeSessionIntentUuid(projectDir, sessionId, selectedUuid);
   } else if (source === "resume") {
@@ -205,6 +215,9 @@ if (sessionId) {
     if (ownedUuid && ownedUuid !== liveUuid) {
       const was = findIntentByUuid(projectDir, ownedUuid);
       if (was) {
+        const signature = `${was.space}/${was.dirName}/${liveUuid ?? "(none)"}`;
+        const alreadyOffered =
+          readSessionRebindOffer(projectDir, sessionId) === signature;
         const live = liveUuid ? findIntentByUuid(projectDir, liveUuid) : null;
         const liveSlug = live ? live.slug : "(none)";
         const entrySkill = harnessDir() === ".codex" ? "$aidlc" : "/aidlc";
@@ -215,11 +228,16 @@ if (sessionId) {
           was.space === activeSp
             ? `run \`${entrySkill} intent ${was.slug}\``
             : `first run \`${entrySkill} space ${was.space}\`; after it completes, run \`${entrySkill} intent ${was.slug}\``;
-        rebindOffer =
-          `INTENT REBIND OFFER: This conversation is bound to ${was.slug}, but the shared cursor names ${liveSlug}. ` +
-          `Move the shared cursor back to ${was.slug}? [Y/n] - on Yes, ${switchInstruction}; ` +
-          `on No, keep working ${was.slug} through this session binding. This changes only machine-local navigation.\n`;
+        if (!alreadyOffered) {
+          rebindOffer =
+            `INTENT REBIND OFFER: This conversation is bound to ${was.slug}, but the shared cursor names ${liveSlug}. ` +
+            `Move the shared cursor back to ${was.slug}? [Y/n] - on Yes, ${switchInstruction}; ` +
+            `on No, keep working ${was.slug} through this session binding. This changes only machine-local navigation.\n`;
+          writeSessionRebindOffer(projectDir, sessionId, signature);
+        }
       }
+    } else {
+      clearSessionRebindOffer(projectDir, sessionId);
     }
 
     // A binding owns attribution. Without one, preserve the legacy stamp that
@@ -236,6 +254,10 @@ if (sessionId) {
   } else if (!stampedUuid && selectedUuid) {
     writeSessionIntentUuid(projectDir, sessionId, selectedUuid);
   }
+}
+
+if (sessionId) {
+  writeSessionBinding(projectDir, sessionId, selection.space, selection.intent);
 }
 
 // Cursor can only surface this probe through beforeSubmitPrompt's blocking

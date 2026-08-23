@@ -2142,6 +2142,11 @@ function safeSessionId(sessionId: string): string {
   return safe;
 }
 
+export function validSessionId(sessionId: string | undefined): string | null {
+  const candidate = sessionId?.trim() ?? "";
+  return candidate && safeSessionId(candidate) ? candidate : null;
+}
+
 function sessionRecordPath(projectDir: string, sessionId: string): string {
   const safe = safeSessionId(sessionId);
   if (!safe) return "";
@@ -2216,6 +2221,52 @@ export function writeSessionBinding(
     writeFileSync(path, `${JSON.stringify(binding)}\n`, "utf-8");
   } catch {
     /* per-user runtime state; best-effort */
+  }
+}
+
+function sessionRebindOfferPath(projectDir: string, sessionId: string): string {
+  const recordPath = sessionRecordPath(projectDir, sessionId);
+  return recordPath ? `${recordPath}.rebind-offer` : "";
+}
+
+export function readSessionRebindOffer(
+  projectDir: string,
+  sessionId: string,
+): string | null {
+  const path = sessionRebindOfferPath(projectDir, sessionId);
+  if (!path) return null;
+  try {
+    return readFileSync(path, "utf-8").trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeSessionRebindOffer(
+  projectDir: string,
+  sessionId: string,
+  signature: string,
+): void {
+  const path = sessionRebindOfferPath(projectDir, sessionId);
+  if (!path || !signature) return;
+  try {
+    mkdirSync(sessionsDir(projectDir), { recursive: true });
+    writeFileSync(path, `${signature}\n`, "utf-8");
+  } catch {
+    /* per-user runtime state; best-effort */
+  }
+}
+
+export function clearSessionRebindOffer(
+  projectDir: string,
+  sessionId: string,
+): void {
+  const path = sessionRebindOfferPath(projectDir, sessionId);
+  if (!path) return;
+  try {
+    unlinkSync(path);
+  } catch {
+    /* absent runtime receipt */
   }
 }
 

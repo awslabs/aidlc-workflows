@@ -31,9 +31,11 @@ import {
   createIntent,
   intentsRegistryPath,
   readIntentRegistry,
+  readSessionBinding,
   readSessionIntentUuid,
   setActiveIntentCursor,
   setActiveSpaceCursor,
+  writeSessionIntentUuid,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
@@ -113,6 +115,19 @@ describe("t169 session-start resume rebind (mechanism cli — spawned hook + cur
     const resumed = fire(proj, "resume", "S2");
     expect(resumed.exitCode).toBe(0);
     expect(resumed.context).not.toContain("INTENT REBIND OFFER");
+  });
+
+  test("upgrade stamp without binding preserves the legacy rebind offer", () => {
+    const first = createIntent(proj, "upgrade-first", "default", "feature");
+    const second = createIntent(proj, "upgrade-second", "default", "feature");
+    writeSessionIntentUuid(proj, "UPGRADE", first.uuid);
+    expect(readSessionBinding(proj, "UPGRADE")).toBeNull();
+    setActiveIntentCursor(proj, second.dirName, "default");
+
+    const resumed = fire(proj, "resume", "UPGRADE");
+    expect(resumed.context).toContain("INTENT REBIND OFFER");
+    expect(resumed.context).toContain("upgrade-first");
+    expect(readSessionBinding(proj, "UPGRADE")?.intent).toBe(first.dirName);
   });
 
   test("cross-space rebind emits two sequential skill invocations", () => {

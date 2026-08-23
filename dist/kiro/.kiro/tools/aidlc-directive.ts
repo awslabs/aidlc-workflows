@@ -1331,7 +1331,7 @@ if (import.meta.main) {
       ],
       continue_token: "opaque-token",
       continue_command:
-        'bun .claude/tools/aidlc-orchestrate.ts continue "opaque-token"',
+        'bun <harness>/tools/aidlc-orchestrate.ts continue "opaque-token"',
     },
     {
       kind: "run-stage",

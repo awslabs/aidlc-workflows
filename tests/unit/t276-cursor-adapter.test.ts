@@ -429,8 +429,8 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(out.user_message ?? "").toContain("intent-b");
     expect(out.user_message ?? "").toContain("/aidlc intent intent-a");
 
-    // The blocked warning is consumed: resubmitting continues on B instead of
-    // deadlocking on the same beforeSubmitPrompt response.
+    // The blocked warning is consumed: resubmitting continues on the bound
+    // intent A instead of deadlocking on the same beforeSubmitPrompt response.
     const next = runAdapter(
       proj,
       "mint",
@@ -438,7 +438,7 @@ describe("t276 cursor adapter payload conversion", () => {
     );
     expect(next.code).toBe(0);
     expect(next.stdout.trim()).toBe("");
-    const shard = readAllAuditShards(proj);
+    const shard = readAllAuditShards(proj, a.dirName, "default");
     expect(shard).toContain("HUMAN_TURN");
     expect(shard).not.toContain("SESSION_RESUMED");
   });
