@@ -32,17 +32,22 @@ module applies only when `directive.reviewer` is present.
 > `unit-of-work-dependency.md`. The planned ceremony is kept here as design
 > intent until a later walk consumes `bolt-plan.md`.
 
-Construction introduces three gate patterns that differ from the standard per-stage approval gate. See SKILL.md §CONSTRUCTION Flow for the complete orchestrator behaviour.
+Construction introduces a walking-skeleton stage gate, a one-time ladder, and halt-and-ask on Code Generation failure. The shipped walk is the **Engine-driven per-unit iteration** block later in this module. Planned Bolt-major variants are marked below.
 
-**Walking-skeleton gate (first Bolt when a real Unit DAG exists)**
+**Walking-skeleton gate (first in-scope Construction EXECUTE stage)**
 
-When the resolved Unit DAG has a first Bolt and the applicable skeleton stance
-selects the walking-skeleton ceremony, that Bolt always presents a Bolt-level
-approval gate regardless of any autonomy-mode setting. The gate covers the
-Bolt's design artifacts and generated code together. Audit: emit
-`GATE_APPROVED` as usual; the enclosing `BOLT_COMPLETED` ties the gate to the
-Bolt. Skeleton-off uses the ordinary first-Bolt gate; a zero-Unit stage has no
-Bolt ceremony at all.
+When the resolved Unit DAG is non-empty and the applicable skeleton stance
+selects the walking-skeleton ceremony, the first in-scope Construction
+EXECUTE stage (`isSkeletonGateStage`) always presents a stage-level approval
+gate regardless of autonomy mode. That gate covers that stage's artifacts
+across the Units that have settled — not a Bolt's combined design artifacts
+and generated code. Audit: emit `GATE_APPROVED` as usual. `BOLT_COMPLETED`
+is not emitted on this gate. Skeleton-off uses the ordinary first-stage gate;
+a zero-Unit stage has no skeleton or Bolt ceremony at all.
+
+> **Planned (non-executable).** A later Bolt-major walk would present a
+> Bolt-level gate covering that Bolt's design artifacts and generated code
+> together, with the enclosing `BOLT_COMPLETED` tying the gate to the Bolt.
 
 **Ladder prompt (fires once, immediately after walking skeleton gate)**
 
@@ -60,21 +65,28 @@ options:
     description: Stop for your approval after each Bolt (or each parallel batch).
 ```
 
+The shipped option labels still say "remaining Bolts" / "Gate every Bolt"; they govern remaining Construction *stage* gates, not Bolt-level gates.
+
 - Record the answer in `aidlc-state.md` as `Construction Autonomy Mode: autonomous` or `Construction Autonomy Mode: gated` via `aidlc-bolt.ts set-autonomy --mode <choice>` (which emits `AUTONOMY_MODE_SET` itself).
 - The ladder choice is set-autonomy-owned, like an approval choice is report-owned: do NOT call `aidlc-log.ts decision` or `aidlc-log.ts answer` for it. Switching to `autonomous` requires the human's fresh turn (the ladder answer) — logging the choice as an interview answer first would consume that turn and the mode switch would refuse.
-- Session resume: if `Construction Autonomy Mode: unset` but the walking skeleton is already `[x]` complete, re-fire the ladder prompt before executing the next Bolt.
+- On the default walk, `autonomous` skips the remaining Construction stage gates except halt-and-ask, the Build-and-Test loop-back's rung 4, and the swarm settle `gate: true` re-entry (the conductor auto-approves that settle under autonomy).
+- Session resume: if `Construction Autonomy Mode: unset` but the walking skeleton is already `[x]` complete, re-fire the ladder prompt before executing the next Construction stage.
 
 **Subsequent Bolt gate (per autonomy mode)**
 
-For Bolts after the walking skeleton, the Bolt-level gate is presented only if `Construction Autonomy Mode: gated`. In `autonomous` mode the gate is skipped. For parallel batches the gate covers every Bolt in the batch (single gate, not one per Bolt).
+> **Planned (non-executable).** Under a later Bolt-major walk, Bolts after the
+> walking skeleton would present a Bolt-level gate only if `Construction
+> Autonomy Mode: gated`. In `autonomous` mode that gate would be skipped. For
+> parallel Bolt batches the gate would cover every Bolt in the batch. The
+> shipped walk does not present subsequent Bolt-level gates.
 
 **Halt-and-ask on failure**
 
-When a Bolt's code-generation returns failure, **always halt and present the halt-and-ask prompt regardless of autonomy mode**. This is one of two cases where `autonomous` mode stops to consult the user — the other is the Build-and-Test failure loop-back's rung 4 (below: "Build-and-Test failure loop-back (3.6 → 3.5)"), which halts when the loop-back bound is exhausted or no identifiable fix exists.
+When Code Generation returns failure, **always halt and present the halt-and-ask prompt regardless of autonomy mode**. This is one of two cases where `autonomous` mode stops to consult the user — the other is the Build-and-Test failure loop-back's rung 4 (below: "Build-and-Test failure loop-back (3.6 → 3.5)"), which halts when the loop-back bound is exhausted or no identifiable fix exists.
 
-- Solo Bolt failure: halt immediately, emit `BOLT_FAILED` (with `--slug` for halt-and-ask correlation), present retry / skip / abort.
-- Parallel batch partial failure: wait for all parallel Tasks to return, preserve successful Bolts' artifacts, emit `BOLT_FAILED` for the failed Bolt with `Succeeded=[names]`, present `"Bolts [X, Y] succeeded, Bolt [Z] failed with: [error]. Options: retry Z, skip Z, abort Construction."`
-- Retry: re-run the failed Bolt only inside the existing worktree.
+- Solo Unit failure: halt immediately; on the swarm / worktree path emit `BOLT_FAILED` (with `--slug` for halt-and-ask correlation), present retry / skip / abort.
+- Parallel batch partial failure: wait for all parallel Tasks to return, preserve successful Units' artifacts, emit `BOLT_FAILED` for the failed Unit with `Succeeded=[names]`, present `"Units [X, Y] succeeded, Unit [Z] failed with: [error]. Options: retry Z, skip Z, abort Construction."`
+- Retry: re-run the failed Unit only inside the existing worktree.
 - Skip: mark `[S]` in state with reason, proceed to next batch. Worktree at `<path>` is preserved.
 - Abort: stop Construction; user can resume later. Worktree at `<path>` is preserved.
 
@@ -263,27 +275,29 @@ impact-unestimated give-up option is a protocol violation.
 ### Within-Bolt Question Collection (Construction)
 
 > **Non-executable future-state (planned Bolt-major ceremony).** The
-> "Construction runs Bolt by Bolt" procedure and numbered steps 1–7 below are
-> design intent. Do not collect questions by Bolt, do not present a Bolt-level
-> answers gate, and do not replace Code Generation's completion gate with a
-> Bolt-level gate on the default walk. Follow **Engine-driven per-unit
-> iteration** and the receipts / waves / unit-major blocks instead. Point 6's
-> swarm sentence (one Code Generation stage gate after the FINAL batch) is
-> current runtime and is restated in the engine-driven block.
+> numbered steps below are design intent. Do not collect questions by Bolt,
+> do not present a Bolt-level answers gate, and do not replace Code
+> Generation's completion gate with a Bolt-level gate on the default walk.
+> Follow **Engine-driven per-unit iteration** and the receipts / waves /
+> unit-major blocks instead.
 
-Construction runs **Bolt by Bolt** (see SKILL.md §CONSTRUCTION Flow for orchestrator behaviour). Within each Bolt, questions across the Bolt's Units are collected upfront before any artifacts or code are produced. This keeps the human's interactive work concentrated at the start of each Bolt.
+> The planned Bolt-major ceremony would run Construction **Bolt by Bolt**.
+> Within each Bolt, questions across the Bolt's Units would be collected
+> upfront before any artifacts or code were produced:
+>
+> 1. **Questions**: For each applicable design stage (3.1–3.4), for each Unit in the Bolt (in build order), execute the stage file in QUESTION-ONLY mode. Questions are grouped by stage — all functional design questions for the Bolt's Units together, then all NFR questions, etc.
+> 2. **Within each stage group**, questions are labeled by Unit name so cross-Unit concerns in the Bolt are visible together.
+> 3. **The standard question protocol** (interaction mode choice, answer collection, ambiguity analysis) applies once per stage group within the Bolt, not per Unit.
+> 4. **A single Bolt-level answers gate** confirms the Bolt's answers across all stages before design artifacts begin.
+> 5. **Design artifacts**: Stage files execute in ARTIFACT-ONLY mode — reading the approved answers and generating artifacts. No human interaction during generation.
+> 6. **Code generation (3.5)**: Per-Unit Task delegation to the aidlc-developer-agent. A single Bolt-level gate (or batch-level gate for parallel batches) would replace the stage file's per-Unit approval gate.
+> 7. **Bolt gate**: Walking skeleton — always present. Subsequent Bolts — per `Construction Autonomy Mode`.
+>
+> Under the shipped swarm, the engine already presents that Code Generation
+> stage gate only after the FINAL DAG batch has converged; that fact is
+> restated in the engine-driven block.
 
-When the orchestrator runs a Bolt in phased mode:
-
-1. **Questions**: For each applicable design stage (3.1–3.4), for each Unit in the Bolt (in build order), execute the stage file in QUESTION-ONLY mode. Questions are grouped by stage — all functional design questions for the Bolt's Units together, then all NFR questions, etc.
-2. **Within each stage group**, questions are labeled by Unit name so cross-Unit concerns in the Bolt are visible together.
-3. **The standard question protocol** (interaction mode choice, answer collection, ambiguity analysis) applies once per stage group within the Bolt, not per Unit.
-4. **A single Bolt-level answers gate** confirms the Bolt's answers across all stages before design artifacts begin.
-5. **Design artifacts**: Stage files execute in ARTIFACT-ONLY mode — reading the approved answers and generating artifacts. No human interaction during generation.
-6. **Code generation (3.5)**: Per-Unit Task delegation to the aidlc-developer-agent. The stage file's per-Unit approval gate is **suppressed by the orchestrator** — a single Bolt-level gate (or batch-level gate for parallel batches) replaces it. Under an autonomous Construction swarm the engine drives one batch per `next` and presents that single stage-level gate only after the FINAL batch has converged (the intermediate batches merge without a gate).
-7. **Bolt gate**: Walking skeleton — always present. Subsequent Bolts — per `Construction Autonomy Mode`. Failure always halts and asks regardless of mode. See SKILL.md §CONSTRUCTION Flow for the ladder prompt, autonomy mode, and halt-and-ask details.
-
-**Engine-driven per-unit iteration.** The orchestration engine now drives the per-Unit loop for the inline per-Unit design stages (functional-design, nfr-requirements, nfr-design, infrastructure-design) the same way it always has for code-generation: on a `next` that lands on an in-flight per-Unit stage (off the swarm path), the engine emits ONE `run-stage` directive per Unit, in Bolt build order, carrying the resolved Unit name in `directive.unit` and its artifact paths. The engine substitutes the next unsettled Unit on each `next`. The stage's per-Unit gate is **suppressed** (`gate: false`) on every not-yet-settled Unit, and the stage's real gate is presented exactly once, on the re-entry after the LAST Unit settles, so a single stage-level approval covers all Units and cannot be reached until every Unit is built (the same "per-Unit gate suppressed, single gate replaces it" rule point 6 already states for code-generation, now applied across all five per-Unit stages, and enforced deterministically: `report --result approved` on a not-yet-completed per-Unit stage is refused while any Unit is unsettled). A workflow with no units-generation dependency artifact on disk degrades to one single-iteration directive (unchanged behaviour). When the artifact exists, the engine validates the compiled `bolt_dag` against it and recomputes the unit batches on the spot if the cache is missing or stale, so the per-unit loop never silently shrinks to an outdated unit set; an artifact whose units block does not parse is surfaced as an error instead.
+**Engine-driven per-unit iteration.** The orchestration engine now drives the per-Unit loop for the inline per-Unit design stages (functional-design, nfr-requirements, nfr-design, infrastructure-design) the same way it always has for code-generation: on a `next` that lands on an in-flight per-Unit stage (off the swarm path), the engine emits ONE `run-stage` directive per Unit, in Bolt build order, carrying the resolved Unit name in `directive.unit` and its artifact paths. The engine substitutes the next unsettled Unit on each `next`. The stage's per-Unit gate is **suppressed** (`gate: false`) on every not-yet-settled Unit, and the stage's real gate is presented exactly once, on the re-entry after the LAST Unit settles, so a single stage-level approval covers all Units and cannot be reached until every Unit is built (the same "per-Unit gate suppressed, single gate replaces it" rule, now applied across all five per-Unit stages, and enforced deterministically: `report --result approved` on a not-yet-completed per-Unit stage is refused while any Unit is unsettled). A workflow with no units-generation dependency artifact on disk degrades to one single-iteration directive (unchanged behaviour). When the artifact exists, the engine validates the compiled `bolt_dag` against it and recomputes the unit batches on the spot if the cache is missing or stale, so the per-unit loop never silently shrinks to an outdated unit set; an artifact whose units block does not parse is surfaced as an error instead.
 
 **Unit lifecycle receipts.** On each inline per-Unit directive, bracket the Unit's work with the receipt verbs: `bun {{HARNESS_DIR}}/tools/aidlc-state.ts unit start --stage <slug> --unit <name>` before the body, and `... unit complete --stage <slug> --unit <name>` after the Unit's artifacts are written (complete verifies that every required artifact is a regular file on disk and refuses directories or missing paths — the receipt is the completion signal, artifacts are the evidence it checks). Pass the exact `directive.stage` + `directive.unit` pair emitted by the engine: `unit start` re-runs the read-only route and refuses a DAG member whose dependencies or earlier same-batch Units are not settled. New Unit names use lowercase kebab-case; safe legacy single-segment names (including digit-leading names, uppercase letters, underscores, and dots) remain accepted by existing DAGs and autonomous swarms, which use a deterministic internal Bolt slug without changing the Unit identity. An autonomy grant does not disable these receipts when a backward jump routes an inline per-Unit stage; only a stage currently owned by the autonomous swarm refuses them. If the Unit must stop before completion (blocking question, failed dependency, session ending mid-Unit), record the checkpoint with single-line text: `... unit pause --stage <slug> --unit <name> --reason "<why>" --next-action "<the exact next step>"`. Every lifecycle row carries an exact stage-attempt `Run floor` (`<boundary-event>:<timestamp>#<ordinal>`); when equal second-precision boundaries in different audit shards are causally unordered, the engine uses a deterministic `AMBIGUOUS:<timestamp>#<digest>` floor that invalidates older receipts instead of trusting shard filename order. Once any receipt exists for a stage, every later attempt stays in receipt mode and requires a current-attempt `UNIT_COMPLETED` receipt per Unit. Artifact files alone no longer settle a Unit, so a stale, paused, reopened, or partially-written Unit can never be mistaken for done. A paused Unit routes FIRST and hard-stops the loop: the engine emits an `ask` naming the Unit, its recorded reason, and next action (`unit_state: paused`), and no other work may start until an explicit `... unit resume --stage <slug> --unit <name>`. `unit start` refuses while another Unit of the stage is open (one active Unit at a time; resume or complete it first), and workflows that never call the verbs keep today's artifact-driven coverage unchanged.
 

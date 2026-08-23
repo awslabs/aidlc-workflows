@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 Reconcile planned Bolt terminology with the shipped stage-major Construction walk. Bolt stays the 2.9 planning slice; protocol ceremony that still teaches Bolt-major is labeled non-executable; diagrams, examples, and the 2.9 handoff describe the current runtime. **Upgrade:** refresh your `dist/<harness>/` shell so the updated protocol module, glossary, and stage guidance are installed.
 
 * Terminology (glossary + stage-protocol hub) keeps Bolt as the planned 2.9 delivery slice and documents walk order, swarm's one final Code Generation gate, unit-major's retained stage-gate cascade, per-Unit `BOLT_*` rows, and `org.md` → `team.md` → `project.md` skeleton stance.
-* `stage-protocol-construction.md` labels Bolt-gate and within-Bolt question subsections as non-executable future-state; the engine-driven per-unit / wave / unit-major / loop-back blocks stay executable.
+* `stage-protocol-construction.md` destages Bolt-major ceremony to non-imperative design notes (combined design+code gate, subsequent Bolt-level gates, within-Bolt steps 1–7); walking-skeleton stage gate, ladder procedure, halt-and-ask, and the engine-driven per-unit / wave / unit-major / loop-back blocks stay executable.
 * User and reference Construction diagrams, worked examples, and the Inception 2.9 handoff now show stage-major and identify `bolt-plan.md` as planning, not the walk source.
 
 ## [2.6.55] - 2026-08-22

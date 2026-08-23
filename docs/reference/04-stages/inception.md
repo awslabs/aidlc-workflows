@@ -51,8 +51,10 @@ Stage 2.2, and the User Stories mob at Stage 2.4.
   the cross-row promotion that makes this stage structurally distinct from every other stage.
 - Stage 2.7 produces `unit-of-work.md`, which defines the units that drive
   the phased construction flow in the Construction phase.
-- Stage 2.9 produces the execution plan that determines which Construction
-  stages run for each unit and in what order. It reads
+- Stage 2.9 produces the approved Bolt plan (economic sequence, multi-Unit
+  grouping, DoD, confidence hypothesis, ownership). That plan is planning
+  content; Construction's runtime batches come from
+  `unit-of-work-dependency.md` (2.7). Stage 2.9 reads
   `aidlc/spaces/<active-space>/memory/{org,team,project}.md` for the team's Way
   of Working, Walking Skeleton stance, and Deployment sections.
 - The phase boundary verification at Stage 2.9 validates Requirements to
@@ -1029,10 +1031,11 @@ Standard 2-option gate: **Approve** (continue to Construction phase) /
 ### Notes
 
 - **This stage's output drives Construction.** The `unit-of-work.md` file
-  defines the Units that the Construction phase iterates over in its per-Unit
-  loop. Each Unit goes through the applicable Construction stages (Functional
-  Design, NFR Requirements, NFR Design, Infrastructure Design, Code
-  Generation) before the next Unit begins.
+  defines the Units; `unit-of-work-dependency.md` is the DAG the Construction
+  engine walks. The default walk is stage-major: one in-scope Construction
+  stage runs for every Unit, then the next stage. Opt-in
+  `Construction Iteration: unit-major` is the walk that finishes one Unit's
+  per-unit stages before the next Unit begins.
 - **2.7 is ALWAYS when in scope.** In the compiled scope grid, 2.7 and 2.9 travel
   together (both EXECUTE or both SKIP per scope). There is no single-unit
   skip condition at this stage — single-Unit flows still produce a trivial
@@ -1352,8 +1355,8 @@ See `docs/guide/04-phases-and-stages.md` for the current Construction walk.
   `stage-protocol-governance.md` §13.
 - **Ideation Phase**: `docs/reference/04-stages/ideation.md` -- Previous phase
   documentation
-- **Construction Phase**: Construction stages execute per the delivery plan
-  produced by Stage 2.9
+- **Construction Phase**: `docs/reference/04-stages/construction.md` — default
+  walk is stage-major; `bolt-plan.md` is planning, not the walk source
 - **Deliberate Deviations**: SKILL.md documents intentional differences from
   the upstream reference, including the RE scope/fingerprint rerun guard,
   aidlc-design-agent support additions, ADR artifacts, and the Delivery

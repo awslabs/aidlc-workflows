@@ -177,11 +177,11 @@ The walking skeleton shipped. How should the remaining Bolts run?
   ▸ Gate every Bolt
 ```
 
-Your answer is recorded in `aidlc-state.md` as `Construction Autonomy Mode` and governs the rest of Construction in this workflow (session resume respects it). Stage 3.5 (Code Generation) runs as a subagent for each Unit; the per-Unit completion gate in that stage file is suppressed — a single stage-level (or batch-level) gate replaces it.
+Your answer is recorded in `aidlc-state.md` as `Construction Autonomy Mode` and governs the remaining Construction *stage* gates in this workflow (session resume respects it). Stage 3.5 (Code Generation) runs as a subagent for each Unit; the per-Unit completion gate in that stage file is suppressed — a single stage-level gate replaces it after the last Unit settles (under swarm, after the final DAG batch).
 
 Units whose dependencies are satisfied and that don't depend on each other run in a **parallel batch** — the orchestrator issues multiple `Task` calls in a single turn. A failure always halts and asks for retry / skip / abort, even when you've chosen autonomous mode.
 
-After all Bolts complete, stages 3.6 (Build and Test) and 3.7 (CI Pipeline) run once across the whole solution.
+After every Unit's per-unit stages settle, stages 3.6 (Build and Test) and 3.7 (CI Pipeline) run once across the whole solution.
 
 ---
 

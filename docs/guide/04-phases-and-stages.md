@@ -36,7 +36,7 @@ graph LR
     subgraph CONSTRUCTION["CONSTRUCTION (3.1-3.7)"]
         C1["Functional Design"]
         C7["CI Pipeline"]
-        C1 -.->|"7 stages per unit"| C7
+        C1 -.->|"3.1–3.5 stage-major per Unit; 3.6–3.7 once after all Units"| C7
     end
 
     subgraph OPERATION["OPERATION (4.1-4.7)"]
@@ -244,7 +244,7 @@ flowchart TD
     GATE1{{"Walking-skeleton gate\nfirst Construction EXECUTE stage"}}
 
     LADDER{"Ladder prompt\n(fires once)"}
-    MODE_AUTO["Continue autonomously\nskips remaining stage gates"]
+    MODE_AUTO["Continue autonomously\nskips remaining stage gates\n(swarm settle auto-approved)"]
     MODE_GATED["Gate every remaining stage"]
 
     NEXT["Next Construction stage\nfor every Unit"]
@@ -287,29 +287,36 @@ When two Units share their dependency prerequisite (for example, Units B and C b
 
 ```mermaid
 flowchart LR
-    A["Unit A first\n(unblocks B and C)"]
-    GA{{"Walking-skeleton gate\n(first Construction stage)"}}
+    S1["First Construction EXECUTE stage\nfor every eligible Unit"]
+    GA{{"One walking-skeleton gate"}}
     L{"Ladder prompt"}
+    LATER["Remaining design stages\nstage-major"]
 
-    subgraph BATCH["Parallel batch (Units B + C)"]
+    subgraph CG["3.5 Code Generation"]
+        A["Unit A"]
         B["Unit B"]
         C["Unit C"]
     end
 
-    GBC{{"One Code Generation stage gate\nafter the final batch (swarm)"}}
+    GBC{{"One Code Generation stage gate\nafter the final DAG batch (swarm)"}}
 
-    A --> GA --> L --> BATCH --> GBC
+    S1 --> GA --> L --> LATER --> A
+    A --> B
+    A --> C
+    B --> GBC
+    C --> GBC
 
-    style A fill:#bbdefb,stroke:#1565c0
+    style S1 fill:#bbdefb,stroke:#1565c0
     style GA fill:#ffcc80,stroke:#e65100
     style L fill:#fff59d,stroke:#f57f17
+    style A fill:#bbdefb,stroke:#1565c0
     style B fill:#bbdefb,stroke:#1565c0
     style C fill:#bbdefb,stroke:#1565c0
-    style BATCH fill:#fff3e0,stroke:#e65100
+    style CG fill:#fff3e0,stroke:#e65100
     style GBC fill:#ffcc80,stroke:#e65100
 ```
 
-<!-- Text fallback: Unit A runs first on the opening Construction stage, followed by the walking-skeleton gate and the ladder prompt. When B and C both depend only on A, they form a parallel batch. Under an autonomous swarm, one Code Generation stage gate covers the stage after the final DAG batch converges. -->
+<!-- Text fallback: The first Construction EXECUTE stage runs for every eligible Unit, then one walking-skeleton gate and the ladder prompt. Remaining design stages stay stage-major. At Code Generation, Unit A can unblock B and C so those two may run as a parallel batch. Under an autonomous swarm, one Code Generation stage gate covers the stage after the final DAG batch converges. -->
 
 The conductor (the live `/aidlc` session) dispatches parallel Code Generation Units by issuing multiple `Task` calls in a single turn. Design stages stay on the engine-driven per-Unit (or wave) path. `BOLT_STARTED` / `BOLT_COMPLETED` fire per Unit/worktree on the swarm path; `SWARM_COMPLETED` closes the batch. A default gated run records none of those `BOLT_*` rows.
 
@@ -336,7 +343,7 @@ Failures always stop Construction, even in autonomous mode. The other autonomous
 
 - Default walk is stage-major: questions and artifacts for a stage run for every Unit, then the next stage. There is no Bolt-level answers gate on the shipped walk.
 - The per-Unit completion gate inside `stages/construction/code-generation.md` is **suppressed by the conductor** during normal Construction. A single stage-level gate replaces it after the last Unit settles; under swarm, that gate waits for the final DAG batch.
-- The ladder prompt fires exactly once per workflow — after the first Construction EXECUTE-stage gate. Your answer is recorded as `Construction Autonomy Mode` in `aidlc-state.md` and honoured on session resume. Unit-major suppresses swarm but **keeps** the per-stage gate cascade.
+- The ladder prompt fires exactly once per workflow — after the first Construction EXECUTE-stage gate. Your answer is recorded as `Construction Autonomy Mode` in `aidlc-state.md` and honoured on session resume. On the default walk, `autonomous` skips remaining stage gates except halt-and-ask, the Build-and-Test loop-back's rung 4, and the swarm settle re-entry (auto-approved under autonomy). Unit-major suppresses swarm but **keeps** the per-stage gate cascade.
 - Parallel Code Generation batches require multiple `Task`-capable subagent slots — see [Agents](06-agents.md) for concurrency constraints.
 
 ---

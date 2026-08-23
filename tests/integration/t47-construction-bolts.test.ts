@@ -1,4 +1,4 @@
-// covers: file:skills/aidlc/SKILL.md, file:tools/aidlc-audit.ts, file:knowledge/aidlc-shared/audit-format.md, file:knowledge/aidlc-shared/state-template.md, file:aidlc-common/protocols/stage-protocol.md, file:aidlc-common/stages/construction/code-generation.md
+// covers: file:skills/aidlc/SKILL.md, file:tools/aidlc-audit.ts, file:knowledge/aidlc-shared/audit-format.md, file:knowledge/aidlc-shared/state-template.md, file:aidlc-common/protocols/stage-protocol.md, file:aidlc-common/protocols/stage-protocol-construction.md, file:aidlc-common/stages/construction/code-generation.md
 //
 // In-process port of tests/integration/t47-construction-bolts.sh (TAP plan 12),
 // mechanism = none. The .sh is a Construction Bolt-by-Bolt vocabulary check: it
@@ -86,6 +86,15 @@ const STATE_TEMPLATE = readFileSync(
 );
 const STAGE_PROTOCOL = readFileSync(
   join(AIDLC_SRC, "aidlc-common", "protocols", "stage-protocol.md"),
+  "utf-8",
+);
+const CONSTRUCTION_PROTOCOL = readFileSync(
+  join(
+    AIDLC_SRC,
+    "aidlc-common",
+    "protocols",
+    "stage-protocol-construction.md",
+  ),
   "utf-8",
 );
 const CODE_GEN = readFileSync(
@@ -202,6 +211,17 @@ describe("t47 Construction Bolt vocabulary (migrated from t47-construction-bolts
     );
     expect(CODE_GEN).toContain(
       "Only the Step 7 completion approval gate is suppressed",
+    );
+  });
+
+  test("construction protocol destages Bolt-major ceremony as non-executable", () => {
+    expect(CONSTRUCTION_PROTOCOL).toContain("Non-executable future-state");
+    expect(CONSTRUCTION_PROTOCOL).toContain("**Planned (non-executable).**");
+    expect(CONSTRUCTION_PROTOCOL).toMatch(
+      /shipped walk does not present subsequent Bolt-level gates/,
+    );
+    expect(CONSTRUCTION_PROTOCOL).not.toMatch(
+      /That Bolt always presents a Bolt-level\napproval gate/,
     );
   });
 });

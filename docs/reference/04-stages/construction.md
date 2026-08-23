@@ -7,10 +7,11 @@ tested software. It covers seven stages (3.1 through 3.7) that span functional
 design, non-functional requirements and design, infrastructure design, code
 generation, build/test verification, and CI pipeline configuration.
 
-Construction is the fourth of five phases in the AI-DLC methodology. It is
-driven by the **execution plan** produced during Delivery Planning (Stage 2.9).
-The plan determines which stages execute, which are skipped, and in what order
-units are built.
+Construction is the fourth of five phases in the AI-DLC methodology. The
+compiled scope grid determines which stages execute and which are skipped.
+Runtime Unit batches come from `unit-of-work-dependency.md` (stage 2.7).
+Delivery Planning (Stage 2.9) produces the approved Bolt plan — planning
+content, not the walk source.
 
 All stages follow `stage-protocol.md` for approval gates, question format,
 completion messages, and state tracking.
@@ -130,12 +131,12 @@ intermediate batches merge without a gate. Audit events (`BOLT_STARTED`,
 `BOLT_COMPLETED`) are per Unit/worktree on the swarm path; `SWARM_COMPLETED`
 closes the batch. A default gated run does not record `BOLT_*`.
 
-**Failure handling.** A Bolt failure always halts Construction regardless
-of autonomy mode. Options are retry (re-run just the failed Bolt), skip
-(mark `[S]` and continue — dependent Bolts may also fail), or abort.
+**Failure handling.** A Code Generation failure always halts Construction
+regardless of autonomy mode. Options are retry (re-run just the failed
+Unit), skip (mark `[S]` and continue — dependents may also fail), or abort.
 Successful siblings in a parallel batch keep their `[x]` status and
-artifacts. See `stage-protocol-construction.md` § "Construction Bolt gates" and
-SKILL.md §CONSTRUCTION Flow for the canonical specification.
+artifacts. See `stage-protocol-construction.md` § "Construction Bolt gates"
+for the canonical specification.
 
 ---
 

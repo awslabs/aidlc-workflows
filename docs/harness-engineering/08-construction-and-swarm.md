@@ -89,9 +89,9 @@ bullet under `## Walking Skeleton` in `core/memory/team.md`:
 ## Walking Skeleton
 
 Until our team has shipped three clean autonomous batches, the recommended
-answer at the ladder prompt is **gate every Bolt**. Reviewers see each Bolt's
-diff before the next one starts. Revisit this default once our convergence
-checks have proven reliable.
+answer at the ladder prompt is **gate every Bolt**. Reviewers see each
+remaining Construction stage (all Units) before the next stage starts.
+Revisit this default once our convergence checks have proven reliable.
 ```
 
 This stacks on top of the org default — the skeleton-first / skip-ceremony split

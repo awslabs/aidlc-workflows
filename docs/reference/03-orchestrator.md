@@ -465,7 +465,7 @@ Shipped per-stage structure:
 2. After the last Unit of that stage settles, the engine re-emits the stage with `gate: true` — one stage-level approval.
 3. Code Generation's per-Unit completion gate inside `code-generation.md` is **suppressed**; Step 3 Plan Approval remains a hard stop. Under an autonomous swarm the Code Generation stage gate is presented only after the **final** DAG batch has converged.
 
-The **walking-skeleton gate** is the first in-scope Construction EXECUTE stage (`isSkeletonGateStage`). Immediately after that gate approves, the orchestrator fires the **ladder prompt** exactly once per workflow, records `Construction Autonomy Mode: autonomous|gated` in `aidlc-state.md`, and emits `AUTONOMY_MODE_SET`. On the default walk, `autonomous` skips the remaining Construction *stage* gates (except halt-and-ask and the Build-and-Test loop-back's rung 4). Opt-in `Construction Iteration: unit-major` suppresses swarm and **retains** the per-stage gate cascade.
+The **walking-skeleton gate** is the first in-scope Construction EXECUTE stage (`isSkeletonGateStage`). Immediately after that gate approves, the orchestrator fires the **ladder prompt** exactly once per workflow, records `Construction Autonomy Mode: autonomous|gated` in `aidlc-state.md`, and emits `AUTONOMY_MODE_SET`. On the default walk, `autonomous` skips the remaining Construction *stage* gates (except halt-and-ask, the Build-and-Test loop-back's rung 4, and the swarm settle `gate: true` re-entry, which the conductor auto-approves under autonomy). Opt-in `Construction Iteration: unit-major` suppresses swarm and **retains** the per-stage gate cascade.
 
 Units eligible to run in parallel (dependency prerequisites satisfied, no mutual dependency) form a **batch**. The orchestrator may dispatch stage 3.5 Code Generation for a batch by issuing **N `Task` calls in a single assistant message**. `BOLT_STARTED` / `BOLT_COMPLETED` fire per Unit/worktree on the swarm path; `SWARM_COMPLETED` closes the batch. A default gated run records none of those `BOLT_*` rows.
 
@@ -591,7 +591,7 @@ Tasks are created in phase batches:
 - **INITIALIZATION**: All Initialization stage tasks (workspace-scaffold, workspace-detection, state-init) created before `aidlc-utility intent-create` runs. The tool completes all three stages in one call; tasks flip to completed after the tool returns.
 - **IDEATION**: All Ideation stage tasks created before stage 1.1 begins.
 - **INCEPTION**: All Inception stage tasks created before stage 2.1 begins.
-- **CONSTRUCTION**: Tasks created based on the execution plan from Delivery Planning. Per-unit stage tasks are created for each unit, plus cross-cutting tasks.
+- **CONSTRUCTION**: Tasks created from the compiled scope graph and the Unit DAG in `unit-of-work-dependency.md`. Per-unit stage tasks are created for each unit, plus cross-cutting tasks. `bolt-plan.md` is planning, not the task source.
 - **OPERATION**: All Operation stage tasks created before stage 4.1 begins.
 
 ### Per-Unit Task Naming Conventions
