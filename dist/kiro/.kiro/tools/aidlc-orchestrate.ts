@@ -74,6 +74,8 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import {
+  constants as fsConstants,
+  copyFileSync,
   type Dirent,
   existsSync,
   mkdirSync,
@@ -154,6 +156,7 @@ import {
   DEFAULT_SCOPE,
   type StageEntry,
   stateFilePath,
+  STOP_HOOK_PROBE_ENV,
   swarmConvergedUnits,
   unitCompletedReceipts,
   unitLifecycleReceiptsInUse,
@@ -1144,8 +1147,9 @@ function resolveScope(
 // threads in from the active intent (relativeRecordDir), or null → the bare space
 // record prefix (relativeSpaceRecordPrefix — a pre-birth shell with no intent
 // yet). These are agent-consumed RELATIVE paths the conductor resolves against
-// the workspace root — the engine never opens them — so re-rooting is a pure
-// prefix swap, not a route through the absolute projectDir-keyed state helpers.
+// the workspace root; the engine only joins them to projectDir for deterministic
+// diary bootstrap. Re-rooting remains a pure prefix swap, not a route through
+// the absolute projectDir-keyed state helpers.
 // Per-unit Construction stages embed a {unit-name} segment that a later engine
 // change resolves; until then the bare phase/slug form is the faithful derivation.
 function memoryPathFor(phase: string, slug: string, recordPrefix: string | null): string {
@@ -1160,6 +1164,40 @@ function unitMemoryPathFor(
 ): string {
   const prefix = recordPrefix ?? relativeSpaceRecordPrefix();
   return `${prefix}/construction/${unit}/${slug}/memory.md`;
+}
+
+// Create the stage diary at the deterministic directive-emission boundary so
+// the conductor never has to probe a maybe-absent path. This is advisory: a
+// missing install template, unresolved placeholder, or filesystem failure must
+// not prevent the run-stage directive from being emitted.
+export function bootstrapDirectiveMemory(
+  memoryPath: string,
+  codekbCtx?: { projectDir: string },
+): void {
+  try {
+    if (
+      !codekbCtx ||
+      memoryPath.includes("{") ||
+      process.env[STOP_HOOK_PROBE_ENV] === "1"
+    ) {
+      return;
+    }
+    const template = join(
+      codekbCtx.projectDir,
+      harnessDir(),
+      "knowledge",
+      "aidlc-shared",
+      "memory-template.md",
+    );
+    if (!existsSync(template)) return;
+
+    const target = join(codekbCtx.projectDir, memoryPath);
+    if (existsSync(target)) return;
+    mkdirSync(dirname(target), { recursive: true });
+    copyFileSync(template, target, fsConstants.COPYFILE_EXCL);
+  } catch {
+    // Diary bootstrap is best-effort; directive routing remains authoritative.
+  }
 }
 
 // Derive the stage file path from phase + slug (the shipped layout:
@@ -2223,6 +2261,7 @@ function buildRunStageDirective(
       forcePersona,
     });
   }
+  bootstrapDirectiveMemory(directive.memory_path, codekbCtx);
   return directive;
 }
 
@@ -3903,6 +3942,7 @@ function waveEntry(
 function attachBoundedWave(
   directive: RunStageDirective,
   wave: RunStageWave,
+  codekbCtx: CodekbCtx,
 ): string | null {
   const entries: RunStageWaveEntry[] = [];
   for (const entry of wave.entries) {
@@ -3932,6 +3972,9 @@ function attachBoundedWave(
     );
   }
   directive.wave = { batch_index: wave.batch_index, entries };
+  for (const entry of entries) {
+    bootstrapDirectiveMemory(entry.unit_memory_path, codekbCtx);
+  }
   return null;
 }
 
@@ -4188,7 +4231,7 @@ function emitPerUnitRunStage(
       );
       directive.gate = false;
       directive.unit = wave.unit;
-      const waveError = attachBoundedWave(directive, wave.wave);
+      const waveError = attachBoundedWave(directive, wave.wave, codekbCtx);
       if (waveError !== null) {
         emit(errorDirective(waveError));
         return;
@@ -6089,6 +6132,7 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
   if (payload.w) {
     const resolution = resolveBoltDag(pd);
     if (resolution.state === "ok") {
+      const codekbCtx = codekbCtxFor(pd);
       const wave = activePerUnitWave(
         pd,
         node,
@@ -6097,10 +6141,10 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
         payload.c,
         payload.a ? liveState : null,
         relativeRecordDir(pd),
-        codekbCtxFor(pd),
+        codekbCtx,
       );
       if (wave.state === "active" && wave.unit === payload.u) {
-        const waveError = attachBoundedWave(directive, wave.wave);
+        const waveError = attachBoundedWave(directive, wave.wave, codekbCtx);
         if (waveError !== null) {
           emit(errorDirective(waveError));
           return;
