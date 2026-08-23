@@ -1117,10 +1117,12 @@ construction stages read as the authoritative boundary reference.
 ### Purpose
 
 Delivery Planning is the capstone of the Inception phase. It plans the Bolt
-sequence — the order in which Units of Work produced by Stage 2.7 are
-executed through Construction. Where Stage 2.7 is analytical (the dependency
-DAG), Stage 2.9 is economic: it chooses a path through the DAG weighted by
-risk, value, team capacity, and learning.
+sequence — the economic order in which Units of Work produced by Stage 2.7
+should ship. Where Stage 2.7 is analytical (the dependency DAG the
+Construction engine actually walks), Stage 2.9 is economic: it chooses a
+path through the DAG weighted by risk, value, team capacity, and learning.
+The engine does not consume `bolt-plan.md` for Unit grouping or runtime
+order.
 
 Per the canonical Glossary in `stage-protocol.md`, a **Bolt** is the
 planned Construction delivery slice from this stage (2.9): one or more
@@ -1299,13 +1301,14 @@ Construction and Operation:
    (When applicable.)
 6. **Units of Work** (2.7) -- Unit definitions with boundaries and complexity
    estimates, unit dependency matrix with build order, story-to-unit mapping.
-   (When applicable.) This is the artifact that drives the Construction
-   phased construction flow.
+   (When applicable.) `unit-of-work-dependency.md` is the artifact the
+   Construction engine reads for Unit grouping and runtime batch order.
 7. **Contract Summary** (2.8) -- The pinned inter-unit and public/external API
    contracts (`contract-summary.md`). (When there is a contract to pin.)
 8. **Delivery Plan** (2.9) -- Bolt plan, build order, dependency matrix, team
-   allocation. This is the execution plan that governs Construction and
-   Operation.
+   allocation. Approved planning content (economic sequence, multi-Unit
+   grouping, DoD, confidence hypothesis, ownership) — not the runtime walk
+   source.
 9. **Phase Boundary Verification** (2.9) -- Inception-to-Construction
    traceability check written to
    `<record>/verification/phase-check-inception.md`.
@@ -1313,29 +1316,30 @@ Construction and Operation:
 ### Handoff to Construction
 
 Upon approval at Stage 2.9, the framework transitions to the Construction
-phase. Construction creates stage-level tasks based on the execution plan from
-Delivery Planning and executes a phased construction flow:
+phase. `bolt-plan.md` stays the approved planning artifact — economic
+sequence, multi-Unit Bolt grouping, Definition of Done, confidence
+hypothesis, and ownership. The engine does **not** consume it for Unit
+grouping or walk order. Runtime batches are computed from
+`unit-of-work-dependency.md` (2.7).
 
-Construction runs Bolt-by-Bolt per `bolt-plan.md`, with parallel batches
-allowed per the bolt plan. Each Bolt covers a coherent slice of one or
-more Units (per `unit-of-work.md` and `unit-of-work-dependency.md`):
+The shipped default walk is **stage-major**: one in-scope Construction
+stage runs for every Unit, then the next stage, with Code Generation last.
+The walking-skeleton gate is the first in-scope Construction EXECUTE stage.
+After that gate, the ladder prompt records `Construction Autonomy Mode`.
+Opt-in `Construction Iteration: unit-major` walks one Unit through every
+per-unit stage before the next Unit; it suppresses swarm and keeps the
+per-stage gate cascade.
 
-For each Bolt:
-1. **3.1 Functional Design** (conditional per execution plan)
-2. **3.2 NFR Requirements** (conditional per execution plan)
-3. **3.3 NFR Design** (conditional per execution plan)
-4. **3.4 Infrastructure Design** (conditional per execution plan)
-5. **3.5 Code Generation** (always, per unit within the Bolt)
+1. **3.1 Functional Design** (conditional per scope / execution plan) — every Unit
+2. **3.2 NFR Requirements** (conditional) — every Unit
+3. **3.3 NFR Design** (conditional) — every Unit
+4. **3.4 Infrastructure Design** (conditional) — every Unit
+5. **3.5 Code Generation** (always) — every Unit; under an autonomous swarm,
+   one stage gate after the final DAG batch
+6. **3.6 Build and Test** (always) — once at the end
+7. **3.7 CI Pipeline** (conditional) — once at the end
 
-After the final Bolt completes:
-6. **3.6 Build and Test** (always)
-7. **3.7 CI Pipeline** (conditional)
-
-Bolts can run in parallel batches as the dependency graph allows; the
-walking-skeleton Bolt always runs first as a single-Bolt batch to verify
-the end-to-end shape before parallel batches kick off. See
-`docs/guide/04-phases-and-stages.md:263-293` for the full Bolt-by-Bolt
-narrative.
+See `docs/guide/04-phases-and-stages.md` for the current Construction walk.
 
 ### Cross-References
 

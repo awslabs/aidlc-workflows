@@ -191,8 +191,8 @@ Emitted only during Phase 3 (Construction). See `stage-protocol.md` Terminology 
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
-| `BOLT_STARTED` | Orchestrator begins a Bolt (or parallel batch of Bolts) | Timestamp, Bolt names, Batch number, Walking skeleton (true/false), optional Bolt slug (when --worktree) | `tools/aidlc-bolt.ts start` |
-| `BOLT_COMPLETED` | All Bolts in the batch finished successfully | Timestamp, Bolt names, Batch number, optional Bolt slug (when --merge) | `tools/aidlc-bolt.ts complete` |
+| `BOLT_STARTED` | Swarm / worktree path only: `aidlc-bolt.ts start` for one Unit (its worktree). Not emitted on a default gated stage-major run. | Timestamp, Unit/Bolt name, Batch number, Walking skeleton (true/false), optional Bolt slug (when --worktree) | `tools/aidlc-bolt.ts start` |
+| `BOLT_COMPLETED` | Swarm / worktree path only: `aidlc-bolt.ts complete` for that same Unit/worktree. Does **not** close the batch — `SWARM_COMPLETED` does. | Timestamp, Unit/Bolt name, Batch number, optional Bolt slug (when --merge) | `tools/aidlc-bolt.ts complete` |
 | `BOLT_FAILED` | A Bolt failed during code-generation, or was explicitly aborted by the user | Timestamp, Failed Bolt, Error summary, optional Bolt slug (halt-and-ask correlation surface read by `aidlc-worktree info --slug`), optional Reason (`aborted` for explicit abort), optional Succeeded siblings | `tools/aidlc-bolt.ts fail` and `tools/aidlc-bolt.ts abort` |
 | `AUTONOMY_MODE_SET` | User answered the ladder prompt after the walking skeleton | Timestamp, Mode (`autonomous` or `gated`) | `tools/aidlc-bolt.ts set-autonomy` |
 

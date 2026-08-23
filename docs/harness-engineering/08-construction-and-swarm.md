@@ -49,16 +49,21 @@ demands. The shipped default lives in the org rule you author at
 `core/memory/org.md` under the `## Walking Skeleton` heading
 (`org.md:28-42`). Read it as the framework's stance:
 
-- The **walking-skeleton Bolt runs first** for greenfield scopes — `mvp`,
-  `enterprise`, `feature`, `poc`, `classic`, `workshop`, `infra`. Bolt 1 is solo and gated,
-  and the user approves it before the remaining Bolts run.
+- The **walking-skeleton gate** is the first in-scope Construction EXECUTE
+  stage for greenfield scopes — `mvp`, `enterprise`, `feature`, `poc`,
+  `classic`, `workshop`, `infra`. That gate is always presented. The planned
+  first Bolt in `bolt-plan.md` is advisory; stance resolves
+  `org.md` → `team.md` → `project.md`.
 - The **skeleton ceremony is skipped** for incremental scopes — `bugfix`,
   `refactor`, `security-patch`. There is nothing to bootstrap on an existing
-  codebase, so the first Bolt runs like any other.
-- After Bolt 1 ships, the **ladder prompt** fires once: "How should the
-  remaining Bolts run?" with two options, continue autonomously or gate every
-  Bolt. The chosen answer persists as `Construction Autonomy Mode` in
-  the intent's `aidlc-state.md` (under its record dir).
+  codebase, so the first Construction stage runs like any other.
+- After that first Construction gate, the **ladder prompt** fires once: "How
+  should the remaining Bolts run?" with two options, continue autonomously or
+  gate every remaining Construction *stage*. The chosen answer persists as
+  `Construction Autonomy Mode` in the intent's `aidlc-state.md` (under its
+  record dir). On the default stage-major walk, `autonomous` skips remaining
+  stage gates. Opt-in unit-major suppresses swarm but keeps the per-stage
+  gate cascade.
 
 You shape this posture the same way you shape any rule, through the
 strict-additive layers from [Rules and the Learning Loop](05-rules-and-the-loop.md):

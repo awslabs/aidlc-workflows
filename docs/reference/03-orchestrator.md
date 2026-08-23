@@ -234,7 +234,7 @@ The state file at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/aidlc-state.md`
 - `[x]` completed (approved by user)
 - `[S]` skipped (scope-excluded at init, cut via `skip`, or bypassed via `--stage`/`--phase` jump)
 
-The Construction phase section is special: it runs Bolt by Bolt (see [Construction Execution](#construction-execution) below), so the checkboxes appear once for each Unit within each Bolt defined in `bolt-plan.md`. Additionally, `Construction Autonomy Mode: [unset|autonomous|gated]` is recorded under **Current Status** — written after the ladder prompt fires and honoured on session resume.
+The Construction phase section is special: the default walk is stage-major (see [Construction Execution](#construction-execution) below), so each per-Unit Construction stage has a checkbox per Unit from `unit-of-work-dependency.md`. `bolt-plan.md` is planning content, not the checkbox source. Additionally, `Construction Autonomy Mode: [unset|autonomous|gated]` is recorded under **Current Status** — written after the ladder prompt fires and honoured on session resume.
 
 ### Recovery Breadcrumb
 
@@ -457,18 +457,17 @@ current-attempt receipts cannot enter or complete approval.
 
 ### Construction Execution <a id="construction-execution"></a>
 
-Construction (stages 3.1–3.7) deviates from the standard stage-by-stage inline execution model. Instead, the orchestrator runs it **Bolt by Bolt**, driven by `<record>/inception/delivery-planning/bolt-plan.md` (Bolt sequence + walking-skeleton marker) and `<record>/inception/units-generation/unit-of-work-dependency.md` (DAG).
+Construction (stages 3.1–3.7) still uses the standard per-stage engine loop, with a per-Unit inner walk. The **default walk is stage-major**: one in-scope Construction stage runs for every Unit, then the next stage, with Code Generation last. Runtime batches are computed from `<record>/inception/units-generation/unit-of-work-dependency.md`. `<record>/inception/delivery-planning/bolt-plan.md` is the approved 2.9 planning artifact (sequence, multi-Unit grouping, DoD, confidence hypothesis, ownership) — the engine does not consume it for Unit grouping or walk order.
 
-Per-Bolt structure:
+Shipped per-stage structure:
 
-1. Collect questions for stages 3.1–3.4 across the Bolt's Units in QUESTION-ONLY mode. Single answers gate.
-2. Generate design artifacts for stages 3.1–3.4 in ARTIFACT-ONLY mode.
-3. Dispatch stage 3.5 Code Generation per Unit via the Task tool (`subagent_type="aidlc-developer-agent"`). The per-Unit approval gate inside `code-generation.md` is **suppressed** by the orchestrator.
-4. Present a single Bolt-level (or batch-level) approval gate.
+1. The engine emits one `run-stage` per unsettled Unit (`directive.unit`, `gate: false`), or a `directive.wave` for an eligible design-stage batch.
+2. After the last Unit of that stage settles, the engine re-emits the stage with `gate: true` — one stage-level approval.
+3. Code Generation's per-Unit completion gate inside `code-generation.md` is **suppressed**; Step 3 Plan Approval remains a hard stop. Under an autonomous swarm the Code Generation stage gate is presented only after the **final** DAG batch has converged.
 
-The first Bolt in `bolt-plan.md` is the **walking skeleton** — its gate is always presented regardless of autonomy mode. Immediately after the walking-skeleton gate approves, the orchestrator fires the **ladder prompt** exactly once per workflow, records `Construction Autonomy Mode: autonomous|gated` in `aidlc-state.md`, and emits `AUTONOMY_MODE_SET`. Remaining Bolts honour that mode.
+The **walking-skeleton gate** is the first in-scope Construction EXECUTE stage (`isSkeletonGateStage`). Immediately after that gate approves, the orchestrator fires the **ladder prompt** exactly once per workflow, records `Construction Autonomy Mode: autonomous|gated` in `aidlc-state.md`, and emits `AUTONOMY_MODE_SET`. On the default walk, `autonomous` skips the remaining Construction *stage* gates (except halt-and-ask and the Build-and-Test loop-back's rung 4). Opt-in `Construction Iteration: unit-major` suppresses swarm and **retains** the per-stage gate cascade.
 
-Bolts eligible to run in parallel (dependency prerequisites satisfied, no mutual dependency) form a **batch**. The orchestrator executes questions/design per-Bolt sequentially within the batch, then dispatches stage 3.5 Code Generation in parallel by issuing **N `Task` calls in a single assistant message**. The framework spawns N subagent sessions concurrently; results arrive in the orchestrator's next turn. A single batch-level gate covers all Bolts in the batch. Audit log ties parallel Bolts together via the `Batch` field on `BOLT_STARTED`/`BOLT_COMPLETED`.
+Units eligible to run in parallel (dependency prerequisites satisfied, no mutual dependency) form a **batch**. The orchestrator may dispatch stage 3.5 Code Generation for a batch by issuing **N `Task` calls in a single assistant message**. `BOLT_STARTED` / `BOLT_COMPLETED` fire per Unit/worktree on the swarm path; `SWARM_COMPLETED` closes the batch. A default gated run records none of those `BOLT_*` rows.
 
 The engine-driven per-unit loop for the design stages (3.1–3.4) and non-autonomous code-generation hands the conductor concrete Unit paths with `gate: false` while work remains. On the default stage-major walk, the four inline design stages may also carry `directive.wave`: complete per-Unit entries for the first unsettled batch, derived from one cache-validated, self-healed DAG snapshot. Each entry identifies its Unit and kind, present/absent consumes, all produces, the kind-applicable required produce subset, Unit-local memory path, build state, completion-receipt state, and paired fingerprint-bound review state. The conductor never reads or reconstructs the DAG.
 
@@ -476,40 +475,41 @@ Wave builders inherit the parent directive's stage metadata, inline persona/know
 
 Failure handling is **halt-and-ask** and runs regardless of autonomy mode:
 
-- Solo Bolt failure: halt, emit `BOLT_FAILED`, present retry / skip / abort.
-- Parallel batch partial failure: wait for all parallel Tasks to return, preserve successful Bolts' artifacts on disk, emit `BOLT_FAILED` with `Succeeded=[names]`, present the same choices scoped to the failed Bolt. Retry re-runs only the failed Bolt; the batch siblings stay `[x]`.
+- Solo Code Generation failure: halt, emit `BOLT_FAILED` on the swarm/worktree path, present retry / skip / abort.
+- Parallel batch partial failure: wait for all parallel Tasks to return, preserve successful Units' artifacts on disk, emit `BOLT_FAILED` with `Succeeded=[names]`, present the same choices scoped to the failed Unit. Retry re-runs only the failed Unit; the batch siblings stay `[x]`.
 
 ```mermaid
 sequenceDiagram
     participant U as User
     participant O as Orchestrator
     participant T as Task Framework
-    participant BA as Subagent (Bolt A)
-    participant BB as Subagent (Bolt B)
-    participant BC as Subagent (Bolt C)
+    participant UA as Subagent (Unit A)
+    participant UB as Subagent (Unit B)
+    participant UC as Subagent (Unit C)
 
-    O->>O: Read bolt-plan.md + unit-of-work-dependency.md
-    O->>U: Run Bolt A (walking skeleton) — questions, design, code-gen
+    O->>O: Read unit-of-work-dependency.md (bolt-plan.md is planning)
+    O->>U: First Construction EXECUTE stage for every Unit
     U->>O: Approve walking-skeleton gate
     O->>U: Ladder prompt (fires once)
     U->>O: "Continue autonomously"
     O->>O: Write Construction Autonomy Mode: autonomous — emit AUTONOMY_MODE_SET
 
-    Note over O,T: Bolts B + C eligible in parallel batch
+    Note over O,T: Remaining design stages stage-major, then Code Generation
+    Note over O,T: Units B + C eligible in parallel CG batch
     O->>T: Task(B code-gen) + Task(C code-gen) in ONE message
     par Parallel execution
-        T->>BB: spawn subagent for Bolt B
-        T->>BC: spawn subagent for Bolt C
+        T->>UB: spawn subagent for Unit B
+        T->>UC: spawn subagent for Unit C
     end
-    BB-->>O: Bolt B artifacts + summary
-    BC-->>O: Bolt C artifacts + summary
-    O->>O: Emit BOLT_COMPLETED for B and C (shared Batch=N)
-    Note over O,U: No gate — autonomous mode. A failure would force halt-and-ask regardless.
+    UB-->>O: Unit B artifacts + summary
+    UC-->>O: Unit C artifacts + summary
+    O->>O: BOLT_COMPLETED per Unit/worktree; SWARM_COMPLETED closes the batch
+    Note over O,U: Swarm presents one Code Generation stage gate after the FINAL batch.
 
-    O->>O: All Bolts done → run 3.6 Build and Test, then 3.7 CI Pipeline
+    O->>O: All Units done → run 3.6 Build and Test, then 3.7 CI Pipeline
 ```
 
-<!-- Text fallback: The orchestrator reads bolt-plan.md and the dependency DAG. It runs Bolt A as the walking skeleton, the user approves the gate, and the ladder prompt fires once. User picks "Continue autonomously", orchestrator writes Construction Autonomy Mode and emits AUTONOMY_MODE_SET. For Bolts B and C (eligible in parallel), the orchestrator issues both Task calls in a single message; the framework runs them concurrently; the orchestrator receives both results in the next turn and emits BOLT_COMPLETED for each with a shared Batch field. No gate because autonomy mode is autonomous — a failure would still halt. Once all Bolts are done, 3.6 and 3.7 run once at the end. -->
+<!-- Text fallback: The orchestrator reads unit-of-work-dependency.md. It runs the first Construction EXECUTE stage for every Unit, the user approves that walking-skeleton gate, and the ladder prompt fires once. User picks "Continue autonomously". Remaining stages run stage-major. For Units B and C (eligible in parallel at Code Generation), the orchestrator issues both Task calls in a single message. Each Unit/worktree may emit BOLT_COMPLETED; SWARM_COMPLETED closes the batch. The swarm presents one Code Generation stage gate after the final DAG batch. Then 3.6 and 3.7 run once. -->
 
 State and audit safety under parallel dispatch: `aidlc-audit.ts` uses mkdir-based locking so concurrent appends are safe. Lifecycle writes happen only after all required Task results return and the conductor reports one outcome; the engine serialises the internal state transition. No state-race risk.
 
@@ -601,9 +601,9 @@ Tasks are created in phase batches:
 | Initialization | `"Initialization - [Stage Name]"` | `"Initialization - Workspace Scaffold"` |
 | Ideation | `"Ideation - [Stage Name]"` | `"Ideation - Intent Capture"` |
 | Inception | `"Inception - [Stage Name]"` | `"Inception - Requirements Analysis"` |
-| Construction (per Bolt) | `"Construction — Bolt: [bolt-name]"` (add `" (walking skeleton)"` for the first Bolt) | `"Construction — Bolt: notification-core (walking skeleton)"` |
+| Construction (per Unit) | `"Construction — [Stage Name] (Unit: [unit-name])"` | `"Construction — Functional Design (Unit: notification-core)"` |
 | Construction (per-Unit code gen) | `"Construction — Code Generation (Unit: [unit-name])"` | `"Construction — Code Generation (Unit: notification-email)"` |
-| Construction (cross-Bolt) | `"Construction — [Stage Name]"` | `"Construction — Build and Test"` |
+| Construction (cross-Unit) | `"Construction — [Stage Name]"` | `"Construction — Build and Test"` |
 | Operation | `"Operation - [Stage Name]"` | `"Operation - Observability Setup"` |
 
 ### Skipped Stage Handling

@@ -229,75 +229,74 @@ Construction used to run stage-by-stage per [unit of work](glossary.md), with an
 
 The first fix batched all questions, all design artifacts, then all code generation across every unit — one review at the end. That swung the pendulum the other way. A 15-unit run could land 15,000 lines of code at the build-and-test gate. Too much to verify in a single review.
 
-The current shape is the middle path: Construction's **default walk is stage-major** — one stage runs for every Unit, then the next stage. A [Bolt](glossary.md) is the planned Construction delivery slice from 2.9 (one or more Units); that plan is not yet a runtime boundary under the default walk. `Construction Iteration: unit-major` is the opt-in walk older docs described as the default. The **walking skeleton** is the planned first Bolt; under the default walk that gate is the first in-scope Construction EXECUTE stage. Once that gate approves, the **ladder prompt** fires exactly once: "Continue autonomously" or "Gate every Bolt". Your answer is recorded in state and governs the rest of Construction. Stages 3.6 (Build and Test) and 3.7 (CI Pipeline) run once at the end across everything.
+The current shape is the middle path: Construction's **default walk is stage-major** — one stage runs for every Unit, then the next stage. A [Bolt](glossary.md) is the planned Construction delivery slice from 2.9 (one or more Units, DoD, confidence hypothesis, ownership). `bolt-plan.md` is planning content; the engine does not consume it for Unit grouping or walk order. Runtime batches come from `unit-of-work-dependency.md` (2.7). `Construction Iteration: unit-major` is the opt-in walk older docs described as the default. The **walking skeleton** is the planned first Bolt; under the default walk that gate is the first in-scope Construction EXECUTE stage. Once that gate approves, the **ladder prompt** fires exactly once. Your answer is recorded in state and governs the remaining Construction *stage* gates. Stages 3.6 (Build and Test) and 3.7 (CI Pipeline) run once at the end across everything.
 
-The shape gives you an early confidence checkpoint and a deliberate autonomy choice, with reviewable slices sized to the Bolts 2.9 already planned.
+The shape gives you an early confidence checkpoint and a deliberate autonomy choice. Reviewable delivery slices are still planned as Bolts in 2.9; the shipped walk does not yet use those slices as runtime boundaries.
 
 ### Construction flow
 
 ```mermaid
 flowchart TD
     START(["Begin Construction"])
-    READ[/"Read bolt-plan.md (from 2.9)\n+ unit-of-work-dependency.md (from 2.7)"/]
+    READ[/"Read unit-of-work-dependency.md (2.7)\nbolt-plan.md is planning, not the walk source"/]
 
-    BOLT1["Bolt 1 — Walking Skeleton\n(stages 3.1–3.5)"]
-    GATE1{{"Walking-skeleton gate\nAlways presented"}}
+    STAGE1["First in-scope Construction EXECUTE stage\nfor every Unit (often 3.1)"]
+    GATE1{{"Walking-skeleton gate\nfirst Construction EXECUTE stage"}}
 
     LADDER{"Ladder prompt\n(fires once)"}
-    MODE_AUTO["Continue autonomously\nConstruction Autonomy Mode: autonomous"]
-    MODE_GATED["Gate every Bolt\nConstruction Autonomy Mode: gated"]
+    MODE_AUTO["Continue autonomously\nskips remaining stage gates"]
+    MODE_GATED["Gate every remaining stage"]
 
-    NEXT_BATCH["Next Bolt (or parallel batch)\n(stages 3.1–3.5)"]
-    GATE_N{{"Bolt/batch gate\n(skipped if autonomous)"}}
-
-    MORE{"More Bolts?"}
+    NEXT["Next Construction stage\nfor every Unit"]
+    GATE_N{{"Per-stage gate\n(skipped if autonomous)"}}
+    MORE{"More per-unit stages?"}
 
     S36["3.6 Build and Test\n(aidlc-quality-agent)\nALWAYS — once"]
     S37["3.7 CI Pipeline\n(aidlc-pipeline-deploy-agent)\nCONDITIONAL — once"]
     VG3{{"Verification Gate:\nConstruction → Operation"}}
 
-    START --> READ --> BOLT1 --> GATE1 --> LADDER
+    START --> READ --> STAGE1 --> GATE1 --> LADDER
     LADDER --> MODE_AUTO
     LADDER --> MODE_GATED
-    MODE_AUTO --> NEXT_BATCH
-    MODE_GATED --> NEXT_BATCH
-    NEXT_BATCH --> GATE_N
+    MODE_AUTO --> NEXT
+    MODE_GATED --> NEXT
+    NEXT --> GATE_N
     GATE_N --> MORE
-    MORE -->|"Yes"| NEXT_BATCH
+    MORE -->|"Yes"| NEXT
     MORE -->|"No"| S36
     S36 ==> S37
     S36 -.->|"skip CI if\nnot in scope"| VG3
     S37 -.-> VG3
 
-    style BOLT1 fill:#bbdefb,stroke:#1565c0
+    style STAGE1 fill:#bbdefb,stroke:#1565c0
     style GATE1 fill:#ffcc80,stroke:#e65100
     style LADDER fill:#fff59d,stroke:#f57f17
     style MODE_AUTO fill:#c8e6c9,stroke:#388e3c
     style MODE_GATED fill:#f8bbd0,stroke:#c2185b
-    style NEXT_BATCH fill:#bbdefb,stroke:#1565c0
+    style NEXT fill:#bbdefb,stroke:#1565c0
     style S36 fill:#c8e6c9,stroke:#388e3c
     style S37 fill:#fff9c4,stroke:#f9a825
     style VG3 fill:#ef9a9a,stroke:#c62828
 ```
 
-<!-- Text fallback: Begin Construction → read bolt-plan.md and unit-of-work-dependency.md → execute Bolt 1 (walking skeleton, stages 3.1–3.5) → walking-skeleton gate (always) → ladder prompt (fires once, choose autonomous or gated) → loop executing remaining Bolts (each covers 3.1–3.5) with or without per-Bolt gate depending on mode → once all Bolts are done, run 3.6 Build and Test then optionally 3.7 CI Pipeline → Verification Gate 3. -->
+<!-- Text fallback: Begin Construction → read unit-of-work-dependency.md for the Unit DAG (bolt-plan.md is planning) → run the first in-scope Construction EXECUTE stage for every Unit → walking-skeleton gate → ladder prompt (autonomous skips remaining stage gates; gated keeps them) → remaining stages stage-major, Code Generation last → 3.6 Build and Test then optionally 3.7 CI Pipeline → Verification Gate 3. -->
 
-### Parallel Bolt batches
+### Parallel Unit batches
 
-When two Bolts share their dependency prerequisite (for example, Bolts B and C both depend only on A) and don't depend on each other, they run concurrently in a single **batch**. A single gate at the end of the batch covers every Bolt in it.
+When two Units share their dependency prerequisite (for example, Units B and C both depend only on A) and don't depend on each other, they form a **batch**. Design stages may emit `directive.wave` for that batch. Code Generation may dispatch sibling Units concurrently. Under an autonomous swarm the engine converges every DAG batch and then presents **one** Code Generation stage gate — not one gate per intermediate batch.
 
 ```mermaid
 flowchart LR
-    A["Bolt A\n(walking skeleton)"]
-    GA{{"Walking-skeleton gate"}}
+    A["Unit A first\n(unblocks B and C)"]
+    GA{{"Walking-skeleton gate\n(first Construction stage)"}}
     L{"Ladder prompt"}
 
-    subgraph BATCH["Parallel batch (Bolts B + C)"]
-        B["Bolt B"]
-        C["Bolt C"]
+    subgraph BATCH["Parallel batch (Units B + C)"]
+        B["Unit B"]
+        C["Unit C"]
     end
 
-    GBC{{"Batch gate\n(skipped if autonomous)"}}
+    GBC{{"One Code Generation stage gate\nafter the final batch (swarm)"}}
 
     A --> GA --> L --> BATCH --> GBC
 
@@ -310,35 +309,35 @@ flowchart LR
     style GBC fill:#ffcc80,stroke:#e65100
 ```
 
-<!-- Text fallback: Bolt A (walking skeleton) runs first, followed by its gate and the ladder prompt. When B and C both depend only on A, they form a parallel batch that executes concurrently. A single batch-level gate covers both Bolts (or is skipped if the user chose "Continue autonomously"). -->
+<!-- Text fallback: Unit A runs first on the opening Construction stage, followed by the walking-skeleton gate and the ladder prompt. When B and C both depend only on A, they form a parallel batch. Under an autonomous swarm, one Code Generation stage gate covers the stage after the final DAG batch converges. -->
 
-The conductor (the live `/aidlc` session) dispatches parallel Bolts by issuing multiple `Task` calls in a single turn — Claude Code's built-in parallelism runs the Code Generation stage for each Bolt concurrently. Question collection and design-artifact generation still run per-Bolt (they're cheap, and question answers have to be serialized through the user anyway).
+The conductor (the live `/aidlc` session) dispatches parallel Code Generation Units by issuing multiple `Task` calls in a single turn. Design stages stay on the engine-driven per-Unit (or wave) path. `BOLT_STARTED` / `BOLT_COMPLETED` fire per Unit/worktree on the swarm path; `SWARM_COMPLETED` closes the batch. A default gated run records none of those `BOLT_*` rows.
 
 ### Halt-and-ask on failure
 
-Failures always stop Construction, even in autonomous mode. That's the one place autonomous mode interrupts.
+Failures always stop Construction, even in autonomous mode. The other autonomous-stop case is the Build-and-Test loop-back's rung 4.
 
-- If a solo Bolt fails, Construction halts immediately and offers **retry** (re-run just that Bolt), **skip** (mark it `[S]` and continue — dependent Bolts will likely also fail), or **abort** (stop Construction entirely).
-- If one Bolt in a parallel batch fails while others succeed, the conductor waits for the whole batch to finish, preserves the successful Bolts' artifacts on disk, and presents the same retry / skip / abort choice for the failed Bolt only.
+- If a solo Unit's Code Generation fails, Construction halts immediately and offers **retry** (re-run just that Unit), **skip** (mark it `[S]` and continue — dependents will likely also fail), or **abort**.
+- If one Unit in a parallel batch fails while others succeed, the conductor waits for the whole batch to finish, preserves the successful Units' artifacts on disk, and presents the same retry / skip / abort choice for the failed Unit only.
 
 ### Stage reference
 
 | # | Stage | Lead | Supporting | Key Artifacts | Runs |
 |---|-------|------|-----------|---------------|------|
-| 3.1 | Functional Design | aidlc-architect-agent | aidlc-developer-agent | `entities.md`, `rules.md`, `functional-spec.md` | Per Bolt (CONDITIONAL by execution plan) |
-| 3.2 | NFR Requirements | aidlc-architect-agent | aidlc-devsecops-agent, aidlc-compliance-agent, aidlc-quality-agent | Performance, security, scalability, reliability, observability NFRs | Per Bolt (CONDITIONAL) |
-| 3.3 | NFR Design | aidlc-architect-agent | aidlc-aws-platform-agent | NFR design specifications | Per Bolt (CONDITIONAL) |
-| 3.4 | Infrastructure Design | aidlc-aws-platform-agent | aidlc-devsecops-agent, aidlc-compliance-agent | Infrastructure specifications, IaC designs | Per Bolt (CONDITIONAL) |
-| 3.5 | Code Generation | aidlc-developer-agent | — | Application code + code docs | Per Bolt (ALWAYS, per Unit within the Bolt) |
+| 3.1 | Functional Design | aidlc-architect-agent | aidlc-developer-agent | `entities.md`, `rules.md`, `functional-spec.md` | Per Unit (CONDITIONAL by execution plan) |
+| 3.2 | NFR Requirements | aidlc-architect-agent | aidlc-devsecops-agent, aidlc-compliance-agent, aidlc-quality-agent | Performance, security, scalability, reliability, observability NFRs | Per Unit (CONDITIONAL) |
+| 3.3 | NFR Design | aidlc-architect-agent | aidlc-aws-platform-agent | NFR design specifications | Per Unit (CONDITIONAL) |
+| 3.4 | Infrastructure Design | aidlc-aws-platform-agent | aidlc-devsecops-agent, aidlc-compliance-agent | Infrastructure specifications, IaC designs | Per Unit (CONDITIONAL) |
+| 3.5 | Code Generation | aidlc-developer-agent | — | Application code + code docs | Per Unit (ALWAYS) |
 | 3.6 | Build and Test | aidlc-quality-agent | aidlc-devsecops-agent | Test results, quality report | ALWAYS, once at end |
 | 3.7 | CI Pipeline | aidlc-pipeline-deploy-agent | — | CI config, quality gates | CONDITIONAL, once at end |
 
 **Key behaviors:**
 
-- Within each Bolt, questions for stages 3.1–3.4 are collected in a single interactive pass across the Bolt's Units before any artifacts generate. A single Bolt-level answers gate confirms all answers before design artifacts begin.
-- The per-Unit approval gate inside `stages/construction/code-generation.md` is **suppressed by the conductor** during normal Bolt execution. A single Bolt-level (or batch-level) gate replaces it.
-- The ladder prompt fires exactly once per workflow — after the walking-skeleton gate. Your answer is recorded as `Construction Autonomy Mode` in `aidlc-state.md` and honoured on session resume.
-- Parallel batches require multiple `Task`-capable subagent slots to be available — see [Agents](06-agents.md) for concurrency constraints.
+- Default walk is stage-major: questions and artifacts for a stage run for every Unit, then the next stage. There is no Bolt-level answers gate on the shipped walk.
+- The per-Unit completion gate inside `stages/construction/code-generation.md` is **suppressed by the conductor** during normal Construction. A single stage-level gate replaces it after the last Unit settles; under swarm, that gate waits for the final DAG batch.
+- The ladder prompt fires exactly once per workflow — after the first Construction EXECUTE-stage gate. Your answer is recorded as `Construction Autonomy Mode` in `aidlc-state.md` and honoured on session resume. Unit-major suppresses swarm but **keeps** the per-stage gate cascade.
+- Parallel Code Generation batches require multiple `Task`-capable subagent slots — see [Agents](06-agents.md) for concurrency constraints.
 
 ---
 

@@ -12,6 +12,26 @@ module applies only when `directive.reviewer` is present.
 
 ### Construction Bolt gates (walking skeleton + ladder + halt-and-ask)
 
+> **Status — two layers.** Follow the shipped layer; do not run the planned
+> Bolt-major layer as conductor procedure.
+>
+> **Shipped:** walking-skeleton *stance* classification (`gate: "unresolved"`
+> in the harness bindings; resolution order `org.md` → `team.md` →
+> `project.md`), the first Construction EXECUTE-stage gate
+> (`isSkeletonGateStage`), the ladder prompt after that gate, halt-and-ask on
+> Code Generation failure (including swarm/worktree `BOLT_FAILED`), and the
+> Build-and-Test loop-back sibling below. `BOLT_STARTED` / `BOLT_COMPLETED`
+> fire only on the swarm / worktree path. A default gated run does not record
+> them.
+>
+> **Non-executable future-state:** any instruction in this subsection to treat
+> a Bolt as one pass through 3.1–3.5, to gate a Bolt's combined design
+> artifacts and generated code, to emit `BOLT_COMPLETED` on the default gated
+> walk, or to present subsequent Bolt-level / per-Bolt-batch gates. The
+> default walk is stage-major; runtime batches come from
+> `unit-of-work-dependency.md`. The planned ceremony is kept here as design
+> intent until a later walk consumes `bolt-plan.md`.
+
 Construction introduces three gate patterns that differ from the standard per-stage approval gate. See SKILL.md §CONSTRUCTION Flow for the complete orchestrator behaviour.
 
 **Walking-skeleton gate (first Bolt when a real Unit DAG exists)**
@@ -241,6 +261,15 @@ impact-unestimated give-up option is a protocol violation.
 ---
 
 ### Within-Bolt Question Collection (Construction)
+
+> **Non-executable future-state (planned Bolt-major ceremony).** The
+> "Construction runs Bolt by Bolt" procedure and numbered steps 1–7 below are
+> design intent. Do not collect questions by Bolt, do not present a Bolt-level
+> answers gate, and do not replace Code Generation's completion gate with a
+> Bolt-level gate on the default walk. Follow **Engine-driven per-unit
+> iteration** and the receipts / waves / unit-major blocks instead. Point 6's
+> swarm sentence (one Code Generation stage gate after the FINAL batch) is
+> current runtime and is restated in the engine-driven block.
 
 Construction runs **Bolt by Bolt** (see SKILL.md §CONSTRUCTION Flow for orchestrator behaviour). Within each Bolt, questions across the Bolt's Units are collected upfront before any artifacts or code are produced. This keeps the human's interactive work concentrated at the start of each Bolt.
 

@@ -29,7 +29,7 @@ completion messages, and state tracking.
 
 ---
 
-## Bolt-by-Bolt Construction
+## Construction walk
 
 A [Bolt](../../guide/glossary.md) is the planned Construction delivery
 slice from Delivery Planning (2.9): one or more Units with a Definition
@@ -44,10 +44,12 @@ per-unit stage, then the next Unit) is closer to a per-Unit Bolt.
 path; a default gated run does not record them. Runtime batches are
 recomputed from `unit-of-work-dependency.md` (stage 2.7).
 `bolt-plan.md` from stage 2.9 is the planning artifact (sequence,
-per-Bolt DoD, walking-skeleton marker). That marker is advisory against
-the active-space `team.md` stance (`PRACTICES_OVERRIDE` /
-`bolt-plan-marker-conflict`). Under the default walk, the
-walking-skeleton gate is the first in-scope Construction EXECUTE stage.
+per-Bolt DoD, walking-skeleton marker). Walking-skeleton stance
+resolves `org.md` → `team.md` → `project.md` (most-specific non-empty
+statement wins); the bolt-plan marker is advisory against that resolved
+stance (`PRACTICES_OVERRIDE` / `bolt-plan-marker-conflict`). Under the
+default walk, the walking-skeleton gate is the first in-scope
+Construction EXECUTE stage.
 Stages 3.6 (Build and Test) and 3.7 (CI Pipeline) run **once** at the
 end across all Units.
 
@@ -69,9 +71,11 @@ After all Units:
 Each design stage file (3.1–3.4) supports QUESTION-ONLY and ARTIFACT-ONLY
 execution modes — see the individual stage files for details. Code Generation's
 Step 3 **Plan Approval always hard-stops before generation**, including during
-Bolt execution. Only its Step 7 per-Unit completion approval gate is
+Construction. Only its Step 7 per-Unit completion approval gate is
 **suppressed by the engine** during normal Construction; a single stage-level
-(or batch-level) completion gate replaces it. The per-Unit completion gate
+completion gate replaces it after the last Unit settles. Under an autonomous
+swarm that gate fires only after the final DAG batch has converged
+(intermediate batches merge without a gate). The per-Unit completion gate
 remains for direct-invocation use (e.g., `/aidlc --stage code-generation`).
 
 **Construction iteration order (opt-in).** By default the engine iterates the
@@ -120,10 +124,11 @@ primitive process the entries serially. See
 **Parallel batches.** When two or more Units share dependency-satisfaction
 and don't depend on each other, the conductor dispatches their Code
 Generation stages concurrently by issuing N `Task` calls in a single
-assistant message. One batch-level gate covers them all. Audit events
-(`BOLT_STARTED`, `BOLT_COMPLETED`) carry a `Batch=N` field so siblings are
-recoverable from the log. Those events fire on the swarm / worktree path;
-a default gated run does not record them.
+assistant message. Under an autonomous swarm the engine converges every
+DAG batch and then presents **one** Code Generation stage gate —
+intermediate batches merge without a gate. Audit events (`BOLT_STARTED`,
+`BOLT_COMPLETED`) are per Unit/worktree on the swarm path; `SWARM_COMPLETED`
+closes the batch. A default gated run does not record `BOLT_*`.
 
 **Failure handling.** A Bolt failure always halts Construction regardless
 of autonomy mode. Options are retry (re-run just the failed Bolt), skip

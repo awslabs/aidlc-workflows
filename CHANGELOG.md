@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.56] - 2026-08-23
+
+Reconcile planned Bolt terminology with the shipped stage-major Construction walk. Bolt stays the 2.9 planning slice; protocol ceremony that still teaches Bolt-major is labeled non-executable; diagrams, examples, and the 2.9 handoff describe the current runtime. **Upgrade:** refresh your `dist/<harness>/` shell so the updated protocol module, glossary, and stage guidance are installed.
+
+* Terminology (glossary + stage-protocol hub) keeps Bolt as the planned 2.9 delivery slice and documents walk order, swarm's one final Code Generation gate, unit-major's retained stage-gate cascade, per-Unit `BOLT_*` rows, and `org.md` → `team.md` → `project.md` skeleton stance.
+* `stage-protocol-construction.md` labels Bolt-gate and within-Bolt question subsections as non-executable future-state; the engine-driven per-unit / wave / unit-major / loop-back blocks stay executable.
+* User and reference Construction diagrams, worked examples, and the Inception 2.9 handoff now show stage-major and identify `bolt-plan.md` as planning, not the walk source.
+
 ## [2.6.55] - 2026-08-22
 
 Run-stage directive emission now creates each stage diary deterministically before the agent begins work, eliminating failed read probes for a file that is expected to be absent on first entry. Internal Stop-hook probes remain write-free, and size-bounded waves create diaries only for the Unit entries actually carried by the emitted directive. **Upgrade:** refresh your `dist/<harness>/` shell so the updated engine and stage guidance are installed.
