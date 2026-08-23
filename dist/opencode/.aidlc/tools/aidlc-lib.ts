@@ -3707,6 +3707,13 @@ function cloneId(projectDir: string): string {
 // there is no per-stage scoping. AUTONOMY_MODE_SET only counts when its Mode is
 // autonomous because that grant consumes the human turn that unlocks downstream
 // presence carve-outs.
+export const BLOCKING_SENSOR_OVERRIDE_CHOICE = "Override blocking sensors";
+export const BLOCKING_SENSOR_OVERRIDE_DECISION = "Blocking gate sensor failure";
+export const BLOCKING_SENSOR_OVERRIDE_OPTIONS = [
+  "Fix findings",
+  BLOCKING_SENSOR_OVERRIDE_CHOICE,
+] as const;
+
 const GATE_RESOLUTION_EVENTS = new Set([
   "GATE_APPROVED",
   "GATE_REJECTED",

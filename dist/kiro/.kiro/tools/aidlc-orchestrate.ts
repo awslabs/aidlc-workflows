@@ -108,6 +108,7 @@ import {
   activeUnitCheckpoint,
   artifactFilename,
   auditBlockField,
+  BLOCKING_SENSOR_OVERRIDE_CHOICE,
   type CheckboxLine,
   checkSummaryConfirmationEvidence,
   clearActiveDirectiveMarker,
@@ -5837,6 +5838,32 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     readAutonomyMode(stateContent) !== "autonomous" &&
     process.env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD !== "1";
 
+  if (flags.overrideBlockingSensors) {
+    if (
+      flags.result !== "awaiting-approval" &&
+      flags.result !== "revised"
+    ) {
+      emit(errorDirective(
+        "--override-blocking-sensors is valid only while opening or re-entering a gate.",
+      ));
+      return;
+    }
+    if (readAutonomyMode(stateContent) === "autonomous") {
+      emit(errorDirective(
+        `Refusing blocking sensor override for "${slug}": Construction Autonomy Mode ` +
+          "is autonomous. Unattended runs must halt on blocking sensor failures.",
+      ));
+      return;
+    }
+    if (flags.userInput?.trim() !== BLOCKING_SENSOR_OVERRIDE_CHOICE) {
+      emit(errorDirective(
+        `A blocking sensor override requires --user-input ` +
+          `"${BLOCKING_SENSOR_OVERRIDE_CHOICE}", the exact choice offered to the human.`,
+      ));
+      return;
+    }
+  }
+
   if (protectedHumanGate && flags.result === "rejected") {
     if (flags.userInput?.trim() !== "Request Changes") {
       emit(errorDirective(
@@ -5922,7 +5949,11 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       }
       subArgs = ["gate-start", slug];
       if (flags.overrideBlockingSensors) {
-        subArgs.push("--override-blocking-sensors");
+        subArgs.push(
+          "--override-blocking-sensors",
+          "--user-input",
+          flags.userInput!,
+        );
       }
     } else if (flags.result === "rejected") {
       if (
@@ -5952,7 +5983,11 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       }
       subArgs = ["revise", slug];
       if (flags.overrideBlockingSensors) {
-        subArgs.push("--override-blocking-sensors");
+        subArgs.push(
+          "--override-blocking-sensors",
+          "--user-input",
+          flags.userInput!,
+        );
       }
     }
 
@@ -6085,9 +6120,6 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       // Backfilled gate — tag the row Recovered=true so audit consumers can
       // tell the engine-opened gate from an organic gate-start.
       sequence.push(["gate-start", slug, "--recovered"]);
-      if (flags.overrideBlockingSensors) {
-        sequence[sequence.length - 1].push("--override-blocking-sensors");
-      }
     }
     // Reviewer precondition (§12a / RFC Track 1) is NOT enforced here. Like the
     // artifact, human-presence, and revision guards, it lives in

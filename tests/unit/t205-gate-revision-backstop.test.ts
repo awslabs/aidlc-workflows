@@ -656,6 +656,12 @@ describe("t205: approve-time gate-revision backstop", () => {
     expect(eventCount(proj, "ARTIFACT_UPDATED")).toBeGreaterThanOrEqual(1);
 
     recordPipelineLinks(proj, ["repo-a", "repo-b"]);
+    const reentered = guardedReport(proj, [
+      "--result",
+      "revised",
+    ]);
+    expect(reentered.rc).toBe(0);
+    expect(reentered.out).toContain('"kind":"print"');
     const freshApproval = guardedReport(proj, [
       "--result",
       "approved",

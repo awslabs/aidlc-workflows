@@ -33,12 +33,14 @@ before you author anything:
   `gate-start` opens its state transaction, the state tool fires each gate-bound
   sensor once for every existing declared deliverable path. The dispatch stays
   outside the transaction because the sensor dispatcher takes the audit lock.
-- **Severity controls gate enforcement.** `advisory` failures are recorded and
-  the gate still opens. A `blocking` failure stops `gate-start`; the explicit
-  `--override-blocking-sensors` flag proceeds and records the sensor ids and
-  detail paths on `STAGE_AWAITING_APPROVAL`. Blocking enforcement applies only
-  to `fire_on: gate` in this release. A write-fired sensor may declare
-  `blocking`, but its result remains advisory.
+- **Severity controls gate enforcement.** `advisory` outcomes are recorded and
+  the gate still opens. A `blocking` binding requires a verified pass: findings,
+  unavailable tools, script/dispatcher errors, malformed verdicts, and timeouts
+  stop gate entry. An override is a separate logged human decision, not a bare
+  flag, and is forbidden in autonomous mode; a successful override records ids,
+  optional detail paths, and reasons on `STAGE_AWAITING_APPROVAL`. Blocking
+  enforcement applies only to `fire_on: gate` in this release. A write-fired
+  sensor may declare `blocking`, but its result remains advisory.
 
 Each fire leaves a row in the intent's `audit/` shards. The event names — exact casing
 matters when you grep the log — are **`SENSOR_FIRED`** when a sensor starts,
@@ -191,12 +193,14 @@ sensor must name the shape; a gate-fired sensor may omit the field to accept
 every declared deliverable. Full behavior is in
 [`matches` filter](../reference/07-sensor-system.md#matches-filter).
 
-**`default_severity` — signal or enforcement.** `advisory` records findings and
-continues. `blocking` stops a gate-fired sensor from opening the gate when it
-reports `FAILED`. The operator may fix the findings or rerun the gate report
-with `--override-blocking-sensors`; the override is recorded in the audit row.
-Blocking on write-fired sensors is accepted by the schema but remains advisory
-in this release. The policy is in
+**`default_severity` — signal or enforcement.** `advisory` records outcomes and
+continues. `blocking` stops a gate-fired sensor unless the dispatcher returns a
+verified pass; findings, unavailable evaluation, malformed output, and timeout
+all refuse. The operator may fix the issue or explicitly select
+`Override blocking sensors` from the logged two-choice prompt, then retry with
+the flag and exact `--user-input`. Autonomous mode cannot override. Blocking on
+write-fired sensors is accepted by the schema but remains advisory in this
+release. The policy is in
 [`default_severity`](../reference/07-sensor-system.md#default_severity).
 
 ---

@@ -110,6 +110,7 @@ interface FireVerdict {
 	output_path: string;
 	result: FireOutcome["kind"];
 	detail_path: string | null;
+	note?: string;
 }
 
 // --- Argv helpers ---
@@ -570,6 +571,9 @@ function handleFire(args: string[]): void {
 			finalOutcome.kind === "failed"
 				? relativizePath(detailPath, projectDir)
 				: null,
+		...(finalOutcome.kind === "passed" && finalOutcome.note
+			? { note: finalOutcome.note }
+			: {}),
 	};
 	process.stdout.write(`${JSON.stringify(verdict)}\n`);
 

@@ -230,15 +230,23 @@ before matching against the manifest `id`.
 
 ## `default_severity`
 
-`advisory` failures produce an audit row and detail file but do not block the
-stage gate. `blocking` failures stop `gate-start` or `revise` before the state
-transition when the binding also declares `fire_on: gate`.
+`advisory` outcomes produce their audit rows but do not block the stage gate.
+A `blocking` gate binding proceeds only on a verified pass. Reported findings,
+dispatcher exit/spawn/timeout failures, malformed or mismatched verdicts,
+`SENSOR_BUDGET_OVERRIDE`, and `SENSOR_PASSED` rows carrying `tool-unavailable`
+or `script-error` all stop `gate-start`, `revise`, or approve-time recovered
+revision re-entry before the gate opens.
 
-The operator can fix the findings and retry, or explicitly pass
-`--override-blocking-sensors` to the gate report. An override opens the gate and
-records `Blocking Sensor Override`, the sensor ids, and detail paths on the
-`STAGE_AWAITING_APPROVAL` row. In this release, a write-fired sensor may declare
-`blocking`, but PostToolUse dispatch remains advisory.
+The operator can fix the findings and retry, or make a separate explicit
+override decision. The conductor records a `DECISION_RECORDED` offering
+`Fix findings,Override blocking sensors`, waits for a new human turn, records
+the exact `QUESTION_ANSWERED`, then retries the gate report with
+`--override-blocking-sensors --user-input "Override blocking sensors"`. A bare
+flag, an unoffered/paraphrased choice, a missing human-backed receipt, or
+autonomous mode is refused. A successful override records the sensor ids,
+optional detail paths, and evaluation reasons on `STAGE_AWAITING_APPROVAL`.
+In this release, a write-fired sensor may declare `blocking`, but PostToolUse
+dispatch remains advisory.
 
 ---
 
@@ -246,14 +254,18 @@ records `Blocking Sensor Override`, the sensor ids, and detail paths on the
 
 `write` is the default and preserves incremental PostToolUse feedback. `gate`
 fires once per existing declared deliverable immediately before `gate-start`
-opens the first gate and again before `revise` re-enters the gate after revision
-work. Dispatch happens before either transaction because `aidlc-sensor.ts fire`
+opens the first gate, before `revise` re-enters the gate after revision work,
+and before the approve-time revision backstop performs recovered re-entry.
+Dispatch happens outside the state transaction because `aidlc-sensor.ts fire`
 takes the audit lock around both its `SENSOR_FIRED` and terminal rows.
 
 The dispatcher prints one compact JSON verdict after the terminal row:
-`fire_id`, `sensor_id`, `stage`, `output_path`, `result`, and `detail_path`.
-`gate-start` and `revise` use that line to enforce blocking failures without
-attempting to pair concurrently-written audit rows themselves.
+`fire_id`, `sensor_id`, `stage`, `output_path`, `result`, `detail_path`, and an
+optional `note`. Gate enforcement validates the verdict identity and treats
+anything other than an unnoted `passed` result as non-passing for a blocking
+binding. Explicit `--artifacts` paths and discovered deliverables are resolved
+canonically and must remain inside the stage's canonical produce directories;
+absolute paths, traversal, and symlink escapes cannot redirect a sensor.
 
 ---
 
