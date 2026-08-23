@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 660,
+    "total": 661,
     "enumeratedByClass": {
-      "function": 396,
+      "function": 397,
       "audit": 87,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 205,
+      "function": 206,
       "audit": 46,
       "scope": 11,
       "stage": 11,
@@ -2242,6 +2242,18 @@
         {
           "file": "tests/unit/t161-per-intent-lock-reaper.test.ts",
           "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:hookChildEnv",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t310-session-binding-helpers.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"

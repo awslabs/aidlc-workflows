@@ -28,6 +28,7 @@ import {
   classifyRuntimeCompileCommand,
   type ClaudeCodeHookInput,
   errorMessage,
+  hookChildEnv,
   hookDebug,
   hooksHealthDir,
   isClaudeCodeHookInput,
@@ -244,6 +245,7 @@ try {
   const args = ["run", runtimeTs, "compile"];
   const result = spawnSync("bun", args, {
     cwd: projectDir,
+    env: hookChildEnv(projectDir, parsed.session_id),
     timeout: 30_000,
     stdio: ["ignore", "pipe", "pipe"],
   });

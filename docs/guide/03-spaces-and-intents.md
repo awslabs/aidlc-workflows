@@ -190,10 +190,16 @@ conversation or the intent and space switch verbs for rebinding.
 The cursors remain write-through compatibility state. Older or unsupported
 environments with no binding therefore behave exactly as before.
 
-On Windows, PID ancestry resolution returns no session identity. Kiro IDE also
-cannot distinguish multiple chats that share one IDE process. Spawned tools in
-those cases fall back to the shared cursors unless the harness process has a
-valid `AIDLC_SESSION_OVERRIDE`.
+On Windows, PID ancestry resolution returns no session identity. Shared-process
+harnesses also cannot distinguish chats that use one process, including Kiro
+IDE multi-chat and multi-session opencode. Spawned tools in those cases fall
+back to the shared cursors unless the harness process has a valid
+`AIDLC_SESSION_OVERRIDE`.
+
+Known limitation: hook writes and the intent and space switch verbs on those
+platforms retain the pre-existing v2 shared-cursor and `.current-session`
+behavior. One chat can therefore affect another chat's navigation or hook
+attribution. Per-session isolation for those paths is future work.
 
 ---
 

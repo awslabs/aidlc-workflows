@@ -1416,16 +1416,27 @@ export function activeIntent(
 // The absolute RECORD directory for an intent:
 // `aidlc/spaces/<space>/intents/<slug>-<id8>/`. Returns null when no intent
 // resolves, signalling the bare-space-root resolution in the path helpers.
+function resolveRecordDir(
+  projectDir: string,
+  intent?: string,
+  space?: string,
+): { dir: string | null; space: string } {
+  const selection = resolveWorkflowSelection(projectDir, { space, intent });
+  return {
+    dir:
+      selection.intent === null
+        ? null
+        : join(intentsDir(projectDir, selection.space), selection.intent),
+    space: selection.space,
+  };
+}
+
 export function recordDir(
   projectDir: string,
   intent?: string,
   space?: string,
 ): string | null {
-  const selection = resolveWorkflowSelection(projectDir, { space, intent });
-  const sp = selection.space;
-  const slug = selection.intent;
-  if (slug === null) return null;
-  return join(intentsDir(projectDir, sp), slug);
+  return resolveRecordDir(projectDir, intent, space).dir;
 }
 
 // Relative record-dir prefix for the engine's agent-consumed artifact/diary
@@ -2479,6 +2490,30 @@ export function resolveSessionIdFromAncestry(projectDir: string): string | null 
   return resolved;
 }
 
+// Build a hook-spawned child's environment from authoritative payload identity.
+// Shared-process harnesses can report a payload session that differs from the
+// process ancestry owner. In that case the child must inherit neither identity:
+// it falls back to the same shared-cursor behavior v2 used instead of triggering
+// the env-vs-ancestry refusal and making an enforcement hook fail open.
+export function hookChildEnv(
+  projectDir: string,
+  payloadSessionId: string | undefined,
+  extra: Record<string, string> = {},
+): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    ...extra,
+  };
+  delete env.AIDLC_SESSION_OVERRIDE;
+  const payloadSession = validSessionId(payloadSessionId);
+  if (!payloadSession) return env;
+  const ancestrySession = resolveSessionIdFromAncestry(projectDir);
+  if (ancestrySession === null || ancestrySession === payloadSession) {
+    env.AIDLC_SESSION_OVERRIDE = payloadSession;
+  }
+  return env;
+}
+
 function resolveSessionIdFromAncestryUncached(projectDir: string): string | null {
   if (process.platform === "win32") return null;
   if (!existsSync(sessionPidMapDir(projectDir))) return null;
@@ -3025,9 +3060,14 @@ export function migrateFlatLayout(projectDir: string): FlatMigrationResult | nul
 // SOURCE (flatStateSource/flatMigrationSource above).
 
 export function stateFilePath(projectDir: string, intent?: string, space?: string): string {
-  const dir = recordDir(projectDir, intent, space);
-  if (dir === null) return join(spaceRecordRoot(projectDir, space), "aidlc-state.md");
-  return join(dir, "aidlc-state.md");
+  const resolved = resolveRecordDir(projectDir, intent, space);
+  if (resolved.dir === null) {
+    return join(
+      spaceRecordRoot(projectDir, resolved.space),
+      "aidlc-state.md",
+    );
+  }
+  return join(resolved.dir, "aidlc-state.md");
 }
 
 // The engine's final validated run-stage is the active execution cursor. Most
@@ -4081,9 +4121,15 @@ export function updateCopilotStopCount(
 // timestamp — see auditShards()/readAllAuditShards(). With no intent resolved the
 // shard lands under the bare space record root (no flat audit.md any more).
 export function auditFilePath(projectDir: string, intent?: string, space?: string): string {
-  const dir = recordDir(projectDir, intent, space);
-  if (dir === null) return join(spaceRecordRoot(projectDir, space), "audit", auditShardName(projectDir));
-  return join(dir, "audit", auditShardName(projectDir));
+  const resolved = resolveRecordDir(projectDir, intent, space);
+  if (resolved.dir === null) {
+    return join(
+      spaceRecordRoot(projectDir, resolved.space),
+      "audit",
+      auditShardName(projectDir),
+    );
+  }
+  return join(resolved.dir, "audit", auditShardName(projectDir));
 }
 
 // The clone-id token file: `aidlc/.aidlc-clone-id`. Workspace-level,
@@ -5605,10 +5651,12 @@ export function auditShards(
   if (intent === undefined && space !== undefined) {
     dirs.push(join(spaceRecordRoot(projectDir, space), "audit"));
   }
-  const intentDir = auditShardDir(projectDir, intent, space);
+  const resolved = resolveRecordDir(projectDir, intent, space);
+  const intentDir =
+    resolved.dir === null ? null : join(resolved.dir, "audit");
   if (intentDir !== null && !dirs.includes(intentDir)) dirs.push(intentDir);
   if (intentDir === null && dirs.length === 0) {
-    dirs.push(join(spaceRecordRoot(projectDir, space), "audit"));
+    dirs.push(join(spaceRecordRoot(projectDir, resolved.space), "audit"));
   }
   const paths: string[] = [];
   for (const shardDir of dirs) {
@@ -8920,8 +8968,8 @@ export function resolveConstructionRepo(
 // lockstep. Stays total (never throws) so the hooks that call the family at
 // module top on a pre-birth shell don't crash.
 export function docsRoot(projectDir: string, intent?: string, space?: string): string {
-  const dir = recordDir(projectDir, intent, space);
-  return dir ?? spaceRecordRoot(projectDir, space);
+  const resolved = resolveRecordDir(projectDir, intent, space);
+  return resolved.dir ?? spaceRecordRoot(projectDir, resolved.space);
 }
 
 // The bare record-tree root (doctor's existence check, the init scaffolder's

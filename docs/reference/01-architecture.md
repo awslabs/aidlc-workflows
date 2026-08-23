@@ -454,10 +454,11 @@ Windows ancestry is unavailable, and multiple Kiro IDE chats can share one
 process. Spawned tools in those cases use shared-cursor behavior unless the
 harness process supplies `AIDLC_SESSION_OVERRIDE`.
 
-The path helpers — `intentsDir`, `knowledgeDir`, `codekbDir` (`aidlc-lib.ts`),
-and `memoryDirFor` (`aidlc-graph.ts:333`) - all default their space argument to
-`activeSpace(projectDir)`, so AI-DLC's own resolvers follow the cursor; switching
-spaces with `/aidlc space <name>` also
+Project-aware path helpers resolve through the same selection ladder: an
+explicit selector, then the session binding, then the shared cursor as the
+final fallback. Helpers that receive a resolved `intent:null` retain its
+selected space when choosing the bare space root. Switching spaces with
+`/aidlc space <name>` also
 re-points each harness-native rule include (the Claude `@`-import stub described
 above, Kiro CLI resources or IDE steering, Codex's rules dir, opencode's
 `instructions` glob, and Copilot's `AGENTS.md` `@`-imports) at the switched space's

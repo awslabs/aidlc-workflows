@@ -72,6 +72,7 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
+  readFileSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -82,6 +83,7 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { writeSessionPidEntry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -381,6 +383,40 @@ describe("t91 aidlc-rebuild-stage-graph hook (migrated from t91-runtime-compile-
       payload("bun .claude/tools/aidlc-state.ts gate-start intent-capture"),
     );
     expect(existsSync(graphPath(p))).toBe(true);
+  }, 30000);
+
+  test("3b: divergent payload and ancestry omit the compile child override", () => {
+    const p = makeProject();
+    writeFileSync(auditPath(p), AUDIT_GATE_APPROVED, "utf-8");
+    const witnessPath = join(p, "runtime-child-env.json");
+    writeFileSync(
+      join(p, ".claude", "tools", "aidlc-runtime.ts"),
+      [
+        'import { writeFileSync } from "node:fs";',
+        `writeFileSync(${JSON.stringify(witnessPath)}, JSON.stringify({`,
+        "  sessionOverride: process.env.AIDLC_SESSION_OVERRIDE ?? null,",
+        '}), "utf-8");',
+      ].join("\n"),
+      "utf-8",
+    );
+    writeSessionPidEntry(p, process.pid, "ancestry-session");
+
+    const r = runHook(
+      p,
+      JSON.stringify({
+        session_id: "payload-session",
+        tool_name: "Bash",
+        tool_input: {
+          command:
+            "bun .claude/tools/aidlc-state.ts approve --stage intent-capture",
+        },
+      }),
+    );
+
+    expect(r.status, r.out).toBe(0);
+    expect(
+      JSON.parse(readFileSync(witnessPath, "utf-8")),
+    ).toEqual({ sessionOverride: null });
   }, 30000);
 
   // --- Case 3: non-aidlc Bash (git status) -> no dispatch + no heartbeat ---

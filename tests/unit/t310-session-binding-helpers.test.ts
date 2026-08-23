@@ -1,4 +1,4 @@
-// covers: function:readSessionBinding function:writeSessionBinding function:resolveWorkflowSelection function:SessionResolutionConflictError function:validSessionId function:writeSessionPidEntry function:writeSessionPidAncestry function:resolveSessionIdFromAncestry
+// covers: function:readSessionBinding function:writeSessionBinding function:resolveWorkflowSelection function:SessionResolutionConflictError function:validSessionId function:writeSessionPidEntry function:writeSessionPidAncestry function:resolveSessionIdFromAncestry function:hookChildEnv
 //
 // Deterministic coverage for the per-session binding store and PID ancestry
 // resolver. All writes stay under a fresh project fixture.
@@ -7,7 +7,10 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  auditFilePath,
   createIntent,
+  docsRoot,
+  hookChildEnv,
   readSessionBinding,
   resolveSessionIdFromAncestry,
   resolveWorkflowSelection,
@@ -15,6 +18,8 @@ import {
   sessionPidMapDir,
   sessionsDir,
   setActiveIntentCursor,
+  setActiveSpaceCursor,
+  stateFilePath,
   validSessionId,
   writeSessionBinding,
   writeSessionPidAncestry,
@@ -79,6 +84,23 @@ describe("t310 session binding helpers", () => {
     expect(resolveWorkflowSelection(proj).intent).toBe(second.dirName);
   });
 
+  test("a null-intent binding keeps its selected space in generic paths", () => {
+    setActiveSpaceCursor(proj, "default");
+    writeSessionBinding(proj, "session-null", "team-b", null);
+    process.env.AIDLC_SESSION_OVERRIDE = "session-null";
+    const teamBareRoot = join(
+      proj,
+      "aidlc",
+      "spaces",
+      "team-b",
+      "intents",
+    );
+
+    expect(stateFilePath(proj)).toBe(join(teamBareRoot, "aidlc-state.md"));
+    expect(auditFilePath(proj)).toStartWith(join(teamBareRoot, "audit"));
+    expect(docsRoot(proj)).toBe(teamBareRoot);
+  });
+
   test("session ids must already be canonical", () => {
     expect(validSessionId("session-a")).toBe("session-a");
     expect(validSessionId(" session-a")).toBeNull();
@@ -101,6 +123,25 @@ describe("t310 session binding helpers", () => {
     expect(
       resolveWorkflowSelection(proj, { sessionId: "session-b" }).intent,
     ).toBe(second.dirName);
+  });
+
+  test("hook child env pins only absent or matching ancestry", () => {
+    process.env.AIDLC_SESSION_OVERRIDE = "inherited-session";
+    rmSync(sessionPidMapDir(proj), { recursive: true, force: true });
+    expect(
+      hookChildEnv(proj, "payload-session", { AIDLC_TEST_EXTRA: "kept" }),
+    ).toMatchObject({
+      AIDLC_SESSION_OVERRIDE: "payload-session",
+      AIDLC_TEST_EXTRA: "kept",
+    });
+
+    writeSessionPidEntry(proj, process.ppid, "payload-session");
+    expect(hookChildEnv(proj, "payload-session").AIDLC_SESSION_OVERRIDE).toBe(
+      "payload-session",
+    );
+    expect(
+      hookChildEnv(proj, "different-session").AIDLC_SESSION_OVERRIDE,
+    ).toBeUndefined();
   });
 
   test("hostile session ids and invalid pids cannot escape the sessions dir", () => {

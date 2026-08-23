@@ -107,6 +107,7 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { writeSessionPidEntry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath; // the bun running this test (mirrors t104)
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -312,7 +313,10 @@ try {
   const { join } = require("node:path");
   writeFileSync(
     join(import.meta.dir, "..", "..", ".probe-env-witness.json"),
-    JSON.stringify({ probe: process.env.AIDLC_STOP_HOOK_PROBE ?? null }),
+    JSON.stringify({
+      probe: process.env.AIDLC_STOP_HOOK_PROBE ?? null,
+      sessionOverride: process.env.AIDLC_SESSION_OVERRIDE ?? null,
+    }),
     "utf-8",
   );
 } catch { /* the witness is diagnostic; never fail the mock over it */ }
@@ -1952,12 +1956,35 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     // child, so deleting the marking now fails this test.
     const witness = JSON.parse(
       readFileSync(join(proj, ".probe-env-witness.json"), "utf-8"),
-    ) as { probe: string | null };
+    ) as { probe: string | null; sessionOverride: string | null };
     expect(witness.probe).toBe("1");
 
     // Retained as a regression guard on the mock's own inertness: if the mock is
     // ever taught to advance the workflow, this catches the marker moving.
     expect(statSync(enginePath).mtimeMs).toBe(before);
+  }, 30000);
+
+  test("(f2) divergent payload and ancestry omit the child override without failing open", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    writeSessionPidEntry(proj, process.pid, "ancestry-session");
+
+    const r = runHook(
+      proj,
+      JSON.stringify({
+        session_id: "payload-session",
+        stop_hook_active: false,
+      }),
+      "run-stage",
+    );
+
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+    const witness = JSON.parse(
+      readFileSync(join(proj, ".probe-env-witness.json"), "utf-8"),
+    ) as { probe: string | null; sessionOverride: string | null };
+    expect(witness.probe).toBe("1");
+    expect(witness.sessionOverride).toBeNull();
   }, 30000);
 
   test("(f2) the probe mark is scoped to the engine consultation, not leaked into the hook's own process", () => {

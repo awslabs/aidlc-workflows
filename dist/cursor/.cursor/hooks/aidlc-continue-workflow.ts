@@ -128,6 +128,7 @@ import {
   getField,
   hasCurrentSharedResumeWait,
   hasPendingDecision,
+  hookChildEnv,
   isEngineToolCall,
   hooksHealthDir,
   isoTimestamp,
@@ -947,11 +948,9 @@ function runEngineNextDirective(
     stdout: "pipe",
     stderr: "pipe",
     timeout: ENGINE_TIMEOUT_MS,
-    env: {
-      ...process.env,
+    env: hookChildEnv(projectDir, sessionId, {
       [STOP_HOOK_PROBE_ENV]: "1",
-      ...(sessionId ? { AIDLC_SESSION_OVERRIDE: sessionId } : {}),
-    },
+    }),
   });
   if (proc.exitCode !== 0) return null;
   const stdout = new TextDecoder().decode(proc.stdout).trim();
