@@ -12,25 +12,31 @@
 // checkout.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import {
   auditBlockField,
   boltSlugForUnit,
   currentSwarmSourceOpeningFingerprint,
   currentSwarmSourceMergeChain,
+  discoverSiblingRepos,
   emitError,
   errorMessage,
   findAllEvents,
   getField,
   gitCommitSourceListing,
+  intentsDir,
+  isValidRepoName,
   latestMainWorkflowStageRunFloorForProject,
+  listIntentDirs,
+  listSpaces,
   parseSourceListing,
   readAllAuditShards,
   readAuditShardEvents,
   readStateFile,
   relativeRecordDir,
+  repoDir,
   reviewedSourceRefPrefix,
   resolveBoltDag,
   resolveConstructionRepo,
@@ -460,6 +466,22 @@ function handleCreate(args: string[]): void {
   // WORKTREE_CREATED/worktree-meta.json record.
   const add = runGit(["worktree", "add", wtPath, "-b", branchName, baseCommit], repoCwd);
   if (!add.ok) {
+    if (
+      existsSync(wtPath) ||
+      repositoryRegistersBoltWorktree(pd, repoCwd, slug)
+    ) {
+      runGit(["worktree", "remove", "--force", wtPath], repoCwd);
+    }
+    const leakedBranch = runGit(
+      ["rev-parse", "--verify", `refs/heads/${branchName}`],
+      repoCwd,
+    );
+    if (leakedBranch.ok && leakedBranch.stdout.trim() === baseCommit) {
+      runGit(
+        ["update-ref", "-d", `refs/heads/${branchName}`, baseCommit],
+        repoCwd,
+      );
+    }
     errorWithSlug(
       slug,
       `git worktree add failed: ${add.stderr.trim() || add.stdout.trim() || `exit ${add.code}`}`
@@ -530,7 +552,6 @@ interface BoundConvergedSourceRecord {
   kind: "bound";
   fingerprint: string;
   commit: string;
-  baseCommit: string;
   unit: string;
   batch: string;
   stage: string;
@@ -563,6 +584,11 @@ function convergedUnitName(
 
 type WorktreeAuditRow = ReturnType<typeof readAuditShardEvents>[number];
 
+interface ScopedWorktreeAuditRow extends WorktreeAuditRow {
+  authorityIntent?: string;
+  authoritySpace: string;
+}
+
 function sortWorktreeAuditRows(rows: WorktreeAuditRow[]): WorktreeAuditRow[] {
   return rows.sort((a, b) => {
     if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
@@ -593,45 +619,326 @@ function latestUnambiguousRow(
   return latest.at(-1) ?? null;
 }
 
-function recordedWorktreeCreationRepo(
+function allWorktreeAuditRows(
+  pd: string,
+): { rows: ScopedWorktreeAuditRow[]; unreadableShards: string[] } {
+  const rows: ScopedWorktreeAuditRow[] = [];
+  const unreadable = new Set<string>();
+  const seenRows = new Set<string>();
+  for (const { name: space } of listSpaces(pd)) {
+    const intentNames = new Set(listIntentDirs(pd, space));
+    try {
+      for (const entry of readdirSync(intentsDir(pd, space), {
+        withFileTypes: true,
+      })) {
+        if (
+          entry.isDirectory() &&
+          existsSync(join(intentsDir(pd, space), entry.name, "audit"))
+        ) {
+          intentNames.add(entry.name);
+        }
+      }
+    } catch {
+      // The explicit-space read below reports an unreadable aggregate root.
+    }
+    for (const intent of [undefined, ...[...intentNames].sort()]) {
+      const failures: string[] = [];
+      const selectedRows = readAuditShardEvents(pd, intent, space, failures);
+      for (const failure of failures) unreadable.add(failure);
+      for (const row of selectedRows) {
+        const key = `${row.shard}\0${row.pos}`;
+        if (seenRows.has(key)) continue;
+        seenRows.add(key);
+        const shardRelative = relative(intentsDir(pd, space), row.shard)
+          .replaceAll("\\", "/");
+        const parts = shardRelative.split("/");
+        rows.push({
+          ...row,
+          authoritySpace: space,
+          ...(parts.length >= 3 &&
+          parts[0] !== ".." &&
+          parts[1] === "audit"
+            ? { authorityIntent: parts[0] }
+            : {}),
+        });
+      }
+    }
+  }
+  return { rows, unreadableShards: [...unreadable].sort() };
+}
+
+function repoSelectorKey(repo: string | null): string {
+  return repo ?? "\0root";
+}
+
+function repoSelectorLabel(repo: string | null): string {
+  return repo ?? "-";
+}
+
+interface RepositoryBoltEvidence {
+  branch: boolean;
+  durable: boolean;
+  registered: boolean;
+  retained: boolean;
+}
+
+function repositoryRegistersBoltWorktree(
+  pd: string,
+  repoCwd: string,
+  slug: string,
+): boolean {
+  const listed = runGit(["worktree", "list", "--porcelain"], repoCwd);
+  if (!listed.ok) return false;
+  const branchName = `bolt-${slug}`;
+  const expectedPath = pathKey(worktreePath(pd, slug));
+  for (const line of listed.stdout.split(/\r?\n/)) {
+    if (
+      (line.startsWith("worktree ") &&
+        pathKey(line.slice("worktree ".length)) === expectedPath) ||
+      line === `branch refs/heads/${branchName}`
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function repositoryBoltEvidence(
+  pd: string,
+  repo: string | null,
+  slug: string,
+): RepositoryBoltEvidence {
+  const cwd = repo === null ? pd : repoDir(pd, repo);
+  if (!runGit(["rev-parse", "--git-dir"], cwd).ok) {
+    return {
+      branch: false,
+      durable: false,
+      registered: false,
+      retained: false,
+    };
+  }
+  const branchName = `bolt-${slug}`;
+  const branch = runGit(
+    ["rev-parse", "--verify", `refs/heads/${branchName}`],
+    cwd,
+  ).ok;
+  const retained = retainedSourceRefs(cwd, slug);
+  const retainedPresent = retained !== null && retained.length > 0;
+  const registered = repositoryRegistersBoltWorktree(pd, cwd, slug);
+  return {
+    branch,
+    durable: branch || retainedPresent || registered,
+    registered,
+    retained: retainedPresent,
+  };
+}
+
+interface DiscardCreationAuthority {
+  evidenceExists: boolean;
+  intent?: string;
+  repo?: string | null;
+  space?: string;
+}
+
+function discardCreationAuthority(
   pd: string,
   slug: string,
-  intent?: string,
-  space?: string,
-): string | null | undefined {
-  let rows: WorktreeAuditRow[];
-  try {
-    rows = readAuditShardEvents(pd, intent, space);
-  } catch {
-    return undefined;
-  }
-  const matches = rows.filter(
+  recorded: ReturnType<typeof recordedWorktreeSelector>,
+  explicitRepo?: string,
+): DiscardCreationAuthority {
+  const audit = allWorktreeAuditRows(pd);
+  const creationRows = audit.rows.filter(
     (row) =>
       row.event === "WORKTREE_CREATED" &&
       auditBlockField(row.block, "Bolt slug") === slug,
   );
-  if (matches.length === 0) return undefined;
-  sortWorktreeAuditRows(matches);
-  const latestTimestamp = matches.at(-1)?.timestamp as string;
-  const latest = matches.filter((row) => row.timestamp === latestTimestamp);
-  const selectors = new Set(
-    latest.map((row) => auditBlockField(row.block, "Repo") ?? ""),
+  const selectors = new Map<string, string | null>();
+  selectors.set(repoSelectorKey(null), null);
+  for (const repo of discoverSiblingRepos(pd)) {
+    selectors.set(repoSelectorKey(repo), repo);
+  }
+  for (const row of creationRows) {
+    const field = auditBlockField(row.block, "Repo");
+    if (field === "-") {
+      selectors.set(repoSelectorKey(null), null);
+    } else if (field !== null && isValidRepoName(field)) {
+      selectors.set(repoSelectorKey(field), field);
+    }
+  }
+  if (recorded?.repoSelector !== undefined) {
+    selectors.set(
+      repoSelectorKey(recorded.repoSelector),
+      recorded.repoSelector,
+    );
+  }
+  if (explicitRepo !== undefined && isValidRepoName(explicitRepo)) {
+    selectors.set(repoSelectorKey(explicitRepo), explicitRepo);
+  }
+
+  const evidence = new Map<string, RepositoryBoltEvidence>();
+  for (const [key, repo] of selectors) {
+    evidence.set(key, repositoryBoltEvidence(pd, repo, slug));
+  }
+  const evidenceExists =
+    existsSync(worktreePath(pd, slug)) ||
+    [...evidence.values()].some((value) => value.durable);
+  if (!evidenceExists) return { evidenceExists: false };
+
+  const wellShapedRows = creationRows.filter((row) => {
+    const recordedPath = auditBlockField(row.block, "Worktree path");
+    const branch = auditBlockField(row.block, "Branch name");
+    return (
+      recordedPath !== null &&
+      pathKey(recordedPath) === pathKey(worktreePath(pd, slug)) &&
+      branch === `bolt-${slug}`
+    );
+  });
+  const rowsByTimestamp = new Map<string, ScopedWorktreeAuditRow[]>();
+  for (const row of wellShapedRows) {
+    const current = rowsByTimestamp.get(row.timestamp) ?? [];
+    current.push(row);
+    rowsByTimestamp.set(row.timestamp, current);
+  }
+  for (const tied of rowsByTimestamp.values()) {
+    const durableRepos = new Set<string>();
+    const shards = new Set<string>();
+    for (const row of tied) {
+      const field = auditBlockField(row.block, "Repo");
+      const repo =
+        field === "-"
+          ? null
+          : field !== null && isValidRepoName(field)
+            ? field
+            : undefined;
+      if (
+        repo !== undefined &&
+        evidence.get(repoSelectorKey(repo))?.durable === true
+      ) {
+        durableRepos.add(repoSelectorKey(repo));
+        shards.add(row.shard);
+      }
+    }
+    if (durableRepos.size > 1 && shards.size > 1) {
+      errorWithSlug(
+        slug,
+        "refusing to discard: same-second cross-shard WORKTREE_CREATED repository authority is ambiguous",
+      );
+    }
+  }
+  const corroborated = wellShapedRows.filter((row) => {
+    const field = auditBlockField(row.block, "Repo");
+    const repo =
+      field === "-"
+        ? null
+        : field !== null && isValidRepoName(field)
+          ? field
+          : undefined;
+    return (
+      repo !== undefined &&
+      evidence.get(repoSelectorKey(repo))?.durable === true
+    );
+  });
+  const corroboratedRepos = new Map<string, string | null>();
+  for (const row of corroborated) {
+    const field = auditBlockField(row.block, "Repo") as string;
+    const repo = field === "-" ? null : field;
+    corroboratedRepos.set(repoSelectorKey(repo), repo);
+  }
+  if (corroboratedRepos.size > 1) {
+    const labels = [...corroboratedRepos.values()]
+      .map(repoSelectorLabel)
+      .sort()
+      .map((value) => JSON.stringify(value))
+      .join(", ");
+    errorWithSlug(
+      slug,
+      `refusing to discard: corroborated WORKTREE_CREATED rows disagree on the creating repository (${labels})`,
+    );
+  }
+
+  let authority: ScopedWorktreeAuditRow | undefined;
+  if (corroborated.length > 0) {
+    authority = [...corroborated].sort((a, b) => {
+      if (a.timestamp !== b.timestamp) {
+        return a.timestamp < b.timestamp ? -1 : 1;
+      }
+      if (a.shard !== b.shard) return a.shard < b.shard ? -1 : 1;
+      return a.pos - b.pos;
+    }).at(-1);
+  }
+  const repoField =
+    authority === undefined
+      ? null
+      : auditBlockField(authority.block, "Repo");
+  const auditRepo =
+    repoField === "-"
+      ? null
+      : repoField !== null && isValidRepoName(repoField)
+        ? repoField
+        : undefined;
+  const hasRepoRow = creationRows.some(
+    (row) => auditBlockField(row.block, "Repo") !== null,
   );
+  const retainedEvidence = [...evidence.values()].some(
+    (value) => value.retained,
+  );
+  const durableRepos = [...evidence.entries()]
+    .filter(([, value]) => value.durable)
+    .map(([key]) => key);
+  const modernAuthority =
+    recorded?.repoSelector !== undefined ||
+    hasRepoRow ||
+    retainedEvidence ||
+    audit.unreadableShards.length > 0;
   if (
-    new Set(latest.map((row) => row.shard)).size > 1 &&
-    selectors.size !== 1
+    auditRepo === undefined &&
+    modernAuthority
   ) {
     errorWithSlug(
       slug,
-      "refusing to discard: same-second cross-shard WORKTREE_CREATED repository authority is ambiguous",
+      "refusing to discard: durable Bolt evidence exists, but no readable corroborated WORKTREE_CREATED Repo authority is available",
     );
   }
-  const selector = auditBlockField(
-    (latest.at(-1) as WorktreeAuditRow).block,
-    "Repo",
-  );
-  if (selector === null || selector === "") return undefined;
-  return selector === "-" ? null : selector;
+  if (auditRepo === undefined && !modernAuthority) {
+    if (durableRepos.length > 1) {
+      errorWithSlug(
+        slug,
+        "refusing to discard: pre-upgrade Bolt evidence spans multiple repositories and has no WORKTREE_CREATED Repo authority",
+      );
+    }
+    if (
+      explicitRepo !== undefined &&
+      durableRepos.length === 1 &&
+      durableRepos[0] !== repoSelectorKey(explicitRepo)
+    ) {
+      errorWithSlug(
+        slug,
+        `refusing to discard: selected repository ${JSON.stringify(explicitRepo)} contradicts the only repository carrying pre-upgrade Bolt evidence`,
+      );
+    }
+  }
+  if (
+    auditRepo !== undefined &&
+    recorded?.repoSelector !== undefined &&
+    recorded.repoSelector !== auditRepo
+  ) {
+    errorWithSlug(
+      slug,
+      `refusing to discard: worktree metadata repository ${JSON.stringify(repoSelectorLabel(recorded.repoSelector))} does not match corroborated WORKTREE_CREATED repository ${JSON.stringify(repoSelectorLabel(auditRepo))}`,
+    );
+  }
+  return {
+    evidenceExists: true,
+    ...(auditRepo === undefined
+      ? {}
+      : {
+          repo: auditRepo,
+          space: authority?.authoritySpace,
+          ...(authority?.authorityIntent === undefined
+            ? {}
+            : { intent: authority.authorityIntent }),
+        }),
+  };
 }
 
 function rowAfter(candidate: WorktreeAuditRow, boundary: WorktreeAuditRow): boolean {
@@ -1141,7 +1448,6 @@ function convergedSourceRecord(
     kind: "bound",
     fingerprint,
     commit,
-    baseCommit: creationBaseCommit,
     unit: unitName,
     batch,
     stage,
@@ -1382,7 +1688,13 @@ function refuseConfiguredMergeDrivers(
     return;
   }
   const configured = runGit(
-    ["config", "--get-regexp", "^merge\\..*\\.driver$"],
+    [
+      "config",
+      "-z",
+      "--name-only",
+      "--get-regexp",
+      "^merge\\..*\\.driver$",
+    ],
     repoCwd,
   );
   if (!configured.ok && configured.code === 1) return;
@@ -1395,8 +1707,8 @@ function refuseConfiguredMergeDrivers(
   const keys = [
     ...new Set(
       configured.stdout
-        .split(/\r?\n/)
-        .map((line) => line.trim().split(/\s+/, 1)[0])
+        .split("\0")
+        .map((key) => key.trim())
         .filter(Boolean),
     ),
   ].sort();
@@ -1986,6 +2298,8 @@ function handleDiscard(args: string[]): void {
   const flags = parseFlags(args);
   const slug = validateSlug(flags.slug);
   const pd = resolveProjectDir(projectDir);
+  const intentWasExplicit =
+    flags.intent !== undefined || flags.space !== undefined;
   const recorded = recordedWorktreeSelector(pd, slug);
   if (
     flags.intent === undefined &&
@@ -1996,10 +2310,47 @@ function handleDiscard(args: string[]): void {
     flags.intent = recorded.intent;
     flags.space = recorded.space;
   }
+  const authority = discardCreationAuthority(
+    pd,
+    slug,
+    recorded,
+    flags.repo,
+  );
+  const wtPath = worktreePath(pd, slug);
+  if (!authority.evidenceExists) {
+    console.log(
+      JSON.stringify({
+        emitted: null,
+        slug,
+        worktree_path: wtPath,
+        reason: "already-discarded",
+      }),
+    );
+    return;
+  }
+  if (authority.space !== undefined) {
+    const authorityRecord =
+      authority.intent === undefined
+        ? null
+        : `aidlc/spaces/${authority.space}/intents/${authority.intent}`;
+    if (
+      intentWasExplicit &&
+      relativeRecordDir(pd, flags.intent, flags.space) !== authorityRecord
+    ) {
+      errorWithSlug(
+        slug,
+        `refusing to discard: selected intent ${JSON.stringify(relativeRecordDir(pd, flags.intent, flags.space))} does not match creating intent ${JSON.stringify(authorityRecord)}`,
+      );
+    }
+    if (!intentWasExplicit && authority.intent !== undefined) {
+      flags.intent = authority.intent;
+      flags.space = authority.space;
+    }
+  }
   const creatingRepo =
-    recorded?.repoSelector !== undefined
-      ? recorded.repoSelector
-      : recordedWorktreeCreationRepo(pd, slug, flags.intent, flags.space);
+    authority.repo !== undefined
+      ? authority.repo
+      : recorded?.repoSelector;
   if (flags.repo === undefined && typeof creatingRepo === "string") {
     flags.repo = creatingRepo;
   }
@@ -2014,12 +2365,13 @@ function handleDiscard(args: string[]): void {
     );
   }
   // P7: anchor every git op to the target sibling repo (or projectDir for legacy).
-  const repoCwd = resolveRepoCwd(pd, flags, slug);
+  const repoCwd =
+    creatingRepo === null ? pd : resolveRepoCwd(pd, flags, slug);
   assertNotSiblingWorktree(repoCwd);
 
-  const wtPath = worktreePath(pd, slug);
   const branchName = `bolt-${slug}`;
   const dirExists = existsSync(wtPath);
+  const registered = repositoryRegistersBoltWorktree(pd, repoCwd, slug);
   const branchExists = runGit([
     "rev-parse",
     "--verify",
@@ -2053,7 +2405,7 @@ function handleDiscard(args: string[]): void {
     errorWithSlug(slug, `Audit emission failed: ${errorMessage(e)}`);
   }
 
-  if (dirExists) {
+  if (dirExists || registered) {
     const rm = runGit(["worktree", "remove", "--force", wtPath], repoCwd);
     if (!rm.ok) {
       errorWithSlug(
@@ -2375,12 +2727,7 @@ function errorWithSlug(slug: string, msg: string): never {
 
 function error(msg: string): never {
   const pd = resolveProjectDir(projectDir);
-  const commandArgs = process.argv.slice(2);
-  const projectDirIndex = commandArgs.indexOf("--project-dir");
-  if (projectDirIndex !== -1 && projectDirIndex + 1 < commandArgs.length) {
-    commandArgs[projectDirIndex + 1] = "<project-dir>";
-  }
-  const command = `aidlc-worktree ${commandArgs.join(" ")}`.trim();
+  const command = `aidlc-worktree ${process.argv.slice(2).join(" ")}`.trim();
   emitError(pd, "aidlc-worktree", command, msg);
 }
 

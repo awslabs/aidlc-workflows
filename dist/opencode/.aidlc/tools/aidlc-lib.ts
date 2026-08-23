@@ -5042,7 +5042,12 @@ export function auditShardDir(projectDir: string, intent?: string, space?: strin
 // first shipped without the fallback; base v2 always read the space shard in
 // that state).
 // Readers merge-sort parsed events by **Timestamp**.
-export function auditShards(projectDir: string, intent?: string, space?: string): string[] {
+export function auditShards(
+  projectDir: string,
+  intent?: string,
+  space?: string,
+  unreadableLocations?: string[],
+): string[] {
   const dirs: string[] = [];
   if (intent === undefined && space !== undefined) {
     dirs.push(join(spaceRecordRoot(projectDir, space), "audit"));
@@ -5057,12 +5062,14 @@ export function auditShards(projectDir: string, intent?: string, space?: string)
     try {
       assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, shardDir));
     } catch {
+      unreadableLocations?.push(shardDir);
       continue;
     }
     let entries: string[];
     try {
       entries = readdirSync(shardDir);
     } catch {
+      if (existsSync(shardDir)) unreadableLocations?.push(shardDir);
       continue;
     }
     for (const file of entries.sort()) {
@@ -5116,9 +5123,15 @@ export function readAuditShardEvents(
   projectDir: string,
   intent?: string,
   space?: string,
+  unreadableShards?: string[],
 ): AuditShardEvent[] {
   const rows: AuditShardEvent[] = [];
-  const shards = auditShards(projectDir, intent, space);
+  const shards = auditShards(
+    projectDir,
+    intent,
+    space,
+    unreadableShards,
+  );
   for (let shardIndex = 0; shardIndex < shards.length; shardIndex++) {
     let content: string;
     try {
@@ -5131,6 +5144,7 @@ export function readAuditShardEvents(
         relative(projectDir, shards[shardIndex]),
       );
     } catch {
+      unreadableShards?.push(shards[shardIndex]);
       continue; // vanished or refused shard; growth during read is tolerated
     }
     const blocks = content.replace(/\r\n/g, "\n").split(/\n---\n/);
@@ -7096,15 +7110,6 @@ function ignoredSourceClaimReason(
   } catch {
     // An absent exact path is valid and becomes stale if it appears later.
   }
-  if (!prefix && currentIsDirectory) {
-    const currentMode = currentGitPathMode(sourceRepoDir, literalPath);
-    if (!currentMode.ok) {
-      return `Git could not verify the current path type for ${JSON.stringify(path)}`;
-    }
-    if (currentMode.mode !== "160000") {
-      return `${JSON.stringify(path)} is a directory; directory claims must end with "/"`;
-    }
-  }
 
   let headTracked = false;
   const head = spawnSync(
@@ -7154,11 +7159,20 @@ function ignoredSourceClaimReason(
     { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
   );
   if (ignored.status === 0) {
-    if (!prefix && headTracked) return null;
+    if (!prefix && headTracked && !currentIsDirectory) return null;
     return `${JSON.stringify(path)} is ignored by Git and cannot be source-review evidence`;
   }
   if (ignored.status !== 1) {
     return `Git could not verify ignore rules for ${JSON.stringify(path)}`;
+  }
+  if (!prefix && currentIsDirectory) {
+    const currentMode = currentGitPathMode(sourceRepoDir, literalPath);
+    if (!currentMode.ok) {
+      return `Git could not verify the current path type for ${JSON.stringify(path)}`;
+    }
+    if (currentMode.mode !== "160000") {
+      return `${JSON.stringify(path)} is a directory; directory claims must end with "/"`;
+    }
   }
   if (!prefix) return null;
 
@@ -7293,10 +7307,32 @@ function symlinkClaimTargetReason(
       } catch (error) {
         return `${JSON.stringify(claimPath)} contains symlink ${JSON.stringify(link)} whose target cannot be read (${errorMessage(error)}). ${remedy}`;
       }
+      let currentDir: string;
+      try {
+        currentDir = realpathSync(dirname(current));
+      } catch (error) {
+        return `${JSON.stringify(claimPath)} contains symlink ${JSON.stringify(link)} whose containing directory cannot be resolved (${errorMessage(error)}). ${remedy}`;
+      }
+      const currentDirRelative = relative(repoRoot, currentDir);
+      if (
+        currentDirRelative === ".." ||
+        currentDirRelative.startsWith(`..${sep}`) ||
+        isAbsolute(currentDirRelative)
+      ) {
+        return `${JSON.stringify(claimPath)} contains symlink ${JSON.stringify(link)} whose fully resolved hop ${JSON.stringify(join(currentDir, basename(current)))} is outside the repository. ${remedy}`;
+      }
       const next = isAbsolute(target)
         ? resolvePath(target)
-        : resolvePath(dirname(current), target);
+        : resolvePath(currentDir, target);
       targetDisplay = relative(repoRoot, next).replaceAll("\\", "/") || ".";
+      const hopRelative = relative(repoRoot, next);
+      if (
+        hopRelative === ".." ||
+        hopRelative.startsWith(`..${sep}`) ||
+        isAbsolute(hopRelative)
+      ) {
+        return `${JSON.stringify(claimPath)} contains symlink ${JSON.stringify(link)} whose fully resolved target ${JSON.stringify(next)} is outside the repository. ${remedy}`;
+      }
       let stat: ReturnType<typeof lstatSync>;
       try {
         stat = lstatSync(next);
@@ -12375,6 +12411,24 @@ import type {
   appendAuditEntryUnlocked as AppendAuditEntryUnlocked,
 } from "./aidlc-audit.ts";
 
+function redactProjectDirPrefix(value: string, projectDir: string): string {
+  const variants = new Set<string>([resolvePath(projectDir)]);
+  try {
+    variants.add(realpathSync(projectDir));
+  } catch {
+    // The caller still gets lexical-prefix redaction when the root vanished.
+  }
+  for (const variant of [...variants]) {
+    variants.add(variant.replaceAll("\\", "/"));
+    variants.add(variant.replaceAll("/", "\\"));
+  }
+  let redacted = value;
+  for (const variant of [...variants].sort((a, b) => b.length - a.length)) {
+    redacted = redacted.replaceAll(variant, "<project-dir>");
+  }
+  return redacted;
+}
+
 // Failures are swallowed — we're already exiting, the caller gets the JSON
 // error on stderr regardless.
 export function emitError(
@@ -12385,6 +12439,8 @@ export function emitError(
   intent?: string,
   space?: string
 ): never {
+  const auditCommand = redactProjectDirPrefix(command, projectDir);
+  const auditMessage = redactProjectDirPrefix(msg, projectDir);
   if (!_errorEmitInProgress) {
     _errorEmitInProgress = true;
     try {
@@ -12417,14 +12473,14 @@ export function emitError(
         if (holdsAuditLock(projectDir, intent, space)) {
           audit.appendAuditEntryUnlocked("ERROR_LOGGED", {
             Tool: tool,
-            Command: command,
-            Error: msg,
+            Command: auditCommand,
+            Error: auditMessage,
           }, projectDir, intent, space);
         } else {
           audit.appendAuditEntry("ERROR_LOGGED", {
             Tool: tool,
-            Command: command,
-            Error: msg,
+            Command: auditCommand,
+            Error: auditMessage,
           }, projectDir, intent, space);
         }
       }

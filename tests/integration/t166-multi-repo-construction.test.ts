@@ -26,7 +26,7 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { AIDLC_SRC, cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
@@ -484,6 +484,424 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
       expect(removedWrong.status).not.toBe(0);
       expect(removedWrong.out).toContain("does not match creating repository");
       expect(hasBoltBranch(removedProj, "repo-b", "audit-removed")).toBe(true);
+    });
+  });
+
+  describe("multi-repo: discard corroborates authority across every intent", () => {
+    function phantomWorkspace(slug: string, plantRepoB: boolean) {
+      const proj = freshWorkspace();
+      makeSiblingRepo(proj, "repo-a");
+      const repoB = makeSiblingRepo(proj, "repo-b");
+      runUtil(
+        proj,
+        "intent-create",
+        "--scope",
+        "feature",
+        "--repos",
+        "repo-a,repo-b",
+      );
+      const created = runWorktree(
+        proj,
+        "create",
+        "--slug",
+        slug,
+        "--base",
+        "main",
+        "--repo",
+        "repo-a",
+      );
+      rmSync(worktreeDir(proj, slug), { recursive: true, force: true });
+      const parent = join(proj, ".aidlc", "worktrees");
+      chmodSync(parent, 0o500);
+      const phantom = runWorktree(
+        proj,
+        "create",
+        "--slug",
+        slug,
+        "--base",
+        "main",
+        "--repo",
+        "repo-b",
+      );
+      chmodSync(parent, 0o700);
+      if (plantRepoB) git(repoB, "branch", `bolt-${slug}`);
+      return { created, phantom, proj };
+    }
+
+    const trueRepo = phantomWorkspace("phantom-true", false);
+    const trueDiscard = runWorktree(
+      trueRepo.proj,
+      "discard",
+      "--slug",
+      "phantom-true",
+      "--repo",
+      "repo-a",
+    );
+
+    const phantomBranch = phantomWorkspace("phantom-branch", true);
+    const phantomBranchDiscard = runWorktree(
+      phantomBranch.proj,
+      "discard",
+      "--slug",
+      "phantom-branch",
+    );
+
+    const movedProj = freshWorkspace();
+    makeSiblingRepo(movedProj, "repo-a");
+    const movedRepoB = makeSiblingRepo(movedProj, "repo-b");
+    runUtil(
+      movedProj,
+      "intent-create",
+      "--scope",
+      "feature",
+      "--repos",
+      "repo-a,repo-b",
+    );
+    const firstIntent = basename(activeRecord(movedProj));
+    runWorktree(
+      movedProj,
+      "create",
+      "--slug",
+      "moved-cursor",
+      "--base",
+      "main",
+      "--repo",
+      "repo-a",
+    );
+    rmSync(worktreeDir(movedProj, "moved-cursor"), {
+      recursive: true,
+      force: true,
+    });
+    runUtil(
+      movedProj,
+      "intent-create",
+      "--scope",
+      "feature",
+      "--repos",
+      "repo-a,repo-b",
+    );
+    const secondIntent = basename(activeRecord(movedProj));
+    git(movedRepoB, "branch", "bolt-moved-cursor");
+    const movedWrong = runWorktree(
+      movedProj,
+      "discard",
+      "--slug",
+      "moved-cursor",
+      "--repo",
+      "repo-b",
+    );
+    const foreignIntent = runWorktree(
+      movedProj,
+      "discard",
+      "--slug",
+      "moved-cursor",
+      "--repo",
+      "repo-a",
+      "--space",
+      "default",
+      "--intent",
+      secondIntent,
+    );
+
+    const metadataProj = freshWorkspace();
+    makeSiblingRepo(metadataProj, "repo-a");
+    makeSiblingRepo(metadataProj, "repo-b");
+    makeSiblingRepo(metadataProj, "repo-c");
+    runUtil(
+      metadataProj,
+      "intent-create",
+      "--scope",
+      "feature",
+      "--repos",
+      "repo-a,repo-b,repo-c",
+    );
+    runWorktree(
+      metadataProj,
+      "create",
+      "--slug",
+      "metadata-conflict",
+      "--base",
+      "main",
+      "--repo",
+      "repo-a",
+    );
+    const metadataPath = join(
+      worktreeDir(metadataProj, "metadata-conflict"),
+      ".aidlc",
+      "worktree-meta.json",
+    );
+    const metadata = JSON.parse(
+      readFileSync(metadataPath, "utf-8"),
+    ) as Record<string, unknown>;
+    metadata.repoSelector = "repo-c";
+    writeFileSync(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`);
+    const metadataConflict = runWorktree(
+      metadataProj,
+      "discard",
+      "--slug",
+      "metadata-conflict",
+      "--repo",
+      "repo-b",
+    );
+
+    function stripCreationRepoField(proj: string): void {
+      const auditDir = join(activeRecord(proj), "audit");
+      for (const file of readdirSync(auditDir)) {
+        const path = join(auditDir, file);
+        writeFileSync(
+          path,
+          readFileSync(path, "utf-8").replace(
+            /^\*\*Repo\*\*:.*\n/gm,
+            "",
+          ),
+        );
+      }
+    }
+
+    const migrationProj = freshWorkspace();
+    makeSiblingRepo(migrationProj, "repo-a");
+    makeSiblingRepo(migrationProj, "repo-b");
+    runUtil(
+      migrationProj,
+      "intent-create",
+      "--scope",
+      "feature",
+      "--repos",
+      "repo-a,repo-b",
+    );
+    runWorktree(
+      migrationProj,
+      "create",
+      "--slug",
+      "migration-single",
+      "--base",
+      "main",
+      "--repo",
+      "repo-a",
+    );
+    rmSync(worktreeDir(migrationProj, "migration-single"), {
+      recursive: true,
+      force: true,
+    });
+    stripCreationRepoField(migrationProj);
+    const migrationSingle = runWorktree(
+      migrationProj,
+      "discard",
+      "--slug",
+      "migration-single",
+      "--repo",
+      "repo-a",
+    );
+
+    const migrationAmbiguousProj = freshWorkspace();
+    makeSiblingRepo(migrationAmbiguousProj, "repo-a");
+    const migrationRepoB = makeSiblingRepo(
+      migrationAmbiguousProj,
+      "repo-b",
+    );
+    runUtil(
+      migrationAmbiguousProj,
+      "intent-create",
+      "--scope",
+      "feature",
+      "--repos",
+      "repo-a,repo-b",
+    );
+    runWorktree(
+      migrationAmbiguousProj,
+      "create",
+      "--slug",
+      "migration-ambiguous",
+      "--base",
+      "main",
+      "--repo",
+      "repo-a",
+    );
+    rmSync(worktreeDir(migrationAmbiguousProj, "migration-ambiguous"), {
+      recursive: true,
+      force: true,
+    });
+    git(migrationRepoB, "branch", "bolt-migration-ambiguous");
+    stripCreationRepoField(migrationAmbiguousProj);
+    const migrationAmbiguous = runWorktree(
+      migrationAmbiguousProj,
+      "discard",
+      "--slug",
+      "migration-ambiguous",
+      "--repo",
+      "repo-b",
+    );
+
+    test("an uncorroborated phantom row cannot override the real creating repo", () => {
+      expect(trueRepo.created.status).toBe(0);
+      expect(trueRepo.phantom.status).not.toBe(0);
+      expect(trueDiscard.status, trueDiscard.out).toBe(0);
+      expect(
+        hasBoltBranch(trueRepo.proj, "repo-a", "phantom-true"),
+      ).toBe(false);
+    });
+
+    test("a deliberately planted second branch makes repository authority ambiguous", () => {
+      expect(phantomBranch.phantom.status).not.toBe(0);
+      expect(phantomBranchDiscard.status).not.toBe(0);
+      expect(phantomBranchDiscard.out).toContain(
+        "corroborated WORKTREE_CREATED rows disagree",
+      );
+      expect(
+        hasBoltBranch(
+          phantomBranch.proj,
+          "repo-a",
+          "phantom-branch",
+        ),
+      ).toBe(true);
+      expect(
+        hasBoltBranch(
+          phantomBranch.proj,
+          "repo-b",
+          "phantom-branch",
+        ),
+      ).toBe(true);
+    });
+
+    test("a moved cursor and foreign intent cannot hide creating authority", () => {
+      expect(firstIntent).not.toBe(secondIntent);
+      expect(movedWrong.status).not.toBe(0);
+      expect(movedWrong.out).toContain("does not match creating repository");
+      expect(foreignIntent.status).not.toBe(0);
+      expect(foreignIntent.out).toContain(
+        "does not match creating intent",
+      );
+      expect(
+        hasBoltBranch(movedProj, "repo-a", "moved-cursor"),
+      ).toBe(true);
+      expect(
+        hasBoltBranch(movedProj, "repo-b", "moved-cursor"),
+      ).toBe(true);
+    });
+
+    test("metadata and corroborated audit authority must agree", () => {
+      expect(metadataConflict.status).not.toBe(0);
+      expect(metadataConflict.out).toContain(
+        "worktree metadata repository",
+      );
+      expect(metadataConflict.out).toContain(
+        "corroborated WORKTREE_CREATED repository",
+      );
+      expect(
+        hasBoltBranch(metadataProj, "repo-a", "metadata-conflict"),
+      ).toBe(true);
+    });
+
+    test("pre-upgrade fallback stays open only when durable repo evidence is unambiguous", () => {
+      expect(migrationSingle.status, migrationSingle.out).toBe(0);
+      expect(
+        hasBoltBranch(migrationProj, "repo-a", "migration-single"),
+      ).toBe(false);
+      expect(migrationAmbiguous.status).not.toBe(0);
+      expect(migrationAmbiguous.out).toContain(
+        "pre-upgrade Bolt evidence spans multiple repositories",
+      );
+      expect(
+        hasBoltBranch(
+          migrationAmbiguousProj,
+          "repo-a",
+          "migration-ambiguous",
+        ),
+      ).toBe(true);
+      expect(
+        hasBoltBranch(
+          migrationAmbiguousProj,
+          "repo-b",
+          "migration-ambiguous",
+        ),
+      ).toBe(true);
+    });
+  });
+
+  describe("ERROR_LOGGED redacts the resolved project prefix centrally", () => {
+    function errorBlock(proj: string): string {
+      const audit = readAllAuditShards(proj);
+      return audit.slice(audit.lastIndexOf("## Error Logged"));
+    }
+
+    const envProj = freshWorkspace();
+    git(envProj, "init", "-q", "-b", "main");
+    git(envProj, "config", "user.email", "t@t");
+    git(envProj, "config", "user.name", "t");
+    git(envProj, "commit", "-q", "-m", "init", "--allow-empty");
+    runUtil(envProj, "intent-create", "--scope", "feature");
+    mkdirSync(worktreeDir(envProj, "env-path"), { recursive: true });
+    const envError = spawnSync(
+      BUN,
+      [WT_TOOL, "create", "--slug", "env-path", "--base", "main"],
+      {
+        cwd: envProj,
+        encoding: "utf-8",
+        env: { ...process.env, AIDLC_PROJECT_DIR: envProj },
+      },
+    );
+
+    const equalsProj = freshWorkspace();
+    git(equalsProj, "init", "-q", "-b", "main");
+    git(equalsProj, "config", "user.email", "t@t");
+    git(equalsProj, "config", "user.name", "t");
+    git(equalsProj, "commit", "-q", "-m", "init", "--allow-empty");
+    runUtil(equalsProj, "intent-create", "--scope", "feature");
+    const equalsError = spawnSync(
+      BUN,
+      [
+        WT_TOOL,
+        "create",
+        "--slug",
+        "equals-path",
+        "--base",
+        "main",
+        `--project-dir=${equalsProj}`,
+      ],
+      {
+        cwd: equalsProj,
+        encoding: "utf-8",
+        env: { ...process.env, AIDLC_PROJECT_DIR: equalsProj },
+      },
+    );
+    const alternateProjectSpelling =
+      process.platform === "win32"
+        ? equalsProj.replaceAll("\\", "/")
+        : equalsProj.replaceAll("/", "\\");
+    const alternateError = spawnSync(
+      BUN,
+      [
+        WT_TOOL,
+        "create",
+        "--slug",
+        "alternate-path",
+        "--base",
+        "main",
+        `--project-dir=${alternateProjectSpelling}`,
+      ],
+      {
+        cwd: equalsProj,
+        encoding: "utf-8",
+        env: { ...process.env, AIDLC_PROJECT_DIR: equalsProj },
+      },
+    );
+
+    test("env-supplied project paths are redacted from Error fields", () => {
+      expect(envError.status).not.toBe(0);
+      expect(errorBlock(envProj)).toContain("<project-dir>/.aidlc/worktrees");
+      expect(errorBlock(envProj)).not.toContain(envProj);
+    });
+
+    test("equals-form project paths are redacted from Command and Error fields", () => {
+      expect(equalsError.status).not.toBe(0);
+      expect(errorBlock(equalsProj)).toContain(
+        "--project-dir=<project-dir>",
+      );
+      expect(errorBlock(equalsProj)).not.toContain(equalsProj);
+      expect(alternateError.status).not.toBe(0);
+      expect(readAllAuditShards(equalsProj)).not.toContain(
+        alternateProjectSpelling,
+      );
     });
   });
 

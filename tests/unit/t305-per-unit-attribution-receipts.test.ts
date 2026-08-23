@@ -239,6 +239,64 @@ describe("t305 strict source-manifest validation", () => {
     expect(exact.ok).toBe(false);
     if (!exact.ok) expect(exact.reason).toContain("ignored by Git");
 
+    mkdirSync(join(project, "ignored-root"), { recursive: true });
+    writeFileSync(join(project, "ignored-root", "generated.js"), "ignored\n");
+    writeFileSync(
+      join(project, ".gitignore"),
+      "ignored.ts\nignored-dir/*.tmp\nignored-root/\n",
+    );
+    manifest(record, "alpha", {
+      stage: "code-generation",
+      unit: "alpha",
+      version: 1,
+      writes: [{ path: "ignored-root" }],
+    });
+    const ignoredDirectoryExact = readUnitSourceManifest(
+      project,
+      "code-generation",
+      "alpha",
+    );
+    expect(ignoredDirectoryExact.ok).toBe(false);
+    if (!ignoredDirectoryExact.ok) {
+      expect(ignoredDirectoryExact.reason).toContain(
+        '"ignored-root" is ignored by Git',
+      );
+      expect(ignoredDirectoryExact.reason).not.toContain(
+        "could not verify the current path type",
+      );
+    }
+
+    writeFileSync(join(project, "ignored-replacement"), "tracked file\n");
+    git(project, ["add", "--", "ignored-replacement"]);
+    git(project, ["commit", "-qm", "track replacement source"]);
+    rmSync(join(project, "ignored-replacement"));
+    mkdirSync(join(project, "ignored-replacement"), { recursive: true });
+    writeFileSync(
+      join(project, "ignored-replacement", "generated.js"),
+      "ignored\n",
+    );
+    writeFileSync(
+      join(project, ".gitignore"),
+      "ignored.ts\nignored-dir/*.tmp\nignored-root/\nignored-replacement/\n",
+    );
+    manifest(record, "alpha", {
+      stage: "code-generation",
+      unit: "alpha",
+      version: 1,
+      writes: [{ path: "ignored-replacement" }],
+    });
+    const ignoredReplacement = readUnitSourceManifest(
+      project,
+      "code-generation",
+      "alpha",
+    );
+    expect(ignoredReplacement.ok).toBe(false);
+    if (!ignoredReplacement.ok) {
+      expect(ignoredReplacement.reason).toContain(
+        '"ignored-replacement" is ignored by Git',
+      );
+    }
+
     manifest(record, "alpha", {
       stage: "code-generation",
       unit: "alpha",
@@ -418,6 +476,74 @@ describe("t305 strict source-manifest validation", () => {
     expect(
       readUnitSourceManifest(projectAlias, "code-generation", "alpha").ok,
     ).toBe(true);
+
+    const outsideHopDir = mkdtempSync(
+      join(tmpdir(), "aidlc-out-and-back-"),
+    );
+    dirs.push(outsideHopDir);
+    symlinkSync(
+      join(project, "tracked-target.ts"),
+      join(outsideHopDir, "hop"),
+    );
+    symlinkSync(
+      join(outsideHopDir, "hop"),
+      join(project, "out-and-back-link.ts"),
+    );
+    git(project, ["add", "--", "out-and-back-link.ts"]);
+    git(project, ["commit", "-qm", "track out-and-back symlink"]);
+    manifest(record, "alpha", {
+      stage: "code-generation",
+      unit: "alpha",
+      version: 1,
+      writes: [{ path: "out-and-back-link.ts" }],
+    });
+    const outAndBack = readUnitSourceManifest(
+      projectAlias,
+      "code-generation",
+      "alpha",
+    );
+    expect(outAndBack.ok).toBe(false);
+    if (!outAndBack.ok) {
+      expect(outAndBack.reason).toContain("out-and-back-link.ts");
+      expect(outAndBack.reason).toContain("outside the repository");
+    }
+
+    symlinkSync(
+      outsideHopDir,
+      join(project, "outside-directory-link"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    symlinkSync(
+      "outside-directory-link/hop",
+      join(project, "nested-out-and-back-link.ts"),
+    );
+    git(project, [
+      "add",
+      "--",
+      "outside-directory-link",
+      "nested-out-and-back-link.ts",
+    ]);
+    git(project, ["commit", "-qm", "track nested out-and-back symlink"]);
+    manifest(record, "alpha", {
+      stage: "code-generation",
+      unit: "alpha",
+      version: 1,
+      writes: [{ path: "nested-out-and-back-link.ts" }],
+    });
+    const nestedOutAndBack = readUnitSourceManifest(
+      projectAlias,
+      "code-generation",
+      "alpha",
+    );
+    expect(nestedOutAndBack.ok).toBe(false);
+    if (!nestedOutAndBack.ok) {
+      expect(nestedOutAndBack.reason).toContain(
+        "nested-out-and-back-link.ts",
+      );
+      expect(nestedOutAndBack.reason).toContain(
+        "outside the repository",
+      );
+    }
 
     mkdirSync(join(project, "real-directory"), { recursive: true });
     writeFileSync(join(project, "real-directory", "inner.ts"), "inner\n");
@@ -1943,13 +2069,27 @@ describe("t305 healthy settled-swarm source completion", () => {
     }, 120000);
   }
 
-  for (const driverName of ["evil", "set", "unset", "unspecified"] as const) {
-    test(`configured merge driver ${driverName} is refused before main mutation`, () => {
+  for (const driverCase of [
+    { attributeName: "evil", configName: "evil", unit: "driver-guard-evil" },
+    { attributeName: "set", configName: "set", unit: "driver-guard-set" },
+    { attributeName: "unset", configName: "unset", unit: "driver-guard-unset" },
+    {
+      attributeName: "unspecified",
+      configName: "unspecified",
+      unit: "driver-guard-unspecified",
+    },
+    {
+      attributeName: "evil",
+      configName: "my driver",
+      unit: "driver-guard-spaced",
+    },
+  ]) {
+    test(`configured merge driver ${JSON.stringify(driverCase.configName)} is refused before main mutation`, () => {
     const project = swarmFixture((root) => {
       writeFileSync(join(root, "driver-target.ts"), "export const base = true;\n");
       writeFileSync(
         join(root, ".gitattributes"),
-        `driver-target.ts merge=${driverName}\n`,
+        `driver-target.ts merge=${driverCase.attributeName}\n`,
       );
     });
     const driverDir = mkdtempSync(join(tmpdir(), "aidlc-merge-driver-"));
@@ -1963,10 +2103,10 @@ describe("t305 healthy settled-swarm source completion", () => {
     chmodSync(driver, 0o755);
     git(project, [
       "config",
-      `merge.${driverName}.driver`,
+      `merge.${driverCase.configName}.driver`,
       `${driver} %A %O %B`,
     ]);
-    const unit = `driver-guard-${driverName}`;
+    const unit = driverCase.unit;
     seedBoltDag(project, [unit]);
     const prepared = runSwarm(project, [
       "prepare",
@@ -2009,7 +2149,9 @@ describe("t305 healthy settled-swarm source completion", () => {
     ).stdout.trim();
     const merged = mergeSwarmUnit(project, unit);
     expect(merged.rc).toBe(1);
-    expect(merged.out).toContain(`merge.${driverName}.driver`);
+    expect(merged.out).toContain(
+      `merge.${driverCase.configName}.driver`,
+    );
     expect(merged.out).toContain("remove the merge.<name>.driver configuration");
     expect(merged.out).toContain("AIDLC_SKIP_SOURCE_FRESHNESS=1");
     expect(merged.out).not.toContain("[merge-succeeded:");
