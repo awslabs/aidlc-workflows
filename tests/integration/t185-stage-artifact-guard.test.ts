@@ -42,7 +42,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -1153,10 +1153,10 @@ X. Other (please specify)
       expect(result.out).toContain("fresh human turn");
       expect(result.out).toContain("end the turn");
       expect(result.out).toContain(
-        "remove or repair every unsupported post-summary section",
+        "remove or repair every invalid or duplicate post-summary section named",
       );
       expect(result.out).toContain(
-        "reset the consolidated-summary `[Answer]:` to blank",
+        "reset the existing consolidated-summary `[Answer]:` tag to blank",
       );
       expect(result.out).toContain(
         'decision --checkpoint summary-confirmation --stage \\"feasibility\\"',
@@ -1203,7 +1203,7 @@ X. Other (please specify)
         "reset the existing consolidated-summary `[Answer]:` tag to blank",
       );
       expect(result.out).toContain(
-        "remove or repair any invalid or duplicate post-summary section",
+        "remove or repair every invalid or duplicate post-summary section named",
       );
       expect(
         result.out.indexOf("reset the existing consolidated-summary"),
@@ -1672,7 +1672,7 @@ X. Other (please specify)
     test("PASSES reverse-engineering once the complete codekb artifact set exists", () => {
       guarded(proj, ["set", "Current Stage=reverse-engineering"]);
       guarded(proj, ["checkbox", "reverse-engineering=in-progress"]);
-      writeCodekbSet(proj, proj.split("/").filter(Boolean).pop() ?? "repo");
+      writeCodekbSet(proj, basename(proj));
       completePipelineReceipts(proj);
       guarded(proj, ["gate-start", "reverse-engineering"]);
       const r = guarded(proj, ["approve", "reverse-engineering", "--user-input", "ok"]);

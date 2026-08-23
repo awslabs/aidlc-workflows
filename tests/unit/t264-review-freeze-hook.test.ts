@@ -28,7 +28,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import {
   blockReason,
   judgeFreeze,
@@ -129,46 +129,47 @@ describe("t264 (a) judgeFreeze decision table", () => {
   });
 
   test("writeTargets: file tools and mutation-capable Bash contribute paths", () => {
+    const hostPath = (value: string): string => resolve(value);
     expect(writeTargets("Write", { file_path: "/a/b.md" })).toEqual(["/a/b.md"]);
     expect(writeTargets("Edit", { file_path: "/a/b.md" })).toEqual(["/a/b.md"]);
     expect(writeTargets("Read", { file_path: "/a/b.md" })).toEqual([]);
-    expect(writeTargets("Bash", { command: "printf x >> /a/b.md" })).toEqual(["/a/b.md"]);
-    expect(writeTargets("Bash", { command: "printf x>>/a/b.md" })).toEqual(["/a/b.md"]);
+    expect(writeTargets("Bash", { command: "printf x >> /a/b.md" })).toEqual([hostPath("/a/b.md")]);
+    expect(writeTargets("Bash", { command: "printf x>>/a/b.md" })).toEqual([hostPath("/a/b.md")]);
     expect(writeTargets("Bash", { command: 'printf x > "$PWD/a/b.md"' }, "/p")).toEqual([
-      "/p/a/b.md",
+      hostPath("/p/a/b.md"),
     ]);
-    expect(writeTargets("Bash", { command: "rm /a/b.md" })).toEqual(["/a/b.md"]);
+    expect(writeTargets("Bash", { command: "rm /a/b.md" })).toEqual([hostPath("/a/b.md")]);
     expect(writeTargets("Bash", { command: "command rm -f /a/b.md" })).toEqual([
-      "/a/b.md",
+      hostPath("/a/b.md"),
     ]);
     expect(writeTargets("Bash", { command: "cp /a/b.md /tmp/copy" })).not.toContain(
-      "/a/b.md",
+      hostPath("/a/b.md"),
     );
     expect(
       writeTargets("Bash", { command: "cp --target-directory=/tmp /a/b.md" }),
-    ).toEqual(["/tmp", "/tmp/b.md"]);
+    ).toEqual([hostPath("/tmp"), hostPath("/tmp/b.md")]);
     expect(writeTargets("Bash", { command: "cp -t /tmp /a/b.md" })).toEqual([
-      "/tmp",
-      "/tmp/b.md",
+      hostPath("/tmp"),
+      hostPath("/tmp/b.md"),
     ]);
     expect(
       writeTargets("Bash", {
         command: "cp /tmp/requirements.md /not-present/inception/requirements-analysis",
       }),
-    ).toEqual(["/not-present/inception/requirements-analysis"]);
+    ).toEqual([hostPath("/not-present/inception/requirements-analysis")]);
     expect(writeTargets("Bash", { command: "mv /a/b.md /tmp/moved" })).toEqual(
-      expect.arrayContaining(["/a/b.md", "/tmp/moved"]),
+      expect.arrayContaining([hostPath("/a/b.md"), hostPath("/tmp/moved")]),
     );
     expect(writeTargets("Bash", { command: "install -dv /a/b /tmp/c" })).toEqual([
-      "/a/b",
-      "/tmp/c",
+      hostPath("/a/b"),
+      hostPath("/tmp/c"),
     ]);
     expect(writeTargets("Bash", { command: "truncate -s 1 -o /a/b.md" })).toEqual([
-      "/a/b.md",
+      hostPath("/a/b.md"),
     ]);
     expect(
       writeTargets("Bash", { command: "command truncate -s 0 /a/b.md" }),
-    ).toEqual(["/a/b.md"]);
+    ).toEqual([hostPath("/a/b.md")]);
     for (const command of [
       "timeout 5 truncate -s 0 /a/b.md",
       "nice truncate -s 0 /a/b.md",
@@ -182,17 +183,17 @@ describe("t264 (a) judgeFreeze decision table", () => {
       "unbuffer truncate -s 0 /a/b.md",
       "env -S 'truncate -s 0 /a/b.md'",
     ]) {
-      expect(writeTargets("Bash", { command }), command).toContain("/a/b.md");
+      expect(writeTargets("Bash", { command }), command).toContain(hostPath("/a/b.md"));
     }
     expect(writeTargets("Bash", { command: "truncate -r /a/b.md /tmp/out" })).toEqual([
-      "/tmp/out",
+      hostPath("/tmp/out"),
     ]);
     expect(
       writeTargets("Bash", { command: "sed -i 's/x/y/' /a/b.md /tmp/c.md" }),
-    ).toEqual(["/a/b.md", "/tmp/c.md"]);
+    ).toEqual([hostPath("/a/b.md"), hostPath("/tmp/c.md")]);
     expect(
       writeTargets("Bash", { command: "perl -pi -e 's/x/y/' /a/b.md /tmp/c.md" }),
-    ).toEqual(["/a/b.md", "/tmp/c.md"]);
+    ).toEqual([hostPath("/a/b.md"), hostPath("/tmp/c.md")]);
     expect(writeTargets("Bash", { command: "sed -n '1p' /a/b.md" })).toEqual([]);
     expect(
       writeTargets("Bash", { command: "sed --version; cat /a/b.md" }),
