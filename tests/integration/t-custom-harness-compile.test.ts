@@ -642,9 +642,43 @@ outputs: none
     }
   });
 
-  // E10b — duplicate producer names are legal when no stage consumes the
+  // E10b — optional_produces shares the same producer namespace as produces.
+  test("E10b: an optional producer colliding on a consumed artifact fails compile", () => {
+    const proj = setupIntegrationProject({ customHarness: true });
+    try {
+      const original = stagePath(proj, SNAPSHOT_STAGE_PHASE, SNAPSHOT_STAGE_SLUG);
+      const duplicateSlug = "schema-snapshot-optional";
+      const duplicate = stagePath(proj, SNAPSHOT_STAGE_PHASE, duplicateSlug);
+      const optionalProducer = readFileSync(original, "utf8")
+        .replace(
+          `slug: ${SNAPSHOT_STAGE_SLUG}`,
+          `slug: ${duplicateSlug}`,
+        )
+        .replace(
+          `produces:\n  - ${SNAPSHOT_ARTIFACT}`,
+          `produces: []\noptional_produces:\n  - ${SNAPSHOT_ARTIFACT}`,
+        );
+      expect(optionalProducer).toContain(
+        `produces: []\noptional_produces:\n  - ${SNAPSHOT_ARTIFACT}`,
+      );
+      writeFileSync(duplicate, optionalProducer);
+
+      const r = graph(proj, ["compile"]);
+      expect(r.status).not.toBe(0);
+      expect(r.stderr).toContain(
+        `Duplicate producers for consumed artifact "${SNAPSHOT_ARTIFACT}"`,
+      );
+      expect(r.stderr).toContain(`${SNAPSHOT_STAGE_SLUG}.md`);
+      expect(r.stderr).toContain(`${duplicateSlug}.md`);
+      expect(r.stderr).toContain(`stage "${PLAN_STAGE_SLUG}"`);
+    } finally {
+      cleanupTestProject(proj);
+    }
+  });
+
+  // E10c — duplicate producer names are legal when no stage consumes the
   // artifact. This preserves the shipped traceability pattern.
-  test("E10b: duplicate producers for an unconsumed artifact compile successfully", () => {
+  test("E10c: duplicate producers for an unconsumed artifact compile successfully", () => {
     const proj = setupIntegrationProject({ customHarness: true });
     try {
       const original = stagePath(proj, SNAPSHOT_STAGE_PHASE, PLAN_STAGE_SLUG);
