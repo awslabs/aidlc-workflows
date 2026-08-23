@@ -47,6 +47,7 @@ test-pro/
   sensors/aidlc-requirement-coverage.md
   tools/aidlc-sensor-coverage-threshold.ts            # the sensor scripts
   tools/aidlc-sensor-requirement-coverage.ts
+  tools/test-pro-doctor.ts                             # optional /aidlc --doctor checks
   scopes/test-pro-validation.md                       # NEW plugin scope
   agents/test-pro-metrics-agent.md                    # NEW support persona
   knowledge/test-pro-metrics-agent/methodology.md     # plugin methodology knowledge
@@ -73,7 +74,7 @@ block:
       "scopes": "scopes/",            // NEW scope identities
       "knowledge": "knowledge/",      // methodology knowledge for agents
       "sensors": "sensors/",          // sensor manifests
-      "tools": "tools/"               // sensor scripts (so a sensor can run)
+      "tools": "tools/"               // runnable sensor + doctor scripts
     }
   }
 }
@@ -82,7 +83,8 @@ block:
 `contributes` keys map to core subtrees (`stages`, `agents`, `scopes`, `memory`,
 `sensors`, `knowledge`, `tools`) — those are merged alongside core at compose.
 `tools` lands CLI scripts in the harness `tools/` dir so a plugin can ship a
-**runnable sensor** (its manifest in `sensors/` + its script in `tools/`).
+**runnable sensor** (its manifest in `sensors/` + its script in `tools/`) and an
+optional doctor check.
 `memory` merges into the default-space method seed, **not** a `rules/` dir (that
 directory is no longer read — see §4). `overlays` is special: it is **not**
 copied; it holds the per-stage contributions consumed by the merge (§3).
@@ -275,6 +277,42 @@ projection remains deferred (doc 18 §8 Status).
   ambiguous set. Membership for plugin-authored stages is their `scopes:`
   frontmatter list; a contribution's `adds.scopes` (§3) adds YOUR scope to an
   existing core stage. See [Scopes](04-scopes.md).
+
+### Ship a doctor check
+
+Add `tools/<plugin>-doctor.ts` when your plugin has install prerequisites or
+composed files that `/aidlc --doctor` should verify. The script is optional and
+runs only while the plugin is enabled. It receives `AIDLC_PROJECT_DIR`,
+`AIDLC_HARNESS_DIR`, and `AIDLC_PLUGIN_NAME`, and must print the JSON contract
+without other stdout:
+
+Doctor discovery derives installed plugin identities from owned stage and scope
+metadata. A plugin must therefore own at least one stage or scope for its doctor
+script to be discoverable; a tools-, sensors-, or knowledge-only plugin is not
+enough on its own.
+
+```typescript
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+
+const root = join(
+  process.env.AIDLC_PROJECT_DIR ?? process.cwd(),
+  process.env.AIDLC_HARNESS_DIR ?? ".claude",
+);
+
+console.log(JSON.stringify({
+  checks: [{
+    pass: existsSync(join(root, "tools", "my-plugin-helper.ts")),
+    label: "my-plugin helper installed",
+    fix: "Run `bun <harness-dir>/tools/aidlc-utility.ts plugin-sync` or re-run hooks/compose.ts.",
+    severity: "error",
+  }],
+}));
+```
+
+Omit `severity` for the default `error` behavior. Use `advisory` for a visible
+finding that must not fail doctor. Keep the script read-only and dependency-free;
+doctor bounds its runtime/output and turns script failures into diagnostic rows.
 
 ## 5. Distribution + install
 

@@ -8,7 +8,6 @@ description: >
   UX/UI designer responsible for wireframing, interaction design, accessibility, and design system compliance.
   Leads Rough Mockups and Refined Mockups stages. Supports Domain Design, and serves as a
   dispatched collaborator in the User Stories mob ensemble.
-disallowedTools: Task
 tools: ["read", "write", "shell"]
 ---
 

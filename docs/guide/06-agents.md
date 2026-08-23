@@ -231,16 +231,16 @@ This table shows which agents are active in which phases, and whether they serve
 
 ## Agent Tool Access
 
-Every agent inherits the **full session toolset** — all of Claude Code's built-in tools plus any MCP tools provisioned to the session. The one shipped restriction is `disallowedTools: Task` (only the conductor spawns subagents); none of the 14 agents declare a `tools:` allowlist. So the table below is not a set of per-agent grants — it records which tools each persona is *expected* to exercise in its work.
+On Claude Code, every agent inherits the **full session toolset** plus provisioned MCP tools, with `disallowedTools: Task` blocking nested delegation. Other harnesses use native tool policy for the same boundary; Kiro delegate allowlists omit `subagent`, and its projected agent Markdown does not carry the unsupported Claude key. The table below records which tools each persona is *expected* to exercise in its work, not a per-agent grant.
 
 | Tool | Expected to exercise it |
 |------|-------------|
 | Read, Edit, Write, Glob, Grep, AskUserQuestion | All 14 agents |
 | Bash | aidlc-aws-platform-agent, aidlc-devsecops-agent, aidlc-developer-agent, aidlc-quality-agent, aidlc-pipeline-deploy-agent, aidlc-operations-agent |
 | WebSearch | aidlc-product-agent, aidlc-design-agent, aidlc-compliance-agent |
-| Task | None (blocked on every agent via `disallowedTools: Task`) |
+| Task / native delegation tool | None (blocked by each harness's projected agent policy) |
 
-To genuinely narrow a persona, add an optional `tools:` allowlist to its frontmatter — but doing so drops inherited MCP access unless the fully-qualified `mcp__<server>__<tool>` ids are also listed. This implementation ships no such restrictions today.
+To narrow a Claude persona, add an optional `tools:` allowlist to its frontmatter — but doing so drops inherited MCP access unless the fully-qualified `mcp__<server>__<tool>` ids are also listed. Other harnesses use their native agent configuration.
 
 ### MCP servers are shared, not per-agent
 

@@ -165,15 +165,17 @@ describe("t04 agent-persona frontmatter contract (migrated from t04-agent-frontm
   });
 
   // .sh L48-52: `grep -q "^disallowedTools:.*Task"`.
-  test("disallowedTools: contains Task (no nested subagents) [.sh test 4 x11]", () => {
+  test("disallowedTools: is exactly one Task denial (no nested subagents) [.sh test 4 x11]", () => {
     for (const agent of AGENTS) {
       const fm = frontmatter(agent);
-      const m = fm.match(/^disallowedTools:\s*(.+)$/m);
-      expect(m, `aidlc-${agent}-agent.md: no disallowedTools: line`).not.toBeNull();
-      // STRONGER: parse the value and assert Task is one of the listed tools,
-      // not merely that "Task" appears somewhere on the line.
-      const tools = (m?.[1] ?? "").split(",").map((t) => t.trim());
-      expect(tools).toContain("Task");
+      const matches = [
+        ...fm.matchAll(/^disallowedTools:\s*(.*?)\s*$/gm),
+      ];
+      expect(
+        matches,
+        `aidlc-${agent}-agent.md: expected exactly one disallowedTools: line`,
+      ).toHaveLength(1);
+      expect(matches[0][1].trim()).toBe("Task");
     }
   });
 

@@ -8,11 +8,11 @@ For user-facing agent descriptions, see the [User Guide -- Agents](../guide/06-a
 
 ## Agent Structure
 
-Each agent is a flat `.md` file in `.claude/agents/` with YAML frontmatter followed by a markdown body. The conductor reads these files to frame its perspective during inline stage execution or to build context for subagent delegation.
+Each authored agent is a flat `.md` file in `core/agents/` with YAML frontmatter followed by a markdown body. The packager projects those personas into each harness's agent surface; the conductor reads the projected files to frame inline work or delegated execution.
 
 ### Frontmatter Contract
 
-Every agent file must include this YAML frontmatter:
+Every authored core agent file must include this YAML frontmatter:
 
 ```yaml
 ---
@@ -30,7 +30,7 @@ tier: judgment                      # judgment | balanced | templated (see Agent
 | `name` | Yes | Agent identifier, must match filename |
 | `description` | Yes | Brief role summary |
 | `tools` | No | Optional allowlist; omit to inherit the full session toolset. Listing it narrows the agent and drops inherited MCP tools unless `mcp__<server>__<tool>` ids are also listed |
-| `disallowedTools` | Yes | Must include `Task` -- only the conductor delegates |
+| `disallowedTools` | Yes in authored core | Must include `Task` -- only the conductor delegates. The packager removes or translates this Claude-dialect key when a harness uses a different native tool-policy surface |
 | `tier` | Yes | `judgment`, `balanced`, or `templated`. The AUTHORED dial: the packager projects it into each harness's native model/effort keys (see Agent Tiers below). Raw `model:`/`effort:` never appear in authored frontmatter -- they are projection OUTPUTS in `dist/<harness>/` |
 
 ### Markdown Body Sections
@@ -49,11 +49,11 @@ Below the frontmatter, the markdown body defines:
 
 ## Shared Configuration
 
-All 14 agents share a common configuration baseline. None declares a `tools:` allowlist, so every agent inherits the **full session toolset** — all of Claude Code's built-in tools plus any MCP tools provisioned to the session. The one shipped restriction is `disallowedTools: Task`.
+All 14 authored agents share a common configuration baseline. On Claude Code, none declares a `tools:` allowlist, so every agent inherits the **full session toolset** plus provisioned MCP tools, with `disallowedTools: Task` as the shipped denial. Other harnesses project that intent into native surfaces: Kiro agent Markdown omits `disallowedTools`, Kiro CLI delegate JSON omits `subagent` from `tools`, and Kiro IDE delegate `tools:` grants likewise exclude delegation.
 
-### The session toolset (inherited by every agent)
+### The Claude Code session toolset
 
-Every agent inherits the built-in Claude Code tools, including:
+Every Claude Code agent inherits the built-in tools, including:
 
 | Tool | Purpose |
 |------|---------|
@@ -68,11 +68,11 @@ Every agent inherits the built-in Claude Code tools, including:
 
 | Tool | Reason |
 |------|--------|
-| Task | Agents operate as delegated workers. Only the SKILL.md conductor performs the Task call. `disallowedTools: Task` avoids cascading subagent chains. |
+| Task | Agents operate as delegated workers. Only the SKILL.md conductor performs the Task call. Claude enforces `disallowedTools: Task`; other harnesses use their native deny/allowlist equivalent. |
 
 ### Tools each persona is expected to exercise
 
-Every agent *can* reach Bash and WebSearch by inheritance; the table records which personas the methodology **expects** to use them in their stage work, not a per-agent grant. To genuinely restrict a persona, add an optional `tools:` allowlist (which drops inherited MCP unless `mcp__<server>__<tool>` ids are also listed) — this implementation ships no such restrictions.
+On Claude Code, every agent *can* reach Bash and WebSearch by inheritance; the table records which personas the methodology **expects** to use them in their stage work, not a per-agent grant. To genuinely restrict a Claude persona, add an optional `tools:` allowlist (which drops inherited MCP unless `mcp__<server>__<tool>` ids are also listed).
 
 | Tool | Expected to exercise it |
 |------|---------------------|

@@ -8,7 +8,6 @@ description: >
   AWS solutions architect responsible for infrastructure design, environment provisioning, and cloud-native architecture.
   Leads Infrastructure Design and Environment Provisioning stages.
   Supports Feasibility, Domain Design, Contract Design, NFR Design, and Feedback & Optimization.
-disallowedTools: Task
 tools: ["read", "write", "shell"]
 ---
 

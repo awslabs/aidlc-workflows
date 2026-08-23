@@ -187,7 +187,7 @@ The scoped `Bash(bun "$CLAUDE_PROJECT_DIR/.claude/tools/"*)` entry sits ahead of
 ### How permissions work
 
 - **Project-wide ceiling**: The `settings.json` allow list is the maximum set of tools available
-- **Agents inherit the full session toolset** by default; the only shipped restriction is `disallowedTools: Task`, which blocks nested subagent spawning
+- **Claude Code agents inherit the full session toolset** by default; `disallowedTools: Task` blocks nested subagent spawning on this harness
 - **Optional per-agent narrowing**: An agent can be narrowed by adding a `tools:` allowlist to its frontmatter — omit it to inherit everything. Listing `tools:` drops inherited MCP tools unless the fully-qualified `mcp__<server>__<tool>` ids are also listed
 
 ### Expanding permissions

@@ -885,6 +885,17 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     )).toBe(false);
   });
 
+  test("a plugin cannot install a doctor script for a foreign plugin identity", () => {
+    const { drops, proj } = composeSynthetic("alpha", {
+      "tools/beta-doctor.ts":
+        'process.stdout.write(JSON.stringify({checks:[{pass:true,label:"foreign"}]}));\n',
+    });
+    expect(existsSync(join(proj, ".claude", "tools", "beta-doctor.ts"))).toBe(false);
+    expect(drops).toContain("[advisory]");
+    expect(drops).toContain('plugin "alpha" doctor script "beta-doctor.ts"');
+    expect(drops).toContain('foreign plugin "beta"');
+  });
+
   test("duplicate incoming scope identities are rejected within one plugin tree", () => {
     const scope = (label: string) => [
       "---", "name: duplicate-scope", "plugin: syn-duplicate-scope",
@@ -1526,6 +1537,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       "name: syn-kiro-collaborator-agent",
       "display_name: Synthetic Kiro Collaborator",
       "plugin: syn-kiro",
+      "disallowedTools: Task",
       "---",
       "",
       "# Synthetic Kiro Collaborator",
@@ -1554,6 +1566,12 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       "agents",
       "syn-kiro-collaborator-agent.md",
     ))).toBe(true);
+    expect(readFileSync(join(
+      proj,
+      ".kiro",
+      "agents",
+      "syn-kiro-collaborator-agent.md",
+    ), "utf-8")).not.toMatch(/^disallowedTools:/m);
     expect(drops).toContain('stage "syn-kiro-ensemble"');
     expect(drops).toContain('agent "syn-kiro-collaborator-agent"');
     expect(drops).toContain("agent-v1 JSON");
@@ -1562,6 +1580,164 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     // The lead is a CORE persona: its shipped agent-v1 JSON is its dispatch
     // surface, so it must never be named as undispatchable.
     expect(drops).not.toContain('agent "aidlc-product-agent"');
+
+    const unsupportedAgent = [
+      "---",
+      "name: syn-kiro-unsupported-agent",
+      "display_name: Synthetic Kiro Unsupported Agent",
+      "plugin: syn-kiro-unsupported",
+      "disallowedTools: WebSearch",
+      "---",
+      "",
+      "# Synthetic Kiro Unsupported Agent",
+      "",
+    ].join("\n");
+    const unsupported = composeSynthetic(
+      "syn-kiro-unsupported",
+      {
+        "agents/syn-kiro-unsupported-agent.md": unsupportedAgent,
+      },
+      ".kiro",
+    );
+    expect(existsSync(join(
+      unsupported.proj,
+      ".kiro",
+      "agents",
+      "syn-kiro-unsupported-agent.md",
+    ))).toBe(false);
+    expect(unsupported.drops).toContain(
+      'cannot project disallowedTools "WebSearch" to Kiro; not copied',
+    );
+
+    const duplicateAgent = unsupportedAgent
+      .replaceAll("syn-kiro-unsupported", "syn-kiro-duplicate")
+      .replace(
+        "disallowedTools: WebSearch",
+        "disallowedTools: Task\ndisallowedTools: WebSearch",
+      );
+    const duplicate = composeSynthetic(
+      "syn-kiro-duplicate",
+      {
+        "agents/syn-kiro-duplicate-agent.md": duplicateAgent,
+      },
+      ".kiro",
+    );
+    expect(existsSync(join(
+      duplicate.proj,
+      ".kiro",
+      "agents",
+      "syn-kiro-duplicate-agent.md",
+    ))).toBe(false);
+    expect(duplicate.drops).toContain(
+      "declares multiple disallowedTools lines",
+    );
+  });
+
+  test("Kiro re-compose migrates only an exact same-plugin legacy persona", () => {
+    const agent = [
+      "---",
+      "name: syn-kiro-upgrade-agent",
+      "display_name: Synthetic Kiro Upgrade Agent",
+      "plugin: syn-kiro-upgrade",
+      "disallowedTools: Task",
+      "---",
+      "",
+      "# Synthetic Kiro Upgrade Agent",
+      "",
+    ].join("\n");
+    const rel = join("agents", "syn-kiro-upgrade-agent.md");
+    const migrated = composeSynthetic(
+      "syn-kiro-upgrade",
+      { "agents/syn-kiro-upgrade-agent.md": agent },
+      ".kiro",
+      (_proj, harnessDir) => {
+        mkdirSync(join(harnessDir, "agents"), { recursive: true });
+        writeFileSync(join(harnessDir, rel), agent);
+      },
+    );
+    const migratedBody = readFileSync(
+      join(migrated.proj, ".kiro", rel),
+      "utf-8",
+    );
+    expect(migratedBody).not.toMatch(/^disallowedTools:/m);
+    expect(migrated.drops).not.toContain("collides with an existing file");
+
+    const editedAgent = `${agent}\n<!-- user-owned edit -->\n`;
+    const edited = composeSynthetic(
+      "syn-kiro-upgrade",
+      { "agents/syn-kiro-upgrade-agent.md": agent },
+      ".kiro",
+      (_proj, harnessDir) => {
+        mkdirSync(join(harnessDir, "agents"), { recursive: true });
+        writeFileSync(join(harnessDir, rel), editedAgent);
+      },
+    );
+    const editedBody = readFileSync(join(edited.proj, ".kiro", rel), "utf-8");
+    expect(editedBody).toBe(editedAgent);
+    expect(edited.drops).toContain("collides with an existing file");
+
+    const unsupportedAgent = agent
+      .replaceAll("syn-kiro-upgrade", "syn-kiro-unsupported-upgrade")
+      .replace("disallowedTools: Task", "disallowedTools: WebSearch");
+    const unsupportedRel = join(
+      "agents",
+      "syn-kiro-unsupported-upgrade-agent.md",
+    );
+    const unsupported = composeSynthetic(
+      "syn-kiro-unsupported-upgrade",
+      {
+        "agents/syn-kiro-unsupported-upgrade-agent.md": unsupportedAgent,
+      },
+      ".kiro",
+      (_proj, harnessDir) => {
+        mkdirSync(join(harnessDir, "agents"), { recursive: true });
+        writeFileSync(join(harnessDir, unsupportedRel), unsupportedAgent);
+      },
+    );
+    expect(readFileSync(
+      join(unsupported.proj, ".kiro", unsupportedRel),
+      "utf-8",
+    )).toBe(unsupportedAgent);
+    expect(unsupported.drops).toContain(
+      'is already composed with unsupported disallowedTools "WebSearch"',
+    );
+    expect(unsupported.drops).toContain(
+      'remove ".kiro/agents/syn-kiro-unsupported-upgrade-agent.md", and re-run compose',
+    );
+    expect(unsupported.drops).not.toContain("collides with an existing file");
+
+    const duplicateAgent = agent
+      .replaceAll("syn-kiro-upgrade", "syn-kiro-duplicate-upgrade")
+      .replace(
+        "disallowedTools: Task",
+        "disallowedTools: Task\ndisallowedTools: WebSearch",
+      );
+    const duplicateRel = join(
+      "agents",
+      "syn-kiro-duplicate-upgrade-agent.md",
+    );
+    const duplicate = composeSynthetic(
+      "syn-kiro-duplicate-upgrade",
+      {
+        "agents/syn-kiro-duplicate-upgrade-agent.md": duplicateAgent,
+      },
+      ".kiro",
+      (_proj, harnessDir) => {
+        mkdirSync(join(harnessDir, "agents"), { recursive: true });
+        writeFileSync(join(harnessDir, duplicateRel), duplicateAgent);
+      },
+    );
+    expect(readFileSync(
+      join(duplicate.proj, ".kiro", duplicateRel),
+      "utf-8",
+    )).toBe(duplicateAgent);
+    expect(duplicate.drops).toContain(
+      "is already composed with multiple disallowedTools lines",
+    );
+    expect(duplicate.drops).toContain(
+      'remove ".kiro/agents/syn-kiro-duplicate-upgrade-agent.md", and re-run compose',
+    );
+    expect(duplicate.drops).not.toContain("collides with an existing file");
   });
 
   test("Kiro rejects an agent JSON that is missing conductor trust registration", () => {
