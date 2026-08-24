@@ -1016,6 +1016,26 @@ function pluginTargets(): PluginTargetTable {
   pluginTargetCache = {};
   for (const harnessName of discoverHarnessNames()) {
     const manifest = loadManifest(harnessName);
+    const installRoots = new Set<string>([
+      manifest.harnessDir,
+      "aidlc",
+    ]);
+    const addTopLevel = (path: string): void => {
+      const top = path.split(/[\\/]/).filter(Boolean)[0];
+      if (top) installRoots.add(top);
+    };
+    for (const file of manifest.harnessFiles) {
+      if (file.projectRoot) addTopLevel(file.dst);
+    }
+    if (manifest.onboarding?.projectRoot) {
+      addTopLevel(manifest.onboarding.dst);
+    }
+    if (manifest.orchestratorSkillPath) {
+      addTopLevel(manifest.orchestratorSkillPath);
+    }
+    for (const root of manifest.plugin?.installRoots ?? []) {
+      addTopLevel(root);
+    }
     pluginTargetCache[harnessName] = {
       harnessName: manifest.name,
       manifestDir:
@@ -1023,6 +1043,7 @@ function pluginTargets(): PluginTargetTable {
         `${manifest.harnessDir}-plugin`,
       harnessLeaf: manifest.harnessDir,
       kind: manifest.plugin?.kind ?? "store",
+      installRoots: [...installRoots].sort(),
     };
   }
   return pluginTargetCache;

@@ -33,6 +33,7 @@ export interface PluginTarget {
   manifestDir: string;
   harnessLeaf: string;
   kind: PluginTargetKind;
+  installRoots: string[];
 }
 
 export type PluginTargetTable = Record<string, PluginTarget>;
@@ -102,6 +103,8 @@ export function readPluginTargets(path: string): PluginTargetTable {
       typeof value.harnessName !== "string" ||
       typeof value.manifestDir !== "string" ||
       typeof value.harnessLeaf !== "string" ||
+      !Array.isArray(value.installRoots) ||
+      value.installRoots.some((item) => typeof item !== "string") ||
       (value.kind !== "store" &&
         value.kind !== "kiro" &&
         value.kind !== "kiro-ide" &&
@@ -116,6 +119,7 @@ export function readPluginTargets(path: string): PluginTargetTable {
       manifestDir: value.manifestDir,
       harnessLeaf: value.harnessLeaf,
       kind: value.kind,
+      installRoots: [...value.installRoots],
     };
   }
   return out;

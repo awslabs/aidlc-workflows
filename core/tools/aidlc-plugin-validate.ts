@@ -57,7 +57,13 @@ export type PluginValidationRule =
   | "compose-hook-stale"
   | "compose-hook-absent"
   | "build-output"
-  | "build-emission";
+  | "build-emission"
+  | "test-install"
+  | "test-compose"
+  | "test-compose-drop"
+  | "test-graph"
+  | "test-idempotency"
+  | "test-live-mutation";
 
 export interface PluginValidationFinding {
   file: string;

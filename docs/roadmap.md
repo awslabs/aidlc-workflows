@@ -164,11 +164,10 @@ but do not yet have committed release versions.
 - The plugin mechanism, content projection, selection and plugin-contributed
   scopes are shipped; the plugin test kit and authoring tiers shipped in
   [#792](https://github.com/awslabs/aidlc-workflows/pull/792).
-- The offline plugin VALIDATE and BUILD authoring tiers ship as the standalone
-  `aidlc-plugin-validate.ts` and `aidlc-plugin-build.ts` tools. The top-level
-  command routes plus the external compose-test tier remain proposed in
-  [#723](https://github.com/awslabs/aidlc-workflows/issues/723) and
-  [#793](https://github.com/awslabs/aidlc-workflows/issues/793).
+- The offline plugin VALIDATE, BUILD, and TEST authoring tiers ship as the
+  standalone `aidlc-plugin-validate.ts`, `aidlc-plugin-build.ts`, and
+  `aidlc-plugin-test.ts` tools. The top-level command routes remain proposed in
+  [#723](https://github.com/awslabs/aidlc-workflows/issues/723).
   Remote discovery, trust, a first-party marketplace and a graduation path are
   also proposed in #723.
   Product discovery
@@ -177,8 +176,9 @@ but do not yet have committed release versions.
   ([#527](https://github.com/awslabs/aidlc-workflows/issues/527)) are candidates
   for first-party plugins.
 - Plugin-native diagnostics are active in
-  [#797](https://github.com/awslabs/aidlc-workflows/pull/797); external authoring
-  compose-test tooling remains proposed in #793.
+  [#797](https://github.com/awslabs/aidlc-workflows/pull/797); external authors
+  can exercise composition against a disposable copy of an install with
+  `aidlc-plugin-test.ts`.
 
 ### Knowledge and documents
 

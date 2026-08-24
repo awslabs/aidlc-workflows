@@ -839,6 +839,9 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     // t315 spawns a copied standalone builder from an isolated temp tree and
     // byte-compares every emitted host projection with committed dist output.
     "unit/t315-plugin-build.test.ts",
+    // t316 spawns the shipped compose-tier tool against copied plugin/install
+    // trees to prove candidate isolation, drops, graph checks, and idempotency.
+    "unit/t316-plugin-test.test.ts",
     "integration/t102.test.ts",
     "integration/t104.test.ts",
     "integration/t105.test.ts",

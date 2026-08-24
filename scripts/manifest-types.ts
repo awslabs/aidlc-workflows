@@ -162,5 +162,10 @@ export type HarnessManifest = {
     manifestDir: string;
     /** Host-specific plugin hook projection shape. */
     kind: "store" | "kiro" | "kiro-ide" | "cursor";
+    /**
+     * Additional project-root surfaces emitted outside harnessDir that compose
+     * must copy into a disposable plugin-test candidate.
+     */
+    installRoots?: string[];
   };
 };

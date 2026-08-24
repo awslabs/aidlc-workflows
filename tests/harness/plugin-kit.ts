@@ -21,6 +21,10 @@ import {
   type PluginValidationRule,
   validatePluginRoot,
 } from "../../dist/claude/.claude/tools/aidlc-plugin-validate.ts";
+import {
+  readPluginDropText,
+  runPluginCompose,
+} from "../../dist/claude/.claude/tools/aidlc-plugin-test.ts";
 import type { DriveOptions } from "./sdk-drive.ts";
 import { driveAidlc } from "./sdk-drive.ts";
 import type { AcpDriveOptions } from "./kiro-acp-drive.ts";
@@ -100,23 +104,7 @@ export function copyHarnessInstall(
 }
 
 export function readPluginDropLogs(projectDir: string): string {
-  const healthDir = join(
-    projectDir,
-    "aidlc",
-    "spaces",
-    "default",
-    "intents",
-    ".aidlc-hooks-health",
-  );
-  if (!existsSync(healthDir)) return "";
-  return readdirSync(healthDir)
-    .filter(
-      (file) =>
-        file.startsWith("plugin-compose") && file.endsWith(".drops"),
-    )
-    .sort()
-    .map((file) => readFileSync(join(healthDir, file), "utf-8"))
-    .join("");
+  return readPluginDropText(projectDir);
 }
 
 export interface ComposePluginFixtureOptions {
@@ -138,78 +126,6 @@ export interface ComposedPluginFixture {
   dropLogs: string;
   composeStdout: string;
   composeStderr: string;
-}
-
-function cursorCompose(
-  projectDir: string,
-  pluginBuilt: string,
-  envOverrides: NodeJS.ProcessEnv | undefined,
-): { stdout: string; stderr: string } {
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  delete env.CLAUDE_PLUGIN_ROOT;
-  delete env.PLUGIN_ROOT;
-  delete env.AIDLC_PLUGIN_ROOT;
-  delete env.CLAUDE_PROJECT_DIR;
-  delete env.CURSOR_PROJECT_DIR;
-  delete env.AIDLC_PROJECT_DIR;
-  env.AIDLC_HARNESS_DIR = ".cursor";
-  // Empty PATH forces the launcher's bundled compose fallback (no installed
-  // aidlc binary); pass env.PATH via overrides to exercise the installed-
-  // binary branch.
-  env.PATH = "";
-  Object.assign(env, envOverrides);
-
-  const compose = spawnSync(
-    BUN,
-    [join(pluginBuilt, "hooks", "aidlc-plugin-compose.ts"), ".cursor"],
-    {
-      cwd: pluginBuilt,
-      input: JSON.stringify({
-        hook_event_name: "sessionStart",
-        workspace_roots: [projectDir],
-      }),
-      encoding: "utf-8",
-      timeout: TIMEOUT_MS - 5_000,
-      env,
-    },
-  );
-  if (compose.status !== 0) {
-    throw new Error(`cursor compose failed: ${compose.stderr}`);
-  }
-  return { stdout: compose.stdout ?? "", stderr: compose.stderr ?? "" };
-}
-
-function directCompose(
-  harness: ShippedHarnessName,
-  projectDir: string,
-  pluginBuilt: string,
-  envOverrides: NodeJS.ProcessEnv | undefined,
-): { stdout: string; stderr: string } {
-  const harnessDir = harnessByName(harness).manifest.harnessDir;
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    AIDLC_HARNESS_DIR: harnessDir,
-    AIDLC_HARNESS_NAME: harness,
-  };
-  if (harness === "claude" || harness === "codex" || harness === "kiro" || harness === "kiro-ide") {
-    env.CLAUDE_PLUGIN_ROOT = pluginBuilt;
-    env.CLAUDE_PROJECT_DIR = projectDir;
-  } else {
-    env.PLUGIN_ROOT = pluginBuilt;
-    env.AIDLC_PROJECT_DIR = projectDir;
-  }
-  Object.assign(env, envOverrides);
-
-  const compose = spawnSync(BUN, [join(pluginBuilt, "hooks", "compose.ts")], {
-    cwd: projectDir,
-    encoding: "utf-8",
-    timeout: TIMEOUT_MS - 5_000,
-    env,
-  });
-  if (compose.status !== 0) {
-    throw new Error(`${harness} compose failed: ${compose.stderr}`);
-  }
-  return { stdout: compose.stdout ?? "", stderr: compose.stderr ?? "" };
 }
 
 export function composePluginFixture(
@@ -251,15 +167,19 @@ export function composePluginFixture(
   }
   options.beforeCompose?.({ projectDir, pluginBuilt });
 
-  const compose =
-    options.harness === "cursor"
-      ? cursorCompose(projectDir, pluginBuilt, options.env)
-      : directCompose(
-          options.harness,
-          projectDir,
-          pluginBuilt,
-          options.env,
-        );
+  const compose = runPluginCompose({
+    harness: options.harness,
+    harnessLeaf: harnessByName(options.harness).manifest.harnessDir,
+    projectDir,
+    pluginBuilt,
+    env: options.env,
+    timeoutMs: TIMEOUT_MS - 5_000,
+  });
+  if (compose.status !== 0) {
+    throw new Error(
+      `${options.harness} compose failed: ${compose.stderr || compose.stdout}`,
+    );
+  }
   return {
     projectDir,
     pluginBuilt,

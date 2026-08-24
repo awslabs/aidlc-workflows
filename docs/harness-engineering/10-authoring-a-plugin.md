@@ -421,8 +421,9 @@ Validation checks:
   template bundled with the validator. Absence is valid because plugin build
   injects the current template.
 
-The user-facing `aidlc plugin validate` and `aidlc plugin build` verbs are not
-part of these toolchain phases. They arrive with the Plugins RFC route table in
+The user-facing `aidlc plugin validate`, `aidlc plugin build`, and
+`aidlc plugin test` verbs are not part of these toolchain phases. They arrive
+with the Plugins RFC route table in
 [RFC #723 §2e](https://github.com/awslabs/aidlc-workflows/issues/723); until then,
 invoke the shipped Bun tools directly.
 
@@ -449,21 +450,44 @@ The authoring flow is:
 
 1. **Validate** the authored root offline.
 2. **Build** each harness projection you support.
-3. **Publish** those generated directories and marketplace metadata from your
+3. **Test** composition against a disposable copy of a real install.
+4. **Publish** those generated directories and marketplace metadata from your
    own repository.
 
 Both tools run from a copied AIDLC tools bundle and require neither an AIDLC
 project nor a framework checkout.
 
+### Testing composition
+
+Answer "does this plugin compose cleanly into my install?" without modifying
+that install:
+
+```bash
+bun <tools-dir>/aidlc-plugin-test.ts <plugin-root> \
+  --install <project-root> [--harness <name>] [--json]
+```
+
+The tool validates and builds first, copies the selected install surfaces into
+a temporary candidate, runs the real emitted `hooks/compose.ts`, recompiles the
+candidate graph, verifies the plugin stages and scopes are present, and runs
+compose a second time to prove idempotency. Any compose drop, graph failure,
+missing plugin node, or second-pass file change exits `1`. The live install is
+hashed before and after and is never a compose target.
+
+Pass `--harness` when the install is ambiguous, including `.kiro` (Kiro CLI vs
+Kiro IDE) and `.aidlc` (Copilot vs OpenCode). `--dist <version>` is reserved
+until RFC #722 milestone 2 defines a released runtime-bundle channel.
+
 1. **Content validation** is the always-on baseline. Run
    `aidlc-plugin-validate.ts` against the authored plugin root. It is fast and
    gives precise authoring findings, but it does not prove that packaging or
    composition succeeds.
-2. **Compose integration** is the default CI check. Call
-   `composePluginFixture()` to build the real harness projection, copy a shipped
-   install into scratch space, run the emitted compose hook, and inspect the
-   compiled graph and installed surfaces. It is deterministic and exercises the
-   actual packager and composer, but it does not launch a model-backed harness.
+2. **Compose integration** is the default CI check. Run
+   `aidlc-plugin-test.ts` against a real install. Inside this repository,
+   `composePluginFixture()` delegates the hook subprocess/drop reader to the
+   same shipped implementation while retaining its test-only fixture API.
+   This tier is deterministic and exercises the actual builder and composer,
+   but it does not launch a model-backed harness.
 3. **Live harness e2e** is opt-in compatibility evidence. Call
    `invokeHarness()` only behind the gate returned by `liveGateFor()`. The live
    gates are `AIDLC_CLAUDE_SDK_LIVE`, `AIDLC_KIRO_ACP_LIVE`,

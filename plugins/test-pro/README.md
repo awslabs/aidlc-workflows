@@ -34,6 +34,7 @@ the way each host installs plugins (the hybrid model — see
 bun <tools-dir>/aidlc-plugin-validate.ts .
 bun <tools-dir>/aidlc-plugin-build.ts . claude
 bun <tools-dir>/aidlc-plugin-build.ts . codex
+bun <tools-dir>/aidlc-plugin-test.ts . --install <claude-project> --harness claude
 # repeat for each supported harness; output defaults to dist/<harness>/
 ```
 
