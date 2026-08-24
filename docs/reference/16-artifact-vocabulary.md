@@ -178,10 +178,10 @@ resolves to `traceability.json`. Two placement shapes apply:
   `nfr-design`, `functional-design`, `infrastructure-design`, and
   `code-generation`. These emit one copy of each artifact per Unit of
   Work during Construction:
-  `<record>/construction/{unit-name}/<stage>/<artifact-filename>`
+  `<record>/construction/units/{unit-name}/<stage>/<artifact-filename>`
   Example: `functional-spec` (produced by `functional-design`) lives
   at
-  `<record>/construction/{unit-name}/functional-design/functional-spec.md`.
+  `<record>/construction/units/{unit-name}/functional-design/functional-spec.md`.
 
 Per-unit status is declared by the stage's `for_each: unit-of-work`
 frontmatter field — the five Construction stages that run once per Unit carry

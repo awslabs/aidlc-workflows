@@ -421,6 +421,7 @@ function writeUnitContribution(proj: string, unit: string, agent: string): void 
   const dir = join(
     seededRecordDir(proj),
     "construction",
+    "units",
     unit,
     "user-stories",
     "contributions",
@@ -447,7 +448,7 @@ function writeFallbackContribution(proj: string, agent: string): void {
 }
 
 function writeUnitArtifact(proj: string, unit: string): void {
-  const dir = join(seededRecordDir(proj), "construction", unit, "user-stories");
+  const dir = join(seededRecordDir(proj), "construction", "units", unit, "user-stories");
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "fixture-artifact.md"), `# Fixture artifact for ${unit}\n`);
 }
@@ -660,7 +661,7 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     expect(missing.kind).toBe("error");
     expect(missing.message).toContain('aidlc-design-agent for unit "beta"');
     expect(missing.message).toContain(
-      "construction/<unit>/user-stories/contributions/<agent-slug>.md",
+      "construction/units/<unit>/user-stories/contributions/<agent-slug>.md",
     );
 
     const completeProj = seedProject();

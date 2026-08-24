@@ -176,7 +176,7 @@ How "source work" is detected depends on the workspace:
   workspace tree and the harness dirs.
 
 Today only `code-generation` declares it. Its per-unit reviews additionally
-require `<record>/construction/<unit>/code-generation/source-manifest.json`:
+require `<record>/construction/units/<unit>/code-generation/source-manifest.json`:
 a strict attribution index of every created, modified, or deleted application-
 source path. The engine binds manifest bytes and claimed content into the unit
 receipt, compares every fresh unit against a content-addressed stage-entry

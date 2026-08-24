@@ -17,7 +17,7 @@
 // handleDoctor is already large) so the workspace-manifest checks read as one
 // unit; handleDoctor calls workspaceManifestChecks() and spreads the rows in.
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { discoverSiblingRepos, errorMessage, harnessDir } from "./aidlc-lib.ts";
 import {
@@ -32,6 +32,39 @@ export interface DoctorCheck {
   pass: boolean;
   label: string;
   fix?: string;
+}
+
+/**
+ * Flag pre-2.6.70 per-unit directories that still sit directly under
+ * construction/. Known construction stage slugs remain valid stage-level
+ * directories; units/ is the only valid unit-axis root.
+ */
+export function constructionUnitLayoutCheck(
+  recordPath: string,
+  constructionStageSlugs: Iterable<string>,
+): DoctorCheck | null {
+  const constructionDir = join(recordPath, "construction");
+  if (!existsSync(constructionDir)) return null;
+  const allowed = new Set(["units", ...constructionStageSlugs]);
+  try {
+    const legacyUnits = readdirSync(constructionDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && !allowed.has(entry.name))
+      .map((entry) => entry.name)
+      .sort();
+    if (legacyUnits.length === 0) return null;
+    return {
+      pass: true,
+      label:
+        `Construction unit layout: ${legacyUnits.length} legacy unit dir(s) directly under construction/ ` +
+        `(advisory): [${legacyUnits.join(", ")}]. Fix: ` +
+        "`mv construction/<u> construction/units/<u>` for each listed unit.",
+    };
+  } catch (e) {
+    return {
+      pass: true,
+      label: `Construction unit layout: check skipped (advisory) - ${errorMessage(e)}`,
+    };
+  }
 }
 
 /**

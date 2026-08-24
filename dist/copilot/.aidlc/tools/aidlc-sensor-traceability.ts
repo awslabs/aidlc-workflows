@@ -194,7 +194,9 @@ function idsFromFile(path: string, patterns: RegExp[], label: string): { ids: Se
 
 function extractUnitName(outputPath: string): string | null {
   const normalized = normalizePath(outputPath);
-  const match = normalized.match(/\/construction\/([^/]+)\/[^/]+\/traceability\.json$/);
+  const match = normalized.match(
+    /\/construction\/units\/([^/]+)\/[^/]+\/traceability\.json$/,
+  );
   return match?.[1] ?? null;
 }
 
@@ -368,7 +370,7 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string):
     return result;
   }
   if (stage === "nfr-design") {
-    const dir = join(docsDir, "construction", unit, "nfr-requirements");
+    const dir = join(docsDir, "construction", "units", unit, "nfr-requirements");
     let sawFile = false;
     for (const name of ["performance-requirements.md", "security-requirements.md", "scalability-requirements.md", "reliability-requirements.md"]) {
       const path = join(dir, name);
@@ -384,7 +386,7 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string):
     return result;
   }
   if (stage === "infrastructure-design") {
-    const dir = join(docsDir, "construction", unit, "nfr-design");
+    const dir = join(docsDir, "construction", "units", unit, "nfr-design");
     let sawFile = false;
     for (const name of ["performance-design.md", "security-design.md", "scalability-design.md", "reliability-design.md", "logical-components.md"]) {
       const path = join(dir, name);
@@ -421,7 +423,7 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string):
     } else {
       addSource(result, idsFromFile(requirements, [ID_PATTERNS.FR, ID_PATTERNS.NFR], "requirements.md"));
     }
-    const nfrDir = join(docsDir, "construction", unit, "nfr-requirements");
+    const nfrDir = join(docsDir, "construction", "units", unit, "nfr-requirements");
     for (const name of ["performance-requirements.md", "security-requirements.md", "scalability-requirements.md", "reliability-requirements.md"]) {
       const path = join(nfrDir, name);
       if (existsSync(path)) {
@@ -431,7 +433,7 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string):
         }
       }
     }
-    const brPath = join(docsDir, "construction", unit, "functional-design", "rules.md");
+    const brPath = join(docsDir, "construction", "units", unit, "functional-design", "rules.md");
     if (existsSync(brPath)) {
       const read = readText(brPath);
       if (read.content !== null) {
@@ -490,7 +492,7 @@ function verifyTargets(
   if (stage === "functional-design" && docsDir) {
     const unit = upstream.unitContext?.unitName ?? extractUnitName(outputPath);
     if (unit) {
-      const brPath = join(docsDir, "construction", unit, "functional-design", "rules.md");
+      const brPath = join(docsDir, "construction", "units", unit, "functional-design", "rules.md");
       const rules = idsFromFile(brPath, [ID_PATTERNS.BR], "rules.md");
       if (rules.reason) reasons.push(rules.reason);
       const targeted = new Set<string>();

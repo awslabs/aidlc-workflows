@@ -602,7 +602,7 @@ describe("t07 Phase B — edge cases", () => {
       ["Sensor Failed", "SENSOR_FAILED", "**Sensor**: aidlc-linter"],
       ["Review Requested", "REVIEW_REQUESTED", "**Stage**: code-generation"],
       ["Review Completed", "REVIEW_COMPLETED", "**Stage**: code-generation"],
-      ["Artifact Created", "ARTIFACT_CREATED", "**Artifact**: construction/pay/x.md"],
+      ["Artifact Created", "ARTIFACT_CREATED", "**Artifact**: construction/units/pay/x.md"],
     ] as const;
     for (const [heading, event, field] of rows) {
       appendFileSync(

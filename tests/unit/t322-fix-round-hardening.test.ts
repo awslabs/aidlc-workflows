@@ -88,6 +88,7 @@ describe("t322 fix-round hardening", () => {
       const dir = join(
         seededRecordDir(proj),
         "construction",
+        "units",
         "alpha",
         "functional-design",
       );
@@ -167,6 +168,7 @@ describe("t322 fix-round hardening", () => {
     const dir = join(
       seededRecordDir(proj),
       "construction",
+      "units",
       "alpha",
       "functional-design",
     );

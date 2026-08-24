@@ -50,9 +50,9 @@ outputs: build-instructions.md, integration-test-instructions.md, performance-te
 ### Step 1: Analyze Testing Requirements
 
 Read code generation outputs across all units from
-`<record>/construction/*/code-generation/code-summary.md` and per-unit test
+`<record>/construction/units/*/code-generation/code-summary.md` and per-unit test
 instructions from
-`<record>/construction/*/code-generation/unit-test-instructions.md`. For a
+`<record>/construction/units/*/code-generation/unit-test-instructions.md`. For a
 zero-Unit scope such as `express`, read the stage-level equivalents under
 `<record>/construction/code-generation/`.
 
@@ -127,7 +127,7 @@ Attempt to execute the build and test commands documented in the instruction fil
 2. **Unit tests**: Collect the run commands from both the stage-level
    `<record>/construction/code-generation/unit-test-instructions.md` file (when
    present, including Express) and all per-unit
-   `<record>/construction/*/code-generation/unit-test-instructions.md` files.
+   `<record>/construction/units/*/code-generation/unit-test-instructions.md` files.
    Deduplicate identical commands and run each distinct command ONCE via Bash.
    Per-unit commands should already be scoped to their Unit. A stage-level or
    malformed per-unit file may carry a project-wide command; run that command
@@ -235,7 +235,7 @@ This is a stage-level gate, not the Construction phase boundary. Enumerate:
 Read both the stage-level
 `<record>/construction/code-generation/traceability.json` file (when present,
 including Express) and every per-unit
-`<record>/construction/*/code-generation/traceability.json` file. Verify each
+`<record>/construction/units/*/code-generation/traceability.json` file. Verify each
 enumerated ID is covered with status `OK` in at least one stage-level or Unit
 entry and that its target file exists. Write
 `<record>/construction/build-and-test/cross-unit-traceability.md` with a

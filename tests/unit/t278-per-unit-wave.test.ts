@@ -185,7 +185,7 @@ function cover(
   stage: string,
   names: string[],
 ): void {
-  const dir = join(seededRecordDir(proj), "construction", unit, stage);
+  const dir = join(seededRecordDir(proj), "construction", "units", unit, stage);
   mkdirSync(dir, { recursive: true });
   for (const name of names) {
     writeFileSync(join(dir, artifactFilename(name)), `# ${name} for ${unit}\n`);
@@ -201,6 +201,7 @@ function review(
   const artifact = join(
     seededRecordDir(proj),
     "construction",
+    "units",
     unit,
     "functional-design",
     "functional-spec.md",
@@ -415,15 +416,15 @@ describe("t278 engine-emitted wave contract", () => {
     expect(api.required_produces).toHaveLength(4);
     expect(
       api.required_produces.every((path) =>
-        path.includes("/construction/api/infrastructure-design/")
+        path.includes("/construction/units/api/infrastructure-design/")
       ),
     ).toBe(true);
     expect(web.unit_kind).toBe("ui");
     expect(web.required_produces).toEqual([
-      `${RP}/construction/web/infrastructure-design/infrastructure-specification.md`,
-      `${RP}/construction/web/infrastructure-design/monitoring-design.md`,
-      `${RP}/construction/web/infrastructure-design/cicd-pipeline.md`,
-      `${RP}/construction/web/infrastructure-design/traceability.json`,
+      `${RP}/construction/units/web/infrastructure-design/infrastructure-specification.md`,
+      `${RP}/construction/units/web/infrastructure-design/monitoring-design.md`,
+      `${RP}/construction/units/web/infrastructure-design/cicd-pipeline.md`,
+      `${RP}/construction/units/web/infrastructure-design/traceability.json`,
     ]);
     expect(api.consumes_absent).toBeArray();
     expect(web.consumes_absent).toBeArray();
@@ -431,10 +432,10 @@ describe("t278 engine-emitted wave contract", () => {
       `${RP}/construction/infrastructure-design/memory.md`,
     );
     expect(api.unit_memory_path).toBe(
-      `${RP}/construction/api/infrastructure-design/memory.md`,
+      `${RP}/construction/units/api/infrastructure-design/memory.md`,
     );
     expect(web.unit_memory_path).toBe(
-      `${RP}/construction/web/infrastructure-design/memory.md`,
+      `${RP}/construction/units/web/infrastructure-design/memory.md`,
     );
 
     expect(result.steering.length).toBeGreaterThan(0);
@@ -475,17 +476,17 @@ describe("t278 engine-emitted wave contract", () => {
       );
     }
     expect(consumePaths).toContain(
-      `${RP}/construction/contract/nfr-requirements/security-requirements.md`,
+      `${RP}/construction/units/contract/nfr-requirements/security-requirements.md`,
     );
     expect(consumePaths).toContain(
-      `${RP}/construction/contract/nfr-requirements/tech-stack-decisions.md`,
+      `${RP}/construction/units/contract/nfr-requirements/tech-stack-decisions.md`,
     );
     expect(consumePaths).toContain(
-      `${RP}/construction/contract/functional-design/functional-spec.md`,
+      `${RP}/construction/units/contract/functional-design/functional-spec.md`,
     );
     expect(entry.required_produces).toEqual([
-      `${RP}/construction/contract/nfr-design/security-design.md`,
-      `${RP}/construction/contract/nfr-design/traceability.json`,
+      `${RP}/construction/units/contract/nfr-design/security-design.md`,
+      `${RP}/construction/units/contract/nfr-design/traceability.json`,
     ]);
   }, 30000);
 
@@ -565,6 +566,7 @@ describe("t278 engine-emitted wave contract", () => {
       join(
         seededRecordDir(proj),
         "construction",
+        "units",
         "beta",
         "functional-design",
         "functional-spec.md",
@@ -610,6 +612,7 @@ describe("t278 engine-emitted wave contract", () => {
       join(
         seededRecordDir(proj),
         "construction",
+        "units",
         "alpha",
         "functional-design",
         "functional-spec.md",
@@ -649,6 +652,7 @@ describe("t278 engine-emitted wave contract", () => {
       join(
         seededRecordDir(proj),
         "construction",
+        "units",
         "alpha",
         "functional-design",
         "functional-spec.md",
@@ -667,6 +671,7 @@ describe("t278 engine-emitted wave contract", () => {
       join(
         seededRecordDir(proj),
         "construction",
+        "units",
         "alpha",
         "functional-design",
         "functional-spec.md",
@@ -694,6 +699,7 @@ describe("t278 engine-emitted wave contract", () => {
     const artifact = join(
       seededRecordDir(proj),
       "construction",
+      "units",
       "alpha",
       "functional-design",
       "functional-spec.md",
@@ -793,6 +799,7 @@ describe("t278 engine-emitted wave contract", () => {
       const memory = join(
         seededRecordDir(proj),
         "construction",
+        "units",
         unit.name,
         "functional-design",
         "memory.md",
@@ -845,6 +852,7 @@ describe("t278 engine-emitted wave contract", () => {
     const unitMemory = join(
       seededRecordDir(proj),
       "construction",
+      "units",
       "alpha",
       "functional-design",
       "memory.md",

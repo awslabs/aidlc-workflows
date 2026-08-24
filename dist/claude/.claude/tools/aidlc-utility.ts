@@ -50,7 +50,10 @@ import {
   validateScope,
 } from "./aidlc-graph.ts";
 import { repointHarnessIncludes } from "./aidlc-includes.ts";
-import { workspaceManifestChecks } from "./aidlc-workspace-doctor.ts";
+import {
+  constructionUnitLayoutCheck,
+  workspaceManifestChecks,
+} from "./aidlc-workspace-doctor.ts";
 import {
   type cachedUnitClaimOverview,
   localUnitClaimOverviewForIntent,
@@ -4665,6 +4668,18 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
     for (const row of workspaceManifestChecks(projectDir)) results.push(row);
   } catch {
     // Advisory only; a scan failure must not hide the main doctor report.
+  }
+
+  try {
+    const constructionLayout = constructionUnitLayoutCheck(
+      docsDir(projectDir),
+      loadGraph()
+        .filter((stage) => stage.phase === "construction")
+        .map((stage) => stage.slug),
+    );
+    if (constructionLayout !== null) results.push(constructionLayout);
+  } catch {
+    // Advisory migration scan; graph/read failures are covered by other rows.
   }
 
   // Cold-safe gate: only emit audit when an audit trail already exists. On a

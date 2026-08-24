@@ -261,7 +261,7 @@ function handleDescribe(args: string[]): void {
 //     space-level codekb root.
 //   - per-unit Construction producers (for_each: unit-of-work): use the
 //     stage-level directory when the effective plan skips Units Generation;
-//     otherwise glob every <record>/construction/<unit>/<slug>/.
+//     otherwise glob every <record>/construction/units/<unit>/<slug>/.
 //   - everything else: <record>/<phase>/<slug>/<name>.md.
 //
 // Fail-open: when no intent record resolves (recordDir null — a bare test
@@ -304,7 +304,7 @@ function artifactDirsForProducer(
 		} catch {
 			// Bare fixtures retain the existing directory-discovery fallback.
 		}
-		const ctorRoot = join(rec, "construction");
+		const ctorRoot = join(rec, "construction", "units");
 		if (!existsSync(ctorRoot)) return [];
 		const dirs: string[] = [];
 		for (const unit of readdirSync(ctorRoot)) {

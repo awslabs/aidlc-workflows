@@ -267,7 +267,7 @@ describe("t44 stage-instruction completeness — parseStageFrontmatter (migrated
 
   // Rerooted: flat aidlc-docs/construction/ -> per-intent <record>/construction/.
   // The per-unit construction stages now write under
-  // `<record>/construction/{unit-name}/<stage>/` (e.g. functional-design.md:103,
+  // `<record>/construction/units/{unit-name}/<stage>/` (e.g. functional-design.md:103,
   // nfr-requirements.md, nfr-design.md, code-generation.md), so the body cites
   // `<record>/construction` rather than the old flat root.
   for (const slug of ["functional-design", "nfr-requirements", "nfr-design", "code-generation"]) {

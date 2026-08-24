@@ -242,8 +242,8 @@ export interface RunStageDirective {
   // unit-of-work) that the engine resolved to a CONCRETE Unit of Work; absent
   // otherwise, and absent when the engine fell back to the {unit-name}
   // placeholder (no compiled unit DAG). It is informational for the conductor
-  // (the produces/consumes/memory paths already carry the unit segment) AND a
-  // marker that this run-stage is ONE iteration of N: the engine drives the
+  // (the produces/consumes/memory paths already carry the units/<unit>
+  // segment) AND a marker that this run-stage is ONE iteration of N: the engine drives the
   // per-unit loop, re-emitting the next uncovered unit on each `next` and
   // suppressing the gate (gate:false) on EVERY not-yet-covered unit. The stage's
   // real gate is presented only once, on the re-entry after the last unit's
@@ -1648,9 +1648,9 @@ if (import.meta.main) {
       mode: "subagent",
       inline_context_paths: [],
       gate: false,
-      memory_path: "aidlc-docs/construction/auth/code-generation/memory.md",
-      consumes: ["aidlc-docs/construction/auth/functional-design/functional-design.md"],
-      produces: ["aidlc-docs/construction/auth/code-generation/code-manifest.md"],
+      memory_path: "aidlc-docs/construction/units/auth/code-generation/memory.md",
+      consumes: ["aidlc-docs/construction/units/auth/functional-design/functional-design.md"],
+      produces: ["aidlc-docs/construction/units/auth/code-generation/code-manifest.md"],
       rules_in_context: ["aidlc-org.md", "aidlc-phase-construction.md"],
       sensors_applicable: ["linter", "type-check"],
       stage_file: ".claude/aidlc-common/stages/construction/code-generation.md",
@@ -1692,9 +1692,9 @@ if (import.meta.main) {
         ".claude/agents/aidlc-developer-agent.md",
       ],
       gate: GATE_UNRESOLVED,
-      memory_path: "aidlc-docs/construction/{unit-name}/functional-design/memory.md",
+      memory_path: "aidlc-docs/construction/units/{unit-name}/functional-design/memory.md",
       consumes: [],
-      produces: ["aidlc-docs/construction/{unit-name}/functional-design/functional-spec.md"],
+      produces: ["aidlc-docs/construction/units/{unit-name}/functional-design/functional-spec.md"],
       rules_in_context: ["aidlc-org.md", "aidlc-phase-construction.md"],
       sensors_applicable: ["required-sections"],
       stage_file: ".claude/aidlc-common/stages/construction/functional-design.md",

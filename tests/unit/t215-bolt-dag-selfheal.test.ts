@@ -244,7 +244,7 @@ function coverUnit(
   slug: string,
   producesNames: string[],
 ): void {
-  const dir = join(seededRecordDir(proj), "construction", unit, slug);
+  const dir = join(seededRecordDir(proj), "construction", "units", unit, slug);
   mkdirSync(dir, { recursive: true });
   for (const name of producesNames) {
     writeFileSync(join(dir, artifactFilename(name)), `# ${name} for ${unit}\n`);
@@ -270,6 +270,7 @@ function logReview(
   const artifact = join(
     seededRecordDir(proj),
     "construction",
+    "units",
     unit,
     "functional-design",
     artifactFilename("functional-spec"),
@@ -416,7 +417,7 @@ describe("t215 bolt dag self-heal", () => {
     expect(r.directive.stage).toBe("functional-design");
     expect(r.directive.unit).toBe("alpha");
     expect(r.directive.produces).toContain(
-      `${RP}/construction/alpha/functional-design/functional-spec.md`,
+      `${RP}/construction/units/alpha/functional-design/functional-spec.md`,
     );
     expect(r.stderr).toContain(HEAL_NOTE);
     logCapturedStderr(r.stderr);
@@ -440,7 +441,7 @@ describe("t215 bolt dag self-heal", () => {
     expect(r.directive.stage).toBe("functional-design");
     expect(r.directive.unit).toBeUndefined();
     expect(r.directive.produces).toContain(
-      `${RP}/construction/{unit-name}/functional-design/functional-spec.md`,
+      `${RP}/construction/units/{unit-name}/functional-design/functional-spec.md`,
     );
     expect(r.stderr).toBe("");
   }, 30000);
@@ -605,7 +606,7 @@ describe("t215 bolt dag self-heal", () => {
     expect(r.directive.kind).toBe("run-stage");
     expect(r.directive.unit).toBeUndefined();
     expect(r.directive.produces).toContain(
-      `${RP}/construction/{unit-name}/functional-design/functional-spec.md`,
+      `${RP}/construction/units/{unit-name}/functional-design/functional-spec.md`,
     );
     expect(r.stderr).toBe("");
   }, 30000);

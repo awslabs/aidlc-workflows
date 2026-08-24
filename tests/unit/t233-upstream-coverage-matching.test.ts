@@ -8,7 +8,7 @@
 // against the one fired file. Two structural mismatches with the
 // framework's authoring conventions made its failures mostly false:
 //   1. Artifacts cite upstream by producing-stage DIRECTORY path in their
-//      provenance header (`construction/<unit>/nfr-requirements/`), never
+//      provenance header (`construction/units/<unit>/nfr-requirements/`), never
 //      re-naming each slug - so `\bperformance-requirements\b` missed a
 //      legitimately-cited upstream.
 //   2. A multi-artifact stage splits its citations across sibling
@@ -111,7 +111,7 @@ describe("t233 producer-directory citation (fix A)", () => {
 			"performance-design.md": [
 				"# Performance Design",
 				"",
-				"basis/trace: `construction/api-service/nfr-requirements/`,",
+				"basis/trace: `construction/units/api-service/nfr-requirements/`,",
 				"`decisions.md`",
 				"",
 				"## Design",

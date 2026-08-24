@@ -1031,7 +1031,7 @@ function candidateReviewFingerprint(
   );
   const manifest: Array<[string, string]> = names.map((name) => {
     const logicalPath =
-      `construction/${unit}/${stage.slug}/${artifactFilename(name)}`;
+      `construction/units/${unit}/${stage.slug}/${artifactFilename(name)}`;
     const path = `${recordPrefix}/${logicalPath}`;
     if (!gitPathExistsAt(projectDir, oid, path)) {
       return [logicalPath, "missing"];
@@ -1073,7 +1073,7 @@ function candidateReviewerReady(
   );
   const pending = new Set<string>();
   let ready = false;
-  const artifactPrefix = `construction/${unit}/${stage.slug}/`;
+  const artifactPrefix = `construction/units/${unit}/${stage.slug}/`;
   const relevantByTimestamp = new Map<string, Set<string>>();
   for (const event of events) {
     const file = auditBlockField(event.block, "File") ?? "";
@@ -1296,7 +1296,7 @@ function transportedAuditViolation(
     }
     const file = (auditBlockField(event.block, "File") ?? "")
       .replace(/\\/g, "/");
-    const unitArtifactRoot = `construction/${unit}/`;
+    const unitArtifactRoot = `construction/units/${unit}/`;
     if (
       !file.startsWith(unitArtifactRoot) &&
       !file.includes(`/${unitArtifactRoot}`)
@@ -1371,7 +1371,7 @@ function candidateBoundary(
   )
     .split(/\r?\n/)
     .filter(Boolean);
-  const unitRoot = `${recordPrefix}/construction/${unit}/`;
+  const unitRoot = `${recordPrefix}/construction/units/${unit}/`;
   const constructionRoot = `${recordPrefix}/construction/`;
   const unitRootKey = unitRoot.toLowerCase();
   const constructionRootKey = constructionRoot.toLowerCase();
@@ -1567,7 +1567,7 @@ function candidateEvidence(
       unitKind,
     );
     for (const name of names) {
-      const path = `${recordPrefix}/construction/${claim.unit}/${stageSlug}/${artifactFilename(name)}`;
+      const path = `${recordPrefix}/construction/units/${claim.unit}/${stageSlug}/${artifactFilename(name)}`;
       if (!gitPathExistsAt(projectDir, claim.oid, path)) {
         fail(`Pinned candidate is missing required artifact ${path}.`);
       }
@@ -1599,18 +1599,18 @@ function candidateEvidence(
     }
   }
   const questionsPath =
-    `${recordPrefix}/construction/${claim.unit}/code-generation/code-generation-questions.md`;
+    `${recordPrefix}/construction/units/${claim.unit}/code-generation/code-generation-questions.md`;
   let planFingerprint: string | null = null;
   if (stages.includes("code-generation")) {
     const plan = gitTextAt(
       projectDir,
       claim.oid,
-      `${recordPrefix}/construction/${claim.unit}/code-generation/code-generation-plan.md`,
+      `${recordPrefix}/construction/units/${claim.unit}/code-generation/code-generation-plan.md`,
     );
     const instructions = gitTextAt(
       projectDir,
       claim.oid,
-      `${recordPrefix}/construction/${claim.unit}/code-generation/unit-test-instructions.md`,
+      `${recordPrefix}/construction/units/${claim.unit}/code-generation/unit-test-instructions.md`,
     );
     const questions = gitTextAt(projectDir, claim.oid, questionsPath);
     const fingerprint =
