@@ -107,6 +107,7 @@ function runReview(
         ? join(
             seededRecordDir(proj),
             "construction",
+            "units",
             unit ?? "unit-alpha",
             stage,
           )
@@ -257,6 +258,7 @@ function seedProject(scope: "bugfix" | "feature"): string {
       join(
         seededRecordDir(proj),
         "construction",
+        "units",
         "unit-alpha",
         "functional-design",
       ),
@@ -266,6 +268,7 @@ function seedProject(scope: "bugfix" | "feature"): string {
       join(
         seededRecordDir(proj),
         "construction",
+        "units",
         "unit-alpha",
         "code-generation",
       ),
@@ -291,6 +294,7 @@ function writeSourceManifest(proj: string, unit: string): void {
   const dir = join(
     seededRecordDir(proj),
     "construction",
+    "units",
     unit,
     "code-generation",
   );
@@ -318,7 +322,7 @@ function writeReviewedArtifact(
   const dir =
     stage === "requirements-analysis"
       ? join(seededRecordDir(proj), "inception", stage)
-      : join(seededRecordDir(proj), "construction", unit ?? "unit-alpha", stage);
+      : join(seededRecordDir(proj), "construction", "units", unit ?? "unit-alpha", stage);
   mkdirSync(dir, { recursive: true });
   const path = join(
     dir,
@@ -2081,6 +2085,7 @@ describe("t271 review iteration ceiling", () => {
       const dir = join(
         seededRecordDir(noDag),
         "construction",
+        "units",
         unit,
         "plugin-review-stage",
       );
@@ -2097,13 +2102,14 @@ describe("t271 review iteration ceiling", () => {
     };
     const pluginSnapshot = reviewArtifactSnapshot(noDag, pluginStage);
     expect(pluginSnapshot?.reviewArtifact).toBe(
-      "construction/alpha/plugin-review-stage/primary.md",
+      "construction/units/alpha/plugin-review-stage/primary.md",
     );
 
     const kindProject = seedProject("feature");
     const kindDir = join(
       seededRecordDir(kindProject),
       "construction",
+      "units",
       "unit-alpha",
       "functional-design",
     );
@@ -2117,7 +2123,7 @@ describe("t271 review iteration ceiling", () => {
       "unit-alpha",
     );
     expect(kindSnapshot?.reviewArtifact).toBe(
-      "construction/unit-alpha/functional-design/functional-spec.md",
+      "construction/units/unit-alpha/functional-design/functional-spec.md",
     );
   });
 
@@ -2987,7 +2993,7 @@ describe("t271 review iteration ceiling", () => {
       mergeReviewRecordsFromDelta(request() + recordlessCompletion, worktreeRoot, mainRoot),
     ).toThrow(/record-era REVIEW_COMPLETED row without a verifiable review record/);
     const legacyRequest = request({
-      "Review Appendix Artifact": "construction/alpha/code-generation/code-generation-plan.md",
+      "Review Appendix Artifact": "construction/units/alpha/code-generation/code-generation-plan.md",
       "Review Appendix Offset": "0",
     }).replace(`**Request Id**: ${requestId}\n`, "");
     const legacyCompletion = recordlessCompletion
@@ -2995,7 +3001,7 @@ describe("t271 review iteration ceiling", () => {
       .replace(
         `**Artifact Fingerprint**: ${artifactFingerprint}\n`,
         `**Artifact Fingerprint**: ${artifactFingerprint}\n` +
-          "**Review Appendix Artifact**: construction/alpha/code-generation/code-generation-plan.md\n" +
+          "**Review Appendix Artifact**: construction/units/alpha/code-generation/code-generation-plan.md\n" +
           "**Review Appendix Offset**: 0\n",
       );
     expect(

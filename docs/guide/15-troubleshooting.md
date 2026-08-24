@@ -66,6 +66,56 @@ hooks and permission/trust entries consistently select the native command.
 
 ---
 
+## Upgrading Construction Unit Artifacts
+
+Per-unit artifacts now live under
+`<record>/construction/units/<unit>/<stage>/`, rather than directly under
+`<record>/construction/<unit>/<stage>/`. Stage-level Build and Test, CI Pipeline,
+and zero-Unit artifacts stay where they are; do not move those directories.
+
+Run `/aidlc --doctor` after upgrading. Its legacy-layout finding names the
+affected Units and emits commands for the active intent record, relative to
+the **project root**. Run those commands from the project root, not from the
+record directory. For example, for the active record
+`aidlc/spaces/default/intents/260624-checkout/` and Unit `payment-api`:
+
+```sh
+if [ -d 'aidlc/spaces/default/intents/260624-checkout/construction/payment-api' ] &&
+   [ ! -e 'aidlc/spaces/default/intents/260624-checkout/construction/units/payment-api' ]; then
+  mkdir -p 'aidlc/spaces/default/intents/260624-checkout/construction/units' &&
+    mv 'aidlc/spaces/default/intents/260624-checkout/construction/payment-api' 'aidlc/spaces/default/intents/260624-checkout/construction/units/payment-api'
+fi
+```
+
+**Migrate a legacy Unit literally named `units` first**, before any other Unit.
+Its old directory occupies the new parent directory, so the command temporarily
+moves it aside to `.units-legacy`, creates the parent, and restores the Unit
+under `units/units`:
+
+```sh
+if [ -d 'aidlc/spaces/default/intents/260624-checkout/construction/units' ] &&
+   [ ! -e 'aidlc/spaces/default/intents/260624-checkout/construction/units/units' ] &&
+   [ ! -e 'aidlc/spaces/default/intents/260624-checkout/construction/.units-legacy' ]; then
+  mv 'aidlc/spaces/default/intents/260624-checkout/construction/units' 'aidlc/spaces/default/intents/260624-checkout/construction/.units-legacy' &&
+    mkdir -p 'aidlc/spaces/default/intents/260624-checkout/construction/units' &&
+    mv 'aidlc/spaces/default/intents/260624-checkout/construction/.units-legacy' 'aidlc/spaces/default/intents/260624-checkout/construction/units/units'
+fi
+```
+
+Use the collision command only when doctor identifies a legacy Unit named
+`units`; a normal `construction/units/` parent is not itself a legacy Unit.
+The source-directory and absent-destination guards make a second run a no-op:
+the normal source is gone, or the `units/units` destination already exists.
+If both a legacy source and its destination already contain artifacts, stop
+and reconcile them rather than removing the guards or overwriting either copy.
+
+Moving artifacts changes the logical paths included in their fingerprints.
+Existing artifact receipts therefore become stale even when file contents are
+unchanged; re-review and re-complete the affected stages to record fresh
+receipts. The move itself does not approve or regenerate evidence.
+
+---
+
 ## Hooks Not Firing
 
 **Symptom**: No entries appearing in the intent's `audit/` shards after file writes, or no subagent completion logs.
@@ -102,9 +152,9 @@ Only the Claude Code administrator can lift this managed setting. After hooks ar
 
 ### Reviewer tool calls refused ("This review cannot open ...")
 
-During a per-unit Construction review, the reviewer-scope hook refuses the dispatched reviewer's tool calls that reach into sibling units' `construction/` paths (the stage-protocol-reviewer.md §12a read-scope bound); the refusal names the current unit and directs the reviewer to the supplied files and that unit's own path, and each refusal records a `REVIEWER_SCOPE_BLOCKED` audit row. If your own source tree contains a `construction/` directory unrelated to AI-DLC units (so legitimate reviewer reads are being refused), set `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1` to disable enforcement; the prose bound still governs. A reviewer being refused with NO review in flight means a stale dispatch record - check `/aidlc --doctor`'s hook-drop counters (`reviewer-scope.drops`) and delete `<record>/.aidlc-reviewer-dispatch.json` if present (records older than 6 hours are ignored and cleaned automatically).
+During a per-unit Construction review, the reviewer-scope hook refuses the dispatched reviewer's tool calls that reach into sibling units' `construction/units/` paths (the stage-protocol-reviewer.md §12a read-scope bound); the refusal names the current unit and directs the reviewer to the supplied files and that unit's own path, and each refusal records a `REVIEWER_SCOPE_BLOCKED` audit row. If your own source tree contains a `construction/` directory unrelated to AI-DLC units (so legitimate reviewer reads are being refused), set `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1` to disable enforcement; the prose bound still governs. A reviewer being refused with NO review in flight means a stale dispatch record - check `/aidlc --doctor`'s hook-drop counters (`reviewer-scope.drops`) and delete `<record>/.aidlc-reviewer-dispatch.json` if present (records older than 6 hours are ignored and cleaned automatically).
 
-Ordinary filters such as `grep latency construction/U03-scoring/nfr.md | grep endpoint` are allowed because the second `grep` searches the piped text. A pipe does not exempt commands that still traverse files: recursive `grep`, `rg --files`, and `rg -f -` still need an in-scope search root or, for `rg`, a glob constrained to the current unit. Pattern files supplied with `-f` must also be in scope. When a pathless command falls back to `.` and is refused, the message identifies that root as implicit.
+Ordinary filters such as `grep latency construction/units/U03-scoring/nfr-requirements/performance-requirements.md | grep endpoint` are allowed because the second `grep` searches the piped text. A pipe does not exempt commands that still traverse files: recursive `grep`, `rg --files`, and `rg -f -` still need an in-scope search root or, for `rg`, a glob constrained to the current unit. Pattern files supplied with `-f` must also be in scope. When a pathless command falls back to `.` and is refused, the message identifies that root as implicit.
 
 ### Statusline shows a cost segment you don't want (or usage tracking concerns)
 

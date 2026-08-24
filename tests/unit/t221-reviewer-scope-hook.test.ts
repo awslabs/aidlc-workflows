@@ -43,7 +43,7 @@ const SCOPE_CONTEXT: ScopeContext = {
 };
 const CURRENT_UNIT_CONTEXT: ScopeContext = {
   recordRoot: RECORD_ROOT,
-  cwd: join(RECORD_ROOT, "construction", "U03-scoring"),
+  cwd: join(RECORD_ROOT, "construction", "units", "U03-scoring"),
 };
 
 // ---------------------------------------------------------------------------
@@ -54,7 +54,7 @@ const DISPATCH: Pick<ReviewerDispatch, "unit" | "exempt"> = {
   unit: "U03-scoring",
   exempt: [
     "aidlc/spaces/default/intents/x/inception/domain-design/components.md",
-    "aidlc/spaces/default/intents/x/construction/U01-infra/functional-design/design.md",
+    "aidlc/spaces/default/intents/x/construction/units/U01-infra/functional-design/design.md",
   ],
 };
 
@@ -71,19 +71,37 @@ describe("t221 (a) evaluateReviewerScope decision table", () => {
     {
       name: "sibling unit Read blocked",
       tool: "Read",
-      input: { file_path: "construction/U01-infra/functional-design/design2.md" },
+      input: { file_path: "construction/units/U01-infra/functional-design/design2.md" },
       block: true,
     },
     {
       name: "current-unit Read allowed",
       tool: "Read",
-      input: { file_path: "construction/U03-scoring/nfr-requirements/nfr.md" },
+      input: { file_path: "construction/units/U03-scoring/nfr-requirements/nfr.md" },
       block: false,
+    },
+    {
+      name: "legacy-layout dispatched-unit Read fails closed",
+      tool: "Read",
+      input: { file_path: "construction/U03-scoring/nfr-requirements/nfr.md" },
+      block: true,
+    },
+    {
+      name: "legacy-layout sibling Read fails closed",
+      tool: "Read",
+      input: { file_path: "construction/U01-infra/functional-design/design2.md" },
+      block: true,
+    },
+    {
+      name: "stage-level construction directory Read is blocked unless exempt",
+      tool: "Read",
+      input: { file_path: "construction/functional-design/memory.md" },
+      block: true,
     },
     {
       name: "exempt contract path allowed (named integration point, exact file)",
       tool: "Read",
-      input: { file_path: "aidlc/spaces/default/intents/x/construction/U01-infra/functional-design/design.md" },
+      input: { file_path: "aidlc/spaces/default/intents/x/construction/units/U01-infra/functional-design/design.md" },
       block: false,
     },
     {
@@ -95,31 +113,31 @@ describe("t221 (a) evaluateReviewerScope decision table", () => {
     {
       name: "sibling Edit blocked (reviewer only appends to the current unit's artifact)",
       tool: "Edit",
-      input: { file_path: "construction/U05-api/functional-design/design.md" },
+      input: { file_path: "construction/units/U05-api/functional-design/design.md" },
       block: true,
     },
     {
       name: "current-unit Write allowed",
       tool: "Write",
-      input: { file_path: "construction/U03-scoring/nfr-requirements/nfr.md" },
+      input: { file_path: "construction/units/U03-scoring/nfr-requirements/nfr.md" },
       block: false,
     },
     {
       name: "sibling NotebookRead blocked",
       tool: "NotebookRead",
-      input: { notebook_path: "construction/U05-api/analysis.ipynb" },
+      input: { notebook_path: "construction/units/U05-api/analysis.ipynb" },
       block: true,
     },
     {
       name: "sibling MultiEdit blocked",
       tool: "MultiEdit",
-      input: { file_path: "construction/U05-api/functional-design/design.md" },
+      input: { file_path: "construction/units/U05-api/functional-design/design.md" },
       block: true,
     },
     {
       name: "sibling LS blocked",
       tool: "LS",
-      input: { path: "construction/U05-api" },
+      input: { path: "construction/units/U05-api" },
       block: true,
     },
     {
@@ -132,19 +150,19 @@ describe("t221 (a) evaluateReviewerScope decision table", () => {
     {
       name: "cross-unit glob in Bash blocked (the field access pattern)",
       tool: "Bash",
-      input: { command: "grep -rn 'instance_type' construction/*/*/*.md inception/*/*.md" },
+      input: { command: "grep -rn 'instance_type' construction/units/*/*/*.md inception/*/*.md" },
       block: true,
     },
     {
       name: "named-sibling grep in Bash blocked",
       tool: "Bash",
-      input: { command: "grep -rn 'ml\\.' construction/U01-infra/nfr-requirements/nfr.md" },
+      input: { command: "grep -rn 'ml\\.' construction/units/U01-infra/nfr-requirements/nfr.md" },
       block: true,
     },
     {
       name: "current-unit grep in Bash allowed",
       tool: "Bash",
-      input: { command: "grep -rn latency construction/U03-scoring/" },
+      input: { command: "grep -rn latency construction/units/U03-scoring/" },
       block: false,
     },
     {
@@ -156,13 +174,13 @@ describe("t221 (a) evaluateReviewerScope decision table", () => {
     {
       name: "exempt file via Bash cat allowed",
       tool: "Bash",
-      input: { command: "cat aidlc/spaces/default/intents/x/construction/U01-infra/functional-design/design.md" },
+      input: { command: "cat aidlc/spaces/default/intents/x/construction/units/U01-infra/functional-design/design.md" },
       block: false,
     },
     {
       name: "listing the exempt file's parent dir still blocked (exact-file exemption)",
       tool: "Bash",
-      input: { command: "ls construction/U01-infra/functional-design/" },
+      input: { command: "ls construction/units/U01-infra/functional-design/" },
       block: true,
     },
     {
@@ -198,19 +216,19 @@ describe("t221 (a) evaluateReviewerScope decision table", () => {
     {
       name: "wildcard inside the construction component blocked",
       tool: "Bash",
-      input: { command: "cat construction*/U01-infra/functional-design/design.md" },
+      input: { command: "cat construction*/units/U01-infra/functional-design/design.md" },
       block: true,
     },
     {
       name: "quote-split construction component blocked",
       tool: "Bash",
-      input: { command: 'cat "construction"/U01-infra/functional-design/design2.md' },
+      input: { command: 'cat "construction"/units/U01-infra/functional-design/design2.md' },
       block: true,
     },
     {
       name: "cd into current unit then relative sibling cat blocked",
       tool: "Bash",
-      input: { command: "cd construction/U03-scoring && cat ../U01-infra/functional-design/design2.md" },
+      input: { command: "cd construction/units/U03-scoring && cat ../U01-infra/functional-design/design2.md" },
       block: true,
     },
     // -- piped stdin-reading search (no path operand) --------------------------
@@ -220,19 +238,19 @@ describe("t221 (a) evaluateReviewerScope decision table", () => {
     {
       name: "piped no-operand grep (2nd segment) reads stdin -> allowed",
       tool: "Bash",
-      input: { command: "grep -rn latency construction/U03-scoring/ | grep ml" },
+      input: { command: "grep -rn latency construction/units/U03-scoring/ | grep ml" },
       block: false,
     },
     {
       name: "piped no-operand rg (2nd segment) reads stdin -> allowed",
       tool: "Bash",
-      input: { command: "cat construction/U03-scoring/nfr.md | rg endpoint" },
+      input: { command: "cat construction/units/U03-scoring/nfr.md | rg endpoint" },
       block: false,
     },
     {
       name: "three-stage pipeline, final no-operand grep reads stdin -> allowed",
       tool: "Bash",
-      input: { command: "grep -rn x construction/U03-scoring/ | sort | grep y" },
+      input: { command: "grep -rn x construction/units/U03-scoring/ | sort | grep y" },
       block: false,
     },
     {
@@ -257,13 +275,13 @@ describe("t221 (a) evaluateReviewerScope decision table", () => {
     {
       name: "Glob pattern spanning siblings blocked",
       tool: "Glob",
-      input: { pattern: "construction/*/functional-design/*.md" },
+      input: { pattern: "construction/units/*/functional-design/*.md" },
       block: true,
     },
     {
       name: "Glob scoped to the current unit allowed",
       tool: "Glob",
-      input: { pattern: "construction/U03-scoring/**/*.md" },
+      input: { pattern: "construction/units/U03-scoring/**/*.md" },
       block: false,
     },
     {
@@ -275,19 +293,19 @@ describe("t221 (a) evaluateReviewerScope decision table", () => {
     {
       name: "pathless Glob explicitly constrained to the current unit allowed",
       tool: "Glob",
-      input: { pattern: "construction/U03-scoring/**/*.md" },
+      input: { pattern: "construction/units/U03-scoring/**/*.md" },
       block: false,
     },
     {
       name: "Grep with a sibling search-root path blocked",
       tool: "Grep",
-      input: { pattern: "publish envelope", path: "construction/U04-events" },
+      input: { pattern: "publish envelope", path: "construction/units/U04-events" },
       block: true,
     },
     {
       name: "Grep content-regex mentioning a sibling path is NOT a file access",
       tool: "Grep",
-      input: { pattern: "construction/U01-infra", path: "construction/U03-scoring" },
+      input: { pattern: "construction/units/U01-infra", path: "construction/units/U03-scoring" },
       block: false,
     },
     {
@@ -306,13 +324,13 @@ describe("t221 (a) evaluateReviewerScope decision table", () => {
     {
       name: "dot-dot traversal out of the current unit blocked (path tool)",
       tool: "Read",
-      input: { file_path: "construction/U03-scoring/../U01-infra/design.md" },
+      input: { file_path: "construction/units/U03-scoring/../U01-infra/design.md" },
       block: true,
     },
     {
       name: "dot-dot traversal out of the current unit blocked (Bash)",
       tool: "Bash",
-      input: { command: "cat construction/U03-scoring/../U05-api/design.md" },
+      input: { command: "cat construction/units/U03-scoring/../U05-api/design.md" },
       block: true,
     },
     {
@@ -342,13 +360,13 @@ describe("t221 (a) evaluateReviewerScope decision table", () => {
     {
       name: "case variant of construction and sibling unit blocked",
       tool: "Read",
-      input: { file_path: "Construction/U02-api/design.md" },
+      input: { file_path: "Construction/units/U02-api/design.md" },
       block: true,
     },
     {
       name: "case variant of current unit allowed",
       tool: "Read",
-      input: { file_path: "construction/u01-infra/design.md" },
+      input: { file_path: "construction/units/u01-infra/design.md" },
       block: false,
       dispatch: { unit: "U01-infra", exempt: [] },
     },
@@ -369,7 +387,7 @@ describe("t221 (a) evaluateReviewerScope decision table", () => {
     {
       name: "unknown tool never blocked",
       tool: "WebSearch",
-      input: { query: "construction/*/design" },
+      input: { query: "construction/units/*/design" },
       block: false,
     },
   ];
@@ -384,9 +402,9 @@ describe("t221 (a) evaluateReviewerScope decision table", () => {
 
   test("blockReason names the unit and the offending target", () => {
     const full: ReviewerDispatch = { reviewer: "aidlc-architecture-reviewer-agent", stage: "s", ...DISPATCH };
-    const reason = blockReason("construction/*/*/*.md", full);
+    const reason = blockReason("construction/units/*/*/*.md", full);
     expect(reason).toContain("U03-scoring");
-    expect(reason).toContain("construction/*/*/*.md");
+    expect(reason).toContain("construction/units/*/*/*.md");
     expect(reason).toContain("the files supplied with the review");
   });
 
@@ -404,7 +422,7 @@ describe("t221 (a) evaluateReviewerScope decision table", () => {
 
   test("blockReason flags a defaulted target as implicit, not typed", () => {
     const full: ReviewerDispatch = { reviewer: "aidlc-architecture-reviewer-agent", stage: "s", ...DISPATCH };
-    const typed = blockReason("construction/U01-infra/design.md", full, false);
+    const typed = blockReason("construction/units/U01-infra/design.md", full, false);
     expect(typed).not.toContain("implicit recursive search");
     const defaulted = blockReason(".", full, true);
     expect(defaulted).toContain("names no path");
@@ -429,8 +447,8 @@ describe("t221 (a) evaluateReviewerScope decision table", () => {
 // ---------------------------------------------------------------------------
 
 describe("t221 piped search options preserve the reviewer boundary", () => {
-  const own = "construction/U03-scoring/nfr.md";
-  const sibling = "construction/U01-infra/private.md";
+  const own = "construction/units/U03-scoring/nfr.md";
+  const sibling = "construction/units/U01-infra/private.md";
   const pipe = `cat ${own} |`;
   const judge = (command: string) =>
     evaluateReviewerScope("Bash", { command }, DISPATCH, SCOPE_CONTEXT);
@@ -487,8 +505,8 @@ describe("t221 piped search options preserve the reviewer boundary", () => {
   }
   test("rg filesystem modes preserve a current-unit glob constraint", () => {
     for (const options of ["--files", "-f -"]) {
-      expect(judge(`${pipe} rg ${options} -g 'construction/U03-scoring/**'`).block).toBe(false);
-      expect(judge(`${pipe} rg ${options} --glob='construction/U01-infra/**'`).block).toBe(true);
+      expect(judge(`${pipe} rg ${options} -g 'construction/units/U03-scoring/**'`).block).toBe(false);
+      expect(judge(`${pipe} rg ${options} --glob='construction/units/U01-infra/**'`).block).toBe(true);
     }
   });
   test("option values are not parsed as more flags", () => {
@@ -614,7 +632,7 @@ function runHook(
 const SIBLING_SWEEP = {
   hook_event_name: "PreToolUse",
   tool_name: "Bash",
-  tool_input: { command: "grep -rn x construction/*/*/*.md" },
+  tool_input: { command: "grep -rn x construction/units/*/*/*.md" },
   agent_type: "aidlc-architecture-reviewer-agent",
 };
 
@@ -633,7 +651,7 @@ describe("t221 (b) dispatch-record lifecycle (shipped hook, subprocess)", () => 
     seedRecord(proj);
     const r = runHook(proj, {
       ...SIBLING_SWEEP,
-      tool_input: { command: "grep -rn x construction/U03-scoring/" },
+      tool_input: { command: "grep -rn x construction/units/U03-scoring/" },
     });
     expect(r.code).toBe(0);
   });
@@ -643,7 +661,7 @@ describe("t221 (b) dispatch-record lifecycle (shipped hook, subprocess)", () => 
     seedRecord(proj);
     const piped = runHook(proj, {
       ...SIBLING_SWEEP,
-      tool_input: { command: "grep -rn x construction/U03-scoring/ | grep y" },
+      tool_input: { command: "grep -rn x construction/units/U03-scoring/ | grep y" },
     });
     expect(piped.code).toBe(0);
     const firstSeg = runHook(proj, {
@@ -661,9 +679,9 @@ describe("t221 (b) dispatch-record lifecycle (shipped hook, subprocess)", () => 
       "echo x | rg --files",
       "echo x | rg -f -",
       "echo x | grep -rn x",
-      "echo x | rg --regexp=x construction/U01-infra/private.md",
-      "echo x | grep -ex construction/U01-infra/private.md",
-      "echo x | grep -f patterns.txt construction/U01-infra/private.md",
+      "echo x | rg --regexp=x construction/units/U01-infra/private.md",
+      "echo x | grep -ex construction/units/U01-infra/private.md",
+      "echo x | grep -f patterns.txt construction/units/U01-infra/private.md",
     ]) {
       const result = runHook(proj, { ...SIBLING_SWEEP, tool_input: { command } });
       expect(result.code, command).toBe(2);
@@ -754,15 +772,15 @@ describe("t221 (b) dispatch-record lifecycle (shipped hook, subprocess)", () => 
     const foreign = runHook(proj, {
       hook_event_name: "PreToolUse",
       tool_name: "Bash",
-      tool_input: { command: "touch Construction/u05-API/result.md" },
+      tool_input: { command: "touch Construction/units/u05-API/result.md" },
     });
     expect(foreign.code).toBe(2);
-    expect(foreign.stderr).toContain("Construction/u05-API/result.md");
+    expect(foreign.stderr).toContain("Construction/units/u05-API/result.md");
 
     const current = runHook(proj, {
       hook_event_name: "PreToolUse",
       tool_name: "Bash",
-      tool_input: { command: "touch construction/u03-SCORING/result.md" },
+      tool_input: { command: "touch construction/units/u03-SCORING/result.md" },
     });
     expect(current.code).toBe(0);
   });
@@ -790,7 +808,7 @@ describe("t221 (b) dispatch-record lifecycle (shipped hook, subprocess)", () => 
     expect(r.code).toBe(2);
     const shard = readFileSync(shardPath, "utf-8");
     expect(shard).toContain("REVIEWER_SCOPE_BLOCKED");
-    expect(shard).toContain("construction/*/*/*.md");
+    expect(shard).toContain("construction/units/*/*/*.md");
     expect(shard).toContain("U03-scoring");
   });
 });

@@ -7,7 +7,7 @@
 //     reviewer approved? Attribution is a pure function of repository content:
 //     REVIEW_COMPLETED receipts (audit shards) carry a Unit Source Fingerprint
 //     that is the sha256 of the evidence file
-//     construction/<unit>/<stage>/reviewed-source-<hash12>.tsv (manifest header
+//     construction/units/<unit>/<stage>/reviewed-source-<hash12>.tsv (manifest header
 //     + claim-restricted path→OID listing). No commit hooks, no commit-message
 //     trailers, no pushed refs are consulted, so a bare clone resolves manual
 //     commits exactly as well as tool-made ones.

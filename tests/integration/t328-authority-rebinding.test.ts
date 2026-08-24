@@ -898,7 +898,7 @@ describe("t328 (5) the per-Unit walk", () => {
       seedBoltDag(dir, ["alpha", "beta"]);
       for (const unit of ["alpha", "beta"]) {
         for (const [slug, artifacts] of Object.entries(DESIGN_ARTIFACTS)) {
-          const recordDir = join(seededRecordDir(dir), "construction", unit, slug);
+          const recordDir = join(seededRecordDir(dir), "construction", "units", unit, slug);
           mkdirSync(recordDir, { recursive: true });
           for (const name of artifacts) {
             writeFileSync(

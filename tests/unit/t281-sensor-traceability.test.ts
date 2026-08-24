@@ -316,14 +316,14 @@ describe("t281 per-Unit scope, reverse derivation, and code targets", () => {
     const proj = project();
     seedUserStories(proj);
     seedUnits(proj);
-    write(proj, "construction/u1-auth/functional-design/rules.md", [
+    write(proj, "construction/units/u1-auth/functional-design/rules.md", [
       "# Rules",
       "",
       "## Authentication",
       "- BR1.1 Validate credentials",
       "- BR1.2 Rate-limit failures",
     ].join("\n"));
-    const file = trace(proj, "construction/u1-auth/functional-design/traceability.json", {
+    const file = trace(proj, "construction/units/u1-auth/functional-design/traceability.json", {
       stage: "functional-design",
       unit: "u1-auth",
       upstream_ids: ["AC1.1.1", "AC1.1.2"],
@@ -341,14 +341,14 @@ describe("t281 per-Unit scope, reverse derivation, and code targets", () => {
     const proj = project();
     seedUserStories(proj);
     seedUnits(proj);
-    write(proj, "construction/u1-auth/functional-design/rules.md", [
+    write(proj, "construction/units/u1-auth/functional-design/rules.md", [
       "# Rules",
       "",
       "## Authentication",
       "- BR1.1 Validate credentials",
       "- BR1.2 Rate-limit failures",
     ].join("\n"));
-    const file = trace(proj, "construction/u1-auth/functional-design/traceability.json", {
+    const file = trace(proj, "construction/units/u1-auth/functional-design/traceability.json", {
       upstream_ids: ["AC1.1.1", "AC1.1.2"],
       coverage: [
         { id: "AC1.1.1", status: "OK", target: "BR1.1" },
@@ -372,8 +372,8 @@ describe("t281 per-Unit scope, reverse derivation, and code targets", () => {
       "|---|---|---|",
       "| US1.2 | U2 | u2-profile |",
     ].join("\n"));
-    write(proj, "construction/u1-auth/functional-design/rules.md", "# Rules\n\n## Auth\n- BR1.1 Rule\n");
-    const file = trace(proj, "construction/u1-auth/functional-design/traceability.json", {
+    write(proj, "construction/units/u1-auth/functional-design/rules.md", "# Rules\n\n## Auth\n- BR1.1 Rule\n");
+    const file = trace(proj, "construction/units/u1-auth/functional-design/traceability.json", {
       upstream_ids: ["AC1.1.1"],
       coverage: [{ id: "AC1.1.1", status: "OK", target: "BR1.1" }],
     });
@@ -389,7 +389,7 @@ describe("t281 per-Unit scope, reverse derivation, and code targets", () => {
     const source = join(proj, "src", "auth.ts");
     mkdirSync(join(source, ".."), { recursive: true });
     writeFileSync(source, "export const auth = true;\n");
-    const file = trace(proj, "construction/u1-auth/code-generation/traceability.json", {
+    const file = trace(proj, "construction/units/u1-auth/code-generation/traceability.json", {
       upstream_ids: ["AC1.1.1", "AC1.1.2"],
       coverage: [
         { id: "AC1.1.1", status: "OK", target: "src/auth.ts" },

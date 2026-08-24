@@ -19,6 +19,16 @@ All stages run **inline** (no subagents in the Operation phase). All stages
 follow `stage-protocol.md` for approval gates, question format, completion
 messages, and state tracking.
 
+Operation stages run once across the application, not once per Unit. When a
+stage consumes Construction NFR or infrastructure artifacts, aggregate the
+applicable inputs for every Unit under `<record>/construction/units/`:
+`<unit>/nfr-requirements/`, `<unit>/nfr-design/`, and
+`<unit>/infrastructure-design/`. Shared Build and Test and CI Pipeline inputs
+remain under `<record>/construction/build-and-test/` and
+`<record>/construction/ci-pipeline/`. If the scope skips a design stage, use
+the consuming stage's documented workspace/requirements fallback; never invent
+missing per-unit artifacts.
+
 ---
 
 ## Stage Summary Table

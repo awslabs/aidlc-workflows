@@ -138,7 +138,7 @@ function unitVerb(
 }
 
 function writeUnitArtifacts(proj: string, unit: string): void {
-  const dir = join(seededRecordDir(proj), "construction", unit, SLUG);
+  const dir = join(seededRecordDir(proj), "construction", "units", unit, SLUG);
   mkdirSync(dir, { recursive: true });
   for (const name of PRODUCES) {
     writeFileSync(join(dir, artifactFilename(name)), `# ${name}\nstub\n`, "utf-8");
@@ -202,7 +202,7 @@ describe("t260 receipts are the transition, artifacts the evidence", () => {
 
   test("artifact-shaped directories neither complete nor settle a unit", () => {
     constructionProject();
-    const dir = join(seededRecordDir(proj), "construction", "unit-a", SLUG);
+    const dir = join(seededRecordDir(proj), "construction", "units", "unit-a", SLUG);
     mkdirSync(dir, { recursive: true });
     for (const name of PRODUCES) {
       mkdirSync(join(dir, artifactFilename(name)));
@@ -448,6 +448,7 @@ describe("t260 single active unit", () => {
       join(
         seededRecordDir(proj),
         "construction",
+        "units",
         "unit-a",
         SLUG,
         `${PRODUCES[0]}.md`,
@@ -722,10 +723,10 @@ describe("t260 receipts bind to an exact stage attempt", () => {
     // new start must bind to the same ambiguity token.
     writeFileSync(
       seededAuditShard(proj),
-      "# AI-DLC Audit Log\n" + block(
+      `# AI-DLC Audit Log\n${block(
         "UNIT_COMPLETED",
         `**Stage**: ${SLUG}\n**Unit**: unit-b\n**Run floor**: ${floor}\n`,
-      ),
+      )}`,
       "utf-8",
     );
     expect(currentUnitLifecycleMode(proj, SLUG)).toBe("serial");

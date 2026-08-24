@@ -17,9 +17,9 @@
 // handleDoctor is already large) so the workspace-manifest checks read as one
 // unit; handleDoctor calls workspaceManifestChecks() and spreads the rows in.
 
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { discoverSiblingRepos, errorMessage } from "./aidlc-lib.ts";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { join, relative } from "node:path";
+import { discoverSiblingRepos, docsRoot, errorMessage, resolveBoltDag } from "./aidlc-lib.ts";
 import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
 import {
   parseWorkspaceManifest,
@@ -34,6 +34,74 @@ export interface DoctorCheck {
   severity?: "warn";
   label: string;
   fix?: string;
+}
+
+/** Detect legacy unit roots using the active DAG, or stage-shaped children without a DAG. */
+export function constructionUnitLayoutCheck(
+  projectDir: string,
+  constructionStageSlugs: Iterable<string>,
+): DoctorCheck | null {
+  const recordPath = docsRoot(projectDir);
+  const constructionDir = join(recordPath, "construction");
+  if (!existsSync(constructionDir)) return null;
+  try {
+    const dag = resolveBoltDag(projectDir);
+    if (dag.state === "malformed") {
+      return {
+        pass: true,
+        label: `Construction unit layout: check skipped (advisory) - unit DAG ${dag.reason}: ${dag.detail}`,
+      };
+    }
+    const units = dag.state === "ok" ? new Set(dag.units) : null;
+    const stages = new Set(constructionStageSlugs);
+    const legacyUnits = readdirSync(constructionDir, { withFileTypes: true })
+      .filter((entry) => {
+        if (!entry.isDirectory() || existsSync(join(constructionDir, "units", entry.name))) {
+          return false;
+        }
+        if (units !== null) return units.has(entry.name);
+        const children = readdirSync(join(constructionDir, entry.name), { withFileTypes: true });
+        // A diary/artifact set is a stage, not a unit. Stage directories can be
+        // empty, but another level of stage directories identifies a migrated
+        // units/ axis containing a stage-named Unit rather than a legacy Unit.
+        return children.length > 0 &&
+          children.every((child) => child.isDirectory() && stages.has(child.name)) &&
+          children.some((child) => {
+            const artifacts = readdirSync(join(constructionDir, entry.name, child.name), { withFileTypes: true });
+            return artifacts.length === 0 || artifacts.some((artifact) => artifact.isFile());
+          });
+      })
+      .map((entry) => entry.name)
+      .sort((a, b) => a === "units" ? -1 : b === "units" ? 1 : a.localeCompare(b));
+    if (legacyUnits.length === 0) return null;
+    const root = `${relative(projectDir, recordPath).replace(/\\/g, "/")}/construction`;
+    const quote = (path: string): string => `'${path.replaceAll("'", "'\"'\"'")}'`;
+    const parent = quote(`${root}/units`);
+    const commands = legacyUnits.map((unit) => {
+      const source = quote(`${root}/${unit}`);
+      const target = quote(`${root}/units/${unit}`);
+      if (unit === "units") {
+        const temporary = quote(`${root}/.units-legacy`);
+        return `if [ -d ${source} ] && [ ! -e ${target} ] && [ ! -e ${temporary} ]; then mv ${source} ${temporary} && mkdir -p ${parent} && mv ${temporary} ${target}; fi`;
+      }
+      return `if [ -d ${source} ] && [ ! -e ${target} ]; then mkdir -p ${parent} && mv ${source} ${target}; fi`;
+    });
+    return {
+      pass: true,
+      severity: "warn",
+      label:
+        `Construction unit layout: ${legacyUnits.length} legacy unit dir(s) directly under construction/ ` +
+        `(advisory): [${legacyUnits.join(", ")}]. Run from the project root, in this order ` +
+        `(safe to repeat; completed moves are no-ops): ${commands.map((command) => `\`${command}\``).join("; ")}. ` +
+        "Per-unit review receipts must be renewed after migration because their logical fingerprint paths changed.",
+      fix: "Run the migration commands above from the project root, then renew per-unit review receipts.",
+    };
+  } catch (e) {
+    return {
+      pass: true,
+      label: `Construction unit layout: check skipped (advisory) - ${errorMessage(e)}`,
+    };
+  }
 }
 
 /**

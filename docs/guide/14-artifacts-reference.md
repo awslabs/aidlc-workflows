@@ -55,12 +55,14 @@ aidlc/spaces/<space>/intents/<YYMMDD>-<label>/   # one record dir per intent
     delivery-planning/
 
   construction/                     # Phase 3 artifacts
-    {unit-name}/                    (per unit of work, repeated)
-      functional-design/            (conditional)
-      nfr-requirements/             (conditional)
-      nfr-design/                   (conditional)
-      infrastructure-design/        (conditional)
-      code-generation/
+    units/
+      {unit-name}/                  (per unit of work, repeated)
+        functional-design/          (conditional)
+        nfr-requirements/           (conditional)
+        nfr-design/                  (conditional)
+        infrastructure-design/      (conditional)
+        code-generation/
+    code-generation/                (zero-Unit scope only)
     build-and-test/
     ci-pipeline/                    (conditional)
 
@@ -198,7 +200,7 @@ The welcome message is rendered at session start via `companyAnnouncements` in `
 
 ### Construction (stages 3.1-3.7)
 
-Stages 3.1-3.5 repeat per unit of work. Artifacts go in `construction/{unit-name}/{stage-name}/`. Stages 3.6-3.7 run once after all units.
+Stages 3.1-3.5 repeat per unit of work. Artifacts go in `construction/units/{unit-name}/{stage-name}/`. Stages 3.6-3.7 run once after all units.
 
 The four design stages (3.1-3.4) prune their artifacts to each unit's **kind** (tagged in 2.7's edge block: `service`, `spec`, `ui`, `packaging`, or `library`). A `spec` unit owes no scalability doc, a `packaging` unit no functional spec; a unit left untagged receives the full matrix below. Which artifact applies to which kind is stage frontmatter data (`produces_kinds`, see [Stage definition](../reference/15-stage-definition.md)). A unit for which none of a stage's artifacts apply is complete for that stage with zero files.
 

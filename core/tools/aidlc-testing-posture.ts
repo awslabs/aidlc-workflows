@@ -1472,7 +1472,7 @@ export function codeGenerationRecordDir(
   const root = join(docsRoot(projectDir), "construction");
   const normalizedUnit = unit?.trim() ?? "";
   return normalizedUnit.length > 0
-    ? join(root, normalizedUnit, "code-generation")
+    ? join(root, "units", normalizedUnit, "code-generation")
     : join(root, "code-generation");
 }
 

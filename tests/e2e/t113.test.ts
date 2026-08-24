@@ -131,6 +131,7 @@ function walkStage(slug: string, proj: string): void {
         : join(
             record,
             "construction",
+            "units",
             "unit-alpha",
             slug,
             "code-generation-plan.md",

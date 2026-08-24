@@ -150,6 +150,7 @@ function writeCodeGenerationArtifacts(unitName: string): void {
   const dir = join(
     seededRecordDir(project),
     "construction",
+    "units",
     unitName,
     "code-generation",
   );
@@ -194,6 +195,7 @@ function recordReview(unitName: string): void {
   const artifact = join(
     seededRecordDir(project),
     "construction",
+    "units",
     unitName,
     "code-generation",
     "code-generation-plan.md",

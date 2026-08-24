@@ -32,6 +32,7 @@ import {
   evaluatePlanApprovalDispatch,
   blockReason,
   promptStageMarkers,
+  knownUnits,
   promptUnitMarkers,
   questionsFileApproved,
   questionsFileHasPendingPlanApproval,
@@ -503,7 +504,7 @@ function seedUnit(
   const dir =
     unit === null
       ? join(proj, RECORD_REL, "construction", "code-generation")
-      : join(proj, RECORD_REL, "construction", unit, "code-generation");
+      : join(proj, RECORD_REL, "construction", "units", unit, "code-generation");
   mkdirSync(dir, { recursive: true });
   seedActiveDirective(proj, "code-generation", unit ?? undefined);
   const authority = resolveCodeGenerationAuthority(proj, { unit });
@@ -801,6 +802,22 @@ describe("t265b hook lifecycle", () => {
       expect(unapproved.status).not.toBe(0);
       expect(unapproved.stdout).toBe("");
       expect(unapproved.stderr).toContain("Cannot assemble a worker brief");
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("knownUnits reads construction/units and ignores top-level stage directories", () => {
+    const proj = scratchProject();
+    try {
+      const record = join(proj, RECORD_REL);
+      mkdirSync(join(record, "construction", "units", "todo-core"), {
+        recursive: true,
+      });
+      mkdirSync(join(record, "construction", "functional-design"), {
+        recursive: true,
+      });
+      expect(knownUnits(proj, record)).toEqual(["todo-core"]);
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }
@@ -1671,6 +1688,7 @@ describe("t265b hook lifecycle", () => {
         proj,
         RECORD_REL,
         "construction",
+        "units",
         "todo-core",
         "code-generation",
         "unit-test-instructions.md",

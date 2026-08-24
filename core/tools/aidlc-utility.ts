@@ -59,7 +59,10 @@ import {
   TRUSTED_COMMAND_TOKENS,
   trustedCommand,
 } from "./aidlc-command.ts";
-import { workspaceManifestChecks } from "./aidlc-workspace-doctor.ts";
+import {
+  constructionUnitLayoutCheck,
+  workspaceManifestChecks,
+} from "./aidlc-workspace-doctor.ts";
 import {
   instructionFileDoctorCheck,
   runtimeDoctorChecks,
@@ -5138,6 +5141,18 @@ export async function collectDoctorReport(
     for (const row of workspaceManifestChecks(projectDir)) results.push(row);
   } catch {
     // Advisory only; a scan failure must not hide the main doctor report.
+  }
+
+  try {
+    const constructionLayout = constructionUnitLayoutCheck(
+      projectDir,
+      loadGraph()
+        .filter((stage) => stage.phase === "construction")
+        .map((stage) => stage.slug),
+    );
+    if (constructionLayout !== null) results.push(constructionLayout);
+  } catch {
+    // Advisory migration scan; graph/read failures are covered by other rows.
   }
 
   results.push(...extraChecks);

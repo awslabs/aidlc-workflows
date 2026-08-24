@@ -30,7 +30,7 @@ scopes:
   - infra
   - classic
   - workshop
-inputs: Infrastructure design from infrastructure-design stage, CD pipeline config from deployment-pipeline stage
+inputs: Infrastructure design and security requirements for every Unit under <record>/construction/units/, CD pipeline config from deployment-pipeline stage
 outputs: environment-inventory.md, validation-report.md, environment-provisioning-questions.md (under this stage's record dir, engine-resolved)
 ---
 
@@ -40,8 +40,10 @@ outputs: environment-inventory.md, validation-report.md, environment-provisionin
 
 ### Step 1: Load Prior Context
 
-- Read infrastructure design from `<record>/construction/infrastructure-design/`
-- Read security requirements from `<record>/construction/nfr-requirements/`
+This stage runs once across all Units. Aggregate per-unit inputs for every Unit under `<record>/construction/units/`:
+
+- Read infrastructure design from `<record>/construction/units/<unit>/infrastructure-design/`
+- Read security requirements from `<record>/construction/units/<unit>/nfr-requirements/`
 
 ### Step 2: Generate Clarifying Questions
 

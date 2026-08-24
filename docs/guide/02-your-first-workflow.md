@@ -312,7 +312,10 @@ aidlc/spaces/<space>/intents/<YYMMDD>-<label>/
 ├── audit/                  # Full decision audit trail (per-clone shards, merged by timestamp)
 ├── ideation/               # Intent, market research, scope, mockups
 ├── inception/              # Requirements, stories, design, units
-├── construction/           # Per-unit code + test artifacts
+├── construction/
+│   ├── units/<unit>/<stage>/ # Per-unit design + code-generation artifacts
+│   ├── build-and-test/       # Shared build/test artifacts
+│   └── ci-pipeline/          # Shared CI artifacts (when in scope)
 ├── operation/              # Deployment, observability, incident plans
 └── verification/           # Phase boundary verification reports
 ```

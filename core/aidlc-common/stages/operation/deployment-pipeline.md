@@ -37,7 +37,7 @@ scopes:
   - classic
   - workshop
   - express
-inputs: CI pipeline config from ci-pipeline stage, infrastructure design from infrastructure-design stage
+inputs: CI pipeline config from the stage-level ci-pipeline directory, infrastructure and NFR design for every Unit under <record>/construction/units/
 outputs: cd-config.md, deployment-strategy.md, rollback-runbook.md, deployment-pipeline-questions.md (under this stage's record dir, engine-resolved)
 ---
 
@@ -47,9 +47,11 @@ outputs: cd-config.md, deployment-strategy.md, rollback-runbook.md, deployment-p
 
 ### Step 1: Load Prior Context
 
+This stage runs once across all Units. Aggregate per-unit inputs for every Unit under `<record>/construction/units/`:
+
 - Read CI pipeline config from `<record>/construction/ci-pipeline/` (if exists)
-- Read infrastructure design from `<record>/construction/infrastructure-design/` (if exists)
-- Read NFR design (deployment-related NFRs) from `<record>/construction/nfr-design/` (if exists)
+- Read infrastructure design from `<record>/construction/units/<unit>/infrastructure-design/` (if it exists)
+- Read NFR design (deployment-related NFRs) from `<record>/construction/units/<unit>/nfr-design/` (if it exists)
 
 Incremental scopes (`bugfix`, `refactor`, and `security-patch`) and `express`
 skip CI Pipeline and Infrastructure Design by design. On brownfield, inspect

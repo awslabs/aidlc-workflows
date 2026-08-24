@@ -357,6 +357,7 @@ function prepareCandidate(
     const dir = join(
       seededRecordDir(checkout),
       "construction",
+      "units",
       unit,
       stageSlug,
     );
@@ -371,6 +372,7 @@ function prepareCandidate(
   const codeDir = join(
     seededRecordDir(checkout),
     "construction",
+    "units",
     unit,
     "code-generation",
   );
@@ -527,6 +529,7 @@ function completeUnitOnMain(projectDir: string, unit: string): void {
     const dir = join(
       seededRecordDir(projectDir),
       "construction",
+      "units",
       unit,
       stageSlug,
     );
@@ -541,6 +544,7 @@ function completeUnitOnMain(projectDir: string, unit: string): void {
   const codeDir = join(
     seededRecordDir(projectDir),
     "construction",
+    "units",
     unit,
     "code-generation",
   );
@@ -1365,6 +1369,7 @@ describe("t326 pinned team Unit merge", () => {
     const foreignPath = join(
       seededRecordDir(pinCandidate.checkout),
       "construction",
+      "units",
       "beta",
       "functional-design",
       "forged.md",
@@ -1391,7 +1396,7 @@ describe("t326 pinned team Unit merge", () => {
     const refusedPin = run(UNIT, ["pin", "alpha"], pinFixture.seed);
     expect(refusedPin.status).not.toBe(0);
     expect(refusedPin.out).toContain(
-      "construction/beta/functional-design/forged.md",
+      "construction/units/beta/functional-design/forged.md",
     );
     expect(refusedPin.out).toContain(trackedMixedCasePath!);
     expect(refusedPin.out).toContain("outside claimed Unit record tree");
@@ -1422,6 +1427,7 @@ describe("t326 pinned team Unit merge", () => {
     const laterForeignPath = join(
       seededRecordDir(landCandidate.checkout),
       "construction",
+      "units",
       "beta",
       "nfr-design",
       "forged.md",
@@ -1485,7 +1491,7 @@ describe("t326 pinned team Unit merge", () => {
     );
     expect(refusedLand.status).not.toBe(0);
     expect(refusedLand.out).toContain(
-      "construction/beta/nfr-design/forged.md",
+      "construction/units/beta/nfr-design/forged.md",
     );
     expect(refusedLand.out).toContain("violates claimed Unit ownership");
   }, 120000);
@@ -2401,6 +2407,7 @@ describe("t326 pinned team Unit merge", () => {
     const reviewerArtifact = join(
       seededRecordDir(reviewed.checkout),
       "construction",
+      "units",
       "alpha",
       reviewerStage.slug,
       artifactFilename(reviewerStage.produces![0]),
@@ -2422,7 +2429,7 @@ describe("t326 pinned team Unit merge", () => {
           "alpha",
           reviewed.generation,
           reviewerStage.slug,
-          `**File**: construction/alpha/${reviewerStage.slug}/${
+          `**File**: construction/units/alpha/${reviewerStage.slug}/${
             artifactFilename(reviewerStage.produces![0])
           }\n`,
         )

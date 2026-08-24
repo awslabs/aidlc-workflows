@@ -33,7 +33,7 @@ scopes:
   - feature
   - classic
   - workshop
-inputs: Observability setup from observability-setup stage, NFR design from nfr-design stage, infrastructure design from infrastructure-design stage
+inputs: Observability setup from observability-setup stage, NFR and infrastructure design for every Unit under <record>/construction/units/
 outputs: runbooks.md, incident-plan.md, escalation-matrix.md, incident-response-questions.md (under this stage's record dir, engine-resolved)
 ---
 
@@ -43,9 +43,11 @@ outputs: runbooks.md, incident-plan.md, escalation-matrix.md, incident-response-
 
 ### Step 1: Load Prior Context
 
+This stage runs once across all Units. Aggregate per-unit inputs for every Unit under `<record>/construction/units/`:
+
 - Read observability setup from `<record>/operation/observability-setup/`
-- Read NFR design from `<record>/construction/nfr-design/`
-- Read infrastructure design from `<record>/construction/infrastructure-design/`
+- Read NFR design from `<record>/construction/units/<unit>/nfr-design/`
+- Read infrastructure design from `<record>/construction/units/<unit>/infrastructure-design/`
 
 ### Step 2: Generate Clarifying Questions
 

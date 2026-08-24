@@ -152,6 +152,7 @@ describe("t291 stale review receipt recovery", () => {
     const budgetDir = join(
       seededRecordDir(budgetProj),
       "construction",
+      "units",
       "alpha",
       "functional-design",
     );

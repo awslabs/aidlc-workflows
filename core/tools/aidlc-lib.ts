@@ -1626,9 +1626,7 @@ function literalEngineCommand(seg: string): { command: string; args: string[] } 
       if (!literal && (arg === "--project-dir" || (attempt && arg === "--aidlc-attempt-id"))) {
         if (i + 1 >= args.length) return null;
         i++;
-      } else if (!literal && native && ["--json", "--quiet", "--no-color", "--yes", "--offline", "--verbose"].includes(arg)) {
-        continue;
-      } else {
+      } else if (literal || !native || !["--json", "--quiet", "--no-color", "--yes", "--offline", "--verbose"].includes(arg)) {
         clean.push(arg);
       }
     }
@@ -8225,14 +8223,14 @@ function summaryQuestionFiles(
     return questionFilesInDir(join(rec, stage.phase, stage.slug), null);
   }
 
-  const constructionDir = join(rec, "construction");
-  if (!existsSync(constructionDir)) return [];
+  const unitsDir = join(rec, "construction", "units");
+  if (!existsSync(unitsDir)) return [];
   const files: SummaryQuestionFile[] = [];
   try {
-    for (const unit of readdirSync(constructionDir).sort()) {
+    for (const unit of readdirSync(unitsDir).sort()) {
       files.push(
         ...questionFilesInDir(
-          join(constructionDir, unit, stage.slug),
+          join(unitsDir, unit, stage.slug),
           unit,
         ),
       );
@@ -8553,8 +8551,8 @@ export function activeSummaryAuthorizationForRecordPath(
 
 /**
  * The summary scope a record-relative artifact path belongs to. Construction
- * per-Unit outputs are recognized by the third segment naming a Construction
- * stage whose graph entry declares `for_each: unit-of-work`; this is path-shape
+ * per-Unit outputs are recognized by the units axis and fourth segment naming a
+ * Construction stage whose graph entry declares `for_each: unit-of-work`; this is path-shape
  * classification, so producesArtifactUnit cannot be reused because it requires
  * a declared artifact filename and summary stamping also covers other outputs.
  */
@@ -8564,14 +8562,14 @@ export function summaryScopeForRecordPath(
 ): { stage: string; unit: string | null } | null {
   const parts = relativePath.split("/");
   if (parts.length < 3) return null;
-  if (parts[0] === "construction" && parts.length >= 4) {
+  if (parts[0] === "construction" && parts[1] === "units" && parts.length >= 5) {
     const stage = stages.find(
       (entry) =>
-        entry.slug === parts[2] &&
+        entry.slug === parts[3] &&
         entry.phase === "construction" &&
         entry.for_each === "unit-of-work",
     );
-    if (stage !== undefined) return { stage: stage.slug, unit: parts[1] };
+    if (stage !== undefined) return { stage: stage.slug, unit: parts[2] };
   }
   const stage = stages.find((entry) => entry.slug === parts[1]);
   return stage === undefined ? null : { stage: stage.slug, unit: null };
@@ -9567,8 +9565,9 @@ export function resolveAuditWorktreePath(
 // row, or a PreToolUse file_path) is one of the stage's declared produces[]
 // artifacts. Matches on the path suffix `/<slug>/<artifact filename>` rather than
 // resolving one absolute dir, so it covers BOTH the standard
-// <record>/<phase>/<slug>/ layout AND the per-unit construction/<unit>/<slug>/
-// layout without needing to know the {unit} segment. Codekb stages get their
+// <record>/<phase>/<slug>/ layout AND the per-unit
+// construction/units/<unit>/<slug>/ layout without needing to know the {unit}
+// segment. Codekb stages get their
 // own arm: their produces live DIRECTLY under a per-repo dir beneath the space
 // codekb root (codekb/<repo>/<name>.md) with no <slug> segment anywhere, so the
 // suffix idiom matches the codekb marker + one repo segment instead. When the
@@ -9642,7 +9641,7 @@ export function producesArtifactUnit(
     const suffix = `/${stage.slug}/${artifactFilename(name)}`;
     if (!norm.endsWith(suffix)) continue;
     const parent = norm.slice(0, -suffix.length);
-    const marker = "/construction/";
+    const marker = "/construction/units/";
     const markerIdx = parent.lastIndexOf(marker);
     if (markerIdx === -1) return null;
     const unit = parent.slice(markerIdx + marker.length);
@@ -9886,13 +9885,13 @@ export function reviewArtifactEntries(
       join(record, stage.phase, stage.slug, artifactFilename(artifact.name)),
     )
   );
-  const construction = join(record, "construction");
-  const discoveredUnits = existsSync(construction)
-    ? readdirSync(construction).filter((name) => {
+  const unitsDir = join(record, "construction", "units");
+  const discoveredUnits = existsSync(unitsDir)
+    ? readdirSync(unitsDir).filter((name) => {
         try {
           return (
-            statSync(join(construction, name)).isDirectory() &&
-            existsSync(join(construction, name, stage.slug))
+            statSync(join(unitsDir, name)).isDirectory() &&
+            existsSync(join(unitsDir, name, stage.slug))
           );
         } catch {
           return false;
@@ -9944,7 +9943,7 @@ export function reviewArtifactEntries(
   }
   if (units.length === 0) {
     return allArtifacts.map((artifact) => ({
-      logicalPath: `construction/*/${stage.slug}/${artifactFilename(artifact.name)}`,
+      logicalPath: `construction/units/*/${stage.slug}/${artifactFilename(artifact.name)}`,
       path: null,
       boundary: record,
       required: artifact.required,
@@ -9953,8 +9952,8 @@ export function reviewArtifactEntries(
   }
   return units.flatMap((name) =>
     artifactsForKind(unitKinds.get(name) ?? null).map((artifact) => ({
-      logicalPath: `construction/${name}/${stage.slug}/${artifactFilename(artifact.name)}`,
-      path: join(record, "construction", name, stage.slug, artifactFilename(artifact.name)),
+      logicalPath: `construction/units/${name}/${stage.slug}/${artifactFilename(artifact.name)}`,
+      path: join(record, "construction", "units", name, stage.slug, artifactFilename(artifact.name)),
       boundary: record,
       required: artifact.required,
       reviewAppendixTarget: artifact.reviewAppendixTarget,
@@ -11755,10 +11754,10 @@ function hasDurableSourceBindingEvidence(
       );
     };
     if (hasSnapshot(snapshots)) return true;
-    const construction = join(record, "construction");
+    const unitsDir = join(record, "construction", "units");
     let units: string[] = [];
     try {
-      units = readdirSync(construction);
+      units = readdirSync(unitsDir);
     } catch {
       // No construction artifacts.
     }
@@ -11766,7 +11765,7 @@ function hasDurableSourceBindingEvidence(
       units.some((unit) =>
         existsSync(
           join(
-            construction,
+            unitsDir,
             unit,
             "code-generation",
             "source-manifest.json",
@@ -13142,8 +13141,9 @@ export function freshReviewReceipts(
 
   // Collect fresh matching terminal reviews after the attempt floor. A later
   // declared-artifact write clears the matching receipt. For per-unit stages,
-  // the path's construction/<unit>/ segment scopes invalidation to that unit;
-  // an ambiguous matching path fails closed by clearing every unit receipt.
+  // the path's construction/units/<unit>/ segment scopes invalidation to that
+  // unit; an ambiguous matching path fails closed by clearing every unit
+  // receipt.
   const recordedRepos = new Set(intentRepos(projectDir));
   const unitVerdicts = new Map<string, ReviewVerdict>();
   const unitStale = new Set<string>();
@@ -17691,7 +17691,14 @@ export function readUnitSourceManifest(
   if (unitError !== null) return { ok: false, reason: unitError };
   const record = recordDir(projectDir);
   if (record === null) return { ok: false, reason: "no active intent record resolves" };
-  const manifestPath = join(record, "construction", unit, stageSlug, "source-manifest.json");
+  const manifestPath = join(
+    record,
+    "construction",
+    "units",
+    unit,
+    stageSlug,
+    "source-manifest.json",
+  );
 
   let rawBytes: Buffer;
   let value: unknown;
@@ -18012,7 +18019,7 @@ export function unitStageRecordRelPath(
   stageSlug: string,
   fileName: string,
 ): string {
-  return `construction/${unit}/${stageSlug}/${fileName}`;
+  return `construction/units/${unit}/${stageSlug}/${fileName}`;
 }
 
 /** Record-relative path of a unit's committed reviewed-listing evidence. */
@@ -20435,9 +20442,9 @@ export function validateBoltSlug(slug: string): string | null {
   return null;
 }
 
-// Unit names become path components under construction/<unit>/ and are also
-// mirrored into single-line state fields. Keep one canonical validator for the
-// authored DAG, cached runtime graph, and lifecycle CLI. Lowercase kebab-case is
+// Unit names become path components under construction/units/<unit>/ and are
+// also mirrored into single-line state fields. Keep one canonical validator for
+// the authored DAG, cached runtime graph, and lifecycle CLI. Lowercase kebab-case is
 // the authoring convention; leading digits, uppercase letters, underscores,
 // and dots remain accepted for safe legacy DAG names.
 export function validateUnitName(name: string): string | null {

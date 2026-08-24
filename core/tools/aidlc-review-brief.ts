@@ -90,7 +90,7 @@ function workspaceArtifactPath(
 }
 
 function entryUnit(logicalPath: string, stageSlug: string): string | undefined {
-  const match = /^construction\/([^/]+)\/([^/]+)\//.exec(logicalPath);
+  const match = /^construction\/units\/([^/]+)\/([^/]+)\//.exec(logicalPath);
   return match?.[2] === stageSlug ? match[1] : undefined;
 }
 
@@ -441,7 +441,7 @@ function parseAuditPathArray(value: string | null): string[] {
 }
 
 function pathUnit(path: string, stageSlug: string): string | undefined {
-  const match = /(?:^|\/)construction\/([^/]+)\/([^/]+)\//.exec(path);
+  const match = /(?:^|\/)construction\/units\/([^/]+)\/([^/]+)\//.exec(path);
   return match?.[2] === stageSlug ? match[1] : undefined;
 }
 
@@ -573,7 +573,7 @@ export function reviewInvalidationDetails(
         continue;
       }
       const sourceManifest =
-        /(?:^|\/)construction\/([^/]+)\/([^/]+)\/source-manifest\.json$/.exec(
+        /(?:^|\/)construction\/units\/([^/]+)\/([^/]+)\/source-manifest\.json$/.exec(
           normalized,
         );
       if (sourceManifest?.[2] === stage.slug) {
@@ -633,6 +633,7 @@ export function reviewInvalidationDetails(
                 resolve(
                   record,
                   "construction",
+                  "units",
                   unit,
                   stage.slug,
                   "source-manifest.json",

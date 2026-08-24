@@ -249,6 +249,7 @@ function writeFunctionalArtifacts(projectDir: string, unit: string): void {
   const functionalDir = join(
     seededRecordDir(projectDir),
     "construction",
+    "units",
     unit,
     "functional-design",
   );
@@ -569,6 +570,7 @@ describe("t325 atomic team Unit claims", () => {
       join(
         seededRecordDir(checkout),
         "construction",
+        "units",
         "alpha",
         "functional-design",
         artifactFilename("functional-spec"),
