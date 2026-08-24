@@ -87,7 +87,12 @@ shown above; VALIDATE, BUILD, and TEST reject alternatives such as
 `"stages": "custom-stages/"` instead of silently omitting that content.
 `tools` lands CLI scripts in the harness `tools/` dir so a plugin can ship a
 **runnable sensor** (its manifest in `sensors/` + its script in `tools/`) and an
-optional doctor check. `overlays` is special: its canonical directory is
+optional doctor check.
+Keep tests and fixtures in the plugin's top-level `tests/` directory, never
+inside `tools/`. Compose drops files under `tools/tests/`, `tools/__tests__/`,
+or `tools/fixtures/`, plus co-located `*.test.ts` and `*.spec.ts` files, and
+records an advisory drop surfaced by `/aidlc --doctor`.
+`overlays` is special: its canonical directory is
 `contributions/`, whose files are consumed by the merge rather than copied as a
 primitive subtree.
 

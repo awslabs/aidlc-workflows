@@ -628,6 +628,43 @@ function doctorScriptOwnershipPrecheck(): CopyPrecheck {
   };
 }
 
+function toolsTestPayloadPrecheck(): CopyPrecheck {
+  const toolsRoot = join(PLUGIN_ROOT, "tools");
+  const targetRoot = join(HARNESS_DIR, "tools");
+  const payloadDirs = new Set(["tests", "__tests__", "fixtures"]);
+  const payloadReason = (relPosix: string): string | null => {
+    const segments = relPosix.split("/");
+    const payloadDir = segments.find((segment) => payloadDirs.has(segment));
+    if (payloadDir) return `it uses the reserved "${payloadDir}/" test/fixture path`;
+    const base = basename(relPosix);
+    return /\.(?:test|spec)\.ts$/.test(base)
+      ? `its basename "${base}" matches a co-located test pattern`
+      : null;
+  };
+  const drop = (relPosix: string, why: string, landed: boolean): void => {
+    recordDrop(
+      `plugin "${PLUGIN_NAME}" tool file "${relPosix}" ${landed ? "is already installed but is" : "is"} a test/fixture payload: ${why}; plugin tests and fixtures live in top-level "tests/", never inside "tools/"${landed ? "; remove the file and re-run compose" : " - not copied"}`,
+      "advisory",
+    );
+  };
+  // Older compose versions may already have landed test payloads. Audit those
+  // up front because copyTreeNoClobber skips prechecks for existing paths.
+  for (const file of walk(toolsRoot)) {
+    const relPosix = relative(toolsRoot, file).replace(/\\/g, "/");
+    const why = payloadReason(relPosix);
+    if (why && existsSync(join(targetRoot, relPosix))) {
+      drop(relPosix, why, true);
+    }
+  }
+  return ({ rel }) => {
+    const relPosix = rel.replace(/\\/g, "/");
+    const why = payloadReason(relPosix);
+    if (!why) return true;
+    drop(relPosix, why, false);
+    return false;
+  };
+}
+
 function projectOpencodeAgentMemory(raw: string): string {
   return raw
     .replaceAll(".aidlc/rules/aidlc-org.md", "aidlc/spaces/default/memory/org.md")
@@ -1725,7 +1762,12 @@ try {
   }
   changed = copyTreeNoClobber(join(PLUGIN_ROOT, "knowledge"), join(HARNESS_DIR, "knowledge"), "knowledge") || changed;
   changed = copyTreeNoClobber(join(PLUGIN_ROOT, "sensors"), join(HARNESS_DIR, "sensors"), "sensor", sensorManifestNamePrecheck()) || changed;
-  changed = copyTreeNoClobber(join(PLUGIN_ROOT, "tools"), join(HARNESS_DIR, "tools"), "tool", doctorScriptOwnershipPrecheck()) || changed;
+  changed = copyTreeNoClobber(
+    join(PLUGIN_ROOT, "tools"),
+    join(HARNESS_DIR, "tools"),
+    "tool",
+    combinePrechecks(toolsTestPayloadPrecheck(), doctorScriptOwnershipPrecheck()),
+  ) || changed;
 
   // 2. Merge contributions into stage SOURCE (structural + prose fragments).
   // Probe ONCE whether the installed engine accepts required_sections — writing

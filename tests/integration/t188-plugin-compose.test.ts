@@ -924,6 +924,55 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(drops).toContain('foreign plugin "beta"');
   });
 
+  test("tool composition drops co-located tests and fixtures", () => {
+    const payloads = [
+      "tests/run.test.ts",
+      "__tests__/nested.ts",
+      "fixtures/sample.json",
+      "alpha-check.test.ts",
+      "alpha-check.spec.ts",
+    ];
+    const files = Object.fromEntries([
+      ...payloads.map((rel) => [`tools/${rel}`, `// ${rel}\n`]),
+      ["tools/alpha-run.ts", 'process.stdout.write("ok");\n'],
+    ]);
+    const { drops, proj } = composeSynthetic("alpha", files);
+    const installedTools = join(proj, ".claude", "tools");
+
+    expect(readFileSync(join(installedTools, "alpha-run.ts"), "utf-8"))
+      .toContain('process.stdout.write("ok")');
+    for (const rel of payloads) {
+      expect(existsSync(join(installedTools, rel))).toBe(false);
+      expect(drops.split("\n").some((line) =>
+        line.includes("[advisory]") &&
+        line.includes(`plugin "alpha" tool file "${rel}"`)
+      )).toBe(true);
+    }
+    expect(drops).toContain('plugin tests and fixtures live in top-level "tests/"');
+  });
+
+  test("tool composition audits but does not delete an already-installed test payload", () => {
+    const body = "// already landed by an older compose\n";
+    const { drops, proj } = composeSynthetic(
+      "alpha",
+      { "tools/tests/run.test.ts": body },
+      ".claude",
+      (_proj, harnessDir) => {
+        const installed = join(harnessDir, "tools", "tests", "run.test.ts");
+        mkdirSync(dirname(installed), { recursive: true });
+        writeFileSync(installed, body);
+      },
+    );
+    const installed = join(proj, ".claude", "tools", "tests", "run.test.ts");
+
+    expect(readFileSync(installed, "utf-8")).toBe(body);
+    expect(drops).toContain("[advisory]");
+    expect(drops).toContain(
+      'plugin "alpha" tool file "tests/run.test.ts" is already installed',
+    );
+    expect(drops).toContain("remove the file and re-run compose");
+  });
+
   test("duplicate incoming scope identities are rejected within one plugin tree", () => {
     const scope = (label: string) => [
       "---", "name: duplicate-scope", "plugin: syn-duplicate-scope",
