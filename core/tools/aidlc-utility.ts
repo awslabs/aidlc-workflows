@@ -2932,10 +2932,10 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
     }
   }
 
-  // Leaked-lock probe (P3 reaper surface) — a wedged audit lock (owner process
-  // dead, or stamp over the stale threshold) blocks every writer on its bucket.
-  // Doctor detects it loudly and CLEARS it (clear=true) so a SIGKILL'd holder
-  // doesn't poison the next run; a live, fresh holder is left alone.
+  // Leaked-lock probe (P3 reaper surface). Doctor automatically clears only a
+  // provably-dead valid owner or an old genuinely-missing stamp. Live,
+  // malformed, and unreadable owners fail closed and require quiescent manual
+  // recovery.
   try {
     const leaks = detectLeakedLocks(projectDir, true);
     if (leaks.length === 0) {
@@ -2944,17 +2944,16 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
       for (const leak of leaks) {
         const subject = leak.kind === "audit" ? "audit lock"
           : leak.kind === "active-directive" ? "active-directive lock"
+          : leak.kind === "coordination-gate" ? "lock coordination gate"
           : "legacy active-directive transaction";
         const outcome = leak.cleared ? "cleared" : "not cleared";
-        const manual = leak.reason === "legacy-transaction";
+        const manual = !leak.cleared;
         results.push({
           pass: false,
           label: `Leaked ${subject} on bucket "${leak.bucket}" (${leak.reason}${leak.ownerPid !== null ? `, pid ${leak.ownerPid}` : ""}) — ${outcome}`,
           fix: manual
             ? `stop all AI-DLC processes, inspect ${leak.lockDir}, then remove or restore it under quiescence`
-            : leak.cleared
-              ? "the stale lock was cleared automatically; re-run your /aidlc command"
-              : "the lock owner changed during diagnosis; re-run doctor before manual action",
+            : "the stale lock was cleared automatically; re-run your /aidlc command",
         });
       }
     }

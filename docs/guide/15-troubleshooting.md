@@ -221,6 +221,11 @@ Lock directories are named `.aidlc-audit-<hash>.lock` and `.aidlc-subagent-<hash
 
 ### Clearing stale locks
 
+Run `/aidlc --doctor` first. It automatically clears only a provably-dead
+generation, a reused PID whose creation generation no longer matches, or an old
+lock whose owner stamp is genuinely missing. Matching/unknown live generations,
+malformed stamps, and unreadable stamps are reported but not removed.
+
 ```bash
 # macOS / Linux
 rm -rf /tmp/.aidlc-audit-*.lock /tmp/.aidlc-subagent-*.lock
@@ -229,7 +234,10 @@ rm -rf /tmp/.aidlc-audit-*.lock /tmp/.aidlc-subagent-*.lock
 Remove-Item "$env:TEMP\.aidlc-audit-*.lock", "$env:TEMP\.aidlc-subagent-*.lock" -Recurse -Force
 ```
 
-Safe to run at any time when no AI-DLC workflow is actively executing. Locks are transient and recreated on each hook invocation.
+Manual removal is safe only after stopping all AI-DLC processes and confirming
+the project is quiescent. Locks and their owner-stamped `.reap` recovery gates
+are transient and recreated as needed. `.gate-mutex` files are persistent
+advisory-lock anchors and may remain empty in the temp directory.
 
 ---
 

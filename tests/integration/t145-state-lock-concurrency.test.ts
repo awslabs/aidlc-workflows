@@ -57,6 +57,10 @@ const REPO_ROOT = join(import.meta.dir, "..", "..");
 const STATE_TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-state.ts");
 const UTIL_TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
 const LOG_TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-log.ts");
+const STATE_LOCK_STRESS_ROUNDS = Math.max(
+  1,
+  Number.parseInt(process.env.AIDLC_T145_LOCK_STRESS_ROUNDS ?? "1", 10) || 1,
+);
 
 let proj: string;
 
@@ -198,15 +202,18 @@ describe("t145 C2b state-lock lost-update safety (mechanism cli — parallel spa
   test("N concurrent `set Revision Count=+1` all land — no lost increments [guard-the-guard]", async () => {
     const N = 20;
     expect(field(proj, "Revision Count")).toBe("0"); // fixture precondition
-    const codes = await fireParallel(
-      proj,
-      Array.from({ length: N }, () => ["set", "Revision Count=+1"]),
-    );
-    // Every writer succeeded (lock serialises; none errors out).
-    expect(codes.every((c) => c === 0)).toBe(true);
-    // The counter reflects ALL N increments. Pre-fix this is < N (lost updates).
-    expect(field(proj, "Revision Count")).toBe(String(N));
-  }, 60000);
+    for (let round = 0; round < STATE_LOCK_STRESS_ROUNDS; round++) {
+      const codes = await fireParallel(
+        proj,
+        Array.from({ length: N }, () => ["set", "Revision Count=+1"]),
+      );
+      // Every writer succeeded (lock serialises; none errors out).
+      expect(codes.every((c) => c === 0), `stress round ${round + 1}`).toBe(true);
+      // The counter reflects ALL N increments. Pre-fix this is < N (lost updates).
+      expect(field(proj, "Revision Count"), `stress round ${round + 1}`)
+        .toBe(String((round + 1) * N));
+    }
+  }, 300000);
 
   // ---------------------------------------------------------------------------
   // TEST 2 — two concurrent `set` of DISTINCT fields. Both updates must survive

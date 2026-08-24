@@ -4,6 +4,7 @@ import { accessSync, appendFileSync, closeSync, constants as fsConstants, cpSync
 import { hostname, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
+import { dlopen, FFIType, type Pointer } from "bun:ffi";
 import {
   resolveHarnessPath,
 } from "./aidlc-runtime-paths.ts";
@@ -3589,12 +3590,27 @@ function transactActiveDirectiveTarget<T>(
   if (ACTIVE_DIRECTIVE_TRANSACTIONS.has(target.markerPath)) {
     throw new Error(`Nested active-directive transaction for ${target.bucket}`);
   }
+  const pendingRelease = ACTIVE_DIRECTIVE_EXIT_HANDLERS.get(target.markerPath);
+  if (pendingRelease) {
+    const outcome = releaseCanonicalOwnerStampedLock(pendingRelease.receipt);
+    if (outcome === "retryable") {
+      throw new ActiveDirectiveLockContendedError(
+        "Active-directive lock release is still pending",
+      );
+    }
+    process.off("exit", pendingRelease.handler);
+    ACTIVE_DIRECTIVE_EXIT_HANDLERS.delete(target.markerPath);
+  }
   mkdirSync(dirname(target.markerPath), { recursive: true });
   const receipt = acquireActiveDirectiveLock(target.lockDir);
   if (!receipt) throw new ActiveDirectiveLockContendedError();
   ACTIVE_DIRECTIVE_TRANSACTIONS.add(target.markerPath);
-  const onExit = () => releaseOwnerStampedLock(receipt);
-  ACTIVE_DIRECTIVE_EXIT_HANDLERS.set(target.markerPath, { token: receipt.owner.token ?? "", handler: onExit });
+  const onExit = () => releaseCanonicalOwnerStampedLock(receipt);
+  ACTIVE_DIRECTIVE_EXIT_HANDLERS.set(target.markerPath, {
+    token: receipt.owner.token ?? "",
+    handler: onExit,
+    receipt,
+  });
   process.on("exit", onExit);
   try {
     const current = readActiveDirectiveMarkerRaw(target.markerPath);
@@ -3631,17 +3647,24 @@ function transactActiveDirectiveTarget<T>(
     throw error;
   } finally {
     ACTIVE_DIRECTIVE_TRANSACTIONS.delete(target.markerPath);
+    const outcome = releaseCanonicalOwnerStampedLock(receipt);
     const registered = ACTIVE_DIRECTIVE_EXIT_HANDLERS.get(target.markerPath);
-    if (registered?.token === receipt.owner.token) {
+    if (
+      outcome !== "retryable" &&
+      registered?.token === receipt.owner.token
+    ) {
       process.off("exit", registered.handler);
       ACTIVE_DIRECTIVE_EXIT_HANDLERS.delete(target.markerPath);
     }
-    releaseOwnerStampedLock(receipt);
   }
 }
 
 const ACTIVE_DIRECTIVE_TRANSACTIONS = new Set<string>();
-const ACTIVE_DIRECTIVE_EXIT_HANDLERS = new Map<string, { token: string; handler: () => void }>();
+const ACTIVE_DIRECTIVE_EXIT_HANDLERS = new Map<string, {
+  token: string;
+  handler: () => void;
+  receipt: OwnerStampedLockReceipt;
+}>();
 
 function freshActiveDirectiveMarker(
   target: ActiveDirectiveTarget,
@@ -10447,23 +10470,21 @@ export function countCheckboxes(
 //      workspace
 //      bucket; only intent-scoped state/audit writes take a per-intent bucket.
 //  (2) the composite identity (projectDir + space + intent | sentinel) keys the
-//      lock dir AND the in-process depth/handler maps, or the maps collide
-//      across intents.
+//      lock dir. In-process receipt/depth/handler maps use a stable lexical
+//      request key, while each receipt retains the acquisition-bound identity.
 //
-// REAPER: acquire stamps owner PID + start-time into the lock dir (owner.json).
-// A waiter reclaims a lock iff process.kill(pid,0) throws ESRCH (owner gone) OR
-// the stamp's age exceeds a conservative threshold — a live under-threshold
-// holder is NEVER robbed. Reclaim is atomic (rename the dead dir aside, then
-// re-mkdir) so only one waiter wins.
+// REAPER: acquire stamps owner PID + acquisition generation + a random token
+// into owner.json. Automatic recovery is fail-closed: malformed/unreadable
+// stamps and live owners are never reaped. A recoverable owner-stamped reap
+// gate blocks acquisition while a provably-dead generation (or an old genuinely
+// missing stamp) is moved, verified, deleted, or restored.
 
 // The reserved bucket for workspace-level mutations (intents.json, intent creation).
 export const WORKSPACE_LOCK_SENTINEL = "__workspace__";
 
-// Default stale-lock age threshold (ms). A lock whose owner is still alive but
-// whose stamp is older than this is treated as leaked (a wedged holder). Tunable
-// via AIDLC_LOCK_STALE_MS for tests/ops. Conservative by default (10 min) so a
-// genuinely slow-but-live holder is never robbed on liveness alone — the PID
-// liveness check reclaims a dead owner immediately regardless of age.
+// Default stale-lock age threshold (ms). Doctor uses this to surface a
+// live-but-old owner for manual diagnosis; automatic acquisition never reaps a
+// live stamped owner. Tunable via AIDLC_LOCK_STALE_MS for tests/ops.
 export const DEFAULT_LOCK_STALE_MS = 10 * 60 * 1000;
 
 function lockStaleMs(): number {
@@ -10487,11 +10508,33 @@ export function auditLockIdentity(projectDir: string, intent?: string, space?: s
     // Creation and diagnostics can lock before the project exists. The absolute
     // lexical path is stable until realpath can resolve filesystem aliases.
   }
+  if (process.platform === "win32") {
+    canonicalProjectDir = canonicalProjectDir.toLowerCase();
+  }
   if (intent === undefined) {
     return `${canonicalProjectDir}\x00${WORKSPACE_LOCK_SENTINEL}`;
   }
   const sp = space ?? activeSpace(projectDir);
   return `${canonicalProjectDir}\x00${sp}\x00${intent}`;
+}
+
+// Stable call-site key for process-local receipt/depth/handler maps. Unlike the
+// filesystem identity, it deliberately does not read realpath or active-space,
+// so release remains bound to the acquisition even if a previously-missing path
+// becomes a symlink/real directory or the active-space cursor changes.
+function auditLockRequestKey(projectDir: string, intent?: string, space?: string): string {
+  const lexicalProjectDir = process.platform === "win32"
+    ? resolvePath(projectDir).toLowerCase()
+    : resolvePath(projectDir);
+  if (intent === undefined) {
+    return JSON.stringify([lexicalProjectDir, "workspace"]);
+  }
+  return JSON.stringify([
+    lexicalProjectDir,
+    "intent",
+    space === undefined ? null : space,
+    intent,
+  ]);
 }
 
 export function auditLockDir(projectDir: string, intent?: string, space?: string): string {
@@ -10500,16 +10543,385 @@ export function auditLockDir(projectDir: string, intent?: string, space?: string
   return join(tmpdir(), `.aidlc-audit-${hash}.lock`);
 }
 
-// Owner stamp written into the lock dir on acquire. start-time uses the process
-// start epoch when available (a wrapped-around PID reuse is then detectable by a
-// start-time mismatch); falls back to acquire-time. No Math.random / Date.now in
-// the steal SUFFIX (scripts forbid them) — see reapStaleLock.
+// Owner stamp written into the lock dir on acquire. The random token identifies
+// the lock generation; processGeneration binds the PID to its OS creation time
+// where the platform exposes one (Linux procfs and Windows GetProcessTimes).
 interface LockOwner {
-  pid: number; startedAtMs: number; reapLiveOwnerAfterStale: boolean; token?: string;
+  pid: number;
+  startedAtMs: number;
+  reapLiveOwnerAfterStale: boolean;
+  token?: string;
+  processGeneration?: string;
+}
+
+type OwnerStampRead =
+  | { status: "ok"; owner: LockOwner }
+  | { status: "missing" }
+  | { status: "invalid" }
+  | { status: "unreadable"; code: string };
+
+export interface AuditLockFaultHooksForTests {
+  afterReleaseOwnerCheck?: (lockDir: string) => void;
+  beforeReleaseRename?: (retiredPath: string, attempt: number) => void;
+  failReleaseRename?: (retiredPath: string, attempt: number) => boolean;
+  afterSuccessfulReap?: (lockDir: string) => void;
+  afterReapFinalCheck?: (lockDir: string) => void;
+  failReapRename?: (privatePath: string, attempt: number) => boolean;
+  beforeAcquirerOwnerStamp?: (lockDir: string, token: string) => void;
+  beforeGateOwnerStamp?: (
+    candidateDir: string,
+    canonicalDir: string,
+    token: string,
+  ) => void;
+  failGateReleaseRename?: (retiredPath: string, attempt: number) => boolean;
+  afterReleasableGateCheck?: (gateDir: string) => void;
+  posixGateLibraryCandidates?: string[];
+  processProbe?: (pid: number) => { alive: boolean; generation: string | null };
+}
+
+let AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS: AuditLockFaultHooksForTests | null = null;
+
+export function _setAuditLockFaultHooksForTests(
+  hooks: AuditLockFaultHooksForTests | null,
+): void {
+  AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS = hooks;
+  POSIX_GATE_API = undefined;
 }
 
 function ownerStampPath(lockDir: string): string {
   return join(lockDir, "owner.json");
+}
+
+function loadWindowsProcessApi() {
+  return dlopen("kernel32.dll", {
+    CreateFileW: {
+      args: [
+        FFIType.ptr,
+        FFIType.u32,
+        FFIType.u32,
+        FFIType.ptr,
+        FFIType.u32,
+        FFIType.u32,
+        FFIType.ptr,
+      ],
+      returns: FFIType.ptr,
+    },
+    LockFileEx: {
+      args: [
+        FFIType.ptr,
+        FFIType.u32,
+        FFIType.u32,
+        FFIType.u32,
+        FFIType.u32,
+        FFIType.ptr,
+      ],
+      returns: FFIType.bool,
+    },
+    UnlockFileEx: {
+      args: [
+        FFIType.ptr,
+        FFIType.u32,
+        FFIType.u32,
+        FFIType.u32,
+        FFIType.ptr,
+      ],
+      returns: FFIType.bool,
+    },
+    OpenProcess: {
+      args: [FFIType.u32, FFIType.bool, FFIType.u32],
+      returns: FFIType.ptr,
+    },
+    GetProcessTimes: {
+      args: [FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr],
+      returns: FFIType.bool,
+    },
+    CloseHandle: {
+      args: [FFIType.ptr],
+      returns: FFIType.bool,
+    },
+  });
+}
+
+function muslArchitecture(): string {
+  const mapping: Record<string, string> = {
+    arm64: "aarch64",
+    ia32: "i386",
+    ppc64: "powerpc64le",
+    x64: "x86_64",
+  };
+  return mapping[process.arch] ?? process.arch;
+}
+
+function posixGateLibraryCandidates(): string[] {
+  if (AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.posixGateLibraryCandidates) {
+    return AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS.posixGateLibraryCandidates;
+  }
+  if (process.platform === "darwin") {
+    return ["/usr/lib/libSystem.B.dylib"];
+  }
+  const arch = muslArchitecture();
+  const candidates = [
+    "libc.so.6",
+    `/lib/ld-musl-${arch}.so.1`,
+    `/usr/lib/ld-musl-${arch}.so.1`,
+    `/lib/libc.musl-${arch}.so.1`,
+    `/usr/lib/libc.musl-${arch}.so.1`,
+    `libc.musl-${arch}.so.1`,
+    "libc.so",
+  ];
+  for (const dir of ["/lib", "/usr/lib", "/lib64", "/usr/lib64"]) {
+    try {
+      for (const entry of readdirSync(dir)) {
+        if (/^(?:ld-musl-|libc\.musl-).+\.so\.1$/.test(entry)) {
+          candidates.push(join(dir, entry));
+        }
+      }
+    } catch {
+      // Directory absent or unreadable; explicit candidates still apply.
+    }
+  }
+  return [...new Set(candidates)];
+}
+
+export function _posixGateLibraryCandidatesForTests(): string[] {
+  return posixGateLibraryCandidates();
+}
+
+function loadPosixGateApi() {
+  let lastError: unknown;
+  for (const library of posixGateLibraryCandidates()) {
+    try {
+      return dlopen(library, {
+      flock: {
+        args: [FFIType.i32, FFIType.i32],
+        returns: FFIType.i32,
+      },
+      });
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError ?? new Error("No POSIX flock library candidate could be loaded");
+}
+
+function loadMacProcessApi() {
+  return dlopen("/usr/lib/libproc.dylib", {
+    proc_pidinfo: {
+      args: [FFIType.i32, FFIType.i32, FFIType.u64, FFIType.ptr, FFIType.i32],
+      returns: FFIType.i32,
+    },
+  });
+}
+
+let WINDOWS_PROCESS_API:
+  | ReturnType<typeof loadWindowsProcessApi>
+  | null
+  | undefined;
+let MAC_PROCESS_API:
+  | ReturnType<typeof loadMacProcessApi>
+  | null
+  | undefined;
+let POSIX_GATE_API:
+  | ReturnType<typeof loadPosixGateApi>
+  | null
+  | undefined;
+let SELF_PROCESS_GENERATION: string | null | undefined;
+
+function windowsProcessGeneration(pid: number): string | null {
+  try {
+    if (WINDOWS_PROCESS_API === undefined) {
+      WINDOWS_PROCESS_API = loadWindowsProcessApi();
+    }
+    if (WINDOWS_PROCESS_API === null) return null;
+    const handle = WINDOWS_PROCESS_API.symbols.OpenProcess(0x1000, false, pid);
+    if (!handle) return null;
+    const creation = new Uint32Array(2);
+    const exit = new Uint32Array(2);
+    const kernel = new Uint32Array(2);
+    const user = new Uint32Array(2);
+    try {
+      if (!WINDOWS_PROCESS_API.symbols.GetProcessTimes(
+        handle,
+        creation,
+        exit,
+        kernel,
+        user,
+      )) return null;
+      return `${creation[1].toString(16)}:${creation[0].toString(16)}`;
+    } finally {
+      WINDOWS_PROCESS_API.symbols.CloseHandle(handle);
+    }
+  } catch {
+    WINDOWS_PROCESS_API = null;
+    return null;
+  }
+}
+
+function linuxProcessGeneration(pid: number): string | null {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf-8");
+    const close = stat.lastIndexOf(")");
+    if (close < 0) return null;
+    const fields = stat.slice(close + 1).trim().split(/\s+/);
+    return fields[19] || null; // procfs field 22: process start time in ticks
+  } catch {
+    return null;
+  }
+}
+
+function macProcessGeneration(pid: number): string | null {
+  try {
+    if (MAC_PROCESS_API === undefined) {
+      MAC_PROCESS_API = loadMacProcessApi();
+    }
+    if (MAC_PROCESS_API === null) return null;
+    const PROC_PIDTBSDINFO = 3;
+    const buffer = new Uint8Array(136);
+    const read = MAC_PROCESS_API.symbols.proc_pidinfo(
+      pid,
+      PROC_PIDTBSDINFO,
+      0n,
+      buffer,
+      buffer.byteLength,
+    );
+    if (read < 136) return null;
+    const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    return `${view.getBigUint64(120, true)}:${view.getBigUint64(128, true)}`;
+  } catch {
+    MAC_PROCESS_API = null;
+    return null;
+  }
+}
+
+function platformHasProcessGeneration(): boolean {
+  return (
+    process.platform === "win32" ||
+    process.platform === "linux" ||
+    process.platform === "darwin"
+  );
+}
+
+type NativeGateMutexReceipt =
+  | { kind: "posix"; fd: number }
+  | {
+      kind: "windows";
+      handle: Pointer;
+      overlapped: Uint8Array;
+    };
+
+function nativeGateMutexPath(lockDir: string): string {
+  return `${lockDir}.gate-mutex`;
+}
+
+function invalidWindowsHandle(handle: Pointer | bigint | null): boolean {
+  if (handle === null) return true;
+  return BigInt.asIntN(64, BigInt(handle)) === -1n;
+}
+
+function tryAcquireNativeGateMutex(
+  lockDir: string,
+): NativeGateMutexReceipt | null {
+  const path = nativeGateMutexPath(lockDir);
+  if (process.platform === "win32") {
+    try {
+      if (WINDOWS_PROCESS_API === undefined) {
+        WINDOWS_PROCESS_API = loadWindowsProcessApi();
+      }
+      if (WINDOWS_PROCESS_API === null) return null;
+      const widePath = Buffer.from(`${path}\0`, "utf16le");
+      const rawHandle = WINDOWS_PROCESS_API.symbols.CreateFileW(
+        widePath,
+        0xc0000000,
+        3,
+        null,
+        4,
+        0x80,
+        null,
+      );
+      if (invalidWindowsHandle(rawHandle)) return null;
+      const handle = rawHandle as Pointer;
+      const overlapped = new Uint8Array(32);
+      if (!WINDOWS_PROCESS_API.symbols.LockFileEx(
+        handle,
+        3,
+        0,
+        1,
+        0,
+        overlapped,
+      )) {
+        WINDOWS_PROCESS_API.symbols.CloseHandle(handle);
+        return null;
+      }
+      return {
+        kind: "windows",
+        handle,
+        overlapped,
+      };
+    } catch {
+      return null;
+    }
+  }
+  try {
+    if (POSIX_GATE_API === undefined) {
+      POSIX_GATE_API = loadPosixGateApi();
+    }
+    if (POSIX_GATE_API === null) return null;
+    const fd = openSync(path, "a+", 0o600);
+    if (POSIX_GATE_API.symbols.flock(fd, 2 | 4) !== 0) {
+      closeSync(fd);
+      return null;
+    }
+    return { kind: "posix", fd };
+  } catch {
+    POSIX_GATE_API = null;
+    return null;
+  }
+}
+
+function acquireNativeGateMutex(
+  lockDir: string,
+  maxRetries = 100,
+  retryMs = 5,
+): NativeGateMutexReceipt | null {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const receipt = tryAcquireNativeGateMutex(lockDir);
+    if (receipt) return receipt;
+    if (attempt < maxRetries) Bun.sleepSync(retryMs);
+  }
+  return null;
+}
+
+function releaseNativeGateMutex(receipt: NativeGateMutexReceipt): void {
+  if (receipt.kind === "posix") {
+    try { POSIX_GATE_API?.symbols.flock(receipt.fd, 8); } catch { /* closing also unlocks */ }
+    try { closeSync(receipt.fd); } catch { /* already closed */ }
+    return;
+  }
+  try {
+    WINDOWS_PROCESS_API?.symbols.UnlockFileEx(
+      receipt.handle,
+      0,
+      1,
+      0,
+      receipt.overlapped,
+    );
+  } catch { /* closing also unlocks */ }
+  try { WINDOWS_PROCESS_API?.symbols.CloseHandle(receipt.handle); } catch { /* already closed */ }
+}
+
+function processGeneration(pid: number): string | null {
+  if (pid === process.pid && SELF_PROCESS_GENERATION !== undefined) {
+    return SELF_PROCESS_GENERATION;
+  }
+  const generation = process.platform === "win32"
+    ? windowsProcessGeneration(pid)
+    : process.platform === "linux"
+      ? linuxProcessGeneration(pid)
+      : process.platform === "darwin"
+        ? macProcessGeneration(pid)
+        : null;
+  if (pid === process.pid) SELF_PROCESS_GENERATION = generation;
+  return generation;
 }
 
 function writeOwnerStamp(
@@ -10517,11 +10929,14 @@ function writeOwnerStamp(
   reapLiveOwnerAfterStale = true,
   token?: string,
 ): LockOwner | null {
+  const generation = processGeneration(process.pid);
+  if (platformHasProcessGeneration() && generation === null) return null;
   const owner: LockOwner = {
     pid: process.pid,
     startedAtMs: lockAcquireEpochMs(),
     reapLiveOwnerAfterStale,
     ...(token ? { token } : {}),
+    ...(generation ? { processGeneration: generation } : {}),
   };
   try {
     writeFileSync(ownerStampPath(lockDir), JSON.stringify(owner), {
@@ -10531,29 +10946,47 @@ function writeOwnerStamp(
     });
     return owner;
   } catch {
-    // Best-effort: a missing stamp degrades the reaper to age-only on the next
-    // waiter (it can't read a PID), never to incorrectness.
+    // Acquisition treats a missing stamp as failure and abandons its directory.
     return null;
   }
 }
 
-function readOwnerStamp(lockDir: string): LockOwner | null {
+function inspectOwnerStamp(lockDir: string): OwnerStampRead {
+  let raw: string;
   try {
-    const raw = readFileSync(ownerStampPath(lockDir), "utf-8");
-    const parsed: unknown = JSON.parse(raw);
-    if (isPlainObject(parsed) && typeof parsed.pid === "number" && typeof parsed.startedAtMs === "number") {
-      return {
-        pid: parsed.pid,
-        startedAtMs: parsed.startedAtMs,
-        // Older stamps have no field and retain the historical over-age reaping.
-        reapLiveOwnerAfterStale: parsed.reapLiveOwnerAfterStale !== false,
-        ...(typeof parsed.token === "string" && parsed.token.length > 0 ? { token: parsed.token } : {}),
-      };
-    }
-  } catch {
-    // no stamp / unreadable
+    raw = readFileSync(ownerStampPath(lockDir), "utf-8");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException)?.code ?? "UNKNOWN";
+    return code === "ENOENT"
+      ? { status: "missing" }
+      : { status: "unreadable", code };
   }
-  return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { status: "invalid" };
+  }
+  if (!isPlainObject(parsed) || typeof parsed.pid !== "number" || typeof parsed.startedAtMs !== "number") {
+    return { status: "invalid" };
+  }
+  return {
+    status: "ok",
+    owner: {
+      pid: parsed.pid,
+      startedAtMs: parsed.startedAtMs,
+      reapLiveOwnerAfterStale: parsed.reapLiveOwnerAfterStale !== false,
+      ...(typeof parsed.token === "string" && parsed.token.length > 0 ? { token: parsed.token } : {}),
+      ...(typeof parsed.processGeneration === "string" && parsed.processGeneration.length > 0
+        ? { processGeneration: parsed.processGeneration }
+        : {}),
+    },
+  };
+}
+
+function readOwnerStamp(lockDir: string): LockOwner | null {
+  const result = inspectOwnerStamp(lockDir);
+  return result.status === "ok" ? result.owner : null;
 }
 
 // A monotonic-ish epoch for the owner stamp. performance.timeOrigin + now()
@@ -10566,9 +10999,8 @@ function lockAcquireEpochMs(): number {
 }
 
 // Is a PID still alive? signal 0 probes liveness without delivering a signal:
-// ESRCH ⇒ gone, EPERM ⇒ alive-but-not-ours (still alive), success ⇒ alive. A
-// missing/invalid pid is treated as "not alive" so an unstamped leaked dir/file
-// is reclaimable on age alone. EXPORTED so a caller outside the lock mechanism
+// ESRCH ⇒ gone, EPERM ⇒ alive-but-not-ours (still alive), success ⇒ alive.
+// EXPORTED so a caller outside the lock mechanism
 // (e.g. a staged-transaction collector distinguishing a live writer's staging
 // dir from a crashed one's) can ask the same question this module already
 // answers for the lock reaper, rather than re-deriving it.
@@ -10583,9 +11015,17 @@ export function isPidAlive(pid: number): boolean {
   }
 }
 
-function ownerAlive(owner: LockOwner | null): boolean {
-  if (!owner) return false;
-  return isPidAlive(owner.pid);
+type OwnerProcessState = "dead" | "same" | "different" | "unknown";
+
+function ownerProcessState(owner: LockOwner): OwnerProcessState {
+  const injected = AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.processProbe?.(owner.pid);
+  const alive = injected?.alive ?? isPidAlive(owner.pid);
+  if (!alive) return "dead";
+  const observedGeneration = injected
+    ? injected.generation
+    : processGeneration(owner.pid);
+  if (!owner.processGeneration || !observedGeneration) return "unknown";
+  return owner.processGeneration === observedGeneration ? "same" : "different";
 }
 
 // A monotonic per-process counter for the steal-rename suffix (no Math.random /
@@ -10625,169 +11065,457 @@ function lockDirMtimeMs(lockDir: string): number | null {
   }
 }
 
-// True iff `dir` carries the exact owner identity `judged` to be reclaimable
-// (same pid + startedAtMs). Called by reapStaleLock on the reaper-PRIVATE moved
-// dir AFTER the CAS rename, to confirm we grabbed the same stale lock we judged
-// — not a fresh live lock a competitor re-acquired in the decide→rename window.
-//
-// A `null` judged-owner means the dir was judged reclaimable as an OLD UNSTAMPED
-// dir. It still matches only if it is STILL unstamped AND still over the grace
-// window. renameSync preserves the inode's mtime, so a genuine old leak keeps
-// its over-grace mtime through the move, whereas a competitor's freshly-mkdir'd
-// re-acquire has a RECENT mtime (under grace) → mismatch → restore. A now-present
-// stamp (a live re-acquirer that already wrote owner.json) likewise mismatches.
-//
-// A concrete judged stamp (dead, or live-but-over-age) matches only if the moved
-// dir still carries the SAME pid + startedAtMs. A re-acquire rewrites owner.json
-// with a different pid / fresher startedAtMs → mismatch → restore.
-function stampMatches(dir: string, judged: LockOwner | null): boolean {
-  const now = readOwnerStamp(dir);
-  if (judged === null) {
-    // Old-unstamped leak. Still unstamped + still over grace (mtime preserved by
-    // rename). A re-created dir resets mtime → under grace → mismatch; a now-
-    // stamped dir → a live re-acquirer → mismatch.
-    if (now !== null) return false;
-    const mtime = lockDirMtimeMs(dir);
-    if (mtime === null) return false; // vanished — nothing to steal
-    return lockAcquireEpochMs() - mtime > unstampedGraceMs();
-  }
-  if (now === null) return false;
+function ownerStampsEqual(now: LockOwner, judged: LockOwner): boolean {
   return (
     now.pid === judged.pid &&
     now.startedAtMs === judged.startedAtMs &&
     now.reapLiveOwnerAfterStale === judged.reapLiveOwnerAfterStale &&
-    now.token === judged.token
+    now.token === judged.token &&
+    now.processGeneration === judged.processGeneration
   );
 }
 
-// Reclaim a lock iff it is provably dead (owner gone) OR stale (over-age). A
-// live, under-threshold holder is left alone (returns false). Returns true iff
-// THIS call freed the dir.
-//
-// MUTUAL-EXCLUSION SAFETY (compare-and-swap steal): the staleness DECISION (read
-// stamp, judge dead/over-age) and the steal are not one OS-atomic operation, so
-// a competing waiter can reap + re-mkdir + stamp a FRESH LIVE lock at the same
-// path in between. A "re-read stamp THEN rename" guard shrinks but does NOT
-// eliminate the window — the competitor can still re-acquire between the re-read
-// and the rename, and the rename then robs the fresh live holder (two concurrent
-// holders → lost update). So the steal is a true CAS keyed on the OS-atomic
-// rename:
-//
-//   1. Rename lockDir aside to a reaper-PRIVATE nonce path. renameSync is the
-//      atomic arbiter — exactly one process moves a given dir; the losers get
-//      ENOENT and fall back to a normal mkdir retry. After this we hold the
-//      moved dir EXCLUSIVELY (no other process can see it under the nonce name).
-//   2. Read the owner stamp INSIDE the moved dir and compare against `judged`
-//      (the identity we decided was stale). If it MATCHES, the dir we grabbed is
-//      the same stale lock we judged → legitimate steal → remove it, return true.
-//   3. If it does NOT match, a competitor reaped the stale dir and re-acquired a
-//      FRESH lock at lockDir between our decision and our rename — we just moved
-//      THEIR live lock. Restore it: rename the nonce dir back to lockDir. If that
-//      restore fails (yet another process already re-mkdir'd lockDir in the gap),
-//      the live lock already exists again at lockDir, so just drop our private
-//      copy. Either way we return false WITHOUT having robbed a live holder.
-//
-// This preserves both invariants atomically — a live (fresh, under-threshold)
-// holder is never destroyed, and exactly one reaper ever frees a given stale dir.
-//
-// RESIDUAL (documented, not silently shipped): the only remaining mutual-
-// exclusion gap is the restore in step 3 — between renaming a wrongly-grabbed
-// fresh lock OUT of lockDir and renaming it BACK, a third process can mkdir
-// lockDir (seeing it momentarily empty); the restore then fails EEXIST and two
-// processes briefly believe they hold the lock. This requires THREE specific
-// interleavings in a sub-microsecond rename↔mkdir window (a competitor must
-// re-acquire before our first rename, AND a third process must mkdir between our
-// two renames) — orders of magnitude narrower than the pre-CAS decide→rename
-// window, and the lock protects an idempotent audit-first transaction (re-run
-// safe). A kernel-atomic compare-and-swap on a directory does not exist in
-// portable POSIX (rename + mkdir are separate syscalls), so closing it fully
-// needs a different primitive (e.g. O_EXCL lockfile with fcntl); tracked as a
-// known limitation, acceptable for this phase given the blast radius.
-function reapStaleLock(lockDir: string, reapUnstamped = true): boolean {
-  const owner = readOwnerStamp(lockDir);
-  if (owner === null) {
-    // UNSTAMPED dir: a live holder mid-acquire (between mkdir and stamp) OR a
-    // process SIGKILL'd in that window. Distinguish by the dir's own age — only
-    // steal one OLDER than the grace window; a fresh unstamped dir is a live
-    // holder about to stamp and MUST NOT be robbed (the C2b concurrent-fork
-    // serialization depends on this).
-    if (!reapUnstamped) return false;
+function stampMatches(dir: string, judged: LockOwner): boolean {
+  const current = inspectOwnerStamp(dir);
+  return current.status === "ok" && ownerStampsEqual(current.owner, judged);
+}
+
+interface ReapCandidate {
+  owner: LockOwner | null;
+  unstampedIdentity: string | null;
+}
+
+function unstampedIdentity(lockDir: string): string | null {
+  try {
+    const stat = statSync(lockDir);
+    return createHash("sha256")
+      .update(`${stat.dev}\x00${stat.ino}\x00${stat.birthtimeMs}\x00${stat.mtimeMs}`)
+      .digest("hex")
+      .slice(0, 24);
+  } catch {
+    return null;
+  }
+}
+
+function reapCandidate(lockDir: string): ReapCandidate | null {
+  const inspected = inspectOwnerStamp(lockDir);
+  if (inspected.status === "invalid" || inspected.status === "unreadable") {
+    return null;
+  }
+  if (inspected.status === "missing") {
     const mtime = lockDirMtimeMs(lockDir);
-    if (mtime === null) return false; // vanished — let the next mkdir try
-    if (lockAcquireEpochMs() - mtime <= unstampedGraceMs()) return false;
-    // else: an old unstamped dir → genuine leak, fall through to steal.
-  } else if (ownerAlive(owner)) {
-    if (!owner.reapLiveOwnerAfterStale) return false;
-    // Live owner: only reclaim if its stamp is over-age (a wedged-but-running
-    // holder). A fresh, live holder is never robbed.
-    if (lockAcquireEpochMs() - owner.startedAtMs <= lockStaleMs()) return false;
-  }
-  // STEP 1 — CAS swap: move the dir to a reaper-private nonce path. This is the
-  // atomic arbiter; only one process wins the rename of a given dir.
-  const dead = `${lockDir}.dead.${reapSuffix()}`;
-  try {
-    renameSync(lockDir, dead);
-  } catch {
-    return false; // another waiter already reclaimed (or the holder released)
-  }
-  // STEP 2 — verify the dir we just grabbed STILL carries the identity judged
-  // stale. stampMatches re-reads owner.json inside the now-private `dead` dir.
-  if (!stampMatches(dead, owner)) {
-    // STEP 3 — we grabbed a FRESH lock a competitor re-acquired in the window.
-    // Restore it so the live holder is not robbed.
-    try {
-      renameSync(dead, lockDir);
-    } catch {
-      // lockDir already re-created by yet another process → the live lock is
-      // back in place; discard our private snapshot.
-      try { rmSync(dead, { recursive: true, force: true }); } catch { /* harmless */ }
+    if (mtime === null || lockAcquireEpochMs() - mtime <= unstampedGraceMs()) {
+      return null;
     }
-    return false;
+    const identity = unstampedIdentity(lockDir);
+    return identity === null
+      ? null
+      : {
+          owner: null,
+          unstampedIdentity: identity,
+        };
   }
-  // Legitimate steal: dead owner, live-but-over-age, or old-unstamped — AND the
-  // identity we grabbed matches what we judged. Remove the private dir.
+  const processState = ownerProcessState(inspected.owner);
+  if (processState === "same" || processState === "unknown") {
+    // Integrity first: automatic acquisition never reaps the same or
+    // generation-unknown live process.
+    return null;
+  }
+  return {
+    owner: inspected.owner,
+    unstampedIdentity: null,
+  };
+}
+
+function reapCandidateStillMatches(lockDir: string, candidate: ReapCandidate): boolean {
+  if (candidate.owner !== null) {
+    const current = inspectOwnerStamp(lockDir);
+    const state = current.status === "ok"
+      ? ownerProcessState(current.owner)
+      : "unknown";
+    return (
+      current.status === "ok" &&
+      ownerStampsEqual(current.owner, candidate.owner) &&
+      (state === "dead" || state === "different")
+    );
+  }
+  return (
+    inspectOwnerStamp(lockDir).status === "missing" &&
+    unstampedIdentity(lockDir) === candidate.unstampedIdentity
+  );
+}
+
+function reapClaimDir(lockDir: string): string {
+  return `${lockDir}.reap`;
+}
+
+function reapPrivateDir(lockDir: string, claimToken: string): string {
+  return `${lockDir}.dead.${claimToken}`;
+}
+
+function tryCreateOwnerStampedDir(
+  dir: string,
+  reapLiveOwnerAfterStale = true,
+): OwnerStampedLockReceipt | null {
+  const candidate = `${dir}.candidate.${randomUUID()}`;
   try {
-    rmSync(dead, { recursive: true, force: true });
+    mkdirSync(candidate, { mode: 0o700 });
   } catch {
-    // leftover .dead dir is harmless (it never collides with the live lock name)
+    return null;
   }
+  const token = randomUUID();
+  const candidateTokenDir = join(candidate, token);
+  try {
+    mkdirSync(candidateTokenDir, { mode: 0o700 });
+    AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.beforeGateOwnerStamp?.(
+      candidate,
+      dir,
+      token,
+    );
+    const owner = writeOwnerStamp(candidate, reapLiveOwnerAfterStale, token);
+    if (!owner?.token) throw new Error("owner stamp failed");
+    renameSync(candidate, dir);
+    return {
+      lockDir: dir,
+      tokenDir: join(dir, token),
+      owner: owner as LockOwner & { token: string },
+    };
+  } catch {
+    try { rmSync(candidate, { recursive: true, force: true }); } catch { /* private debris */ }
+    return null;
+  }
+}
+
+function restoreReapPrivate(
+  lockDir: string,
+  privateDir: string,
+): boolean {
+  if (!existsSync(privateDir)) return true;
+  if (existsSync(lockDir)) return false;
+  for (let attempt = 0; attempt <= 100; attempt++) {
+    try {
+      renameSync(privateDir, lockDir);
+      return true;
+    } catch {
+      if (existsSync(lockDir)) return false;
+      if (!existsSync(privateDir)) return true;
+      if (attempt < 100) Bun.sleepSync(5);
+    }
+  }
+  return false;
+}
+
+function retireReapClaim(claimDir: string): boolean {
+  for (let attempt = 0; attempt <= 100; attempt++) {
+    const retired = `${claimDir}.retired.${randomUUID()}`;
+    try {
+      renameSync(claimDir, retired);
+      try { rmSync(retired, { recursive: true, force: true }); } catch { /* private debris */ }
+      return true;
+    } catch {
+      if (!existsSync(claimDir)) return true;
+      if (attempt < 100) Bun.sleepSync(5);
+    }
+  }
+  return false;
+}
+
+function recoverReapClaim(lockDir: string, owner: LockOwner): boolean {
+  const claimDir = reapClaimDir(lockDir);
+  const privateDir = owner.token ? reapPrivateDir(lockDir, owner.token) : "";
+  if (privateDir && existsSync(privateDir) && !existsSync(lockDir)) {
+    // The stale gate still excludes every canonical mutation. Restore first,
+    // regardless of whether the displaced generation is dead, live, or
+    // unreadable; the next gate owner will classify it from the canonical path.
+    if (!restoreReapPrivate(lockDir, privateDir)) return false;
+  }
+  return retireReapClaim(claimDir);
+}
+
+const PENDING_REAP_GATE_RELEASES = new Map<string, {
+  receipt: OwnerStampedLockReceipt;
+  handler: () => void;
+}>();
+
+function reapGateReleasablePath(
+  claimDir: string,
+  owner: LockOwner & { token: string },
+): string {
+  return join(claimDir, owner.token, "releasable");
+}
+
+function reapGateIsReleasable(claimDir: string, owner: LockOwner): boolean {
+  return (
+    typeof owner.token === "string" &&
+    existsSync(reapGateReleasablePath(
+      claimDir,
+      owner as LockOwner & { token: string },
+    ))
+  );
+}
+
+function markReapGateReleasable(receipt: OwnerStampedLockReceipt): boolean {
+  const path = reapGateReleasablePath(receipt.lockDir, receipt.owner);
+  for (let attempt = 0; attempt <= 100; attempt++) {
+    try {
+      writeFileSync(path, "", { flag: "wx", mode: 0o600 });
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") return true;
+      if (!ownerReceiptMatches(receipt)) return false;
+      if (attempt < 100) Bun.sleepSync(5);
+    }
+  }
+  return false;
+}
+
+function clearPendingReapGateRelease(claimDir: string): void {
+  const pending = PENDING_REAP_GATE_RELEASES.get(claimDir);
+  if (!pending) return;
+  process.off("exit", pending.handler);
+  PENDING_REAP_GATE_RELEASES.delete(claimDir);
+}
+
+function retryPendingReapGateRelease(claimDir: string): boolean {
+  const pending = PENDING_REAP_GATE_RELEASES.get(claimDir);
+  if (!pending) return true;
+  if (!existsSync(claimDir)) {
+    clearPendingReapGateRelease(claimDir);
+    return true;
+  }
+  if (!markReapGateReleasable(pending.receipt)) return false;
+  const outcome = releaseOwnerStampedLock(pending.receipt, false, true);
+  if (outcome === "retryable") return false;
+  clearPendingReapGateRelease(claimDir);
   return true;
+}
+
+function acquireReapClaim(lockDir: string): OwnerStampedLockReceipt | null {
+  const claimDir = reapClaimDir(lockDir);
+  const mutex = acquireNativeGateMutex(lockDir);
+  if (!mutex) return null;
+  try {
+    if (!retryPendingReapGateRelease(claimDir)) return null;
+    for (let attempt = 0; attempt <= 3; attempt++) {
+      const created = tryCreateOwnerStampedDir(claimDir, false);
+      if (created) return created;
+      const inspected = inspectOwnerStamp(claimDir);
+      if (inspected.status === "ok") {
+        if (reapGateIsReleasable(claimDir, inspected.owner)) {
+          AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.afterReleasableGateCheck?.(
+            claimDir,
+          );
+          if (!retireReapClaim(claimDir)) return null;
+          continue;
+        }
+        const state = ownerProcessState(inspected.owner);
+        if (state === "same" || state === "unknown") return null;
+        if (!recoverReapClaim(lockDir, inspected.owner)) return null;
+      } else if (inspected.status === "missing") {
+        const mtime = lockDirMtimeMs(claimDir);
+        if (mtime === null || lockAcquireEpochMs() - mtime <= unstampedGraceMs()) return null;
+        if (!retireReapClaim(claimDir)) return null;
+      } else {
+        // Invalid/unreadable claim ownership is ambiguous and remains fail-closed.
+        return null;
+      }
+    }
+    return null;
+  } finally {
+    releaseNativeGateMutex(mutex);
+  }
+}
+
+function releaseReapClaim(receipt: OwnerStampedLockReceipt): boolean {
+  const lockDir = receipt.lockDir.endsWith(".reap")
+    ? receipt.lockDir.slice(0, -".reap".length)
+    : receipt.lockDir;
+  const mutex = acquireNativeGateMutex(lockDir);
+  let outcome: LockReleaseOutcome = "retryable";
+  if (mutex) {
+    try {
+      const marked = markReapGateReleasable(receipt);
+      outcome = marked
+        ? releaseOwnerStampedLock(receipt, false, true)
+        : "retryable";
+    } finally {
+      releaseNativeGateMutex(mutex);
+    }
+  }
+  if (outcome !== "retryable") {
+    clearPendingReapGateRelease(receipt.lockDir);
+    return true;
+  }
+  if (!PENDING_REAP_GATE_RELEASES.has(receipt.lockDir)) {
+    const handler = () => {
+      releaseReapClaim(receipt);
+    };
+    PENDING_REAP_GATE_RELEASES.set(receipt.lockDir, { receipt, handler });
+    process.on("exit", handler);
+  }
+  return false;
+}
+
+// Reclaim only a provably-dead stamped owner, a generation-mismatched reused
+// PID, or a genuinely old missing-stamp directory. The fixed owner-stamped reap
+// gate blocks acquisition while canonical ownership is moved or restored.
+function reapStaleLock(lockDir: string, reapUnstamped = true): boolean {
+  const claim = acquireReapClaim(lockDir);
+  if (!claim) return false;
+  let releaseClaim = true;
+  const dead = reapPrivateDir(lockDir, claim.owner.token);
+  let moved = false;
+  try {
+    const candidate = reapCandidate(lockDir);
+    if (
+      candidate === null ||
+      (!reapUnstamped && candidate.owner === null)
+    ) return false;
+    if (!reapCandidateStillMatches(lockDir, candidate)) return false;
+    AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.afterReapFinalCheck?.(lockDir);
+    for (let attempt = 0; attempt <= 100; attempt++) {
+      if (AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.failReapRename?.(dead, attempt)) {
+        if (attempt < 100) Bun.sleepSync(5);
+        continue;
+      }
+      try {
+        renameSync(lockDir, dead);
+        moved = true;
+        break;
+      } catch {
+        if (!reapCandidateStillMatches(lockDir, candidate)) return false;
+        if (attempt < 100) Bun.sleepSync(5);
+      }
+    }
+    if (!moved) return false;
+    if (!reapCandidateStillMatches(dead, candidate)) {
+      if (!restoreReapPrivate(lockDir, dead)) releaseClaim = false;
+      return false;
+    }
+    try {
+      rmSync(dead, { recursive: true, force: true });
+    } catch {
+      // Private dead-generation debris never aliases the canonical lock path.
+    }
+    AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.afterSuccessfulReap?.(lockDir);
+    return true;
+  } finally {
+    if (releaseClaim && !releaseReapClaim(claim)) {
+      // A valid claim left behind is recoverable by a later contender.
+    }
+  }
 }
 
 interface OwnerStampedLockReceipt {
   lockDir: string; tokenDir: string; owner: LockOwner & { token: string };
 }
 
+interface AuditLockReceipt extends OwnerStampedLockReceipt {
+  identityKey: string;
+  releasePending: boolean;
+}
+
 function ownerReceiptMatches(receipt: OwnerStampedLockReceipt): boolean {
   return stampMatches(receipt.lockDir, receipt.owner);
 }
 
-function releaseOwnerStampedLock(receipt: OwnerStampedLockReceipt): void {
-  const retired = `${receipt.lockDir}.released.${reapSuffix()}`;
-  try { renameSync(receipt.lockDir, retired); } catch { return; }
-  if (!stampMatches(retired, receipt.owner)) {
-    try { renameSync(retired, receipt.lockDir); } catch {
-      try { rmSync(retired, { recursive: true, force: true }); } catch { /* replacement is authoritative */ }
-    }
-    return;
-  }
-  try { rmSync(retired, { recursive: true, force: true }); } catch { /* retired debris is not live */ }
-}
+type LockReleaseOutcome = "released" | "not-owner" | "retryable";
 
-function abandonUnstampedActiveDirectiveLock(lockDir: string, token: string): void {
-  const retired = `${lockDir}.failed.${reapSuffix()}`;
-  try { renameSync(lockDir, retired); } catch { return; }
-  if (readOwnerStamp(retired) === null && existsSync(join(retired, token))) {
-    try { rmSync(retired, { recursive: true, force: true }); } catch { /* failed acquisition debris */ }
-    return;
-  }
-  try { renameSync(retired, lockDir); } catch {
-    try { rmSync(retired, { recursive: true, force: true }); } catch { /* replacement is authoritative */ }
-  }
-}
-
-function acquireActiveDirectiveLock(lockDir: string): OwnerStampedLockReceipt | null {
+function releaseOwnerStampedLock(
+  receipt: OwnerStampedLockReceipt,
+  applyFaultHooks = true,
+  applyGateFaultHooks = false,
+): LockReleaseOutcome {
+  let checked = false;
   for (let attempt = 0; attempt <= 100; attempt++) {
+    const current = inspectOwnerStamp(receipt.lockDir);
+    if (current.status === "missing" && !existsSync(receipt.lockDir)) return "not-owner";
+    if (current.status !== "ok") {
+      if (attempt < 100) Bun.sleepSync(5);
+      continue;
+    }
+    if (!ownerStampsEqual(current.owner, receipt.owner)) return "not-owner";
+    if (!checked && applyFaultHooks) {
+      checked = true;
+      AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.afterReleaseOwnerCheck?.(receipt.lockDir);
+    }
+    const retired = `${receipt.lockDir}.released.${receipt.owner.token}.${randomUUID()}`;
+    if (applyFaultHooks) {
+      AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.beforeReleaseRename?.(retired, attempt);
+    }
+    if (
+      applyFaultHooks &&
+      AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.failReleaseRename?.(retired, attempt)
+    ) {
+      if (attempt < 100) Bun.sleepSync(5);
+      continue;
+    }
+    if (
+      applyGateFaultHooks &&
+      AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.failGateReleaseRename?.(
+        retired,
+        attempt,
+      )
+    ) {
+      if (attempt < 100) Bun.sleepSync(5);
+      continue;
+    }
+    try {
+      renameSync(receipt.lockDir, retired);
+      try { rmSync(retired, { recursive: true, force: true }); } catch { /* private debris */ }
+      return "released";
+    } catch {
+      if (attempt < 100) Bun.sleepSync(5);
+    }
+  }
+  return "retryable";
+}
+
+function releaseCanonicalOwnerStampedLock(
+  receipt: OwnerStampedLockReceipt,
+): LockReleaseOutcome {
+  const gate = acquireReapClaim(receipt.lockDir);
+  if (!gate) return "retryable";
+  try {
+    return releaseOwnerStampedLock(receipt);
+  } finally {
+    releaseReapClaim(gate);
+  }
+}
+
+function abandonUnstampedUnderGate(lockDir: string, token: string): void {
+  // Only a successfully-created token directory proves this process owns the
+  // unstamped generation. The caller holds the coordination gate throughout.
+  if (!existsSync(join(lockDir, token))) return;
+  const retired = `${lockDir}.failed.${randomUUID()}`;
+  let moved = false;
+  for (let attempt = 0; attempt <= 100; attempt++) {
+    try {
+      renameSync(lockDir, retired);
+      moved = true;
+      break;
+    } catch {
+      if (!existsSync(join(lockDir, token))) return;
+      if (attempt < 100) Bun.sleepSync(5);
+    }
+  }
+  if (!moved) return;
+  if (!existsSync(join(retired, token))) {
+    restoreReapPrivate(lockDir, retired);
+    return;
+  }
+  try { rmSync(retired, { recursive: true, force: true }); } catch { /* private debris */ }
+}
+
+function acquireOwnerStampedLock(
+  lockDir: string,
+  maxRetries: number,
+  retryMs: number,
+  reapLiveOwnerAfterStale = true,
+): OwnerStampedLockReceipt | null {
+  const create = (): OwnerStampedLockReceipt | null => {
+    const gate = acquireReapClaim(lockDir);
+    if (!gate) return null;
     try {
       mkdirSync(lockDir, { mode: 0o700 });
       const token = randomUUID();
@@ -10795,12 +11523,16 @@ function acquireActiveDirectiveLock(lockDir: string): OwnerStampedLockReceipt | 
       try {
         mkdirSync(tokenDir, { mode: 0o700 });
       } catch {
-        abandonUnstampedActiveDirectiveLock(lockDir, token);
+        abandonUnstampedUnderGate(lockDir, token);
         return null;
       }
-      const owner = writeOwnerStamp(lockDir, true, token);
+      AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.beforeAcquirerOwnerStamp?.(
+        lockDir,
+        token,
+      );
+      const owner = writeOwnerStamp(lockDir, reapLiveOwnerAfterStale, token);
       if (!owner?.token) {
-        abandonUnstampedActiveDirectiveLock(lockDir, token);
+        abandonUnstampedUnderGate(lockDir, token);
         return null;
       }
       const receipt: OwnerStampedLockReceipt = {
@@ -10811,11 +11543,78 @@ function acquireActiveDirectiveLock(lockDir: string): OwnerStampedLockReceipt | 
       return receipt;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") return null;
-      if (reapStaleLock(lockDir)) continue;
-      if (attempt < 100) Bun.sleepSync(10);
+      return null;
+    } finally {
+      releaseReapClaim(gate);
     }
+  };
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const acquired = create();
+    if (acquired) return acquired;
+    if (reapStaleLock(lockDir)) {
+      const afterReap = create();
+      if (afterReap) return afterReap;
+    }
+    if (attempt < maxRetries) Bun.sleepSync(retryMs);
   }
   return null;
+}
+
+function acquireActiveDirectiveLock(lockDir: string): OwnerStampedLockReceipt | null {
+  return acquireOwnerStampedLock(lockDir, 100, 10);
+}
+
+// Receipts, reentrancy, and exit handlers are keyed by the acquisition-bound
+// canonical lock identity. Stable lexical request bindings preserve that
+// identity across path materialization/active-space changes, while an
+// equivalent existing symlink or Windows-case alias resolves directly to the
+// same canonical identity.
+const AUDIT_LOCK_RECEIPTS = new Map<string, AuditLockReceipt>();
+const AUDIT_LOCK_REQUEST_BINDINGS = new Map<string, string>();
+
+function unregisterAuditLockHandler(identityKey: string): void {
+  const handler = AUDIT_LOCK_EXIT_HANDLERS.get(identityKey);
+  if (!handler) return;
+  process.off("exit", handler);
+  AUDIT_LOCK_EXIT_HANDLERS.delete(identityKey);
+}
+
+function removeAuditRequestBindings(identityKey: string): void {
+  for (const [requestKey, boundIdentity] of AUDIT_LOCK_REQUEST_BINDINGS) {
+    if (boundIdentity === identityKey) AUDIT_LOCK_REQUEST_BINDINGS.delete(requestKey);
+  }
+}
+
+function releaseAuditReceipt(identityKey: string): boolean {
+  const receipt = AUDIT_LOCK_RECEIPTS.get(identityKey);
+  if (!receipt) {
+    unregisterAuditLockHandler(identityKey);
+    removeAuditRequestBindings(identityKey);
+    return true;
+  }
+  const outcome = releaseCanonicalOwnerStampedLock(receipt);
+  if (outcome === "retryable") {
+    receipt.releasePending = true;
+    return false;
+  }
+  AUDIT_LOCK_RECEIPTS.delete(identityKey);
+  unregisterAuditLockHandler(identityKey);
+  removeAuditRequestBindings(identityKey);
+  return true;
+}
+
+function auditLockBoundIdentity(
+  projectDir: string,
+  intent?: string,
+  space?: string,
+): { requestKey: string; identityKey: string } {
+  const requestKey = auditLockRequestKey(projectDir, intent, space);
+  return {
+    requestKey,
+    identityKey:
+      AUDIT_LOCK_REQUEST_BINDINGS.get(requestKey) ??
+      auditLockIdentity(projectDir, intent, space),
+  };
 }
 
 export function acquireAuditLock(
@@ -10826,46 +11625,42 @@ export function acquireAuditLock(
   space?: string,
   reapLiveOwnerAfterStale = true,
 ): boolean {
-  const lockDir = auditLockDir(projectDir, intent, space);
-  for (let i = 0; i <= maxRetries; i++) {
-    try {
-      mkdirSync(lockDir);
-      writeOwnerStamp(lockDir, reapLiveOwnerAfterStale);
-      return true;
-    } catch {
-      // EEXIST: someone holds it. Before sleeping, try to reap a dead/stale
-      // holder so a SIGKILL'd owner doesn't wedge every waiter for the full
-      // retry budget. If we reap, retry the mkdir immediately (next loop turn).
-      if (reapStaleLock(lockDir)) {
-        try {
-          mkdirSync(lockDir);
-          writeOwnerStamp(lockDir, reapLiveOwnerAfterStale);
-          return true;
-        } catch {
-          // another waiter beat us to the freed dir — fall through to sleep
-        }
-      }
-      if (i < maxRetries) {
-        Bun.sleepSync(retryMs);
-      }
-    }
+  const { requestKey, identityKey } = auditLockBoundIdentity(
+    projectDir,
+    intent,
+    space,
+  );
+  const existing = AUDIT_LOCK_RECEIPTS.get(identityKey);
+  if (existing) {
+    if (!existing.releasePending || !releaseAuditReceipt(identityKey)) return false;
   }
-  return false;
+  const lockDir = auditLockDir(projectDir, intent, space);
+  const receipt = acquireOwnerStampedLock(
+    lockDir,
+    maxRetries,
+    retryMs,
+    reapLiveOwnerAfterStale,
+  );
+  if (!receipt) return false;
+  AUDIT_LOCK_RECEIPTS.set(identityKey, {
+    ...receipt,
+    identityKey,
+    releasePending: false,
+  });
+  AUDIT_LOCK_REQUEST_BINDINGS.set(requestKey, identityKey);
+  return true;
 }
 
 export function releaseAuditLock(projectDir: string, intent?: string, space?: string): void {
-  const lockDir = auditLockDir(projectDir, intent, space);
-  const key = auditLockIdentity(projectDir, intent, space);
-  try {
-    rmSync(lockDir, { recursive: true, force: true });
-  } catch {
-    // Lock dir may already be removed
+  const { requestKey, identityKey } = auditLockBoundIdentity(
+    projectDir,
+    intent,
+    space,
+  );
+  if (AUDIT_LOCK_RECEIPTS.has(identityKey)) {
+    AUDIT_LOCK_REQUEST_BINDINGS.set(requestKey, identityKey);
   }
-  const handler = AUDIT_LOCK_EXIT_HANDLERS.get(key);
-  if (handler) {
-    process.off("exit", handler);
-    AUDIT_LOCK_EXIT_HANDLERS.delete(key);
-  }
+  releaseAuditReceipt(identityKey);
 }
 
 /** True only while `ownerPid` is the live process stamped into this lock.
@@ -10879,7 +11674,9 @@ export function auditLockOwnedByProcess(
 ): boolean {
   if (!Number.isInteger(ownerPid) || ownerPid <= 0) return false;
   const owner = readOwnerStamp(auditLockDir(projectDir, intent, space));
-  return owner?.pid === ownerPid && ownerAlive(owner);
+  if (owner?.pid !== ownerPid) return false;
+  const state = ownerProcessState(owner);
+  return state === "same" || state === "unknown";
 }
 
 // Tracks per-identity exit handlers that release the audit lock if a caller
@@ -10887,18 +11684,19 @@ export function auditLockOwnedByProcess(
 // blocks, so a tool that wraps locked work in try/finally and then calls
 // errorWithSlug → emitError → process.exit will leak the lock dir without
 // this safety net. Lock acquire registers a handler; release deregisters.
-// Keyed on the COMPOSITE lock identity (projectDir + space + intent | sentinel)
-// so handlers for different intents don't collide (invariant 2).
+// Keyed on the canonical acquisition identity; lexical request bindings route
+// path/active-space drift back to that identity.
 const AUDIT_LOCK_EXIT_HANDLERS = new Map<string, () => void>();
 
-// Per-IDENTITY reentrancy depth. Same-process nested withAuditLock calls for the
-// same lock identity would otherwise self-deadlock — the inner mkdir hits
+// Per-IDENTITY reentrancy depth. Equivalent aliases therefore share depth while
+// a materialized-path request remains bound to the identity it acquired.
+// Same-process nested withAuditLock calls would otherwise self-deadlock — the inner mkdir hits
 // EEXIST against the lock the outer caller already holds, and burns the
 // retry budget (50 × 100ms = 5s) before throwing. The depth counter makes the
 // primitive reentrant: the outer call performs the OS-level lock acquire/release;
 // inner calls just bump depth and return. Cross-process locking is unaffected —
 // different processes still serialise via mkdir EEXIST. Keyed on the composite
-// identity so two intents in one process don't share a depth counter.
+// identity so two intents/explicit spaces in one process don't share a depth.
 const AUDIT_LOCK_DEPTH = new Map<string, number>();
 
 // writeFileAtomic — non-corrupting variant of writeFileSync. Writes to a
@@ -11299,12 +12097,15 @@ export function withAuditLock<T>(
   // immediately regardless, so a big budget only ever waits on live work.
   maxRetries = 50,
   retryMs = 100,
-  // Long external operations such as repository clones can exceed the generic
-  // ten-minute stale threshold while still making progress. Those callers opt
-  // out of live-owner reaping; dead owners remain immediately reclaimable.
+  // Long external operations can opt out of over-age doctor classification.
+  // Automatic acquisition never reaps a live owner regardless of this flag;
+  // provably-dead owners remain immediately reclaimable.
   reapLiveOwnerAfterStale = true,
 ): T extends Promise<unknown> ? never : T {
-  const key = auditLockIdentity(projectDir, intent, space);
+  const requestKey = auditLockRequestKey(projectDir, intent, space);
+  let key =
+    AUDIT_LOCK_REQUEST_BINDINGS.get(requestKey) ??
+    auditLockIdentity(projectDir, intent, space);
   const currentDepth = AUDIT_LOCK_DEPTH.get(key) ?? 0;
   if (currentDepth === 0) {
     if (
@@ -11319,13 +12120,15 @@ export function withAuditLock<T>(
     ) {
       throw new Error(`Failed to acquire audit lock for ${key} after retries`);
     }
+    key = AUDIT_LOCK_REQUEST_BINDINGS.get(requestKey) ?? key;
+    const receipt = AUDIT_LOCK_RECEIPTS.get(key);
+    if (!receipt) {
+      throw new Error(`Audit lock receipt missing after acquire for ${key}`);
+    }
     // Safety net: if the body calls process.exit (Bun skips `finally` in that
     // case), the on-exit handler releases the lock dir so the project isn't
     // poisoned for ~5s on the next invocation.
-    const onExit = () => {
-      const lockDir = auditLockDir(projectDir, intent, space);
-      try { rmSync(lockDir, { recursive: true, force: true }); } catch { /* already removed */ }
-    };
+    const onExit = () => { releaseCanonicalOwnerStampedLock(receipt); };
     AUDIT_LOCK_EXIT_HANDLERS.set(key, onExit);
     process.on("exit", onExit);
   }
@@ -11343,10 +12146,9 @@ export function withAuditLock<T>(
   }
 }
 
-// True iff THIS process currently holds the audit lock for the given identity
-// (projectDir + intent | sentinel) via an outer withAuditLock (or a bare
-// acquireAuditLock paired with the exit-handler install). The lock-acquire path
-// registers a per-identity exit handler and the release path removes it (see
+// True iff THIS process currently holds the audit lock for the given request
+// via an outer withAuditLock. The lock-acquire path registers a per-request exit
+// handler and the release path removes it (see
 // AUDIT_LOCK_EXIT_HANDLERS), so the handler's presence is the in-lock signal.
 // emitError (below) already branches on this to pick appendAuditEntryUnlocked
 // vs appendAuditEntry; the state tool's emitAudit helper uses it for the same
@@ -11356,14 +12158,16 @@ export function withAuditLock<T>(
 // withAuditLock's depth counter is — so it would burn the full 50×100ms retry
 // budget and then throw).
 export function holdsAuditLock(projectDir: string, intent?: string, space?: string): boolean {
-  return AUDIT_LOCK_EXIT_HANDLERS.has(auditLockIdentity(projectDir, intent, space));
+  const { identityKey } = auditLockBoundIdentity(projectDir, intent, space);
+  return AUDIT_LOCK_EXIT_HANDLERS.has(identityKey);
 }
 
 // --- Doctor probe: leaked audit locks ----------------------------------------
 //
-// A leaked lock is a lock dir whose owner is provably dead (ESRCH) OR whose
-// stamp is over the stale threshold. `/aidlc doctor` surfaces it (and, when
-// clear=true, clears it loudly). We can't enumerate tmpdir() hashes back to
+// Doctor surfaces provably-dead, old missing-stamp, over-age live, malformed,
+// and unreadable locks. Automatic clear is restricted to dead valid owners and
+// old genuinely-missing stamps; every ambiguous/live case remains fail-closed.
+// We can't enumerate tmpdir() hashes back to
 // projects, so we probe the buckets THIS project would use: the workspace
 // sentinel bucket + every intent record across every space (the same identities
 // the writers key on). A leaked lock is reported with its bucket + owner PID.
@@ -11371,60 +12175,167 @@ export function holdsAuditLock(projectDir: string, intent?: string, space?: stri
 export interface LeakedLock {
   bucket: string; // "__workspace__" or "<space>/<intent>"
   lockDir: string; ownerPid: number | null;
-  reason: "dead-owner" | "over-age" | "unstamped" | "legacy-transaction";
-  kind: "audit" | "active-directive" | "legacy-active-directive-transaction"; cleared: boolean;
+  reason:
+    | "dead-owner"
+    | "over-age"
+    | "unstamped"
+    | "invalid-owner"
+    | "unreadable-owner"
+    | "generation-unavailable"
+    | "released-gate"
+    | "legacy-transaction";
+  kind:
+    | "audit"
+    | "active-directive"
+    | "coordination-gate"
+    | "legacy-active-directive-transaction";
+  cleared: boolean;
 }
 
-// Detect (and optionally clear) leaked locks for this project. `staleMs`
-// defaults to the configured threshold. Returns the leaks found (and cleared,
-// when clear=true). Pure-read when clear=false.
+function clearCoordinationGate(
+  lockDir: string,
+  expectedOwner: LockOwner,
+  reason: "released-gate" | "dead-owner",
+): boolean {
+  const mutex = acquireNativeGateMutex(lockDir);
+  if (!mutex) return false;
+  try {
+    const gateDir = reapClaimDir(lockDir);
+    const current = inspectOwnerStamp(gateDir);
+    if (
+      current.status !== "ok" ||
+      !ownerStampsEqual(current.owner, expectedOwner)
+    ) return false;
+    if (reason === "released-gate") {
+      AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.afterReleasableGateCheck?.(gateDir);
+      return (
+        reapGateIsReleasable(gateDir, current.owner) &&
+        retireReapClaim(gateDir)
+      );
+    }
+    const state = ownerProcessState(current.owner);
+    return (
+      (state === "dead" || state === "different") &&
+      recoverReapClaim(lockDir, current.owner)
+    );
+  } finally {
+    releaseNativeGateMutex(mutex);
+  }
+}
+
+// Detect (and safely clear eligible) leaked locks for this project. Returns the
+// findings and whether each was cleared. Pure-read when clear=false.
 export function detectLeakedLocks(projectDir: string, clear = false): LeakedLock[] {
   const leaks: LeakedLock[] = [];
+  const probeCoordinationGate = (
+    bucketLabel: string,
+    lockDir: string,
+  ): void => {
+    const gateDir = reapClaimDir(lockDir);
+    if (!existsSync(gateDir)) return;
+    const inspected = inspectOwnerStamp(gateDir);
+    if (
+      inspected.status === "ok" &&
+      reapGateIsReleasable(gateDir, inspected.owner)
+    ) {
+      const cleared = clear
+        ? clearCoordinationGate(lockDir, inspected.owner, "released-gate")
+        : false;
+      leaks.push({
+        bucket: bucketLabel,
+        lockDir: gateDir,
+        ownerPid: inspected.owner.pid,
+        reason: "released-gate",
+        kind: "coordination-gate",
+        cleared,
+      });
+      return;
+    }
+    if (inspected.status === "ok") {
+      const state = ownerProcessState(inspected.owner);
+      if (state === "dead" || state === "different") {
+        const cleared = clear
+          ? clearCoordinationGate(lockDir, inspected.owner, "dead-owner")
+          : false;
+        leaks.push({
+          bucket: bucketLabel,
+          lockDir: gateDir,
+          ownerPid: inspected.owner.pid,
+          reason: "dead-owner",
+          kind: "coordination-gate",
+          cleared,
+        });
+      }
+    }
+  };
   const probe = (bucketLabel: string, intent?: string, space?: string): void => {
     const lockDir = auditLockDir(projectDir, intent, space);
+    probeCoordinationGate(bucketLabel, lockDir);
     if (!existsSync(lockDir)) return;
-    const owner = readOwnerStamp(lockDir);
+    const inspected = inspectOwnerStamp(lockDir);
+    const owner = inspected.status === "ok" ? inspected.owner : null;
     let reason: LeakedLock["reason"] | null = null;
-    if (!owner) {
+    if (inspected.status === "invalid") {
+      reason = "invalid-owner";
+    } else if (inspected.status === "unreadable") {
+      reason = "unreadable-owner";
+    } else if (inspected.status === "missing") {
       // Unstamped: only a leak if older than the mid-acquire grace window (else
       // a live process is between mkdir and stamp).
       const mtime = lockDirMtimeMs(lockDir);
       if (mtime !== null && lockAcquireEpochMs() - mtime > unstampedGraceMs()) {
         reason = "unstamped";
       }
-    } else if (!ownerAlive(owner)) {
-      reason = "dead-owner";
-    } else if (
-      owner.reapLiveOwnerAfterStale &&
-      lockAcquireEpochMs() - owner.startedAtMs > lockStaleMs()
-    ) {
-      reason = "over-age";
+    } else if (inspected.status === "ok") {
+      const state = ownerProcessState(inspected.owner);
+      if (state === "dead" || state === "different") {
+        reason = "dead-owner";
+      } else if (state === "unknown") {
+        reason = "generation-unavailable";
+      } else if (
+        inspected.owner.reapLiveOwnerAfterStale &&
+        lockAcquireEpochMs() - inspected.owner.startedAtMs > lockStaleMs()
+      ) {
+        reason = "over-age";
+      }
     }
     if (reason === null) return; // a live, fresh, stamped lock is legitimately held
-    let cleared = false;
-    if (clear && !reapStaleLock(lockDir)) {
-      // Ownership changed after classification, or another reaper already won.
-      // Never remove a fresh replacement lock by pathname.
-      return;
-    }
-    if (clear) cleared = true;
+    const cleared = clear && (reason === "dead-owner" || reason === "unstamped")
+      ? reapStaleLock(lockDir)
+      : false;
     leaks.push({ bucket: bucketLabel, lockDir, ownerPid: owner?.pid ?? null, reason, kind: "audit", cleared });
   };
   const probeActiveDirective = (bucketLabel: string, root: string): void => {
     const lockDir = join(root, ACTIVE_DIRECTIVE_LOCK);
+    probeCoordinationGate(bucketLabel, lockDir);
     if (existsSync(lockDir)) {
-      const owner = readOwnerStamp(lockDir);
+      const inspected = inspectOwnerStamp(lockDir);
+      const owner = inspected.status === "ok" ? inspected.owner : null;
       let reason: LeakedLock["reason"] | null = null;
-      if (!owner) {
+      if (inspected.status === "invalid") {
+        reason = "invalid-owner";
+      } else if (inspected.status === "unreadable") {
+        reason = "unreadable-owner";
+      } else if (inspected.status === "missing") {
         const mtime = lockDirMtimeMs(lockDir);
         if (mtime !== null && lockAcquireEpochMs() - mtime > unstampedGraceMs()) reason = "unstamped";
-      } else if (!ownerAlive(owner)) {
-        reason = "dead-owner";
-      } else if (owner.reapLiveOwnerAfterStale && lockAcquireEpochMs() - owner.startedAtMs > lockStaleMs()) {
-        reason = "over-age";
+      } else if (inspected.status === "ok") {
+        const state = ownerProcessState(inspected.owner);
+        if (state === "dead" || state === "different") {
+          reason = "dead-owner";
+        } else if (state === "unknown") {
+          reason = "generation-unavailable";
+        } else if (
+          inspected.owner.reapLiveOwnerAfterStale &&
+          lockAcquireEpochMs() - inspected.owner.startedAtMs > lockStaleMs()
+        ) {
+          reason = "over-age";
+        }
       }
       if (reason !== null) {
-        const cleared = clear ? reapStaleLock(lockDir) : false;
+        const cleared = clear && (reason === "dead-owner" || reason === "unstamped")
+          ? reapStaleLock(lockDir)
+          : false;
         leaks.push({ bucket: bucketLabel, lockDir, ownerPid: owner?.pid ?? null, reason,
           kind: "active-directive", cleared });
       }
