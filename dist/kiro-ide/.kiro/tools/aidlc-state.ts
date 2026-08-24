@@ -1,7 +1,23 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve as resolvePath,
+  sep,
+} from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
@@ -10,6 +26,9 @@ import {
   appendSlug,
   appendUnderHeading,
   artifactFilename,
+  BLOCKING_SENSOR_OVERRIDE_CHOICE,
+  BLOCKING_SENSOR_OVERRIDE_DECISION,
+  BLOCKING_SENSOR_OVERRIDE_OPTIONS,
   type CheckboxState,
   checkSummaryConfirmationEvidence,
   codekbDir,
@@ -27,6 +46,7 @@ import {
   formatReceivedReply,
   freshReviewReceipts,
   getField,
+  harnessDir,
   hasUnsafeSingleLineCharacter,
   holdsAuditLock,
   humanActedSinceGate,
@@ -51,6 +71,7 @@ import {
   pipelineLinkEvidence,
   producesArtifactFile,
   readAllAuditShards,
+  readAuditShardEvents,
   readStateFile,
   recordDir,
   relativeMemoryPath,
@@ -1677,6 +1698,521 @@ function producesArtifactsExist(
   return false;
 }
 
+interface SensorFireVerdict {
+  fire_id: string;
+  sensor_id: string;
+  stage: string;
+  output_path: string;
+  result: "passed" | "failed" | "budget-override";
+  detail_path: string | null;
+  note?: string;
+}
+
+interface BlockingSensorIssue {
+  sensorId: string;
+  outputPath: string;
+  detailPath: string | null;
+  reason: string;
+}
+
+interface GateSensorEvaluation {
+  issues: BlockingSensorIssue[];
+  fingerprints: Map<string, string>;
+}
+
+function pathIsWithin(root: string, candidate: string): boolean {
+  const rel = relative(root, candidate);
+  return rel === "" ||
+    (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+// Resolve every existing declared deliverable, reusing the same stage directory
+// placement as producesArtifactsExist. --artifacts may name resolved paths or
+// filenames; it supplements the graph walk for optional/custom emitters but
+// cannot introduce an undeclared deliverable or escape a canonical produce dir.
+function existingDeclaredArtifactPaths(
+  pd: string,
+  stage: {
+    slug: string;
+    phase: string;
+    for_each?: string;
+    produces?: string[];
+    optional_produces?: string[];
+  },
+  artifacts?: string,
+): string[] {
+  const names = [
+    ...(stage.produces ?? []),
+    ...(stage.optional_produces ?? []),
+  ];
+  const declaredFilenames = new Set(names.map(artifactFilename));
+  const dirs = producesDirsForStage(pd, stage);
+  const projectRoot = realpathSync(pd);
+  const roots = dirs.flatMap((dir) => {
+    if (!existsSync(dir)) return [];
+    let canonical: string;
+    try {
+      canonical = realpathSync(dir);
+      if (!statSync(canonical).isDirectory()) return [];
+    } catch {
+      return [];
+    }
+    if (!pathIsWithin(projectRoot, canonical)) {
+      error(
+        `Refusing gate sensor dispatch for "${stage.slug}": resolved produce directory ` +
+          `"${dir}" escapes the project root after canonicalization.`,
+      );
+    }
+    return [canonical];
+  });
+  const found = new Set<string>();
+  const addIfDeclaredFile = (candidate: string): void => {
+    if (!declaredFilenames.has(basename(candidate)) || !existsSync(candidate)) {
+      return;
+    }
+    let canonical: string;
+    try {
+      canonical = realpathSync(candidate);
+      if (!statSync(canonical).isFile()) return;
+    } catch {
+      return;
+    }
+    if (!roots.some((root) => pathIsWithin(root, canonical))) {
+      error(
+        `Refusing gate sensor artifact "${candidate}" for "${stage.slug}": ` +
+          "the canonical path is outside the stage's resolved produce directories.",
+      );
+    }
+    found.add(canonical);
+  };
+
+  for (const dir of dirs) {
+    for (const filename of declaredFilenames) {
+      addIfDeclaredFile(join(dir, filename));
+    }
+  }
+
+  for (const token of (artifacts ?? "").split(",")) {
+    const value = token.trim();
+    if (!value) continue;
+    const variants = declaredFilenames.has(basename(value))
+      ? [value]
+      : [value, artifactFilename(value)];
+    for (const variant of variants) {
+      if (
+        isAbsolute(variant) ||
+        variant.includes("/") ||
+        variant.includes("\\")
+      ) {
+        addIfDeclaredFile(
+          isAbsolute(variant) ? variant : resolvePath(pd, variant),
+        );
+      }
+      for (const dir of dirs) addIfDeclaredFile(join(dir, variant));
+    }
+  }
+
+  return [...found];
+}
+
+function parseSensorFireVerdict(stdout: string): SensorFireVerdict | null {
+  const lines = stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try {
+      const value = JSON.parse(lines[i]) as Partial<SensorFireVerdict>;
+      if (
+        typeof value.fire_id === "string" &&
+        typeof value.sensor_id === "string" &&
+        typeof value.stage === "string" &&
+        typeof value.output_path === "string" &&
+        (value.result === "passed" ||
+          value.result === "failed" ||
+          value.result === "budget-override") &&
+        (value.detail_path === null || typeof value.detail_path === "string") &&
+        (value.note === undefined || typeof value.note === "string")
+      ) {
+        return value as SensorFireVerdict;
+      }
+    } catch {
+      // Keep scanning in case a wrapper wrote a banner before the JSON verdict.
+    }
+  }
+  return null;
+}
+
+function gateSensorDispatchTimeoutMs(): number | undefined {
+  const raw = process.env.AIDLC_GATE_SENSOR_DISPATCH_TIMEOUT_MS;
+  if (!raw) return undefined;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function diagnosticSnippet(value: string | null | undefined): string {
+  return (value ?? "").replace(/\s+/g, " ").trim().slice(0, 240);
+}
+
+function gateSensorMatchesOutput(
+  sensor: NonNullable<
+    NonNullable<ReturnType<typeof findStageBySlug>>["sensors_applicable"]
+  >[number],
+  outputPath: string,
+): boolean {
+  return sensor.matches === undefined ||
+    new Bun.Glob(sensor.matches).match(outputPath.replace(/\\/g, "/"));
+}
+
+function artifactFingerprint(path: string): string | null {
+  try {
+    return createHash("sha256").update(readFileSync(path)).digest("hex");
+  } catch {
+    return null;
+  }
+}
+
+function fireGateSensors(
+  pd: string,
+  stage: NonNullable<ReturnType<typeof findStageBySlug>>,
+  artifacts?: string,
+): GateSensorEvaluation {
+  const paths = existingDeclaredArtifactPaths(pd, stage, artifacts);
+  const issues: BlockingSensorIssue[] = [];
+  const fingerprints = new Map<string, string>();
+  if (paths.length === 0) return { issues, fingerprints };
+
+  const sensors = (stage.sensors_applicable ?? []).filter((sensor) =>
+    sensor.fire_on === "gate"
+  );
+  for (const sensor of sensors) {
+    if (sensor.default_severity !== "blocking") continue;
+    for (const outputPath of paths) {
+      if (!gateSensorMatchesOutput(sensor, outputPath) || fingerprints.has(outputPath)) {
+        continue;
+      }
+      const fingerprint = artifactFingerprint(outputPath);
+      if (fingerprint === null) {
+        issues.push({
+          sensorId: sensor.id,
+          outputPath,
+          detailPath: null,
+          reason: "artifact became unreadable before sensor dispatch",
+        });
+        continue;
+      }
+      fingerprints.set(outputPath, fingerprint);
+    }
+  }
+
+  const executable = compiledExecutable();
+  const sensorTool = fileURLToPath(new URL("./aidlc-sensor.ts", import.meta.url));
+  for (const sensor of sensors) {
+    for (const outputPath of paths) {
+      if (!gateSensorMatchesOutput(sensor, outputPath)) continue;
+      const expectedFingerprint = fingerprints.get(outputPath);
+      if (
+        sensor.default_severity === "blocking" &&
+        (
+          expectedFingerprint === undefined ||
+          artifactFingerprint(outputPath) !== expectedFingerprint
+        )
+      ) {
+        issues.push({
+          sensorId: sensor.id,
+          outputPath,
+          detailPath: null,
+          reason: "artifact changed before sensor dispatch",
+        });
+        continue;
+      }
+      const args = [
+        "fire",
+        sensor.id,
+        "--stage",
+        stage.slug,
+        "--output-path",
+        outputPath,
+      ];
+      const command = executable
+        ? [executable, "sensor", ...args]
+        : [process.execPath, sensorTool, ...args];
+      const result = spawnSync(command[0], command.slice(1), {
+        cwd: pd,
+        encoding: "utf-8",
+        timeout: gateSensorDispatchTimeoutMs(),
+        env: {
+          ...process.env,
+          AIDLC_PROJECT_DIR: pd,
+          CLAUDE_PROJECT_DIR: pd,
+        },
+      });
+      if (sensor.default_severity !== "blocking") continue;
+      if (artifactFingerprint(outputPath) !== expectedFingerprint) {
+        issues.push({
+          sensorId: sensor.id,
+          outputPath,
+          detailPath: null,
+          reason: "artifact changed during sensor evaluation",
+        });
+        continue;
+      }
+      if (result.error) {
+        const code = (result.error as NodeJS.ErrnoException).code ?? "unknown";
+        issues.push({
+          sensorId: sensor.id,
+          outputPath,
+          detailPath: null,
+          reason:
+            code === "ETIMEDOUT"
+              ? "dispatcher timeout"
+              : `dispatcher spawn failed (${code})`,
+        });
+        continue;
+      }
+      if (result.status !== 0) {
+        const stderr = diagnosticSnippet(result.stderr);
+        issues.push({
+          sensorId: sensor.id,
+          outputPath,
+          detailPath: null,
+          reason:
+            result.status === null
+              ? `dispatcher terminated by ${result.signal ?? "unknown signal"}`
+              : `dispatcher exited ${result.status}${stderr ? `: ${stderr}` : ""}`,
+        });
+        continue;
+      }
+      const verdict = parseSensorFireVerdict(result.stdout ?? "");
+      if (verdict === null) {
+        issues.push({
+          sensorId: sensor.id,
+          outputPath,
+          detailPath: null,
+          reason: "dispatcher returned no valid verdict",
+        });
+        continue;
+      }
+      let verdictOutputPath: string | null = null;
+      try {
+        verdictOutputPath = realpathSync(
+          isAbsolute(verdict.output_path)
+            ? verdict.output_path
+            : resolvePath(pd, verdict.output_path),
+        );
+      } catch {
+        // The exact output file is already known to exist; an unresolvable
+        // verdict path is invalid evaluation evidence.
+      }
+      if (
+        verdict.sensor_id !== sensor.id ||
+        verdict.stage !== stage.slug ||
+        verdictOutputPath !== outputPath
+      ) {
+        issues.push({
+          sensorId: sensor.id,
+          outputPath,
+          detailPath: null,
+          reason: "dispatcher verdict identity did not match the requested fire",
+        });
+        continue;
+      }
+      if (verdict.result === "failed" && verdict.detail_path !== null) {
+        issues.push({
+          sensorId: sensor.id,
+          outputPath: verdict.output_path,
+          detailPath: verdict.detail_path,
+          reason: "reported findings",
+        });
+        continue;
+      }
+      if (verdict.result === "passed" && verdict.note === undefined) continue;
+      issues.push({
+        sensorId: sensor.id,
+        outputPath: verdict.output_path,
+        detailPath: verdict.detail_path,
+        reason:
+          verdict.result === "passed"
+            ? verdict.note ?? "invalid passed verdict"
+            : verdict.result === "budget-override"
+              ? "sensor execution exceeded its budget"
+              : "failed verdict omitted its detail path",
+      });
+    }
+  }
+  return { issues, fingerprints };
+}
+
+function verifyGateSensorArtifactsUnchanged(
+  slug: string,
+  evaluation: GateSensorEvaluation,
+): void {
+  for (const [outputPath, fingerprint] of evaluation.fingerprints) {
+    if (artifactFingerprint(outputPath) === fingerprint) continue;
+    error(
+      `Refusing to open the gate for "${slug}": blocking sensor artifact ` +
+        `"${outputPath}" changed after evaluation. Retry so every blocking sensor ` +
+        "checks the bytes that enter the gate.",
+    );
+  }
+}
+
+function auditEventIsAfter(
+  later: ReturnType<typeof readAuditShardEvents>[number],
+  earlier: ReturnType<typeof readAuditShardEvents>[number],
+): boolean {
+  if (later.shard === earlier.shard) return later.pos > earlier.pos;
+  return later.timestamp > earlier.timestamp;
+}
+
+function hasBlockingSensorOverrideAuthorization(
+  pd: string,
+  slug: string,
+): boolean {
+  const rows = readAuditShardEvents(pd);
+  const stageRows = rows.filter((row) => {
+    const workflow = auditField(row.block, "Workflow");
+    return auditField(row.block, "Stage") === slug &&
+      !workflow?.startsWith("single-stage:");
+  });
+  const boundaries = stageRows.filter((row) =>
+    row.event === "STAGE_STARTED" ||
+    row.event === "STAGE_AWAITING_APPROVAL" ||
+    row.event === "GATE_REJECTED"
+  );
+  const interactions = stageRows.filter((row) =>
+    row.event === "DECISION_RECORDED" ||
+    row.event === "QUESTION_ANSWERED"
+  );
+  const answers = interactions.filter((row) =>
+    row.event === "QUESTION_ANSWERED" &&
+    auditField(row.block, "Details") === BLOCKING_SENSOR_OVERRIDE_CHOICE
+  );
+
+  for (const answer of answers) {
+    if (!boundaries.every((boundary) => auditEventIsAfter(answer, boundary))) {
+      continue;
+    }
+    if (
+      !interactions.every((row) =>
+        row === answer || auditEventIsAfter(answer, row)
+      )
+    ) {
+      continue;
+    }
+    const decision = interactions.findLast((row) => {
+      if (
+        row.event !== "DECISION_RECORDED" ||
+        row.shard !== answer.shard ||
+        row.pos >= answer.pos ||
+        auditField(row.block, "Decision") !== BLOCKING_SENSOR_OVERRIDE_DECISION
+      ) {
+        return false;
+      }
+      const options = (auditField(row.block, "Options") ?? "")
+        .split(",")
+        .map((option) => option.trim());
+      return BLOCKING_SENSOR_OVERRIDE_OPTIONS.every((option) =>
+        options.includes(option)
+      );
+    });
+    if (!decision) continue;
+    const humanTurn = rows.some((row) =>
+      row.event === "HUMAN_TURN" &&
+      row.shard === answer.shard &&
+      row.pos > decision.pos &&
+      row.pos < answer.pos
+    );
+    if (humanTurn) return true;
+  }
+  return false;
+}
+
+function enforceBlockingGateSensors(
+  pd: string,
+  stateContent: string,
+  slug: string,
+  reportResult: "awaiting-approval" | "revised",
+  issues: BlockingSensorIssue[],
+  overrideRequested: boolean,
+  overrideInput?: string,
+): void {
+  if (issues.length === 0) return;
+  const sensorIds = [...new Set(issues.map((issue) => issue.sensorId))];
+  const detailPaths = issues.flatMap((issue) =>
+    issue.detailPath === null ? [] : [issue.detailPath]
+  );
+  const reasons = issues.map(
+    (issue) => `${issue.sensorId}@${issue.outputPath}: ${issue.reason}`,
+  );
+  if (overrideRequested) {
+    if (isAutonomousMode(stateContent)) {
+      error(
+        `Refusing blocking sensor override for "${slug}": Construction Autonomy Mode ` +
+          "is autonomous. Unattended runs must halt on blocking sensor findings or " +
+          "unavailable evaluations.",
+      );
+    }
+    if (overrideInput?.trim() !== BLOCKING_SENSOR_OVERRIDE_CHOICE) {
+      error(
+        `Refusing blocking sensor override for "${slug}": --user-input must be the ` +
+          `exact offered choice "${BLOCKING_SENSOR_OVERRIDE_CHOICE}".`,
+      );
+    }
+    if (!hasBlockingSensorOverrideAuthorization(pd, slug)) {
+      error(
+        `Refusing blocking sensor override for "${slug}": no fresh authorization receipt ` +
+          `proves that "${BLOCKING_SENSOR_OVERRIDE_CHOICE}" was offered and selected after ` +
+          "a HUMAN_TURN. Record the decision and exact answer through aidlc-log.ts, then retry.",
+      );
+    }
+    return;
+  }
+  error(
+    `Blocking gate sensor evaluation did not pass for "${slug}". Sensors: ` +
+      `${sensorIds.join(", ")}. Detail paths: ${detailPaths.join(", ") || "none"}. ` +
+      `Reasons: ${reasons.join("; ")}. Fix the findings and retry, or first run ` +
+      `bun ${harnessDir()}/tools/aidlc-log.ts decision --stage ${slug} ` +
+      `--decision "${BLOCKING_SENSOR_OVERRIDE_DECISION}" --options ` +
+      `"${BLOCKING_SENSOR_OVERRIDE_OPTIONS.join(",")}", present those choices, and ` +
+      `after the human selects "${BLOCKING_SENSOR_OVERRIDE_CHOICE}" record it with ` +
+      `aidlc-log.ts answer. Then retry: bun ${harnessDir()}/tools/aidlc-orchestrate.ts ` +
+      `report --stage ${slug} --result ${reportResult} --override-blocking-sensors ` +
+      `--user-input "${BLOCKING_SENSOR_OVERRIDE_CHOICE}". Autonomous mode cannot override.`,
+  );
+}
+
+function addBlockingSensorOverrideFields(
+  fields: Record<string, string>,
+  issues: BlockingSensorIssue[],
+  overrideRequested: boolean,
+): void {
+  if (issues.length === 0 || !overrideRequested) return;
+  fields["Blocking Sensor Override"] = "true";
+  fields["Blocking Sensor IDs"] = [
+    ...new Set(issues.map((issue) => issue.sensorId)),
+  ].join(",");
+  const detailPaths = issues.flatMap((issue) =>
+    issue.detailPath === null ? [] : [issue.detailPath]
+  );
+  if (detailPaths.length > 0) {
+    fields["Blocking Sensor Detail Paths"] = detailPaths.join(",");
+  }
+  fields["Blocking Sensor Reasons"] = issues
+    .map((issue) => `${issue.sensorId}: ${issue.reason}`)
+    .join("; ");
+}
+
+function verifyGateOpeningGuards(
+  pd: string,
+  content: string,
+  stage: NonNullable<ReturnType<typeof findStageBySlug>>,
+): void {
+  verifyStageArtifacts(pd, stage, "present-approval-gate");
+  verifySummaryConfirmationPrecondition(pd, content, stage);
+  verifyPipelineLinkPrecondition(pd, stage);
+  if (!reviewerGateGuardDisabled()) {
+    verifyReviewerPrecondition(pd, content, stage, "present-approval-gate");
+  }
+}
+
 // True when any non-doc file exists in the workspace - a file outside the
 // aidlc/ workspace tree and the harness dirs. Bounded shallow walk (one level
 // into each top-level dir is enough to detect src/<file>); avoids a full
@@ -2873,15 +3409,21 @@ function validateSlugInState(
   }
 }
 
-// gate-start <slug> — transition [-] → [?], emit STAGE_AWAITING_APPROVAL.
-// On an existing [?] gate, re-run every opening guard without emitting or
-// writing another transition. This lets report revalidate legacy/recovered
-// gates instead of treating their persisted checkbox as proof of validity.
+// gate-start <slug> — fire gate-bound sensors, then transition [-] → [?] and
+// emit STAGE_AWAITING_APPROVAL.
+// On an existing [?] gate, re-run every opening guard without writing another
+// transition. A consumed blocking-sensor override emits a Revalidated row so
+// its human authorization cannot be reused; ordinary revalidation stays quiet.
 // --recovered marks a BACKFILLED gate row (the engine opening a gate the
 // conductor skipped, e.g. report's explicit-stage recovery) with
 // Recovered=true so audit consumers can tell backfills from organic opens.
 function handleGateStart(args: string[]): void {
-  if (args.length < 1) error("Usage: aidlc-state.ts gate-start <slug> [--artifacts <csv>] [--recovered]");
+  if (args.length < 1) {
+    error(
+      "Usage: aidlc-state.ts gate-start <slug> [--artifacts <csv>] " +
+        "[--recovered] [--override-blocking-sensors] [--user-input <choice>]",
+    );
+  }
   const slug = args[0];
   let artifacts: string | undefined;
   const artifactsIdx = args.indexOf("--artifacts");
@@ -2889,8 +3431,40 @@ function handleGateStart(args: string[]): void {
     artifacts = args[artifactsIdx + 1];
   }
   const recovered = args.includes("--recovered");
+  const overrideBlockingSensors = args.includes("--override-blocking-sensors");
+  const overrideInput = getFlagValue(args.slice(1), "--user-input");
 
   const pd = resolveProjectDir(projectDir);
+  // Sensor dispatch MUST stay outside the state transaction: aidlc-sensor.ts
+  // takes the same audit lock around its FIRED and terminal rows.
+  const preflightContent = readStateFile(pd);
+  const preflightStage = findStageBySlug(slug);
+  if (!preflightStage) error(`Unknown stage: ${slug}`);
+  validateSlugInState(
+    preflightContent,
+    slug,
+    ["in-progress", "awaiting-approval"],
+  );
+  verifyGateOpeningGuards(
+    pd,
+    preflightContent,
+    preflightStage,
+  );
+  const gateSensorEvaluation = fireGateSensors(
+    pd,
+    preflightStage,
+    artifacts,
+  );
+  enforceBlockingGateSensors(
+    pd,
+    preflightContent,
+    slug,
+    "awaiting-approval",
+    gateSensorEvaluation.issues,
+    overrideBlockingSensors,
+    overrideInput,
+  );
+
   // C2b lost-update safety: validate→transition→emit-audit→write under one
   // lock (the state-precondition check and the write see one snapshot).
   withAuditLock(pd, () => {
@@ -2900,13 +3474,28 @@ function handleGateStart(args: string[]): void {
   if (!stage) error(`Unknown stage: ${slug}`);
   validateSlugInState(content, slug, ["in-progress", "awaiting-approval"]);
   const alreadyAwaiting = getSlugState(content, slug) === "awaiting-approval";
-  verifyStageArtifacts(pd, stage, "present-approval-gate");
-  verifySummaryConfirmationPrecondition(pd, content, stage);
-  verifyPipelineLinkPrecondition(pd, stage);
-  if (!reviewerGateGuardDisabled()) {
-    verifyReviewerPrecondition(pd, content, stage, "present-approval-gate");
-  }
+  verifyGateOpeningGuards(pd, content, stage);
+  verifyGateSensorArtifactsUnchanged(slug, gateSensorEvaluation);
   if (alreadyAwaiting) {
+    if (
+      gateSensorEvaluation.issues.length > 0 &&
+      overrideBlockingSensors
+    ) {
+      try {
+        const fields: Record<string, string> = {
+          Stage: slug,
+          Revalidated: "true",
+        };
+        addBlockingSensorOverrideFields(
+          fields,
+          gateSensorEvaluation.issues,
+          true,
+        );
+        emitAudit(pd, "STAGE_AWAITING_APPROVAL", fields);
+      } catch (e) {
+        error(`Audit emission failed: ${errorMessage(e)}`);
+      }
+    }
     console.log(
       JSON.stringify({
         slug,
@@ -2926,6 +3515,11 @@ function handleGateStart(args: string[]): void {
     const fields: Record<string, string> = { Stage: slug };
     if (artifacts) fields.Artifacts = artifacts;
     if (recovered) fields.Recovered = "true";
+    addBlockingSensorOverrideFields(
+      fields,
+      gateSensorEvaluation.issues,
+      overrideBlockingSensors,
+    );
     emitAudit(pd, "STAGE_AWAITING_APPROVAL", fields);
   } catch (e) {
     error(`Audit emission failed: ${errorMessage(e)}`);
@@ -2944,12 +3538,99 @@ function handleGateStart(args: string[]): void {
 // delegates to handleAdvance or handleCompleteWorkflow for the remaining
 // transitions. Eliminates the t59-class bug where the orchestrator approved
 // but forgot to call advance, leaving Current Stage pointing at a [x] slug.
+function verifyApprovalDecision(
+  pd: string,
+  content: string,
+  stage: NonNullable<ReturnType<typeof findStageBySlug>>,
+  userInput?: string,
+): { approvalInput: string | undefined; autonomousDecision: boolean } {
+  const autonomousDecision = isAutonomousConstructionDecision(
+    content,
+    stage.phase,
+  );
+  const approvalInput = userInput?.trim();
+  const approvalAuthorship =
+    autonomousDecision || humanPresenceGuardDisabled()
+      ? null
+      : selfAttributedDecisionMarker(approvalInput, "approval");
+  if (approvalAuthorship) {
+    error(
+      `Refusing to approve "${stage.slug}": decision self-attribution blocked ` +
+        `(${approvalAuthorship.category}) in --user-input: "${approvalAuthorship.phrase}". ` +
+        "This tripwire detects explicit conductor/model provenance; it does not prove authorship. " +
+        "An approval is the human's to make. End the turn and let them answer; if a " +
+        "completion precondition is blocking you, surface that blocker at the gate instead " +
+        "of recording a decision on their behalf.",
+    );
+  }
+  if (!autonomousDecision && !humanPresenceGuardDisabled()) {
+    const rawRevisionCount = getField(content, "Revision Count");
+    const parsedRevisionCount = rawRevisionCount
+      ? parseInt(rawRevisionCount, 10)
+      : 0;
+    const revisionCount = Number.isFinite(parsedRevisionCount)
+      ? parsedRevisionCount
+      : 0;
+    const matchesOfferedApproval =
+      approvalInput === "Approve" ||
+      (approvalInput === "Accept as-is" && revisionCount >= 3);
+    if (!matchesOfferedApproval) {
+      const cancellation = isNonAnswer(approvalInput)
+        ? " The reply is cancellation boilerplate, not consent."
+        : "";
+      error(
+        `Refusing to approve "${stage.slug}": received reply ` +
+          `${formatReceivedReply(approvalInput)} did not match an offered choice at ` +
+          `the held gate.${cancellation} Re-present the original held gate with every ` +
+          "offered choice and wait for the human to choose one.",
+      );
+    }
+  }
+  if (
+    !autonomousDecision &&
+    !humanPresenceGuardDisabled() &&
+    !humanActedSinceGate(pd)
+  ) {
+    error(
+      `Refusing to approve "${stage.slug}": a real human has not acted at this gate ` +
+        "since it opened. The approval gate requires a typed human turn before it can " +
+        "commit. Acknowledge the gate as a human, then approve. (autonomous Construction " +
+        "is exempt)",
+    );
+  }
+  return { approvalInput, autonomousDecision };
+}
+
 function handleApprove(args: string[]): void {
   if (args.length < 1) error("Usage: aidlc-state.ts approve <slug> [--user-input <text>]");
   const slug = args[0];
   const { userInput } = parseApproveFlags(args.slice(1));
 
   const pd = resolveProjectDir(projectDir);
+  const preflightContent = readStateFile(pd);
+  const preflightStage = findStageBySlug(slug);
+  if (!preflightStage) error(`Unknown stage: ${slug}`);
+  validateSlugInState(preflightContent, slug, "awaiting-approval");
+  const preflightDecision = verifyApprovalDecision(
+    pd,
+    preflightContent,
+    preflightStage,
+    userInput,
+  );
+  verifyStageArtifacts(pd, preflightStage);
+  verifySummaryConfirmationPrecondition(
+    pd,
+    preflightContent,
+    preflightStage,
+  );
+  const preflightBackstop =
+    !revisionBackstopDisabled() &&
+    !preflightDecision.autonomousDecision &&
+    unrecordedRevisionSinceGateOpen(pd, preflightStage);
+  const backstopSensorEvaluation = preflightBackstop
+    ? fireGateSensors(pd, preflightStage)
+    : { issues: [], fingerprints: new Map<string, string>() };
+
   // Per-stage token/cost rollup - computed BEFORE the lock opens (ledger read
   // only, try/caught). Approve is the STAGE_COMPLETED that fires in the normal
   // gate flow (the nested advance/complete-workflow suppress their own once this
@@ -2968,47 +3649,13 @@ function handleApprove(args: string[]): void {
 
   const stage = findStageBySlug(slug);
   if (!stage) error(`Unknown stage: ${slug}`);
-  const autonomousDecision = isAutonomousConstructionDecision(content, stage.phase);
   validateSlugInState(content, slug, "awaiting-approval");
-  const approvalInput = userInput?.trim();
-  // Nor is the conductor's OWN decision an approval. The presence guard below
-  // proves a human is in the session; it cannot prove this choice is theirs, so
-  // a self-attributed approval ("CONDUCTOR DEFAULT, session unattended") would
-  // commit a gate no human resolved and leave a GATE_APPROVED row indistinguishable
-  // from a real one. Autonomous Construction is exempt (it owns the decision).
-  const approvalAuthorship =
-    autonomousDecision || humanPresenceGuardDisabled()
-      ? null
-      : selfAttributedDecisionMarker(approvalInput, "approval");
-  if (approvalAuthorship) {
-    error(
-      `Refusing to approve "${slug}": decision self-attribution blocked ` +
-        `(${approvalAuthorship.category}) in --user-input: "${approvalAuthorship.phrase}". ` +
-        "This tripwire detects explicit conductor/model provenance; it does not prove authorship. " +
-        "An approval is the human's to make. End the turn and " +
-        "let them answer; if a completion precondition is blocking you, surface that blocker at " +
-        "the gate instead of recording a decision on their behalf.",
-    );
-  }
-  if (!autonomousDecision && !humanPresenceGuardDisabled()) {
-    const rawRevisionCount = getField(content, "Revision Count");
-    const parsedRevisionCount = rawRevisionCount ? parseInt(rawRevisionCount, 10) : 0;
-    const revisionCount = Number.isFinite(parsedRevisionCount) ? parsedRevisionCount : 0;
-    const matchesOfferedApproval =
-      approvalInput === "Approve" ||
-      (approvalInput === "Accept as-is" && revisionCount >= 3);
-    if (!matchesOfferedApproval) {
-      const cancellation = isNonAnswer(approvalInput)
-        ? " The reply is cancellation boilerplate, not consent."
-        : "";
-      error(
-        `Refusing to approve "${slug}": received reply ${formatReceivedReply(approvalInput)} ` +
-          `did not match an offered choice at the held gate.${cancellation} ` +
-          "Re-present the original held gate with every offered choice and wait for the human " +
-          "to choose one.",
-      );
-    }
-  }
+  const { approvalInput, autonomousDecision } = verifyApprovalDecision(
+    pd,
+    content,
+    stage,
+    userInput,
+  );
 
   // Artifact guard (issue #366): a stage cannot be approved without evidence of
   // work on disk. Runs BEFORE any mutation so a refusal (error() -> exit) leaves
@@ -3019,29 +3666,6 @@ function handleApprove(args: string[]): void {
   // construction/<unit>/<slug>/) and code-producing stages (workspace_requires).
   verifyStageArtifacts(pd, stage);
   verifySummaryConfirmationPrecondition(pd, content, stage);
-
-  // Human-presence guard: a gate cannot be approved unless a real
-  // human acted at THIS gate since the last gate resolution. Runs BEFORE any
-  // mutation so a refusal (error() -> exit) leaves state untouched (same slot
-  // as the artifact guard above). Carve-outs FIRST: autonomous Construction
-  // (swarm / Bolt) and the suite-wide test bypass never require presence.
-  if (autonomousDecision) {
-    // skip the presence check — autonomous Construction has no human at the gate
-  } else if (humanPresenceGuardDisabled()) {
-    // skip — suite-wide deterministic off-switch (AIDLC_SKIP_HUMAN_PRESENCE_GUARD)
-  } else if (!humanActedSinceGate(pd)) {
-    // Ledger-event presence check: refuse unless a HUMAN_TURN event was appended
-    // AFTER the last gate resolution (GATE_APPROVED / GATE_REJECTED /
-    // QUESTION_ANSWERED) in ledger order - the boundary is the prior resolution,
-    // NOT this gate's open event (one human turn drives both open and approve).
-    // Cascade-safety + freshness fall out of order; no marker file / turn counter.
-    error(
-      `Refusing to approve "${slug}": a real human has not acted at this gate ` +
-        `since it opened. The approval gate requires a typed human turn before it ` +
-        `can commit. Acknowledge the gate as a human, then approve. (autonomous ` +
-        `Construction is exempt)`
-    );
-  }
 
   // Gate-revision backstop: reconcile a revision the conductor performed at an
   // open gate but never recorded (it skipped the `reject` verb). When the ledger
@@ -3054,11 +3678,17 @@ function handleApprove(args: string[]): void {
   // after review instead of leaving an invalid [?] gate open.
   // Skipped under the off-switch and in autonomous Construction (no human at the
   // gate, so no human-driven revision to reconcile).
-  if (
+  const backstopNow =
     !revisionBackstopDisabled() &&
     !autonomousDecision &&
-    unrecordedRevisionSinceGateOpen(pd, stage)
-  ) {
+    unrecordedRevisionSinceGateOpen(pd, stage);
+  if (backstopNow && !preflightBackstop) {
+    error(
+      `Refusing to approve "${slug}": revision evidence changed during the gate ` +
+        "preflight. Retry the approval so revised bytes can be checked before re-entry.",
+    );
+  }
+  if (backstopNow) {
     const priorCount = getField(content, "Revision Count");
     const priorParsed = priorCount ? parseInt(priorCount, 10) : 0;
     const revCount = (Number.isFinite(priorParsed) ? priorParsed : 0) + 1;
@@ -3085,10 +3715,20 @@ function handleApprove(args: string[]): void {
       error(`Audit emission failed: ${errorMessage(e)}`);
     }
     writeStateFile(pd, content);
+    verifyGateSensorArtifactsUnchanged(slug, backstopSensorEvaluation);
     verifySummaryConfirmationPrecondition(pd, content, stage);
+    verifyPipelineLinkPrecondition(pd, stage);
     if (!reviewerGateGuardDisabled()) {
       verifyReviewerPrecondition(pd, content, stage, "present-approval-gate");
     }
+    enforceBlockingGateSensors(
+      pd,
+      content,
+      slug,
+      "revised",
+      backstopSensorEvaluation.issues,
+      false,
+    );
     try {
       emitAudit(pd, "STAGE_AWAITING_APPROVAL", {
         Stage: slug,
@@ -3341,12 +3981,42 @@ function handleReject(args: string[]): void {
   });
 }
 
-// revise <slug> — transition [R] → [?] (re-enter gate after revision work)
+// revise <slug> — fire gate-bound sensors, then transition [R] → [?]
+// (re-enter gate after revision work)
 function handleRevise(args: string[]): void {
-  if (args.length < 1) error("Usage: aidlc-state.ts revise <slug>");
+  if (args.length < 1) {
+    error(
+      "Usage: aidlc-state.ts revise <slug> [--override-blocking-sensors] " +
+        "[--user-input <choice>]",
+    );
+  }
   const slug = args[0];
+  const overrideBlockingSensors = args.includes("--override-blocking-sensors");
+  const overrideInput = getFlagValue(args.slice(1), "--user-input");
 
   const pd = resolveProjectDir(projectDir);
+  // Sensor dispatch MUST stay outside the state transaction: aidlc-sensor.ts
+  // takes the same audit lock around its FIRED and terminal rows.
+  const preflightContent = readStateFile(pd);
+  const preflightStage = findStageBySlug(slug);
+  if (!preflightStage) error(`Unknown stage: ${slug}`);
+  validateSlugInState(preflightContent, slug, "revising");
+  verifyGateOpeningGuards(
+    pd,
+    preflightContent,
+    preflightStage,
+  );
+  const gateSensorEvaluation = fireGateSensors(pd, preflightStage);
+  enforceBlockingGateSensors(
+    pd,
+    preflightContent,
+    slug,
+    "revised",
+    gateSensorEvaluation.issues,
+    overrideBlockingSensors,
+    overrideInput,
+  );
+
   // C2b lost-update safety: validate→transition→emit-audit→write under one lock.
   withAuditLock(pd, () => {
   let content = readStateFile(pd);
@@ -3354,21 +4024,24 @@ function handleRevise(args: string[]): void {
   const stage = findStageBySlug(slug);
   if (!stage) error(`Unknown stage: ${slug}`);
   validateSlugInState(content, slug, "revising");
-  verifyStageArtifacts(pd, stage, "present-approval-gate");
-  verifySummaryConfirmationPrecondition(pd, content, stage);
-  if (!reviewerGateGuardDisabled()) {
-    verifyReviewerPrecondition(pd, content, stage, "present-approval-gate");
-  }
+  verifyGateOpeningGuards(pd, content, stage);
+  verifyGateSensorArtifactsUnchanged(slug, gateSensorEvaluation);
 
   content = setCheckbox(content, slug, "awaiting-approval");
   const timestamp = isoTimestamp();
   content = setField(content, "Last Updated", timestamp);
 
   try {
-    emitAudit(pd, "STAGE_AWAITING_APPROVAL", {
+    const fields: Record<string, string> = {
       Stage: slug,
       Details: "Re-entering gate after revision",
-    });
+    };
+    addBlockingSensorOverrideFields(
+      fields,
+      gateSensorEvaluation.issues,
+      overrideBlockingSensors,
+    );
+    emitAudit(pd, "STAGE_AWAITING_APPROVAL", fields);
   } catch (e) {
     error(`Audit emission failed: ${errorMessage(e)}`);
   }

@@ -210,9 +210,10 @@ at compile time.
 For `fire_on: write`, `matches` is the fire filter: the hook compares the path
 being written against the glob and an entry without a glob never fires. For
 `fire_on: gate`, `gate-start` and `revise` enumerate every existing declared
-deliverable and the dispatcher applies `matches` to each path; an omitted glob
-accepts every deliverable. All six shipped manifests declare a glob. The
-compile resolver copies it into `sensors_applicable[]`.
+deliverable, skip paths outside each sensor's `matches` capability, and dispatch
+only matching paths; an omitted glob accepts every deliverable. All six shipped
+manifests declare a glob. The compile resolver copies it into
+`sensors_applicable[]`.
 
 Empty string (`matches: ""`) is rejected at parse time. Write-fired sensors
 should declare a glob; gate-fired sensors may omit it to analyze every declared
@@ -245,6 +246,8 @@ the exact `QUESTION_ANSWERED`, then retries the gate report with
 flag, an unoffered/paraphrased choice, a missing human-backed receipt, or
 autonomous mode is refused. A successful override records the sensor ids,
 optional detail paths, and evaluation reasons on `STAGE_AWAITING_APPROVAL`.
+Revalidating an already-open gate emits a fresh row with `Revalidated: true`,
+consuming the authorization receipt instead of leaving it reusable.
 In this release, a write-fired sensor may declare `blocking`, but PostToolUse
 dispatch remains advisory.
 
@@ -258,6 +261,9 @@ opens the first gate, before `revise` re-enters the gate after revision work,
 and before the approve-time revision backstop performs recovered re-entry.
 Dispatch happens outside the state transaction because `aidlc-sensor.ts fire`
 takes the audit lock around both its `SENSOR_FIRED` and terminal rows.
+Blocking dispatch fingerprints every matching artifact before evaluation,
+checks that fingerprint after each sensor, and checks it again inside the state
+transaction. Changed bytes refuse gate entry and must be evaluated on a retry.
 
 The dispatcher prints one compact JSON verdict after the terminal row:
 `fire_id`, `sensor_id`, `stage`, `output_path`, `result`, `detail_path`, and an

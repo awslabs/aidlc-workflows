@@ -181,8 +181,9 @@ stage output. Omission means `write`.
 **`matches` — what shape of file should this analyze?** For `fire_on: write`,
 this glob is the fire filter and is effectively required: the hook fires only
 when the written path matches, and an entry with no `matches` never fires.
-For `fire_on: gate`, the dispatcher applies the same capability check to each
-existing declared deliverable; omitting `matches` accepts every one. The
+For `fire_on: gate`, the state tool applies the same capability check to each
+existing declared deliverable and dispatches only matching files; omitting
+`matches` accepts every one. The
 code-quality sensors set it to code globs (`aidlc-linter.md` uses
 `**/*.{ts,js}`; `aidlc-type-check.md` uses `**/*.{ts,tsx}`) so they fire only on
 code writes and stay quiet on prose; the document-shape sensors scope to the

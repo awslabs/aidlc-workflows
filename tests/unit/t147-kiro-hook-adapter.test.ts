@@ -923,7 +923,9 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       const batchAudit = readAudit(dir).slice(beforeBatch.length);
       expect(batch.code).toBe(0);
       expect(batchAudit.match(/\*\*Event\*\*: ARTIFACT_(?:CREATED|UPDATED)/g)).toHaveLength(2);
-      expect(batchAudit.match(/\*\*Event\*\*: SENSOR_FIRED/g)).toHaveLength(4);
+      // The document sensors are gate-fired; PostToolUse still reaches the
+      // dispatcher heartbeat but must not evaluate them on intermediate writes.
+      expect(batchAudit.match(/\*\*Event\*\*: SENSOR_FIRED/g) ?? []).toHaveLength(0);
       for (const path of batchPaths) {
         expect(batchAudit).toContain(
           `<project-dir>/${relative(dir, path).replace(/\\/g, "/")}`,

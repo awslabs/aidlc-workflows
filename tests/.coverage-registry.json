@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 638,
+    "total": 641,
     "enumeratedByClass": {
-      "function": 375,
+      "function": 378,
       "audit": 87,
       "scope": 11,
       "stage": 33,
@@ -500,7 +500,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/integration/t304-gate-sensor-enforcement.test.ts",
+          "file": "tests/integration/t311-gate-sensor-enforcement.test.ts",
           "mechanism": "cli"
         },
         {
@@ -520,7 +520,7 @@
           "mechanism": "tui"
         },
         {
-          "file": "tests/integration/t304-gate-sensor-enforcement.test.ts",
+          "file": "tests/integration/t311-gate-sensor-enforcement.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -1282,6 +1282,27 @@
     {
       "unitClass": "function",
       "unitId": "function:AUTONOMY_MODE_FIELD",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:BLOCKING_SENSOR_OVERRIDE_CHOICE",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:BLOCKING_SENSOR_OVERRIDE_DECISION",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:BLOCKING_SENSOR_OVERRIDE_OPTIONS",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -6588,7 +6609,7 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
-          "file": "tests/integration/t304-gate-sensor-enforcement.test.ts",
+          "file": "tests/integration/t311-gate-sensor-enforcement.test.ts",
           "mechanism": "cli"
         },
         {
@@ -6768,7 +6789,7 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
-          "file": "tests/integration/t304-gate-sensor-enforcement.test.ts",
+          "file": "tests/integration/t311-gate-sensor-enforcement.test.ts",
           "mechanism": "cli"
         },
         {

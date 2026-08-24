@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.72] - 2026-08-24
+
+Gate-bound sensors now run once against each matching final deliverable and can enforce blocking findings without accepting stale or unverified bytes. **Upgrade:** refresh your `dist/<harness>/` shell so the expanded sensor schema, compiled bindings, gate dispatcher, and audited override flow are installed.
+
+* Sensor manifests accept `fire_on: write|gate` (default `write`) and `default_severity: advisory|blocking`; compiled `sensors_applicable` entries carry firing mode, severity, category, and path filter.
+* `claim-sources`, `required-sections`, and `upstream-coverage` now run at approval boundaries, while write-fired sensors remain advisory. Gate dispatch skips deliverables outside each sensor's `matches` capability.
+* Blocking gate sensors fail closed on findings, unavailable or malformed evaluation, timeout, identity mismatch, and artifact bytes changing during or after evaluation. The gate transaction rechecks matching artifact fingerprints before opening.
+* A human-backed `Override blocking sensors` choice may override a stable blocking result in gated mode. The override is unavailable in autonomous mode, is recorded on `STAGE_AWAITING_APPROVAL`, and is consumed and audited when revalidating an already-open gate.
+
 ## [2.6.71] - 2026-08-24
 
 Non-English workflows now keep the agent's human-facing conversation and structured-question prose in the resolved conversation language, including status updates and narration between tool calls from the orchestrator and delegated agents. **Upgrade:** refresh your `dist/<harness>/` shell; existing workspaces keep their own memory tree, so merge the extended `Conversation language — what to localize` rule into each `aidlc/spaces/<space>/memory/org.md` by hand and start a fresh session for it to load.

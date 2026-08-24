@@ -1715,6 +1715,11 @@ interface BlockingSensorIssue {
   reason: string;
 }
 
+interface GateSensorEvaluation {
+  issues: BlockingSensorIssue[];
+  fingerprints: Map<string, string>;
+}
+
 function pathIsWithin(root: string, candidate: string): boolean {
   const rel = relative(root, candidate);
   return rel === "" ||
@@ -1846,20 +1851,78 @@ function diagnosticSnippet(value: string | null | undefined): string {
   return (value ?? "").replace(/\s+/g, " ").trim().slice(0, 240);
 }
 
+function gateSensorMatchesOutput(
+  sensor: NonNullable<
+    NonNullable<ReturnType<typeof findStageBySlug>>["sensors_applicable"]
+  >[number],
+  outputPath: string,
+): boolean {
+  return sensor.matches === undefined ||
+    new Bun.Glob(sensor.matches).match(outputPath.replace(/\\/g, "/"));
+}
+
+function artifactFingerprint(path: string): string | null {
+  try {
+    return createHash("sha256").update(readFileSync(path)).digest("hex");
+  } catch {
+    return null;
+  }
+}
+
 function fireGateSensors(
   pd: string,
   stage: NonNullable<ReturnType<typeof findStageBySlug>>,
   artifacts?: string,
-): BlockingSensorIssue[] {
+): GateSensorEvaluation {
   const paths = existingDeclaredArtifactPaths(pd, stage, artifacts);
-  if (paths.length === 0) return [];
-
   const issues: BlockingSensorIssue[] = [];
+  const fingerprints = new Map<string, string>();
+  if (paths.length === 0) return { issues, fingerprints };
+
+  const sensors = (stage.sensors_applicable ?? []).filter((sensor) =>
+    sensor.fire_on === "gate"
+  );
+  for (const sensor of sensors) {
+    if (sensor.default_severity !== "blocking") continue;
+    for (const outputPath of paths) {
+      if (!gateSensorMatchesOutput(sensor, outputPath) || fingerprints.has(outputPath)) {
+        continue;
+      }
+      const fingerprint = artifactFingerprint(outputPath);
+      if (fingerprint === null) {
+        issues.push({
+          sensorId: sensor.id,
+          outputPath,
+          detailPath: null,
+          reason: "artifact became unreadable before sensor dispatch",
+        });
+        continue;
+      }
+      fingerprints.set(outputPath, fingerprint);
+    }
+  }
+
   const executable = compiledExecutable();
   const sensorTool = fileURLToPath(new URL("./aidlc-sensor.ts", import.meta.url));
-  for (const sensor of stage.sensors_applicable ?? []) {
-    if (sensor.fire_on !== "gate") continue;
+  for (const sensor of sensors) {
     for (const outputPath of paths) {
+      if (!gateSensorMatchesOutput(sensor, outputPath)) continue;
+      const expectedFingerprint = fingerprints.get(outputPath);
+      if (
+        sensor.default_severity === "blocking" &&
+        (
+          expectedFingerprint === undefined ||
+          artifactFingerprint(outputPath) !== expectedFingerprint
+        )
+      ) {
+        issues.push({
+          sensorId: sensor.id,
+          outputPath,
+          detailPath: null,
+          reason: "artifact changed before sensor dispatch",
+        });
+        continue;
+      }
       const args = [
         "fire",
         sensor.id,
@@ -1882,6 +1945,15 @@ function fireGateSensors(
         },
       });
       if (sensor.default_severity !== "blocking") continue;
+      if (artifactFingerprint(outputPath) !== expectedFingerprint) {
+        issues.push({
+          sensorId: sensor.id,
+          outputPath,
+          detailPath: null,
+          reason: "artifact changed during sensor evaluation",
+        });
+        continue;
+      }
       if (result.error) {
         const code = (result.error as NodeJS.ErrnoException).code ?? "unknown";
         issues.push({
@@ -1965,7 +2037,21 @@ function fireGateSensors(
       });
     }
   }
-  return issues;
+  return { issues, fingerprints };
+}
+
+function verifyGateSensorArtifactsUnchanged(
+  slug: string,
+  evaluation: GateSensorEvaluation,
+): void {
+  for (const [outputPath, fingerprint] of evaluation.fingerprints) {
+    if (artifactFingerprint(outputPath) === fingerprint) continue;
+    error(
+      `Refusing to open the gate for "${slug}": blocking sensor artifact ` +
+        `"${outputPath}" changed after evaluation. Retry so every blocking sensor ` +
+        "checks the bytes that enter the gate.",
+    );
+  }
 }
 
 function auditEventIsAfter(
@@ -3325,9 +3411,9 @@ function validateSlugInState(
 
 // gate-start <slug> — fire gate-bound sensors, then transition [-] → [?] and
 // emit STAGE_AWAITING_APPROVAL.
-// On an existing [?] gate, re-run every opening guard without emitting or
-// writing another transition. This lets report revalidate legacy/recovered
-// gates instead of treating their persisted checkbox as proof of validity.
+// On an existing [?] gate, re-run every opening guard without writing another
+// transition. A consumed blocking-sensor override emits a Revalidated row so
+// its human authorization cannot be reused; ordinary revalidation stays quiet.
 // --recovered marks a BACKFILLED gate row (the engine opening a gate the
 // conductor skipped, e.g. report's explicit-stage recovery) with
 // Recovered=true so audit consumers can tell backfills from organic opens.
@@ -3364,7 +3450,7 @@ function handleGateStart(args: string[]): void {
     preflightContent,
     preflightStage,
   );
-  const blockingFailures = fireGateSensors(
+  const gateSensorEvaluation = fireGateSensors(
     pd,
     preflightStage,
     artifacts,
@@ -3374,7 +3460,7 @@ function handleGateStart(args: string[]): void {
     preflightContent,
     slug,
     "awaiting-approval",
-    blockingFailures,
+    gateSensorEvaluation.issues,
     overrideBlockingSensors,
     overrideInput,
   );
@@ -3389,7 +3475,27 @@ function handleGateStart(args: string[]): void {
   validateSlugInState(content, slug, ["in-progress", "awaiting-approval"]);
   const alreadyAwaiting = getSlugState(content, slug) === "awaiting-approval";
   verifyGateOpeningGuards(pd, content, stage);
+  verifyGateSensorArtifactsUnchanged(slug, gateSensorEvaluation);
   if (alreadyAwaiting) {
+    if (
+      gateSensorEvaluation.issues.length > 0 &&
+      overrideBlockingSensors
+    ) {
+      try {
+        const fields: Record<string, string> = {
+          Stage: slug,
+          Revalidated: "true",
+        };
+        addBlockingSensorOverrideFields(
+          fields,
+          gateSensorEvaluation.issues,
+          true,
+        );
+        emitAudit(pd, "STAGE_AWAITING_APPROVAL", fields);
+      } catch (e) {
+        error(`Audit emission failed: ${errorMessage(e)}`);
+      }
+    }
     console.log(
       JSON.stringify({
         slug,
@@ -3411,7 +3517,7 @@ function handleGateStart(args: string[]): void {
     if (recovered) fields.Recovered = "true";
     addBlockingSensorOverrideFields(
       fields,
-      blockingFailures,
+      gateSensorEvaluation.issues,
       overrideBlockingSensors,
     );
     emitAudit(pd, "STAGE_AWAITING_APPROVAL", fields);
@@ -3521,9 +3627,9 @@ function handleApprove(args: string[]): void {
     !revisionBackstopDisabled() &&
     !preflightDecision.autonomousDecision &&
     unrecordedRevisionSinceGateOpen(pd, preflightStage);
-  const backstopSensorIssues = preflightBackstop
+  const backstopSensorEvaluation = preflightBackstop
     ? fireGateSensors(pd, preflightStage)
-    : [];
+    : { issues: [], fingerprints: new Map<string, string>() };
 
   // Per-stage token/cost rollup - computed BEFORE the lock opens (ledger read
   // only, try/caught). Approve is the STAGE_COMPLETED that fires in the normal
@@ -3609,6 +3715,7 @@ function handleApprove(args: string[]): void {
       error(`Audit emission failed: ${errorMessage(e)}`);
     }
     writeStateFile(pd, content);
+    verifyGateSensorArtifactsUnchanged(slug, backstopSensorEvaluation);
     verifySummaryConfirmationPrecondition(pd, content, stage);
     verifyPipelineLinkPrecondition(pd, stage);
     if (!reviewerGateGuardDisabled()) {
@@ -3619,7 +3726,7 @@ function handleApprove(args: string[]): void {
       content,
       slug,
       "revised",
-      backstopSensorIssues,
+      backstopSensorEvaluation.issues,
       false,
     );
     try {
@@ -3899,13 +4006,13 @@ function handleRevise(args: string[]): void {
     preflightContent,
     preflightStage,
   );
-  const blockingFailures = fireGateSensors(pd, preflightStage);
+  const gateSensorEvaluation = fireGateSensors(pd, preflightStage);
   enforceBlockingGateSensors(
     pd,
     preflightContent,
     slug,
     "revised",
-    blockingFailures,
+    gateSensorEvaluation.issues,
     overrideBlockingSensors,
     overrideInput,
   );
@@ -3918,6 +4025,7 @@ function handleRevise(args: string[]): void {
   if (!stage) error(`Unknown stage: ${slug}`);
   validateSlugInState(content, slug, "revising");
   verifyGateOpeningGuards(pd, content, stage);
+  verifyGateSensorArtifactsUnchanged(slug, gateSensorEvaluation);
 
   content = setCheckbox(content, slug, "awaiting-approval");
   const timestamp = isoTimestamp();
@@ -3930,7 +4038,7 @@ function handleRevise(args: string[]): void {
     };
     addBlockingSensorOverrideFields(
       fields,
-      blockingFailures,
+      gateSensorEvaluation.issues,
       overrideBlockingSensors,
     );
     emitAudit(pd, "STAGE_AWAITING_APPROVAL", fields);

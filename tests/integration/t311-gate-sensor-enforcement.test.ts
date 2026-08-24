@@ -57,7 +57,11 @@ interface Fixture {
   scripts: string;
 }
 
-function setupFixture(severity: "advisory" | "blocking"): Fixture {
+function setupFixture(
+  severity: "advisory" | "blocking",
+  matches = "**/*",
+  pass = false,
+): Fixture {
   const project = createTestProject();
   projects.push(project);
   const sensors = join(project, ".test-sensors");
@@ -77,7 +81,7 @@ function setupFixture(severity: "advisory" | "blocking"): Fixture {
       "fire_on: gate",
       "description: gate enforcement fixture",
       "category: test",
-      'matches: "**/*"',
+      `matches: "${matches}"`,
       "timeout_seconds: 5",
       "---",
       "",
@@ -87,7 +91,7 @@ function setupFixture(severity: "advisory" | "blocking"): Fixture {
   writeFileSync(
     join(scripts, `aidlc-sensor-${id}.ts`),
     [
-      'process.stdout.write(JSON.stringify({ pass: false, findings_count: 1 }) + "\\n");',
+      `process.stdout.write(JSON.stringify({ pass: ${pass}, findings_count: ${pass ? 0 : 1} }) + "\\n");`,
       "process.exit(0);",
       "",
     ].join("\n"),
@@ -123,7 +127,7 @@ function setupFixture(severity: "advisory" | "blocking"): Fixture {
             fire_on: "gate",
             default_severity: severity,
             category: "test",
-            matches: "**/*",
+            matches,
           },
         ],
       },
@@ -318,7 +322,7 @@ function dispatcherStub(
   return path;
 }
 
-describe("t304 gate-bound sensor enforcement", () => {
+describe("t311 gate-bound sensor enforcement", () => {
   test("fires once per deliverable, blocks, overrides with audit, and leaves advisory failures non-blocking", () => {
     const blocking = setupFixture("blocking");
     const refused = gate(blocking);
@@ -460,6 +464,40 @@ describe("t304 gate-bound sensor enforcement", () => {
     }
   }, 30_000);
 
+  test("gate dispatch skips deliverables outside the sensor matches capability", () => {
+    const fixture = setupFixture("blocking", "**/one.md", true);
+    const result = gate(fixture);
+    const finalAudit = audit(fixture.project);
+    expect(result.status).toBe(0);
+    expect(eventCount(finalAudit, "SENSOR_FIRED")).toBe(1);
+    expect(finalAudit).toContain("one.md");
+    expect(finalAudit).not.toContain("two.md");
+    expect(readFileSync(seededStateFile(fixture.project), "utf-8")).toContain(
+      "- [?] probe",
+    );
+  }, 30_000);
+
+  test("blocking verdicts cannot authorize bytes changed during evaluation", () => {
+    const fixture = setupFixture("blocking", "**/*", true);
+    writeFileSync(
+      join(fixture.scripts, "aidlc-sensor-gate-probe.ts"),
+      [
+        'import { appendFileSync } from "node:fs";',
+        'const index = process.argv.indexOf("--output-path");',
+        'appendFileSync(process.argv[index + 1], "\\nchanged after check\\n");',
+        'process.stdout.write(JSON.stringify({ pass: true, findings_count: 0 }) + "\\n");',
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    const result = gate(fixture);
+    expect(result.status).toBe(1);
+    expect(result.out).toContain("artifact changed during sensor evaluation");
+    expect(readFileSync(seededStateFile(fixture.project), "utf-8")).toContain(
+      "- [-] probe",
+    );
+  }, 30_000);
+
   test("explicit and symlinked artifacts cannot escape canonical produce directories", () => {
     const explicit = setupFixture("blocking");
     const explicitRoot = join(
@@ -531,7 +569,31 @@ describe("t304 gate-bound sensor enforcement", () => {
       .filter((block) =>
         block.includes("**Event**: STAGE_AWAITING_APPROVAL") &&
         block.includes("**Recovered**: true")
-      );
+    );
     expect(recoveredGateRows).toHaveLength(0);
+  }, 30_000);
+
+  test("an already-open gate audits and consumes its blocking override", () => {
+    const fixture = setupFixture("blocking");
+    authorizeOverride(fixture);
+    expect(gate(fixture, overrideArgs()).status).toBe(0);
+
+    authorizeOverride(fixture);
+    const revalidated = gate(fixture, overrideArgs());
+    const revalidatedAudit = audit(fixture.project);
+    expect(revalidated.status).toBe(0);
+    expect(revalidated.out).toContain('"already_awaiting_approval":true');
+    const gateRows = revalidatedAudit
+      .split("\n---\n")
+      .filter((block) =>
+        block.includes("**Event**: STAGE_AWAITING_APPROVAL")
+      );
+    const revalidationRow = gateRows[gateRows.length - 1] ?? "";
+    expect(revalidationRow).toContain("**Revalidated**: true");
+    expect(revalidationRow).toContain("**Blocking Sensor Override**: true");
+
+    const reused = gate(fixture, overrideArgs());
+    expect(reused.status).toBe(1);
+    expect(reused.out).toContain("no fresh authorization receipt");
   }, 30_000);
 });
