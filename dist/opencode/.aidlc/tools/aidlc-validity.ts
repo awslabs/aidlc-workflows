@@ -22,7 +22,7 @@ import {
  */
 export const VALIDATION_BASIS_FIELD = "Validation Basis";
 export const VALIDATION_WARNING_FIELD = "Validation Warning";
-const VALIDATION_BASIS_SCHEMA = 2 as const;
+const VALIDATION_BASIS_SCHEMA = 3 as const;
 
 export type StageValidityStatus = "stale" | "needs-revalidation";
 
@@ -61,8 +61,8 @@ export interface StageValidityIssue {
 export interface StageValidityInspection {
   issues: StageValidityIssue[];
   /**
-   * Completed stages whose current attempt has no schema-2 receipt. Existing
-   * workflows and the earlier schema-1 draft fail open until re-completion.
+   * Completed stages whose current attempt has no schema-3 receipt. Existing
+   * workflows and earlier receipt schemas fail open until re-completion.
    */
   untracked: string[];
   /** Non-blocking diagnostics for receipts that could not be re-inspected. */
@@ -98,7 +98,7 @@ interface OrderedAuditEvent {
 interface CompletionReceipts {
   /** Receipt for the current attempt only; used to track completed checkboxes. */
   current: Map<string, StageValidationBasis>;
-  /** Last schema-2 receipt, retained across STAGE_STARTED for propagation. */
+  /** Last schema-3 receipt, retained across STAGE_STARTED for propagation. */
   latestKnown: Map<string, StageValidationBasis>;
 }
 
@@ -372,6 +372,13 @@ export function captureStageValidationBasis(
   options: CaptureStageValidationOptions = {},
 ): StageValidationBasis {
   const projectType = projectTypeFrom(stateContent);
+  const captureOptions: CaptureStageValidationOptions = {
+    ...options,
+    resolution: {
+      ...options.resolution,
+      stateContent,
+    },
+  };
   return {
     schema: VALIDATION_BASIS_SCHEMA,
     graphContract: graphContractFingerprint(stage),
@@ -381,9 +388,9 @@ export function captureStageValidationBasis(
       stage,
       stages,
       projectType,
-      options,
+      captureOptions,
     ),
-    outputs: captureOutputBasis(projectDir, stage, options),
+    outputs: captureOutputBasis(projectDir, stage, captureOptions),
   };
 }
 
@@ -538,7 +545,7 @@ function completionReceiptsFromAudit(audit: string): CompletionReceipts {
   return { current, latestKnown };
 }
 
-/** Return schema-2 receipts for each stage's current attempt. */
+/** Return schema-3 receipts for each stage's current attempt. */
 export function latestCompletionBasesFromAudit(
   audit: string,
 ): Map<string, StageValidationBasis> {
@@ -608,7 +615,7 @@ function observedDependencyEdges(
 }
 
 /**
- * Propagate stale roots through dependencies actually observed in schema-2
+ * Propagate stale roots through dependencies actually observed in schema-3
  * completion receipts. A declared-but-missing optional consume is not an edge.
  * requires_stage is not used because v2 does not yet distinguish semantic and
  * ordering-only requires edges.

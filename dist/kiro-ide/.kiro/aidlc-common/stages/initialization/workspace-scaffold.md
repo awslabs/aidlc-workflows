@@ -39,7 +39,13 @@ MANDATORY: Follow stage-protocol.md for state tracking and audit logging.
 1. Update `<record>/aidlc-state.md`: set `Current Stage` to `scaffolding workspace`
 2. Mark workspace-scaffold as `[-]` in progress
 
-### Step 2: Ensure the Space Knowledge Directory
+### Step 2: Ensure the Space Shared Directories
+
+Ensure-exists the empty space-level CodeKB parent
+`aidlc/spaces/<space>/codekb/`. This makes the shared store safe to inspect
+before Reverse Engineering runs. Repository directories remain lazy:
+`codekb/<repo>/` appears only when Reverse Engineering writes that repo's
+artifacts.
 
 Ensure-exists the space-level domain-knowledge directory
 `aidlc/spaces/<space>/knowledge/` (shorthand `aidlc/knowledge/`). It is

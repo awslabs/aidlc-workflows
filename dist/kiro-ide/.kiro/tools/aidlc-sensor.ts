@@ -50,12 +50,15 @@ import {
 	artifactFilename,
 	codekbDir,
 	errorMessage,
+	getField,
 	isoTimestamp,
 	isPlainObject,
 	KNOWN_CODEKB_STAGES,
+	readStateFile,
 	recordDir,
 	resolveProjectDir,
 	sensorsDir,
+	usesStageLevelPerUnitArtifacts,
 	withAuditLock,
 } from "./aidlc-lib.ts";
 import {
@@ -256,8 +259,9 @@ function handleDescribe(args: string[]): void {
 // producesDirsForStage / aidlc-orchestrate.ts's resolveArtifactPath seams:
 //   - codekb producers (reverse-engineering): glob every repo dir under the
 //     space-level codekb root.
-//   - per-unit Construction producers (for_each: unit-of-work): the unit is
-//     unknown here, so glob every <record>/construction/<unit>/<slug>/.
+//   - per-unit Construction producers (for_each: unit-of-work): use the
+//     stage-level directory when the effective plan skips Units Generation;
+//     otherwise glob every <record>/construction/<unit>/<slug>/.
 //   - everything else: <record>/<phase>/<slug>/<name>.md.
 //
 // Fail-open: when no intent record resolves (recordDir null — a bare test
@@ -287,6 +291,19 @@ function artifactDirsForProducer(
 	const rec = recordDir(pd);
 	if (rec === null) return [];
 	if (producer.for_each === "unit-of-work") {
+		try {
+			const stateContent = readStateFile(pd);
+			if (
+				usesStageLevelPerUnitArtifacts(
+					getField(stateContent, "Scope"),
+					stateContent,
+				)
+			) {
+				return [join(rec, producer.phase, producer.slug)];
+			}
+		} catch {
+			// Bare fixtures retain the existing directory-discovery fallback.
+		}
 		const ctorRoot = join(rec, "construction");
 		if (!existsSync(ctorRoot)) return [];
 		const dirs: string[] = [];

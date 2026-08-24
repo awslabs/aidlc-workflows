@@ -114,6 +114,7 @@ import {
   clearActiveDirectiveMarker,
   codekbRepoName,
   currentUnitLifecycleMode,
+  effectivePlanAction,
   errorMessage,
   filterProducesByKind,
   firstInScopeStageOfPhase,
@@ -163,6 +164,7 @@ import {
   swarmConvergedUnits,
   unitCompletedReceipts,
   unitLifecycleReceiptsInUse,
+  usesStageLevelPerUnitArtifacts,
   toPosix,
   validScopes,
   harnessDir,
@@ -2772,33 +2774,6 @@ function nodeForSlug(slug: string): GraphStage | undefined {
   return loadGraph().find((s) => s.slug === slug);
 }
 
-// Resolve the approved plan's action for one stage. The state suffix is the
-// live plan (including recomposition) and therefore wins over the stock scope
-// grid. Keep this separate from GraphStage.execution: ALWAYS|CONDITIONAL
-// describes stage-authored applicability, not whether this workflow approved
-// the stage for execution.
-function effectivePlanAction(
-  slug: string,
-  scope: string,
-  stateContent: string | null,
-): "EXECUTE" | "SKIP" | undefined {
-  const stateAction = stateContent
-    ? parseStateStageSuffixes(stateContent).get(slug)
-    : undefined;
-  return stateAction ?? loadScopeMapping()[scope]?.stages[slug];
-}
-
-// A per-unit stage falls back to one stage-level iteration only when the
-// effective plan excludes the Unit-DAG producer. This distinguishes an
-// intentional zero-Unit scope/composed plan from a normal workflow whose
-// Units Generation stage has not produced its artifact yet.
-function usesStageLevelPerUnitArtifacts(
-  scope: string,
-  stateContent: string | null,
-): boolean {
-  return effectivePlanAction("units-generation", scope, stateContent) !== "EXECUTE";
-}
-
 // The `next` handler reads workflow state and emits exactly one directive. Rule
 // transport may lazily mint its machine-local MAC key, but never mutates shared
 // workflow state.
@@ -3609,6 +3584,7 @@ function isAutonomousSwarmCandidate(
 ): boolean {
   if (node.phase !== "construction") return false;
   if (node.for_each !== SWARM_FOR_EACH || node.mode !== SWARM_MODE) return false;
+  if (usesStageLevelPerUnitArtifacts(scope, stateContent)) return false;
   if (isSkeletonGateStage(node, scope)) return false;
   if (readAutonomyMode(stateContent) !== "autonomous") return false;
   return true;
@@ -4244,6 +4220,21 @@ function emitPerUnitRunStage(
   resolution?: BoltBatchesResolution,
   allowWave = true,
 ): void {
+  if (usesStageLevelPerUnitArtifacts(scope, stateContent)) {
+    const directive = buildRunStageDirective(
+      node,
+      projectType,
+      null,
+      scope,
+      stateContent,
+      recordPrefix,
+      codekbCtx,
+    );
+    directive.gate = true;
+    emit(directive);
+    return;
+  }
+
   const r = resolution ?? resolveBoltBatches(projectDir);
 
   // GATE precedence: never iterate per-unit until the walking-skeleton gate is
@@ -4255,10 +4246,7 @@ function emitPerUnitRunStage(
   // single directive (with the {unit-name} placeholder + the unresolved gate)
   // and return. The follow-up `next` (after `report --skeleton-stance`) resolves
   // the gate and re-enters here to begin per-unit iteration.
-  const stageLevelFallback =
-    r.state === "none" && usesStageLevelPerUnitArtifacts(scope, stateContent);
   if (
-    !stageLevelFallback &&
     isSkeletonGateStage(node, scope) &&
     readSkeletonStance(stateContent) === null
   ) {
@@ -4268,34 +4256,14 @@ function emitPerUnitRunStage(
 
   switch (r.state) {
     case "none":
-      if (!stageLevelFallback) {
-        emitRunStageForSlug(
-          node.slug,
-          projectType,
-          scope,
-          stateContent,
-          recordPrefix,
-          codekbCtx,
-        );
-        return;
-      }
-      // No dependency artifact exists on disk: run one stage-level iteration.
-      // There is no Bolt, Unit, skeleton classification, ladder, or swarm path,
-      // so paths omit the synthetic {unit-name} segment and the ordinary gated
-      // stage contract applies directly.
-      {
-        const directive = buildRunStageDirective(
-          node,
-          projectType,
-          null,
-          scope,
-          stateContent,
-          recordPrefix,
-          codekbCtx,
-        );
-        directive.gate = true;
-        emit(directive);
-      }
+      emitRunStageForSlug(
+        node.slug,
+        projectType,
+        scope,
+        stateContent,
+        recordPrefix,
+        codekbCtx,
+      );
       return;
     case "malformed":
       emit({
@@ -4489,6 +4457,21 @@ function emitUnitMajorRunStage(
   codekbCtx: CodekbCtx,
   projectDir: string,
 ): void {
+  if (usesStageLevelPerUnitArtifacts(scope, stateContent)) {
+    emitPerUnitRunStage(
+      node,
+      projectType,
+      scope,
+      stateContent,
+      recordPrefix,
+      codekbCtx,
+      projectDir,
+      undefined,
+      false,
+    );
+    return;
+  }
+
   // Skeleton-gate precedence, exactly as emitPerUnitRunStage: never begin the
   // walk before the walking-skeleton stance is resolved. functional-design is
   // both the first block stage and the skeleton-gate stage for
@@ -5244,6 +5227,7 @@ function checkEnsembleEvidence(
   options: {
     singleRun?: boolean;
     settledSwarm?: boolean;
+    stageLevelPerUnit?: boolean;
     boltBatches?: BoltBatchesResolution;
     unitKinds?: Map<string, string> | null;
   } = {},
@@ -5264,7 +5248,10 @@ function checkEnsembleEvidence(
   // {unit-name} placeholder with stateContent null), so demanding the MAIN
   // DAG's per-unit contribution sets would make a per-unit single stage
   // unapprovable. Evidence for a single run is checked at the stage level.
-  const perUnit = !options.singleRun && isPerUnit(node);
+  const perUnit =
+    !options.singleRun &&
+    !options.stageLevelPerUnit &&
+    isPerUnit(node);
   const resolution = perUnit
     ? (options.boltBatches ?? resolveBoltBatches(pd))
     : null;
@@ -5337,7 +5324,11 @@ function checkStageCompletionEvidence(
   stateContent: string,
   pd: string,
 ): EnsembleEvidenceResult {
-  const boltResolution = isPerUnit(node) ? resolveBoltBatches(pd) : null;
+  const stageLevelPerUnit =
+    isPerUnit(node) &&
+    usesStageLevelPerUnitArtifacts(scope, stateContent);
+  const boltResolution =
+    isPerUnit(node) && !stageLevelPerUnit ? resolveBoltBatches(pd) : null;
   const unitKinds =
     boltResolution?.state === "ok" ? boltResolution.unitKinds : null;
   const settledSwarm = isSettledAutonomousSwarm(
@@ -5369,7 +5360,7 @@ function checkStageCompletionEvidence(
     }
   }
 
-  if (isPerUnit(node) && !settledSwarm) {
+  if (isPerUnit(node) && !stageLevelPerUnit && !settledSwarm) {
     const resolution = boltResolution ?? resolveBoltBatches(pd);
     if (resolution.state === "malformed") {
       return {
@@ -5428,6 +5419,7 @@ function checkStageCompletionEvidence(
     relativeRecordDir(pd),
     {
       settledSwarm,
+      stageLevelPerUnit,
       boltBatches: boltResolution ?? undefined,
       unitKinds,
     },

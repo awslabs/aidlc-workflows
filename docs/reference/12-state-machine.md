@@ -610,7 +610,7 @@ A completed checkbox records execution history. It does not prove that the
 result still matches the runtime artifact instances captured at completion.
 Execution state and result validity are therefore separate concepts.
 
-Each main-workflow `STAGE_COMPLETED` event may carry a schema-2 `Validation
+Each main-workflow `STAGE_COMPLETED` event may carry a schema-3 `Validation
 Basis`. Runtime resolution remains concrete and instance-aware: the active Bolt
 DAG expands per-unit artifacts, `produces_kinds` filters unit kinds, and the
 artifact-vocabulary filename mapping resolves collision-safe names such as
@@ -633,6 +633,11 @@ which bytes the stage read while executing. "Observed dependency" means an
 input recorded in the completion receipt; changes before capture become the
 baseline, while later changes can be detected.
 
+Schema-2 and earlier receipts remain untracked until normal re-completion.
+Schema 2 cannot distinguish its former zero-instance resolution from the
+stage-level zero-Unit resolution, so treating it as advisory avoids reporting
+unchanged in-flight workflows as stale after an upgrade.
+
 `requires_stage` is not treated as an invalidation edge because the current v2
 schema uses it for both semantic dependency and ordering. An explicit edge kind
 would be required before it can safely participate in validity propagation.
@@ -654,9 +659,11 @@ may contain a new boundary from a forced re-init in those releases; completions
 before that boundary read as untracked and fail open until their stages
 complete again.
 
-Known limitation: artifact resolution is scope-blind. The express scope runs
-Code Generation and Build and Test with stage-level artifact paths and no Unit
-DAG, so the resolver's per-unit expansion finds zero instances for those
-outputs and they are not fingerprinted; changes to them are currently not
-detected (fail-open, never a false drift). A scope-aware resolution contract is
-follow-up work.
+Artifact resolution follows the approved workflow plan for per-Unit stages.
+When Units Generation is skipped, including express and recomposed zero-Unit
+plans, validity resolves one stage-level artifact instance under
+`<record>/construction/<stage>/` and does not inspect a Bolt DAG or stale
+per-Unit directories. When Units Generation executes, normal Bolt DAG expansion
+and the legacy no-DAG directory fallback remain unchanged. Missing or ambiguous
+plan state makes receipt capture or inspection unavailable with a non-blocking
+warning rather than reporting false drift.

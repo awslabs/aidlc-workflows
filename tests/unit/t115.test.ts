@@ -1597,4 +1597,57 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     expect(refused.out).toContain("no fresh REVIEW_COMPLETED");
     expect(countEvent(p, "STAGE_AWAITING_APPROVAL")).toBe(0);
   }, 30000);
+
+  test("R20: a zero-Unit stage-level artifact mutation invalidates the pending review", () => {
+    const p = projWithState("state-construction-with-worktree.md");
+    replaceStateText(
+      p,
+      "### CONSTRUCTION PHASE",
+      "### INCEPTION PHASE\n- [S] units-generation — SKIP\n\n### CONSTRUCTION PHASE",
+    );
+    seedBoltDagBatches(p, [["stale-unit"]]);
+    const outputDir = join(
+      seededRecordDir(p),
+      "construction",
+      "code-generation",
+    );
+    mkdirSync(outputDir, { recursive: true });
+    const summary = join(outputDir, "code-summary.md");
+    writeFileSync(summary, "# Reviewed code summary\n", "utf-8");
+
+    const request = log(
+      [
+        "review",
+        "--stage",
+        "code-generation",
+        "--reviewer",
+        "aidlc-architecture-reviewer-agent",
+        "--iteration",
+        "1",
+      ],
+      p,
+    );
+    expect(request.status, request.out).toBe(0);
+
+    writeFileSync(summary, "# Changed after dispatch\n", "utf-8");
+    const verdict = log(
+      [
+        "review",
+        "--stage",
+        "code-generation",
+        "--reviewer",
+        "aidlc-architecture-reviewer-agent",
+        "--iteration",
+        "1",
+        "--verdict",
+        "READY",
+      ],
+      p,
+    );
+    expect(verdict.status).not.toBe(0);
+    expect(verdict.out).toContain(
+      "declared artifacts changed after REVIEW_REQUESTED",
+    );
+    expect(countEvent(p, "REVIEW_COMPLETED")).toBe(0);
+  }, 30000);
 });

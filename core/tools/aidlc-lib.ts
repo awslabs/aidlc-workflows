@@ -4563,6 +4563,13 @@ export function checkSummaryConfirmationEvidence(
   if (
     declared &&
     isPerUnitStage(stage) &&
+    !(
+      options.stateContent !== undefined &&
+      usesStageLevelPerUnitArtifacts(
+        getField(options.stateContent ?? "", "Scope"),
+        options.stateContent,
+      )
+    ) &&
     options.workflow === undefined &&
     options.unit === undefined
   ) {
@@ -5474,7 +5481,10 @@ function reviewArtifactEntries(
   projectDir: string,
   stage: ReviewFingerprintStage,
   unit?: string,
-  boltDag?: BoltDagResolution,
+  options: {
+    boltDag?: BoltDagResolution;
+    stateContent?: string | null;
+  } = {},
 ): ReviewArtifactEntry[] | null {
   const artifactsForKind = (kind: string | null) => [
     ...filterProducesByKind(stage.produces_kinds, stage.produces ?? [], kind).map(
@@ -5526,9 +5536,32 @@ function reviewArtifactEntries(
     }));
   }
 
+  let stateContent = options.stateContent;
+  if (stateContent === undefined) {
+    try {
+      stateContent = readStateFile(projectDir);
+    } catch {
+      stateContent = null;
+    }
+  }
+  if (
+    unit === undefined &&
+    stateContent !== null &&
+    usesStageLevelPerUnitArtifacts(
+      getField(stateContent, "Scope"),
+      stateContent,
+    )
+  ) {
+    return allArtifacts.map((artifact) => ({
+      logicalPath: `${stage.phase}/${stage.slug}/${artifactFilename(artifact.name)}`,
+      path: join(record, stage.phase, stage.slug, artifactFilename(artifact.name)),
+      required: artifact.required,
+    }));
+  }
+
   let units: string[];
   let unitKinds = new Map<string, string>();
-  const resolution = boltDag ?? resolveBoltDag(projectDir);
+  const resolution = options.boltDag ?? resolveBoltDag(projectDir);
   if (unit) {
     units = [unit];
     if (resolution.state === "ok" && resolution.unitKinds !== null) {
@@ -5589,11 +5622,15 @@ export function reviewArtifactFingerprint(
   options: {
     requireRequiredArtifacts?: boolean;
     boltDag?: BoltDagResolution;
+    stateContent?: string | null;
   } = {},
 ): string | null {
   let entries: ReviewArtifactEntry[] | null;
   try {
-    entries = reviewArtifactEntries(projectDir, stage, unit, options.boltDag);
+    entries = reviewArtifactEntries(projectDir, stage, unit, {
+      boltDag: options.boltDag,
+      stateContent: options.stateContent,
+    });
   } catch {
     return null;
   }
@@ -5895,7 +5932,12 @@ export function freshReviewReceipts(
     return sawSessionBoundary;
   };
 
-  const perUnit = stage.for_each === "unit-of-work";
+  const perUnit =
+    stage.for_each === "unit-of-work" &&
+    !usesStageLevelPerUnitArtifacts(
+      getField(stateContent, "Scope"),
+      stateContent,
+    );
   const unitMajor =
     perUnit && getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
   const dag = perUnit ? options.boltDag ?? resolveBoltDag(projectDir) : null;
@@ -6160,7 +6202,10 @@ export function freshReviewReceipts(
       projectDir,
       stage,
       unit,
-      { boltDag: options.boltDag },
+      {
+        boltDag: options.boltDag,
+        stateContent,
+      },
     );
     const fingerprintUsable =
       artifactFingerprintUsable && currentFingerprint !== null;
@@ -9052,6 +9097,7 @@ export function isAutonomousSwarmStage(
   if (!isAutonomousMode(stateContent)) return false;
   const scope = stateContent ? getField(stateContent, "Scope") : null;
   if (!scope) return false;
+  if (usesStageLevelPerUnitArtifacts(scope, stateContent)) return false;
   const first = firstInScopeStageOfPhase("construction", scope);
   if (first !== null && first.slug === stage.slug) return false;
   const resolution = resolveBoltDag(projectDir);
@@ -12712,10 +12758,32 @@ export function nextInScopeStage(
   return null;
 }
 
-// Parse the "- [x] slug — EXECUTE" / "— SKIP" suffix from Stage Progress. The
-// suffix is set by `aidlc-utility init` per scope + Greenfield/Brownfield
-// overrides, then preserved across stage transitions — it represents the
-// plan, not the current run-state (checkbox letters are separate).
+// Resolve one stage's action in the approved workflow plan. State suffixes
+// include recomposition and project-type overrides, so they take precedence
+// over the stock scope grid.
+export function effectivePlanAction(
+  slug: string,
+  scope: string | null | undefined,
+  stateContent: string | null,
+): "EXECUTE" | "SKIP" | undefined {
+  const stateAction = stateContent
+    ? parseStateStageSuffixes(stateContent).get(slug)
+    : undefined;
+  if (stateAction !== undefined) return stateAction;
+  return scope ? loadScopeMapping()[scope]?.stages[slug] : undefined;
+}
+
+// A per-unit stage uses one stage-level artifact set when the approved plan
+// excludes the Unit DAG producer.
+export function usesStageLevelPerUnitArtifacts(
+  scope: string | null | undefined,
+  stateContent: string | null,
+): boolean {
+  return effectivePlanAction("units-generation", scope, stateContent) !== "EXECUTE";
+}
+
+// Parse each stage's EXECUTE or SKIP suffix from Stage Progress. The suffix is
+// the approved plan action, independent of the checkbox run state.
 export function parseStateStageSuffixes(
   content: string
 ): Map<string, "EXECUTE" | "SKIP"> {

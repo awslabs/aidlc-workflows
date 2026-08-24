@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 643,
+    "total": 645,
     "enumeratedByClass": {
-      "function": 379,
+      "function": 381,
       "audit": 87,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 195,
+      "function": 197,
       "audit": 46,
       "scope": 11,
       "stage": 11,
@@ -1824,6 +1824,18 @@
         {
           "file": "tests/unit/t294-document-extractors-seam.test.ts",
           "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:effectivePlanAction",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t310-stage-validity-propagation.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -4539,6 +4551,18 @@
         {
           "file": "tests/integration/t165-intent-create-p4.test.ts",
           "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:usesStageLevelPerUnitArtifacts",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t310-stage-validity-propagation.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"

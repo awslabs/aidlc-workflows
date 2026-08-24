@@ -74,6 +74,7 @@ import {
   isPlainObject,
   isoTimestamp,
   isPackageJson,
+  codekbDir,
   codekbRepoName,
   codekbScopeFingerprint,
   parseReScope,
@@ -1303,7 +1304,7 @@ To get started:
       audit: readAllAuditShards(projectDir, flags.intent, flags.space),
       currentBasis: (stage, stages) =>
         captureStageValidationBasis(projectDir, stage, content, stages, {
-          resolution: { recordPath: dirname(sp) },
+          resolution: { recordPath: dirname(sp), stateContent: content },
         }),
     });
     const directlyStale = validity.issues
@@ -4384,10 +4385,9 @@ function phasesWithExecuteStages(scope: string): Set<string> {
 
 // Ensure the dirs a workflow writes into exist. Idempotent ensure-exists (SEED
 // ships the shell). Creates the active intent's record dir plus a per-phase
-// artifact dir for each phase the SCOPE RUNS, AND the SPACE-level domain
-// knowledge/ dir (a sibling of intents, not a record subdir); all skipped if
-// already present. The active-intent cursor must be set (createIntent/migration
-// did so) before this runs.
+// artifact dir for each phase the SCOPE RUNS, plus the SPACE-level CodeKB
+// parent and domain knowledge dir; all skipped if already present. The active
+// intent cursor must be set before this runs.
 //
 // Scope-excluded phases get NO folder: an empty `operation/` in a bugfix record
 // reads as work that was planned and skipped, when that phase was never in the
@@ -4408,6 +4408,9 @@ function ensureWorkspaceDirs(projectDir: string, scope: string): void {
   // verification/ is scope-independent: sensor and gate verification can land
   // for any phase, so every record gets it.
   mkdirSync(join(record, "verification"), { recursive: true });
+  // The shared CodeKB parent is safe to inspect before any repository has been
+  // analyzed. Per-repo stores remain lazy and appear only when RE writes them.
+  mkdirSync(dirname(codekbDir(projectDir, "_")), { recursive: true });
   // SPACE-level domain knowledge dir (NOT per-intent): vision §"Spaces" makes
   // knowledge a sibling of memory/codekb/intents under spaces/<space>/, so team
   // domain knowledge accumulates across every intent in the space rather than
@@ -4454,8 +4457,8 @@ function ensureWorkspaceDirs(projectDir: string, scope: string): void {
 //
 // The directory-tree copy + knowledge READMEs that the old `--init` shipped are
 // gone: the workspace shell (spaces/default/memory, native includes) ships in
-// dist/ (SEED), and lazy per-intent/codekb/knowledge dirs are ensure-exists
-// (created on demand). What stays is the scope→stage state-build that routes
+// dist/ (SEED), and lazy workspace dirs are ensure-exists at birth or first
+// use. What stays is the scope→stage state-build that routes
 // the workflow to its first post-init stage — relocated here, now writing into
 // the BORN intent's record (the active-intent cursor set first makes the
 // default-resolving state/audit helpers resolve there).

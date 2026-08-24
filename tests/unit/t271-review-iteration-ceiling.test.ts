@@ -104,7 +104,10 @@ function seedProject(scope: "bugfix" | "feature"): string {
       readFileSync(sf, "utf8").replace(
         "- **Scope**: bugfix",
         "- **Scope**: feature"
-      )
+      ).replace(
+        "- [S] units-generation — SKIP (bugfix scope)",
+        "- [ ] units-generation — EXECUTE",
+      ),
     );
   }
   seedBoltDagBatches(proj, [["unit-alpha"]]);

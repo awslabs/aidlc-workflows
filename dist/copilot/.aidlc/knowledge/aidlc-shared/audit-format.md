@@ -353,10 +353,10 @@ The public `aidlc-audit.ts append` CLI is a diagnostic escape hatch, not the can
 
 ## Validation basis on `STAGE_COMPLETED`
 
-Main-workflow `STAGE_COMPLETED` entries may include a compact schema-2 receipt:
+Main-workflow `STAGE_COMPLETED` entries may include a compact schema-3 receipt:
 
 ```text
-**Validation Basis**: {"schema":2,"graphContract":"sha256:...","projectType":"brownfield","inputs":[{"artifact":"code-summary","producer":"code-generation","required":true,"instanceCount":12,"presentCount":12,"structureHash":"sha256:...","contentHash":"sha256:..."}],"outputs":[...]}
+**Validation Basis**: {"schema":3,"graphContract":"sha256:...","projectType":"brownfield","inputs":[{"artifact":"code-summary","producer":"code-generation","required":true,"instanceCount":12,"presentCount":12,"structureHash":"sha256:...","contentHash":"sha256:..."}],"outputs":[...]}
 ```
 
 The resolver first computes the concrete runtime artifact-instance set using
@@ -375,5 +375,7 @@ untracked and advisory rather than a reason to abort the state transition.
 
 The latest receipt remains useful as dependency evidence after a stage is
 reopened, while only a completion in the current attempt counts as current
-tracking for the stage itself. A schema-1, concrete-instance schema-2 Draft, or
-receipt-less completion fails open until the stage completes with this schema.
+tracking for the stage itself. Earlier schemas and receipt-less completions fail
+open until the stage completes with this schema. Schema 2 is deliberately
+untracked because it cannot distinguish its old zero-instance resolution from
+the stage-level zero-Unit resolution introduced with schema 3.

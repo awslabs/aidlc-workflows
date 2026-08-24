@@ -98,6 +98,7 @@ import {
   stagesInScope,
   swarmConvergedUnits,
   updateIntentStatus,
+  usesStageLevelPerUnitArtifacts,
   validateUnitName,
   validScopes,
   withAuditLock,
@@ -933,6 +934,13 @@ function handleUnit(args: string[]): void {
   // `unit start` calls could both pass the single-active-unit check.
   withAuditLock(pd, () => {
     let content = readStateFile(pd);
+    const scope = getField(content, "Scope");
+    if (usesStageLevelPerUnitArtifacts(scope, content)) {
+      error(
+        `Refusing unit ${action} for "${unit}": the effective workflow plan skips ` +
+          "Units Generation, so this stage runs once at stage level.",
+      );
+    }
 
     // Only an engine-eligible autonomous swarm owns SWARM_UNIT_* bookkeeping.
     // The autonomy grant persists across backward jumps, where inline per-unit
@@ -1454,6 +1462,7 @@ function autonomousSwarmOwnsStage(
   }
   const scope = getField(stateContent, "Scope");
   if (!scope) return true;
+  if (usesStageLevelPerUnitArtifacts(scope, stateContent)) return false;
   const first = firstInScopeStageOfPhase("construction", scope);
   return first === null || first.slug !== stage.slug;
 }
@@ -1631,13 +1640,9 @@ function producesDirsForStage(
   if (rec === null) return [];
   const perUnit = stage.for_each === "unit-of-work";
   if (perUnit) {
-    const resolution = resolveBoltDag(pd);
     const stateContent = readStateFile(pd);
     const scope = getField(stateContent, "Scope");
-    const unitProducerAction =
-      parseStateStageSuffixes(stateContent).get("units-generation") ??
-      (scope ? loadScopeMapping()[scope]?.stages["units-generation"] : undefined);
-    if (resolution.state === "none" && unitProducerAction !== "EXECUTE") {
+    if (usesStageLevelPerUnitArtifacts(scope, stateContent)) {
       return [join(rec, "construction", stage.slug)];
     }
     const ctorRoot = join(rec, "construction");
@@ -1670,17 +1675,21 @@ function producesArtifactsExist(
   const produces = stage.produces ?? [];
   if (produces.length === 0) return true; // nothing declared -> nothing to verify
   if (stage.for_each === "unit-of-work" && stage.produces_kinds !== undefined) {
-    const resolution = resolveBoltDag(pd);
-    if (resolution.state === "ok" && resolution.unitKinds !== null) {
-      const allVacuous = resolution.units.every(
-        (u) =>
-          filterProducesByKind(
-            stage.produces_kinds,
-            produces,
-            resolution.unitKinds?.get(u) ?? null,
-          ).length === 0,
-      );
-      if (allVacuous) return true;
+    const stateContent = readStateFile(pd);
+    const scope = getField(stateContent, "Scope");
+    if (!usesStageLevelPerUnitArtifacts(scope, stateContent)) {
+      const resolution = resolveBoltDag(pd);
+      if (resolution.state === "ok" && resolution.unitKinds !== null) {
+        const allVacuous = resolution.units.every(
+          (u) =>
+            filterProducesByKind(
+              stage.produces_kinds,
+              produces,
+              resolution.unitKinds?.get(u) ?? null,
+            ).length === 0,
+        );
+        if (allVacuous) return true;
+      }
     }
   }
   const dirs = producesDirsForStage(pd, stage);
@@ -2505,7 +2514,9 @@ function verifyReviewerPrecondition(
   // WORKFLOW_STARTED/STAGE_JUMPED floor, the unit-major STAGE_STARTED skip,
   // and per-unit write invalidation are all documented there.
   const receipts = freshReviewReceipts(pd, content, stage, { reviewClass });
-  const perUnit = stage.for_each === "unit-of-work";
+  const perUnit =
+    stage.for_each === "unit-of-work" &&
+    !usesStageLevelPerUnitArtifacts(getField(content, "Scope"), content);
   const pendingRecoveryUnits = Array.from(receipts.unitPending)
     .filter(([, pending]) => pending.recovery)
     .map(([unit]) => unit);
@@ -2527,12 +2538,14 @@ function verifyReviewerPrecondition(
   // binding and applies newest-fresh-claimant shielding per path.
   const sourceFreshnessOff =
     process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1";
-  const settledSwarm = settledSwarmForArtifactGuardOrError(
-    pd,
-    stage,
-    content,
-    action,
-  );
+  const settledSwarm =
+    perUnit &&
+    settledSwarmForArtifactGuardOrError(
+      pd,
+      stage,
+      content,
+      action,
+    );
   // A tightly bounded reconciliation handles the one intentional exception to
   // the global outer boundary: after an unclaimed addition is reverted, the
   // current baseline delta can be fully covered by fresh modern unit bindings

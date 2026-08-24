@@ -1,6 +1,7 @@
 // covers: core/tools/aidlc-artifact-resolution.ts
 // covers: core/tools/aidlc-artifact-vocabulary.ts
 // covers: core/tools/aidlc-validity.ts
+// covers: function:effectivePlanAction function:usesStageLevelPerUnitArtifacts
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   mkdirSync,
@@ -105,7 +106,10 @@ function intentRecord(projectDir: string): string {
   return join(projectDir, "aidlc", "spaces", "default", "intents", INTENT);
 }
 
-function stateContent(completed = graph.map((stage) => stage.slug)): string {
+function stateContent(
+  completed = graph.map((stage) => stage.slug),
+  scope = "classic",
+): string {
   const completedSet = new Set(completed);
   const rows = graph.map((stage) => {
     const marker = completedSet.has(stage.slug) ? "x" : " ";
@@ -115,6 +119,7 @@ function stateContent(completed = graph.map((stage) => stage.slug)): string {
 
 ## Runtime State
 - **Project Type**: greenfield
+- **Scope**: ${scope}
 
 ## Stage Progress
 ${rows.join("\n")}
@@ -263,7 +268,7 @@ function basis(
   overrides: Partial<StageValidationBasis> = {},
 ): StageValidationBasis {
   return {
-    schema: 2,
+    schema: 3,
     graphContract: "sha256:contract",
     projectType: "greenfield",
     inputs: [artifactBasis()],
@@ -432,6 +437,89 @@ describe("v2 stage-graph compatibility", () => {
     ]);
   });
 
+  test("resolves an express per-unit output as one stage-level fingerprint", () => {
+    const projectDir = tempProject();
+    const state = stateContent(["code-generation"], "express");
+    const record = initializeProject(projectDir, state);
+    const code = graph.find((stage) => stage.slug === "code-generation");
+    if (!code) throw new Error("fixture missing code-generation");
+    writeArtifact(
+      record,
+      "construction",
+      "code-generation",
+      "code-summary.md",
+      "stage-level-v1\n",
+    );
+
+    const instances = resolveArtifactInstances(
+      projectDir,
+      "code-summary",
+      code,
+      { runtimeUnits, stateContent: state },
+    );
+    expect(instances).toHaveLength(1);
+    expect(instances[0]).toMatchObject({
+      unit: null,
+      unitKind: null,
+    });
+    expect(instances[0].relativePath.endsWith(
+      "/construction/code-generation/code-summary.md",
+    )).toBe(true);
+
+    const captured = captureStageValidationBasis(
+      projectDir,
+      code,
+      state,
+      graph,
+    );
+    expect(captured.outputs).toEqual([
+      expect.objectContaining({
+        artifact: "code-summary",
+        instanceCount: 1,
+        presentCount: 1,
+      }),
+    ]);
+  });
+
+  test("ignores stale per-unit directories for an express stage-level owner", () => {
+    const projectDir = tempProject();
+    const state = stateContent(["code-generation"], "express");
+    const record = initializeProject(projectDir, state);
+    const code = graph.find((stage) => stage.slug === "code-generation");
+    if (!code) throw new Error("fixture missing code-generation");
+    writeArtifact(
+      record,
+      "construction",
+      "code-generation",
+      "code-summary.md",
+      "stage-level-v1\n",
+    );
+    writeUnitArtifact(
+      record,
+      "stale-unit",
+      "code-generation",
+      "code-summary.md",
+      "stale-unit-v1\n",
+    );
+    writeArtifact(
+      record,
+      "inception",
+      "units-generation",
+      "unit-of-work-dependency.md",
+      "not a valid unit dag\n",
+    );
+
+    const instances = resolveArtifactInstances(
+      projectDir,
+      "code-summary",
+      code,
+      { stateContent: state },
+    );
+    expect(instances).toHaveLength(1);
+    expect(instances[0].unit).toBeNull();
+    expect(instances[0].relativePath).not.toContain("stale-unit");
+  });
+
   test("falls back to existing per-unit stage directories only when no DAG exists", () => {
     const projectDir = tempProject();
     const record = initializeProject(projectDir);
@@ -565,20 +653,22 @@ describe("v2 stage-graph compatibility", () => {
   });
 });
 
-describe("schema-2 validation basis", () => {
-  test("parses schema 2 and deliberately fails open on schema 1", () => {
+describe("schema-3 validation basis", () => {
+  test("parses schema 3 and deliberately fails open on earlier schemas", () => {
     expect(parseStageValidationBasis(JSON.stringify(basis()))).toEqual(basis());
-    expect(
-      parseStageValidationBasis(
-        JSON.stringify({
-          schema: 1,
-          definition: "sha256:old",
-          projectType: "greenfield",
-          inputs: {},
-          outputs: {},
-        }),
-      ),
-    ).toBeNull();
+    for (const schema of [1, 2]) {
+      expect(
+        parseStageValidationBasis(
+          JSON.stringify({
+            schema,
+            graphContract: "sha256:old",
+            projectType: "greenfield",
+            inputs: [],
+            outputs: [],
+          }),
+        ),
+      ).toBeNull();
+    }
   });
 
   test("reports graph, project-type, aggregate input, and output drift", () => {
@@ -908,6 +998,58 @@ describe("observed stage-level stale propagation", () => {
 });
 
 describe("read-only inspection", () => {
+  test("detects direct drift in an express stage-level artifact", () => {
+    const projectDir = tempProject();
+    const state = stateContent(["code-generation"], "express");
+    const record = initializeProject(projectDir, state);
+    const code = graph.find((stage) => stage.slug === "code-generation");
+    if (!code) throw new Error("fixture missing code-generation");
+    writeArtifact(
+      record,
+      "inception",
+      "requirements-analysis",
+      "requirements.md",
+      "requirements-v1\n",
+    );
+    const output = writeArtifact(
+      record,
+      "construction",
+      "code-generation",
+      "code-summary.md",
+      "stage-level-v1\n",
+    );
+    const fields = stageValidationAuditFields(
+      projectDir,
+      code,
+      state,
+      graph,
+    );
+    expect(fields[VALIDATION_WARNING_FIELD]).toBeUndefined();
+    const audit = [
+      auditEvent("WORKFLOW_STARTED", "2026-08-23T00:00:00.000Z"),
+      auditEvent("STAGE_COMPLETED", "2026-08-23T00:00:01.000Z", {
+        Stage: code.slug,
+        ...fields,
+      }),
+    ].join("\n---\n");
+
+    writeFileSync(output, "stage-level-v2\n");
+    const result = inspectStageValidity(projectDir, state, {
+      stages: graph,
+      audit,
+    });
+
+    expect(result.issues).toEqual([
+      expect.objectContaining({
+        stage: "code-generation",
+        status: "stale",
+        direct: true,
+        reasons: [expect.stringContaining("output:code-summary")],
+      }),
+    ]);
+    expect(result.warnings).toEqual([]);
+  });
+
   test("detects direct artifact drift and transitive revalidation", () => {
     const projectDir = tempProject();
     const state = stateContent();
@@ -943,12 +1085,17 @@ describe("read-only inspection", () => {
     expect(result.warnings).toEqual([]);
   });
 
-  test("schema-1 and receipt-less completions remain untracked and fail open", () => {
+  test("schema-2 and receipt-less completions remain untracked and fail open", () => {
     const legacyAudit = [
       auditEvent("WORKFLOW_STARTED", "2026-08-05T00:00:00.000Z"),
       auditEvent("STAGE_COMPLETED", "2026-08-05T00:00:01.000Z", {
         Stage: "requirements-analysis",
-        "Validation Basis": JSON.stringify({ schema: 1 }),
+        "Validation Basis": JSON.stringify({
+          ...basis({
+            outputs: [],
+          }),
+          schema: 2,
+        }),
       }),
     ].join("\n---\n");
     const result = inspectStageValidity(
