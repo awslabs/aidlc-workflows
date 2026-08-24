@@ -106,6 +106,14 @@ catalog row and state, and `show <id>` returns one citable record plus current
 extracted text when available. The `/aidlc-knowledge` skill guides the same
 workflow.
 
+A document can also carry a short **summary and tags**, so an agent can cite its
+gist without re-reading the whole file. The agent writes the summary itself and
+persists it with `summarize <id>`, bound to the revision it describes. Edit the
+original without re-summarizing and the summary reports `invalidated` and is
+withheld rather than served stale — the same revision-binding rule the extracted
+text follows. Tags survive that invalidation; passing `--tags` replaces the set,
+omitting it leaves the existing tags alone.
+
 Recovery is intentionally limited. If only `documentkb/index.json` is lost,
 `sync` rebuilds it from the surviving per-document `metadata.json` records,
 including tombstones. Deleting the whole `documentkb/` tree also deletes those
