@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.100] - 2026-08-26
+
+Knowledge index recovery now selects duplicate records against the live managed source even when the project path traverses a symlink, and refuses present sources that cannot be safely read. **Upgrade:** refresh your `dist/<harness>/` shell to receive the corrected recovery behavior.
+
+* `aidlc-knowledge sync` rebuilds a missing `index.json` using digest matching through symlinked project paths, preventing a newer stale duplicate record from surviving recovery.
+* When duplicate records require a digest tie-break, a present-but-refused managed source, including a dangling symlink, now stops the rebuild with the source path and refusal reason; only a genuinely absent source retains the deterministic newest-`indexed_at` fallback.
+
 ## [2.6.99] - 2026-08-26
 
 Audit and usage-ledger read-modify-write transactions now remain serialized during Windows lock handoff instead of allowing retirement or stale recovery to displace a successor. **Upgrade:** re-copy `dist/<harness>/` so all state, audit, active-directive, and usage writers receive the generation-bound lock protocol.

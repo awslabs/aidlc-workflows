@@ -69,6 +69,7 @@ import {
   onboard,
   readIndex,
   rebindDocument,
+  rebuildIndex,
   setIntentAssociation,
   sha256Hex,
   spaceAuditShardPath,
@@ -99,21 +100,26 @@ const MIN_HOLD_MS = 300;
 const HOLD_CAP_MS = 15_000;
 
 let proj: string | undefined;
+let projectLink: string | undefined;
 
 /** A project WITH AN ACTIVE INTENT. The intent is not incidental: the shard bug
  *  this file guards is invisible in a space with no intents, because that is the
  *  one case where the buggy call happens to return the right path. */
-function projectWithIntent(): string {
-  proj = mkdtempSync(join(tmpdir(), "t298-"));
+function initializeProjectWithIntent(projectDir: string): string {
   const r = spawnSync(
     "bun",
     [join(AIDLC_TOOLS, "aidlc-utility.ts"), "intent-create", "--label", "probe",
-     "--project-dir", proj],
+     "--project-dir", projectDir],
     { encoding: "utf-8", env: CHILD_ENV },
   );
   expect(r.status, `intent-create failed: ${r.stderr}`).toBe(0);
-  mkdirSync(documentsDir(proj, SPACE), { recursive: true });
-  return proj;
+  mkdirSync(documentsDir(projectDir, SPACE), { recursive: true });
+  return projectDir;
+}
+
+function projectWithIntent(): string {
+  proj = mkdtempSync(join(tmpdir(), "t298-"));
+  return initializeProjectWithIntent(proj);
 }
 
 function doc(p: string, name: string, body = "text\n"): string {
@@ -128,6 +134,36 @@ function intentUuid(p: string): string {
     "utf-8",
   )) as { uuid: string }[];
   return rows[0].uuid;
+}
+
+function plantDuplicatePolicy(p: string): {
+  source: string;
+  indexedId: string;
+  duplicateId: string;
+} {
+  const source = doc(p, "policy.md", "current policy\n");
+  const indexed = onboard(p, SPACE, source, NOW).indexed[0];
+  const winnerDir = join(documentkbDir(p, SPACE), indexed.id);
+  const winnerMeta = JSON.parse(
+    readFileSync(join(winnerDir, "metadata.json"), "utf-8"),
+  ) as Record<string, unknown>;
+  const duplicateId = "019fda80-8f8d-7bfa-b56c-983cf0353fab";
+  const duplicateDir = join(documentkbDir(p, SPACE), duplicateId);
+  mkdirSync(duplicateDir, { recursive: true });
+  writeFileSync(
+    join(duplicateDir, "metadata.json"),
+    `${JSON.stringify({
+      ...winnerMeta,
+      id: duplicateId,
+      sha256: sha256Hex(Buffer.from("stale policy\n")),
+      bytes: Buffer.byteLength("stale policy\n"),
+      indexed_at: "2026-08-08T00:00:00Z",
+      extraction: { state: "unsupported_type", detectedType: "text/plain" },
+      content: undefined,
+      content_sha256: undefined,
+    }, null, 2)}\n`,
+  );
+  return { source, indexedId: indexed.id, duplicateId };
 }
 
 function runOnboard(p: string, args: string[] = []): { status: number; out: string } {
@@ -210,6 +246,10 @@ function auditShards(p: string): { path: string; body: string }[] {
 }
 
 afterEach(() => {
+  if (projectLink !== undefined) {
+    rmSync(projectLink, { recursive: true, force: true });
+    projectLink = undefined;
+  }
   if (proj !== undefined) {
     rmSync(proj, { recursive: true, force: true });
     proj = undefined;
@@ -1517,28 +1557,7 @@ describe("t298 commit-time reconciliation and idempotent recovery", () => {
 
   test("rebuild keeps the duplicate live row whose digest matches the source", () => {
     const p = projectWithIntent();
-    const source = doc(p, "policy.md", "current policy\n");
-    const indexed = onboard(p, SPACE, source, NOW).indexed[0];
-    const winnerDir = join(documentkbDir(p, SPACE), indexed.id);
-    const winnerMeta = JSON.parse(
-      readFileSync(join(winnerDir, "metadata.json"), "utf-8"),
-    ) as Record<string, unknown>;
-    const loserId = "019fda80-8f8d-7bfa-b56c-983cf0353fab";
-    const loserDir = join(documentkbDir(p, SPACE), loserId);
-    mkdirSync(loserDir, { recursive: true });
-    writeFileSync(
-      join(loserDir, "metadata.json"),
-      `${JSON.stringify({
-        ...winnerMeta,
-        id: loserId,
-        sha256: sha256Hex(Buffer.from("stale policy\n")),
-        bytes: Buffer.byteLength("stale policy\n"),
-        indexed_at: "2026-08-08T00:00:00Z",
-        extraction: { state: "unsupported_type", detectedType: "text/plain" },
-        content: undefined,
-        content_sha256: undefined,
-      }, null, 2)}\n`,
-    );
+    const { source, indexedId } = plantDuplicatePolicy(p);
     rmSync(indexPath(p, SPACE));
 
     syncDocuments(p, SPACE, "2026-08-09T00:00:00Z");
@@ -1546,8 +1565,66 @@ describe("t298 commit-time reconciliation and idempotent recovery", () => {
       (row) => !row.removed_at && row.source.path === "documents/policy.md",
     );
     expect(rows).toHaveLength(1);
-    expect(rows[0].id).toBe(indexed.id);
+    expect(rows[0].id).toBe(indexedId);
     expect(rows[0].sha256).toBe(sha256Hex(readFileSync(source)));
+  });
+
+  test("rebuild resolves duplicate source digests through a symlinked project path", () => {
+    proj = mkdtempSync(join(tmpdir(), "t298-real-"));
+    projectLink = `${proj}-link`;
+    symlinkSync(proj, projectLink, "dir");
+    const p = initializeProjectWithIntent(projectLink);
+    const { source, indexedId } = plantDuplicatePolicy(p);
+    rmSync(indexPath(p, SPACE));
+
+    syncDocuments(p, SPACE, "2026-08-09T00:00:00Z");
+    const rows = readIndex(p, SPACE).documents.filter(
+      (row) => !row.removed_at && row.source.path === "documents/policy.md",
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].id).toBe(indexedId);
+    expect(rows[0].sha256).toBe(sha256Hex(readFileSync(source)));
+  });
+
+  test("rebuild refuses a present duplicate source that cannot be read", () => {
+    const p = projectWithIntent();
+    const { source } = plantDuplicatePolicy(p);
+    rmSync(indexPath(p, SPACE));
+    rmSync(source);
+    mkdirSync(source);
+
+    expect(() => rebuildIndex(p, SPACE)).toThrow(
+      /documents\/policy\.md.*policy\.md is a directory/,
+    );
+  });
+
+  test("rebuild refuses a dangling duplicate source symlink", () => {
+    const p = projectWithIntent();
+    const { source } = plantDuplicatePolicy(p);
+    rmSync(indexPath(p, SPACE));
+    rmSync(source);
+    try {
+      symlinkSync("missing-policy.md", source);
+    } catch {
+      return; // Windows without symlink privilege.
+    }
+
+    expect(() => rebuildIndex(p, SPACE)).toThrow(
+      /documents\/policy\.md.*policy\.md is a symlink/i,
+    );
+  });
+
+  test("rebuild with an absent duplicate source keeps the newest indexed row", () => {
+    const p = projectWithIntent();
+    const { source, duplicateId } = plantDuplicatePolicy(p);
+    rmSync(indexPath(p, SPACE));
+    rmSync(source);
+
+    const rows = rebuildIndex(p, SPACE).documents.filter(
+      (row) => !row.removed_at && row.source.path === "documents/policy.md",
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].id).toBe(duplicateId);
   });
 
   test("a successful edited onboard event carries its source path", () => {
