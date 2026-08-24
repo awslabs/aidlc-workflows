@@ -1,0 +1,44 @@
+{
+  "claude": {
+    "harnessName": "claude",
+    "manifestDir": ".claude-plugin",
+    "harnessLeaf": ".claude",
+    "kind": "store"
+  },
+  "codex": {
+    "harnessName": "codex",
+    "manifestDir": ".codex-plugin",
+    "harnessLeaf": ".codex",
+    "kind": "store"
+  },
+  "copilot": {
+    "harnessName": "copilot",
+    "manifestDir": ".plugin",
+    "harnessLeaf": ".aidlc",
+    "kind": "store"
+  },
+  "cursor": {
+    "harnessName": "cursor",
+    "manifestDir": ".cursor-plugin",
+    "harnessLeaf": ".cursor",
+    "kind": "cursor"
+  },
+  "kiro": {
+    "harnessName": "kiro",
+    "manifestDir": ".kiro-plugin",
+    "harnessLeaf": ".kiro",
+    "kind": "kiro"
+  },
+  "kiro-ide": {
+    "harnessName": "kiro-ide",
+    "manifestDir": ".kiro-plugin",
+    "harnessLeaf": ".kiro",
+    "kind": "kiro-ide"
+  },
+  "opencode": {
+    "harnessName": "opencode",
+    "manifestDir": ".opencode-plugin",
+    "harnessLeaf": ".aidlc",
+    "kind": "store"
+  }
+}

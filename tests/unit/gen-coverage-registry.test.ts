@@ -836,6 +836,9 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     // t314 spawns the shipped standalone validator to pin its process exit
     // codes and exact JSON/human output contracts outside a framework project.
     "unit/t314-plugin-validate.test.ts",
+    // t315 spawns a copied standalone builder from an isolated temp tree and
+    // byte-compares every emitted host projection with committed dist output.
+    "unit/t315-plugin-build.test.ts",
     "integration/t102.test.ts",
     "integration/t104.test.ts",
     "integration/t105.test.ts",

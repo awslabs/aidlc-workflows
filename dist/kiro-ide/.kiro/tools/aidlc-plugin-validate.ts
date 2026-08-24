@@ -55,7 +55,9 @@ export type PluginValidationRule =
   | "tools-payload"
   | "compose-template-missing"
   | "compose-hook-stale"
-  | "compose-hook-absent";
+  | "compose-hook-absent"
+  | "build-output"
+  | "build-emission";
 
 export interface PluginValidationFinding {
   file: string;

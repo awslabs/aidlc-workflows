@@ -316,11 +316,20 @@ doctor bounds its runtime/output and turns script failures into diagnostic rows.
 
 ## 5. Distribution + install
 
-The packager emits your plugin as **a real host plugin** (one projection target
-per harness, including `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`,
-Copilot's `.plugin/plugin.json`, and Kiro's folder projection). You publish the
-output to a git repo with semver tags and a `marketplace.json`, and teams install
-through the host's native commands.
+The shipped builder emits your plugin as **a real host plugin** for one harness
+at a time, including `.claude-plugin/plugin.json`,
+`.codex-plugin/plugin.json`, Copilot's `.plugin/plugin.json`, and Kiro's folder
+projection:
+
+```bash
+bun <tools-dir>/aidlc-plugin-build.ts <plugin-root> <harness> [outDir]
+```
+
+The default output is `<plugin-root>/dist/<harness>/`. Run it once for each
+harness you publish. The repository packager uses the same emitter to build
+first-party `dist/plugins/<name>/<harness>/` trees, so its byte-parity guard also
+guards external builds. Publish the output to a git repo with semver tags and a
+`marketplace.json`; teams then install through the host's native commands.
 
 ### Claude / Codex (host store)
 
@@ -412,14 +421,39 @@ Validation checks:
   template bundled with the validator. Absence is valid because plugin build
   injects the current template.
 
-The user-facing `aidlc plugin validate` verb is intentionally not part of this
-phase. It arrives with the Plugins RFC route table in
+The user-facing `aidlc plugin validate` and `aidlc plugin build` verbs are not
+part of these toolchain phases. They arrive with the Plugins RFC route table in
 [RFC #723 §2e](https://github.com/awslabs/aidlc-workflows/issues/723); until then,
-invoke the shipped Bun tool directly.
+invoke the shipped Bun tools directly.
 
 The repository test helper's `validatePluginContent()` delegates these shared
 rules to the same tool and adds checkout-aware checks such as resolving
 contribution targets against core.
+
+### Building your plugin
+
+Project one validated plugin into one host-native plugin:
+
+```bash
+bun <tools-dir>/aidlc-plugin-build.ts <plugin-root> claude
+bun <tools-dir>/aidlc-plugin-build.ts <plugin-root> codex ./release/codex
+bun <tools-dir>/aidlc-plugin-build.ts <plugin-root> cursor --json
+```
+
+The builder runs validation in-process before it writes anything. Errors refuse
+the build with exit `1`; warnings proceed. Invalid command usage and unknown
+harness names exit `2`. Without `outDir`, output lands at
+`<plugin-root>/dist/<harness>/`.
+
+The authoring flow is:
+
+1. **Validate** the authored root offline.
+2. **Build** each harness projection you support.
+3. **Publish** those generated directories and marketplace metadata from your
+   own repository.
+
+Both tools run from a copied AIDLC tools bundle and require neither an AIDLC
+project nor a framework checkout.
 
 1. **Content validation** is the always-on baseline. Run
    `aidlc-plugin-validate.ts` against the authored plugin root. It is fast and

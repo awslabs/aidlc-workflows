@@ -3,10 +3,12 @@ All notable changes to this project will be documented in this file.
 
 ## [2.6.105] - 2026-08-26
 
-Plugin authors can now validate an authored plugin repository offline with the shipped standalone validator, without an AIDLC project or framework checkout. **Upgrade:** refresh your `dist/<harness>/` shell to install the validator and its bundled compose-hook reference.
+Plugin authors can now validate and build an authored plugin repository offline with shipped standalone tools, without an AIDLC project or framework checkout. **Upgrade:** refresh your `dist/<harness>/` shell to install the authoring tools, bundled hook templates, and harness target data.
 
 * Run `bun <tools-dir>/aidlc-plugin-validate.ts <plugin-root> [--json]`; exit codes are `0` valid, `1` findings, and `2` usage.
 * Validation covers manifest shape, stage schema, scope and agent identity, plugin-local duplicate artifact producers across `produces` and `optional_produces`, accidental test/fixture payloads under `tools/`, and vendored compose-hook drift.
+* Run `bun <tools-dir>/aidlc-plugin-build.ts <plugin-root> <harness> [outDir] [--json]` to validate then emit one host-native projection; output defaults to `<plugin-root>/dist/<harness>/`.
+* The checkout packager and standalone builder share one emitter. Harness manifests generate the bundled target table, and isolated proof tests byte-compare all seven externally built test-pro projections with committed `dist/plugins` output.
 * `tests/harness/plugin-kit.ts` now delegates its overlapping content rules to the shipped validator while retaining checkout-aware contribution-target and extra authoring checks.
 
 ## [2.6.104] - 2026-08-26

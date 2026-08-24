@@ -29,9 +29,12 @@ test-pro is emitted by the packager as a real host plugin per harness. Install i
 the way each host installs plugins (the hybrid model — see
 [`docs/reference/18-plugin-mechanism.md`](../../docs/reference/18-plugin-mechanism.md)):
 
-**Author / build** (from the repo):
+**Author / build** (from any plugin repository with a copied tools bundle):
 ```bash
-bun scripts/package.ts          # emits all seven dist/plugins/test-pro/<harness>/ projections
+bun <tools-dir>/aidlc-plugin-validate.ts .
+bun <tools-dir>/aidlc-plugin-build.ts . claude
+bun <tools-dir>/aidlc-plugin-build.ts . codex
+# repeat for each supported harness; output defaults to dist/<harness>/
 ```
 
 **Claude Code** (host store):
