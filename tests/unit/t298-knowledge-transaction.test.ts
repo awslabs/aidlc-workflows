@@ -1452,6 +1452,26 @@ describe("t298 commit-time reconciliation and idempotent recovery", () => {
     expect(readFileSync(shard, "utf-8")).toBe(repaired);
   });
 
+  test("audit provenance converges when a source path contains the project-dir string", () => {
+    const p = projectWithIntent();
+    const mirroredProjectDir = join(documentsDir(p, SPACE), p);
+    mkdirSync(mirroredProjectDir, { recursive: true });
+    const source = join(mirroredProjectDir, "spec.txt");
+    writeFileSync(source, "subject\n");
+    const indexed = onboard(p, SPACE, source, NOW).indexed[0];
+    const shard = spaceAuditShardPath(p, SPACE);
+
+    syncDocuments(p, SPACE, "2026-08-13T03:10:00Z");
+    syncDocuments(p, SPACE, "2026-08-13T03:11:00Z");
+
+    const documentRows = readFileSync(shard, "utf-8")
+      .split(/\n---\n/)
+      .filter((block) => block.includes(`**Document**: ${indexed.id}`));
+    expect(documentRows).toHaveLength(1);
+    expect(documentRows[0]).toContain("**Event**: DOCUMENT_INDEXED");
+    expect(documentRows[0]).not.toContain("**Change**: audit-repair");
+  });
+
   test("a truncated first event cannot replace missing DOCUMENT_INDEXED provenance", () => {
     const p = projectWithIntent();
     const source = doc(p, "truncated-first.md");

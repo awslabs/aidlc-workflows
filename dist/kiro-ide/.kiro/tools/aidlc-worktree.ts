@@ -1280,17 +1280,32 @@ function convergedSourceRecord(
         : typeof worktreeMeta.gitCommonDir === "string"
           ? gitCommonDirHash(worktreeMeta.gitCommonDir)
           : null;
+    if (worktreeMeta.repoSelector !== selectedRepo) {
+      errorWithSlug(
+        slug,
+        `refusing to merge: selected repository ${JSON.stringify(selectedRepo ?? "-")} does not match creating repository ${JSON.stringify(worktreeMeta.repoSelector ?? "-")}; retry with the creating --repo selector`,
+      );
+    }
+    if (selectedCommonDir === null) {
+      errorWithSlug(
+        slug,
+        `refusing to merge: could not resolve the selected checkout git directory for repository ${JSON.stringify(selectedRepo ?? "-")} after partial cleanup; restore the selected checkout registration, then retry`,
+      );
+    }
+    if (worktreeCommonDir === null) {
+      errorWithSlug(
+        slug,
+        "refusing to merge: could not resolve the Bolt worktree git directory after partial cleanup; restore the worktree registration or discard and restart the Bolt attempt",
+      );
+    }
     if (
-      worktreeMeta.repoSelector !== selectedRepo ||
-      selectedCommonDir === null ||
-      worktreeCommonDir === null ||
       metadataCommonDirHash === null ||
       metadataCommonDirHash !== gitCommonDirHash(selectedCommonDir) ||
       metadataCommonDirHash !== gitCommonDirHash(worktreeCommonDir)
     ) {
       errorWithSlug(
         slug,
-        `refusing to merge: selected repository ${JSON.stringify(selectedRepo ?? "-")} does not match creating repository ${JSON.stringify(worktreeMeta.repoSelector ?? "-")}; retry with the creating --repo selector`,
+        "refusing to merge: recorded creating-repository provenance does not match the selected repository or Bolt worktree; restore the original repository/worktree binding or discard and restart the Bolt attempt",
       );
     }
     if (

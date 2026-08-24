@@ -556,20 +556,30 @@ describe("t305 strict source-manifest validation", () => {
       stage: "code-generation",
       unit: "alpha",
       version: 1,
-      writes: [{ path: "linked-directory/" }],
+      writes: [{ path: "linked-directory" }],
     });
-    const linkedDirectory = readUnitSourceManifest(
+    const linkedDirectoryExact = readUnitSourceManifest(
       project,
       "code-generation",
       "alpha",
     );
-    expect(linkedDirectory.ok).toBe(false);
-    if (!linkedDirectory.ok) {
-      expect(linkedDirectory.reason).toContain("linked-directory");
-      expect(linkedDirectory.reason).toContain(
+    expect(linkedDirectoryExact.ok).toBe(false);
+    if (!linkedDirectoryExact.ok) {
+      expect(linkedDirectoryExact.reason).toContain("linked-directory");
+      expect(linkedDirectoryExact.reason).toContain(
         'directory claims must end with "/"',
       );
     }
+
+    manifest(record, "alpha", {
+      stage: "code-generation",
+      unit: "alpha",
+      version: 1,
+      writes: [{ path: "real-directory/inner.ts" }],
+    });
+    expect(
+      readUnitSourceManifest(project, "code-generation", "alpha").ok,
+    ).toBe(true);
 
     manifest(record, "alpha", {
       stage: "code-generation",
@@ -591,10 +601,34 @@ describe("t305 strict source-manifest validation", () => {
         "Source claims bind link text, not target bytes",
       );
       expect(throughLinkedDirectory.reason).toContain(
-        "claim the link itself or the real target path",
+        "claim the real target path instead, or restructure the link",
+      );
+      expect(throughLinkedDirectory.reason).not.toContain(
+        "claim the link itself",
       );
       expect(throughLinkedDirectory.reason).not.toContain(
         "Git could not verify ignore rules",
+      );
+    }
+
+    manifest(record, "alpha", {
+      stage: "code-generation",
+      unit: "alpha",
+      version: 1,
+      writes: [{ path: "linked-directory/" }],
+    });
+    const linkedDirectoryPrefix = readUnitSourceManifest(
+      project,
+      "code-generation",
+      "alpha",
+    );
+    expect(linkedDirectoryPrefix.ok).toBe(false);
+    if (!linkedDirectoryPrefix.ok) {
+      expect(linkedDirectoryPrefix.reason).toContain(
+        '"real-directory" is a directory and cannot be bound through a symlinked directory claim',
+      );
+      expect(linkedDirectoryPrefix.reason).not.toContain(
+        'directory claims must end with "/"',
       );
     }
   });

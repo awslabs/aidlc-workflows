@@ -79,11 +79,16 @@ function runSwarm(proj: string, ...args: string[]): RunResult {
   return { status: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}`, stdout: r.stdout ?? "" };
 }
 
-function runState(proj: string, ...args: string[]): RunResult {
+function runStateWithEnv(
+  proj: string,
+  extraEnv: NodeJS.ProcessEnv,
+  ...args: string[]
+): RunResult {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
     AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+    ...extraEnv,
   };
   delete env.AIDLC_SKIP_ARTIFACT_GUARD;
   delete env.AIDLC_SKIP_SOURCE_FRESHNESS;
@@ -97,6 +102,23 @@ function runState(proj: string, ...args: string[]): RunResult {
     out: `${r.stdout ?? ""}${r.stderr ?? ""}`,
     stdout: r.stdout ?? "",
   };
+}
+
+function runState(proj: string, ...args: string[]): RunResult {
+  return runStateWithEnv(proj, {}, ...args);
+}
+
+function emittedError(result: RunResult): string {
+  const line = result.out
+    .split(/\r?\n/)
+    .find((candidate) => candidate.trim().startsWith('{"error":'));
+  if (line === undefined) return result.out;
+  try {
+    const parsed = JSON.parse(line) as { error?: unknown };
+    return typeof parsed.error === "string" ? parsed.error : result.out;
+  } catch {
+    return result.out;
+  }
 }
 
 function git(cwd: string, ...args: string[]): { status: number; out: string } {
@@ -133,13 +155,13 @@ function activeRecord(proj: string): string {
   return join(intents, candidates[0]);
 }
 
-function seedOneUnitDag(proj: string, unit: string): void {
+function seedOneUnitDag(proj: string, unit: string, kind?: string): void {
   const record = activeRecord(proj);
   const dag = join(record, "inception", "units-generation");
   mkdirSync(dag, { recursive: true });
   writeFileSync(
     join(dag, "unit-of-work-dependency.md"),
-    `\`\`\`yaml\nunits:\n  - name: ${unit}\n    depends_on: []\n\`\`\`\n`,
+    `\`\`\`yaml\nunits:\n  - name: ${unit}\n${kind === undefined ? "" : `    kind: ${kind}\n`}    depends_on: []\n\`\`\`\n`,
   );
   writeFileSync(
     join(record, "runtime-graph.json"),
@@ -192,6 +214,132 @@ function recordMainReview(
   }
   const completed = spawnSync(BUN, [LOG_TOOL, ...args, "--verdict", "READY"], { encoding: "utf-8", cwd: proj });
   return { status: completed.status ?? -1, out: `${completed.stdout ?? ""}${completed.stderr ?? ""}`, stdout: completed.stdout ?? "" };
+}
+
+function compositionScenario(
+  suffix: string,
+  validityCaptureFails: boolean,
+  mutateAfterReview: boolean,
+): { proj: string; approved: RunResult; audit: string } {
+  const proj = freshWorkspace();
+  const repoA = makeSiblingRepo(proj, "repo-a");
+  mkdirSync(join(repoA, "aidlc"), { recursive: true });
+  writeFileSync(
+    join(repoA, "aidlc", "application.ts"),
+    "export const reviewed = 1;\n",
+  );
+  git(repoA, "add", "--", "aidlc/application.ts");
+  git(repoA, "commit", "-q", "-m", "seed composition source");
+  const created = runUtil(
+    proj,
+    "intent-create",
+    "--scope",
+    "feature",
+    "--repos",
+    "repo-a",
+  );
+  if (created.status !== 0) throw new Error(created.out);
+  const unit = `composition-${suffix}`;
+  seedOneUnitDag(proj, unit, "service");
+  const prepared = runSwarm(
+    proj,
+    "prepare",
+    "--batch",
+    "1",
+    "--units",
+    unit,
+    "--base",
+    "main",
+    "--repo",
+    "repo-a",
+  );
+  if (prepared.status !== 0) throw new Error(prepared.out);
+  const wt = worktreeDir(proj, unit);
+  writeFileSync(
+    join(wt, "aidlc", "application.ts"),
+    "export const reviewed = 2;\n",
+  );
+  git(wt, "add", "--", "aidlc/application.ts");
+  git(wt, "commit", "-q", "-m", "review composition source");
+  const sourceFingerprint = workspaceSourceFingerprint(wt);
+  if (sourceFingerprint === null) {
+    throw new Error("composition source fingerprint unavailable");
+  }
+  appendAuditEntry(
+    "SWARM_UNIT_CONVERGED",
+    {
+      "Batch number": "1",
+      "Unit name": unit,
+      Stage: "code-generation",
+      "Run floor": latestMainWorkflowStageRunFloorForProject(
+        proj,
+        "code-generation",
+      ),
+      "Source Fingerprint": sourceFingerprint,
+      "Source Commit": git(wt, "rev-parse", "HEAD").out.trim(),
+    },
+    proj,
+  );
+  const merged = runWorktree(
+    proj,
+    "merge",
+    "--slug",
+    unit,
+    "--target",
+    "main",
+    "--strategy",
+    "squash",
+    "--repo",
+    "repo-a",
+  );
+  if (merged.status !== 0) throw new Error(merged.out);
+  const reviewed = recordMainReview(
+    proj,
+    unit,
+    "repo-a",
+    "aidlc/application.ts",
+  );
+  if (reviewed.status !== 0) throw new Error(reviewed.out);
+  if (mutateAfterReview) {
+    writeFileSync(
+      join(repoA, "aidlc", "application.ts"),
+      "export const reviewed = 3;\n",
+    );
+  }
+  const stateEnv: NodeJS.ProcessEnv = {};
+  if (validityCaptureFails) {
+    const graph = JSON.parse(
+      readFileSync(
+        join(AIDLC_SRC, "tools", "data", "stage-graph.json"),
+        "utf-8",
+      ),
+    ) as Array<{
+      slug?: string;
+      consumes?: Array<{ artifact: string; required: boolean }>;
+    }>;
+    const codeGeneration = graph.find(
+      (candidate) => candidate.slug === "code-generation",
+    );
+    if (codeGeneration === undefined) {
+      throw new Error("composition graph missing code-generation");
+    }
+    codeGeneration.consumes = [
+      ...(codeGeneration.consumes ?? []),
+      { artifact: "composition-missing-producer", required: true },
+    ];
+    const graphPath = join(proj, "composition-stage-graph.json");
+    writeFileSync(graphPath, `${JSON.stringify(graph, null, 2)}\n`);
+    stateEnv.AIDLC_STAGE_GRAPH = graphPath;
+  }
+  const approved = runStateWithEnv(
+    proj,
+    stateEnv,
+    "approve",
+    "code-generation",
+    "--user-input",
+    "ship",
+  );
+  return { proj, approved, audit: readAllAuditShards(proj) };
 }
 
 const worktreeDir = (proj: string, slug: string): string =>
@@ -296,6 +444,200 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
           "utf-8",
         ),
       ).toContain("legacy metadata");
+    });
+  });
+
+  describe("merge binding refusals name the failed authority check", () => {
+    const setup = (slug: string) => {
+      const proj = freshWorkspace();
+      const repoA = makeSiblingRepo(proj, "repo-a");
+      const repoB = makeSiblingRepo(proj, "repo-b");
+      runUtil(
+        proj,
+        "intent-create",
+        "--scope",
+        "feature",
+        "--repos",
+        "repo-a,repo-b",
+      );
+      const created = runWorktree(
+        proj,
+        "create",
+        "--slug",
+        slug,
+        "--base",
+        "main",
+        "--repo",
+        "repo-a",
+      );
+      if (created.status !== 0) throw new Error(created.out);
+      return {
+        proj,
+        repoA,
+        repoB,
+        wt: worktreeDir(proj, slug),
+      };
+    };
+
+    const provenance = setup("binding-provenance");
+    const provenanceMetaPath = join(
+      provenance.wt,
+      ".aidlc",
+      "worktree-meta.json",
+    );
+    const provenanceMeta = JSON.parse(
+      readFileSync(provenanceMetaPath, "utf-8"),
+    ) as Record<string, unknown>;
+    delete provenanceMeta.gitCommonDirHash;
+    provenanceMeta.gitCommonDir = realpathSync(
+      join(provenance.repoB, ".git"),
+    );
+    writeFileSync(
+      provenanceMetaPath,
+      `${JSON.stringify(provenanceMeta, null, 2)}\n`,
+    );
+    const provenanceMerge = runWorktree(
+      provenance.proj,
+      "merge",
+      "--slug",
+      "binding-provenance",
+      "--target",
+      "main",
+      "--strategy",
+      "squash",
+      "--repo",
+      "repo-a",
+    );
+
+    const unresolved = setup("binding-unresolved");
+    rmSync(join(unresolved.wt, ".git"), { recursive: true, force: true });
+    const unresolvedMerge = runWorktree(
+      unresolved.proj,
+      "merge",
+      "--slug",
+      "binding-unresolved",
+      "--target",
+      "main",
+      "--strategy",
+      "squash",
+      "--repo",
+      "repo-a",
+    );
+
+    const selector = setup("binding-selector");
+    const selectorMerge = runWorktree(
+      selector.proj,
+      "merge",
+      "--slug",
+      "binding-selector",
+      "--target",
+      "main",
+      "--strategy",
+      "squash",
+      "--repo",
+      "repo-b",
+    );
+
+    test("provenance mismatch, partial cleanup, and selector mismatch stay distinct", () => {
+      const provenanceError = emittedError(provenanceMerge);
+      const unresolvedError = emittedError(unresolvedMerge);
+      const selectorError = emittedError(selectorMerge);
+      expect(provenanceMerge.status).not.toBe(0);
+      expect(provenanceError).toContain(
+        "recorded creating-repository provenance does not match the selected repository or Bolt worktree",
+      );
+      expect(provenanceError).not.toContain(
+        'selected repository "repo-a" does not match creating repository "repo-a"',
+      );
+
+      expect(unresolvedMerge.status).not.toBe(0);
+      expect(unresolvedError).toContain(
+        "could not resolve the Bolt worktree git directory after partial cleanup",
+      );
+      expect(unresolvedError).toContain(
+        "restore the worktree registration or discard and restart the Bolt attempt",
+      );
+      expect(unresolvedError).not.toContain(
+        'selected repository "repo-a" does not match creating repository "repo-a"',
+      );
+
+      expect(selectorMerge.status).not.toBe(0);
+      expect(selectorError).toContain(
+        'selected repository "repo-b" does not match creating repository "repo-a"',
+      );
+      expect(selectorError).toContain(
+        "retry with the creating --repo selector",
+      );
+      expect(selectorError).not.toContain(
+        "recorded creating-repository provenance",
+      );
+    });
+  });
+
+  describe("#716 validity capture composes with per-unit source binding", () => {
+    const sourceRefusal = compositionScenario(
+      "source-refusal",
+      true,
+      true,
+    );
+    const validityWarning = compositionScenario(
+      "validity-warning",
+      true,
+      false,
+    );
+    const green = compositionScenario("green", false, false);
+    const completedBlock = (audit: string): string | undefined =>
+      audit
+        .split(/\n---\n/)
+        .find((block) =>
+          block.includes("**Event**: STAGE_COMPLETED") &&
+          block.includes("**Stage**: code-generation")
+        );
+
+    test("source refusal wins, validity failure stays advisory, and green completion emits both receipts", () => {
+      expect(sourceRefusal.approved.status).not.toBe(0);
+      expect(sourceRefusal.approved.out).toContain(
+        "source-fingerprint mismatch",
+      );
+      expect(completedBlock(sourceRefusal.audit)).toBeUndefined();
+      expect(sourceRefusal.audit).not.toContain("**Validation Basis**:");
+      expect(sourceRefusal.audit).not.toContain("**Validation Warning**:");
+
+      expect(
+        validityWarning.approved.status,
+        validityWarning.approved.out,
+      ).toBe(0);
+      expect(validityWarning.approved.out).toContain(
+        "Validity receipt omitted",
+      );
+      const warningBlock = completedBlock(validityWarning.audit);
+      expect(warningBlock).toContain("**Validation Warning**:");
+      expect(warningBlock).not.toContain("**Validation Basis**:");
+      expect(validityWarning.audit).toContain(
+        "**Unit Source Fingerprint**:",
+      );
+
+      expect(green.approved.status, green.approved.out).toBe(0);
+      const greenBlock = completedBlock(green.audit);
+      expect(greenBlock).toBeDefined();
+      const basisLine = greenBlock
+        ?.split(/\r?\n/)
+        .find((line) => line.startsWith("**Validation Basis**: "));
+      expect(basisLine).toBeDefined();
+      const basis = JSON.parse(
+        basisLine?.slice("**Validation Basis**: ".length) ?? "{}",
+      ) as { schema?: number };
+      expect(basis.schema).toBe(2);
+      const reviewBlock = green.audit
+        .split(/\n---\n/)
+        .find((block) =>
+          block.includes("**Event**: REVIEW_COMPLETED") &&
+          block.includes("**Unit Source Fingerprint**:")
+        );
+      expect(reviewBlock).toContain("**Source Fingerprint**:");
+      expect(reviewBlock).toContain("**Unit Source Fingerprint**:");
+      expect(green.audit).not.toContain(green.proj);
+      expect(green.audit).not.toContain(realpathSync(green.proj));
     });
   });
 

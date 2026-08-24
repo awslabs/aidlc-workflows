@@ -7206,7 +7206,7 @@ function ignoredSourceClaimReason(
     literalPath,
   );
   if (symlinkedParent !== null) {
-    return `${JSON.stringify(path)} traverses symlinked directory ${JSON.stringify(symlinkedParent)}. Source claims bind link text, not target bytes; claim the link itself or the real target path instead.`;
+    return `${JSON.stringify(path)} traverses symlinked directory ${JSON.stringify(symlinkedParent)}. Source claims bind link text, not target bytes; claim the real target path instead, or restructure the link.`;
   }
 
   let currentExists = false;
@@ -7481,7 +7481,10 @@ function symlinkClaimTargetReason(
         pathModeIndexes,
       );
       if (ignored !== null) {
-        return `${JSON.stringify(claimPath)} contains symlink ${JSON.stringify(link)} whose fully resolved target is not bindable: ${ignored}. ${remedy}`;
+        const targetReason = prefix && stat.isDirectory()
+          ? `${JSON.stringify(repoRelative)} is a directory and cannot be bound through a symlinked directory claim`
+          : ignored;
+        return `${JSON.stringify(claimPath)} contains symlink ${JSON.stringify(link)} whose fully resolved target is not bindable: ${targetReason}. ${remedy}`;
       }
       targetDisplay = "";
       break;
@@ -12559,7 +12562,24 @@ export function redactProjectDirPrefix(
   }
   let redacted = value;
   for (const variant of [...variants].sort((a, b) => b.length - a.length)) {
-    redacted = redacted.replaceAll(variant, "<project-dir>");
+    let offset = 0;
+    while (offset < redacted.length) {
+      const index = redacted.indexOf(variant, offset);
+      if (index === -1) break;
+      const next = redacted[index + variant.length];
+      if (
+        next !== undefined &&
+        next !== "/" &&
+        next !== "\\" &&
+        !/\s/.test(next)
+      ) {
+        offset = index + variant.length;
+        continue;
+      }
+      redacted =
+        `${redacted.slice(0, index)}<project-dir>${redacted.slice(index + variant.length)}`;
+      offset = index + "<project-dir>".length;
+    }
   }
   return redacted;
 }

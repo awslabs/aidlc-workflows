@@ -79,6 +79,7 @@ import {
   readAtomicReplacedFileNoFollowOrThrow,
   readRegularFileNoFollowOrThrow,
   readAuditShardEvents,
+  redactProjectDirPrefix,
   removeTreeSync,
   renameIntoPlace,
   resolveProjectDir,
@@ -3141,17 +3142,18 @@ function ensureDocumentRevisionAudit(
   state: DocumentAuditState = documentAuditState(projectDir, space),
 ): void {
   const projection = state.documents.get(row.id);
+  const auditSource = redactProjectDirPrefix(row.source.path, projectDir);
   if (
     projection?.latestRevision?.event !== "DOCUMENT_REMOVED" &&
     projection?.latestRevision?.digest === row.sha256 &&
-    projection.latestRevision.source === row.source.path
+    projection.latestRevision.source === auditSource
   ) return;
   if (projection?.seen) {
     const fields = {
       Space: space,
       Document: row.id,
       Change: "audit-repair",
-      Source: row.source.path,
+      Source: auditSource,
       Digest: row.sha256,
     };
     appendAuditEntryAtPathUnlocked(
@@ -3165,7 +3167,7 @@ function ensureDocumentRevisionAudit(
     const fields = {
       Space: space,
       Document: row.id,
-      Source: row.source.path,
+      Source: auditSource,
       Digest: row.sha256,
       ...(row.related_intent_ids === undefined
         ? {}
@@ -3189,12 +3191,13 @@ function ensureDocumentRemovalAudit(
 ): void {
   if (!isTombstoned(row)) return;
   const latest = state.documents.get(row.id)?.latestRevision;
+  const auditSource = redactProjectDirPrefix(row.source.path, projectDir);
   if (latest?.event === "DOCUMENT_REMOVED" &&
-      latest.source === row.source.path && latest.digest === row.sha256) return;
+      latest.source === auditSource && latest.digest === row.sha256) return;
   const fields = {
     Space: space,
     Document: row.id,
-    "Last Path": row.source.path,
+    "Last Path": auditSource,
     "Last Digest": row.sha256,
   };
   appendAuditEntryAtPathUnlocked(
@@ -3702,14 +3705,15 @@ export function rebindDocument(
       writeMetadataTo(documentDir(projectDir, space, row.id), row);
       const auditState = documentAuditState(projectDir, space);
       const latestRevision = auditState.documents.get(row.id)?.latestRevision;
+      const auditSource = redactProjectDirPrefix(nextPath, projectDir);
       const hasRebindAudit = latestRevision?.event !== "DOCUMENT_REMOVED" &&
-        latestRevision?.source === nextPath && latestRevision.digest === digest;
+        latestRevision?.source === auditSource && latestRevision.digest === digest;
       if (!hasRebindAudit) {
         const fields = {
           Space: space,
           Document: row.id,
           Change: "rebound",
-          Source: nextPath,
+          Source: auditSource,
           Digest: digest,
         };
         appendAuditEntryAtPathUnlocked(
