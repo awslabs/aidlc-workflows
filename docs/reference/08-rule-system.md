@@ -55,7 +55,7 @@ The §13 Learnings Ritual asks the orchestrator to screen for conflicts (a narro
 
 This design replaces the earlier `enforcement: enforced` keyword and `overrides:` block model. Both keywords are removed from the schema. Frontmatter parsing rejects them via the unknown-key tolerance policy below — they pass through silently rather than throwing, but the resolver ignores them.
 
-The doctor rule-drift check surfaces post-write drift on demand: when org rules change after team or project content has already landed on disk, doctor deterministically finds `##` headings that the team/project practice files (`memory/team.md`, `memory/project.md`) share with a *populated* org heading and surfaces each overlap as an advisory candidate — file, section, and the quoted org sentence — rendered `Rule drift: N team/project rule(s) overlap org policy (review for contradiction)`. Doctor itself runs no LLM: detection is byte-reproducible heading/string work. The contradiction verdict — the same section-level LLM check the admission gates run — is the consuming orchestrator's at observation-time, non-blocking. The human then revises, escalates, or accepts the surfaced drift.
+The doctor rule-drift check surfaces post-write drift on demand: when org rules change after team or project content has already landed on disk, doctor deterministically finds `##` headings that the team/project practice files (`memory/team.md`, `memory/project.md`) share with a *populated* org heading and surfaces each overlap as an advisory candidate — file, section, and the quoted org sentence — rendered `Rule drift: N team/project rule(s) overlap org policy (review for contradiction)`. Overlaps from a stale file are removed from that live count and reported separately as `Rule drift: N stale-suppressed`. Doctor itself runs no LLM: detection is byte-reproducible heading/string work. The contradiction verdict — the same section-level LLM check the admission gates run — is the consuming orchestrator's at observation-time, non-blocking. The human then revises, escalates, or accepts the surfaced drift.
 
 ## `pairing:` field
 
@@ -77,11 +77,28 @@ Valid values:
 
 The doctor paired-coverage row counts paired-vs-feedforward-only rules and surfaces unpaired rules as a coverage gap (see [Rule-drift detection](#rule-drift-detection)).
 
+## Lifecycle fields
+
+Every rule file MAY declare file-level lifecycle metadata:
+
+```yaml
+---
+status: active
+stale_after: 2026-12-31
+---
+```
+
+- `status` accepts exactly `active`, `deprecated`, or `draft`. `deprecated` makes the file stale; `active` and `draft` do not.
+- `stale_after` must be a real calendar date in `YYYY-MM-DD` form. A file becomes stale only when the current UTC date is strictly greater than that value, so the `stale_after` day itself remains live.
+- Lifecycle applies to the whole file, not individual headings. A stale team/project file's org-heading overlaps move from the live rule-drift count into the separate passing `stale-suppressed` row.
+
+Both fields are optional, and invalid values stop rule loading with an error that names the file. They are valid on org, team, project, and phase rule files, although the Tier-1 deterministic consumer is deliberately limited to suppressing team/project overlaps in `/aidlc --doctor`; lifecycle metadata does not remove any rule from the strict-additive runtime bundle.
+
 ## Rule-drift detection
 
 `/aidlc --doctor` ships two advisory rows that observe rule/sensor state. Both are read-only and always pass — neither changes the health-check exit code. (As of v0.6.10 `--doctor` is cold-safe: the `GUARDRAIL_LOADED` audit row the paired-coverage check emits is written only when the active intent's `audit/` shard already exists. On a fresh shell with no intent yet, doctor prints the rows but emits nothing and creates no files.)
 
-- **Rule drift** — for each team/project practice file (`memory/team.md`, `memory/project.md`), doctor finds `##` headings that also appear under a *populated* heading in `memory/org.md` and surfaces each overlap as a candidate pair: file, section, and the first org sentence quoted verbatim. Headings whose org body is empty (e.g. the framework-default `## Forbidden`, `## Mandated`, `## Corrections`, which hold only HTML comments) do not count — the overlap must carry content on both sides. The count N is the number of *structural* candidate pairs, not LLM-confirmed contradictions: doctor detects deterministically; the contradiction verdict is the orchestrator-LLM's at observation time (see the [strict-additive section](#strict-additive-runtime-model)).
+- **Rule drift** — for each team/project practice file (`memory/team.md`, `memory/project.md`), doctor finds `##` headings that also appear under a *populated* heading in `memory/org.md` and surfaces each overlap as a candidate pair: file, section, and the first org sentence quoted verbatim. Headings whose org body is empty (e.g. the framework-default `## Forbidden`, `## Mandated`, `## Corrections`, which hold only HTML comments) do not count — the overlap must carry content on both sides. Live overlaps render in the existing review-for-contradiction row; overlaps from files whose lifecycle is stale render in one separate `Rule drift: N stale-suppressed` advisory row with the same inline detail. The count N in each row is the number of *structural* candidate pairs, not LLM-confirmed contradictions: doctor detects deterministically; the contradiction verdict is the orchestrator-LLM's at observation time (see the [strict-additive section](#strict-additive-runtime-model)).
 - **Paired sensor coverage** — for each rule carrying `pairing: <sensor-id>`, doctor strips the `aidlc-` prefix and confirms the named sensor exists in at least one stage's resolved sensor set (`sensors_applicable`). The row reads `Paired sensor coverage: P/(M-X) guardrails paired (X feedforward-only)`, where M is the rules carrying a `pairing:` value, X is the feedforward-only rules (which never need a sensor), and P is the rules whose named sensor resolves; unpaired rules (sensor id named but bound by no stage) are listed inline. This is a **file-existence check, not a semantic one** — it confirms the binding resolves, not that the sensor fits the rule. The row emits the `GUARDRAIL_LOADED` audit event once per run on an initialized project (the emit is suppressed on a pristine project with no `audit.md` — see the cold-safe note above).
 
 ## Forward-compat policy

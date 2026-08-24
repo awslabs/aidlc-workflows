@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.102] - 2026-08-26
+
+Rule files can now carry validated lifecycle metadata, and doctor separates stale team/project overlaps from live contradiction-review candidates without changing runtime rule delivery. **Upgrade:** refresh your `dist/<harness>/` shell; add lifecycle fields only where you want file-level drift triage.
+
+* Add optional `status: active|deprecated|draft` and `stale_after: YYYY-MM-DD` rule frontmatter, with compile-time validation that names the invalid file and rejects blank or block-scalar lifecycle declarations.
+* `/aidlc --doctor` keeps live rule-drift output unchanged and reports deprecated or date-expired file overlaps in one passing `Rule drift: N stale-suppressed` row.
+
 ## [2.6.101] - 2026-08-26
 
 Human review checkpoints now show deterministic decision context before both summary confirmation and final approval, preserve accepted or rejected finding dispositions without modifying receipt-frozen artifacts, and retain concrete invalidation paths through the required recovery review. **Upgrade:** refresh your `dist/<harness>/` shell so the new review-brief tool, gate audit fields, and protocol guidance are installed.

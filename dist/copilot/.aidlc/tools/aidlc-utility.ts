@@ -154,6 +154,7 @@ import {
   type AuditShardEvent,
 } from "./aidlc-lib.ts";
 import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
+import { isRuleStale } from "./aidlc-rule-schema.ts";
 import {
   captureStageValidationBasis,
   inspectStageValidity,
@@ -3869,8 +3870,11 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
         if (text.trim() !== "") orgPopulated.set(h, text);
       }
       const drifts: Array<{ file: string; heading: string; orgSentence: string }> = [];
+      const staleSuppressed: Array<{ file: string; heading: string; orgSentence: string }> = [];
+      const today = new Date().toISOString().slice(0, 10);
       for (const rule of rules) {
         if (rule.scope !== "team" && rule.scope !== "project") continue;
+        const stale = isRuleStale(rule.frontmatter, today);
         for (const [h, text] of rule.headings) {
           if (text.trim() === "") continue;
           const orgText = orgPopulated.get(h);
@@ -3881,7 +3885,12 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
           const firstLine = orgText.split("\n")[0] ?? orgText;
           const sentenceMatch = firstLine.match(/^.*?[.!?](?=\s|$)/);
           const orgSentence = (sentenceMatch ? sentenceMatch[0] : firstLine).trim();
-          drifts.push({ file: rule.path, heading: h, orgSentence });
+          const overlap = { file: rule.path, heading: h, orgSentence };
+          if (stale) {
+            staleSuppressed.push(overlap);
+          } else {
+            drifts.push(overlap);
+          }
         }
       }
       if (drifts.length === 0) {
@@ -3896,6 +3905,15 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
         results.push({
           pass: true,
           label: `Rule drift: ${drifts.length} team/project rule(s) overlap org policy (review for contradiction): ${detail}`,
+        });
+      }
+      if (staleSuppressed.length > 0) {
+        const detail = staleSuppressed
+          .map((d) => `${d.file} ## ${d.heading} ⇄ org "${d.orgSentence}"`)
+          .join("; ");
+        results.push({
+          pass: true,
+          label: `Rule drift: ${staleSuppressed.length} stale-suppressed: ${detail}`,
         });
       }
     }

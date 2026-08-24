@@ -63,8 +63,8 @@
 //       "Rule drift: 1 team/project rule(s) overlap org policy"  -> test 6:
 //       both on the same rendered drift line (read seam honoured end-to-end).
 //
-// 6 .sh asserts -> 6 expect()-bearing test() cases here (same count, same
-// observables, several STRONGER via single-line co-location + prefix pinning).
+// 6 .sh asserts -> 6 migrated expect()-bearing test() cases here, plus
+// lifecycle triage coverage for deprecated/date-stale/live/mixed fixtures.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -136,6 +136,10 @@ function runDoctor(rd: string): DoctorResult {
 /** The single `Rule drift:` line from doctor's report (the .sh's grep "Rule drift:"). */
 function driftLine(out: string): string {
   return out.split("\n").find((l) => l.includes("Rule drift:")) ?? "";
+}
+
+function driftLines(out: string): string[] {
+  return out.split("\n").filter((l) => l.includes("Rule drift:"));
 }
 
 describe("t104 aidlc-utility doctor — rule-drift row (migrated from t104-doctor-rule-drift.sh, plan 6)", () => {
@@ -238,5 +242,81 @@ describe("t104 aidlc-utility doctor — rule-drift row (migrated from t104-docto
     expect(line).toContain(
       "Rule drift: 1 team/project rule(s) overlap org policy",
     );
+  }, 30000);
+
+  test("deprecated team file moves its overlap to stale-suppressed", () => {
+    const r = runDoctor(
+      rulesDir({
+        "org.md":
+          "# Org\n\n## Testing Posture\n\nOrg coverage policy.\n",
+        "team.md":
+          "---\nstatus: deprecated\n---\n\n# Team\n\n## Testing Posture\n\nOld team policy.\n",
+      }),
+    );
+    const lines = driftLines(r.out);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain("Rule drift: no team/project rule overlaps org policy");
+    expect(lines[1]).toContain("Rule drift: 1 stale-suppressed");
+    expect(lines[1]).toContain("team.md ## Testing Posture");
+  }, 30000);
+
+  test("past stale_after moves its overlap to stale-suppressed", () => {
+    const r = runDoctor(
+      rulesDir({
+        "org.md":
+          "# Org\n\n## Deployment\n\nOrg deployment policy.\n",
+        "project.md":
+          "---\nstale_after: 2000-01-01\n---\n\n# Project\n\n## Deployment\n\nOld project policy.\n",
+      }),
+    );
+    const lines = driftLines(r.out);
+    expect(lines[0]).toContain("Rule drift: no team/project rule overlaps org policy");
+    expect(lines[1]).toContain("Rule drift: 1 stale-suppressed");
+    expect(lines[1]).toContain("project.md ## Deployment");
+  }, 30000);
+
+  test("future stale_after preserves the existing live row byte-for-byte", () => {
+    const baseline = runDoctor(rulesDir(DRIFT_RULES));
+    const future = runDoctor(
+      rulesDir({
+        ...DRIFT_RULES,
+        "team.md":
+          `---\nstale_after: 2099-12-31\n---\n\n${DRIFT_RULES["team.md"]}`,
+      }),
+    );
+    expect(driftLines(future.out)).toEqual(driftLines(baseline.out));
+  }, 30000);
+
+  test("active status preserves the existing live row byte-for-byte", () => {
+    const baseline = runDoctor(rulesDir(DRIFT_RULES));
+    const active = runDoctor(
+      rulesDir({
+        ...DRIFT_RULES,
+        "team.md":
+          `---\nstatus: active\n---\n\n${DRIFT_RULES["team.md"]}`,
+      }),
+    );
+    expect(driftLines(active.out)).toEqual(driftLines(baseline.out));
+  }, 30000);
+
+  test("mixed stale and live files render both rows with independent counts", () => {
+    const r = runDoctor(
+      rulesDir({
+        "org.md":
+          "# Org\n\n## Testing Posture\n\nOrg coverage policy.\n",
+        "team.md":
+          "---\nstatus: deprecated\n---\n\n# Team\n\n## Testing Posture\n\nOld team policy.\n",
+        "project.md":
+          "# Project\n\n## Testing Posture\n\nLive project policy.\n",
+      }),
+    );
+    const lines = driftLines(r.out);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain("Rule drift: 1 team/project rule(s) overlap org policy");
+    expect(lines[0]).toContain("project.md ## Testing Posture");
+    expect(lines[0]).not.toContain("team.md ## Testing Posture");
+    expect(lines[1]).toContain("Rule drift: 1 stale-suppressed");
+    expect(lines[1]).toContain("team.md ## Testing Posture");
+    expect(lines[1]).not.toContain("project.md ## Testing Posture");
   }, 30000);
 });
