@@ -62,7 +62,13 @@ function runReview(
     [LOG_TOOL, "review", ...args],
     {
       encoding: "utf-8",
-      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, ...extraEnv },
+      env: {
+        ...process.env,
+        CLAUDE_PROJECT_DIR: proj,
+        AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1",
+        AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+        ...extraEnv,
+      },
     }
   );
   return {
@@ -102,6 +108,41 @@ function seedProject(scope: "bugfix" | "feature"): string {
     );
   }
   seedBoltDagBatches(proj, [["unit-alpha"]]);
+  const stageArtifacts: Array<[string, string[]]> = [
+    [
+      join(seededRecordDir(proj), "inception", "requirements-analysis"),
+      ["requirements.md", "requirements-analysis-questions.md"],
+    ],
+    [
+      join(
+        seededRecordDir(proj),
+        "construction",
+        "unit-alpha",
+        "functional-design",
+      ),
+      ["entities.md", "rules.md", "functional-spec.md", "traceability.json"],
+    ],
+    [
+      join(
+        seededRecordDir(proj),
+        "construction",
+        "unit-alpha",
+        "code-generation",
+      ),
+      [
+        "code-generation-plan.md",
+        "unit-test-instructions.md",
+        "code-summary.md",
+        "traceability.json",
+      ],
+    ],
+  ];
+  for (const [dir, names] of stageArtifacts) {
+    mkdirSync(dir, { recursive: true });
+    for (const name of names) {
+      writeFileSync(join(dir, name), `# ${name}\n`, "utf-8");
+    }
+  }
   return proj;
 }
 
@@ -284,8 +325,9 @@ describe("t271 review iteration ceiling", () => {
 
     const spent = runReview(proj, [...base, "--iteration", "3"]);
     expect(spent.status).not.toBe(0);
-    expect(spent.stderr).toContain("stale-receipt recovery review pass was already spent");
+    expect(spent.stderr).toContain("one recovery review was already used");
     expect(spent.stderr).toContain("human Request Changes decision");
+    expect(spent.stderr).toContain("human's behalf");
   });
 
   test("adversarial stale receipt gets one recovery request after the full budget", () => {
@@ -371,7 +413,7 @@ describe("t271 review iteration ceiling", () => {
     ]);
     expect(retry.status).not.toBe(0);
     expect(retry.stderr).toContain(
-      "stale-receipt recovery review pass was already spent",
+      "one recovery review was already used",
     );
     expect(retry.stderr).not.toContain("Start the one recovery pass");
   });
@@ -758,7 +800,7 @@ describe("t271 review iteration ceiling", () => {
     expect(runReview(proj, [...request, "--verdict", "READY"]).status).toBe(0);
   });
 
-  test("--unit requires membership in an authoritative DAG", () => {
+  test("--unit requires an authoritative DAG or a matching active Bolt", () => {
     const noDag = createTestProject();
     seedStateFile(noDag, "state-mid-inception.md");
     seedAuditFile(noDag);

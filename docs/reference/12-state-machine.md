@@ -164,7 +164,9 @@ codekb directory. `workspace_requires: true` also requires source-work evidence
 outside `aidlc/` and the harness dir. A failure writes nothing. Optional outputs
 do not participate. For `produces_kinds`, units whose kind prunes the required
 set to zero owe no artifact; any applicable unit remains strict. Bypass with
-`AIDLC_SKIP_ARTIFACT_GUARD=1`.
+`AIDLC_SKIP_ARTIFACT_GUARD=1`. The same switch also bypasses the review logger's
+required-output existence check; without it, a stage-level review of a
+per-Unit stage requires every authoritative Unit's applicable required outputs.
 
 **Reviewer gate guard (issue #551).** A reviewer-bearing stage cannot enter
 `AwaitingApproval` through `gate-start` or `revise` until its configured

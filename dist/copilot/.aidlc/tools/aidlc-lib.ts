@@ -4879,6 +4879,34 @@ export function checkSummaryConfirmationEvidence(
           "reconfirmation to create a new scoped receipt. "
         : "";
     const recoveryMessage = legacyRecovery + recovery;
+    // A receipt verifies the questions file under the scope IT recorded:
+    // unscoped legacy receipts cover the whole file, scoped ones cover the
+    // confirmed content. Resolve per receipt so a duplicate-confirmation check
+    // never compares one receipt's digest against another's scope. Returns
+    // null for an unreadable file or an unknown scope, which fails closed at
+    // every call site.
+    const scopeHashes = new Map<string, string | null>();
+    const questionHashForScope = (scope: string | null): string | null => {
+      const key = scope ?? "";
+      const cached = scopeHashes.get(key);
+      if (cached !== undefined) return cached;
+      let value: string | null = null;
+      try {
+        if (scope === null) {
+          value = createHash("sha256")
+            .update(readFileSync(question.path))
+            .digest("hex");
+        } else if (scope === SUMMARY_CONFIRMATION_HASH_SCOPE) {
+          value = summaryConfirmationContentHash(
+            readFileSync(question.path, "utf-8"),
+          );
+        }
+      } catch {
+        value = null;
+      }
+      scopeHashes.set(key, value);
+      return value;
+    };
     let currentHash: string;
     try {
       currentHash = hashScope === null
@@ -4918,14 +4946,47 @@ export function checkSummaryConfirmationEvidence(
         return file !== null &&
           resolveAuditProjectPath(projectDir, file) === artifactAbs;
       });
-      const writeAfterReceipt = writes.some((entry) => {
-        if (entry.shard === receipt.shard) return entry.pos > receipt.pos;
-        if (entry.timestamp !== receipt.timestamp) {
-          return entry.timestamp > receipt.timestamp;
+      const strictlyAfter = (
+        later: AuditShardEvent,
+        earlier: AuditShardEvent,
+      ): boolean => {
+        if (later.shard === earlier.shard) return later.pos > earlier.pos;
+        if (later.timestamp !== earlier.timestamp) {
+          return later.timestamp > earlier.timestamp;
         }
         return false;
-      });
-      if (!writeAfterReceipt) {
+      };
+      const writeAfterReceipt = writes.some((entry) =>
+        strictlyAfter(entry, receipt)
+      );
+      // Re-confirming the SAME answers does not revoke the authorization an
+      // earlier identical confirmation already exercised. A re-record made
+      // only to repair the prompt/turn handshake would otherwise demand that
+      // an already-reviewed document be written again, which the review freeze
+      // forbids - the deadlock this guard is not allowed to create. The
+      // candidate must sit in this attempt window, precede both the selected
+      // receipt and a real write, carry the positive choice, and cover the
+      // answers as they are NOW under its own Hash Scope.
+      const earlierIdenticalConfirmationAuthorizesWrite = !writeAfterReceipt &&
+        orderedReceipts.some((candidate) => {
+          if (candidate === receipt) return false;
+          if (!strictlyAfter(receipt, candidate)) return false;
+          if (auditBlockField(candidate.block, "Details") !== "Looks correct") {
+            return false;
+          }
+          const candidateHash = questionHashForScope(
+            auditBlockField(candidate.block, "Hash Scope"),
+          );
+          if (
+            candidateHash === null ||
+            auditBlockField(candidate.block, "Questions SHA-256") !==
+              candidateHash
+          ) {
+            return false;
+          }
+          return writes.some((entry) => strictlyAfter(entry, candidate));
+        });
+      if (!writeAfterReceipt && !earlierIdenticalConfirmationAuthorizesWrite) {
         const unorderedWrite = writes.find((entry) =>
           entry.timestamp === receipt.timestamp && entry.shard !== receipt.shard
         );
@@ -4939,10 +5000,9 @@ export function checkSummaryConfirmationEvidence(
         return {
           ok: false,
           message:
-            `Refusing to complete "${stage.slug}": artifact ${artifact} has no ` +
-            "recorded native-tool write after the human's consolidated summary " +
-            "confirmation. Regenerate or re-save it after confirmation, then " +
-            "report completion again.",
+            `Refusing to continue "${stage.slug}": this stage's output document ` +
+            `${artifact} was not saved after the confirmed answers. Save the ` +
+            "document after confirmation, then continue.",
         };
       }
     }
@@ -5337,6 +5397,8 @@ export function terminalReviewVerdict(
 export interface PendingReviewProgress {
   state: "outstanding" | "retry-required" | "repair-required";
   iteration: number;
+  recovery: boolean;
+  suspensionActive: boolean;
 }
 
 export interface StaleReviewProgress {
@@ -5475,6 +5537,17 @@ function reviewArtifactEntries(
   } else if (resolution.state === "ok") {
     units = resolution.units;
     unitKinds = resolution.unitKinds ?? new Map();
+  } else if (resolution.state === "none") {
+    return allArtifacts.map((artifact) => ({
+      logicalPath: `construction/${stage.slug}/${artifactFilename(artifact.name)}`,
+      path: join(
+        record,
+        "construction",
+        stage.slug,
+        artifactFilename(artifact.name),
+      ),
+      required: artifact.required,
+    }));
   } else {
     const construction = join(record, "construction");
     units = existsSync(construction)
@@ -5770,6 +5843,9 @@ export function freshReviewReceipts(
     "STAGE_STARTED",
     "STAGE_JUMPED",
     "GATE_REJECTED",
+    "SESSION_STARTED",
+    "SESSION_RESUMED",
+    "BOLT_STARTED",
     "ARTIFACT_CREATED",
     "ARTIFACT_UPDATED",
     "REVIEW_REQUESTED",
@@ -5867,6 +5943,7 @@ export function freshReviewReceipts(
       fingerprint: string | null;
       timestamp: string;
       shard: string;
+      suspensionActive: boolean;
     }
   >();
   const modernUnitReceipts = new Map<
@@ -5893,6 +5970,36 @@ export function freshReviewReceipts(
   let stagePending: PendingReviewProgress | null = null;
   for (let i = floorIdx + 1; i < events.length; i++) {
     const e = events[i];
+    if (e.event === "SESSION_STARTED" || e.event === "SESSION_RESUMED") {
+      for (const request of pendingRequests.values()) {
+        request.suspensionActive = false;
+      }
+      continue;
+    }
+    if (e.event === "BOLT_STARTED" && perUnit) {
+      const units = (auditBlockField(e.block, "Bolt names") ?? "")
+        .split(",")
+        .map((unit) => unit.trim())
+        .filter((unit) => unit.length > 0);
+      for (const unit of units) {
+        for (const [key, request] of pendingRequests) {
+          if (request.unit === unit) pendingRequests.delete(key);
+        }
+        unitVerdicts.delete(unit);
+        unitStale.delete(unit);
+        unitStaleProgress.delete(unit);
+        unitIterations.delete(unit);
+        unitReceiptRecovery.delete(unit);
+        unitPending.delete(unit);
+        if (newestSourceUnit === unit) {
+          newestSourceFingerprint = null;
+          newestSourceUnit = null;
+          newestSourceProgress = null;
+          sourceRecoverySpent = false;
+        }
+      }
+      continue;
+    }
     if (e.event === "ARTIFACT_CREATED" || e.event === "ARTIFACT_UPDATED") {
       const file = auditBlockField(e.block, "File");
       if (!file) continue;
@@ -5968,6 +6075,11 @@ export function freshReviewReceipts(
         fingerprint: auditBlockField(e.block, "Artifact Fingerprint"),
         timestamp: e.timestamp,
         shard: e.shard,
+        suspensionActive:
+          recovery &&
+          /^sha256:[0-9a-f]{64}$/.test(
+            auditBlockField(e.block, "Artifact Fingerprint") ?? "",
+          ),
       });
       continue;
     }
@@ -6027,8 +6139,18 @@ export function freshReviewReceipts(
     if (terminalVerdict === null) {
       if (verdict !== "NOT-READY" || !fingerprintUsable) continue;
       const pending: PendingReviewProgress = fingerprintMatches
-        ? { state: "repair-required", iteration }
-        : { state: "outstanding", iteration: iteration + 1 };
+        ? {
+            state: "repair-required",
+            iteration,
+            recovery: request.recovery,
+            suspensionActive: false,
+          }
+        : {
+            state: "outstanding",
+            iteration: iteration + 1,
+            recovery: request.recovery,
+            suspensionActive: false,
+          };
       if (unit) {
         unitVerdicts.delete(unit);
         unitIterations.delete(unit);
@@ -6088,13 +6210,15 @@ export function freshReviewReceipts(
     const pending: PendingReviewProgress = {
       state: "retry-required",
       iteration: request.iteration,
+      recovery: request.recovery,
+      suspensionActive: request.suspensionActive,
     };
     if (request.unit) {
-      unitVerdicts.delete(request.unit);
+      if (!request.recovery) unitVerdicts.delete(request.unit);
       unitIterations.delete(request.unit);
       unitPending.set(request.unit, pending);
     } else {
-      stageVerdict = null;
+      if (!request.recovery) stageVerdict = null;
       stageIteration = null;
       stagePending = pending;
     }
@@ -9053,6 +9177,61 @@ export function parseCheckboxes(content: string): CheckboxLine[] {
     match = regex.exec(content);
   }
   return results;
+}
+
+export function recoveryGuidance(
+  _projectDir: string,
+  stateContent: string,
+  stageSlug: string,
+): string {
+  const stage = parseCheckboxes(stateContent).find(
+    (entry) => entry.slug === stageSlug,
+  );
+  if (stage?.suffix.startsWith("SKIP")) {
+    return (
+      "This stage is excluded from the current plan; change to a scope that " +
+      `includes it with /aidlc --scope <scope>, then restart ${stageSlug}.`
+    );
+  }
+  if (!stage || stage.state === "pending") {
+    return (
+      `Restart this stage with /aidlc --stage ${stageSlug}; the recorded ` +
+      "answers survive, and the stage will ask for confirmation again."
+    );
+  }
+  if (stage.state === "skipped") {
+    return (
+      `Restart this stage with /aidlc --stage ${stageSlug}; the recorded ` +
+      "answers survive, and the stage will ask for confirmation again."
+    );
+  }
+  if (
+    stage.state === "in-progress" ||
+    stage.state === "awaiting-approval"
+  ) {
+    return (
+      "To change this document, tell me what should change and I'll record your " +
+      "Request Changes decision (this works before the gate opens); that unlocks " +
+      "the file for revision and a fresh review."
+    );
+  }
+  if (stage.state === "revising") {
+    return (
+      "This stage is mid-revision; the way to restart it cleanly is a redo jump: " +
+      `/aidlc --stage ${stageSlug} (your recorded answers survive; you will ` +
+      "re-confirm the summary once)."
+    );
+  }
+  if (stage.state === "completed") {
+    return (
+      "This stage is already approved; restore the reviewed source state, or " +
+      `jump back with /aidlc --stage ${stageSlug} to redo it.`
+    );
+  }
+  return (
+    `Restart this stage with /aidlc --stage ${stageSlug}; the recorded answers ` +
+    "survive, and the stage will ask for confirmation again."
+  );
 }
 
 export function setCheckbox(

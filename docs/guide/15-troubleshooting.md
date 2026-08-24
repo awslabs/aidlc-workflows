@@ -124,6 +124,26 @@ After 3 revision cycles on the same stage, a third option appears: **Accept as-i
 
 Use `/aidlc --stage <target>` to jump to a different stage. Intervening stages will be marked `[S]` (skipped) in the state file.
 
+### A reviewed document needs another change
+
+If a final review already covers the document, direct edits are blocked so the
+review cannot silently certify different content.
+
+- While the stage is active or awaiting approval, describe the change and choose
+  **Request Changes**. The decision can be recorded before the gate opens.
+- While the stage is `[R]`, restart it with `/aidlc --stage <slug>`.
+- After the stage is `[x]`, restore the reviewed source state or jump back with
+  `/aidlc --stage <slug>` to redo it.
+
+When only workspace source changed and the one recovery review is still
+available, start that recovery request before replacing the old Review section.
+The pending request temporarily permits writes only to that stage or Unit while
+the stale condition remains. Restoring the reviewed workspace source, recording
+the verdict, or starting/resuming another session re-arms the freeze. Restoring
+output-document bytes does not clear audit-recorded artifact staleness. After a
+session restart, retry the same pending request before replacing the Review
+section. The gate remains closed until the matching verdict is recorded.
+
 ---
 
 ## Context Compaction

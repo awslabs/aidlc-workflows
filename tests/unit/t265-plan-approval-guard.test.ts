@@ -735,4 +735,17 @@ describe("t265c registrations", () => {
     );
     expect(skill).toContain("plan-approval guard is likewise prose-only");
   });
+
+  test("the documented off-switch is scoped to the dispatch hook", () => {
+    const docs = readFileSync(
+      join(REPO_ROOT, "docs", "reference", "06-hooks-and-tools.md"),
+      "utf-8",
+    );
+    expect(docs).toContain(
+      "disables this PreToolUse hook only",
+    );
+    expect(docs).toContain(
+      "does **not** disable the autonomous `aidlc-swarm.ts prepare` precondition",
+    );
+  });
 });

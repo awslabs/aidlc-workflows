@@ -59,6 +59,8 @@ function writeRequirements(proj: string, content: string): string {
   mkdirSync(dir, { recursive: true });
   const artifact = join(dir, "requirements.md");
   writeFileSync(artifact, content, "utf-8");
+  const questions = join(dir, "requirements-analysis-questions.md");
+  writeFileSync(questions, "# Requirements Questions\n", "utf-8");
   return artifact;
 }
 
@@ -139,9 +141,12 @@ describe("t291 stale review receipt recovery", () => {
     );
     expect(spent.status).not.toBe(0);
     expect(spent.stderr).toContain(
-      "stale-receipt recovery review pass was already spent",
+      "one recovery review was already used",
     );
     expect(spent.stderr).toContain("human Request Changes decision");
+    expect(spent.stderr).toContain("human's behalf");
+    expect(spent.stderr).toContain("restore the reviewed source state");
+    expect(spent.stderr).toContain("/aidlc --stage requirements-analysis");
   });
 
   test("a human Request Changes resets a spent recovery to iteration 1", () => {
@@ -184,7 +189,7 @@ describe("t291 stale review receipt recovery", () => {
     const spent = run(LOG_TOOL, [...review, "--iteration", "3"], proj);
     expect(spent.status).not.toBe(0);
     expect(spent.stderr).toContain(
-      "stale-receipt recovery review pass was already spent",
+      "one recovery review was already used",
     );
 
     const rejected = run(

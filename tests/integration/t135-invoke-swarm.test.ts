@@ -373,7 +373,13 @@ function logWorktreeReview(
     ];
     if (terminal) args.push("--verdict", verdict);
     args.push("--project-dir", wt);
-    const logged = spawnSync(BUN, args, { encoding: "utf-8" });
+    const logged = spawnSync(BUN, args, {
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1",
+      },
+    });
     if (logged.status !== 0) {
       throw new Error(`worktree review log failed: ${logged.stdout}${logged.stderr}`);
     }

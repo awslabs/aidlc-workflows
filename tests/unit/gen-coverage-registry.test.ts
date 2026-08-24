@@ -985,6 +985,10 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t317-gate-pending-doctor.test.ts",
     "unit/t304-pipeline-link-receipts.test.ts",
     "unit/t313-plugin-doctor-checks.test.ts",
+    "unit/t320-review-confirmation-deadlock.test.ts",
+    "unit/t321-source-recovery-freeze.test.ts",
+    "unit/t322-fix-round-hardening.test.ts",
+    "unit/t323-review-verdict-closure.test.ts",
     "unit/t255-workspace-sync.test.ts",
     "unit/t304-source-freshness-receipts.test.ts",
     // t305 runs the shipped review/state tools because source-attribution
