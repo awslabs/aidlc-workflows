@@ -246,6 +246,22 @@ describe("t231 plugin list and sync handlers", () => {
     expect(result.stderr).toContain("missing hooks/compose.ts");
   });
 
+  test("plugin sync names and classifies every unusable configured root", () => {
+    const project = emptyProject();
+    const composeLessRoot = tempDir("aidlc-t231-plugin-no-compose-");
+    const missingRoot = join(tempDir("aidlc-t231-plugin-missing-parent-"), "not-installed");
+    const result = utility(["plugin-sync"], project, {
+      AIDLC_PLUGIN_ROOT: composeLessRoot,
+      CLAUDE_PLUGIN_ROOT: missingRoot,
+      PLUGIN_ROOT: "",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain(`- ${composeLessRoot}: missing hooks/compose.ts`);
+    expect(result.stderr).toContain(`- ${missingRoot}: root directory does not exist`);
+  });
+
   test("plugin sync warns about compose-less roots while composing valid roots", () => {
     const project = emptyProject();
     const pluginRoot = tempDir("aidlc-t231-plugin-valid-");
