@@ -2252,7 +2252,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/unit/t310-session-binding-helpers.test.ts",
+          "file": "tests/unit/t318-session-binding-helpers.test.ts",
           "mechanism": "none"
         }
       ],
@@ -3429,7 +3429,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/unit/t310-session-binding-helpers.test.ts",
+          "file": "tests/unit/t318-session-binding-helpers.test.ts",
           "mechanism": "none"
         }
       ],
@@ -3861,7 +3861,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/unit/t310-session-binding-helpers.test.ts",
+          "file": "tests/unit/t318-session-binding-helpers.test.ts",
           "mechanism": "none"
         }
       ],
@@ -3887,12 +3887,12 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/unit/t310-session-binding-helpers.test.ts",
-          "mechanism": "none"
-        },
-        {
           "file": "tests/unit/t312-orchestrate-session-binding.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t318-session-binding-helpers.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -4108,7 +4108,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/unit/t310-session-binding-helpers.test.ts",
+          "file": "tests/unit/t318-session-binding-helpers.test.ts",
           "mechanism": "none"
         }
       ],
@@ -4757,7 +4757,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/unit/t310-session-binding-helpers.test.ts",
+          "file": "tests/unit/t318-session-binding-helpers.test.ts",
           "mechanism": "none"
         }
       ],
@@ -4994,7 +4994,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/unit/t310-session-binding-helpers.test.ts",
+          "file": "tests/unit/t318-session-binding-helpers.test.ts",
           "mechanism": "none"
         }
       ],
@@ -5029,7 +5029,7 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/unit/t310-session-binding-helpers.test.ts",
+          "file": "tests/unit/t318-session-binding-helpers.test.ts",
           "mechanism": "none"
         }
       ],
@@ -5041,7 +5041,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/unit/t310-session-binding-helpers.test.ts",
+          "file": "tests/unit/t318-session-binding-helpers.test.ts",
           "mechanism": "none"
         }
       ],

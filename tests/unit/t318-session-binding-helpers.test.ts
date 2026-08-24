@@ -54,7 +54,7 @@ afterEach(() => {
   proj = "";
 });
 
-describe("t310 session binding helpers", () => {
+describe("t318 session binding helpers", () => {
   test("binding JSON round-trips a record and an explicit null intent", () => {
     const intent = createIntent(proj, "auth", "default", "feature");
     writeSessionBinding(proj, "session-a", "default", intent.dirName);
