@@ -207,7 +207,7 @@ function recordReview(
   });
   if ((requested.status ?? -1) !== 0) {
     const expected = `${requested.stdout ?? ""}${requested.stderr ?? ""}`.match(
-      /expected ([1-9][0-9]*) from the current audit attempt/,
+      /next iteration is ([1-9][0-9]*)/,
     )?.[1];
     if (expected !== undefined && expected !== iteration) {
       iteration = expected;
@@ -897,7 +897,7 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
     recordReview(proj);
     expect(readAllAuditShards(proj)).toContain("**Source Fingerprint**: ");
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
-    expect(r.out).not.toContain("source-fingerprint mismatch");
+    expect(r.out).not.toContain("project source changed after");
     expect(r.rc).toBe(0);
   }, 60_000);
 
@@ -912,7 +912,7 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
     writeFileSync(src, "export const answer = 1337; // edited after review\n", "utf-8");
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.rc).not.toBe(0);
-    expect(r.out).toContain("source-fingerprint mismatch");
+    expect(r.out).toContain("project source changed after");
     expect(r.out).toContain(REVIEWER);
   }, 60_000);
 
@@ -926,7 +926,7 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
       "ship it",
     ]);
     expect(refused.rc).not.toBe(0);
-    expect(refused.out).toContain("source-fingerprint mismatch");
+    expect(refused.out).toContain("project source changed after");
 
     recordReview(proj);
     const audit = readAllAuditShards(proj);
@@ -950,7 +950,7 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
       "ship it",
     ]);
     expect(refused.rc).not.toBe(0);
-    expect(refused.out).toContain("source-fingerprint mismatch");
+    expect(refused.out).toContain("project source changed after");
 
     recordReview(proj); // iteration 3: bounded stale-receipt recovery
     const audit = readAllAuditShards(proj);
@@ -990,7 +990,7 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
     );
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.rc).not.toBe(0);
-    expect(r.out).toContain("source-fingerprint mismatch");
+    expect(r.out).toContain("project source changed after");
   }, 60_000);
 
   test("a true advance replay stays idempotent even if source later changes", () => {
@@ -1006,7 +1006,7 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
     test(`an already-completed stage without receipts recovers through ${route}`, () => {
       expect(guarded(proj, ["checkbox", "code-generation=completed"]).rc).toBe(0);
       const recovery = guarded(proj, [route, "code-generation"]);
-      expect(recovery.out).not.toContain("no fresh REVIEW_COMPLETED");
+      expect(recovery.out).not.toContain("has not reviewed the current output");
       expect(recovery.rc).toBe(0);
     }, 60_000);
 
@@ -1016,7 +1016,7 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
       writeFileSync(src, `export const answer = 100; // ${route} after partial approval\n`, "utf-8");
       const recovery = guarded(proj, [route, "code-generation"]);
       expect(recovery.rc).not.toBe(0);
-      expect(recovery.out).toContain("source-fingerprint mismatch");
+      expect(recovery.out).toContain("project source changed after");
     }, 60_000);
 
     test(`an artifact change cannot hide stale source during completed-stage recovery through ${route}`, () => {
@@ -1039,7 +1039,7 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
 
       const recovery = guarded(proj, [route, "code-generation"]);
       expect(recovery.rc).not.toBe(0);
-      expect(recovery.out).toContain("source-fingerprint mismatch");
+      expect(recovery.out).toContain("project source changed after");
     }, 60_000);
   }
 
@@ -1061,7 +1061,7 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
       expect(guarded(proj, ["checkbox", "code-generation=completed"]).rc).toBe(0);
       writeFileSync(src, `export const answer = 102; // ${artifactBinding} artifact binding\n`, "utf-8");
       const recovery = guarded(proj, ["advance", "code-generation"]);
-      expect(recovery.out).not.toContain("source-fingerprint mismatch");
+      expect(recovery.out).not.toContain("project source changed after");
       expect(recovery.rc).toBe(0);
     }, 60_000);
   }
@@ -1197,7 +1197,7 @@ describe("t314 multi-unit source attribution", () => {
     expect(gate.rc, gate.out).toBe(0);
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.rc).toBe(1);
-    expect(r.out).toContain("Invalidated receipts: alpha");
+    expect(r.out).toContain("Changed after review: alpha");
   }, 60_000);
 
   // Re-reviewing alpha refreshes the global outer binding, but beta's own
@@ -1230,7 +1230,7 @@ describe("t314 multi-unit source attribution", () => {
 
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.rc).toBe(1);
-    expect(r.out).toContain("Invalidated receipts: beta");
+    expect(r.out).toContain("Changed after review: beta");
   }, 60_000);
 
   // The stage-entry baseline sees unreviewed.ts, while neither fresh Unit
@@ -1307,7 +1307,7 @@ describe("t314 multi-unit source attribution", () => {
     recordReview(proj, "code-generation", REVIEWER, "beta");
 
     const clean = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
-    expect(clean.out).not.toContain("source-fingerprint mismatch");
+    expect(clean.out).not.toContain("project source changed after");
     expect(clean.rc).toBe(0);
 
     // Now edit inside the recorded repo after the last review: must refuse.
@@ -1319,7 +1319,11 @@ describe("t314 multi-unit source attribution", () => {
     writeFileSync(join(repoA, "alpha.ts"), "export const alpha = 999;\n", "utf-8");
     const dirty = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(dirty.rc).not.toBe(0);
-    expect(dirty.out).toContain("source-fingerprint mismatch");
+    expect(dirty.out).toContain(
+      "workspace source changed again after the one recovery review",
+    );
+    expect(dirty.out).toContain("To change this document");
+    expect(dirty.out).toContain("Request Changes decision");
   }, 60_000);
 });
 

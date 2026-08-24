@@ -515,7 +515,9 @@ describe("t185: stage-completion artifact guard (#366)", () => {
     bypassed(proj, ["gate-start", slug]);
     const r = guarded(proj, ["approve", slug, "--user-input", "ok"]);
     expect(r.rc).not.toBe(0);
-    expect(r.out).toContain("Refusing to complete");
+    expect((JSON.parse(r.out) as { error: string }).error).toContain(
+      'Cannot complete "feasibility": none of its declared artifacts exist',
+    );
     // State untouched: the stage is NOT marked completed.
     expect(field(proj, "Current Stage")).toBe(slug);
   });
@@ -524,7 +526,9 @@ describe("t185: stage-completion artifact guard (#366)", () => {
     const slug = field(proj, "Current Stage");
     const r = guarded(proj, ["gate-start", slug]);
     expect(r.rc).not.toBe(0);
-    expect(r.out).toContain("Refusing to present the approval gate");
+    expect((JSON.parse(r.out) as { error: string }).error).toContain(
+      'Cannot present "feasibility" for approval: none of its declared artifacts exist',
+    );
     expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(
       `- [-] ${slug}`,
     );
@@ -535,7 +539,9 @@ describe("t185: stage-completion artifact guard (#366)", () => {
     bypassed(proj, ["checkbox", `${slug}=revising`]);
     const r = guarded(proj, ["revise", slug]);
     expect(r.rc).not.toBe(0);
-    expect(r.out).toContain("Refusing to present the approval gate");
+    expect((JSON.parse(r.out) as { error: string }).error).toContain(
+      'Cannot present "feasibility" for approval: none of its declared artifacts exist',
+    );
     expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(
       `- [R] ${slug}`,
     );
@@ -545,7 +551,9 @@ describe("t185: stage-completion artifact guard (#366)", () => {
     const slug = field(proj, "Current Stage");
     const r = guarded(proj, ["advance", slug]);
     expect(r.rc).not.toBe(0);
-    expect(r.out).toContain("Refusing to complete");
+    expect((JSON.parse(r.out) as { error: string }).error).toContain(
+      'Cannot complete "feasibility": none of its declared artifacts exist',
+    );
     expect(field(proj, "Current Stage")).toBe(slug);
   });
 
@@ -557,7 +565,9 @@ describe("t185: stage-completion artifact guard (#366)", () => {
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
     const r = guarded(proj, ["finalize", slug]);
     expect(r.rc).not.toBe(0);
-    expect(r.out).toContain("Refusing to complete");
+    expect((JSON.parse(r.out) as { error: string }).error).toContain(
+      'Cannot complete "feasibility": none of its declared artifacts exist',
+    );
     expect(field(proj, "Current Stage")).toBe(slug);
   });
 
@@ -566,7 +576,9 @@ describe("t185: stage-completion artifact guard (#366)", () => {
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
     const r = guarded(proj, ["complete-workflow", slug]);
     expect(r.rc).not.toBe(0);
-    expect(r.out).toContain("Refusing to complete");
+    expect((JSON.parse(r.out) as { error: string }).error).toContain(
+      'Cannot complete "feasibility": none of its declared artifacts exist',
+    );
     expect(field(proj, "Current Stage")).toBe(slug);
   });
 
@@ -1755,7 +1767,9 @@ X. Other (please specify)
       bypassed(proj, ["gate-start", "reverse-engineering"]);
       const r = guarded(proj, ["approve", "reverse-engineering", "--user-input", "ok"]);
       expect(r.rc).not.toBe(0);
-      expect(r.out).toContain("Refusing to complete");
+      expect((JSON.parse(r.out) as { error: string }).error).toContain(
+        'Cannot complete "reverse-engineering": none of its declared artifacts exist',
+      );
     });
 
     test("PASSES reverse-engineering once the complete codekb artifact set exists", () => {
@@ -1779,7 +1793,9 @@ X. Other (please specify)
 
       const r = guarded(proj, ["gate-start", "reverse-engineering"]);
       expect(r.rc).not.toBe(0);
-      expect(r.out).toContain("Refusing to present the approval gate");
+      expect((JSON.parse(r.out) as { error: string }).error).toContain(
+        'Cannot present "reverse-engineering" for approval: none of its declared artifacts exist',
+      );
     });
 
     test("PASSES multi-repo codekb when every registered repo has the full set", () => {
@@ -2006,7 +2022,9 @@ X. Other (please specify)
       gateSetupBypassed(proj, ["gate-start", "code-generation"]);
       const r = guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
       expect(r.rc).not.toBe(0);
-      expect(r.out).toContain("Refusing to complete");
+      expect((JSON.parse(r.out) as { error: string }).error).toContain(
+        'Cannot complete "code-generation": none of its declared artifacts exist',
+      );
     });
 
     test("unexpected settled-swarm probe failures are controlled and leave state unchanged", () => {
@@ -2026,7 +2044,7 @@ X. Other (please specify)
       expect(r.rc).toBe(1);
       const refusal = JSON.parse(r.out) as { error: string };
       expect(refusal.error).toContain(
-        'Refusing to present the approval gate for "code-generation"',
+        'Cannot present "code-generation" for approval: the settled-swarm probe failed unexpectedly',
       );
       expect(refusal.error).toContain("settled-swarm probe failed unexpectedly");
       expect(refusal.error).toContain("Scope file missing frontmatter");

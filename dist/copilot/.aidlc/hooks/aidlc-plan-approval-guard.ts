@@ -186,17 +186,15 @@ export function blockReason(mentioned: string[]): string {
     mentioned.length === 1
       ? `unit ${mentioned[0]}`
       : mentioned.length > 1
-        ? `one unit (conflicting AIDLC-UNIT markers: ${mentioned.join(", ")})`
-        : "one unit (AIDLC-UNIT marker missing)";
+        ? `one unit, but the brief names several (${mentioned.join(", ")})`
+        : "one unit, but the brief does not name it";
   return (
-    `plan-approval guard: code-generation must not dispatch ${GUARDED_AGENT} before the ` +
-    `plan, unit-test instructions, and current Testing Contract are fingerprinted and approved ` +
-    `for ${scope}. Follow the stage file's Steps 2-3 first: write the plan and instructions, ` +
-    `embed the resolver's ## Testing Contract JSON, record its current [Approval Fingerprint], ` +
-    `present the Plan Approval question, END the turn, and record the human's explicit ` +
-    `"Approve Plan" answer. Only then dispatch generation (Step 4), starting the delegation ` +
-    `prompt with "AIDLC-UNIT: <unit>" and "AIDLC-TESTING-CONTRACT: <contract hash>". ` +
-    `code-generation-plan.md is the INPUT to generation, never a retroactive summary.`
+    `Code generation cannot start for ${scope} because its plan and test instructions are ` +
+    `not currently approved. Finish Steps 2-3 in code-generation: update ` +
+    `code-generation-plan.md and unit-test-instructions.md, refresh the Testing Contract and ` +
+    `approval fingerprint, present Plan Approval, end the turn, and wait for the human's ` +
+    `"Approve Plan" answer. Then retry the developer handoff with ` +
+    `"AIDLC-UNIT: <unit>" and "AIDLC-TESTING-CONTRACT: <contract hash>" at the start of the brief.`
   );
 }
 

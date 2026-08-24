@@ -473,7 +473,7 @@ describe("t215 bolt dag self-heal", () => {
     expect(r.directive.message).toContain("functional-design");
     expect(r.directive.message).toContain("alpha");
     expect(r.directive.message).toContain("beta");
-    expect(r.directive.message).toContain("per-unit");
+    expect(r.directive.message).toContain("work items are not complete");
     expect(r.stderr).toContain(HEAL_NOTE);
     logCapturedStderr(r.stderr);
   }, 30000);

@@ -679,11 +679,11 @@ describe("t278 engine-emitted wave contract", () => {
     );
     expect(rejected.status).toBe(0);
     expect(rejected.out).toContain('"kind":"error"');
-    expect(rejected.out).toContain("Refusing to reject");
+    expect(rejected.out).toContain("Cannot request changes");
     expect(rejected.out).toContain(
-      "stale-receipt recovery review was already spent",
+      "recovery review has already been used",
     );
-    expect(rejected.out).toContain("only after a real human has acted");
+    expect(rejected.out).toContain("only a new human choice");
     expect(next(proj).directive.wave?.entries[0]).toMatchObject({
       unit: "alpha",
       review_state: "escalation-required",

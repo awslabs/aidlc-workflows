@@ -85,7 +85,7 @@ const GATE_ORDER_PIN =
   "keep the §1 approval question's standard option order (Approve first, Request Changes second)";
 const SKILL_PIN = "stage-protocol-reviewer.md";
 const STALE_ERROR_PIN =
-  "terminal review receipt from aidlc-product-lead-agent was invalidated";
+  "output document changed after aidlc-product-lead-agent reviewed it";
 const TEST_ENV = {
   AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
   AIDLC_SKIP_ARTIFACT_GUARD: "1",
@@ -228,10 +228,10 @@ describe("t263 reviewer terminal-receipt ordering (receipt-invalidation loop fix
       TEST_ENV,
     );
     expect(refused.status).not.toBe(0);
-    expect(refused.out).toContain("Refusing to present the approval gate");
+    expect(refused.out).toContain("Cannot present");
     expect(refused.out).toContain("requirements-analysis");
     expect(refused.out).toContain("aidlc-product-lead-agent");
-    expect(refused.out).toContain("§12a");
+    expect(refused.out).toContain("aidlc-log.ts review --stage requirements-analysis");
   });
 
   test("gate-start accepts a fresh terminal reviewer receipt", () => {
@@ -280,7 +280,7 @@ describe("t263 reviewer terminal-receipt ordering (receipt-invalidation loop fix
       TEST_ENV,
     );
     expect(refused.out).toContain('"kind":"error"');
-    expect(refused.out).toContain("Refusing to present the approval gate");
+    expect(refused.out).toContain("Cannot present");
     expect(eventCount(p, "STAGE_AWAITING_APPROVAL")).toBe(1);
   });
 
@@ -375,10 +375,10 @@ describe("t263 reviewer terminal-receipt ordering (receipt-invalidation loop fix
       TEST_ENV,
     );
     expect(refused.status).not.toBe(0);
-    expect(refused.out).toContain("Refusing to present the approval gate");
+    expect(refused.out).toContain("Cannot present");
     expect(refused.out).toContain("requirements-analysis");
     expect(refused.out).toContain("aidlc-product-lead-agent");
-    expect(refused.out).toContain("§12a");
+    expect(refused.out).toContain("aidlc-log.ts review --stage requirements-analysis");
   });
 
   test("approve keeps the existing completion-path refusal wording", () => {
@@ -402,12 +402,12 @@ describe("t263 reviewer terminal-receipt ordering (receipt-invalidation loop fix
       TEST_ENV,
     );
     expect(refused.status).not.toBe(0);
-    expect(refused.out).toContain("Refusing to complete");
+    expect(refused.out).toContain("Cannot complete");
     expect(refused.out).toContain("requirements-analysis");
-    expect(refused.out).toContain("it declares a reviewer");
-    expect(refused.out).toContain("before completing.");
+    expect(refused.out).toContain("has not reviewed the current output");
+    expect(refused.out).toContain("After recording the verdict");
     expect(refused.out).not.toContain(
-      "Refusing to present the approval gate",
+      "Cannot present",
     );
   });
 });

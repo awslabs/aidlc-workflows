@@ -984,7 +984,9 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         command,
       ).toBe("deny");
       expect(blocked.stdout, command).toContain(
-        command.includes("--project-dir /tmp") ? "different physical project" : "conductor-owned",
+        command.includes("--project-dir /tmp")
+          ? "different physical project"
+          : "only the main workflow session can change stage status or routing",
       );
     }
 

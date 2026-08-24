@@ -947,11 +947,11 @@ export async function run(input: string): Promise<number> {
   const verb = directStateTransition(parsed.tool_input?.command ?? "");
   if (verb !== null) {
     process.stderr.write(
-      `[aidlc] Direct aidlc-state.ts ${verb} is blocked: stage status is changed by the workflow ` +
-        "tools, not by hand, so that the state file, the audit log, and the compiled stage graph " +
-        "stay in agreement. Use aidlc-orchestrate.ts report --stage <slug> --result " +
+      `Stage status cannot be changed with aidlc-state.ts ${verb} because that bypasses ` +
+        "the workflow's completion and approval checks. Use aidlc-orchestrate.ts report " +
+        "--stage <slug> --result " +
         "<awaiting-approval|approved|rejected|revised|completed|skipped>; use " +
-        "aidlc-orchestrate.ts park to pause the workflow, and next/jump to change routing.\n",
+        "aidlc-orchestrate.ts park to pause, and next/jump to move through the workflow.\n",
     );
     return 2;
   }
@@ -964,8 +964,10 @@ export async function run(input: string): Promise<number> {
   if (delegatedCommand === null) return 0;
 
   process.stderr.write(
-    `[aidlc] Delegated agent "${agentType}" cannot run ${delegatedCommand}: workflow lifecycle and routing are conductor-owned. ` +
-      "Return the artifact, contribution, or review verdict to the invoking orchestrator without parking, resuming, reporting, routing, or presenting a gate.\n",
+    `Delegated agent "${agentType}" cannot run ${delegatedCommand} because only the main ` +
+      "workflow session can change stage status or routing. Return the artifact, contribution, " +
+      "or review verdict to the main session without parking, resuming, reporting, routing, " +
+      "or presenting an approval question.\n",
   );
   return 2;
 }

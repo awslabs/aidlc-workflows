@@ -1194,7 +1194,10 @@ describe("t17 approve artifact guard (#366)", () => {
     runState(proj, ["gate-start", "feasibility"]);
     const r = guarded(["approve", "feasibility", "--user-input", "ok"]);
     expect(r.rc).not.toBe(0);
-    expect(r.combined).toContain("Refusing to complete");
+    const refusal = JSON.parse(r.combined) as { error: string };
+    expect(refusal.error).toContain(
+      'Cannot complete "feasibility": none of its declared artifacts exist',
+    );
     // State untouched: not marked [x].
     expect(readState(proj)).not.toContain("[x] feasibility");
   });

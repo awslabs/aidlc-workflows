@@ -347,7 +347,7 @@ describe("t221 (a) evaluateReviewerScope decision table", () => {
     const reason = blockReason("construction/*/*/*.md", full);
     expect(reason).toContain("U03-scoring");
     expect(reason).toContain("construction/*/*/*.md");
-    expect(reason).toContain("the specific files you were handed");
+    expect(reason).toContain("the files supplied with the review");
   });
 
   test("parseDispatchRecord accepts the documented shape and rejects malformed records", () => {
@@ -431,7 +431,7 @@ describe("t221 (b) dispatch-record lifecycle (shipped hook, subprocess)", () => 
     seedRecord(proj);
     const r = runHook(proj, SIBLING_SWEEP);
     expect(r.code).toBe(2);
-    expect(r.stderr).toContain("reviewer read-scope");
+    expect(r.stderr).toContain("This review cannot open");
     expect(r.stderr).toContain("U03-scoring");
   });
 

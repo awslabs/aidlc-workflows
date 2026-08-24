@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.104] - 2026-08-26
+
+Error recovery now keeps the same project-focused voice as normal workflow progress without weakening terminal errors or state-aware review recovery. **Upgrade:** refresh your `dist/<harness>/` shell so every harness receives the updated conductor rules, tools, and hooks.
+
+* Conductors translate ordinary tool, hook, and workflow-check refusals into project language, while terminal engine error directives remain verbatim, stop immediately, and are never retried.
+* Retry limits follow the same project action and target across corrected arguments and unrelated successful calls; a success for that action, a human-chosen alternative, or a relevant workflow-state change resets the count.
+* Gate, question, review, collaboration, plan-approval, reviewer-scope, and state-transition refusals now name the blocked project action and an actionable recovery without section cites, audit event names, or internal output-field vocabulary.
+* Exhausted review recovery preserves state-aware guidance for active, revising, completed, and off-plan stages instead of always directing the conductor to an approval gate.
+
 ## [2.6.103] - 2026-08-26
 
 Kind-vacuous Construction units no longer deadlock summary-confirmation routing when their unit kind excludes every output of a per-unit stage. **Upgrade:** refresh your `dist/<harness>/` shell so unit-major routing and per-unit approval skip confirmation evidence that an inapplicable unit cannot produce.

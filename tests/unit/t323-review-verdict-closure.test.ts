@@ -101,7 +101,9 @@ describe("t323 review verdict closure", () => {
     writeFileSync(primary, "# functional-spec.md\n\n## Review\n\nREADY\n");
     const staleVerdict = runReview(proj, [...args, "--verdict", "READY"]);
     expect(staleVerdict.status).not.toBe(0);
-    expect(staleVerdict.stderr).toContain("changed after REVIEW_REQUESTED");
+    expect(staleVerdict.stderr).toContain(
+      "output documents changed after review iteration 1 started",
+    );
 
     const rebound = runReview(proj, [...args, "--retry-pending"]);
     expect(rebound.status).toBe(0);

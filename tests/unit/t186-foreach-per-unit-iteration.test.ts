@@ -404,7 +404,7 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     expect(d.message).toContain("functional-design");
     expect(d.message).toContain("alpha");
     expect(d.message).toContain("beta");
-    expect(d.message).toContain("per-unit");
+    expect(d.message).toContain("work items are not complete");
   }, 30000);
 
   // 6b: coverage guard refuses even when only the LAST unit is uncovered (the

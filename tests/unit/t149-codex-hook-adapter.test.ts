@@ -472,7 +472,7 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       expect(r.code).toBe(2);
       expect(r.stdout).toBe("");
       expect(r.stderr).toContain(
-        "Direct aidlc-state.ts reject is blocked",
+        "Stage status cannot be changed with aidlc-state.ts reject",
       );
       expect(r.stderr).toContain("aidlc-orchestrate.ts report");
     } finally {
@@ -528,7 +528,7 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
         },
       });
       expect(r.code).toBe(2);
-      expect(r.stderr).toContain("plan-approval guard");
+      expect(r.stderr).toContain("Code generation cannot start");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -568,7 +568,7 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       });
       expect(r.code).toBe(2);
       expect(r.stdout).toBe("");
-      expect(r.stderr).toContain("workflow lifecycle and routing are conductor-owned");
+      expect(r.stderr).toContain("only the main workflow session can change stage status or routing");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

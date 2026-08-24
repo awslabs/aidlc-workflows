@@ -246,9 +246,10 @@ forward-compatible with Track 2.
    backfill) **refuses to commit for a reviewer-bearing stage** unless a
    `REVIEW_COMPLETED` row with a terminal verdict exists in the audit tail for
    that stage's current iteration. On a miss it returns an `error` directive:
-   *"Stage <slug> declares a reviewer; no REVIEW_COMPLETED found. Invoke the
-   reviewer (§12a) before approving."* The engine reads the stage node to know
-   whether a reviewer is declared, so it can enforce this deterministically.
+   *"Cannot present <slug> for approval because <reviewer> has not reviewed the
+   current output. Request the review, record its verdict, then try again."*
+   The engine reads the stage node to know whether a reviewer is declared, so
+   it can enforce this deterministically.
 
 4. **`--doctor` surfaces skips.** With the events in place, doctor can flag a
    reviewer-bearing stage that reached `awaiting-approval` without a matching

@@ -214,7 +214,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     guarded(proj, ["gate-start", slug]); // STAGE_AWAITING_APPROVAL recorded (ledger non-empty)
     const r = guarded(proj, ["approve", slug, "--user-input", "Approve"]);
     expect(r.rc).not.toBe(0);
-    expect(r.out).toContain("Refusing to approve");
+    expect(r.out).toContain("Cannot approve");
     expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
     // State untouched: the stage is NOT marked completed.
     expect(field(proj, "Current Stage")).toBe(slug);
@@ -265,7 +265,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     guarded(proj, ["gate-start", slug2]);
     const r2 = guarded(proj, ["approve", slug2, "--user-input", "Approve"]);
     expect(r2.rc).not.toBe(0);
-    expect(r2.out).toContain("Refusing to approve");
+    expect(r2.out).toContain("Cannot approve");
     // Still exactly ONE commit across the whole turn.
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
     expect(field(proj, "Current Stage")).toBe(slug2);
@@ -335,7 +335,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     guarded(proj, ["gate-start", slug2]);
     const r = guarded(proj, ["approve", slug2, "--user-input", "Approve"]);
     expect(r.rc).not.toBe(0);
-    expect(r.out).toContain("Refusing to approve");
+    expect(r.out).toContain("Cannot approve");
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
     expect(field(proj, "Current Stage")).toBe(slug2);
   });
@@ -441,7 +441,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "Looks correct",
       ]);
       expect(fabricated.rc).not.toBe(0);
-      expect(fabricated.out).toContain("real human has not responded");
+      expect(fabricated.out).toContain("no human reply has arrived");
 
       recordHumanTurn(proj);
       const confirmed = guardedLog(proj, [
@@ -594,7 +594,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "Looks correct",
       ]);
       expect(result.rc).not.toBe(0);
-      expect(result.out).toContain("turn was already consumed");
+      expect(result.out).toContain("that turn was already used by another decision");
       expect(eventCount(proj, "SUMMARY_CONFIRMATION_RECORDED")).toBe(0);
     });
 
@@ -710,7 +710,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       ).toBe(0);
       const r = guardedLog(proj, ["answer", "--stage", slug, "--details", "my answer"]);
       expect(r.rc).not.toBe(0);
-      expect(r.out).toContain("Refusing to record this answer");
+      expect(r.out).toContain("Cannot record this answer");
       expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(0);
     });
 
@@ -832,7 +832,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "Approve",
       ]);
       expect(answer.rc).not.toBe(0);
-      expect(answer.out).toContain("Refusing to acknowledge this approval choice");
+      expect(answer.out).toContain("Cannot record this approval choice");
       expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(0);
 
       const approve = guardedReport(proj, [
@@ -866,7 +866,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       ]);
       expect(reject.rc).toBe(0);
       expect(reject.out).toContain('"kind":"error"');
-      expect(reject.out).toContain("Refusing to reject");
+      expect(reject.out).toContain("Cannot request changes");
       expect(eventCount(proj, "GATE_REJECTED")).toBe(0);
       expect(field(proj, "Revision Count")).toBe("0");
       expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(
@@ -907,7 +907,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       ]);
       expect(second.rc).toBe(0);
       expect(second.out).toContain('"kind":"error"');
-      expect(second.out).toContain("Refusing to reject");
+      expect(second.out).toContain("Cannot request changes");
       expect(eventCount(proj, "GATE_REJECTED")).toBe(1);
     });
 

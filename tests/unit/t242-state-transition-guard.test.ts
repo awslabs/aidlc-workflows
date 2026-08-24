@@ -414,7 +414,9 @@ describe("t242 state-transition ownership guard", () => {
       env: unownedEnv(),
     });
     expect(delegated.status).toBe(2);
-    expect(delegated.stderr).toContain("workflow lifecycle and routing are conductor-owned");
+    expect(delegated.stderr).toContain(
+      "only the main workflow session can change stage status or routing",
+    );
 
     const conductor = spawnSync(process.execPath, [HOOK], {
       input: JSON.stringify({
@@ -457,7 +459,7 @@ describe("t242 state-transition ownership guard", () => {
       });
       expect(delegated.status, command).toBe(2);
       expect(delegated.stderr, command).toContain(
-        "workflow lifecycle and routing are conductor-owned",
+        "only the main workflow session can change stage status or routing",
       );
     }
   });
@@ -526,7 +528,7 @@ describe("t242 state-transition ownership guard", () => {
     expect(r.status).toBe(2);
     expect(r.stdout).toBe("");
     expect(r.stderr).toContain(
-      "Direct aidlc-state.ts gate-start is blocked",
+      "Stage status cannot be changed with aidlc-state.ts gate-start",
     );
     expect(r.stderr).toContain("aidlc-orchestrate.ts report");
   });
@@ -545,7 +547,7 @@ describe("t242 state-transition ownership guard", () => {
       );
       expect(r.status, `${verb}: ${r.stdout}${r.stderr}`).toBe(1);
       expect(`${r.stdout}${r.stderr}`).toContain(
-        `Direct aidlc-state.ts ${verb} is blocked`,
+        `Stage status cannot be changed with aidlc-state.ts ${verb}`,
       );
     }
   });
@@ -563,7 +565,7 @@ describe("t242 state-transition ownership guard", () => {
     );
     expect(r.status).toBe(1);
     expect(`${r.stdout}${r.stderr}`).toContain(
-      "Direct aidlc-state.ts gate-start is blocked",
+      "Stage status cannot be changed with aidlc-state.ts gate-start",
     );
   });
 

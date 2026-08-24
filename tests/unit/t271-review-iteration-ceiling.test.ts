@@ -270,10 +270,9 @@ describe("t271 review iteration ceiling", () => {
       "--iteration", "2",
     ]);
     expect(over.status).not.toBe(0);
-    expect(over.stderr).toContain("exceeds");
-    expect(over.stderr).toContain("advisory");
+    expect(over.stderr).toContain("allows 1 review pass");
     // The refusal must teach the terminal path, not re-trigger a review loop.
-    expect(over.stderr).toContain("quote its findings at the approval gate");
+    expect(over.stderr).toContain("include the findings in the approval summary");
     // No REVIEW_REQUESTED row landed for the refused request.
     const audit = readAllAuditShards(proj);
     const rows = audit.match(/\*\*Event\*\*: REVIEW_REQUESTED/g) ?? [];
@@ -300,12 +299,14 @@ describe("t271 review iteration ceiling", () => {
       "--retry-pending",
     ]);
     expect(retry.status).not.toBe(0);
-    expect(retry.stderr).toContain("receipt was invalidated by a later artifact write");
+    expect(retry.stderr).toContain(
+      "completed before the stage output or project source changed",
+    );
     expect(retry.stderr).toContain("--iteration 2");
 
     const wrongOrdinal = runReview(proj, [...base, "--iteration", "1"]);
     expect(wrongOrdinal.status).not.toBe(0);
-    expect(wrongOrdinal.stderr).toContain("expected 2");
+    expect(wrongOrdinal.stderr).toContain("next iteration is 2");
 
     const recovery = runReview(proj, [...base, "--iteration", "2"]);
     expect(recovery.status).toBe(0);
@@ -443,9 +444,8 @@ describe("t271 review iteration ceiling", () => {
       "--iteration", "3",
     ], iterationOnly);
     expect(over.status).not.toBe(0);
-    expect(over.stderr).toContain("exceeds");
-    expect(over.stderr).toContain("review budget (2)");
-    expect(over.stderr).toContain("present the gate");
+    expect(over.stderr).toContain("allows 2 review passes");
+    expect(over.stderr).toContain("approval gate");
   });
 
   test("scope review_cap lowers an adversarial budget to 1 (bugfix)", () => {
@@ -456,7 +456,7 @@ describe("t271 review iteration ceiling", () => {
       "--iteration", "2",
     ]);
     expect(over.status).not.toBe(0);
-    expect(over.stderr).toContain("review budget (1)");
+    expect(over.stderr).toContain("allows 1 review pass");
   });
 
   test("Review Override none refuses even iteration 1", () => {
@@ -476,7 +476,7 @@ describe("t271 review iteration ceiling", () => {
       "--iteration", "1",
     ]);
     expect(refused.status).not.toBe(0);
-    expect(refused.stderr).toContain("review budget (0)");
+    expect(refused.stderr).toContain("allows 0 review passes");
   });
 
   test("inline per-unit reviews remain subject to scope caps", () => {
@@ -508,7 +508,7 @@ describe("t271 review iteration ceiling", () => {
       "--iteration", "2",
     ]);
     expect(over.status).not.toBe(0);
-    expect(over.stderr).toContain("review budget (1)");
+    expect(over.stderr).toContain("allows 1 review pass");
   });
 
   test("a matching autonomous Bolt attempt uses the declared class", () => {
@@ -550,7 +550,7 @@ describe("t271 review iteration ceiling", () => {
       "--iteration", "3",
     ], iterationOnly);
     expect(over.status).not.toBe(0);
-    expect(over.stderr).toContain("review budget (2)");
+    expect(over.stderr).toContain("allows 2 review passes");
 
     appendAuditEntry("BOLT_FAILED", {
       "Bolt slug": "unit-alpha",
@@ -563,7 +563,7 @@ describe("t271 review iteration ceiling", () => {
       "--iteration", "1",
     ], iterationOnly);
     expect(afterFailure.status).not.toBe(0);
-    expect(afterFailure.stderr).toContain("review budget (0)");
+    expect(afterFailure.stderr).toContain("allows 0 review passes");
   });
 
   test("an advisory autonomous Bolt remains single-pass", () => {
@@ -607,8 +607,8 @@ describe("t271 review iteration ceiling", () => {
       "--iteration", "2",
     ], env);
     expect(refused.status).not.toBe(0);
-    expect(refused.stderr).toContain("review budget (1)");
-    expect(refused.stderr).toContain("single advisory pass");
+    expect(refused.stderr).toContain("allows 1 review pass");
+    expect(refused.stderr).toContain("Do not ask the reviewer again");
   });
 
   test("an autonomous Bolt with spent recovery halts before claim or merge", () => {
@@ -691,7 +691,7 @@ describe("t271 review iteration ceiling", () => {
 
     const noLongerPending = runReview(proj, [...request, "--retry-pending"]);
     expect(noLongerPending.status).not.toBe(0);
-    expect(noLongerPending.stderr).toContain("no unmatched REVIEW_REQUESTED");
+    expect(noLongerPending.stderr).toContain("no pending request with that number exists");
 
     const overBudget = runReview(proj, [
       "--stage", "requirements-analysis",
@@ -699,7 +699,7 @@ describe("t271 review iteration ceiling", () => {
       "--iteration", "2",
     ]);
     expect(overBudget.status).not.toBe(0);
-    expect(overBudget.stderr).toContain("review budget (1)");
+    expect(overBudget.stderr).toContain("allows 1 review pass");
   });
 
   test("REVIEW_COMPLETED must pair to an unmatched request iteration", () => {
@@ -711,7 +711,7 @@ describe("t271 review iteration ceiling", () => {
       "--verdict", "READY",
     ]);
     expect(unpaired.status).not.toBe(0);
-    expect(unpaired.stderr).toContain("no unmatched REVIEW_REQUESTED");
+    expect(unpaired.stderr).toContain("no pending request with that number exists");
 
     expect(runReview(proj, [
       "--stage", "requirements-analysis",
@@ -733,7 +733,7 @@ describe("t271 review iteration ceiling", () => {
       "--verdict", "READY",
     ]);
     expect(duplicate.status).not.toBe(0);
-    expect(duplicate.stderr).toContain("no unmatched REVIEW_REQUESTED");
+    expect(duplicate.stderr).toContain("no pending request with that number exists");
   });
 
   test("missing and malformed request iterations are refused", () => {
@@ -761,10 +761,10 @@ describe("t271 review iteration ceiling", () => {
     expect(runReview(proj, args("1")).status).toBe(0);
     const duplicate = runReview(proj, args("1"));
     expect(duplicate.status).not.toBe(0);
-    expect(duplicate.stderr).toContain("still unmatched");
+    expect(duplicate.stderr).toContain("still waiting for a verdict");
     const concurrentNext = runReview(proj, args("2"));
     expect(concurrentNext.status).not.toBe(0);
-    expect(concurrentNext.stderr).toContain("still unmatched");
+    expect(concurrentNext.stderr).toContain("still waiting for a verdict");
 
     expect(
       runReview(proj, [...args("1"), "--verdict", "NOT-READY"]).status,
@@ -796,7 +796,9 @@ describe("t271 review iteration ceiling", () => {
     writeFileSync(artifact, "changed while reviewer was running\n", "utf-8");
     const staleVerdict = runReview(proj, [...request, "--verdict", "READY"]);
     expect(staleVerdict.status).not.toBe(0);
-    expect(staleVerdict.stderr).toContain("changed after REVIEW_REQUESTED");
+    expect(staleVerdict.stderr).toContain(
+      "output documents changed after review iteration",
+    );
     expect(readAllAuditShards(proj)).not.toContain("**Event**: REVIEW_COMPLETED");
 
     expect(runReview(proj, [...request, "--retry-pending"]).status).toBe(0);

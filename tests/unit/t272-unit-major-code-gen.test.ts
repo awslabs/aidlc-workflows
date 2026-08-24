@@ -411,7 +411,7 @@ describe("t272 code-generation joins the unit-major walk", () => {
     expect(d.kind).toBe("error");
     expect(d.message).toContain("code-generation");
     expect(d.message).toContain("beta");
-    expect(d.message).toContain("per-unit");
+    expect(d.message).toContain("work items are not complete");
   }, 30000);
 
   // 4: revision re-entry through the widened block. From a fully-covered

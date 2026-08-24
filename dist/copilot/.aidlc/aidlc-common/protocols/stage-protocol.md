@@ -40,6 +40,31 @@ so they can open them. Never explain the gate's machinery to justify asking.
 report an error** (they need the specific command or path to fix it). Even
 then the FIRST sentence is plain language; the specifics follow it.
 
+**When an action is refused, translate the refusal instead of relaying it.**
+The tool, hook, or workflow check's own message is diagnostic output, not chat
+narration: never quote or paraphrase its internal vocabulary to the user. Say
+one plain sentence naming what was declined and why in the user's project
+terms, then one plain sentence naming the next step they can take. For example:
+"I can't edit the stories document right now because it was already reviewed
+for approval. To change it, you can request changes and I'll revise and
+re-review." Leave the refusal text in the tool result. This rule applies only
+when a tool call fails or a hook or workflow check denies an attempted action
+and returns control to the current directive. It does not apply when the engine
+emits `directive.kind === "error"`: print that terminal, user-facing message
+verbatim, stop immediately, and never retry it. Identify an action by its
+requested project operation plus target, such as approving stage X, writing
+artifact Y, or requesting review for stage X and Unit U. Corrected incidental
+arguments retain the identity; changing the operation or target creates a new
+identity. Count refusals separately per identity and stop on its second refusal
+since reset, even if unrelated actions succeeded between attempts. Reset only
+when that identity succeeds, the human explicitly abandons it, or a workflow
+transition changes its operation or target. Thus two refused review requests
+with corrected flags reach the limit, and a successful unrelated status check
+between them does not reset it; a successful review request, a different
+review target, or a workflow transition to another operation starts a fresh
+count. Diagnose a refusal only from its message and `/aidlc --doctor`. Never
+read framework or workflow source files to investigate it.
+
 **In Construction, the loop's bookkeeping is internal.** This phase repeats the
 same stage once per piece of work, and the machinery that drives the repetition
 is the largest pile of internal detail in the framework: which pass of the
@@ -54,11 +79,11 @@ re-entry the directive's `narration` value already says exactly that. Where a
 directive carries no line, one sentence naming the piece being built is the
 ceiling, and silence is the ordinary case.
 
-Two things this contract does NOT change. Print a message a tool tells you to
-print VERBATIM: those strings are the tool's own wording, not yours to
-paraphrase. And keep every audit event name, state marker, tool flag, file
-path, and stage slug exactly as written, in prose and in machine-facing
-sections alike.
+Two things this contract does NOT change. Print a non-refusal message a tool
+tells you to print VERBATIM: those strings are the tool's own wording, not
+yours to paraphrase. Refusals follow the translation rule above. And keep every
+audit event name, state marker, tool flag, file path, and stage slug exactly as
+written in machine-facing sections.
 
 ### Structured questions (harness-neutral contract)
 

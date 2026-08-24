@@ -465,7 +465,7 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     expect(d.kind).toBe("error");
     expect(d.message).toContain("functional-design");
     expect(d.message).toContain("beta");
-    expect(d.message).toContain("per-unit");
+    expect(d.message).toContain("work items are not complete");
   }, 30000);
 
   // 6: revision re-entry. From a fully-covered grid, deleting one artifact of

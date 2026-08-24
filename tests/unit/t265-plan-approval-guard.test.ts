@@ -482,7 +482,7 @@ describe("t265b hook lifecycle", () => {
       seedUnit(proj, "todo-core", { plan: false });
       const r = runHook(proj, DISPATCH(proj, "Generate all code for todo-core"));
       expect(r.code).toBe(2);
-      expect(r.stderr).toContain("plan-approval guard");
+      expect(r.stderr).toContain("Code generation cannot start");
       expect(r.stderr).toContain("code-generation-plan.md");
     } finally {
       rmSync(proj, { recursive: true, force: true });

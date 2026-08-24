@@ -688,16 +688,12 @@ export function parseDispatchRecord(raw: string): ReviewerDispatch | null {
 // reviewer self-corrects without retrying the same call.
 export function blockReason(target: string, dispatch: ReviewerDispatch): string {
   return (
-    `[aidlc] reviewer read-scope: "${target}" reads another unit's files under construction/. ` +
-    `This review covers unit ${dispatch.unit} only, plus the specific files you were handed ` +
-    `(the stage file, the questions file, and the shared design documents this unit builds ` +
-    `on). Check cross-unit claims against those handed files instead of opening another ` +
-    `unit's work. If this unit's design names an integration point in another unit's file, ` +
-    `say so in your findings rather than reading it; the only files readable outside this ` +
-    `unit are the ones the conductor listed as exceptions when it started the review. (If ` +
-    `you meant a file in the CURRENT unit, write the unit name out in full - a shell ` +
-    `variable in the path cannot be checked, so it is refused; searches must stay inside ` +
-    `the current unit's path.)`
+    `This review cannot open "${target}" because it belongs to another unit; the current ` +
+    `review covers ${dispatch.unit}. Use the files supplied with the review and the files ` +
+    `under this unit's construction path. If the design depends on another unit, note that ` +
+    `integration point in the findings instead of opening its files. Write ${dispatch.unit} ` +
+    `literally in shell paths because variables cannot be checked, and keep searches inside ` +
+    `the current unit.`
   );
 }
 

@@ -298,8 +298,9 @@ describe("t307 autonomous unit-major loop-back receipts", () => {
     ]);
     expect(missingReview.kind).toBe("error");
     expect(missingReview.message).toContain(
-      "1 of 2 applicable units have no fresh recorded review (beta)",
+      "1 of 2 applicable units do not have a current review",
     );
+    expect(missingReview.message).toContain("(beta)");
 
     recordReview("beta");
     const refreshed = report([

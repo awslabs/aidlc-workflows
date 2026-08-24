@@ -687,7 +687,8 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE human-turn recording + core gate 
         // The engine delivers refusals as a typed error directive on stdout with
         // exit code 0, so assert the directive text; the ledger asserts below
         // prove no mutation landed.
-        expect(fabricated.stdout).toContain("Refusing to approve");
+        expect(fabricated.stdout).toContain("Cannot approve");
+        expect(fabricated.stdout).toContain("no new human reply");
         // Settle a beat so a wrongly committed second gate would also have landed.
         await new Promise((r) => setTimeout(r, 8000));
 

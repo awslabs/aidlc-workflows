@@ -401,7 +401,7 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
         const approvedBefore = eventCount(projectDir, "GATE_APPROVED");
         const refused = reportApprovedWithoutEvidence(projectDir);
         expect(refused.kind).toBe("error");
-        expect(refused.message).toContain("ensemble must convene");
+        expect(refused.message).toContain("collaborator notes are missing or incomplete");
         for (const agent of SUPPORT_AGENTS) {
           expect(refused.message).toContain(agent);
           expect(existsSync(contributionPath(projectDir, agent))).toBe(false);
@@ -620,7 +620,7 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
         expect(eventCount(projectDir, "GATE_APPROVED")).toBe(approvedBefore + 1);
         expect(
           result.toolResults.some((toolResult) =>
-            toolResult.resultText.includes("ensemble must convene")
+            toolResult.resultText.includes("collaborator notes are missing or incomplete")
           ),
           "live approval was refused after the mob wrote complete evidence",
         ).toBe(false);

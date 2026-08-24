@@ -1130,7 +1130,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
       p,
     );
     expect(r.out).toContain('"kind":"error"');
-    expect(r.out).toContain("declares a reviewer");
+    expect(r.out).toContain("has not reviewed the current output");
     // The transition was NOT committed — no GATE_APPROVED emitted.
     expect(countEvent(p, "GATE_APPROVED")).toBe(0);
   }, 30000);
@@ -1187,7 +1187,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
       p,
     );
     expect(r.out).toContain('"kind":"error"');
-    expect(r.out).toContain("fresh REVIEW_COMPLETED");
+    expect(r.out).toContain("has not reviewed the current output");
     expect(countEvent(p, "GATE_APPROVED")).toBe(0);
   }, 30000);
 
@@ -1238,7 +1238,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
 
     const r = state(["approve", "requirements-analysis", "--user-input", "Approve"], p);
     expect(r.status).not.toBe(0);
-    expect(r.out).toContain("declares a reviewer");
+    expect(r.out).toContain("has not reviewed the current output");
     expect(countEvent(p, "GATE_APPROVED")).toBe(0);
   }, 30000);
 
@@ -1266,7 +1266,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     // Re-approve with no fresh review → refused (the pre-reject review is stale).
     const r = state(["approve", "requirements-analysis", "--user-input", "Approve"], p);
     expect(r.status).not.toBe(0);
-    expect(r.out).toContain("declares a reviewer");
+    expect(r.out).toContain("has not reviewed the current output");
     expect(countEvent(p, "GATE_APPROVED")).toBe(0);
 
     // A fresh review after the reject unblocks it.
@@ -1293,7 +1293,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     expect(openGateWithoutReview(p).status).toBe(0);
     const r = state(["approve", "requirements-analysis", "--user-input", "Approve"], p);
     expect(r.status).not.toBe(0);
-    expect(r.out).toContain("declares a reviewer");
+    expect(r.out).toContain("has not reviewed the current output");
     expect(countEvent(p, "GATE_APPROVED")).toBe(0);
   }, 30000);
 
@@ -1303,7 +1303,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
       const before = readFileSync(statePath(refusedProject), "utf-8");
       const refused = state([command, "requirements-analysis"], refusedProject);
       expect(refused.status, command).not.toBe(0);
-      expect(refused.out, command).toContain("declares a reviewer");
+      expect(refused.out, command).toContain("has not reviewed the current output");
       expect(readFileSync(statePath(refusedProject), "utf-8"), command).toBe(before);
 
       const acceptedProject = projWithState("state-mid-inception.md");
@@ -1336,7 +1336,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
 
     const r = state(["approve", "requirements-analysis"], p);
     expect(r.status).not.toBe(0);
-    expect(r.out).toContain("declares a reviewer");
+    expect(r.out).toContain("has not reviewed the current output");
     expect(countEvent(p, "GATE_APPROVED")).toBe(0);
   }, 30000);
 
@@ -1361,7 +1361,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     ).toContain("**Workflow**: single-stage:requirements-analysis");
     const r = state(["approve", "requirements-analysis", "--user-input", "Approve"], p);
     expect(r.status).not.toBe(0);
-    expect(r.out).toContain("declares a reviewer");
+    expect(r.out).toContain("has not reviewed the current output");
     expect(countEvent(p, "GATE_APPROVED")).toBe(0);
   }, 30000);
 
@@ -1394,7 +1394,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
       const refused = state(["approve", "requirements-analysis"], p);
       expect(refused.status).not.toBe(0);
       expect(refused.out).toContain(
-        "terminal review receipt from aidlc-product-lead-agent was invalidated",
+        "output document changed after aidlc-product-lead-agent reviewed it",
       );
       expect(countEvent(p, "GATE_APPROVED")).toBe(0);
 
@@ -1458,7 +1458,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
 
       const refused = state(["approve", "requirements-analysis"], p);
       expect(refused.status).not.toBe(0);
-      expect(refused.out).toContain("fresh REVIEW_COMPLETED");
+      expect(refused.out).toContain("has not reviewed the current output");
       expect(countEvent(p, "GATE_APPROVED")).toBe(0);
     }
   }, 30000);
@@ -1494,7 +1494,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
       const refused = state(["approve", "requirements-analysis"], p);
       expect(refused.status).not.toBe(0);
       expect(refused.out).toContain(
-        "terminal review receipt from aidlc-product-lead-agent was invalidated",
+        "output document changed after aidlc-product-lead-agent reviewed it",
       );
 
       expect(state(["reject", "requirements-analysis", "--feedback", "artifact changed"], p).status).toBe(0);
@@ -1562,7 +1562,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     seedBoltDagBatches(p, [["foo"]]);
     const result = state(["finalize", "code-generation"], p);
     expect(result.status).not.toBe(0);
-    expect(result.out).toContain("declares a reviewer");
+    expect(result.out).toContain("do not have a current review");
   }, 30000);
 
   test("R19: a legacy unit-scoped receipt cannot satisfy the no-DAG stage fallback", () => {
@@ -1594,7 +1594,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
       },
     );
     expect(refused.status).not.toBe(0);
-    expect(refused.out).toContain("no fresh REVIEW_COMPLETED");
+    expect(refused.out).toContain("has not reviewed the current output");
     expect(countEvent(p, "STAGE_AWAITING_APPROVAL")).toBe(0);
   }, 30000);
 
@@ -1646,7 +1646,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     );
     expect(verdict.status).not.toBe(0);
     expect(verdict.out).toContain(
-      "declared artifacts changed after REVIEW_REQUESTED",
+      "output documents changed after review iteration 1 started",
     );
     expect(countEvent(p, "REVIEW_COMPLETED")).toBe(0);
   }, 30000);

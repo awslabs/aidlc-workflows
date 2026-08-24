@@ -338,7 +338,9 @@ describe("t321 request-bound source-recovery freeze suspension", () => {
       "READY",
     ]);
     expect(staleVerdict.status).not.toBe(0);
-    expect(staleVerdict.stderr).toContain("changed after REVIEW_REQUESTED");
+    expect(staleVerdict.stderr).toContain(
+      "output documents changed after review iteration 2 started",
+    );
 
     expect(
       runLog(proj, [...recoveryArgs, "--retry-pending"]).status,

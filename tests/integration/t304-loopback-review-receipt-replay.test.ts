@@ -256,7 +256,9 @@ describe("t304 loop-back refreshes per-unit Code Generation reviews", () => {
       "Retry with fix",
     ]);
     expect(stale.kind).toBe("error");
-    expect(stale.message).toContain("2 of 2 applicable units have no fresh recorded review");
+    expect(stale.message).toContain(
+      "2 of 2 applicable units do not have a current review",
+    );
     expect(stale.message).toContain("alpha, beta");
 
     for (const unit of UNITS) recordReview(unit);

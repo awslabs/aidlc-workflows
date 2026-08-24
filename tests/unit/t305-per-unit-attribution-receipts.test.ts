@@ -1239,7 +1239,7 @@ describe("t305 real receipt and guard flows", () => {
     writeFileSync(join(project, "beta.ts"), "export const b=2\n");
     // Refresh the global outer binding with alpha while beta remains stale.
     review(project, record, "alpha", [{ path: "alpha.ts" }]);
-    const refused = approve(project); expect(refused.rc).toBe(1); expect(refused.out).toContain("Invalidated receipts: beta"); expect(refused.out).not.toContain("Invalidated receipts: alpha");
+    const refused = approve(project); expect(refused.rc).toBe(1); expect(refused.out).toContain("Changed after review: beta"); expect(refused.out).not.toContain("Changed after review: alpha");
     const recovered = review(project, record, "beta", [{ path: "beta.ts" }]); expect(recovered.verdict.rc).toBe(0); expect(approve(project).rc).toBe(0);
   }, 30000);
 
@@ -1255,7 +1255,7 @@ describe("t305 real receipt and guard flows", () => {
     review(project, record, "beta", []);
     const refused = approve(project);
     expect(refused.rc).toBe(1);
-    expect(refused.out).toContain("Invalidated receipts: alpha");
+    expect(refused.out).toContain("Changed after review: alpha");
   }, 30000);
 
   test("retargeting a reviewed in-repo symlink invalidates its owning receipt", () => {
@@ -1283,7 +1283,7 @@ describe("t305 real receipt and guard flows", () => {
     expect(beta.verdict.rc, beta.verdict.out).toBe(0);
     const refused = approve(project);
     expect(refused.rc).toBe(1);
-    expect(refused.out).toContain("Invalidated receipts: alpha");
+    expect(refused.out).toContain("Changed after review: alpha");
   }, 30000);
 
   test("4 newest claimant shields overlap, but a stale newer claimant invalidates both", () => {
@@ -1291,7 +1291,7 @@ describe("t305 real receipt and guard flows", () => {
     review(pass.project, pass.record, "alpha", [{ path: "shared.ts" }]); writeFileSync(join(pass.project, "shared.ts"), "export const s=2\n"); review(pass.project, pass.record, "beta", [{ path: "shared.ts" }]); expect(approve(pass.project).rc).toBe(0);
     const fail = runtimeFixture(); writeFileSync(join(fail.project, "shared.ts"), "export const s=1\n");
     review(fail.project, fail.record, "alpha", [{ path: "shared.ts" }]); writeFileSync(join(fail.project, "shared.ts"), "export const s=2\n"); review(fail.project, fail.record, "beta", [{ path: "shared.ts" }]); writeFileSync(join(fail.project, "shared.ts"), "export const s=3\n");
-    const r=approve(fail.project); expect(r.rc).toBe(1); expect(r.out).toContain("source-fingerprint mismatch");
+    const r=approve(fail.project); expect(r.rc).toBe(1); expect(r.out).toContain("project source changed after aidlc-architecture-reviewer-agent reviewed it");
     const state=readFileSync(join(fail.record,"aidlc-state.md"),"utf-8"); const receipts=freshReviewReceipts(fail.project,state,{slug:"code-generation",phase:"construction",for_each:"unit-of-work",reviewer:REVIEWER,reviewer_max_iterations:2,workspace_requires:true,produces:["code-generation-plan","unit-test-instructions","code-summary","traceability"]}); expect([...receipts.unitStale].sort()).toEqual(["alpha","beta"]);
   }, 30000);
 
@@ -1337,8 +1337,8 @@ describe("t305 real receipt and guard flows", () => {
   }, 30000);
 
   test("7 manifest tamper and 8 claimed deletion make only the owning unit stale", () => {
-    const tamper=runtimeFixture(); review(tamper.project,tamper.record,"alpha",[{path:"app.ts"}]); review(tamper.project,tamper.record,"beta",[]); writeManifest(tamper.record,"alpha",[]); expect(approve(tamper.project).out).toContain("Invalidated receipts: alpha");
-    const deleted=runtimeFixture(); writeFileSync(join(deleted.project,"alpha.ts"),"a\n"); review(deleted.project,deleted.record,"alpha",[{path:"alpha.ts"}]); review(deleted.project,deleted.record,"beta",[]); rmSync(join(deleted.project,"alpha.ts")); review(deleted.project,deleted.record,"beta",[]); expect(approve(deleted.project).out).toContain("Invalidated receipts: alpha");
+    const tamper=runtimeFixture(); review(tamper.project,tamper.record,"alpha",[{path:"app.ts"}]); review(tamper.project,tamper.record,"beta",[]); writeManifest(tamper.record,"alpha",[]); expect(approve(tamper.project).out).toContain("Changed after review: alpha");
+    const deleted=runtimeFixture(); writeFileSync(join(deleted.project,"alpha.ts"),"a\n"); review(deleted.project,deleted.record,"alpha",[{path:"alpha.ts"}]); review(deleted.project,deleted.record,"beta",[]); rmSync(join(deleted.project,"alpha.ts")); review(deleted.project,deleted.record,"beta",[]); expect(approve(deleted.project).out).toContain("Changed after review: alpha");
   }, 30000);
 
   test("9 fieldless per-unit bindings preserve legacy global policy and 11 zero-unit stays manifest-free", () => {
@@ -2052,7 +2052,7 @@ describe("t305 real receipt and guard flows", () => {
     expect(refused.rc).toBe(1);
     const refusal = JSON.parse(refused.out) as { error: string };
     expect(refusal.error).toContain(
-      'Refusing to present the approval gate for "code-generation"',
+      'Cannot present "code-generation" for approval',
     );
     expect(refusal.error).toContain(
       "mixes fieldless and field-bearing Unit obligations",
@@ -2067,11 +2067,11 @@ describe("t305 real receipt and guard flows", () => {
 
   test("12 two recorded repos invalidate only the owning repo and unit", () => {
     const base=runtimeFixture(); const project=base.project; const record=base.record; rmSync(join(project,".git"),{recursive:true,force:true}); for (const repo of ["repo-a","repo-b"]) { const path=join(project,repo); mkdirSync(path,{recursive:true}); git(path,["init","-q"]); git(path,["config","user.email","t@test"]); git(path,["config","user.name","t"]); writeFileSync(join(path,`${repo}.ts`),`export const ${repo.replace(/-/g,"_")}=1\n`); git(path,["add","-A"]); git(path,["commit","-qm","seed"]); } const registry=join(project,"aidlc","spaces","default","intents","intents.json"); const rows=JSON.parse(readFileSync(registry,"utf-8")); rows[0].repos=["repo-a","repo-b"]; writeFileSync(registry,`${JSON.stringify(rows)}\n`); const initial=workspaceSourceListing(project)!; appendAuditEntry("STAGE_JUMPED",{Target:"code-generation","Source Baseline":writeBaselineSourceSnapshot(project,"code-generation",initial)},project); const multiBoundary=Math.floor(Date.now()/1000); while(Math.floor(Date.now()/1000)===multiBoundary){}
-    review(project,record,"alpha",[{repo:"repo-a",path:"repo-a.ts"}]); review(project,record,"beta",[{repo:"repo-b",path:"repo-b.ts"}]); writeFileSync(join(project,"repo-b","repo-b.ts"),"export const repo_b=2\n"); review(project,record,"alpha",[{repo:"repo-a",path:"repo-a.ts"}]); const r=approve(project); expect(r.out).toContain("Invalidated receipts: beta"); expect(r.out).not.toContain("Invalidated receipts: alpha");
+    review(project,record,"alpha",[{repo:"repo-a",path:"repo-a.ts"}]); review(project,record,"beta",[{repo:"repo-b",path:"repo-b.ts"}]); writeFileSync(join(project,"repo-b","repo-b.ts"),"export const repo_b=2\n"); review(project,record,"alpha",[{repo:"repo-a",path:"repo-a.ts"}]); const r=approve(project); expect(r.out).toContain("Changed after review: beta"); expect(r.out).not.toContain("Changed after review: alpha");
   }, 30000);
 
   test("absent exact claim becomes stale when the path appears before an unrelated review", () => {
-    const {project,record}=runtimeFixture(); review(project,record,"alpha",[{path:"future.ts"}]); writeFileSync(join(project,"future.ts"),"future\n"); review(project,record,"beta",[{path:"app.ts"}]); expect(approve(project).out).toContain("Invalidated receipts: alpha");
+    const {project,record}=runtimeFixture(); review(project,record,"alpha",[{path:"future.ts"}]); writeFileSync(join(project,"future.ts"),"future\n"); review(project,record,"beta",[{path:"app.ts"}]); expect(approve(project).out).toContain("Changed after review: alpha");
   }, 30000);
 
   test("ghost/non-applicable units cannot mint review authority or cover unclaimed source", () => {

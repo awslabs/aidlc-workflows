@@ -106,7 +106,7 @@ describe("t291 stale review receipt recovery", () => {
     );
     expect(stale.status).not.toBe(0);
     expect(stale.out).toContain(
-      "terminal review receipt from aidlc-product-lead-agent was invalidated",
+      "output document changed after aidlc-product-lead-agent reviewed it",
     );
     expect(stale.out).toContain("one recovery review pass");
 

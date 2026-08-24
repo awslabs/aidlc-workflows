@@ -584,10 +584,11 @@ export function main(argv: string[]): void {
     process.env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS !== "1"
   ) {
     error(
-      `Direct aidlc-state.ts ${subcommand} is blocked: workflow lifecycle transitions are engine-owned. ` +
-        "Use aidlc-orchestrate.ts report --stage <slug> --result " +
+      `Stage status cannot be changed with aidlc-state.ts ${subcommand} because that bypasses ` +
+        "the workflow's completion and approval checks. Use aidlc-orchestrate.ts report " +
+        "--stage <slug> --result " +
         "<awaiting-approval|approved|rejected|revised|completed|skipped>; use " +
-        "aidlc-orchestrate.ts park to park, and next/jump for routing changes.",
+        "aidlc-orchestrate.ts park to pause, and next/jump to move through the workflow.",
     );
   }
 
@@ -2482,8 +2483,8 @@ function reviewerPreconditionPrefix(
   action: ReviewerPreconditionAction,
 ): string {
   return action === "present-approval-gate"
-    ? `Refusing to present the approval gate for "${slug}"`
-    : `Refusing to complete "${slug}"`;
+    ? `Cannot present "${slug}" for approval`
+    : `Cannot complete "${slug}"`;
 }
 
 function verifyReviewerPrecondition(
@@ -2715,8 +2716,8 @@ function verifyReviewerPrecondition(
           `run \`aidlc-log.ts review --stage ${stage.slug} --unit <unit> --reviewer ` +
           `${reviewer} --iteration <next ordinal>\`, then record the verdict with ` +
           `the same command plus \`--verdict <READY|NOT-READY>\` and stop editing ` +
-          `produces[] artifacts, that unit's source-manifest.json, and that unit's ` +
-          `claimed source paths.`,
+          `this stage's output documents, that unit's source-manifest.json, and `
+          + `that unit's claimed source paths.`,
       );
     }
     if (recoverySpent.length > 0) {
@@ -2742,10 +2743,10 @@ function verifyReviewerPrecondition(
       );
     }
     error(
-      `${reviewerPreconditionPrefix(stage.slug, action)}: it declares a reviewer (${reviewer}) but ` +
-        `${missing.length} of ${reviewUnits.length} applicable units have no fresh recorded ` +
-        `review (${missing.join(", ")}). Invalidated receipts: ` +
-        `${stale.length > 0 ? stale.join(", ") : "none"}. Never reviewed: ` +
+      `${reviewerPreconditionPrefix(stage.slug, action)} because ${missing.length} of ` +
+        `${reviewUnits.length} applicable units do not have a current review from ${reviewer} ` +
+        `(${missing.join(", ")}). Changed after review: ` +
+        `${stale.length > 0 ? stale.join(", ") : "none"}. Not yet reviewed: ` +
         `${neverReviewed.length > 0 ? neverReviewed.join(", ") : "none"}. ` +
         guidance.join(" ")
     );
@@ -2808,12 +2809,9 @@ function staleSourcePreconditionError(
     );
   }
   error(
-    `Refusing to complete "${slug}": the workspace source no longer matches the ` +
-      `state of the most recent recorded review (source-fingerprint mismatch). ` +
-      `Re-invoke ${reviewer} against the current source, record the one bounded ` +
-      `stale-receipt recovery REVIEW_REQUESTED/REVIEW_COMPLETED pair, or revert ` +
-      `the source edit. The recovery pass remains available after the normal ` +
-      `review iteration budget is exhausted.`,
+    `Cannot complete "${slug}" because the project source changed after ${reviewer} ` +
+      `reviewed it. Ask ${reviewer} to review the current source once more and record ` +
+      `the verdict, or revert the source change, then try again.`,
   );
 }
 
@@ -2839,9 +2837,9 @@ function verifyPipelineLinkPrecondition(
     repo ? `${repo}:${link}` : link
   );
   error(
-    `Refusing to complete "${stage.slug}": mode: pipeline requires a current-attempt ` +
-      `PIPELINE_LINK_COMPLETED receipt for every declared link. Missing: ${missing.join(", ")}. ` +
-      `Run aidlc-log.ts link after each link returns` +
+    `Cannot complete "${stage.slug}" because these pipeline handoffs have not been ` +
+      `recorded for the current run: ${missing.join(", ")}. Run aidlc-log.ts link after ` +
+      `each agent returns` +
       `${evidence.repos.length > 0 ? " with --repo <repo>" : ""}, or set ` +
       `AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1 only to recover a legitimately-run in-flight pipeline.`,
   );
@@ -2865,12 +2863,12 @@ function staleReviewPreconditionError(
     );
   }
   error(
-    `${reviewerPreconditionPrefix(slug, action)}: its terminal review receipt from ${reviewer} ` +
-      `was invalidated by a later write to a declared produces[] artifact. Run ` +
+    `${reviewerPreconditionPrefix(slug, action)} because an output document changed after ` +
+      `${reviewer} reviewed it. Run ` +
       `one recovery review pass with \`aidlc-log.ts review --stage ${slug} ` +
       `--reviewer ${reviewer} --iteration <next ordinal>\`, then record the verdict ` +
       `with the same command plus \`--verdict <READY|NOT-READY>\`. After that ` +
-      `receipt, stop editing produces[] artifacts. If the recovery pass was already ` +
+      `review, stop editing this stage's output documents. If the recovery pass was already ` +
       `spent, present the situation to the human at the approval gate; a human ` +
       `Request Changes decision resets the review attempt. Do not record a rejection ` +
       `on the human's behalf.`
@@ -2884,27 +2882,22 @@ function reviewerPreconditionError(
 ): never {
   if (action === "present-approval-gate") {
     error(
-      `Refusing to present the approval gate for "${slug}": it declares a reviewer ` +
-        `(${reviewer}) but no fresh REVIEW_COMPLETED is recorded for it. Run the ` +
-        `reviewer first (stage-protocol-reviewer.md §12a); its findings are the ` +
-        `human's decision support at the gate. Record the verdict with ` +
-        `\`aidlc-log.ts review --stage ${slug} --reviewer ${reviewer} --verdict ` +
-        `<READY|NOT-READY>\` before presenting the gate. Terminal ordering: apply ` +
-        `any fixes FIRST, then run the reviewer, record the receipt, and stop editing ` +
-        `produces[] artifacts - a later write to one invalidates the receipt and ` +
-        `re-opens this refusal. Do not apply suggestions riding on a READY verdict; ` +
-        `surface them at the gate instead.`,
+      `Cannot present "${slug}" for approval because ${reviewer} has not reviewed the ` +
+        `current output. Apply any fixes first, then request the review with ` +
+        `\`aidlc-log.ts review --stage ${slug} --reviewer ${reviewer} --iteration ` +
+        `<next ordinal>\` and record its verdict with the same command plus ` +
+        `\`--verdict <READY|NOT-READY>\`. After recording the verdict, do not edit ` +
+        `this stage's output documents; include suggestions from a READY review in the ` +
+        `approval summary instead.`,
     );
   }
   error(
-    `Refusing to complete "${slug}": it declares a reviewer (${reviewer}) but no ` +
-      `fresh REVIEW_COMPLETED is recorded for it. Invoke the reviewer ` +
-      `(stage-protocol-reviewer.md §12a) and record the verdict with \`aidlc-log.ts review --stage ` +
-      `${slug} --reviewer ${reviewer} --verdict <READY|NOT-READY>\` before completing. ` +
-      `Terminal ordering: apply any fixes FIRST, then run the reviewer, record the ` +
-      `receipt, and stop editing produces[] artifacts - a later write to one ` +
-      `invalidates the receipt and re-opens this refusal. Do not apply suggestions ` +
-      `riding on a READY verdict; surface them at the gate instead.`
+    `Cannot complete "${slug}" because ${reviewer} has not reviewed the current output. ` +
+      `Apply any fixes first, then request the review with \`aidlc-log.ts review --stage ` +
+      `${slug} --reviewer ${reviewer} --iteration <next ordinal>\` and record its verdict ` +
+      `with the same command plus \`--verdict <READY|NOT-READY>\`. After recording the ` +
+      `verdict, do not edit this stage's output documents; include suggestions from a ` +
+      `READY review in the approval summary instead.`
   );
 }
 
@@ -3621,12 +3614,12 @@ function verifyApprovalDecision(
       : selfAttributedDecisionMarker(approvalInput, "approval");
   if (approvalAuthorship) {
     error(
-      `Refusing to approve "${stage.slug}": decision self-attribution blocked ` +
-        `(${approvalAuthorship.category}) in --user-input: "${approvalAuthorship.phrase}". ` +
-        "This tripwire detects explicit conductor/model provenance; it does not prove authorship. " +
-        "An approval is the human's to make. End the turn and let them answer; if a " +
-        "completion precondition is blocking you, surface that blocker at the gate instead " +
-        "of recording a decision on their behalf.",
+      `Cannot approve "${stage.slug}" because --user-input says the choice came from the ` +
+        `assistant (${approvalAuthorship.category}: "${approvalAuthorship.phrase}"). ` +
+        "This check looks for explicit assistant provenance; it does not prove who wrote " +
+        "the reply. Approval is the human's decision: end the turn and let them answer, " +
+        "and if something is blocking completion, explain that blocker at the gate in " +
+        "project terms instead of recording their decision.",
     );
   }
   if (!autonomousDecision && !humanPresenceGuardDisabled()) {
@@ -3645,10 +3638,10 @@ function verifyApprovalDecision(
         ? " The reply is cancellation boilerplate, not consent."
         : "";
       error(
-        `Refusing to approve "${stage.slug}": received reply ` +
-          `${formatReceivedReply(approvalInput)} did not match an offered choice at ` +
-          `the held gate.${cancellation} Re-present the original held gate with every ` +
-          "offered choice and wait for the human to choose one.",
+        `Cannot approve "${stage.slug}" because the reply ` +
+          `${formatReceivedReply(approvalInput)} did not match one of the offered ` +
+          `choices.${cancellation} Present the original question with every choice again ` +
+          "and wait for the human to pick one.",
       );
     }
   }
@@ -3658,10 +3651,9 @@ function verifyApprovalDecision(
     !humanActedSinceGate(pd)
   ) {
     error(
-      `Refusing to approve "${stage.slug}": a real human has not acted at this gate ` +
-        "since it opened. The approval gate requires a typed human turn before it can " +
-        "commit. Acknowledge the gate as a human, then approve. (autonomous Construction " +
-        "is exempt)",
+      `Cannot approve "${stage.slug}" because no new human reply has been received for ` +
+        "this approval question. Wait for the human to type their choice, then retry the " +
+        "approval.",
     );
   }
   return { approvalInput, autonomousDecision };
@@ -4011,15 +4003,15 @@ function handleReject(args: string[]): void {
   ) {
     if (recoveryResetNeedsHuman) {
       error(
-        `Refusing to reject "${slug}": the stale-receipt recovery review was already spent ` +
-          "in this stage attempt, so GATE_REJECTED may reset review accounting only after " +
-          "a real human has acted. Present the escalation to the human and wait for a typed " +
-          "Request Changes decision before retrying.",
+        `Cannot request changes for "${slug}" because its recovery review has already ` +
+          `been used and only a new human choice can start another review attempt. Present ` +
+          `the situation at the approval question and wait for a typed Request Changes choice.`,
       );
     }
     error(
-      `Refusing to reject "${slug}": a real human has not acted at this gate since it opened. ` +
-        "Requesting changes requires a typed human turn before it can commit.",
+      `Cannot request changes for "${slug}" because no new human reply has been received ` +
+        `for this approval question. Wait for the human to type Request Changes and their ` +
+        `feedback, then retry.`,
     );
   }
 
@@ -4037,12 +4029,10 @@ function handleReject(args: string[]): void {
       : selfAttributedDecisionMarker(feedback, "rejection");
   if (rejectionAuthorship) {
     error(
-      `Refusing to reject "${slug}": decision self-attribution blocked ` +
-        `(${rejectionAuthorship.category}) in --feedback: "${rejectionAuthorship.phrase}". ` +
-        "This tripwire detects explicit conductor/model provenance; it does not prove authorship. " +
-        "Requesting changes is the human's decision. If you need " +
-        "another review pass because a produces[] artifact changed after the reviewer's receipt, " +
-        "say so at the gate and let the human choose - do not record their rejection for them.",
+      `Cannot request changes for "${slug}" because --feedback says it was written by the ` +
+        `assistant (${rejectionAuthorship.category}: "${rejectionAuthorship.phrase}"). ` +
+        `Requesting changes is the human's decision. Explain why another review is needed at ` +
+        `the approval question and wait for the human to choose.`,
     );
   }
   const reviewFindingDispositions = rejectedFindingDispositionField(

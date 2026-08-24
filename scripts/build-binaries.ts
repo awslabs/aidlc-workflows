@@ -1063,7 +1063,7 @@ function planApprovalHookGate(artifact: string): GateResult {
       "hook-plan-approval-guard",
       result,
       result.status === 2 &&
-        result.stderr.includes("plan-approval guard") &&
+        result.stderr.includes("Code generation cannot start") &&
         !runtimeCrash(output) &&
         !output.includes("does not export run(input)"),
       {
@@ -1124,7 +1124,7 @@ function planApprovalAdapterGate(
       `adapter-${harness}-plan-approval-guard`,
       result,
       result.status === 2 &&
-        result.stderr.includes("plan-approval guard") &&
+        result.stderr.includes("Code generation cannot start") &&
         !runtimeCrash(output) &&
         !output.includes("does not export run(input)"),
       {

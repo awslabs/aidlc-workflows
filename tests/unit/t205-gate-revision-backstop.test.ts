@@ -393,7 +393,7 @@ describe("t205: approve-time gate-revision backstop", () => {
 
     const refused = guarded(proj, ["approve", slug, "--user-input", "looks good now"]);
     expect(refused.rc).not.toBe(0);
-    expect(refused.out).toContain("fresh REVIEW_COMPLETED");
+    expect(refused.out).toContain("has not reviewed the current output");
     expect(eventCount(proj, "GATE_REJECTED")).toBe(1);
     expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
     expect(field(proj, "Revision Count")).toBe("1");
@@ -659,7 +659,7 @@ describe("t205: approve-time gate-revision backstop", () => {
     ]);
     expect(staleApproval.rc).toBe(0);
     expect(staleApproval.out).toContain('"kind":"error"');
-    expect(staleApproval.out).toContain("PIPELINE_LINK_COMPLETED");
+    expect(staleApproval.out).toContain("pipeline handoffs have not been recorded");
 
     expect(field(proj, "Revision Count")).toBe("1");
     const rejected = auditBlocks(proj).filter(
