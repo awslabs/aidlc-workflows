@@ -212,7 +212,10 @@ evidence only. On `mode: pipeline`, the same report outcomes and every direct
 completing transition require an ordered, current-attempt
 `PIPELINE_LINK_COMPLETED` receipt for every lead/support link. Multi-repo
 reverse engineering requires a complete chain per scanned repo; a current-attempt
-repo-scoped `ARTIFACT_REUSED` row with `Decision=keep` exempts a reused repo,
+repo-scoped `ARTIFACT_REUSED` row with `Decision=keep` exempts a reused repo.
+Isolated rows carry `Workflow: single-stage:<slug>` and are accepted only while
+the complete graph-declared Reverse Engineering artifact set remains valid and
+the store remains `CURRENT`;
 while `modify`/`redo` rows do not. A rejection, jump, or later stage start resets
 the main-workflow evidence, and isolated `--single` link rows never satisfy it. Bypass with
 `AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1`, intended only for recovering a
@@ -419,7 +422,7 @@ column.
 |---|---|---|
 | `ARTIFACT_CREATED` | `hooks/aidlc-write-audit-log.ts` | Write to net-new path — distinguished from UPDATED via `mtimeMs == birthtimeMs` stat check |
 | `ARTIFACT_UPDATED` | `hooks/aidlc-write-audit-log.ts` | Edit tool or Write overwriting existing file |
-| `ARTIFACT_REUSED` | `tools/aidlc-state.ts` | `reuse-artifact` subcommand — keep/modify/redo decisions; optional `Repo` scopes evidence to one registered repo, but only `keep` grants a current-attempt pipeline exemption |
+| `ARTIFACT_REUSED` | `tools/aidlc-state.ts` | `reuse-artifact` subcommand — keep/modify/redo decisions; optional `Repo` scopes evidence to one registered repo, optional `--single` binds it to the open synthetic attempt, but only `keep` with a complete authoritative artifact set and still-`CURRENT` isolated Reverse Engineering store grants that pipeline exemption |
 
 ### Construction Bolts
 

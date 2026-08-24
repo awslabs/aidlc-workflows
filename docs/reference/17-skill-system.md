@@ -16,7 +16,7 @@ The engine is authored at `core/tools/aidlc-orchestrate.ts` and ships into each 
 
 | Subcommand | Role | Mutates state? |
 |------------|------|----------------|
-| `next` | Read the workflow state (the active intent's `aidlc-state.md`, under `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`) and the compiled stage graph (`tools/data/stage-graph.json`), resolve scope and position, and emit **exactly one** typed directive (JSON) to stdout. A no-state creation over a workspace that already holds intents emits an intent-pick prompt rather than creating a duplicate. | No workflow-state mutation. An ordinary team dispatcher read may refresh the gitignored local claim-observation cache and generation stamps; Stop-hook and route-check probes do not. |
+| `next` | Read the workflow state (the active intent's `aidlc-state.md`, under `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`) and the compiled stage graph (`tools/data/stage-graph.json`), resolve scope and position, and emit **exactly one** typed directive (JSON) to stdout. | No workflow-state mutation. `next --single` records only its synthetic `STAGE_STARTED` audit boundary before emitting work; an ordinary team dispatcher read may refresh the gitignored local claim-observation cache and generation stamps, while Stop-hook and route-check probes do not. A no-state creation over a workspace that already holds intents emits an intent-pick prompt instead of creating a duplicate. |
 | `report` | Commit the transition after the conductor acted on a directive. A stage-aware dispatcher: `--stage <slug>` pins the acted directive so a recovered `Current Stage` cannot make the report target drift. It owns approval, rejection, revision, completion, and skip outcomes, dispatching internal state transitions atomically and opening a missing gate before approval when the explicitly reported stage is still `[-]`. | Yes. |
 | `team-board` | Render the pure Team Construction board used by the terminal main dispatcher and `/aidlc --status`. Internal query surface; no fetch and no state/cache mutation. | No. |
 | `park` | Pause an active workflow at a clean inter-stage boundary. It writes the `Parked` marker that makes subsequent `next` calls emit a terminal `parked` directive; `/aidlc --resume` clears the marker before routing resumes. | Yes. |
@@ -29,12 +29,15 @@ and starts the next stage (or completes the workflow) without emitting
 `STAGE_COMPLETED`. `report --single --result skipped` is rejected. Conductors
 never invoke the corresponding `aidlc-state.ts` lifecycle verb directly.
 
-`next --stage <slug> --single` emits a `run-stage` with `single: true`,
+`next --stage <slug> --single` first records `STAGE_STARTED` under
+`single-stage:<slug>`, then emits a `run-stage` with `single: true`,
 `gate: false`, and `next_stage: null`. That typed marker overrides normal gate
 handling: the conductor runs the body, configured topology and reviewer, then
-calls `report --single --stage <slug> --result completed` exactly once. It does
-not run workflow learnings, open an approval gate, call main-workflow `next`, or
-park. The returned `done` terminates the isolated run.
+calls `report --single --stage <slug> --result completed` exactly once. Report
+requires the open start boundary and records the matching `STAGE_COMPLETED`; it
+does not fabricate both rows. The isolated path does not run workflow learnings,
+open an approval gate, call main-workflow `next`, or park. The returned `done`
+terminates the isolated run.
 
 The engine is deterministic code by design — routing is the determinism concern, so it lives in a tool, never in LLM prose (handing route string-building to an LLM would invert the tool/agent/human thesis). It **composes** the existing deterministic library: `loadGraph()` for the compiled graph, `nextInScopeStage()` / `firstInScopeStageOfPhase()` for sequencing, `validScopes()` for the scope-name set, and `getField` / `parseCheckboxes` for state reads. The non-happy-path branches (jump, intent creation, scope/config change, env-scope validation) compose the sibling CLI tools by shelling out and relaying their stderr verbatim, so user-facing error wording is never reconstructed. Explicit resume falls through to normal continuation after its parked/no-state guards. The only things the engine *adds* rather than composes are the decision rule mapping `(observed state + graph) → directive kind` and the artifact-path resolver that turns the graph node's vocabulary names into canonical record-dir paths (`aidlc/spaces/<space>/intents/<YYMMDD>-<label>/<phase>/<stage>/...`).
 
@@ -102,7 +105,7 @@ The orchestrator is one skill among many. Each harness ships a plural set under 
 
 The runner skills are generated, never hand-written, by `tools/aidlc-runner-gen.ts`:
 
-- **Stage-runners** are opt-in sugar. Each core `/aidlc-<slug>` (or plugin-owned `/<plugin>-<slug>`) packages `/aidlc --stage <slug> --single` (which works without it) into a typeable command that runs one stage in isolation via the engine's `--single` mode and never advances the main workflow's `Current Stage`. The emitted `single: true` directive bypasses workflow learnings and approval gates, commits its synthetic lifecycle pair through `report --single`, and stops on the returned `done`. The slug list comes from `loadGraph()` — the one compiled source of truth — so a stage added to the graph flows into a runner with no edit here. The bootstrap initialization stages are excluded (they have no standalone `--single` meaning; `--single` refuses them), and the whole initialization phase ships as one `/aidlc-init` runner that packages the engine's `intent-create` move.
+- **Stage-runners** are opt-in sugar. Each core `/aidlc-<slug>` (or plugin-owned `/<plugin>-<slug>`) packages `/aidlc --stage <slug> --single` (which works without it) into a typeable command that runs one stage in isolation via the engine's `--single` mode and never advances the main workflow's `Current Stage`. `next --single` owns the synthetic start, the emitted `single: true` directive bypasses workflow learnings and approval gates, and `report --single` owns the matching completion before the runner stops on `done`. The slug list comes from `loadGraph()` — the one compiled source of truth — so a stage added to the graph flows into a runner with no edit here. The bootstrap initialization stages are excluded (they have no standalone `--single` meaning; `--single` refuses them), and the whole initialization phase ships as one `/aidlc-init` runner that packages the engine's `intent-create` move.
 - **Scope-runners** package an already-runnable command; the scope file holds the definition and opts into the default generated set with `runner: true`. Each is a short shell that drives `aidlc-orchestrate next --scope <scope>` to `done` with a fixed scope and no detection. The full scope set stays reachable via `/aidlc --scope <name>`; runners are typeable sugar over the high-traffic ones and any plugin scope that opts in.
 
 Two drift guards keep the on-disk runner sets pinned to their sources: `aidlc-runner-gen.ts check` for stage-runners and `scopes --check` for scope-runners, both run in CI. Runners carry **no `hooks:` block** — the workflow-spine hooks live project-wide in `settings.json`, so the deterministic spine is inherited, not copied. And no runner loads `conductor.md` by hand: the engine delivers the persona on the first `next`.

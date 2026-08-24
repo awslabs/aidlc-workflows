@@ -71,13 +71,13 @@ from the intent's registry row before making any reuse or scan decision:
    `aidlc/spaces/<active-space>/intents/intents.json` (the row whose `uuid`/`slug`
    matches the active intent). This is the set captured at intent creation (an explicit
    `--repos a,b` or sibling auto-discovery).
-2. **Single-repo / unrecorded:** if `repos` is absent, empty, or has exactly one
-   entry, RE runs once against the lone repo - the same flow as before. (An
-   unrecorded set means the workspace root is itself the single repo.)
-3. **Multi-repo:** if `repos` has more than one entry, resolve the Step 1 guard
-   decision for every repo, then run Steps 2-3 once for each repo selected for a
-   scan. Scan that repo's sibling directory (`<workspace>/<repo>/`) and write its
-   9 artifacts to the directory `codekb-path --repo <repo>` prints (the
+2. **Unrecorded project-root repo:** if `repos` is absent or empty, RE runs once
+   against the workspace root. Its handoff and receipts omit repo qualification.
+3. **Registered repos (one or more):** resolve the Step 1 guard decision for
+   every recorded repo, then run Steps 2-3 once for each repo selected for a
+   scan. Scan that repo's sibling directory (`<workspace>/<repo>/`), qualify its
+   handoff and both receipts with that exact repo identity, and write its 9
+   artifacts to the directory `codekb-path --repo <repo>` prints (the
    space-level `aidlc/spaces/<active-space>/codekb/<repo>/`; see Step 3). Each
    repo's codekb is independent, so selected scans may run as parallel subagents.
 
@@ -85,8 +85,9 @@ In the steps below, `<repo>` is the repository whose decision or scan is being
 processed.
 
 For each repo selected for scanning, Steps 2-3 are one independent receipt
-chain. Add `--repo <repo>` to both receipt commands when the intent registers
-multiple repos; omit it for a single/unrecorded repo.
+chain. Add `--repo <repo>` to both receipt commands whenever the intent records
+that repo identity, including an exactly-one repo set. Omit it only for an
+unrecorded project-root repo.
 
 #### Rerun guard: check each existing store before scanning
 
@@ -143,16 +144,19 @@ still need scanning. On a scan choice, also record its breadth; that choice
 sets the developer brief, and Step 3's scope block records what the scan
 actually covered.
 
-On an ordinary workflow run, immediately after each human reuse decision,
-record that repo's current-attempt exemption:
+Immediately after each human reuse decision, record that repo's
+current-attempt exemption:
 
 ```
-bun .claude/tools/aidlc-state.ts reuse-artifact reverse-engineering --decision keep --artifacts "<codekb-path output>" --repo <repo>
+bun .claude/tools/aidlc-state.ts reuse-artifact reverse-engineering --decision keep --artifacts "<codekb-path output>" [--repo <repo>] [--single]
 ```
 
 Use one row per reused registered repo. For an unrecorded single-repo workspace,
-omit `--repo`; for an isolated run, do not mint this main-workflow reuse row.
-The all-reuse routing below is unchanged.
+omit `--repo`. On an isolated run (`directive.single === true`), add `--single`;
+the tool verifies the complete canonical nine-artifact store is present and
+still `CURRENT`, binds the row to this synthetic attempt, and the completion
+check independently re-verifies artifact authority and freshness before
+accepting it.
 
 Only after every repository decision has been resolved:
 
@@ -161,11 +165,13 @@ Only after every repository decision has been resolved:
   `bun .claude/tools/aidlc-orchestrate.ts report --stage reverse-engineering --result skipped --reason "codekb reuse: all resolved stores CURRENT, human chose reuse"`.
 - If every repo is reused on an isolated run (`directive.single === true`), do
   NOT call the main-workflow skipped report. Return the reused-repositories
-  summary to the orchestrator's isolated stage-runner branch; it owns the
-  single `report --single --stage "reverse-engineering" --result completed`.
+  summary to the orchestrator's isolated stage-runner branch; the single-run
+  reuse rows satisfy its pipeline evidence, and it owns the single
+  `report --single --stage "reverse-engineering" --result completed`.
 - If any repo needs scanning, do not report a skip. Proceed to Steps 2-3 for
   only the full/focused scan repos; leave each reused repo's store unchanged.
-  On an isolated run, add `--single` to every link receipt command below.
+  The reuse rows exempt those repos while scanned repos still require both
+  links. On an isolated run, add `--single` to every link receipt command below.
 
 ### Step 2: Developer Code Scan
 
@@ -173,6 +179,12 @@ Delegate to Task tool with aidlc-developer-agent:
 - subagent_type="aidlc-developer-agent"
 - The agent persona and knowledge are loaded automatically. Do NOT manually inject the persona.
 - Include workspace state from aidlc-state.md as context
+
+The conductor owns the store/reuse decision but does NOT inspect application
+source, enumerate the repo, or precompute the file list before this dispatch.
+That duplicates the developer link. Give the developer the repo root, the
+intent, the chosen breadth, the active Minimal/Standard/Comprehensive depth,
+and the exact handoff path below; the developer discovers the source surface.
 
 Brief the developer with the scan breadth chosen at the Step 1 guard (full
 rescan = the whole repo; focused scan = the intent's area, named explicitly in
@@ -190,23 +202,37 @@ whole codebase) for:
 - Code quality indicators (linting, CI/CD, documentation)
 - Technical debt signals
 
-Developer returns structured scan results following the Developer Code Scan
-Template in
-`.claude/knowledge/aidlc-developer-agent/re-artifacts.md`.
+Developer writes the structured scan results following the Developer Code Scan
+Template in `.claude/knowledge/aidlc-developer-agent/re-artifacts.md`:
 
-After the developer return has been read and preserved for the next link, mint
-link 1 before dispatching the architect:
+- Unrecorded project-root repo:
+  `<record>/inception/reverse-engineering/developer-scan.md`
+- Registered repo (including an exactly-one repo set):
+  `<record>/inception/reverse-engineering/developer-scan-<repo>.md`
+
+This file is the durable pipeline handoff. The developer's return summary names
+the handoff path and any concerns only; it does not repeat the scan body.
+
+After the developer return has been read, verify the handoff file exists and
+contains `## Developer Code Scan Results`, `### Scan Coverage`, and
+`## Handoff Summary`. Then mint link 1 before dispatching the architect:
 
 ```
-bun .claude/tools/aidlc-log.ts link --stage reverse-engineering --link aidlc-developer-agent [--repo <repo>] [--single]
+bun .claude/tools/aidlc-log.ts link --stage reverse-engineering --link aidlc-developer-agent --artifact "<developer scan handoff path>" [--repo <repo>] [--single]
 ```
+
+The logger requires the handoff to have been written in the current stage
+attempt and binds the receipt to its path, write time, and SHA-256. A
+rejection/resume cannot reuse the old file, and any edit after the receipt
+invalidates this link plus every downstream pipeline link until the developer
+and architect run again.
 
 ### Step 3: Architect Synthesis
 
 Delegate to Task tool with aidlc-architect-agent:
 - subagent_type="aidlc-architect-agent"
 - The agent persona and knowledge are loaded automatically. Do NOT manually inject the persona.
-- Pass the complete developer scan results as context
+- Pass the developer scan handoff path, not its body; the architect reads that file
 - Include workspace state from aidlc-state.md
 
 Architect synthesizes scan results into 9 artifacts:
@@ -224,6 +250,12 @@ Architect synthesizes scan results into 9 artifacts:
    bun .claude/tools/aidlc-utility.ts codekb-scope-diff --repo <repo> --mint --paths <analyzed paths>
    ```
 
+At Minimal depth, all nine artifacts and every required section above still
+exist. Keep them concise by recording each inventory or finding once in its
+owning artifact and cross-referencing it elsewhere instead of repeating the
+same source list, dependency table, or persistence finding across files. This
+is the methodology's existing depth contract, not an output-length cap.
+
 **Resolve the write directory with the engine, do NOT compose the path yourself.**
 Run the read-only tool
 
@@ -231,7 +263,8 @@ Run the read-only tool
 bun .claude/tools/aidlc-utility.ts codekb-path --repo <repo>
 ```
 
-(omit `--repo` for a single/unrecorded repo — the engine resolves the repo name).
+(omit `--repo` only for an unrecorded project-root repo; pass it for every
+registered repo identity, including an exactly-one repo set).
 It prints ONE line: the exact directory, e.g. `aidlc/spaces/<active-space>/codekb/<repo>/`.
 
 **Overwrite backstop - run BEFORE writing (the compare needs the store still

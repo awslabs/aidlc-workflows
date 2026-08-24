@@ -153,7 +153,7 @@ export interface RunStageDirective {
   mode: "inline" | "subagent" | "pipeline" | "mob" | "agent-team";
   // Pipeline recovery surface. links is the declared lead→support chain;
   // completed contains current-attempt receipts (repo-qualified as
-  // `<repo>:<agent>` when the intent registers multiple repositories).
+  // `<repo>:<agent>` whenever the intent records repository identity).
   pipeline?: RunStagePipeline;
   // single marks an isolated stage-runner invocation. The conductor branches
   // on this before gate handling, reports with `report --single`, and treats

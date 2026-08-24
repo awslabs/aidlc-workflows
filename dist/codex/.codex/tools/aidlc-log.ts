@@ -6,8 +6,9 @@
 // (the §12a reviewer step). Orchestrator-callable; state tool doesn't own these
 // because they fire per-question / per-review, not per state transition.
 
-import { existsSync, readFileSync } from "node:fs";
-import { relative, resolve, sep } from "node:path";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { join, relative, resolve, sep } from "node:path";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   auditBlockField,
@@ -29,7 +30,9 @@ import {
   isTeamUnitOwnership,
   loadStageGraphAll,
   isNonAnswer,
+  latestPipelineLinkArtifactMtime,
   parseCheckboxes,
+  pipelineAttemptStartedAt,
   pipelineLinkEvidence,
   pipelineLinks,
   readAllAuditShards,
@@ -646,7 +649,8 @@ function handleAnswer(args: string[]): void {
 
 // --- Subcommand: link ---
 // Usage:
-//   aidlc-log link --stage <slug> --link <agent> [--repo <repo>] [--single]
+//   aidlc-log link --stage <slug> --link <agent> [--repo <repo>]
+//     [--artifact <path>] [--single]
 //       → PIPELINE_LINK_COMPLETED
 //
 // The receipt is emitted only after a declared pipeline link returns. Ordering,
@@ -691,7 +695,7 @@ function handleLink(args: string[]): void {
       if (evidence.repos.length > 0) {
         if (!flags.repo) {
           throw new Error(
-            `Cannot record pipeline link for "${flags.stage}": this intent has multiple repositories; pass --repo <repo>.`,
+            `Cannot record pipeline link for "${flags.stage}": this intent records repository identity; pass --repo <repo>.`,
           );
         }
         if (!evidence.repos.includes(flags.repo)) {
@@ -699,6 +703,10 @@ function handleLink(args: string[]): void {
             `Cannot record pipeline link for "${flags.stage}": repo "${flags.repo}" is not registered for this intent (${evidence.repos.join(", ")}).`,
           );
         }
+      } else if (flags.repo) {
+        throw new Error(
+          `Cannot record pipeline link for "${flags.stage}": this intent has no registered repo identity; omit --repo.`,
+        );
       }
 
       const repo = flags.repo ?? null;
@@ -729,6 +737,74 @@ function handleLink(args: string[]): void {
         Link: flags.link,
         Position: `${index + 1}/${links.length}`,
       };
+      if (
+        flags.stage === "reverse-engineering" &&
+        flags.link === node.lead_agent
+      ) {
+        if (!flags.artifact) {
+          throw new Error(
+            'Cannot record reverse-engineering developer link: pass --artifact "<record>/inception/reverse-engineering/developer-scan[-<repo>].md".',
+          );
+        }
+        const root = recordDir(pd);
+        if (root === null) {
+          throw new Error(
+            "Cannot record reverse-engineering developer link: active intent record is unavailable.",
+          );
+        }
+        const expected = join(
+          root,
+          "inception",
+          "reverse-engineering",
+          repo ? `developer-scan-${repo}.md` : "developer-scan.md",
+        );
+        const artifact = resolve(pd, flags.artifact);
+        if (artifact !== expected) {
+          throw new Error(
+            `Cannot record reverse-engineering developer link: --artifact must resolve to ${toPosix(relative(pd, expected))}.`,
+          );
+        }
+        if (!existsSync(artifact) || !statSync(artifact).isFile()) {
+          throw new Error(
+            `Cannot record reverse-engineering developer link: handoff file does not exist: ${flags.artifact}.`,
+          );
+        }
+        const attemptStartedAt = pipelineAttemptStartedAt(
+          pd,
+          flags.stage,
+          { singleRun },
+        );
+        const artifactStat = statSync(artifact);
+        if (
+          attemptStartedAt === "" ||
+          artifactStat.mtimeMs < Date.parse(attemptStartedAt)
+        ) {
+          throw new Error(
+            `Cannot record reverse-engineering developer link: ${toPosix(relative(pd, artifact))} was not written in the current stage attempt.`,
+          );
+        }
+        const previousMtime = latestPipelineLinkArtifactMtime(
+          pd,
+          flags.stage,
+          flags.link,
+          repo,
+          { singleRun },
+        );
+        if (
+          previousMtime !== null &&
+          artifactStat.mtimeMs <= previousMtime
+        ) {
+          throw new Error(
+            `Cannot record reverse-engineering developer link: ${toPosix(relative(pd, artifact))} was not rewritten after its prior pipeline receipt.`,
+          );
+        }
+        const digest = createHash("sha256")
+          .update(readFileSync(artifact))
+          .digest("hex");
+        fields["Artifact Path"] = toPosix(relative(pd, artifact));
+        fields["Artifact SHA256"] = `sha256:${digest}`;
+        fields["Artifact Mtime Ms"] = String(artifactStat.mtimeMs);
+      }
       if (repo) fields.Repo = repo;
       if (singleRun) fields.Workflow = `single-stage:${flags.stage}`;
       emitAudit(pd, "PIPELINE_LINK_COMPLETED", fields, intent, space);

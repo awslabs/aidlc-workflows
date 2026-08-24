@@ -22,8 +22,10 @@
 // against the frozen aidlc-directive.ts contract before it is printed.
 //
 // Subcommand dispatch table:
-//   next   — read state, refresh only the exact-team derived projection, resolve
-//            scope (state > flag > env > default), and emit one directive. LIVE.
+//   next   — resolve scope (state > flag > env > default), find the workflow's
+//            position, refresh only the exact-team derived projection, and emit
+//            one directive. Ordinary routing is otherwise read-only; `--single`
+//            records its isolated audit start before dispatch. LIVE.
 //   report — commit a transition after the conductor acted on a directive.
 //            LIVE. A stage-aware dispatcher: it shells out to aidlc-state.ts
 //            transitions so the next `next` reads fresh state. Explicit
@@ -85,7 +87,7 @@ import {
   readdirSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   type AskDirective,
@@ -128,6 +130,7 @@ import {
   hasAnyUnitClaimRefs,
   intentRepos,
   inspectContinuationCursor,
+  isPluginEnabled,
   isPerUnitStage,
   isRegularFile,
   isTeamUnitOwnership,
@@ -164,6 +167,7 @@ import {
   resolveWorkflowSelection,
   scopeCostSummary,
   selectionAwareDefaultScope,
+  singleStageAttemptIsOpen,
   resolveDefaultScope,
   DEFAULT_SCOPE,
   type StageEntry,
@@ -221,6 +225,7 @@ import {
   resolveHarnessRoot,
 } from "./aidlc-runtime-paths.ts";
 import { appendAuditEntries } from "./aidlc-audit.ts";
+import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { inspectStageValidity } from "./aidlc-validity.ts";
 import {
   readRuleBundle,
@@ -2676,11 +2681,166 @@ function inlineAgentsFor(node: GraphStage): string[] {
 // the deliver-once derivation filters on it. inlineContextPaths below is the
 // path-only projection the directive's roster field carries.
 type InlineContextEntry = { abs: string; rel: string; agent: string | null };
+type PluginKnowledgeOwners = ReadonlyMap<string, ReadonlySet<string>>;
+
+// Minimal scopes still load every active-space rule, persona, stage file,
+// consume, and user/team knowledge file. The only pruning here is shipped
+// framework knowledge whose subject belongs to another stage. Standard and
+// Comprehensive depth keep the full historical roster.
+const MINIMAL_INLINE_KNOWLEDGE: Readonly<
+  Record<string, Readonly<Record<string, ReadonlySet<string>>>>
+> = {
+  "intent-capture": {
+    "aidlc-shared": new Set([
+      "ai-dlc-principles.md",
+      "rules-reading.md",
+      "verification.md",
+    ]),
+    "aidlc-product-agent": new Set([
+      "requirements-elicitation.md",
+      "requirements-guide.md",
+    ]),
+    "aidlc-architect-agent": new Set(["architecture-guide.md"]),
+  },
+  "requirements-analysis": {
+    "aidlc-shared": new Set([
+      "ai-dlc-principles.md",
+      "brownfield.md",
+      "rules-reading.md",
+      "verification.md",
+    ]),
+    "aidlc-product-agent": new Set([
+      "requirements-elicitation.md",
+      "requirements-guide.md",
+    ]),
+  },
+};
+
+const SHIPPED_INLINE_KNOWLEDGE: Readonly<
+  Record<string, ReadonlySet<string>>
+> = {
+  "aidlc-shared": new Set([
+    "ai-dlc-principles.md",
+    "audit-format.md",
+    "brownfield.md",
+    "knowledge-readme-template.md",
+    "memory-template.md",
+    "rules-reading.md",
+    "state-template.md",
+    "verification.md",
+    "worktree-info-schema.md",
+  ]),
+  "aidlc-product-agent": new Set([
+    "functional-design-guide.md",
+    "market-research-methods.md",
+    "prioritization-frameworks.md",
+    "product-guide.md",
+    "requirements-elicitation.md",
+    "requirements-guide.md",
+    "user-story-patterns.md",
+  ]),
+  "aidlc-architect-agent": new Set([
+    "adr-template.md",
+    "architecture-guide.md",
+    "architecture-patterns.md",
+    "ddd-patterns.md",
+    "nfr-design-guide.md",
+    "nfr-design-patterns.md",
+  ]),
+};
+
+function pluginKnowledgeOwners(
+  harnessRoot: string,
+  warnings: string[],
+): PluginKnowledgeOwners {
+  const dataDir = join(harnessRoot, "tools", "data");
+  if (!existsSync(dataDir)) return new Map();
+  const owners = new Map<string, Set<string>>();
+  let files: string[];
+  try {
+    files = readdirSync(dataDir)
+      .filter((name) =>
+        name.startsWith("plugin-files-") && name.endsWith(".json")
+      )
+      .sort();
+  } catch (e) {
+    warnings.push(
+      `Warning: plugin knowledge ownership data "${toPosix(dataDir)}" is unreadable (${errorMessage(e)}). ` +
+        "Minimal context will continue without plugin provenance.",
+    );
+    return owners;
+  }
+  for (const name of files) {
+    const path = join(dataDir, name);
+    try {
+      const parsed = JSON.parse(readFileSync(path, "utf-8")) as {
+        schema_version?: unknown;
+        plugin?: unknown;
+        knowledge?: unknown;
+      };
+      if (
+        parsed.schema_version !== 1 ||
+        typeof parsed.plugin !== "string" ||
+        !Array.isArray(parsed.knowledge)
+      ) {
+        throw new Error("expected schema_version 1, plugin, and knowledge[]");
+      }
+      for (const value of parsed.knowledge) {
+        if (
+          typeof value !== "string" ||
+          value.length === 0 ||
+          value.startsWith("/") ||
+          value.split("/").includes("..")
+        ) {
+          throw new Error("knowledge paths must be relative path segments");
+        }
+        const rel = toPosix(join("knowledge", value));
+        const pathOwners = owners.get(rel) ?? new Set<string>();
+        pathOwners.add(parsed.plugin);
+        owners.set(rel, pathOwners);
+      }
+    } catch (e) {
+      warnings.push(
+        `Warning: plugin knowledge ownership file "${toPosix(path)}" is invalid (${errorMessage(e)}). ` +
+          "Re-run plugin composition before relying on Minimal context pruning.",
+      );
+    }
+  }
+  return owners;
+}
+
+function selectShippedInlineKnowledge(
+  files: Array<{ abs: string; rel: string }>,
+  stage: string,
+  owner: string,
+  depth: string | null,
+  harnessRoot: string,
+  pluginOwners: PluginKnowledgeOwners,
+): Array<{ abs: string; rel: string }> {
+  if (depth?.trim().toLowerCase() !== "minimal") return files;
+  const selected = MINIMAL_INLINE_KNOWLEDGE[stage]?.[owner];
+  if (!selected) return files;
+  const shipped = SHIPPED_INLINE_KNOWLEDGE[owner];
+  return files.filter((file) => {
+    const harnessRelative = toPosix(relative(harnessRoot, file.abs));
+    const pathOwners = pluginOwners.get(harnessRelative);
+    if (pathOwners) {
+      return [...pathOwners].some((plugin) => isPluginEnabled(plugin));
+    }
+    const ownerRelative = toPosix(relative(
+      join(harnessRoot, "knowledge", owner),
+      file.abs,
+    ));
+    return shipped?.has(ownerRelative) !== true ||
+      selected.has(ownerRelative);
+  });
+}
 
 function inlineContextEntries(
   node: GraphStage,
   codekbCtx?: CodekbCtx,
   warnings: string[] = [],
+  depth: string | null = null,
 ): InlineContextEntry[] {
   const agents = inlineAgentsFor(node);
   if (agents.length === 0) return [];
@@ -2692,6 +2852,7 @@ function inlineContextEntries(
   const harnessRoot = resolveHarnessRoot();
   const harnessPrefix = harnessDir();
   const entries: InlineContextEntry[] = [];
+  const pluginOwners = pluginKnowledgeOwners(harnessRoot, warnings);
 
   for (const agent of agents) {
     const persona = join(harnessRoot, "agents", `${agent}.md`);
@@ -2719,18 +2880,32 @@ function inlineContextEntries(
     });
   }
   entries.push(
-    ...markdownFilesUnder(
-      join(harnessRoot, "knowledge", "aidlc-shared"),
-      join(harnessPrefix, "knowledge", "aidlc-shared"),
-      warnings,
+    ...selectShippedInlineKnowledge(
+      markdownFilesUnder(
+        join(harnessRoot, "knowledge", "aidlc-shared"),
+        join(harnessPrefix, "knowledge", "aidlc-shared"),
+        warnings,
+      ),
+      node.slug,
+      "aidlc-shared",
+      depth,
+      harnessRoot,
+      pluginOwners,
     ).map((f) => ({ ...f, agent: null })),
   );
   for (const agent of agents) {
     entries.push(
-      ...markdownFilesUnder(
-        join(harnessRoot, "knowledge", agent),
-        join(harnessPrefix, "knowledge", agent),
-        warnings,
+      ...selectShippedInlineKnowledge(
+        markdownFilesUnder(
+          join(harnessRoot, "knowledge", agent),
+          join(harnessPrefix, "knowledge", agent),
+          warnings,
+        ),
+        node.slug,
+        agent,
+        depth,
+        harnessRoot,
+        pluginOwners,
       ).map((f) => ({ ...f, agent })),
     );
   }
@@ -2774,9 +2949,10 @@ function inlineContextEntries(
 function inlineContextRoster(
   node: GraphStage,
   codekbCtx?: CodekbCtx,
+  depth: string | null = null,
 ): { paths: string[]; warnings: string[] } {
   const warnings: string[] = [];
-  const allPaths = inlineContextEntries(node, codekbCtx, warnings).map((e) => e.rel);
+  const allPaths = inlineContextEntries(node, codekbCtx, warnings, depth).map((e) => e.rel);
   const paths: string[] = [];
   for (const path of allPaths) {
     const candidate = [...paths, path];
@@ -2874,7 +3050,10 @@ function buildRunStageDirective(
     codekbCtx,
     stateContent,
   );
-  const inlineContext = inlineContextRoster(node, codekbCtx);
+  const depth = stateContent
+    ? getField(stateContent, "Depth")
+    : loadScopeMetadata()[scope]?.depth ?? null;
+  const inlineContext = inlineContextRoster(node, codekbCtx, depth);
   const ruleEntries = codekbCtx
     ? rulesContentEntries(node, codekbCtx.projectDir, codekbCtx.space)
     : null;
@@ -3421,8 +3600,9 @@ function nodeForSlug(slug: string): GraphStage | undefined {
 }
 
 // The `next` handler reads workflow state and emits exactly one directive. Rule
-// transport may lazily mint its machine-local MAC key, but never mutates shared
-// workflow state.
+// transport may lazily mint its machine-local MAC key. Ordinary routing never
+// mutates shared workflow state; `--single` adds only its synthetic audit start
+// and cannot move the main workflow pointer.
 function handleNext(args: string[], projectDir: string | undefined): void {
   activeStageValidityAdvisory = undefined;
   const flags = parseNextFlags(args);
@@ -3896,10 +4076,10 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // pivot Current Stage (it emits a `print` naming `aidlc-jump.ts execute`, a
   // mutation), so --single must short-circuit it and emit the run-stage DIRECTLY
   // here — exactly the read-only no-state `next --stage` shape, but unconditional
-  // on whether a main workflow exists. The companion `report --single` commits the
-  // STAGE_STARTED/STAGE_COMPLETED pair under a synthetic workflow id (audit only);
-  // it never dispatches advance/approve/complete-workflow, so the main pointer is
-  // structurally untouchable from a single-stage run. This branch precedes Branch
+  // on whether a main workflow exists. This branch records STAGE_STARTED under a
+  // synthetic workflow id before emitting work; `report --single` records only
+  // STAGE_COMPLETED. Neither path dispatches advance/approve/complete-workflow, so
+  // the main pointer is structurally untouchable from a single-stage run. This branch precedes Branch
   // 5 (scope/config-change) and Branch 7 (jump) so neither mutating path is reached
   // under --single.
   if (flags.single) {
@@ -3917,7 +4097,14 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       ));
       return;
     }
-    emitSingleRunStage(flags.stage, scope, projectType, recordPrefix, codekbCtx);
+    emitSingleRunStage(
+      flags.stage,
+      scope,
+      projectType,
+      recordPrefix,
+      codekbCtx,
+      codekbCtx.projectDir,
+    );
     return;
   }
 
@@ -6132,12 +6319,28 @@ function emitForSlug(
 const SINGLE_INIT_ERROR =
   "Cannot run an initialization stage with --single. Initialization is bootstrap (it creates the intent + state); it runs automatically when you start a workflow (describe what to build, e.g. /aidlc \"build the auth service\").";
 
+function ensureSingleStageStarted(
+  projectDir: string,
+  node: GraphStage,
+): string | null {
+  if (singleStageAttemptIsOpen(projectDir, node.slug)) return null;
+  return appendSingleStageAuditEvents(projectDir, [{
+    eventType: "STAGE_STARTED",
+    fields: {
+      Stage: node.slug,
+      Agent: node.lead_agent,
+      Workflow: syntheticWorkflowId(node.slug),
+    },
+  }]);
+}
+
 function emitSingleRunStage(
   slug: string,
   scope: string,
   projectType: "brownfield" | "greenfield" | null,
   recordPrefix: string | null = null,
-  codekbCtx?: CodekbCtx,
+  codekbCtx: CodekbCtx,
+  projectDir: string,
 ): void {
   const node = nodeForSlug(slug);
   if (!node) {
@@ -6158,11 +6361,17 @@ function emitSingleRunStage(
     ));
     return;
   }
-  // Build the directive from the graph node alone (stateContent: null → no main
-  // state read, no skeleton round-trip, no main-pointer persona signal), with
-  // forcePersona: this is the conductor's first directive of the single run,
-  // so D-E delivery applies (attached inside the builder so the steering
-  // injection budgets around it).
+  const startError = ensureSingleStageStarted(projectDir, node);
+  if (startError) {
+    emit(errorDirective(
+      `Failed to record the isolated start boundary for "${node.slug}": ${startError}`,
+    ));
+    return;
+  }
+  // Build the directive only after the synthetic start is durable. Steering
+  // continuation tokens bind the current audit/state route; writing the start
+  // after token construction would make the engine invalidate its own first
+  // continuation as stale.
   const directive = buildRunStageDirective(
     node,
     projectType,
@@ -6518,7 +6727,7 @@ interface ReportFlags {
   reason?: string;
   rejectFindings?: string[];
   skeletonStance?: string; // the classify round-trip's classified stance
-  single?: boolean; // --single: commit a synthetic-id STAGE_STARTED/COMPLETED pair, never the main pointer
+  single?: boolean; // --single: complete the synthetic attempt opened by next --single, never the main pointer
   stage?: string; // --stage <slug>: the acted stage (required under --single; preferred for main workflow reports)
   overrideBlockingSensors?: boolean;
   unit?: string; // --unit <name>: required for team-owned per-unit gates
@@ -6598,10 +6807,11 @@ function spawnState(
 }
 
 // The synthetic single-stage owner uses the internal append route because
-// STAGE_COMPLETED is protected from public CLI emission. appendAuditEntries
-// validates the complete pair before touching disk, then writes both blocks
-// under one lock. This remains audit-only and cannot mutate the main pointer.
-function appendSingleStageAuditPair(
+// STAGE_STARTED/STAGE_COMPLETED are protected lifecycle events.
+// appendAuditEntries validates the requested boundary before touching disk and
+// writes it under one lock. This remains audit-only and cannot mutate the main
+// pointer.
+function appendSingleStageAuditEvents(
   projectDir: string,
   entries: Array<{ eventType: string; fields: Record<string, string> }>,
 ): string | null {
@@ -6694,9 +6904,9 @@ function handleSkeletonStanceReport(
 //
 // The synthetic workflow id a `--single` stage-runner's events are tagged with.
 // It is NOT a real WORKFLOW_STARTED id — it exists only to mark the
-// STAGE_STARTED/STAGE_COMPLETED pair in `audit.md` as belonging to an isolated
-// single-stage run, never to the main workflow. The `<slug>` segment makes the
-// provenance legible in the audit trail.
+// STAGE_STARTED/STAGE_COMPLETED boundaries in `audit.md` as belonging to an
+// isolated single-stage run, never to the main workflow. The `<slug>` segment
+// makes the provenance legible in the audit trail.
 function syntheticWorkflowId(slug: string): string {
   return `single-stage:${slug}`;
 }
@@ -6704,6 +6914,22 @@ function syntheticWorkflowId(slug: string): string {
 type EnsembleEvidenceResult =
   | { ok: true }
   | { ok: false; message: string };
+
+function checkSingleCodekbArtifacts(
+  node: GraphStage,
+  pd: string,
+): EnsembleEvidenceResult {
+  if (!KNOWN_CODEKB_STAGES.has(node.slug)) return { ok: true };
+  const inspection = inspectRequiredArtifactInstances(pd, node);
+  if (inspection.ok) return { ok: true };
+  return {
+    ok: false,
+    message:
+      `Stage "${node.slug}" cannot complete its isolated run: required CodeKB artifacts ` +
+      `are missing, redirected, unreadable, or not regular files (${inspection.failures.map((failure) => failure.path).join(", ")}). ` +
+      "Restore the canonical artifact set or rescan before reporting completion.",
+  };
+}
 
 function requiresEnsembleEvidence(node: GraphStage): boolean {
   return node.mode === "mob" ||
@@ -6934,10 +7160,10 @@ function checkStageCompletionEvidence(
   );
 }
 
-// Handle `report --single --stage <slug> --result <outcome>`: commit the lone
-// STAGE_STARTED / STAGE_COMPLETED pair for `<slug>` under a SYNTHETIC workflow
-// id, audit-only, then emit `done`. This is the WRITE half of the stage-runner
-// contract, and it carries the load-bearing pointer invariant:
+// Handle `report --single --stage <slug> --result <outcome>`: complete the
+// synthetic lifecycle whose STAGE_STARTED boundary was recorded by
+// `next --single`, then emit `done`. This is the completion half of the
+// stage-runner contract and carries the load-bearing pointer invariant:
 //
 //   A `--single` run NEVER touches the main state file's `Current Stage`.
 //
@@ -6951,10 +7177,9 @@ function checkStageCompletionEvidence(
 // — and that returns an `error` directive rather than silently mutating. The two
 // together make "advance the main workflow from a single run" unreachable.
 //
-// The pair is emitted in one append-batch transaction (the engine writes
-// nothing itself). STAGE_STARTED carries Stage + Agent + Workflow (the
-// synthetic id); STAGE_COMPLETED carries Stage + Details + Workflow, matching
-// the field shape aidlc-state.ts emits for the same events.
+// STAGE_COMPLETED carries Stage + Details + Workflow, matching the field shape
+// aidlc-state.ts emits. A direct report without an open synthetic start is
+// rejected, so pipeline receipts always have an authoritative attempt floor.
 //
 // The reviewer precondition is DELIBERATELY not engine-enforced here. It
 // guards the four completing state transitions (aidlc-state.ts approve /
@@ -7005,12 +7230,24 @@ function handleSingleReport(
 
   const pd = resolveProjectDir(projectDir);
   const wfId = syntheticWorkflowId(node.slug);
+  if (!singleStageAttemptIsOpen(pd, node.slug)) {
+    emit(errorDirective(
+      `Cannot complete isolated stage "${node.slug}": no open ${wfId} STAGE_STARTED boundary exists. ` +
+        `Run \`next --stage ${node.slug} --single\` first.`,
+    ));
+    return;
+  }
   const summaryEvidence = checkSummaryConfirmationEvidence(pd, node, {
     workflow: wfId,
     stateContent: null,
   });
   if (!summaryEvidence.ok) {
     emit(errorDirective(summaryEvidence.message));
+    return;
+  }
+  const artifactEvidence = checkSingleCodekbArtifacts(node, pd);
+  if (!artifactEvidence.ok) {
+    emit(errorDirective(artifactEvidence.message));
     return;
   }
   // Isolated reports never inherit the main workflow's scope, autonomy, or DAG.
@@ -7035,28 +7272,18 @@ function handleSingleReport(
     emit(errorDirective(evidence.message));
     return;
   }
-  const pairError = appendSingleStageAuditPair(pd, [
-    {
-      eventType: "STAGE_STARTED",
-      fields: {
-        Stage: node.slug,
-        Agent: node.lead_agent,
-        Workflow: wfId,
-      },
+  const completionError = appendSingleStageAuditEvents(pd, [{
+    eventType: "STAGE_COMPLETED",
+    fields: {
+      Stage: node.slug,
+      Details: `Single-stage run of ${node.slug} completed`,
+      Workflow: wfId,
     },
-    {
-      eventType: "STAGE_COMPLETED",
-      fields: {
-        Stage: node.slug,
-        Details: `Single-stage run of ${node.slug} completed`,
-        Workflow: wfId,
-      },
-    },
-  ]);
-  if (pairError) {
+  }]);
+  if (completionError) {
     emit(errorDirective(
-      `Failed to record single-stage lifecycle pair for "${node.slug}"` +
-        `: ${pairError}`,
+      `Failed to record single-stage completion for "${node.slug}"` +
+        `: ${completionError}`,
     ));
     return;
   }
@@ -7199,9 +7426,9 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     }
   }
 
-  // Branch -1 — the --single stage-runner commit. A stage-runner reports
+  // Branch -1 — the --single stage-runner completion. A stage-runner reports
   // its lone stage via `report --single --stage <slug> --result <outcome>`; the
-  // engine commits a synthetic-id STAGE_STARTED/STAGE_COMPLETED pair (audit only)
+  // engine closes the synthetic attempt opened by `next --single` (audit only)
   // and NEVER touches the main `Current Stage`. Resolves first, before the
   // main-workflow branches, so a single-stage commit can never fall through to a
   // state-mutating subcommand.

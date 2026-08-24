@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import {
   artifactFilename,
@@ -13,6 +13,8 @@ import {
   intentRepos,
   isPerUnitStage,
   recordDir,
+  assertNoSymlinkInChainOrThrow,
+  readRegularFileNoFollowOrThrow,
   resolveBoltDag,
   toPosix,
   usesStageLevelPerUnitArtifacts,
@@ -22,6 +24,7 @@ export interface ArtifactOwnerNode {
   slug: string;
   phase: string;
   for_each?: string;
+  produces?: readonly string[];
   produces_kinds?: Readonly<Record<string, readonly string[]>>;
 }
 
@@ -48,6 +51,17 @@ export interface ArtifactResolutionOptions {
   codekbRepos?: readonly string[];
   /** Workflow state used to mirror the engine's stage-level decision. */
   stateContent?: string;
+}
+
+export interface RequiredArtifactFailure {
+  artifact: string;
+  path: string;
+  reason: string;
+}
+
+export interface RequiredArtifactInspection {
+  ok: boolean;
+  failures: RequiredArtifactFailure[];
 }
 
 export function isCodekbArtifactOwner(owner: { slug: string }): boolean {
@@ -276,4 +290,51 @@ export function resolveArtifactInstances(
       unitKind: null,
     },
   ];
+}
+
+/**
+ * Inspect every concrete instance of every required `produces[]` artifact.
+ * Resolution stays graph-owned; file authority uses the shared no-follow,
+ * single-link regular-file reader and rejects redirected parent components.
+ */
+export function inspectRequiredArtifactInstances(
+  projectDir: string,
+  owner: ArtifactOwnerNode,
+  options: ArtifactResolutionOptions = {},
+): RequiredArtifactInspection {
+  const failures: RequiredArtifactFailure[] = [];
+  const anchor = realpathSync(projectDir);
+  for (const artifact of owner.produces ?? []) {
+    const instances = resolveArtifactInstances(
+      projectDir,
+      artifact,
+      owner,
+      options,
+    );
+    if (instances.length === 0) {
+      failures.push({
+        artifact,
+        path: artifact,
+        reason: "no canonical runtime instance resolved",
+      });
+      continue;
+    }
+    for (const instance of instances) {
+      try {
+        const relativePath = relative(projectDir, instance.absolutePath);
+        assertNoSymlinkInChainOrThrow(anchor, relativePath);
+        readRegularFileNoFollowOrThrow(
+          instance.absolutePath,
+          `required artifact "${instance.relativePath}"`,
+        );
+      } catch (error) {
+        failures.push({
+          artifact,
+          path: instance.relativePath,
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+  return { ok: failures.length === 0, failures };
 }

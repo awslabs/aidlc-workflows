@@ -195,7 +195,9 @@ bun .claude/tools/aidlc-orchestrate.ts next --stage <your-slug> --single
 The engine's `--single` mode runs that one stage in isolation. It emits a single
 `run-stage` directive for the stage (with its lead agent, resolved
 consumes/produces paths, rules, and sensors), the conductor runs it, and a
-synthetic-id `STAGE_STARTED`/`STAGE_COMPLETED` pair is committed to the audit log.
+synthetic-id lifecycle is committed to the audit log: `next --single` records
+`STAGE_STARTED` before dispatch, and `report --single` requires that boundary
+before recording `STAGE_COMPLETED`.
 The directive carries `single: true`, so the conductor runs the configured body,
 topology, reviewer, and completion checks, reports once with
 `report --single --stage <slug> --result completed`, and stops on `done`. It does
