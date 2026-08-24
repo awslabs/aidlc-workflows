@@ -223,7 +223,10 @@ set-union and their fragments interleave by this same ordering — genuinely mer
 Each spliced fragment is wrapped in a sentinel comment carrying a content hash
 (`<!-- plugin:<plugin>:<anchor>:<order>:<hash> --> … <!-- /plugin:… -->`), which
 is how re-composing stays idempotent and an upgraded fragment replaces its prior
-block. Two authoring rules follow from that:
+block. Compose also records each successfully applied fragment's anchor, order,
+and hash in the plugin contribution sidecar. That provenance exists even for a
+prose-only plugin, allowing doctor to detect a missing marker or changed fragment
+body after an engine reinstall. Two authoring rules follow from that:
 
 - **Don't write a sentinel-lookalike line in fragment prose.** A line matching
   `<!-- /plugin:… -->` inside your prose will be mistaken for a block terminator
@@ -233,6 +236,24 @@ block. Two authoring rules follow from that:
   hashless marker; an upgrade won't recognize it and will splice a second copy.
   Only PR-branch installs are affected — recompose from a clean base, or delete
   the old block by hand, once.
+
+### Engine upgrade lifecycle
+
+An engine reinstall copies the stock `dist/<harness>/` graph and core stage
+sources over the effective install. Plugin-namespaced files and contribution
+sidecars can survive that overlay while their graph entries and structural or
+prose contribution merges disappear. Authors should make re-composition part of
+their upgrade instructions: run `/aidlc plugin sync` after every engine
+reinstall or upgrade (or start a new session on a host with the plugin compose
+hook). Composition is idempotent, so this restores the same effective surface
+without duplicating unchanged contributions. `/aidlc --doctor` reports the
+broken state as **Composed plugin surface**. The check fails closed when an
+enabled plugin's sidecar is unreadable or malformed, a recorded target stage no
+longer exists, or a recorded structural or prose contribution is absent or
+changed. Consume records preserve and verify `artifact`, `required`, and optional
+`conditional_on`; artifact-only records from older sidecars remain compatible. An
+invalid sidecar cannot be reconstructed safely from an already-composed stage:
+refresh the stock engine, remove that sidecar, then run `plugin sync`.
 
 ## 4. Packaging the other primitives
 

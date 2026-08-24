@@ -131,10 +131,16 @@ function activePluginSelection(targetRoot: string): string[] | null {
   return stringArray(parsed.plugins, `${path}: plugins`);
 }
 
+interface ConsumeEntry {
+  artifact: string;
+  required: boolean;
+  conditional_on?: string;
+}
+
 interface StageContribRecord {
   produces?: string[];
   sensors?: string[];
-  consumes?: string[];
+  consumes?: Array<string | ConsumeEntry>;
   scopes?: string[];
   required_sections?: string[];
   required_sections_created?: boolean;
@@ -173,19 +179,12 @@ interface PluginFragment {
   end: number;
 }
 
-interface ConsumeEntry {
-  artifact: string;
-  required: boolean;
-  conditional_on?: string;
-}
-
 function stageContribRecord(value: unknown): StageContribRecord | null {
   if (!isObject(value)) return null;
   const record: StageContribRecord = {};
   for (const field of [
     "produces",
     "sensors",
-    "consumes",
     "scopes",
     "required_sections",
   ] as const) {
@@ -195,6 +194,38 @@ function stageContribRecord(value: unknown): StageContribRecord | null {
       return null;
     }
     record[field] = entries;
+  }
+  if (value.consumes !== undefined) {
+    if (!Array.isArray(value.consumes)) return null;
+    const consumes: Array<string | ConsumeEntry> = [];
+    for (const entry of value.consumes) {
+      if (typeof entry === "string") {
+        if (entry.length === 0) return null;
+        consumes.push(entry);
+        continue;
+      }
+      if (
+        !isObject(entry) ||
+        typeof entry.artifact !== "string" ||
+        entry.artifact.length === 0 ||
+        typeof entry.required !== "boolean" ||
+        (
+          entry.conditional_on !== undefined &&
+          entry.conditional_on !== "brownfield" &&
+          entry.conditional_on !== "greenfield"
+        )
+      ) {
+        return null;
+      }
+      consumes.push({
+        artifact: entry.artifact,
+        required: entry.required,
+        ...(typeof entry.conditional_on === "string"
+          ? { conditional_on: entry.conditional_on }
+          : {}),
+      });
+    }
+    record.consumes = consumes;
   }
   if (value.required_sections_created !== undefined) {
     if (typeof value.required_sections_created !== "boolean") return null;
@@ -352,10 +383,21 @@ function consumeEntries(content: string, artifacts: ReadonlySet<string>): Consum
   return [...found.values()];
 }
 
-function consumeArtifactValues(content: string): ReadonlySet<string> {
-  return new Set(
-    [...content.matchAll(/^ {2}- artifact:\s*([\w-]+)/gm)].map((entry) => entry[1]),
-  );
+function consumeEntryValues(content: string): ReadonlyMap<string, ConsumeEntry> {
+  const found = new Map<string, ConsumeEntry>();
+  for (const match of content.matchAll(
+    /^ {2}- artifact:\s*([\w-]+).*\n((?: {4}(?:required|conditional_on):.*\n)*)/gm,
+  )) {
+    const required = match[2].match(/^ {4}required:\s*(true|false)\s*$/m)?.[1];
+    if (!required || found.has(match[1])) continue;
+    const conditionalOn = match[2].match(/^ {4}conditional_on:\s*(\S+)\s*$/m)?.[1];
+    found.set(match[1], {
+      artifact: match[1],
+      required: required === "true",
+      ...(conditionalOn ? { conditional_on: conditionalOn } : {}),
+    });
+  }
+  return found;
 }
 
 function reconcileCoreOwnedContributions(source: Buffer, state: PluginStageState): void {
@@ -363,7 +405,7 @@ function reconcileCoreOwnedContributions(source: Buffer, state: PluginStageState
   const coreValues = {
     produces: new Set(listFieldValues(content, "produces") ?? []),
     sensors: new Set(listFieldValues(content, "sensors") ?? []),
-    consumes: consumeArtifactValues(content),
+    consumes: consumeEntryValues(content),
     scopes: new Set(listFieldValues(content, "scopes") ?? []),
     required_sections: new Set(listFieldValues(content, "required_sections") ?? []),
   };
@@ -374,7 +416,6 @@ function reconcileCoreOwnedContributions(source: Buffer, state: PluginStageState
     for (const field of [
       "produces",
       "sensors",
-      "consumes",
       "scopes",
       "required_sections",
     ] as const) {
@@ -384,6 +425,23 @@ function reconcileCoreOwnedContributions(source: Buffer, state: PluginStageState
       if (retained.length > 0) binding.raw[field] = retained;
       else delete binding.raw[field];
       binding.record[field] = retained;
+      binding.sidecar.dirty = true;
+    }
+    const priorConsumes = binding.record.consumes ?? [];
+    const retainedConsumes = priorConsumes.filter((value) => {
+      const artifact = typeof value === "string" ? value : value.artifact;
+      const core = coreValues.consumes.get(artifact);
+      if (!core) return true;
+      if (typeof value === "string") return false;
+      return (
+        core.required !== value.required ||
+        core.conditional_on !== value.conditional_on
+      );
+    });
+    if (retainedConsumes.length !== priorConsumes.length) {
+      if (retainedConsumes.length > 0) binding.raw.consumes = retainedConsumes;
+      else delete binding.raw.consumes;
+      binding.record.consumes = retainedConsumes;
       binding.sidecar.dirty = true;
     }
     if (
@@ -661,11 +719,13 @@ function rebuildPluginComposedStage(
     for (const field of [
       "produces",
       "sensors",
-      "consumes",
       "scopes",
       "required_sections",
     ] as const) {
       for (const value of record[field] ?? []) owned[field].add(value);
+    }
+    for (const value of record.consumes ?? []) {
+      owned.consumes.add(typeof value === "string" ? value : value.artifact);
     }
     requiredSectionsCreated ||= record.required_sections_created === true;
   }

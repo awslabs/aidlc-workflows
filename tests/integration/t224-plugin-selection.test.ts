@@ -211,6 +211,8 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
     expect(composed).toContain("test-pro-regression-suite");
     expect(composed).toContain("Step 8a (test-pro)");
     expect(existsSync(sidecar)).toBe(true);
+    const composedSidecar = readFileSync(sidecar, "utf-8");
+    expect(composedSidecar).toContain('"fragments"');
 
     const disable = runUtility(proj, ["select-plugins", "aidlc"]);
     expect(disable.status).toBe(0);
@@ -238,6 +240,7 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
     const restored = readFileSync(stagePath, "utf-8");
     expect(restored).toBe(composed);
     expect(existsSync(sidecar)).toBe(true);
+    expect(readFileSync(sidecar, "utf-8")).toBe(composedSidecar);
   });
 
   test("compose does not merge contributions for a plugin the selection disables", () => {

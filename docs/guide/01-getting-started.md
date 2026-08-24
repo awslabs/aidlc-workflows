@@ -248,6 +248,14 @@ Then continue in [AI-DLC on opencode](harnesses/opencode.md): the split `.aidlc/
 
 </details>
 
+> **Upgrading an install that uses plugins:** copying a fresh
+> `dist/<harness>/` engine over an existing project restores the shipped stage
+> graph and core stage sources, which removes composed plugin graph entries and
+> contribution merges. After every engine reinstall or upgrade, run
+> `/aidlc plugin sync`. Claude, Codex, Cursor, and Kiro IDE can also self-heal
+> through their plugin compose hook on the next session start; Kiro CLI requires
+> the explicit sync.
+
 ### Step 2: Navigate to your project
 
 ```bash

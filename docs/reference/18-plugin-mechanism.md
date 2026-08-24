@@ -158,6 +158,19 @@ The steps (identical regardless of trigger):
 
 Because composition is one N-way merge (not a sequence of independent overlays), **two plugins that both contribute to the same stage are genuinely merged** — structural additions set-union, prose fragments order deterministically — rather than one silently overwriting the other. The runtime stays **read-only** with respect to composition: all merging happens at compose time, never per session. The merge edits **stage source** (not the compiled JSON), so it is **durable** across any later `aidlc-graph compile` (e.g. the rebuild-stage-graph hook) and **idempotent** — re-running on every SessionStart composes nothing new.
 
+An engine reinstall is different from a graph compile: copying a fresh
+`dist/<harness>/` overwrites the compiled graph and core stage sources, so
+plugin-owned files and sidecars may remain while graph entries and contribution
+merges disappear. Re-run `/aidlc plugin sync` after every engine upgrade; hosts
+with a compose hook also repair the surface on the next session start. The
+doctor's **Composed plugin surface** check detects both missing plugin graph
+entries and stale structural or prose contributions. Unreadable or malformed
+enabled-plugin sidecars and records that target a missing stage also fail the
+check rather than being skipped. Because an already-composed structural value
+cannot be attributed safely after its provenance is corrupted, recover an
+invalid sidecar by refreshing the stock engine, removing that sidecar, and then
+running `plugin sync`.
+
 ## 5. Selection
 
 Plugins add; the install selects. Composing a plugin copies its files into the
@@ -265,12 +278,14 @@ asks for an explicit `--scope`.
 
 Disabling a plugin also removes what it merged into core stages, not just its
 own files. Compose records the structural adds it actually applied (produces /
-sensors / consumes / scopes / required_sections, per target stage) in a per-plugin
-sidecar at `tools/data/plugin-contrib-<key>.json`; spliced prose fragments carry
-their own sentinel markers. On disable, `select-plugins` strips both from the
-installed stage source inside the same rollback transaction, so a disabled
-plugin's contributions stop steering enabled stages. Re-enabling restores them
-on the next session start: the plugin's compose hook re-merges, byte-identical.
+sensors / full consume entries including `required` and optional
+`conditional_on` / scopes / required_sections, per target stage) and each
+successfully applied fragment's anchor/order/hash in a per-plugin sidecar at
+`tools/data/plugin-contrib-<key>.json`; spliced prose fragments also carry their
+own sentinel markers. On disable, `select-plugins` strips both from the installed
+stage source inside the same rollback transaction, so a disabled plugin's
+contributions stop steering enabled stages. Re-enabling restores them on the
+next session start: the plugin's compose hook re-merges, byte-identical.
 
 Compose hooks and `select-plugins` serialize these mutations on the same
 workspace lock. The lock spans installed stage edits, per-plugin sidecars,
@@ -341,7 +356,7 @@ fragments:                    # PROSE — spliced into the stage body
 **Merge semantics:**
 
 - **Structural surfaces** — **set union** into the target stage's source frontmatter. Commutative, order-independent, safe across uncoordinated authors. *Implemented today:* `produces`, `consumes` (artifact + `required` + `conditional_on`, each preserved), `sensors`, `scopes`, `required_sections`. `adds.scopes` carries two guard rails: the scope's identity file must already be installed (a name with no `scopes/<name>.md` would resolve as an all-SKIP phantom), and that installed file's `plugin:` frontmatter must name the contributing plugin exactly — putting a core stage under a core or foreign-plugin scope changes selection semantics the other owner never agreed to, and ownership comes from the file's declared owner, not a name-prefix rule (dash prefixes overlap across plugin names; a core scope declares no `plugin:` and never merges); a violating entry is dropped-with-log, never merged. *Not yet merged (deferred):* `adds.requires_stage` — a contribution may declare it, but the compose hook records it to the drops log (`--doctor` surfaces it) rather than merging, so its absence is visible, never silent. When it graduates it set-unions like the others.
-- **Prose fragments** (`fragments` of step/question prose) — spliced into the stage body at the declared anchor, ordered deterministically by `(order, plugin)`. Each spliced block is wrapped in a content-hashed sentinel, so re-composing is idempotent, an upgraded fragment replaces its prior block, and blocks from separate plugins interleave by `(order, plugin)` regardless of hook-firing order. The agent reads base body + ordered fragments at runtime.
+- **Prose fragments** (`fragments` of step/question prose) — spliced into the stage body at the declared anchor, ordered deterministically by `(order, plugin)`. Each spliced block is wrapped in a content-hashed sentinel and its anchor/order/hash is persisted in the contribution sidecar, so re-composing is idempotent, an upgraded fragment replaces its prior block, prose-only plugins retain verifiable provenance, and blocks from separate plugins interleave by `(order, plugin)` regardless of hook-firing order. The agent reads base body + ordered fragments at runtime.
 - **No override, ever.** A contribution can only add. It cannot change a stage's `lead_agent`, relax a `consumes[].required`, remove a field, or replace existing step prose. A genuine need to *change* upstream behavior is a framework-level decision, never a quiet patch inside a plugin.
 
 **Fragment anchors:**

@@ -558,8 +558,9 @@ When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** sect
 | Background subagents | Reports fresh and stale session-scoped entries in `aidlc/.aidlc-subagent-inflight`. Fresh entries are advisory; stale or malformed entries fail with exact removal guidance. Silent when absent |
 | Cycle detection | `stage-graph.json` has no cycles |
 | Orphan stage files | Every slug in the graph has a matching `<phase>/<slug>.md` on disk |
-| Uncompiled stage files | Surfaces any stage `.md` on disk whose slug is not in the compiled graph, it will not execute until you run `aidlc-graph.ts compile` (advisory, never fails) |
+| Uncompiled stage files | Surfaces any stage `.md` on disk whose slug is not in the compiled graph. Plugin-owned files name `plugin sync`; other authored stages name `aidlc-graph.ts compile` (advisory, never fails) |
 | Plugin selection | Enabled plugin list, per-plugin enabled-stage counts, full-graph `enabled:false` flag agreement, and torn-selection recovery hints |
+| Composed plugin surface | Enabled plugin-owned stage files are compiled; every enabled-plugin contribution sidecar is readable and valid, every recorded target stage exists, and every recorded structural addition or prose fragment is still present and unchanged |
 | Plugin checks | Runs optional `tools/<plugin>-doctor.ts` scripts only for enabled plugins. Error findings fail doctor; advisory findings are visible and exported without changing the exit code |
 | Scope validation | All enabled scopes (from `.claude/scopes/*.md` after plugin selection) walk cleanly (advisories for scope-truncation gaps are expected) |
 | Schema validation | Every stage's YAML frontmatter passes `validateStageFrontmatter` |
@@ -594,6 +595,7 @@ When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** sect
 ✓ Orphan stage files: 33 graph entries all have files
 ✓ Uncompiled stage files: 0 stage files missing from the compiled graph
 ✓ Enabled plugins: all enabled (no selection); enabled stage counts: aidlc=33
+✓ Composed plugin surface: all enabled plugin stages and recorded contributions are present
 ✓ Scope validation: 11 scopes valid
 ✓ Schema validation: 33/33 stages valid
 ✓ Graph references: 122 artifacts + edges resolved
@@ -1027,6 +1029,12 @@ repeatedly; when no plugin roots are configured it exits 0 with
 `no installed plugins; nothing to sync`. If configured roots have no
 `hooks/compose.ts`, the command exits 1 and names each root and reason. With a
 mixed set, it warns for each skipped root, composes the valid roots, and exits 0.
+Re-run it after every engine reinstall or upgrade: copying a fresh
+`dist/<harness>/` restores the shipped graph and core stage sources, so
+previously composed plugin graph entries and contribution merges must be
+applied again. Hosts with plugin SessionStart hooks (Claude, Codex, Cursor, and
+Kiro IDE) also self-heal on the next session start; Kiro CLI requires the
+explicit sync.
 
 `/aidlc plugin validate [path]` and
 `/aidlc plugin build <harness> [outDir]` expose the shipped standalone

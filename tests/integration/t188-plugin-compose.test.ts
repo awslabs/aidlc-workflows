@@ -691,6 +691,17 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     // The pre-existing core consumes are untouched (still required: true).
     const core = (bat?.consumes ?? []).find((c) => c.artifact === "code-generation-plan");
     expect(core?.required).toBe(true);
+
+    const sidecar = JSON.parse(
+      readFileSync(
+        join(project, ".claude", "tools", "data", "plugin-contrib-test-pro.json"),
+        "utf-8",
+      ),
+    );
+    expect(sidecar["build-and-test"]?.consumes).toEqual([
+      { artifact: "test-pro-test-harness-design", required: false },
+      { artifact: "test-pro-testability-requirements", required: false },
+    ]);
   });
 
   test("contribution merges sensors into the target stage node", () => {
@@ -1322,6 +1333,31 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     const body = stageBody(project, "construction", "build-and-test");
     expect(body).toContain("Step 8a (test-pro)");
     expect(body).toContain("Step 9a (test-pro)");
+  });
+
+  test("successfully spliced fragments are recorded in the contribution sidecar", () => {
+    const body = stageBody(project, "construction", "build-and-test");
+    const sidecar = JSON.parse(
+      readFileSync(
+        join(project, ".claude", "tools", "data", "plugin-contrib-test-pro.json"),
+        "utf-8",
+      ),
+    );
+    const fragments = sidecar["build-and-test"]?.fragments as Array<{
+      anchor: string;
+      order: number;
+      hash: string;
+    }>;
+    expect(fragments.length).toBeGreaterThan(0);
+    for (const fragment of fragments) {
+      expect(fragment.hash).toMatch(/^[0-9a-f]{8}$/);
+      expect(body).toContain(
+        `<!-- plugin:test-pro:${fragment.anchor}:${fragment.order}:${fragment.hash} -->`,
+      );
+      expect(body).toContain(
+        `<!-- /plugin:test-pro:${fragment.anchor}:${fragment.order}:${fragment.hash} -->`,
+      );
+    }
   });
 
   test("fragments land in step order (8a before 8b before 8c)", () => {

@@ -1475,14 +1475,14 @@ function mergeListField(content: string, field: string, items: string[], target:
 // Append consumes objects (artifact + required + optional conditional_on).
 // Handles block + `consumes: []`.
 type ConsumeEntry = { artifact: string; required: boolean; conditional_on?: string };
-function mergeConsumes(content: string, entries: ConsumeEntry[], target: string, added?: string[]): string {
+function mergeConsumes(content: string, entries: ConsumeEntry[], target: string, added?: ConsumeEntry[]): string {
   if (entries.length === 0) return content;
   const render = (e: ConsumeEntry) =>
     `  - artifact: ${e.artifact}\n    required: ${e.required}` +
     (e.conditional_on ? `\n    conditional_on: ${e.conditional_on}` : "");
   const emptyRe = /^consumes:\s*\[\s*\]\s*$/m;
   if (emptyRe.test(content)) {
-    added?.push(...entries.map((e) => e.artifact));
+    added?.push(...entries.map((entry) => ({ ...entry })));
     return content.replace(emptyRe, "consumes:\n" + entries.map(render).join("\n"));
   }
   // Each entry is `- artifact:` plus every following indented continuation line
@@ -1499,7 +1499,7 @@ function mergeConsumes(content: string, entries: ConsumeEntry[], target: string,
   const existing = new Set([...m[1].matchAll(/- artifact:\s*([\w-]+)/g)].map((x) => x[1]));
   const toAdd = entries.filter((e) => !existing.has(e.artifact));
   if (toAdd.length === 0) return content;
-  added?.push(...toAdd.map((e) => e.artifact));
+  added?.push(...toAdd.map((entry) => ({ ...entry })));
   return content.replace(blockRe, m[1] + toAdd.map(render).join("\n") + "\n");
 }
 
@@ -1597,6 +1597,7 @@ function hashProse(s: string): string {
 }
 
 interface Fragment { plugin: string; anchor: string; order: number; prose: string; }
+interface FragmentRecord { anchor: string; order: number; hash: string; }
 
 // Splice ONE fragment into stage source, idempotently and order-deterministically.
 // Each spliced block is delimited by an open sentinel carrying (plugin, anchor,
@@ -1620,11 +1621,16 @@ function spliceFragment(content: string, f: Fragment, target: string): string {
   // Present already? Skip on hash match; replace the whole block on hash change.
   const mine = content.match(new RegExp(`<!-- plugin:${pE}:${aE}:${f.order}:([0-9a-f]+) -->`));
   if (mine) {
-    if (mine[1] === hash) return content;
     const start = mine.index!;
     const oldClose = closeOf(mine[1]); // the OLD block's own hash-qualified close
     const end = content.indexOf(oldClose, start);
     if (end === -1) { recordDrop(`contribution to ${target}: fragment block for "${f.anchor}" order ${f.order} missing close marker; left as-is`); return content; }
+    if (
+      mine[1] === hash &&
+      content.slice(start, end + oldClose.length) === block
+    ) {
+      return content;
+    }
     return content.slice(0, start) + block + content.slice(end + oldClose.length);
   }
 
@@ -1726,31 +1732,101 @@ try {
   // it into a stage an older engine can't parse would break every later compile.
   const requiredSectionsSafe = await installedSchemaAccepts("required_sections", ["Probe Section"]);
   const contribRoot = join(PLUGIN_ROOT, "contributions");
-  // Per-plugin sidecar of what compose ACTUALLY merged into core stage source
-  // (structural adds carry no in-file provenance, unlike the sentinel-marked
-  // prose fragments), keyed by target stage. select-plugins reads it to strip
-  // a disabled plugin's merged entries - without it, disable left the plugin's
-  // produces/sensors/consumes/scopes welded into enabled core stages. Accumulated
-  // across re-runs: entries this run added are unioned into any prior record
-  // (an idempotent re-compose adds nothing and must not erase the record).
-  type StageContribRecord = { produces?: string[]; sensors?: string[]; consumes?: string[]; scopes?: string[]; required_sections?: string[]; required_sections_created?: boolean };
+  // Per-plugin sidecar of what compose ACTUALLY merged into core stage source,
+  // keyed by target stage. Structural additions need it for disable-time strip;
+  // fragment records let doctor verify sentinel-marked prose after an engine
+  // reinstall. Accumulated across re-runs: structural entries are unioned, while
+  // a fragment upgrade replaces the prior hash for its (anchor, order) identity.
+  type StageContribRecord = { produces?: string[]; sensors?: string[]; consumes?: Array<string | ConsumeEntry>; scopes?: string[]; required_sections?: string[]; required_sections_created?: boolean; fragments?: FragmentRecord[] };
+  type StringContribField = "produces" | "sensors" | "scopes" | "required_sections";
   const contribManifestPath = join(HARNESS_DIR, "tools", "data", `plugin-contrib-${PLUGIN_KEY}.json`);
+  let contribManifestLoadError: string | null = null;
   const contribManifest: Record<string, StageContribRecord> = (() => {
+    if (!existsSync(contribManifestPath)) return {};
     try {
       const parsed = JSON.parse(readFileSync(contribManifestPath, "utf-8"));
-      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
-    } catch { return {}; }
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("expected a JSON object");
+      }
+      if (Object.keys(parsed).length === 0) throw new Error("has no stage records");
+      for (const [target, record] of Object.entries(parsed)) {
+        if (!record || typeof record !== "object" || Array.isArray(record)) {
+          throw new Error(`target ${target} must contain an object record`);
+        }
+      }
+      return parsed as Record<string, StageContribRecord>;
+    } catch (e) {
+      contribManifestLoadError = e instanceof Error ? e.message : String(e);
+      return {};
+    }
   })();
-  const recordContrib = (target: string, field: keyof StageContribRecord, values: string[]): void => {
+  let contribManifestDirty = false;
+  const contribRecord = (target: string): StageContribRecord => {
+    const current = contribManifest[target];
+    if (!current || typeof current !== "object" || Array.isArray(current)) {
+      contribManifest[target] = {};
+    }
+    return contribManifest[target];
+  };
+  const recordContrib = (target: string, field: StringContribField, values: string[]): void => {
     if (values.length === 0) return;
-    contribManifest[target] ??= {};
-    const rec = contribManifest[target];
-    if (field === "required_sections_created") return; // set directly, not via list
-    const prior = new Set((rec[field] as string[] | undefined) ?? []);
+    const rec = contribRecord(target);
+    const existing = rec[field];
+    const prior = new Set(
+      Array.isArray(existing)
+        ? existing.filter((value): value is string => typeof value === "string")
+        : [],
+    );
     for (const v of values) prior.add(v);
     (rec[field] as string[]) = [...prior].sort();
   };
-  let contribManifestDirty = false;
+  const recordConsumes = (target: string, values: ConsumeEntry[]): void => {
+    if (values.length === 0) return;
+    const rec = contribRecord(target);
+    const byArtifact = new Map<string, string | ConsumeEntry>();
+    for (const value of Array.isArray(rec.consumes) ? rec.consumes : []) {
+      if (typeof value === "string" && value.length > 0) {
+        byArtifact.set(value, value);
+      } else if (
+        value !== null &&
+        typeof value === "object" &&
+        typeof value.artifact === "string" &&
+        typeof value.required === "boolean" &&
+        (value.conditional_on === undefined || typeof value.conditional_on === "string")
+      ) {
+        byArtifact.set(value.artifact, { ...value });
+      }
+    }
+    for (const value of values) byArtifact.set(value.artifact, { ...value });
+    rec.consumes = [...byArtifact.values()].sort((a, b) =>
+      (typeof a === "string" ? a : a.artifact).localeCompare(
+        typeof b === "string" ? b : b.artifact,
+      )
+    );
+  };
+  const recordFragment = (target: string, fragment: FragmentRecord): void => {
+    const rec = contribRecord(target);
+    const prior = Array.isArray(rec.fragments)
+      ? rec.fragments.filter((entry): entry is FragmentRecord =>
+          entry !== null &&
+          typeof entry === "object" &&
+          typeof entry.anchor === "string" &&
+          Number.isSafeInteger(entry.order) &&
+          typeof entry.hash === "string")
+      : [];
+    const next = [
+      ...prior.filter((entry) =>
+        entry.anchor !== fragment.anchor || entry.order !== fragment.order
+      ),
+      fragment,
+    ].sort((a, b) =>
+      a.anchor.localeCompare(b.anchor) || a.order - b.order || a.hash.localeCompare(b.hash)
+    );
+    if (JSON.stringify(prior) !== JSON.stringify(next)) {
+      rec.fragments = next;
+      contribManifestDirty = true;
+    }
+  };
   // Fragment keys seen across ALL contribution files this run, so a same
   // (target, plugin, anchor, order) arriving from a SECOND file drops-with-log
   // rather than silently last-writer-winning via the hash-upgrade path (round-3).
@@ -1762,7 +1838,15 @@ try {
   // produces/sensors/prose into enabled stages (and undo select-plugins'
   // disable-time strip on the very next session start). The advisory drop at
   // the top of this run already names the select-plugins command to enable.
-  const contribPhases = pluginEnabledBySelection() && existsSync(contribRoot) ? readdirSync(contribRoot) : [];
+  if (contribManifestLoadError) {
+    recordDrop(
+      `contribution sidecar ${relative(PROJECT_DIR, contribManifestPath)} is unreadable or invalid (${contribManifestLoadError}); refusing to replace provenance from an already-composed stage - refresh the stock dist/<harness>/ engine, remove the invalid sidecar, then run plugin sync`,
+    );
+  }
+  const contribPhases =
+    !contribManifestLoadError && pluginEnabledBySelection() && existsSync(contribRoot)
+      ? readdirSync(contribRoot)
+      : [];
   // Installed scope roster for the adds.scopes guards, keyed by frontmatter
   // `name:` (the runtime's scope identity — core files carry the `aidlc-`
   // stem prefix, so filename lookup would miss them). Snapshotted once here:
@@ -1890,7 +1974,7 @@ try {
       // stage (mixed endings). Contribution content is already normalized above.
       let stageContent = readFileSync(stageFile, "utf-8").replace(/\r\n/g, "\n");
       const before = stageContent;
-      const addedProduces: string[] = [], addedSensors: string[] = [], addedConsumes: string[] = [], addedScopes: string[] = [], addedSections: string[] = [];
+      const addedProduces: string[] = [], addedSensors: string[] = [], addedConsumes: ConsumeEntry[] = [], addedScopes: string[] = [], addedSections: string[] = [];
       const sectionsMeta: { created?: boolean } = {};
       // adds.scopes — set-union the target stage into this plugin's scopes.
       // Two guard rails, both drop-logged: the scope's identity file must
@@ -1930,12 +2014,11 @@ try {
       }
       recordContrib(target, "produces", addedProduces);
       recordContrib(target, "sensors", addedSensors);
-      recordContrib(target, "consumes", addedConsumes);
+      recordConsumes(target, addedConsumes);
       recordContrib(target, "scopes", addedScopes);
       recordContrib(target, "required_sections", addedSections);
       if (sectionsMeta.created) {
-        contribManifest[target] ??= {};
-        contribManifest[target].required_sections_created = true;
+        contribRecord(target).required_sections_created = true;
       }
       if (addedProduces.length || addedSensors.length || addedConsumes.length || addedScopes.length || addedSections.length) {
         contribManifestDirty = true;
@@ -2007,6 +2090,13 @@ try {
         if (seenFragKeys.has(key)) { recordDrop(`contribution to ${target}: duplicate fragment ${f.plugin}:${f.anchor}:${f.order} (same plugin/anchor/order, possibly across files); dropped`); continue; }
         seenFragKeys.add(key);
         stageContent = spliceFragment(stageContent, f, target);
+        const fragment = { anchor: f.anchor, order: f.order, hash: hashProse(f.prose) };
+        const open = `<!-- plugin:${f.plugin}:${fragment.anchor}:${fragment.order}:${fragment.hash} -->`;
+        const close = `<!-- /plugin:${f.plugin}:${fragment.anchor}:${fragment.order}:${fragment.hash} -->`;
+        const openIdx = stageContent.indexOf(open);
+        if (openIdx !== -1 && stageContent.indexOf(close, openIdx + open.length) !== -1) {
+          recordFragment(target, fragment);
+        }
       }
 
       if (stageContent !== before) { // compare-before-write (review #11)
@@ -2016,15 +2106,16 @@ try {
     }
   }
 
-  // Persist the contribution sidecar so select-plugins can strip this
-  // plugin's merged structural adds on disable. Written only when this run
-  // added something (idempotent re-runs leave the prior record untouched).
+  // Persist structural and fragment provenance when this run changes it.
+  // A prose-only plugin therefore leaves a sidecar that doctor can verify after
+  // a fresh engine distribution overwrites the composed stage source.
   if (contribManifestDirty) {
     try {
       mkdirSync(join(HARNESS_DIR, "tools", "data"), { recursive: true });
       writeComposeFile(contribManifestPath, `${JSON.stringify(contribManifest, null, 2)}\n`);
     } catch (e) {
-      recordDrop(`could not write the contribution sidecar ${relative(PROJECT_DIR, contribManifestPath)}: ${e instanceof Error ? e.message : String(e)} - disabling this plugin will not strip its merged contributions`, "advisory");
+      recordDrop(`could not write the contribution sidecar ${relative(PROJECT_DIR, contribManifestPath)}: ${e instanceof Error ? e.message : String(e)} - doctor cannot verify the composed surface and disabling this plugin will not strip its merged contributions`);
+      rollbackComposeWrites();
     }
   }
 
