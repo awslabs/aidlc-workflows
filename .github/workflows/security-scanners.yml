@@ -45,11 +45,14 @@ jobs:
 
       - name: Scan repository history
         id: scan
+        env:
+          SCAN_REF: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set +e
           gitleaks git \
             --config=.gitleaks.toml \
             --baseline-path=.gitleaks-baseline.json \
+            --log-opts="$SCAN_REF" \
             --report-format=sarif \
             --report-path=gitleaks.sarif \
             .
