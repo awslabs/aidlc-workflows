@@ -1176,8 +1176,9 @@ try {
 // A confirmed second intent deliberately moves the shared cursor before this
 // old conversation ends. The PostToolUse hook writes an exact per-session
 // receipt for that transition. Allow only when the receipt is fresh, the
-// session still owns the original intent, and the created intent is still the
-// active cursor; an unrelated concurrent cursor change satisfies none of these.
+// session now owns the created intent, and that intent is still the active
+// cursor; the receipt itself retains the original UUID for continuation proof.
+// An unrelated concurrent cursor change satisfies none of these.
 if (sessionId) {
   const handoff = readSessionIntentHandoff(projectDir, sessionId);
   if (handoff) {
@@ -1187,7 +1188,7 @@ if (sessionId) {
       now - handoff.issuedAtMs <= SESSION_INTENT_HANDOFF_TTL_MS;
     const exactBoundary =
       fresh &&
-      readSessionIntentUuid(projectDir, sessionId) === handoff.fromIntentUuid &&
+      readSessionIntentUuid(projectDir, sessionId) === handoff.toIntentUuid &&
       activeIntentUuid(projectDir) === handoff.toIntentUuid;
     clearSessionIntentHandoff(projectDir, sessionId);
     if (exactBoundary) {

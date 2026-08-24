@@ -463,7 +463,10 @@ re-points each harness-native rule include (the Claude `@`-import stub described
 above, Kiro CLI resources or IDE steering, Codex's rules dir, opencode's
 `instructions` glob, and Copilot's `AGENTS.md` `@`-imports) at the switched space's
 `memory/`. At `default` the re-point is a byte-identical no-op, so a single-team
-committed tree never churns.
+committed tree never churns. SessionStart uses the resolved session space for
+that re-point, but the include remains one checkout-global mutable surface:
+workflow selection is session-bound across spaces, while simultaneous
+multi-space ambient method delivery can still race.
 
 **Committed vs gitignored.** `aidlc/` is checked in so a team shares its work.
 The split (`harness/claude/dot-gitignore:34-54`): the two cursors

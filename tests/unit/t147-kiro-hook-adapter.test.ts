@@ -231,7 +231,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       const original = readIntentRegistry(dir)[0];
       const created = createIntent(dir, "new-work", "default", "bugfix");
       const sessionId = "kiro-handoff-session";
-      writeSessionIntentUuid(dir, sessionId, original.uuid);
+      writeSessionIntentUuid(dir, sessionId, created.uuid);
       writeSessionIntentHandoff(dir, sessionId, original.uuid, created.uuid);
 
       const r = runAdapter(dir, "continue-workflow", {

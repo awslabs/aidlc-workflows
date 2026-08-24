@@ -154,11 +154,18 @@ const selection = stampedTarget
     }
   : resolveWorkflowSelection(projectDir, { sessionId });
 
+// Persist the resolved fallback before any early return. A cold session must
+// retain intent:null instead of later following a cursor moved by another
+// session that creates the first workflow.
+if (sessionId) {
+  writeSessionBinding(projectDir, sessionId, selection.space, selection.intent);
+}
+
 // Atomically materialize a clone's missing gitignored cursor, then align the
 // harness-native includes before the no-workflow early exit.
 ensureActiveSpaceCursor(projectDir);
 try {
-  repointHarnessIncludes(projectDir, activeSpace(projectDir));
+  repointHarnessIncludes(projectDir, selection.space);
 } catch {
   // non-fatal — includes self-heal on the next /aidlc / switch / --doctor
 }
@@ -273,10 +280,6 @@ if (sessionId) {
   } else if (!stampedUuid && selectedUuid) {
     writeSessionIntentUuid(projectDir, sessionId, selectedUuid);
   }
-}
-
-if (sessionId) {
-  writeSessionBinding(projectDir, sessionId, selection.space, selection.intent);
 }
 
 // Cursor can only surface this probe through beforeSubmitPrompt's blocking

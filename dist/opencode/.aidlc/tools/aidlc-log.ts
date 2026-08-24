@@ -644,8 +644,9 @@ function handleLink(args: string[]): void {
   }
 
   const pd = resolveActiveProjectDir(projectDir);
-  const space = activeSpace(pd);
-  const intent = activeIntent(pd, space);
+  const selection = resolveWorkflowSelection(pd);
+  const space = selection.space;
+  const intent = selection.intent;
   if (!intent) {
     error("Cannot resolve the active intent for pipeline link logging.");
   }

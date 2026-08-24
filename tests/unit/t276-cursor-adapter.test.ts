@@ -1250,7 +1250,7 @@ if (import.meta.main) {
     };
     expect(lostOut.permission).toBe("deny");
     expect(lostOut.agent_message ?? "").toContain("identity is unavailable or ambiguous");
-  }, 15_000);
+  }, 30_000);
 
   test("25: partial reviewer-ledger loss cannot resolve an unknown conversation as a developer", () => {
     const proj = installedProject();

@@ -193,6 +193,14 @@ treated like an intentional sanctioned session switch.
 The cursors remain write-through compatibility state. Older or unsupported
 environments with no binding therefore behave exactly as before.
 
+Session bindings isolate workflow selection across spaces, but the
+harness-native method include is still one mutable checkout-wide surface.
+SessionStart and the space switch verb re-point that surface to the selected
+space, so two simultaneous sessions in different spaces can overwrite which
+space's ambient rules the harness delivers next. This increment supports
+concurrent intents within one space; concurrent multi-space ambient method
+delivery remains future work.
+
 On Windows, PID ancestry resolution returns no session identity. Shared-process
 harnesses also cannot distinguish chats that use one process, including Kiro
 IDE multi-chat and multi-session opencode. Children of payload-bearing hooks
@@ -246,7 +254,9 @@ When you switch spaces, two things follow the cursor automatically:
    that team's method.
 
 At `default` this re-pointing is a no-op, which is why a single-team workspace
-never churns its committed files.
+never churns its committed files. The include is checkout-global rather than
+session-local, so simultaneous sessions in different spaces can race on ambient
+method delivery even though their workflow record selection stays bound.
 
 ### Knowing which space you're in
 

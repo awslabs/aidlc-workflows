@@ -51,9 +51,9 @@ import {
 // conversation yet. PostToolUse is the first boundary that carries both the
 // exact host session_id and the successful birth result. Bind from that pair,
 // never from the workspace-global `.current-session` marker: another
-// pre-workflow conversation may have started more recently. Existing stamps
-// are immutable here so a second, unrelated birth keeps the ending session
-// owned by its original intent.
+// pre-workflow conversation may have started more recently. A second birth
+// moves binding and attribution to the created intent; the transient handoff
+// receipt retains the prior UUID for the Stop-hook continuation boundary.
 function bindCreatedIntentToInvokingSession(
   projectDir: string,
   parsed: ClaudeCodeHookInput,
@@ -92,9 +92,8 @@ function bindCreatedIntentToInvokingSession(
   });
   if (!created?.uuid) return;
   writeSessionBinding(projectDir, sessionId, space, dirName);
-  if (existingUuid) {
+  if (existingUuid && existingUuid !== created.uuid) {
     writeSessionIntentHandoff(projectDir, sessionId, existingUuid, created.uuid);
-    return;
   }
   writeSessionIntentUuid(projectDir, sessionId, created.uuid);
 }

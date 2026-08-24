@@ -367,7 +367,7 @@ describe("t164 --new-intent birth directive hands off to a fresh session", () =>
     }
   });
 
-  test("the complete fresh-session handoff attributes SESSION_ENDED to the original intent", () => {
+  test("the complete fresh-session handoff moves SESSION_ENDED to the created intent", () => {
     // Real production order: the host starts a session before any workflow
     // exists, then the first /aidlc invocation births the initial intent.
     expect(
@@ -431,18 +431,18 @@ describe("t164 --new-intent birth directive hands off to a fresh session", () =>
 
     const firstAudit = readIntentAudit(proj, first!);
     const secondAuditBeforeStart = readIntentAudit(proj, second!);
-    expect(firstAudit).toContain("**Event**: SESSION_ENDED");
-    expect(firstAudit).toContain("**Reason**: clear");
-    expect(secondAuditBeforeStart).not.toContain("**Event**: SESSION_ENDED");
-    expect(existsSync(hookHeartbeat(proj, first!, "session-end.last"))).toBe(true);
-    expect(existsSync(hookHeartbeat(proj, second!, "session-end.last"))).toBe(false);
+    expect(firstAudit).not.toContain("**Event**: SESSION_ENDED");
+    expect(secondAuditBeforeStart).toContain("**Event**: SESSION_ENDED");
+    expect(secondAuditBeforeStart).toContain("**Reason**: clear");
+    expect(existsSync(hookHeartbeat(proj, first!, "session-end.last"))).toBe(false);
+    expect(existsSync(hookHeartbeat(proj, second!, "session-end.last"))).toBe(true);
 
     expect(
       fireHook(SESSION_START, { source: "clear", session_id: "handoff-session-2" }),
     ).toBe(0);
     const secondAudit = readIntentAudit(proj, second!);
     expect(secondAudit).toContain("**Event**: SESSION_STARTED");
-    expect(secondAudit).not.toContain("**Event**: SESSION_ENDED");
+    expect(secondAudit).toContain("**Event**: SESSION_ENDED");
   });
 
   test("concurrent pre-workflow sessions bind only the session that invoked birth", () => {
