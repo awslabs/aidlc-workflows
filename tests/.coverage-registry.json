@@ -20,14 +20,14 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 664,
+    "total": 665,
     "enumeratedByClass": {
       "function": 400,
       "audit": 87,
       "scope": 11,
       "stage": 33,
-      "hook": 18,
-      "subcommand": 108,
+    "hook": 18,
+    "subcommand": 109,
       "render-surface": 7
     },
     "coveredByClass": {
@@ -35,8 +35,8 @@
       "audit": 46,
       "scope": 11,
       "stage": 11,
-      "hook": 18,
-      "subcommand": 96,
+    "hook": 18,
+    "subcommand": 97,
       "render-surface": 7
     }
   },
@@ -6650,6 +6650,18 @@
         },
         {
           "file": "tests/unit/t293-knowledge-journey.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-knowledge summarize",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t301-knowledge-summarize.test.ts",
           "mechanism": "cli"
         }
       ],

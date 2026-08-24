@@ -1019,6 +1019,15 @@ function terminalCommandFromPluginCommand(
 // all enumerate the same surface instead of three hand-kept copies drifting.
 // `remove` is deliberately absent: deletion stays "delete your own original,
 // then sync", so the tool never holds a destructive verb over user-owned files.
+//
+// `summarize` (S3b) is a deliberate EIGHTH verb, not a flag riding on an
+// existing one. It is not the same case the design rejected for an extractor-
+// config verb (§7's option (b), which had a strictly better packager-owned
+// alternative): a summary is LLM-authored text with no other entry point into
+// the tool, so persisting it needs its own verb exactly as `associate`/
+// `dissociate` needed theirs. The tool stays deterministic -- it validates,
+// bounds, digests and persists the text a caller supplies; it never generates
+// or judges content itself (design §6's execution model).
 export const KNOWLEDGE_VERBS: readonly string[] = Object.freeze([
   "onboard",
   "sync",
@@ -1027,6 +1036,7 @@ export const KNOWLEDGE_VERBS: readonly string[] = Object.freeze([
   "associate",
   "dissociate",
   "rebind",
+  "summarize",
 ]);
 
 export type KnowledgeCommand =

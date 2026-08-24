@@ -387,7 +387,7 @@ export const ROUTES: readonly Route[] = [
     // this literal, because reading the route is exactly what missed it.
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: ["onboard", "sync", "list", "show", "associate", "dissociate", "rebind"],
+    verbs: ["onboard", "sync", "list", "show", "associate", "dissociate", "rebind", "summarize"],
     tool: TOOLS.knowledge,
     // ONE line in the human help, which is capped at 20 lines: it is a summary
     // for a person deciding what to type, not the surface. Every verb still
@@ -399,6 +399,7 @@ export const ROUTES: readonly Route[] = [
       "onboard [path]", "sync", "list", "show <id>",
       "associate <id> --intent [slug]", "dissociate <id> --intent [slug]",
       "rebind <id> --to <path>",
+      "summarize <id> --text-file <path> --source-revision <sha256>",
     ],
   },
   {

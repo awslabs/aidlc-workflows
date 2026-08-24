@@ -73,13 +73,17 @@ aidlc/spaces/<space>/knowledge/
     +-- <document-id>/
         +-- metadata.json
         +-- content.md
+        +-- summary.md    # present only once `knowledge summarize` has run
 ```
 
 `aidlc-knowledge.ts` stages catalog changes under
 `documentkb/.journal/<transaction-id>/`, then commits them while holding the
 workspace audit lock. The originals under `documents/` are never moved or
-deleted by the framework. Extracted content is revision-bound and treated as
-untrusted data.
+deleted by the framework. Extracted content AND summaries are revision-bound
+and treated as untrusted data: `summarize <id> --text-file <path>
+--source-revision <sha256>` persists LLM-authored summary text the tool never
+generates itself, and a summary whose `source_revision` no longer matches the
+row's digest is reported `invalidated` and withheld, exactly like extraction.
 
 Each per-document `metadata.json` duplicates the row identity and source facts
 needed to rebuild a lost `index.json`. That is the recovery boundary: surviving

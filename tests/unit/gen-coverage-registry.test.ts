@@ -817,14 +817,22 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     // t293 spawns `aidlc.ts knowledge <verb>` -- the COMPILED dispatcher, not the
     // knowledge tool -- because that indirection is the defect it exists to catch:
     // every other knowledge test invoked `aidlc-knowledge.ts` directly, so the
-    // public command returned `unknown verb` for all seven verbs while 460 tests
-    // stayed green. A journey through the documented workflow cannot be run
-    // in-process without bypassing the exact layer under test.
+    // public command returned `unknown verb` for every verb (seven at the time
+    // this defect was found; an eighth, `summarize`, was added later) while 460
+    // tests stayed green. A journey through the documented workflow cannot be
+    // run in-process without bypassing the exact layer under test.
     "unit/t293-knowledge-journey.test.ts",
     // t304 spawns the real directive-emitting CLI because memory bootstrap is
     // observable only at the process boundary where projectDir and the shipped
     // harness template are both present.
     "unit/t304-run-stage-memory-bootstrap.test.ts",
+    // t301 spawns `aidlc.ts knowledge summarize` through the compiled
+    // dispatcher (same §8.12 discipline as t293), and its two ACTION-only
+    // probes drive real concurrent subprocesses (a race between two
+    // `summarize` publications) and a pre-placed directory forcing a real
+    // filesystem write failure -- neither is observable from an in-process
+    // call.
+    "unit/t301-knowledge-summarize.test.ts",
     "integration/t102.test.ts",
     "integration/t104.test.ts",
     "integration/t105.test.ts",

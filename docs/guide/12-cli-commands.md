@@ -32,7 +32,7 @@ All AI-DLC commands start with the orchestrator invocation. This chapter is a co
 | `/aidlc intent [name]` | List intents in the active space, or switch to an existing intent |
 | `/aidlc space [name]` | List spaces, or switch to an existing space |
 | `/aidlc space-create <name>` | Create a new space from the framework baseline |
-| `/aidlc knowledge <verb>` | Index and read your own documents (`onboard`, `sync`, `list`, `show`, `associate`, `dissociate`, `rebind`) |
+| `/aidlc knowledge <verb>` | Index and read your own documents (`onboard`, `sync`, `list`, `show`, `associate`, `dissociate`, `rebind`, `summarize`) |
 | `/aidlc --status` | Display a read-only status summary |
 | `/aidlc --doctor` | Run a health check on your setup |
 | `/aidlc --doctor --export` | Run a fresh health check, then write a small, redacted diagnostic report for sharing |
@@ -257,6 +257,7 @@ them so agents can cite them instead of guessing.
 | `/aidlc knowledge associate <id> --intent [slug]` | Scope a document to one intent |
 | `/aidlc knowledge dissociate <id> --intent [slug]` | Remove that scoping |
 | `/aidlc knowledge rebind <id> --to <path>` | Repair a row whose original moved *and* changed |
+| `/aidlc knowledge summarize <id> --text-file <path> --source-revision <sha256> [--tags <csv>]` | Persist an LLM-authored summary (and optional tags) — the tool never generates the text itself |
 
 `--space <name>` targets a space other than the active one. `onboard` is idempotent:
 re-running it on an unchanged file reports `already` rather than writing a second

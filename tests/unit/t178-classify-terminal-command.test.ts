@@ -276,6 +276,7 @@ describe("classifyTerminalCommand() - knowledge (DocumentKB) verbs", () => {
       "associate",
       "dissociate",
       "rebind",
+      "summarize",
     ]);
     for (const verb of KNOWLEDGE_VERBS) {
       expect(classifyTerminalCommand(["knowledge", verb]), verb).toEqual({

@@ -97,8 +97,10 @@ import {
   type ExtractionRecord,
   derivativeIsCurrent,
   effectiveExtractionState,
+  effectiveSummaryState,
   isCanonicalUuid,
   isTombstoned,
+  summaryIsCurrent,
   validateDocumentIndex,
   validateDocumentMetadata,
 } from "./aidlc-documentkb-schema.ts";
@@ -442,6 +444,12 @@ export function sha256Hex(buf: Buffer | Uint8Array): string {
   return createHash("sha256").update(buf).digest("hex");
 }
 
+/** Same shape the schema's own SHA256_REGEX enforces on read (aidlc-
+ *  documentkb-schema.ts) -- kept local rather than exported from there, since
+ *  that module is pure/no-I/O and this is a CLI-input-validation use, not a
+ *  persisted-shape check. */
+const SHA256_HEX_REGEX = /^[0-9a-f]{64}$/;
+
 // --- Extraction --------------------------------------------------------------
 //
 // AI-DLC ships NO PDF parser and downloads none at runtime. It probes an
@@ -473,6 +481,18 @@ export const EXTRACT_OUTPUT_CHAR_CAP = 200_000;
  *  refusal of the BATCH, not a silent truncation. */
 export const EXTRACT_BATCH_DOC_CAP = 20;
 export const EXTRACT_BATCH_BYTE_CAP = 256 * 1024 * 1024;
+
+// --- Summaries (S3b) ---------------------------------------------------------
+//
+// The tool's job is deterministic: validate, bound, digest, persist. The LLM
+// authors the text; this module never generates or judges it. Follows the
+// extraction lifecycle rather than inventing a parallel mechanism -- same
+// journal, same audit shard, same revision-binding rule (design §3.1c/I19).
+
+/** A summary is a short derivative, one to a few paragraphs -- not a second
+ *  copy of the extracted text. Capped well below EXTRACT_OUTPUT_CHAR_CAP so a
+ *  runaway generation cannot turn `summary.md` into a duplicate `content.md`. */
+export const SUMMARY_MAX_CHARS = 4_000;
 
 /** The default extractor when a harness configures none. */
 const DEFAULT_PDF_ARGV: readonly string[] = [
@@ -2119,6 +2139,16 @@ export interface ListedDocument {
   bytes: number;
   indexed_at: string;
   intents?: string[];
+  /** OMITTED for an untagged document, matching the schema's own omit-means-
+   *  untagged contract (S3a) -- `list` mirrors the row rather than inventing a
+   *  second "no tags" spelling. */
+  tags?: string[];
+  /** The EFFECTIVE summary state (S3b), derived exactly as `state` above is:
+   *  `absent`, `generated`, or `invalidated` when a summary's source_revision
+   *  no longer matches the row's current digest. Present on every row --
+   *  `summary` is never omitted on the row itself, so this never needs an
+   *  omit-vs-empty distinction the way `tags`/`intents` do. */
+  summary_state: "absent" | "generated" | "invalidated";
 }
 
 /** Why this row is not available, or "indexed" when it is. Separate from the
@@ -2170,6 +2200,8 @@ export function listDocuments(projectDir: string, space: string): ListedDocument
     bytes: row.bytes,
     indexed_at: row.indexed_at,
     ...(row.related_intent_ids === undefined ? {} : { intents: [...row.related_intent_ids] }),
+    ...(row.tags === undefined ? {} : { tags: [...row.tags] }),
+    summary_state: effectiveSummaryState(row),
   }));
 }
 
@@ -2188,6 +2220,36 @@ export interface ShownDocument extends ListedDocument {
   content_notice?: string;
   content_trust?: string;
   content_handling?: string;
+  /** Present only when there is a CURRENT generated summary to show -- the
+   *  same revision-binding gate `content` uses (design I19/§8.3 row I30). */
+  summary_text?: string;
+  /** Present WHENEVER `summary_text` is, in the SAME payload -- the summary is
+   *  LLM output derived from the same untrusted customer content `content`
+   *  is, so it carries the identical inline notice discipline, never a
+   *  sidecar. */
+  summary_notice?: string;
+}
+
+/** Shared by content and summary: read a derivative through the full
+ *  boundary and verify its digest, so a failed multi-file publication cannot
+ *  expose stale bytes under a fresh source_revision. `field`/`expected` let
+ *  one implementation serve both `content`/`content_sha256` and
+ *  `summary.path`/`summary_sha256` without a second copy that can drift. */
+function verifiedDerivativeBytes(
+  projectDir: string,
+  space: string,
+  relPath: string,
+  expectedSha256: string,
+): Buffer | null {
+  try {
+    const kbReal = realpathSync(documentkbDir(projectDir, space));
+    const rel = relPath.replace(/^documentkb\//, "");
+    const real = resolveContainedPath(kbReal, rel);
+    const bytes = readAtomicReplacedFileNoFollowOrThrow(real, `documentkb/${rel}`);
+    return sha256Hex(bytes) === expectedSha256 ? bytes : null;
+  } catch {
+    return null;
+  }
 }
 
 function verifiedContentBytes(
@@ -2197,15 +2259,17 @@ function verifiedContentBytes(
 ): Buffer | null {
   if (row.content === undefined || row.content_sha256 === undefined ||
       !derivativeIsCurrent(row)) return null;
-  try {
-    const kbReal = realpathSync(documentkbDir(projectDir, space));
-    const rel = row.content.replace(/^documentkb\//, "");
-    const real = resolveContainedPath(kbReal, rel);
-    const bytes = readAtomicReplacedFileNoFollowOrThrow(real, `documentkb/${rel}`);
-    return sha256Hex(bytes) === row.content_sha256 ? bytes : null;
-  } catch {
-    return null;
-  }
+  return verifiedDerivativeBytes(projectDir, space, row.content, row.content_sha256);
+}
+
+function verifiedSummaryBytes(
+  projectDir: string,
+  space: string,
+  row: DocumentRow,
+): Buffer | null {
+  if (row.summary.state !== "generated" || row.summary_sha256 === undefined ||
+      !summaryIsCurrent(row)) return null;
+  return verifiedDerivativeBytes(projectDir, space, row.summary.path, row.summary_sha256);
 }
 
 /**
@@ -2233,6 +2297,8 @@ export function showDocument(projectDir: string, space: string, id: string): Sho
     bytes: row.bytes,
     indexed_at: row.indexed_at,
     ...(row.related_intent_ids === undefined ? {} : { intents: [...row.related_intent_ids] }),
+    ...(row.tags === undefined ? {} : { tags: [...row.tags] }),
+    summary_state: effectiveSummaryState(row),
     sha256: row.sha256,
     source: row.source,
     extraction: row.extraction,
@@ -2249,20 +2315,40 @@ export function showDocument(projectDir: string, space: string, id: string): Sho
   // Only serve text that is CURRENT. A derivative whose source_revision no longer
   // matches the row's digest describes a revision that no longer exists, so it is
   // withheld rather than shown with a caveat.
+  let out: ShownDocument = base;
   if (row.content !== undefined && derivativeIsCurrent(row)) {
     const bytes = verifiedContentBytes(projectDir, space, row);
-    if (bytes === null) return { ...base, state: "invalidated" };
-    return {
-      ...base,
-      content: bytes.toString("utf-8"),
-      // Inline, in the SAME payload. Not a separate call, not a sidecar file, not
-      // a line in a skill someone may not have read.
-      content_notice: UNTRUSTED_CONTENT_NOTICE,
-      content_trust: "untrusted",
-      content_handling: "data-not-instructions",
-    };
+    if (bytes === null) {
+      out = { ...out, state: "invalidated" };
+    } else {
+      out = {
+        ...out,
+        content: bytes.toString("utf-8"),
+        // Inline, in the SAME payload. Not a separate call, not a sidecar file, not
+        // a line in a skill someone may not have read.
+        content_notice: UNTRUSTED_CONTENT_NOTICE,
+        content_trust: "untrusted",
+        content_handling: "data-not-instructions",
+      };
+    }
   }
-  return base;
+  // Same revision-binding gate as content, and the SAME inline-notice
+  // discipline (design §8.3 row I30): a summary is LLM output derived from
+  // untrusted customer content, so a caller that receives `summary_text`
+  // cannot receive it without `summary_notice` in the SAME payload.
+  if (row.summary.state === "generated" && summaryIsCurrent(row)) {
+    const bytes = verifiedSummaryBytes(projectDir, space, row);
+    if (bytes === null) {
+      out = { ...out, summary_state: "invalidated" };
+    } else {
+      out = {
+        ...out,
+        summary_text: bytes.toString("utf-8"),
+        summary_notice: UNTRUSTED_CONTENT_NOTICE,
+      };
+    }
+  }
+  return out;
 }
 
 /** Human-readable catalog. `--json` carries the same rows, so a caller filters
@@ -2277,7 +2363,8 @@ export function renderList(rows: ListedDocument[]): string {
     // appears only on problems trains the eye to read its absence as "fine",
     // which is exactly how a tombstone comes to look healthy.
     const flag = r.status === "indexed" ? r.state : r.status;
-    return `${r.id}  ${flag.padEnd(22)}  ${r.path}`;
+    const tagSuffix = r.tags !== undefined && r.tags.length > 0 ? `  [${r.tags.join(", ")}]` : "";
+    return `${r.id}  ${flag.padEnd(22)}  ${r.path}${tagSuffix}`;
   });
   return `${rows.length} document(s)\n${lines.join("\n")}\n`;
 }
@@ -2296,6 +2383,8 @@ export function renderShow(d: ShownDocument): string {
     `citation   ${d.citation}`,
   ];
   if (d.intents !== undefined) out.push(`intents    ${d.intents.join(", ")}`);
+  if (d.tags !== undefined) out.push(`tags       ${d.tags.join(", ")}`);
+  out.push(`summary    ${d.summary_state}`);
   if (d.extraction.reason !== undefined) out.push(`reason     ${d.extraction.reason}`);
   // A truncated extraction must announce itself: an agent answering from the
   // first 50 pages of a 300-page policy with no signal it read a fraction is
@@ -2307,6 +2396,9 @@ export function renderShow(d: ShownDocument): string {
     out.push(
       `truncated  yes${extent} — the content below is a PARTIAL extraction, not the whole document`,
     );
+  }
+  if (d.summary_text !== undefined) {
+    out.push("", d.summary_notice ?? UNTRUSTED_CONTENT_NOTICE, "", "--- summary ---", d.summary_text);
   }
   if (d.content !== undefined) {
     out.push("", d.content_notice ?? UNTRUSTED_CONTENT_NOTICE, "", "--- content ---", d.content);
@@ -3513,6 +3605,171 @@ export function setIntentAssociation(
   }, undefined, space);
 }
 
+// --- summarize (S3b) ---------------------------------------------------------
+
+export interface SummarizeOutcome {
+  id: string;
+  sha256: string;
+  source_revision: string;
+  chars: number;
+  truncated: boolean;
+}
+
+/**
+ * Persist an LLM-authored summary for one document.
+ *
+ * The tool's job is deterministic -- validate, bound, digest, persist -- never
+ * to generate or judge text (design §6). `text` is supplied by the caller
+ * (the CLI reads it from `--text-file`); this function never invokes an LLM.
+ *
+ * `sourceRevision` is the digest of the document the CALLER actually read
+ * when it produced `text` -- normally the `sha256` a prior `show <id>` (or
+ * `list`) reported. This is NOT re-derived from the row at commit time: doing
+ * that would bind the summary to whatever revision happens to be live when
+ * the lock is acquired, which can differ from the revision the LLM actually
+ * summarized if the document changed in between -- exactly the silent
+ * correctness failure the extraction transaction's own step-4a re-validation
+ * exists to prevent (design §6.3). So this function re-validates the SUPPLIED
+ * revision against the row's current digest inside the lock, and refuses
+ * (never guesses or silently rebinds) on a mismatch.
+ *
+ * Follows the SAME journaled-transaction shape extraction publication uses,
+ * not a parallel mechanism: stage into `.journal/`, re-validate inside the
+ * lock, publish index before content, audit last. A crash mid-publish must
+ * leave the row's summary absent-or-complete, never half-written.
+ */
+export function summarizeDocument(
+  projectDir: string,
+  space: string,
+  id: string,
+  text: string,
+  sourceRevision: string,
+  tags?: string[],
+): SummarizeOutcome {
+  assertKnowledgeRootTrusted(projectDir, space);
+  if (!SHA256_HEX_REGEX.test(sourceRevision)) {
+    throw new Error(
+      "--source-revision must be a lowercase sha256 hex digest -- the digest `show <id>` " +
+        "reported for the revision this summary was written from.",
+    );
+  }
+  if (hasNulByte(Buffer.from(text, "utf-8"))) {
+    throw new Error("summary text must not contain a NUL byte.");
+  }
+  if (text.trim().length === 0) {
+    throw new Error("summary text must not be empty or whitespace-only.");
+  }
+  const bounded = text.length > SUMMARY_MAX_CHARS ? text.slice(0, SUMMARY_MAX_CHARS) : text;
+  const truncated = text.length > SUMMARY_MAX_CHARS;
+  const buf = Buffer.from(bounded, "utf-8");
+  const summarySha256 = sha256Hex(buf);
+
+  // Stage OUTSIDE the lock: writing the buffer to a journal dir touches disk
+  // but spawns nothing, unlike extraction -- there is no external process here
+  // to justify deferring past the lock's acquire budget, but staging first
+  // still means a mid-write crash leaves a discardable txn dir rather than a
+  // half-written documentkb/<id>/summary.md.
+  const txnId = uuidv7();
+  const txnDir = journalTxnDir(projectDir, space, txnId);
+  try {
+    ensureDirSync(txnDir);
+    writeBufferAtomic(join(txnDir, "summary.md"), buf);
+
+    return withAuditLock(projectDir, () => {
+      // Read fresh, INSIDE the lock -- the same rule every other commit in
+      // this file follows, for the same reason: a concurrent writer (sync,
+      // rebind, another summarize) may have advanced this row since this
+      // call's own pre-lock work.
+      const index = readIndex(projectDir, space);
+      const row = index.documents.find((r) => r.id === id);
+      if (row === undefined) {
+        throw new Error(
+          `No document with id ${id} in this space's DocumentKB. Run ` +
+            `\`/aidlc knowledge list\` to see the catalog.`,
+        );
+      }
+      if (isTombstoned(row)) {
+        throw new Error(
+          `Document ${id} was removed; a tombstoned document cannot receive a new summary.`,
+        );
+      }
+      // THE re-validation step, mirroring onboard/sync's digest recheck: the
+      // SUPPLIED revision must still match the row's CURRENT digest. A
+      // mismatch means the document changed between when the caller read it
+      // and this commit -- publishing anyway would bind a summary to a
+      // revision the row no longer has, which the very next read would then
+      // report as `invalidated`. Refuse and name the remedy rather than
+      // publish a summary already dead on arrival.
+      if (sourceRevision !== row.sha256) {
+        throw new Error(
+          `${id} changed since source_revision ${sourceRevision} was read (now ${row.sha256}). ` +
+            `Nothing was written. Run \`/aidlc knowledge show ${id}\` again and summarize the ` +
+            `current revision.`,
+        );
+      }
+
+      row.summary = {
+        state: "generated",
+        path: `documentkb/${row.id}/summary.md`,
+        source_revision: sourceRevision,
+      };
+      row.summary_sha256 = summarySha256;
+      // Tags reach the row through NO second, looser path: `tags` is assigned
+      // straight onto the candidate row, and the very next line
+      // (assertPublishable) runs it through the SAME validateDocumentIndex
+      // call every other writer in this file uses -- the identical S3a
+      // validator that refuses an empty array, an over-cap tag, a duplicate,
+      // a control character, untrimmed whitespace. There is no tags-specific
+      // check here to drift from that contract.
+      if (tags !== undefined) row.tags = tags;
+
+      // VALIDATE THE WHOLE CANDIDATE ROW before anything commits -- the same
+      // ordering invariant onboard/sync publish through (assertPublishable):
+      // a summary (or a tags list) that would fail the schema on its very
+      // next read must publish NOTHING, so this call fails closed rather
+      // than leaving an index a future read refuses.
+      assertPublishable(index);
+
+      // INDEX BEFORE CONTENT, for the identical reason `publishRowContent`'s
+      // own comment gives for content.md: `show` gates the text it serves on
+      // `summaryIsCurrent`, which compares `source_revision` against
+      // `row.sha256` as recorded in index.json. Publishing the index first
+      // means a later summary.md write failure leaves the row's
+      // source_revision moved but the file stale-or-absent, so the digest
+      // check fails closed rather than serving unverified bytes.
+      writeIndex(projectDir, space, index);
+      writeMetadataTo(documentDir(projectDir, space, row.id), row);
+      renameIntoPlace(
+        join(txnDir, "summary.md"),
+        join(documentDir(projectDir, space, row.id), "summary.md"),
+      );
+
+      appendAuditEntryAtPathUnlocked(
+        "DOCUMENT_UPDATED",
+        {
+          Space: space,
+          Document: row.id,
+          Change: "summarized",
+          Source: row.source.path,
+          Digest: sourceRevision,
+        },
+        projectDir,
+        spaceAuditShardPath(projectDir, space),
+      );
+
+      return {
+        id: row.id,
+        sha256: summarySha256,
+        source_revision: sourceRevision,
+        chars: bounded.length,
+        truncated,
+      };
+    }, undefined, space);
+  } finally {
+    try { removeTreeSync(txnDir); } catch { /* best effort; sync's collector sweeps stragglers */ }
+  }
+}
+
 // --- rebuild + rebind --------------------------------------------------------
 
 /**
@@ -3787,8 +4044,8 @@ function parseFlags(
       json = true;
     } else if (a === "--allow-inactive") {
       allowInactive = true;
-    } else if (a === "--to") {
-      i++; // consumed by the rebind handler, which needs the raw argv
+    } else if (a === "--to" || a === "--text-file" || a === "--source-revision" || a === "--tags") {
+      i++; // consumed by the rebind/summarize handlers, which need the raw argv
     } else if (a.startsWith("--")) {
       throw new Error(`Unknown flag: ${a}`);
     } else {
@@ -3887,6 +4144,52 @@ export function main(argv: string[]): void {
         else emitHuman(`rebound ${out.id}: ${out.from} -> ${out.to}\n`);
         break;
       }
+      case "summarize": {
+        const { space: spaceFlag, json, positional } = parseFlags(args.slice(1));
+        if (positional[0] === undefined) error("summarize requires a document id.");
+        const textFileIdx = args.indexOf("--text-file");
+        if (textFileIdx < 0 || args[textFileIdx + 1] === undefined) {
+          error("summarize requires --text-file <path> (the LLM-authored summary text).");
+        }
+        const revisionIdx = args.indexOf("--source-revision");
+        if (revisionIdx < 0 || args[revisionIdx + 1] === undefined) {
+          error(
+            "summarize requires --source-revision <sha256> -- the digest `show <id>` reported " +
+              "for the revision this summary was written from.",
+          );
+        }
+        const pd = resolveProjectDir(projectDir);
+        const space = resolveSpaceFlag(spaceFlag, pd);
+        assertKnowledgeRootTrusted(pd, space);
+        // Read through the SAME no-follow boundary every other untrusted path
+        // in this tool uses -- a summary text file is caller-supplied, exactly
+        // like a rebind `--to` target, and must not be able to redirect this
+        // read via a symlink, FIFO, or other non-regular file.
+        const textPath = args[textFileIdx + 1];
+        const textBuf = readRegularFileNoFollowOrThrow(textPath, "--text-file");
+        if (!decodesAsUtf8(textBuf)) {
+          error(`--text-file ${textPath} is not valid UTF-8.`);
+        }
+        const tagsIdx = args.indexOf("--tags");
+        // Comma-separated, matching `--options <csv>`'s shipped precedent
+        // (aidlc-log.ts). Passed straight through to summarizeDocument, which
+        // routes it through the SAME validateDocumentIndex call every other
+        // write in this file uses -- no separate tag-shape check here.
+        const tags = tagsIdx >= 0 && args[tagsIdx + 1] !== undefined
+          ? args[tagsIdx + 1].split(",")
+          : undefined;
+        const out = summarizeDocument(
+          pd, space, positional[0], textBuf.toString("utf-8"), args[revisionIdx + 1], tags,
+        );
+        if (json) emitJson(out as unknown as Record<string, unknown>);
+        else {
+          emitHuman(
+            `summarized ${out.id}: ${out.chars} chars` +
+              `${out.truncated ? ` (truncated to the ${SUMMARY_MAX_CHARS}-char cap)` : ""}\n`,
+          );
+        }
+        break;
+      }
       case "associate":
       case "dissociate": {
         const { space: spaceFlag, intent, json, allowInactive, positional } = parseFlags(args.slice(1));
@@ -3915,7 +4218,7 @@ export function main(argv: string[]): void {
       case "help":
       case undefined:
         process.stdout.write(
-          "Usage: aidlc-knowledge <onboard|sync|list|show|associate|dissociate|rebind> " +
+          "Usage: aidlc-knowledge <onboard|sync|list|show|associate|dissociate|rebind|summarize> " +
             "[args] [--space <name>] [--json]\n" +
             "\n" +
             "  onboard [path]  Index one document, or every new file under\n" +
@@ -3927,13 +4230,16 @@ export function main(argv: string[]): void {
             "  associate <id> --intent [slug]    Scope a document to an intent.\n" +
             "  dissociate <id> --intent [slug]   Remove that scoping.\n" +
             "  sync            Reconcile with documents/; rebuild a lost index.\n" +
-            "  rebind <id> --to <path>           Repair identity after a move+edit.\n",
+            "  rebind <id> --to <path>           Repair identity after a move+edit.\n" +
+            "  summarize <id> --text-file <path> --source-revision <sha256> [--tags <csv>]\n" +
+            "                  Persist an LLM-authored summary (and optional tags).\n" +
+            "                  The tool never generates the text itself.\n",
         );
         break;
       default:
         error(
           `Unknown subcommand: ${subcommand}. ` +
-            `Valid: onboard, sync, list, show, associate, dissociate, rebind, help`,
+            `Valid: onboard, sync, list, show, associate, dissociate, rebind, summarize, help`,
         );
     }
   } catch (e) {

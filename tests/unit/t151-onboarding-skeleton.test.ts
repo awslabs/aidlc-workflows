@@ -122,4 +122,25 @@ describe("t151 onboarding skeleton — a new harness gets a complete doc for fre
       }
     }
   });
+
+  // DocumentKB finding (P2, S3 review): the "Document knowledge (DocumentKB)"
+  // paragraph enumerates the aidlc-knowledge verb surface in prose, and
+  // `summarize` was added to the tool (S3b) without ever landing here — a
+  // silent gap because no test pinned verb completeness. Pin the full set
+  // against the SOURCE skeleton (not a per-harness render) so the next verb
+  // added to the tool without a skeleton edit fails HERE, not just at the
+  // t285 tool<->skill parity boundary (a different file, `aidlc-knowledge`'s
+  // SKILL.md, not this shared onboarding doc).
+  test("4: the DocumentKB paragraph names every aidlc-knowledge verb", () => {
+    const docKbPara = SKELETON.split("\n").find((l) => l.includes("Document knowledge (DocumentKB)")) ?? "";
+    expect(docKbPara, "DocumentKB paragraph not found in the skeleton").not.toBe("");
+    for (const verb of ["onboard", "sync", "list", "show", "associate", "dissociate", "rebind", "summarize"]) {
+      expect(docKbPara, `verb "${verb}" is absent from the DocumentKB onboarding paragraph`).toContain(verb);
+    }
+    // `remove` is deliberately absent as a VERB (see the skill's own pin) —
+    // the paragraph legitimately says "no `remove`" in prose, so assert
+    // there is no `remove <id>`-shaped invocation, not that the word never
+    // appears at all.
+    expect(docKbPara).not.toMatch(/`remove\s+<id>/);
+  });
 });
