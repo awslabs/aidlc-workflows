@@ -21,8 +21,8 @@
 //         classification,
 //       * <record>/ideation/ exists with a questions file carrying filled
 //         [Answer]: lines and at least one structured (heading-bearing) artifact,
-//       * MORE than 6 stages are marked complete `- [x]` (POC > bugfix; the .sh's
-//         test 10 — 3 init + Ideation stages),
+//       * MORE than 6 stages are marked complete `- [x]` (the POC milestone from
+//         the .sh's test 10 — 3 init + Ideation stages),
 //       * audit.md has substantial content,
 //   - RENDER (the tui-only value-add): the captured grid showed a gate menu
 //     (`❯` caret + the `Enter to select` / `Submit answers` footer) at least once —

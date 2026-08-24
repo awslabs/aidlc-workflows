@@ -49,14 +49,14 @@
 //   Section D (phase-presence semantics, 3 asserts):
 //     .sh 15 (bugfix 0 ideation EXEC)    -> "D1: bugfix executes zero ideation-phase stages"
 //     .sh 16 (classic 0 ideation EXEC)  -> "D2: classic executes zero ideation-phase stages"
-//     .sh 17 (bugfix 0 operation EXEC)   -> "D3: bugfix executes zero operation-phase stages"
+//     .sh 17 (bugfix 2 operation EXEC)   -> "D3: bugfix executes exactly two operation-phase stages"
 //
 // STRONGER than the .sh (kept, not weakened):
 //   - Section A/B/C are additionally proven by a single byte-equality of the
 //     committed SKILL.md region against canonicalScopeTableRegion(
 //     renderScopeTable()) — the committed table is provably the transpose of
 //     the grid, not merely "contains the markers / count agrees".
-//   - Section C asserts exact integers (7, 32, 13, 22, 8, 8, 10, 25) derived
+//   - Section C asserts exact integers (including bugfix's 9) derived
 //     from the grid AND read from the table cell, on the SAME scope row —
 //     co-located, not "the number appears somewhere".
 //   - Section D guards against a vacuous pass: both the ideation slug set and
@@ -252,7 +252,7 @@ describe("t30 Section D — scope phase-presence semantics (read JSON directly)"
     expect(execCount).toBe(3);
   });
 
-  test("D3: bugfix executes zero operation-phase stages [.sh 17]", () => {
+  test("D3: bugfix executes exactly two operation-phase stages [.sh 17]", () => {
     const grid = readGrid();
     const graph = readGraph();
     const operationSlugs = graph
@@ -262,6 +262,6 @@ describe("t30 Section D — scope phase-presence semantics (read JSON directly)"
     const execCount = operationSlugs.filter(
       (s) => grid.bugfix.stages[s] === "EXECUTE",
     ).length;
-    expect(execCount).toBe(0);
+    expect(execCount).toBe(2);
   });
 });

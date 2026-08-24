@@ -146,10 +146,11 @@ The same emit-time resolution splits the consumed inputs by presence: the
 directive's `consumes` lists only resolved paths that exist on disk, and any
 REQUIRED declared input whose file is absent moves to `consumes_absent`,
 annotated `expected: true` when the producing stage is off the active scope's
-path (the scope deliberately skipped it — see `consumes[].required` above) or
-`expected: false` when a producer is on the path but the file is still
-missing. A `required: false` consume that is absent is simply dropped — an
-optional input that does not exist is not an input, never a gap. The
+path or every on-path producer is recorded `[S]` after a conditional runtime
+skip (the producer did not run — see `consumes[].required` above).
+`expected: false` means an on-path producer was not skipped but the file is
+still missing. A `required: false` consume that is absent is simply dropped —
+an optional input that does not exist is not an input, never a gap. The
 conductor is never pointed at a path that cannot be read; absence-by-design
 arrives as data, not as a failed read.
 

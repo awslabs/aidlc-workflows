@@ -12,8 +12,8 @@
 - **Practices Affirmed Timestamp**:
 
 ## Scope Configuration
-- **Stages to Execute**: 0.1, 0.2, 0.3, 2.1, 2.3, 3.5, 3.6
-- **Stages to Skip**: 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 2.2, 2.4, 2.5, 2.6, 2.7, 2.8, 3.1, 3.2, 3.3, 3.4, 3.7, 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7
+- **Stages to Execute**: 0.1, 0.2, 0.3, 2.1, 2.3, 3.5, 3.6, 4.1, 4.3
+- **Stages to Skip**: 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 2.2, 2.4, 2.5, 2.6, 2.7, 2.8, 3.1, 3.2, 3.3, 3.4, 3.7, 4.2, 4.4, 4.5, 4.6, 4.7
 - **Depth**: Minimal
 - **Test Strategy**: Minimal
 
@@ -24,7 +24,7 @@
 - **Build System**: npm
 
 ## Execution Plan Summary
-- **Total Stages**: 7
+- **Total Stages**: 9
 - **Completed**: 4
 - **In Progress**: requirements-analysis
 
@@ -78,9 +78,9 @@ Per unit: [unit-name]
 - [S] ci-pipeline — SKIP (bugfix scope)
 
 ### OPERATION PHASE
-- [S] deployment-pipeline — SKIP (bugfix scope)
+- [ ] deployment-pipeline — EXECUTE
 - [S] environment-provisioning — SKIP (bugfix scope)
-- [S] deployment-execution — SKIP (bugfix scope)
+- [ ] deployment-execution — EXECUTE
 - [S] observability-setup — SKIP (bugfix scope)
 - [S] incident-response — SKIP (bugfix scope)
 - [S] performance-validation — SKIP (bugfix scope)

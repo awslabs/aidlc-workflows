@@ -63,7 +63,7 @@ inputs that steer it.
 Everything else a harness engineer configures hangs off these two:
 
 - **Scopes** decide *which* stages run for a given kind of work (a bugfix runs
-  7 of 33 stages; an enterprise feature runs all of them).
+  9 of 33 stages; an enterprise feature runs all of them).
 - **Rules** are standing decisions that travel into every workflow — your
   team's "always do it this way."
 - **Sensors** are deterministic checks bound to stages — an advisory second

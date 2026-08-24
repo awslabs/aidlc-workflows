@@ -142,6 +142,7 @@ import {
   parseWorkspaceCommand,
   READ_ONLY_FLAGS,
   readAllAuditShards,
+  readAuditShardEvents,
   recordHookDrop,
   markEngineTouch,
   relativeCodekbDir,
@@ -1755,11 +1756,12 @@ function resolveConsumes(
 // (`required: false`) input that does not exist simply is not an input — it
 // is dropped from the directive entirely, never flagged as a gap. Each
 // required absent entry is annotated: `expected: true` when no producer of
-// the artifact is on the active scope's path (the scope deliberately skipped
-// the producer — the lean scopes' designed shortcut, so absence is by
-// design), `expected: false` when a producer IS on the path but the file is
-// still missing (a runtime-skipped conditional producer, or a real gap the
-// recovery protocol owns).
+// the artifact is on the active scope's path, or every on-path producer has
+// audit provenance for a conditional runtime skip. In both cases the producer
+// did not run, so the stage's documented fallback owns the absence.
+// `expected: false` means an on-path producer was not conditionally skipped
+// but its output is still missing, which is a real gap the recovery protocol
+// owns. A bare [S] is insufficient because forward jumps also mark stages [S].
 //
 // Existence resolves like unitCovered: the resolved paths are
 // workspace-RELATIVE with forward slashes, re-rooted absolutely under
@@ -1769,13 +1771,70 @@ function resolveConsumes(
 //     check against; everything stays in `consumes`, exactly as before.
 //   - a path still carrying the {unit-name} placeholder → existence is
 //     unknowable pre-Bolt; it stays in `consumes`.
+function conditionalRuntimeSkipStages(projectDir: string): Set<string> {
+  const mainRows = readAuditShardEvents(projectDir).filter(
+    (row) =>
+      !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:"),
+  );
+  const workflowFloor = mainRows
+    .filter((row) => row.event === "WORKFLOW_STARTED")
+    .reduce(
+      (latest, row) => row.timestamp > latest ? row.timestamp : latest,
+      "",
+    );
+  const latestByStage = new Map<
+    string,
+    Map<string, (typeof mainRows)[number]>
+  >();
+
+  for (const row of mainRows) {
+    if (workflowFloor && row.timestamp < workflowFloor) continue;
+    if (row.event !== "STAGE_STARTED" && row.event !== "STAGE_SKIPPED") {
+      continue;
+    }
+    const stage = auditBlockField(row.block, "Stage");
+    if (!stage) continue;
+    const current = latestByStage.get(stage);
+    const currentTimestamp = current?.values().next().value?.timestamp ?? "";
+    if (!current || row.timestamp > currentTimestamp) {
+      latestByStage.set(stage, new Map([[row.shard, row]]));
+      continue;
+    }
+    if (row.timestamp < currentTimestamp) continue;
+    const sameShard = current.get(row.shard);
+    if (!sameShard || row.pos > sameShard.pos) current.set(row.shard, row);
+  }
+
+  const conditional = new Set<string>();
+  for (const [stage, latestRows] of latestByStage) {
+    const rows = [...latestRows.values()];
+    if (
+      rows.length > 0 &&
+      rows.every((row) => {
+        if (row.event !== "STAGE_SKIPPED") return false;
+        const kind = auditBlockField(row.block, "Skip Kind");
+        if (kind !== null) return kind === "conditional-runtime";
+        const reason = auditBlockField(row.block, "Reason");
+        return reason !== null && !reason.startsWith("Skipped by jump to ");
+      })
+    ) {
+      conditional.add(stage);
+    }
+  }
+  return conditional;
+}
+
 function splitConsumesByPresence(
   consumes: ResolvedConsume[],
   scope: string,
   codekbCtx?: CodekbCtx,
+  stateContent?: string | null,
 ): { present: string[]; absent: Array<{ path: string; expected: boolean }> } {
   if (!codekbCtx) return { present: consumes.map((c) => c.path), absent: [] };
   const onPath = new Set(subgraphForScope(scope).map((s) => s.slug));
+  const conditionallySkipped = conditionalRuntimeSkipStages(
+    codekbCtx.projectDir,
+  );
   const present: string[] = [];
   const absent: Array<{ path: string; expected: boolean }> = [];
   for (const c of consumes) {
@@ -1789,9 +1848,19 @@ function splitConsumesByPresence(
       continue;
     }
     if (!c.required) continue; // optional + missing → not an input, not a gap
-    const producers = producersOf(c.artifact);
-    const producerOnPath = producers.some((p) => onPath.has(p.slug));
-    absent.push({ path: c.path, expected: !producerOnPath });
+    const onPathProducers = producersOf(c.artifact).filter((p) =>
+      onPath.has(p.slug)
+    );
+    const allOnPathProducersSkipped = onPathProducers.length > 0 &&
+      stateContent != null &&
+      onPathProducers.every((p) =>
+        checkboxForSlug(stateContent, p.slug)?.state === "skipped" &&
+        conditionallySkipped.has(p.slug)
+      );
+    absent.push({
+      path: c.path,
+      expected: onPathProducers.length === 0 || allOnPathProducersSkipped,
+    });
   }
   return { present, absent };
 }
@@ -2139,7 +2208,12 @@ function buildRunStageDirective(
     codekbCtx,
     unitKind,
   );
-  const { present, absent } = splitConsumesByPresence(resolvedConsumes, scope, codekbCtx);
+  const { present, absent } = splitConsumesByPresence(
+    resolvedConsumes,
+    scope,
+    codekbCtx,
+    stateContent,
+  );
   const inlineContext = inlineContextRoster(node, codekbCtx);
   const ruleEntries = codekbCtx
     ? rulesContentEntries(node, codekbCtx.projectDir, codekbCtx.space)
@@ -3900,6 +3974,7 @@ function waveEntry(
   unitKind: string | null,
   projectType: "brownfield" | "greenfield" | null,
   scope: string,
+  stateContent: string | null,
   recordPrefix: string | null,
   codekbCtx: CodekbCtx,
   buildRequired: boolean,
@@ -3920,6 +3995,7 @@ function waveEntry(
     resolvedConsumes,
     scope,
     codekbCtx,
+    stateContent,
   );
   const entry: RunStageWaveEntry = {
     unit,
@@ -4080,6 +4156,7 @@ function activePerUnitWave(
             unitKind,
             projectType,
             scope,
+            stateContent,
             recordPrefix,
             codekbCtx,
             buildRequired,

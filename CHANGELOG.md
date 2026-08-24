@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.70] - 2026-08-24
+
+Bugfix and refactor workflows now carry verified changes through the existing deployment path instead of stopping after Build and Test. **Upgrade:** refresh your `dist/<harness>/` shell to pick up the expanded scope grids, deployment fallback, and skip-provenance fix.
+
+* The `bugfix` and `refactor` scopes now execute Deployment Pipeline and Deployment Execution, matching the deployment tail already used by `security-patch`; Environment Provisioning and the remaining Operation stages stay skipped.
+* When Deployment Pipeline is conditionally skipped because the workspace pipeline is already adequate, Deployment Execution receives its missing pipeline artifacts as expected absences and uses the existing workspace configuration instead of entering missing-artifact recovery.
+* `STAGE_SKIPPED` records now distinguish conditional runtime skips from explicit jumps, so jumping over an on-path producer no longer hides its missing required output as an expected absence.
+* Bugfix now runs 9 of 33 stages with 6 approval gates; Refactor runs 10 of 33 stages with 7 approval gates.
+
 ## [2.6.69] - 2026-08-24
 
 Per-unit source review now binds the manifest and claimed source at dispatch, and sibling-repository Bolt worktrees preserve application source under root `aidlc/` and `.aidlc/` directories. **Upgrade:** refresh your `dist/<harness>/` shell; write a valid `source-manifest.json` before every per-unit workspace review request, and use `--retry-pending` to re-dispatch after any pre-verdict source change.
@@ -258,6 +267,7 @@ Bounded Build & Test → Code Generation failure loop-back. When Build and Test 
 * Single-stage runs (`/aidlc --stage build-and-test --single`) stop at classification because they have no main-workflow position to move; impact-estimated options appear in the isolated-run summary.
 * The stage-ritual exception is present in all seven shipped conductor SKILLs, including Cursor and GitHub Copilot, and generated distributions remain byte-aligned with their authored sources.
 * Deterministic integration coverage (`t304-loopback-review-receipt-replay`) proves the replayed Code Generation gate refuses stale per-Unit reviews after `STAGE_JUMPED` and succeeds only after fresh receipts are recorded.
+
 ## [2.6.18] - 2026-08-19
 
 Classic and Express are new scope options, and the implicit default scope is now Classic — a **declared behavior change**: invocations that name no scope and match no keyword now run the v1-style lifecycle without Ideation instead of the full-lifecycle Feature scope. Exactly two things control the implicit default: the `AWS_AIDLC_DEFAULT_SCOPE` env var (which overrides) and the framework's hard-coded `classic` fallback. Express has a deterministic requirements-to-conditional-deploy path, and conditional protocol modules reduce fixed context without dropping reviewer recovery behavior. **Upgrade:** refresh your `dist/<harness>/` shell; in-flight workflows keep their persisted scope and need no migration; set `AWS_AIDLC_DEFAULT_SCOPE=feature` (Claude: the `.claude/settings.json` `env` block, which now ships `classic`) to keep the previous full-lifecycle default.

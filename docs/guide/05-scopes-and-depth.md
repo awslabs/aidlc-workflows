@@ -48,17 +48,19 @@ Core ships 11 named scopes. Each scope defines a stage set and a default depth l
 
 **Use when:** Fixing a specific bug. Streamlined path from intent capture through code generation and testing.
 
-- **Stages:** 7 of 33
+- **Stages:** 9 of 33
 - **Default depth:** Minimal
-- **Skips:** Market Research, Feasibility, Team Formation, Mockups, most design and architecture stages, all Operation stages
+- **Includes:** Deployment Pipeline and Deployment Execution so the verified fix ships
+- **Skips:** Market Research, Feasibility, Team Formation, Mockups, most design and architecture stages, environment provisioning, and broader operational readiness
 
 ### refactor
 
 **Use when:** Cleaning up or restructuring existing code without changing functionality.
 
-- **Stages:** 8 of 33
+- **Stages:** 10 of 33
 - **Default depth:** Minimal
-- **Skips:** Similar to bugfix — focused on code analysis, design, and implementation
+- **Includes:** Functional Design plus Deployment Pipeline and Deployment Execution
+- **Skips:** Similar to bugfix — focused on code analysis, design, implementation, and deployment through the existing path
 
 ### infra
 
@@ -119,8 +121,8 @@ Authoritative data lives in the `.claude/scopes/aidlc-<name>.md` files (scope id
 | `feature` | 33 / 33 | Standard | Standard | Full lifecycle for new features |
 | `mvp` | 23 / 33 | Standard | Standard | Greenfield, skip late operations |
 | `poc` | 8 / 33 | Minimal | Minimal | Prove feasibility fast |
-| `bugfix` | 7 / 33 | Minimal | Minimal | Fix a specific bug |
-| `refactor` | 8 / 33 | Minimal | Minimal | Clean up existing code |
+| `bugfix` | 9 / 33 | Minimal | Minimal | Fix and deploy a specific bug |
+| `refactor` | 10 / 33 | Minimal | Minimal | Clean up and deploy existing code |
 | `infra` | 13 / 33 | Standard | Standard | Infrastructure change |
 | `security-patch` | 10 / 33 | Minimal | Minimal | CVE response |
 | `classic` | 26 / 33 | Standard | Standard | V1-style lifecycle without Ideation — the implicit default |
@@ -165,14 +167,14 @@ The routing table above gives the counts; this matrix shows exactly **which** st
 | 3.5 | Code Generation | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  | ✓ | ✓ | ✓ | ✓ |
 | 3.6 | Build and Test | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  | ✓ | ✓ | ✓ | ✓ |
 | 3.7 | CI Pipeline | ✓ | ✓ | ✓ |  |  |  | ✓ |  | ✓ | ✓ |  |
-| 4.1 | Deployment Pipeline | ✓ | ✓ |  |  |  |  | ✓ | ✓ | ✓ | ✓ | ✓ |
+| 4.1 | Deployment Pipeline | ✓ | ✓ |  |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | 4.2 | Environment Provisioning | ✓ | ✓ |  |  |  |  | ✓ |  | ✓ | ✓ |  |
-| 4.3 | Deployment Execution | ✓ | ✓ |  |  |  |  | ✓ | ✓ | ✓ | ✓ | ✓ |
+| 4.3 | Deployment Execution | ✓ | ✓ |  |  | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | 4.4 | Observability Setup | ✓ | ✓ |  |  |  |  | ✓ |  | ✓ | ✓ | ✓ |
 | 4.5 | Incident Response | ✓ | ✓ |  |  |  |  |  |  | ✓ | ✓ |  |
 | 4.6 | Performance Validation | ✓ | ✓ |  |  |  |  |  |  | ✓ | ✓ |  |
 | 4.7 | Feedback & Optimization | ✓ | ✓ |  |  |  |  |  |  | ✓ | ✓ |  |
-| | **Total stages** | **33** | **33** | **23** | **8** | **7** | **8** | **13** | **10** | **26** | **26** | **10** |
+| | **Total stages** | **33** | **33** | **23** | **8** | **9** | **10** | **13** | **10** | **26** | **26** | **10** |
 <!-- END scope-stage-matrix -->
 
 A ✓ marks static scope membership — it means the stage is included in the scope's plan, not that it will unconditionally execute. CONDITIONAL stages may be skipped at runtime when their condition does not hold (for example, Reverse Engineering only runs for brownfield projects), and pending stages can be reshaped through an approved composer proposal (see [the composer](#the-adaptive-composer)). Composed (custom) scopes are not listed here — their grids live in `scope-grid.json` alongside the stock ones.
@@ -206,7 +208,7 @@ The engine analyzes your intent against keyword patterns:
 After a clear keyword match, you get a one-line confirmation naming the MATCHED scope and the ceremony it carries, straight from the compiled grid:
 
 ```
-Starting a "bugfix" workflow for: "fix login bug" - 7 of 33 stages, 4 approval gates, 1 stage repeats per unit of work in Construction. Confirm to proceed,
+Starting a "bugfix" workflow for: "fix login bug" - 9 of 33 stages, 6 approval gates, 1 stage repeats per unit of work in Construction. Confirm to proceed,
 name a different scope, or say "compose" for a tailored plan.
 ```
 

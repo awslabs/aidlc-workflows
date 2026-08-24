@@ -429,6 +429,7 @@ function handleExecute(args: string[]): void {
       emitAudit(pd, "STAGE_SKIPPED", {
         Stage: skippedSlug,
         Reason: `Skipped by jump to ${targetSlug} (${direction})`,
+        "Skip Kind": "jump",
       });
     }
 

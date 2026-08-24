@@ -59,7 +59,7 @@ All three stages run inside a single deterministic `bun .claude/tools/aidlc-util
 - None (entry point)
 
 ### Outputs
-- one artifact directory per phase the scope runs: `<record>/initialization/`, plus each of `ideation/`, `inception/`, `construction/`, `operation/` holding at least one EXECUTE stage. A phase the scope excludes gets no directory (a bugfix record has no `ideation/` or `operation/`), and per-stage subdirectories are not created here: a stage's directory appears when it first writes an artifact
+- one artifact directory per phase the scope runs: `<record>/initialization/`, plus each of `ideation/`, `inception/`, `construction/`, `operation/` holding at least one EXECUTE stage. A phase the scope excludes gets no directory (a bugfix record has no `ideation/`), and per-stage subdirectories are not created here: a stage's directory appears when it first writes an artifact
 - `<record>/verification/` (created for every scope)
 - the empty space-level `aidlc/knowledge/` directory (a sibling of the space's `intents/`)
 - the intent's `audit/` shard dir (header + session + scaffold events)

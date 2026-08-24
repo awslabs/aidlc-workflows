@@ -822,8 +822,8 @@ and problem complexity.
 | feature | Standard | Standard | 33 | All stages |
 | mvp | Standard | Standard | 23 | Skip all Operation |
 | poc | Minimal | Minimal | ~8 | Initialization + Ideation + core Inception |
-| bugfix | Minimal | Minimal | ~8 | Targeted |
-| refactor | Minimal | Minimal | 8 | Targeted |
+| bugfix | Minimal | Minimal | 9 | Targeted |
+| refactor | Minimal | Minimal | 10 | Targeted |
 | infra | Standard | Standard | ~13 | Infra-focused |
 | security-patch | Minimal | Minimal | ~10 | Security-focused |
 | classic | Standard | Standard | 26 | Default v1-style lifecycle without Ideation |

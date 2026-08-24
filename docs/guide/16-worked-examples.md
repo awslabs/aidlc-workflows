@@ -12,7 +12,7 @@ Two complete walkthroughs showing AI-DLC in action: a bugfix and a feature. Each
 
 ## Bugfix Walkthrough
 
-This example fixes a null pointer exception in a user profile API. The **bugfix** scope runs 7 stages (3 Initialization + 4 domain) at Minimal depth.
+This example fixes a null pointer exception in a user profile API. The **bugfix** scope runs 9 stages (3 Initialization + 6 domain) at Minimal depth.
 
 ### Invocation
 
@@ -39,6 +39,8 @@ You respond:
 | 2.3 | Requirements Analysis | Inception | aidlc-product-agent | inline |
 | 3.5 | Code Generation | Construction | aidlc-developer-agent | subagent |
 | 3.6 | Build and Test | Construction | aidlc-quality-agent | inline |
+| 4.1 | Deployment Pipeline | Operation | aidlc-pipeline-deploy-agent | inline |
+| 4.3 | Deployment Execution | Operation | aidlc-pipeline-deploy-agent + aidlc-developer-agent | inline |
 
 ### Initialization (stages 0.1-0.3) — auto-proceed
 
@@ -48,7 +50,7 @@ The 3 Initialization stages run as a single deterministic tool call (`aidlc-util
 - **0.2 Workspace Detection** — Rule-based scan identifies Java 17, Spring Boot 3.2, Maven, brownfield project
 - **0.3 State Init** — Initializes `aidlc-state.md` with scope `bugfix`, depth `Minimal`, and the domain stages marked for execution
 
-> Progress: 3/7 overall | 3/3 INITIALIZATION stages complete. Next: Reverse Engineering
+> Progress: 3/9 overall | 3/3 INITIALIZATION stages complete. Next: Reverse Engineering
 
 ### Stage 2.1 — Reverse Engineering
 
@@ -138,7 +140,18 @@ mvn verify               # Integration tests pass
 
 Results captured in `<record>/construction/build-and-test/test-results.md`: 89 tests passed, 0 failures, coverage increased from 62% to 64%.
 
-**Approval gate:** You select **Approve**. Workflow complete.
+**Approval gate:** You select **Approve**.
+
+### Stages 4.1 and 4.3 — Deploy
+
+Deployment Pipeline inspects the existing delivery configuration and records
+the deployment strategy, CD configuration, and rollback runbook. Environment
+Provisioning remains skipped because this bugfix uses the existing target
+environment.
+
+After approval, Deployment Execution deploys the tested artifact through that
+pipeline, runs smoke tests and health checks, and records the deployment log.
+You approve the final gate and the workflow completes.
 
 ### End state
 
@@ -147,7 +160,7 @@ aidlc/spaces/default/
   codekb/
     user-service/             # 9 space-level RE artifacts
   intents/260624-null-display-fix/
-    aidlc-state.md            # All 7 stages marked [x]
+    aidlc-state.md            # All 9 stages marked [x]
     audit/                    # Full decision trail (per-clone shards)
     inception/
       requirements-analysis/ # requirements.md + questions
@@ -155,6 +168,9 @@ aidlc/spaces/default/
       bugfix-null-display-name/
         code-generation/     # plan + summary
       build-and-test/        # instructions + test results
+    operation/
+      deployment-pipeline/   # CD config + strategy + rollback runbook
+      deployment-execution/  # deployment log + smoke tests + health checks
 ```
 
 Application code in workspace root:

@@ -31,6 +31,8 @@ scopes:
   - enterprise
   - feature
   - infra
+  - bugfix
+  - refactor
   - security-patch
   - classic
   - workshop
@@ -55,14 +57,14 @@ Load aidlc-pipeline-deploy-agent persona from `agents/aidlc-pipeline-deploy-agen
 - Read infrastructure design from `<record>/construction/infrastructure-design/` (if exists)
 - Read NFR design (deployment-related NFRs) from `<record>/construction/nfr-design/` (if exists)
 
-Incremental scopes (security-patch) and `express` skip CI Pipeline and
-Infrastructure Design by design. On brownfield, inspect the workspace's
-existing pipeline and infrastructure configuration plus the code knowledge
-base. On Express greenfield, use the approved requirements, Build and Test
-results, and deployment artifacts generated in the workspace (for example a
-Dockerfile, service manifest, or IaC); if no deployable target exists, this
-CONDITIONAL stage reports skipped. Design only against evidence that exists -
-never invent a missing CI or infrastructure artifact.
+Incremental scopes (`bugfix`, `refactor`, and `security-patch`) and `express`
+skip CI Pipeline and Infrastructure Design by design. On brownfield, inspect
+the workspace's existing pipeline and infrastructure configuration plus the
+code knowledge base. On Express greenfield, use the approved requirements,
+Build and Test results, and deployment artifacts generated in the workspace
+(for example a Dockerfile, service manifest, or IaC); if no deployable target
+exists, this CONDITIONAL stage reports skipped. Design only against evidence
+that exists - never invent a missing CI or infrastructure artifact.
 
 ### Step 3: Generate Clarifying Questions
 

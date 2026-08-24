@@ -5300,6 +5300,10 @@
           "mechanism": "tui"
         },
         {
+          "file": "tests/e2e/t302-deployment-pipeline-skip-fallback.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/e2e/t52-workflow-state-progression.test.ts",
           "mechanism": "sdk"
         },
@@ -5455,6 +5459,10 @@
       "unitId": "refactor",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/e2e/t302-deployment-pipeline-skip-fallback.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/integration/t130-scope-runners.test.ts",
           "mechanism": "cli"
@@ -6156,6 +6164,10 @@
         {
           "file": "tests/e2e/t-acp-kiro-jump.serial.test.ts",
           "mechanism": "none"
+        },
+        {
+          "file": "tests/e2e/t302-deployment-pipeline-skip-fallback.test.ts",
+          "mechanism": "cli"
         },
         {
           "file": "tests/e2e/t56-workflow-forward-jump.test.ts",

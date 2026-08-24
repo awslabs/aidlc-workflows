@@ -3527,7 +3527,11 @@ function handleSkip(args: string[]): void {
 
   try {
     if (!skipAlreadyAudited) {
-      emitAudit(pd, "STAGE_SKIPPED", { Stage: slug, Reason: reason });
+      emitAudit(pd, "STAGE_SKIPPED", {
+        Stage: slug,
+        Reason: reason,
+        "Skip Kind": "conditional-runtime",
+      });
     }
     if (nextStage) {
       if (crossesPhaseBoundary) {

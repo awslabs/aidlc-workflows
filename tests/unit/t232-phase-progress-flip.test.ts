@@ -171,14 +171,14 @@ describe("t232 Phase Progress - birth seed", () => {
     expect(rowStatus(proj, "Operation")).toBe("Pending");
   });
 
-  test("bugfix scope: excluded phases Skipped, first post-init phase Active", () => {
+  test("bugfix scope: excluded Ideation Skipped, first post-init phase Active", () => {
     const proj = createTestProject();
     tempDirs.push(proj);
     expect(birth(proj, "bugfix").rc).toBe(0);
     expect(rowStatus(proj, "Initialization")).toBe("Verified");
     expect(rowStatus(proj, "Ideation")).toBe("Skipped");
     expect(rowStatus(proj, "Inception")).toBe("Active");
-    expect(rowStatus(proj, "Operation")).toBe("Skipped");
+    expect(rowStatus(proj, "Operation")).toBe("Pending");
   });
 });
 
@@ -280,12 +280,12 @@ describe("t232 Phase Progress - jump + complete-workflow", () => {
 });
 
 describe("t232 Phase Progress - plan re-shaping re-derives unreached rows", () => {
-  test("scope-change: newly excluded phase Skipped, history untouched", () => {
+  test("scope-change: included Operation stays Pending, history untouched", () => {
     const proj = createTestProject();
     tempDirs.push(proj);
     expect(birth(proj, "feature").rc).toBe(0);
     expect(run(UTILITY_TOOL, proj, ["scope-change", "--scope", "bugfix"]).rc).toBe(0);
-    expect(rowStatus(proj, "Operation")).toBe("Skipped");
+    expect(rowStatus(proj, "Operation")).toBe("Pending");
     // The Active/Verified rows record history the plan change cannot rewrite.
     expect(rowStatus(proj, "Initialization")).toBe("Verified");
     expect(rowStatus(proj, "Ideation")).toBe("Active");
