@@ -100,6 +100,19 @@ plugins/test-pro/
   README.md
 ```
 
+### Validate the authored plugin
+
+Run the shipped offline validator before packaging:
+
+```bash
+bun dist/claude/.claude/tools/aidlc-plugin-validate.ts plugins/test-pro
+```
+
+The validator requires no project install and checks the manifest, stage
+schema, scope/agent identity, duplicate plugin-local artifact producers,
+`tools/` payload hygiene, and any vendored compose hook. This plugin does not
+vendor `hooks/compose.ts`; the packager injects the current bundled template.
+
 ### The contribution seam
 A contribution declares **structural** additions (`adds.produces` / `consumes` /
 `sensors` / `required_sections`) and **prose** additions (`fragments` at anchors

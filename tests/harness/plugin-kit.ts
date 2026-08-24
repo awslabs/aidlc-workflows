@@ -18,9 +18,9 @@ import {
   scalarField,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
-  type ValidationContext,
-  validateStageFrontmatter,
-} from "../../dist/claude/.claude/tools/aidlc-stage-schema.ts";
+  type PluginValidationRule,
+  validatePluginRoot,
+} from "../../dist/claude/.claude/tools/aidlc-plugin-validate.ts";
 import type { DriveOptions } from "./sdk-drive.ts";
 import { driveAidlc } from "./sdk-drive.ts";
 import type { AcpDriveOptions } from "./kiro-acp-drive.ts";
@@ -285,7 +285,13 @@ export type PluginFindingCode =
   | "artifact-namespace"
   | "contribution-target"
   | "file-name"
-  | "stage-body";
+  | "stage-body"
+  | "scope-schema"
+  | "agent-schema"
+  | "duplicate-artifact-producer"
+  | "tools-payload"
+  | "compose-hook-stale"
+  | "plugin-root";
 
 export interface PluginContentFinding {
   code: PluginFindingCode;
@@ -346,108 +352,49 @@ function nestedListField(
   return [];
 }
 
-function validateManifest(
-  pluginRoot: string,
-  pluginName: string,
-  findings: PluginContentFinding[],
-): void {
-  const manifestFile = join(pluginRoot, ".aidlc-plugin", "plugin.json");
-  if (!existsSync(manifestFile)) {
-    addFinding(
-      findings,
-      "manifest-missing",
-      manifestFile,
-      "plugin manifest is missing",
-    );
-    return;
+function sharedFindingCode(rule: PluginValidationRule): PluginFindingCode {
+  if (rule === "manifest-missing") return "manifest-missing";
+  if (rule === "manifest-json") return "manifest-json";
+  if (rule === "manifest-name") return "manifest-name";
+  if (rule === "manifest-shape") return "manifest-shape";
+  if (rule === "stage-frontmatter" || rule === "stage-schema") {
+    return "stage-schema";
   }
-  let manifest: unknown;
-  try {
-    manifest = JSON.parse(readFileSync(manifestFile, "utf-8"));
-  } catch (error) {
-    addFinding(
-      findings,
-      "manifest-json",
-      manifestFile,
-      `plugin manifest is not valid JSON: ${String(error)}`,
-    );
-    return;
+  if (rule === "stage-filename") return "stage-slug";
+  if (
+    rule === "stage-owner" ||
+    rule === "scope-owner" ||
+    rule === "agent-owner"
+  ) {
+    return "plugin-owner";
   }
   if (
-    typeof manifest !== "object" ||
-    manifest === null ||
-    Array.isArray(manifest)
+    rule === "scope-filename" ||
+    rule === "scope-name" ||
+    rule === "agent-filename" ||
+    rule === "agent-name"
   ) {
-    addFinding(
-      findings,
-      "manifest-shape",
-      manifestFile,
-      "plugin manifest must be an object",
-    );
-    return;
+    return "file-name";
   }
-  const value = manifest as Record<string, unknown>;
-  if (value.name !== pluginName) {
-    addFinding(
-      findings,
-      "manifest-name",
-      manifestFile,
-      `manifest name must equal plugin directory name "${pluginName}"`,
-    );
-  }
-  if (typeof value.version !== "string" || value.version.trim() === "") {
-    addFinding(
-      findings,
-      "manifest-shape",
-      manifestFile,
-      "manifest version must be a non-empty string",
-    );
-  }
-  const aidlc = value.aidlc;
   if (
-    typeof aidlc !== "object" ||
-    aidlc === null ||
-    Array.isArray(aidlc) ||
-    typeof (aidlc as Record<string, unknown>).contributes !== "object" ||
-    (aidlc as Record<string, unknown>).contributes === null ||
-    Array.isArray((aidlc as Record<string, unknown>).contributes)
+    rule === "scope-frontmatter" ||
+    rule === "scope-depth" ||
+    rule === "scope-keywords"
   ) {
-    addFinding(
-      findings,
-      "manifest-shape",
-      manifestFile,
-      "manifest aidlc.contributes must be an object",
-    );
+    return "scope-schema";
   }
-}
-
-function validateOwnedFileNames(
-  files: string[],
-  pluginName: string,
-  findings: PluginContentFinding[],
-): void {
-  for (const file of files) {
-    const frontmatter = frontmatterBlock(readFileSync(file, "utf-8")) ?? "";
-    const owner = scalarField(frontmatter, "plugin");
-    if (owner !== pluginName) {
-      addFinding(
-        findings,
-        "plugin-owner",
-        file,
-        `plugin field must equal "${pluginName}"`,
-      );
-    }
-    const name = scalarField(frontmatter, "name");
-    const stem = basename(file, ".md");
-    if (name !== stem) {
-      addFinding(
-        findings,
-        "file-name",
-        file,
-        `name field must equal filename stem "${stem}"`,
-      );
-    }
+  if (rule === "agent-frontmatter") return "agent-schema";
+  if (rule === "duplicate-artifact-producer") {
+    return "duplicate-artifact-producer";
   }
+  if (rule === "tools-payload") return "tools-payload";
+  if (
+    rule === "compose-hook-stale" ||
+    rule === "compose-template-missing"
+  ) {
+    return "compose-hook-stale";
+  }
+  return "plugin-root";
 }
 
 export function validatePluginContent(
@@ -457,7 +404,6 @@ export function validatePluginContent(
   const root = resolve(pluginRoot);
   const pluginName = basename(root);
   const findings: PluginContentFinding[] = [];
-  validateManifest(root, pluginName, findings);
 
   const coreStagesDir =
     options.coreStagesDir ??
@@ -472,50 +418,35 @@ export function validatePluginContent(
   const coreStages = new Set(
     walkMarkdownFiles(coreStagesDir).map((file) => basename(file, ".md")),
   );
-  const context: ValidationContext = {
-    agents: pluginAgentRoster(root, options),
-  };
+  const shared = validatePluginRoot(root, {
+    stageContext: { agents: pluginAgentRoster(root, options) },
+  });
+  for (const finding of shared.errors) {
+    addFinding(
+      findings,
+      sharedFindingCode(finding.rule),
+      finding.file === "." ? root : join(root, finding.file),
+      finding.message,
+    );
+  }
 
   for (const file of walkMarkdownFiles(join(root, "stages"))) {
     const raw = readFileSync(file, "utf-8");
-    let parsed: Record<string, unknown>;
+    let parsed: Record<string, unknown> | null = null;
     try {
       parsed = parseStageFrontmatter(raw);
-    } catch (error) {
-      addFinding(
-        findings,
-        "stage-schema",
-        file,
-        `stage frontmatter could not be parsed: ${String(error)}`,
-      );
-      continue;
+    } catch {
+      // The shared validator already reports parse/schema failures.
     }
-    const result = validateStageFrontmatter(parsed, context);
-    if (!result.valid) {
-      for (const error of result.errors) {
-        addFinding(findings, "stage-schema", file, error);
-      }
-    }
-    const stem = basename(file, ".md");
-    if (parsed.slug !== stem) {
-      addFinding(
-        findings,
-        "stage-slug",
-        file,
-        `slug must equal filename stem "${stem}"`,
-      );
-    }
-    if (parsed.plugin !== pluginName) {
-      addFinding(
-        findings,
-        "plugin-owner",
-        file,
-        `plugin field must equal "${pluginName}"`,
-      );
-    }
-    for (const artifact of Array.isArray(parsed.produces)
-      ? parsed.produces
-      : []) {
+    const artifacts = parsed
+      ? [
+          ...(Array.isArray(parsed.produces) ? parsed.produces : []),
+          ...(Array.isArray(parsed.optional_produces)
+            ? parsed.optional_produces
+            : []),
+        ]
+      : [];
+    for (const artifact of artifacts) {
       if (
         typeof artifact === "string" &&
         !artifact.startsWith(`${pluginName}-`)
@@ -570,17 +501,6 @@ export function validatePluginContent(
       }
     }
   }
-
-  validateOwnedFileNames(
-    walkMarkdownFiles(join(root, "scopes")),
-    pluginName,
-    findings,
-  );
-  validateOwnedFileNames(
-    walkMarkdownFiles(join(root, "agents")),
-    pluginName,
-    findings,
-  );
   return findings;
 }
 

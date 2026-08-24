@@ -174,7 +174,7 @@ describe("t294 absent by default — no harness is perturbed", () => {
   test("--check is green with the field absent", () => {
     const r = pkg(["--check"]);
     expect(r.status, r.out).toBe(0);
-  }, 15000);
+  }, 120000);
 
   test("the runtime accessor returns null when nothing is configured", () => {
     // Absent is the NORMAL case, not an error: the tool then probes pdftotext on

@@ -437,6 +437,22 @@ const MEMORY_DST = join("aidlc", "spaces", "default", "memory");
 // ships for normal installs — this is an additive fallback, not a replacement.
 const MEMORY_SEED_DST = join("tools", "data", "memory-seed");
 
+// The plugin authoring validator must run from a copied distribution with no
+// framework checkout. Ship the compose hook's source of truth beside the tool
+// so a vendored hooks/compose.ts can be byte-compared offline.
+const PLUGIN_COMPOSE_TEMPLATE_SRC = join(
+  REPO_ROOT,
+  "scripts",
+  "plugin-hooks-template",
+  "compose.ts",
+);
+const PLUGIN_COMPOSE_TEMPLATE_DST = join(
+  "tools",
+  "data",
+  "plugin-hooks-template",
+  "compose.ts",
+);
+
 // The active-space CURSOR shipped as part of the workspace shell (SEED). It
 // lives at aidlc/active-space (ABOVE spaces/, not inside memory/) and holds the
 // name of the space the next /aidlc resolves against. Ships pointed at the
@@ -520,6 +536,12 @@ function emitMemorySeed(
     mkdirSync(dirname(outPath), { recursive: true });
     writeFileSync(outPath, transform(file, readFileSync(file), harnessDir, rulesRename, harness));
   }
+}
+
+function emitPluginComposeTemplate(treeRoot: string): void {
+  const outPath = join(treeRoot, PLUGIN_COMPOSE_TEMPLATE_DST);
+  mkdirSync(dirname(outPath), { recursive: true });
+  cpSync(PLUGIN_COMPOSE_TEMPLATE_SRC, outPath);
 }
 
 // Emit the active-space CURSOR (aidlc/active-space -> "default") into the dist
@@ -662,6 +684,10 @@ function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): strin
   //     it out via ensureWorkspaceDirs. Inside <harnessDir>, so the generated
   //     root inventory byte-diffs it under --check.
   emitMemorySeed(treeRoot, harnessDir, m.rulesRename, harnessKind);
+
+  // 2f. Bundle the plugin compose hook's reference bytes beside the standalone
+  //     validator. This is engine data, not an executable hook registration.
+  emitPluginComposeTemplate(treeRoot);
 
   // 3. Compile the stage graph into the assembled tree (writes harness-correct
   //    stage-graph.json + scope-grid.json). compileStageGraph() bootstraps each

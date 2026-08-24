@@ -378,12 +378,53 @@ Trust is **host-native** — you don't build anything:
 
 Use three tiers, from cheapest to most realistic:
 
-1. **Content validation** is the always-on baseline. Call
-   `validatePluginContent()` against the authored plugin root. It runs pure,
-   deterministic checks for manifest identity, stage schema and ownership,
-   artifact namespacing, contribution targets, scope and agent filenames, and
-   non-empty stage bodies. It is fast and gives precise authoring findings, but
-   it does not prove that packaging or composition succeeds.
+### Validating your plugin
+
+Run the shipped validator against the plugin repository root before building or
+composing:
+
+```bash
+bun <tools-dir>/aidlc-plugin-validate.ts <plugin-root>
+bun <tools-dir>/aidlc-plugin-validate.ts <plugin-root> --json
+```
+
+The tool is offline and standalone: `<plugin-root>` is the directory containing
+`.aidlc-plugin/plugin.json`; no AIDLC project or framework checkout is required.
+Exit `0` means valid, `1` means authoring findings, and `2` means invalid command
+usage. JSON output is `{valid, errors, warnings}` with stable file-scoped
+findings.
+
+Validation checks:
+
+- the manifest exists and has the documented identity, SemVer, and
+  `aidlc.contributes` shape;
+- every stage parses and passes the shipped stage schema, with matching slug,
+  filename, and plugin ownership;
+- scopes use `<plugin>-<name>.md`, match their frontmatter identity, declare a
+  supported depth, and parse declared keywords as a non-empty block or flow
+  list;
+- agents use `<plugin>-<role>-agent.md` and match their frontmatter identity;
+- no two plugin stages produce the same artifact across `produces` and
+  `optional_produces`, even when no stage consumes it;
+- `tools/` contains no nested `tests/`, `fixtures/`, or `*.test.ts` payloads
+  that composition would copy into an install;
+- a vendored `hooks/compose.ts`, when present, is byte-identical to the
+  template bundled with the validator. Absence is valid because plugin build
+  injects the current template.
+
+The user-facing `aidlc plugin validate` verb is intentionally not part of this
+phase. It arrives with the Plugins RFC route table in
+[RFC #723 §2e](https://github.com/awslabs/aidlc-workflows/issues/723); until then,
+invoke the shipped Bun tool directly.
+
+The repository test helper's `validatePluginContent()` delegates these shared
+rules to the same tool and adds checkout-aware checks such as resolving
+contribution targets against core.
+
+1. **Content validation** is the always-on baseline. Run
+   `aidlc-plugin-validate.ts` against the authored plugin root. It is fast and
+   gives precise authoring findings, but it does not prove that packaging or
+   composition succeeds.
 2. **Compose integration** is the default CI check. Call
    `composePluginFixture()` to build the real harness projection, copy a shipped
    install into scratch space, run the emitted compose hook, and inspect the
@@ -405,7 +446,8 @@ automatically and join the integration tier. Run one plugin's tests with:
 bash tests/run-tests.sh --integration --filter "plugin-<name>"
 ```
 
-This content test is the minimum copyable shape:
+Inside this repository, this content test is the minimum copyable shape. The
+helper delegates the shared rules to the shipped tool:
 
 ```ts
 import { expect, test } from "bun:test";

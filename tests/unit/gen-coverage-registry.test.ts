@@ -833,6 +833,9 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     // filesystem write failure -- neither is observable from an in-process
     // call.
     "unit/t326-knowledge-summarize.test.ts",
+    // t314 spawns the shipped standalone validator to pin its process exit
+    // codes and exact JSON/human output contracts outside a framework project.
+    "unit/t314-plugin-validate.test.ts",
     "integration/t102.test.ts",
     "integration/t104.test.ts",
     "integration/t105.test.ts",
