@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.90] - 2026-08-25
+
+`/aidlc --doctor` now distinguishes hook directories that have not had a chance to populate from dead hook seams after a workflow stage ran. **Upgrade:** refresh your `dist/<harness>/` shell so doctor can detect this condition.
+
+* When `.aidlc-hooks-health/` exists without any `.last` files and the active audit ledger contains `STAGE_STARTED`, doctor reports `Hook heartbeat data` and exits 1; CI jobs that gate on doctor will now fail for this broken hook state.
+* Missing, pre-created, and debug-only health directories still report the existing not-yet-fired pass row before any stage starts, while real heartbeat files continue to report their last-fired timestamps.
+
 ## [2.6.89] - 2026-08-25
 
 The conductor no longer parks a workflow because context *feels* heavy. The orchestrator skill previously licensed parking when context seemed low even though the conductor cannot measure its own usage, causing unnecessary park/resume interruptions while most of the window remained free. **Upgrade:** refresh your `dist/<harness>/` shell to install the bounded parking guidance.

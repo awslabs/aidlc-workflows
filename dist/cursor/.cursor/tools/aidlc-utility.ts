@@ -2581,24 +2581,27 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
     }
   }
 
+  // Read across every per-clone audit shard (single shard in the common case).
+  // Both hook-health and state-drift checks use the same intent-scoped ledger.
+  const auditAllShards = readAllAuditShards(projectDir);
+  const auditShardEvents = readAuditShardEvents(projectDir);
+
   // 6. Hook heartbeats
-  // Three states:
-  //   (a) .aidlc-hooks-health/ missing entirely → fresh install, hooks haven't
-  //       had a chance to fire yet. Pass with advisory label — not drift.
-  //   (b) Directory exists but no .last files → hooks registered but have
-  //       never fired. Genuine drift; fail.
-  //   (c) Directory has .last files → hooks are working; pass with timestamps.
+  // Three states, discriminated by health-dir presence, readable heartbeats,
+  // and evidence that a workflow stage ran in the same intent-scoped ledger:
+  //   (a) .aidlc-hooks-health/ missing entirely, or present without .last files
+  //       before STAGE_STARTED → hooks have not had a chance to fire. Pass.
+  //       This preserves debug-only dirs and ignores doctor's HEALTH_CHECKED.
+  //   (b) Directory exists without .last files after STAGE_STARTED, or .last
+  //       files exist but are all unreadable → hooks should have fired. Fail.
+  //   (c) Directory has readable .last files → hooks are working; pass with
+  //       timestamps.
   const healthDir = hooksHealthDir(projectDir);
   const heartbeatEntries: string[] = [];
   const heartbeatDirExists = existsSync(healthDir);
-  // A health dir that exists but carries NO hook-fired content is equivalent to
-  // "not yet fired" (state a), not drift (state b). Besides the `.last`
-  // heartbeats, the dir may hold purely-diagnostic files that no hook firing
-  // produced: `hook-debug.log` (written by hookDebug under AIDLC_HOOK_DEBUG) and
-  // `.first-fired` (the run-sensors banner marker). If ONLY those exist, treat
-  // it as fresh — otherwise enabling AIDLC_HOOK_DEBUG on a fresh install would
-  // flip this check from PASS to a false drift FAIL for exactly the user trying
-  // to diagnose hooks.
+  const workflowStageStarted = auditAllShards.includes("**Event**: STAGE_STARTED");
+  // Track .last presence separately from readable entries so an unreadable
+  // heartbeat file remains a failure instead of looking like a fresh install.
   let hasHookFiredContent = false;
   if (heartbeatDirExists) {
     try {
@@ -2623,19 +2626,23 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
       pass: true,
       label: `Hooks last fired: ${heartbeatEntries.join(", ")}`,
     });
-  } else if (!heartbeatDirExists || !hasHookFiredContent) {
-    // (a) fresh install (dir absent) OR a debug-only dir with no heartbeats yet
-    // — nothing to verify. Not drift.
+  } else if (
+    !heartbeatDirExists ||
+    (!hasHookFiredContent && !workflowStageStarted)
+  ) {
+    // (a) fresh install, pre-created dir, or debug-only dir before a stage ran.
     results.push({
       pass: true,
       label: "Hook heartbeats: not yet fired (first workflow stage will populate)",
     });
   } else {
-    // (b) registered but never fired — genuine drift
+    // (b) a stage ran without any heartbeat, or heartbeat files are unreadable.
     results.push({
       pass: false,
       label: "Hook heartbeat data",
-      fix: "health dir exists but no hooks have fired — verify hooks are registered in settings.json",
+      fix: !hasHookFiredContent && workflowStageStarted
+        ? "health dir exists and the ledger shows STAGE_STARTED, but no hook has ever fired — verify hooks are registered in settings.json"
+        : "health dir exists but no hooks have fired — verify hooks are registered in settings.json",
     });
   }
 
@@ -2717,9 +2724,6 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
   // verify the state actually matches. Covers the rare case where audit-first
   // succeeded but the state write failed (disk full, permission lost mid-run).
   const stateMdPath = stateFilePath(projectDir);
-  // Read across every per-clone audit shard (single shard in the common case).
-  const auditAllShards = readAllAuditShards(projectDir);
-  const auditShardEvents = readAuditShardEvents(projectDir);
   if (existsSync(stateMdPath) && auditAllShards.length > 0) {
     try {
       const auditContent = auditAllShards;
