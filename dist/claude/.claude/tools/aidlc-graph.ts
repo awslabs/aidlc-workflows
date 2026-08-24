@@ -188,6 +188,8 @@ export interface GraphStage extends StageEntry {
   // Absent when no review step is configured. Parsed from stage frontmatter
   // `reviewer:` field and carried through to the run-stage directive.
   reviewer?: string;
+  // Required Markdown output that owns the appended reviewer section.
+  review_artifact?: string;
   // reviewer_max_iterations — review cycle cap before escalating to human.
   // Defaults to 2 when reviewer is present.
   reviewer_max_iterations?: number;
@@ -474,6 +476,7 @@ const FIELD_ORDER = [
   "sensors",
   "scopes",
   "reviewer",
+  "review_artifact",
   "reviewer_max_iterations",
   "review_class",
   "summary_confirmation",
@@ -2125,6 +2128,7 @@ function buildGraphStage(
   }
   if (parsed.reviewer !== undefined) {
     stage.reviewer = parsed.reviewer;
+    stage.review_artifact = parsed.review_artifact;
     // Default the cap to 2 when a reviewer is declared but no explicit cap is
     // set. The parser (V1) now returns a real number and validateStageFrontmatter
     // (V2) rejects a non-positive-integer cap upstream, so this should always

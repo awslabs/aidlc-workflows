@@ -7,7 +7,12 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -173,6 +178,22 @@ function writeCodeGenerationArtifacts(unit: string): void {
 }
 
 function recordReview(unit: string): void {
+  const artifact = join(
+    seededRecordDir(project),
+    "construction",
+    unit,
+    "code-generation",
+    "code-generation-plan.md",
+  );
+  const current = readFileSync(artifact, "utf-8");
+  const reviewStart = current.search(/^## Review[ \t]*$/m);
+  if (reviewStart !== -1) {
+    writeFileSync(
+      artifact,
+      `${current.slice(0, reviewStart).replace(/\s+$/, "")}\n`,
+      "utf-8",
+    );
+  }
   const args = [
     "review",
     "--stage",
@@ -186,6 +207,11 @@ function recordReview(unit: string): void {
   ];
   const requested = run(LOG, args);
   expect(requested.status, requested.out).toBe(0);
+  appendFileSync(
+    artifact,
+    `\n## Review\n\n**Verdict:** READY\n**Reviewer:** ${REVIEWER}\n**Iteration:** 1\n\n### Findings\n\nFixture review.\n`,
+    "utf-8",
+  );
   const completed = run(LOG, [...args, "--verdict", "READY"]);
   expect(completed.status, completed.out).toBe(0);
   expect(completed.stdout).toContain('"emitted":"REVIEW_COMPLETED"');

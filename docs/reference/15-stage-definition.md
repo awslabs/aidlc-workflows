@@ -409,7 +409,7 @@ Pipeline stages additionally reject a support agent repeated elsewhere in the
 chain, including the lead repeated as support, because link receipts identify
 one declared position by its unique agent.
 
-### `reviewer`, `reviewer_max_iterations`, and `review_class`
+### `reviewer`, `review_artifact`, `reviewer_max_iterations`, and `review_class`
 
 Optional. `reviewer` names a quality-gate agent invoked after the stage body
 produces its artifacts and before the approval gate (see [Stage
@@ -417,6 +417,13 @@ Protocol](04-stage-protocol.md)). Two reviewers ship today —
 `aidlc-product-lead-agent` and `aidlc-architecture-reviewer-agent` — and the
 compile validates the value against the discovered agent roster the same way
 `lead_agent` is validated.
+
+Every reviewer-bearing stage must also declare `review_artifact`, naming one
+required Markdown entry from `produces[]`. That scalar is the sole owner of the
+appended `## Review` section; list ordering and plugin-added outputs cannot
+change it. On a per-Unit stage the target must remain applicable for every Unit
+kind on which any required output is applicable, otherwise graph compilation
+fails. Structured outputs such as `traceability.json` cannot be review targets.
 
 `reviewer_max_iterations` caps the review/revise loop before the workflow proceeds
 to the gate with unresolved findings. It **defaults to 2** when `reviewer` is

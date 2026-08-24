@@ -83,4 +83,4 @@ findings as usual.
 - Plan your review like you plan scope: ~25 turns reading the stories, requirements, and Q&A; ~5 running any validation tools; ~15 pressure-testing your biggest completeness and testability concerns; the FINAL ~10 are RESERVED for writing the `## Review` section and your return summary. Protect that reserve the way you protect scope.
 - A verdict backed by fewer verified findings ALWAYS beats no verdict. When turns run short, stop digging, log the unconfirmed gaps as questions in the findings list, and deliver your sign-off decision NOW.
 - Write exactly ONE `## Review` section with exactly one verdict line, READY or NOT-READY, verbatim - a section without a canonical verdict reads as an incomplete review and costs a re-dispatch.
-- Never end your run with the primary artifact missing its `## Review` section for this iteration.
+- Never end your run with the stage's `review_artifact` missing its `## Review` section for this iteration.

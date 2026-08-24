@@ -39,8 +39,10 @@ import {
   recordDir,
   relativeRecordDir,
   recoveryGuidance,
+  reviewCompletionMatchesRequest,
+  reviewArtifactSnapshot,
+  reviewRequestBindingFromBlock,
   resolveBoltDag,
-  reviewArtifactFingerprint,
   reviewAttemptWindow,
   resolveProjectDir,
   resolveWorkflowSelection,
@@ -56,11 +58,17 @@ import {
   unitSourceFingerprint,
   UNBINDABLE_FINGERPRINT,
   validateLiveUnitScope,
+  validateReviewAppendix,
   withAuditLock,
   workspaceSourceState,
   writeUnitSourceSnapshot,
 } from "./aidlc-lib.js";
-import type { AuditShardEvent, ReviewClass } from "./aidlc-lib.js";
+import type {
+  AuditShardEvent,
+  ReviewClass,
+  ReviewRequestBinding,
+  ReviewVerdict,
+} from "./aidlc-lib.js";
 
 // Resolve the project dir AND assert that an active workflow exists before any
 // audit emit. WHY: aidlc-log is orchestrator-called per-question and threads no
@@ -766,9 +774,13 @@ type ReviewAttemptSummary = {
   boltBatch: string | null;
   boltSlug: string | null;
   pendingIterations: Set<number>;
-  pendingFingerprints: Map<number, string | null>;
-  pendingSourceFingerprints: Map<number, string | null>;
-  pendingUnitSourceFingerprints: Map<number, string | null>;
+  pendingRequests: Map<
+    number,
+    {
+      binding: ReviewRequestBinding | null;
+      retried: boolean;
+    }
+  >;
   recoveryIteration: number | null;
   recoverySpent: boolean;
   ambiguity: string | null;
@@ -782,7 +794,7 @@ type ReviewAttemptSummary = {
 function reviewAttemptSummary(
   rows: AuditShardEvent[],
   stateContent: string,
-  stage: { slug: string; for_each?: string },
+  stage: { slug: string; for_each?: string; workspace_requires?: boolean },
   reviewer: string,
   unit: string | undefined,
   workflow: string | undefined,
@@ -1001,9 +1013,13 @@ function reviewAttemptSummary(
   let recoveryIteration: number | null = null;
   let recoverySpent = false;
   const pendingIterations = new Set<number>();
-  const pendingFingerprints = new Map<number, string | null>();
-  const pendingSourceFingerprints = new Map<number, string | null>();
-  const pendingUnitSourceFingerprints = new Map<number, string | null>();
+  const pendingRequests = new Map<
+    number,
+    {
+      binding: ReviewRequestBinding | null;
+      retried: boolean;
+    }
+  >();
   for (let i = floor + 1; i < events.length; i++) {
     const entry = events[i];
     if (
@@ -1035,6 +1051,8 @@ function reviewAttemptSummary(
     if (!rawIteration || !/^[1-9][0-9]*$/.test(rawIteration)) continue;
     const iteration = Number(rawIteration);
     if (entry.event === "REVIEW_REQUESTED") {
+      const binding = reviewRequestBindingFromBlock(entry.block);
+      if (binding === null) continue;
       if (auditBlockField(entry.block, "Retry") !== "pending-request") {
         requestCount++;
       }
@@ -1043,23 +1061,27 @@ function reviewAttemptSummary(
         recoverySpent = true;
       }
       pendingIterations.add(iteration);
-      pendingFingerprints.set(
-        iteration,
-        auditBlockField(entry.block, "Artifact Fingerprint"),
-      );
-      pendingSourceFingerprints.set(
-        iteration,
-        auditBlockField(entry.block, "Source Fingerprint"),
-      );
-      pendingUnitSourceFingerprints.set(
-        iteration,
-        auditBlockField(entry.block, "Unit Source Fingerprint"),
-      );
+      const previous = pendingRequests.get(iteration);
+      const modernBinding =
+        binding.appendixArtifact !== null &&
+        binding.appendixOffset !== null &&
+        (!stage.workspace_requires || binding.sourceFingerprint !== null);
+      pendingRequests.set(iteration, {
+        binding,
+        retried:
+          previous?.retried === true ||
+          (auditBlockField(entry.block, "Retry") === "pending-request" &&
+            modernBinding),
+      });
     } else {
-      pendingIterations.delete(iteration);
-      pendingFingerprints.delete(iteration);
-      pendingSourceFingerprints.delete(iteration);
-      pendingUnitSourceFingerprints.delete(iteration);
+      const pending = pendingRequests.get(iteration);
+      if (
+        pending?.binding &&
+        reviewCompletionMatchesRequest(pending.binding, entry.block)
+      ) {
+        pendingIterations.delete(iteration);
+        pendingRequests.delete(iteration);
+      }
     }
   }
   return {
@@ -1068,9 +1090,7 @@ function reviewAttemptSummary(
     boltBatch,
     boltSlug,
     pendingIterations,
-    pendingFingerprints,
-    pendingSourceFingerprints,
-    pendingUnitSourceFingerprints,
+    pendingRequests,
     recoveryIteration,
     recoverySpent,
     ambiguity,
@@ -1205,6 +1225,11 @@ function handleReview(args: string[]): void {
     const node = loadStageGraphAll().find((stage) => stage.slug === flags.stage);
     if (!node?.reviewer) {
       refuseReview(`Cannot record review: stage "${flags.stage}" has no declared reviewer.`);
+    }
+    if (!node.review_artifact) {
+      refuseReview(
+        `Cannot record review: stage "${flags.stage}" has no declared review_artifact.`,
+      );
     }
     if (flags.reviewer !== node.reviewer) {
       refuseReview(
@@ -1406,6 +1431,7 @@ function handleReview(args: string[]): void {
     const iteration = Number(flags.iteration);
     fields.Iteration = flags.iteration;
     let retried = false;
+    let upgraded = false;
     let recovery: "stale-receipt" | undefined;
     try {
       withAuditLock(pd, () => {
@@ -1453,7 +1479,8 @@ function handleReview(args: string[]): void {
         const recoverySpent =
           attempt.recoverySpent || sourceRecoverySpent;
         if (retryPending) {
-          if (!attempt.pendingIterations.has(iteration)) {
+          const pendingRequest = attempt.pendingRequests.get(iteration);
+          if (!pendingRequest) {
             if (scopeStale) {
               if (recoverySpent) {
                 refuseReview(
@@ -1494,21 +1521,110 @@ function handleReview(args: string[]): void {
                 `pending request with that number exists. Start the expected review pass instead.`,
             );
           }
-          fields.Retry = "pending-request";
-          const fingerprint = reviewArtifactFingerprint(pd, node, flags.unit, {
+          const requestBinding = pendingRequest.binding;
+          if (requestBinding === null) {
+            refuseReview(
+              `Refusing review retry for "${flags.stage}": the original ` +
+                `REVIEW_REQUESTED iteration ${iteration} has no valid request ` +
+                "binding, so its authority cannot be recovered by rebaselining.",
+            );
+          }
+          if (pendingRequest.retried) {
+            refuseReview(
+              `Refusing review retry for "${flags.stage}": REVIEW_REQUESTED ` +
+                `iteration ${iteration} already used its one pending-request retry. ` +
+                "Do not dispatch it again; record the bounded incomplete-review " +
+                "NOT-READY fallback or start the next permitted review iteration.",
+            );
+          }
+          const snapshot = reviewArtifactSnapshot(pd, node, flags.unit, {
             requireRequiredArtifacts,
             boltDag: unitResolution ?? undefined,
             mergedBoltUnits,
+            ...(requestBinding.appendixArtifact !== null &&
+            requestBinding.appendixOffset !== null
+              ? {
+                  appendixBinding: {
+                    artifact: requestBinding.appendixArtifact,
+                    offset: requestBinding.appendixOffset,
+                  },
+                }
+              : {}),
           });
-          if (fingerprint === null) {
+          if (snapshot === null) {
             refuseReview(
-              `Cannot start review for "${flags.stage}": a required output ` +
-                "document is missing or unreadable. Create every required output " +
-                "document for this stage, then retry the review.",
+              `Cannot retry review for "${flags.stage}": the declared artifact set ` +
+                "could not be captured as one stable snapshot. Restore regular " +
+                "artifact files and retry.",
             );
           }
-          fields["Artifact Fingerprint"] = fingerprint;
-          stampRequestedSourceBinding(node);
+          const currentRequestFingerprint =
+            requestBinding.appendixArtifact === null ||
+              requestBinding.appendixOffset === null
+              ? snapshot.fingerprint
+              : snapshot.requestFingerprint;
+          if (currentRequestFingerprint !== requestBinding.artifactFingerprint) {
+            refuseReview(
+              `Refusing review retry for "${flags.stage}": declared artifacts no ` +
+                `longer match the bytes from REVIEW_REQUESTED iteration ${iteration}. ` +
+                "A retry re-dispatches that exact request and cannot rebaseline changed " +
+                "content. Remove any partial reviewer appendix and restore the requested " +
+                "artifact bytes before retrying.",
+            );
+          }
+          const legacyUpgrade =
+            requestBinding.appendixArtifact === null ||
+            requestBinding.appendixOffset === null ||
+            (node.workspace_requires &&
+              requestBinding.sourceFingerprint === null) ||
+            (node.workspace_requires &&
+              flags.unit !== undefined &&
+              node.for_each === "unit-of-work" &&
+              flags.single !== "true" &&
+              requestBinding.unitSourceFingerprint === null);
+          if (node.workspace_requires) {
+            stampRequestedSourceBinding(node);
+            const currentSource = fields["Source Fingerprint"];
+            if (
+              requestBinding.sourceFingerprint !== null &&
+              currentSource !== requestBinding.sourceFingerprint
+            ) {
+              refuseReview(
+                `Refusing review retry for "${flags.stage}": workspace source no ` +
+                  `longer matches REVIEW_REQUESTED iteration ${iteration}. A retry ` +
+                  "cannot rebaseline source changed while review was pending.",
+              );
+            }
+            const currentUnitSource = fields["Unit Source Fingerprint"];
+            if (
+              requestBinding.unitSourceFingerprint !== null &&
+              currentUnitSource !== requestBinding.unitSourceFingerprint
+            ) {
+              refuseReview(
+                `Refusing review retry for "${flags.stage}": unit source or ` +
+                  `source-manifest.json no longer matches REVIEW_REQUESTED ` +
+                  `iteration ${iteration}. A retry cannot rebaseline changed unit source.`,
+              );
+            }
+          }
+          fields.Retry = "pending-request";
+          fields["Artifact Fingerprint"] = requestBinding.artifactFingerprint;
+          fields["Review Appendix Artifact"] =
+            requestBinding.appendixArtifact ?? snapshot.appendixArtifact;
+          fields["Review Appendix Offset"] = String(
+            requestBinding.appendixOffset ?? snapshot.appendixOffset,
+          );
+          if (requestBinding.sourceFingerprint !== null) {
+            fields["Source Fingerprint"] = requestBinding.sourceFingerprint;
+          }
+          if (requestBinding.unitSourceFingerprint !== null) {
+            fields["Unit Source Fingerprint"] =
+              requestBinding.unitSourceFingerprint;
+          }
+          if (legacyUpgrade) {
+            fields.Upgrade = "legacy-request";
+            upgraded = true;
+          }
           emitAudit(pd, "REVIEW_REQUESTED", fields, intent, space);
           retried = true;
           return;
@@ -1568,19 +1684,21 @@ function handleReview(args: string[]): void {
           fields.Recovery = "stale-receipt";
           recovery = "stale-receipt";
         }
-        const fingerprint = reviewArtifactFingerprint(pd, node, flags.unit, {
+        const snapshot = reviewArtifactSnapshot(pd, node, flags.unit, {
           requireRequiredArtifacts,
           boltDag: unitResolution ?? undefined,
           mergedBoltUnits,
         });
-        if (fingerprint === null) {
+        if (snapshot === null) {
           refuseReview(
             `Cannot start review for "${flags.stage}": a required output document ` +
               "is missing or unreadable. Create every required output document " +
               "for this stage, then retry the review.",
           );
         }
-        fields["Artifact Fingerprint"] = fingerprint;
+        fields["Artifact Fingerprint"] = snapshot.requestFingerprint;
+        fields["Review Appendix Artifact"] = snapshot.appendixArtifact;
+        fields["Review Appendix Offset"] = String(snapshot.appendixOffset);
         stampRequestedSourceBinding(node);
         emitAudit(pd, "REVIEW_REQUESTED", fields, intent, space);
       }, intent, space);
@@ -1592,6 +1710,7 @@ function handleReview(args: string[]): void {
       emitted: "REVIEW_REQUESTED",
       stage: flags.stage,
       ...(retried ? { retry: "pending-request" } : {}),
+      ...(upgraded ? { upgrade: "legacy-request" } : {}),
       ...(recovery ? { recovery } : {}),
     }));
     return;
@@ -1622,45 +1741,45 @@ function handleReview(args: string[]): void {
         unitResolution,
         mergedBoltUnits,
       } = loadContext(false, false);
-      if (!attempt.pendingIterations.has(iteration)) {
+      const pendingRequest = attempt.pendingRequests.get(iteration);
+      if (!pendingRequest) {
         refuseReview(
           `Cannot record a verdict for review iteration ${iteration} on "${flags.stage}" ` +
             `because no pending request with that number exists. Start or retry that review first.`,
         );
       }
-      const requestedFingerprint = attempt.pendingFingerprints.get(iteration);
-      if (
-        requestedFingerprint === undefined ||
-        requestedFingerprint === null ||
-        !/^sha256:[0-9a-f]{64}$/.test(requestedFingerprint)
-      ) {
+      const requestBinding = pendingRequest.binding;
+      if (requestBinding === null) {
         refuseReview(
-          `Cannot record the verdict for "${flags.stage}" because review iteration ${iteration} ` +
-            `was not bound to readable output documents. Re-run that iteration with ` +
-            `--retry-pending before recording the verdict.`,
+          `Refusing REVIEW_COMPLETED for "${flags.stage}": the matching REVIEW_REQUESTED ` +
+            `iteration ${iteration} has no valid request binding. Its authority ` +
+          "cannot be recovered by retrying or rebaselining; start a fresh review attempt.",
         );
       }
-      const fingerprint = reviewArtifactFingerprint(pd, node, flags.unit, {
+      if (
+        requestBinding.appendixArtifact === null ||
+        requestBinding.appendixOffset === null
+      ) {
+        refuseReview(
+          `Refusing REVIEW_COMPLETED for "${flags.stage}": the matching request ` +
+            "does not carry a modern review appendix binding.",
+        );
+      }
+      const snapshot = reviewArtifactSnapshot(pd, node, flags.unit, {
         requireRequiredArtifacts,
         boltDag: unitResolution ?? undefined,
         mergedBoltUnits,
+        appendixBinding: {
+          artifact: requestBinding.appendixArtifact,
+          offset: requestBinding.appendixOffset,
+        },
       });
-      if (fingerprint === null) {
+      if (snapshot === null) {
         refuseReview(
-          `Cannot finish review for "${flags.stage}": a required output document ` +
-            "is missing or unreadable. Restore every required output document " +
-            "to the reviewed state, then record the result again.",
+          `Cannot record review for "${flags.stage}": the declared artifact set ` +
+            "changed during the snapshot or its append target is no longer valid.",
         );
       }
-      if (fingerprint !== requestedFingerprint) {
-        refuseReview(
-          `Cannot record the verdict for "${flags.stage}" because its output documents changed ` +
-            `after review iteration ${iteration} started. Re-run that iteration with ` +
-            `--retry-pending so the reviewer sees the current version.`,
-        );
-      }
-      fields["Artifact Fingerprint"] = fingerprint;
-
       const bindsUnitSource =
         node.workspace_requires === true &&
         flags.unit !== undefined &&
@@ -1679,32 +1798,59 @@ function handleReview(args: string[]): void {
         );
       }
 
-      // One temporary-index pass supplies both the compatibility fingerprint
-      // and the per-unit listing. A null state is recorded explicitly so new
-      // receipts fail closed while fieldless legacy evidence keeps migrating.
+      if (snapshot.requestFingerprint !== requestBinding.artifactFingerprint) {
+        refuseReview(
+          `Refusing REVIEW_COMPLETED for "${flags.stage}": declared artifacts changed ` +
+            `outside the reviewer-authored appendix after REVIEW_REQUESTED iteration ` +
+            `${iteration}. Restore the requested bytes and re-dispatch that exact ` +
+            "iteration; --retry-pending cannot rebaseline changed content.",
+        );
+      }
+      const incompleteFallback =
+        snapshot.appendix.length === 0 &&
+        pendingRequest.retried &&
+        verdict === "NOT-READY";
+      if (!incompleteFallback) {
+        const appendix = validateReviewAppendix(snapshot.appendix, {
+          verdict: verdict as ReviewVerdict,
+          reviewer: flags.reviewer,
+          iteration,
+        });
+        if (!appendix.valid) {
+          refuseReview(
+            `Refusing REVIEW_COMPLETED for "${flags.stage}": ${appendix.reason}.`,
+          );
+        }
+      }
+      fields["Request Fingerprint"] = requestBinding.artifactFingerprint;
+      fields["Artifact Fingerprint"] = snapshot.fingerprint;
+      fields["Review Appendix Artifact"] = requestBinding.appendixArtifact;
+      fields["Review Appendix Offset"] = String(
+        requestBinding.appendixOffset,
+      );
+      // Bind the terminal receipt to the workspace source state the reviewer
+      // inspected. Only workspace-writing stages carry this binding. A newly
+      // unbindable receipt records that explicitly so completion fails closed;
+      // only genuinely legacy fieldless receipts keep migration behavior.
       if (node.workspace_requires) {
         const sourceState = workspaceSourceState(pd, intent, space);
         const sourceFingerprint =
           sourceState?.fingerprint ?? UNBINDABLE_FINGERPRINT;
-        const requestedSourceFingerprint =
-          attempt.pendingSourceFingerprints.get(iteration);
-        if (
-          requestedSourceFingerprint === undefined ||
-          requestedSourceFingerprint === null
-        ) {
+        if (requestBinding.sourceFingerprint === null) {
           refuseReview(
             `Refusing REVIEW_COMPLETED for "${flags.stage}": the matching REVIEW_REQUESTED ` +
-              `iteration ${iteration} has no source fingerprint. Re-dispatch that exact ` +
-              "iteration with --retry-pending before recording the verdict.",
+              `iteration ${iteration} has no source fingerprint. Modernize that exact ` +
+              "request with --retry-pending before recording the verdict.",
           );
         }
-        if (sourceFingerprint !== requestedSourceFingerprint) {
+        if (sourceFingerprint !== requestBinding.sourceFingerprint) {
           refuseReview(
             `Refusing REVIEW_COMPLETED for "${flags.stage}": workspace source changed after ` +
-              `REVIEW_REQUESTED iteration ${iteration}. Re-dispatch that exact iteration with ` +
-              "--retry-pending so the reviewer inspects the current bytes.",
+              `REVIEW_REQUESTED iteration ${iteration}. Restore the requested source state ` +
+              "and re-dispatch the reviewer.",
           );
         }
+        fields["Request Source Fingerprint"] = sourceFingerprint;
         fields["Source Fingerprint"] = sourceFingerprint;
         if (bindsUnitSource) {
           const unitFingerprint =
@@ -1715,23 +1861,18 @@ function handleReview(args: string[]): void {
                   manifest,
                   manifest.rawBytesSha256,
                 );
-          const requestedUnitFingerprint =
-            attempt.pendingUnitSourceFingerprints.get(iteration);
-          if (
-            requestedUnitFingerprint === undefined ||
-            requestedUnitFingerprint === null
-          ) {
+          if (requestBinding.unitSourceFingerprint === null) {
             refuseReview(
               `Refusing REVIEW_COMPLETED for "${flags.stage}": the matching REVIEW_REQUESTED ` +
-                `iteration ${iteration} has no unit source fingerprint. Re-dispatch that exact ` +
-                "iteration with --retry-pending before recording the verdict.",
+                `iteration ${iteration} has no unit source fingerprint. Modernize that exact ` +
+                "request with --retry-pending before recording the verdict.",
             );
           }
-          if (unitFingerprint !== requestedUnitFingerprint) {
+          if (unitFingerprint !== requestBinding.unitSourceFingerprint) {
             refuseReview(
               `Refusing REVIEW_COMPLETED for "${flags.stage}": unit source or source-manifest.json ` +
-                `changed after REVIEW_REQUESTED iteration ${iteration}. Re-dispatch that exact ` +
-                "iteration with --retry-pending so the reviewer inspects the current bytes.",
+                `changed after REVIEW_REQUESTED iteration ${iteration}. Restore the requested ` +
+                "unit source state and re-dispatch the reviewer.",
             );
           }
           fields["Unit Source Fingerprint"] = unitFingerprint;

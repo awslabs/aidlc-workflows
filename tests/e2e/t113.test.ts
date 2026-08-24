@@ -63,6 +63,11 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import {
+  appendFileSync,
+  mkdirSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -71,7 +76,10 @@ import {
 } from "../harness/fixtures.ts";
 // P4: audit is sharded per clone under the created intent's record; read the
 // merged shards via the shipped helper (default-resolves the active intent).
-import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  readAllAuditShards,
+  recordDir,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
@@ -115,6 +123,20 @@ function walkStage(slug: string, proj: string): void {
     "code-generation": "aidlc-architecture-reviewer-agent",
   };
   if (reviewerFor[slug]) {
+    const record = recordDir(proj);
+    if (!record) throw new Error("active record missing");
+    const artifact =
+      slug === "requirements-analysis"
+        ? join(record, "inception", slug, "requirements.md")
+        : join(
+            record,
+            "construction",
+            "unit-alpha",
+            slug,
+            "code-generation-plan.md",
+          );
+    mkdirSync(join(artifact, ".."), { recursive: true });
+    writeFileSync(artifact, `# ${slug}\n`, "utf-8");
     const requested = run(LOG, [
       "review",
       "--stage",
@@ -125,6 +147,11 @@ function walkStage(slug: string, proj: string): void {
       "1",
     ], proj);
     expect(requested.status).toBe(0);
+    appendFileSync(
+      artifact,
+      `\n## Review\n\n**Verdict:** READY\n**Reviewer:** ${reviewerFor[slug]}\n**Iteration:** 1\n\n### Findings\n\nFixture review.\n`,
+      "utf-8",
+    );
     const rv = run(LOG, [
       "review",
       "--stage",

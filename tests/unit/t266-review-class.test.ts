@@ -91,6 +91,7 @@ describe("t266 review class", () => {
       const res = validateStageFrontmatter({
         ...BASE,
         reviewer: "aidlc-product-lead-agent",
+        review_artifact: "fixture-artifact",
         review_class: cls,
       });
       expect(res.valid).toBe(true);
@@ -101,6 +102,7 @@ describe("t266 review class", () => {
     const res = validateStageFrontmatter({
       ...BASE,
       reviewer: "aidlc-product-lead-agent",
+      review_artifact: "fixture-artifact",
       review_class: "none", // scope-cap/override vocabulary, not a stage value
     });
     expect(res.valid).toBe(false);
@@ -117,6 +119,48 @@ describe("t266 review class", () => {
     expect(res.valid).toBe(false);
     if (!res.valid) {
       expect(res.errors.join("\n")).toContain("review_class requires a reviewer");
+    }
+  });
+
+  test("schema requires an explicit stable Markdown review_artifact", () => {
+    const missing = validateStageFrontmatter({
+      ...BASE,
+      reviewer: "aidlc-product-lead-agent",
+    });
+    expect(missing.valid).toBe(false);
+    if (!missing.valid) {
+      expect(missing.errors).toContain("reviewer requires review_artifact");
+    }
+
+    for (const reviewArtifact of ["optional", "traceability"]) {
+      const invalid = validateStageFrontmatter({
+        ...BASE,
+        produces: ["fixture-artifact", "traceability"],
+        optional_produces: ["optional"],
+        reviewer: "aidlc-product-lead-agent",
+        review_artifact: reviewArtifact,
+      });
+      expect(invalid.valid, reviewArtifact).toBe(false);
+    }
+
+    const pruned = validateStageFrontmatter({
+      ...BASE,
+      phase: "construction",
+      for_each: "unit-of-work",
+      produces: ["plugin-output", "fixture-artifact"],
+      produces_kinds: {
+        "plugin-output": ["service", "ui"],
+        "fixture-artifact": ["service"],
+      },
+      reviewer: "aidlc-product-lead-agent",
+      review_artifact: "fixture-artifact",
+      plugin: "fixture-plugin",
+    });
+    expect(pruned.valid).toBe(false);
+    if (!pruned.valid) {
+      expect(pruned.errors.join("\n")).toContain(
+        'review_artifact "fixture-artifact" is pruned for applicable unit kinds: ui',
+      );
     }
   });
 
@@ -152,20 +196,24 @@ describe("t266 review class", () => {
       const graph = JSON.parse(read(rel)) as Array<{
         slug: string;
         reviewer?: string;
+        review_artifact?: string;
         review_class?: string;
       }>;
       const bySlug = new Map(graph.map((s) => [s.slug, s]));
       for (const slug of ADVISORY_STAGES) {
         expect(bySlug.get(slug)?.review_class).toBe("advisory");
+        expect(bySlug.get(slug)?.review_artifact).toBeTruthy();
       }
       for (const slug of ADVERSARIAL_STAGES) {
         expect(bySlug.get(slug)?.review_class).toBe("adversarial");
+        expect(bySlug.get(slug)?.review_artifact).toBeTruthy();
       }
       // No reviewer -> no class key at all.
       const noReviewer = graph.filter((s) => !s.reviewer);
       expect(noReviewer.length).toBeGreaterThan(0);
       for (const s of noReviewer) {
         expect(s.review_class).toBeUndefined();
+        expect(s.review_artifact).toBeUndefined();
       }
     }
   });

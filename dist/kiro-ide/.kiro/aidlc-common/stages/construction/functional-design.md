@@ -9,6 +9,7 @@ support_agents:
 mode: inline
 summary_confirmation: required
 reviewer: aidlc-architecture-reviewer-agent
+review_artifact: functional-spec
 reviewer_max_iterations: 2
 for_each: unit-of-work
 produces:
@@ -21,7 +22,7 @@ optional_produces:
 produces_kinds:
   entities: [service, spec, library]
   rules: [service, spec, library]
-  functional-spec: [service, ui, library]
+  functional-spec: [service, spec, ui, library]
   traceability: [service, spec, ui, library]
   frontend-components: [ui]
 consumes:

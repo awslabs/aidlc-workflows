@@ -1,4 +1,6 @@
-// covers: function:isAutonomousSwarmStage
+// covers: function:isAutonomousSwarmStage, function:reviewArtifactSnapshot,
+// function:validateReviewAppendix, function:reviewCompletionMatchesRequest,
+// function:reviewRequestBindingFromBlock
 //
 // t271 — engine-enforced review iteration ceiling (aidlc-log review).
 //
@@ -22,7 +24,17 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  linkSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import {
   createTestProject,
@@ -35,8 +47,13 @@ import {
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
+  auditBlockField,
   boltSlugForUnit,
+  freshReviewReceipts,
   readAllAuditShards,
+  reviewArtifactFingerprint,
+  reviewArtifactSnapshot,
+  resolveStage,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const LOG_TOOL = join(
@@ -57,6 +74,63 @@ function runReview(
   args: string[],
   extraEnv: Record<string, string> = {},
 ) {
+  const stage = args[args.indexOf("--stage") + 1];
+  const reviewer = args[args.indexOf("--reviewer") + 1];
+  const iteration = Number(args[args.indexOf("--iteration") + 1]);
+  const unitIndex = args.indexOf("--unit");
+  const unit = unitIndex === -1 ? undefined : args[unitIndex + 1];
+  const definition = resolveStage(stage);
+  let reviewArtifact: string | null = null;
+  if (definition?.review_artifact) {
+    const dir =
+      definition.for_each === "unit-of-work"
+        ? join(
+            seededRecordDir(proj),
+            "construction",
+            unit ?? "unit-alpha",
+            stage,
+          )
+        : join(seededRecordDir(proj), definition.phase, stage);
+    reviewArtifact = join(dir, `${definition.review_artifact}.md`);
+    mkdirSync(dir, { recursive: true });
+    if (!existsSync(reviewArtifact)) {
+      writeFileSync(reviewArtifact, `# ${definition.review_artifact}\n`, "utf-8");
+    }
+  }
+  const verdictIndex = args.indexOf("--verdict");
+  if (
+    verdictIndex === -1 &&
+    !args.includes("--retry-pending") &&
+    extraEnv.AIDLC_TEST_KEEP_REVIEW !== "1" &&
+    reviewArtifact !== null
+  ) {
+    const current = readFileSync(reviewArtifact, "utf-8");
+    const reviewStart = current.search(/^## Review[ \t]*$/m);
+    if (reviewStart !== -1) {
+      writeFileSync(
+        reviewArtifact,
+        `${current.slice(0, reviewStart).replace(/\s+$/, "")}\n`,
+        "utf-8",
+      );
+    }
+  }
+  if (verdictIndex !== -1) {
+    if (reviewArtifact !== null) {
+      if (
+        !/^## Review[ \t]*$/m.test(readFileSync(reviewArtifact, "utf-8"))
+      ) {
+        appendFileSync(
+          reviewArtifact,
+          reviewAppendix(
+            reviewer,
+            iteration,
+            args[verdictIndex + 1].toUpperCase() as "READY" | "NOT-READY",
+          ),
+          "utf-8",
+        );
+      }
+    }
+  }
   const res = spawnSync(
     process.execPath,
     [LOG_TOOL, "review", ...args],
@@ -146,6 +220,7 @@ function seedProject(scope: "bugfix" | "feature"): string {
       writeFileSync(join(dir, name), `# ${name}\n`, "utf-8");
     }
   }
+  writeSourceManifest(proj, "unit-alpha");
   return proj;
 }
 
@@ -170,7 +245,10 @@ function writeSourceManifest(proj: string, unit: string): void {
 
 function writeReviewedArtifact(
   proj: string,
-  stage: "requirements-analysis" | "code-generation",
+  stage:
+    | "requirements-analysis"
+    | "functional-design"
+    | "code-generation",
   content: string,
   unit?: string,
 ): string {
@@ -183,6 +261,8 @@ function writeReviewedArtifact(
     dir,
     stage === "requirements-analysis"
       ? "requirements.md"
+      : stage === "functional-design"
+        ? "functional-spec.md"
       : "code-generation-plan.md",
   );
   writeFileSync(path, content, "utf-8");
@@ -197,6 +277,28 @@ function writeReviewedArtifact(
     writeSourceManifest(proj, unit);
   }
   return path;
+}
+
+function auditBlocks(proj: string, event: string): string[] {
+  return readAllAuditShards(proj)
+    .replace(/\r\n/g, "\n")
+    .split(/\n---\n/)
+    .filter((block) => auditBlockField(block, "Event") === event);
+}
+
+function reviewAppendix(
+  reviewer: string,
+  iteration: number,
+  verdict: "READY" | "NOT-READY",
+  findings = "No blocking findings.",
+): string {
+  return (
+    "\n## Review\n\n" +
+    `**Verdict:** ${verdict}\n` +
+    `**Reviewer:** ${reviewer}\n` +
+    `**Iteration:** ${iteration}\n\n` +
+    `### Findings\n\n${findings}\n`
+  );
 }
 
 describe("t271 review iteration ceiling", () => {
@@ -697,7 +799,7 @@ describe("t271 review iteration ceiling", () => {
       "--stage", "requirements-analysis",
       "--reviewer", "aidlc-product-lead-agent",
       "--iteration", "2",
-    ]);
+    ], { AIDLC_TEST_KEEP_REVIEW: "1" });
     expect(overBudget.status).not.toBe(0);
     expect(overBudget.stderr).toContain("allows 1 review pass");
   });
@@ -775,7 +877,7 @@ describe("t271 review iteration ceiling", () => {
     expect(rows.length).toBe(2);
   });
 
-  test("request fingerprints bind the verdict to the dispatched artifact bytes", () => {
+  test("a compliant reviewer appendix completes without retry and the receipt binds the full result", () => {
     const proj = seedProject("feature");
     const artifact = writeReviewedArtifact(
       proj,
@@ -789,20 +891,835 @@ describe("t271 review iteration ceiling", () => {
     ];
 
     expect(runReview(proj, request).status).toBe(0);
-    expect(readAllAuditShards(proj)).toMatch(
-      /\*\*Event\*\*: REVIEW_REQUESTED[\s\S]*?\*\*Artifact Fingerprint\*\*: sha256:[0-9a-f]{64}/,
+    const requested = auditBlocks(proj, "REVIEW_REQUESTED")[0];
+    const requestFingerprint = auditBlockField(
+      requested,
+      "Artifact Fingerprint",
+    );
+    expect(requestFingerprint).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(auditBlockField(requested, "Review Appendix Artifact")).toBe(
+      "inception/requirements-analysis/requirements.md",
+    );
+    expect(auditBlockField(requested, "Review Appendix Offset")).toBe(
+      String(Buffer.byteLength("reviewed requirements\n")),
     );
 
-    writeFileSync(artifact, "changed while reviewer was running\n", "utf-8");
+    appendFileSync(
+      artifact,
+      reviewAppendix("aidlc-product-lead-agent", 1, "READY"),
+      "utf-8",
+    );
+    expect(runReview(proj, [...request, "--verdict", "READY"]).status).toBe(0);
+
+    const completed = auditBlocks(proj, "REVIEW_COMPLETED")[0];
+    expect(auditBlockField(completed, "Request Fingerprint")).toBe(
+      requestFingerprint,
+    );
+    expect(auditBlockField(completed, "Artifact Fingerprint")).toMatch(
+      /^sha256:[0-9a-f]{64}$/,
+    );
+    expect(auditBlockField(completed, "Artifact Fingerprint")).not.toBe(
+      requestFingerprint,
+    );
+
+    const stage = resolveStage("requirements-analysis");
+    if (!stage) throw new Error("requirements-analysis missing from stage graph");
+    const receipts = freshReviewReceipts(
+      proj,
+      readFileSync(seededStateFile(proj), "utf-8"),
+      stage,
+      { reviewClass: "advisory" },
+    );
+    expect(receipts.stageVerdict).toBe("READY");
+
+    appendFileSync(artifact, "\npost-receipt mutation\n", "utf-8");
+    const stale = freshReviewReceipts(
+      proj,
+      readFileSync(seededStateFile(proj), "utf-8"),
+      stage,
+      { reviewClass: "advisory" },
+    );
+    expect(stale.stageVerdict).toBeNull();
+    expect(stale.stageStale).toBe(true);
+  });
+
+  test("--retry-pending cannot rebaseline changed review input into a READY receipt", () => {
+    const proj = seedProject("feature");
+    const artifact = writeReviewedArtifact(
+      proj,
+      "requirements-analysis",
+      "reviewed requirements\n",
+    );
+    const request = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+      "--iteration", "1",
+    ];
+
+    expect(runReview(proj, request).status).toBe(0);
+    writeFileSync(
+      artifact,
+      `changed while reviewer was running\n${reviewAppendix(
+        "aidlc-product-lead-agent",
+        1,
+        "READY",
+      )}`,
+      "utf-8",
+    );
+
     const staleVerdict = runReview(proj, [...request, "--verdict", "READY"]);
     expect(staleVerdict.status).not.toBe(0);
     expect(staleVerdict.stderr).toContain(
-      "output documents changed after review iteration",
+      "changed outside the reviewer-authored appendix",
     );
-    expect(readAllAuditShards(proj)).not.toContain("**Event**: REVIEW_COMPLETED");
 
-    expect(runReview(proj, [...request, "--retry-pending"]).status).toBe(0);
+    const retry = runReview(proj, [...request, "--retry-pending"]);
+    expect(retry.status).not.toBe(0);
+    expect(retry.stderr).toContain("cannot rebaseline changed content");
+    expect(auditBlocks(proj, "REVIEW_REQUESTED")).toHaveLength(1);
+    expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(0);
+  });
+
+  test("an incomplete review can retry after its partial appendix is removed", () => {
+    const proj = seedProject("feature");
+    const original = "reviewed requirements\n";
+    const artifact = writeReviewedArtifact(
+      proj,
+      "requirements-analysis",
+      original,
+    );
+    const request = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+      "--iteration", "1",
+    ];
+
+    expect(runReview(proj, request).status).toBe(0);
+    const originalFingerprint = auditBlockField(
+      auditBlocks(proj, "REVIEW_REQUESTED")[0],
+      "Artifact Fingerprint",
+    );
+    appendFileSync(artifact, "\n## Review\n\nfinding without verdict\n", "utf-8");
+
+    writeFileSync(artifact, original, "utf-8");
+    const retry = runReview(proj, [...request, "--retry-pending"]);
+    expect(retry.status).toBe(0);
+    expect(retry.stdout).toContain('"retry":"pending-request"');
+    const requests = auditBlocks(proj, "REVIEW_REQUESTED");
+    expect(requests).toHaveLength(2);
+    expect(auditBlockField(requests[1], "Artifact Fingerprint")).toBe(
+      originalFingerprint,
+    );
+    const secondRetry = runReview(proj, [...request, "--retry-pending"]);
+    expect(secondRetry.status).not.toBe(0);
+    expect(secondRetry.stderr).toContain(
+      "already used its one pending-request retry",
+    );
+    expect(auditBlocks(proj, "REVIEW_REQUESTED")).toHaveLength(2);
+
+    appendFileSync(
+      artifact,
+      reviewAppendix(
+        "aidlc-product-lead-agent",
+        1,
+        "READY",
+        "Recovered review.",
+      ),
+      "utf-8",
+    );
     expect(runReview(proj, [...request, "--verdict", "READY"]).status).toBe(0);
+  });
+
+  test("only one owned canonical Review section may occupy the appended suffix", () => {
+    const cases = [
+      {
+        name: "semantic bytes before heading",
+        suffix:
+          "\nUnreviewed acceptance criteria.\n" +
+          reviewAppendix("aidlc-product-lead-agent", 1, "READY"),
+        error: "must begin with only blank lines",
+      },
+      {
+        name: "duplicate review section",
+        suffix:
+          reviewAppendix("aidlc-product-lead-agent", 1, "READY") +
+          reviewAppendix("aidlc-product-lead-agent", 1, "READY"),
+        error: "no later rendered H1 or H2 heading",
+      },
+      {
+        name: "later H1 section",
+        suffix:
+          reviewAppendix("aidlc-product-lead-agent", 1, "READY") +
+          "\n# Unreviewed Top Level\n\nSemantic content.\n",
+        error: "no later rendered H1 or H2 heading",
+      },
+      {
+        name: "indented later H1 section",
+        suffix:
+          reviewAppendix("aidlc-product-lead-agent", 1, "READY") +
+          "\n   # Unreviewed Top Level\n\nSemantic content.\n",
+        error: "no later rendered H1 or H2 heading",
+      },
+      {
+        name: "later setext H1",
+        suffix:
+          reviewAppendix("aidlc-product-lead-agent", 1, "READY") +
+          "\nUnreviewed Top Level\n====================\n\nSemantic content.\n",
+        error: "no later rendered H1 or H2 heading",
+      },
+      {
+        name: "later setext H2",
+        suffix:
+          reviewAppendix("aidlc-product-lead-agent", 1, "READY") +
+          "\nUnreviewed Top Level\n--------------------\n\nSemantic content.\n",
+        error: "no later rendered H1 or H2 heading",
+      },
+      {
+        name: "indented later setext H2",
+        suffix:
+          reviewAppendix("aidlc-product-lead-agent", 1, "READY") +
+          "\nUnreviewed Top Level\n   --------------------\n\nSemantic content.\n",
+        error: "no later rendered H1 or H2 heading",
+      },
+      {
+        name: "rendered HTML H1",
+        suffix:
+          reviewAppendix("aidlc-product-lead-agent", 1, "READY") +
+          "\n<h1>Unreviewed Top Level</h1>\n\nSemantic content.\n",
+        error: "no rendered HTML H1 or H2 heading",
+      },
+      {
+        name: "nested rendered HTML H2",
+        suffix:
+          reviewAppendix("aidlc-product-lead-agent", 1, "READY") +
+          '\n<section><H2 class="replacement">Unreviewed</H2></section>\n',
+        error: "no rendered HTML H1 or H2 heading",
+      },
+      {
+        name: "multiline rendered HTML H1",
+        suffix:
+          reviewAppendix("aidlc-product-lead-agent", 1, "READY") +
+          '\n<h1\n class="replacement">Unreviewed</h1>\n',
+        error: "no rendered HTML H1 or H2 heading",
+      },
+      {
+        name: "inline code cannot open a fake HTML comment",
+        suffix:
+          reviewAppendix("aidlc-product-lead-agent", 1, "READY") +
+          "\nLiteral `<!--`\n# Unreviewed Top Level\n-->\n",
+        error: "no later rendered H1 or H2 heading",
+      },
+      {
+        name: "list continuation code cannot open a fake HTML comment",
+        suffix:
+          reviewAppendix("aidlc-product-lead-agent", 1, "READY") +
+          "\n- Literal `<!--\n  continued`\n\n# Unreviewed Top Level\n-->\n",
+        error: "no later rendered H1 or H2 heading",
+      },
+      {
+        name: "blockquote continuation code cannot open a fake HTML comment",
+        suffix:
+          reviewAppendix("aidlc-product-lead-agent", 1, "READY") +
+          "\n> Literal `<!--\n> continued`\n\n# Unreviewed Top Level\n-->\n",
+        error: "no later rendered H1 or H2 heading",
+      },
+      {
+        name: "multiline code cannot cross into a list HTML heading",
+        suffix:
+          reviewAppendix("aidlc-product-lead-agent", 1, "READY") +
+          "\nLiteral `not code across blocks\n- <h1>Unreviewed</h1>\n`\n",
+        error: "no rendered HTML H1 or H2 heading",
+      },
+      {
+        name: "renderer sentinel injection",
+        suffix: [
+          "",
+          "## Review",
+          "",
+          "\u0001Verdict:\u0002 READY",
+          "\u0001Reviewer:\u0002 aidlc-product-lead-agent",
+          "\u0001Iteration:\u0002 1",
+          "",
+        ].join("\n"),
+        error: "exactly one canonical verdict line",
+      },
+      {
+        name: "malformed verdict",
+        suffix: reviewAppendix(
+          "aidlc-product-lead-agent",
+          1,
+          "READY",
+        ).replace("**Verdict:** READY", "**Verdict:** READY enough"),
+        error: "exactly one canonical verdict line",
+      },
+      {
+        name: "conflicting duplicate verdict",
+        suffix: reviewAppendix(
+          "aidlc-product-lead-agent",
+          1,
+          "READY",
+        ).replace(
+          "**Verdict:** READY",
+          "**Verdict:** READY\n**Verdict:** NOT-READY",
+        ),
+        error: "exactly one canonical verdict line",
+      },
+      {
+        name: "forged reviewer",
+        suffix: reviewAppendix("aidlc-architecture-reviewer-agent", 1, "READY"),
+        error: "Reviewer line matching the requested reviewer",
+      },
+      {
+        name: "wrong iteration",
+        suffix: reviewAppendix("aidlc-product-lead-agent", 2, "READY"),
+        error: "Iteration line matching the request",
+      },
+      {
+        name: "conflicting duplicate reviewer",
+        suffix: reviewAppendix(
+          "aidlc-product-lead-agent",
+          1,
+          "READY",
+        ).replace(
+          "**Reviewer:** aidlc-product-lead-agent",
+          "**Reviewer:** aidlc-product-lead-agent\n**Reviewer:** aidlc-architecture-reviewer-agent",
+        ),
+        error: "exactly one Reviewer line",
+      },
+      {
+        name: "conflicting indented duplicate reviewer",
+        suffix: reviewAppendix(
+          "aidlc-product-lead-agent",
+          1,
+          "READY",
+        ).replace(
+          "**Reviewer:** aidlc-product-lead-agent",
+          "**Reviewer:** aidlc-product-lead-agent\n   **Reviewer:** aidlc-architecture-reviewer-agent",
+        ),
+        error: "exactly one Reviewer line",
+      },
+      {
+        name: "conflicting duplicate iteration",
+        suffix: reviewAppendix(
+          "aidlc-product-lead-agent",
+          1,
+          "READY",
+        ).replace(
+          "**Iteration:** 1",
+          "**Iteration:** 1\n**Iteration:** 2",
+        ),
+        error: "exactly one Iteration line",
+      },
+    ] as const;
+
+    for (const scenario of cases) {
+      const proj = seedProject("feature");
+      const artifact = writeReviewedArtifact(
+        proj,
+        "requirements-analysis",
+        "reviewed requirements\n",
+      );
+      const request = [
+        "--stage", "requirements-analysis",
+        "--reviewer", "aidlc-product-lead-agent",
+        "--iteration", "1",
+      ];
+      expect(runReview(proj, request).status, scenario.name).toBe(0);
+      appendFileSync(artifact, scenario.suffix, "utf-8");
+      const completed = runReview(proj, [...request, "--verdict", "READY"]);
+      expect(completed.status, scenario.name).not.toBe(0);
+      expect(completed.stderr, scenario.name).toContain(scenario.error);
+      expect(auditBlocks(proj, "REVIEW_COMPLETED"), scenario.name).toHaveLength(
+        0,
+      );
+    }
+  }, 30_000); // Native Windows runs every crafted suffix through spawned Bun CLIs.
+
+  test("fenced and inline examples cannot conflict with review ownership", () => {
+    const proj = seedProject("feature");
+    const artifact = writeReviewedArtifact(
+      proj,
+      "requirements-analysis",
+      "reviewed requirements\n",
+    );
+    const request = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+      "--iteration", "1",
+    ];
+    expect(runReview(proj, request).status).toBe(0);
+    appendFileSync(
+      artifact,
+      reviewAppendix(
+        "aidlc-product-lead-agent",
+        1,
+        "READY",
+        [
+          "The tool emitted these literal examples:",
+          "",
+          "```markdown",
+          "# Example H1",
+          "Example setext",
+          "==============",
+          "<h2>Example HTML heading</h2>",
+          "**Verdict:** NOT-READY",
+          "**Reviewer:** aidlc-architecture-reviewer-agent",
+          "**Iteration:** 99",
+          "```",
+          "",
+          "~~~text",
+          "## Another example",
+          "**Reviewer:** not-authority",
+          "~~~",
+          "",
+          "Inline code such as `<h1>Example</h1>` is not rendered authority.",
+          "",
+          "<!--",
+          "<h1>Commented example</h1>",
+          "**Reviewer:** commented-not-authority",
+          "-->",
+        ].join("\n"),
+      ),
+      "utf-8",
+    );
+    const completed = runReview(proj, [...request, "--verdict", "READY"]);
+    expect(completed.status, completed.stderr).toBe(0);
+    expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(1);
+  });
+
+  test("multiline code spans cannot hide or erase canonical ownership fields", () => {
+    const proj = seedProject("feature");
+    const artifact = writeReviewedArtifact(
+      proj,
+      "requirements-analysis",
+      "reviewed requirements\n",
+    );
+    const request = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+      "--iteration", "1",
+    ];
+    expect(runReview(proj, request).status).toBe(0);
+    appendFileSync(
+      artifact,
+      [
+        "",
+        "## Review",
+        "",
+        "### Findings",
+        "",
+        "Literal `<!--",
+        "continued -->` remains code.",
+        "",
+        "**Verdict:** READY",
+        "**Reviewer:** aidlc-product-lead-agent",
+        "**Iteration:** 1",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    const completed = runReview(proj, [...request, "--verdict", "READY"]);
+    expect(completed.status, completed.stderr).toBe(0);
+    expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(1);
+  });
+
+  test("an empty primary artifact accepts only a canonical owned review appendix", () => {
+    const proj = seedProject("feature");
+    const artifact = writeReviewedArtifact(
+      proj,
+      "requirements-analysis",
+      "",
+    );
+    const request = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+      "--iteration", "1",
+    ];
+    expect(runReview(proj, request).status).toBe(0);
+    expect(
+      auditBlockField(
+        auditBlocks(proj, "REVIEW_REQUESTED")[0],
+        "Review Appendix Offset",
+      ),
+    ).toBe("0");
+    appendFileSync(
+      artifact,
+      reviewAppendix("aidlc-product-lead-agent", 1, "READY").trimStart(),
+      "utf-8",
+    );
+    expect(runReview(proj, [...request, "--verdict", "READY"]).status).toBe(0);
+  });
+
+  test("review_artifact, not produces order, owns plugin, kind-filtered, and no-DAG append selection", () => {
+    const noDag = createTestProject();
+    seedStateFile(noDag, "state-mid-inception.md");
+    seedAuditFile(noDag);
+    for (const unit of ["zeta", "alpha"]) {
+      const dir = join(
+        seededRecordDir(noDag),
+        "construction",
+        unit,
+        "plugin-review-stage",
+      );
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "plugin-preface.md"), "plugin output\n", "utf-8");
+      writeFileSync(join(dir, "primary.md"), `${unit} primary\n`, "utf-8");
+    }
+    const pluginStage = {
+      slug: "plugin-review-stage",
+      phase: "construction",
+      for_each: "unit-of-work",
+      review_artifact: "primary",
+      produces: ["plugin-preface", "primary"],
+    };
+    const pluginSnapshot = reviewArtifactSnapshot(noDag, pluginStage);
+    expect(pluginSnapshot?.appendixArtifact).toBe(
+      "construction/alpha/plugin-review-stage/primary.md",
+    );
+
+    const kindProject = seedProject("feature");
+    const kindDir = join(
+      seededRecordDir(kindProject),
+      "construction",
+      "unit-alpha",
+      "functional-design",
+    );
+    mkdirSync(kindDir, { recursive: true });
+    writeFileSync(join(kindDir, "functional-spec.md"), "spec unit\n", "utf-8");
+    const functional = resolveStage("functional-design");
+    if (!functional) throw new Error("functional-design missing from graph");
+    const kindSnapshot = reviewArtifactSnapshot(
+      kindProject,
+      functional,
+      "unit-alpha",
+    );
+    expect(kindSnapshot?.appendixArtifact).toBe(
+      "construction/unit-alpha/functional-design/functional-spec.md",
+    );
+  });
+
+  test("a controlled atomic replacement invalidates the coherent artifact snapshot", () => {
+    const proj = seedProject("feature");
+    const artifact = writeReviewedArtifact(
+      proj,
+      "requirements-analysis",
+      "reviewed requirements\n",
+    );
+    const stage = resolveStage("requirements-analysis");
+    if (!stage) throw new Error("requirements-analysis missing from graph");
+    const requested = reviewArtifactSnapshot(proj, stage);
+    if (!requested) throw new Error("request snapshot failed");
+    appendFileSync(
+      artifact,
+      reviewAppendix("aidlc-product-lead-agent", 1, "READY"),
+      "utf-8",
+    );
+    const replacement = `${artifact}.replacement`;
+    writeFileSync(
+      replacement,
+      `replacement content\n${reviewAppendix(
+        "aidlc-product-lead-agent",
+        1,
+        "READY",
+      )}`,
+      "utf-8",
+    );
+    let replaced = false;
+    const raced = reviewArtifactSnapshot(proj, stage, undefined, {
+      appendixBinding: {
+        artifact: requested.appendixArtifact,
+        offset: requested.appendixOffset,
+      },
+      snapshotObserver: ({ logicalPath }) => {
+        if (!replaced && logicalPath === requested.appendixArtifact) {
+          if (process.platform === "win32") {
+            // Windows renameSync does not replace an existing destination.
+            // Mutate the already-open file instead; the stable descriptor/path
+            // identity check must reject this race too.
+            writeFileSync(artifact, readFileSync(replacement));
+          } else {
+            renameSync(replacement, artifact);
+          }
+          replaced = true;
+        }
+      },
+    });
+    expect(replaced).toBe(true);
+    expect(raced).toBeNull();
+    expect(readFileSync(artifact, "utf-8")).toContain("replacement content");
+  });
+
+  test("review snapshots reject symlinked and hardlinked artifact leaves", () => {
+    const stage = resolveStage("requirements-analysis");
+    if (!stage) throw new Error("requirements-analysis missing from graph");
+
+    for (const alias of ["symlink", "hardlink"] as const) {
+      for (const name of [
+        "requirements.md",
+        "requirements-analysis-questions.md",
+      ]) {
+        const proj = seedProject("feature");
+        const artifact = join(
+          seededRecordDir(proj),
+          "inception",
+          "requirements-analysis",
+          name,
+        );
+        const external = join(proj, `external-${alias}-${name}`);
+        const canary = `external ${alias} canary\n`;
+        writeFileSync(external, canary, "utf-8");
+        unlinkSync(artifact);
+        if (alias === "symlink") {
+          try {
+            symlinkSync(external, artifact);
+          } catch {
+            continue; // Windows without symlink privilege.
+          }
+        } else {
+          linkSync(external, artifact);
+        }
+
+        expect(reviewArtifactSnapshot(proj, stage)).toBeNull();
+        expect(reviewArtifactFingerprint(proj, stage)).toBeNull();
+        const request = spawnSync(
+          process.execPath,
+          [
+            LOG_TOOL,
+            "review",
+            "--stage",
+            "requirements-analysis",
+            "--reviewer",
+            "aidlc-product-lead-agent",
+            "--iteration",
+            "1",
+            "--project-dir",
+            proj,
+          ],
+          {
+            encoding: "utf-8",
+            env: {
+              ...process.env,
+              AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+            },
+          },
+        );
+        expect(request.status).not.toBe(0);
+        expect(readFileSync(external, "utf-8")).toBe(canary);
+        expect(auditBlocks(proj, "REVIEW_REQUESTED")).toHaveLength(0);
+      }
+    }
+  });
+
+  test("malformed completion rows do not consume a pending modern request", () => {
+    const proj = seedProject("feature");
+    const artifact = writeReviewedArtifact(
+      proj,
+      "requirements-analysis",
+      "reviewed requirements\n",
+    );
+    const request = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+      "--iteration", "1",
+    ];
+    expect(runReview(proj, request).status).toBe(0);
+    const requested = auditBlocks(proj, "REVIEW_REQUESTED")[0];
+    appendAuditEntry(
+      "REVIEW_COMPLETED",
+      {
+        Stage: "requirements-analysis",
+        Reviewer: "aidlc-product-lead-agent",
+        Iteration: "1",
+        Verdict: "READY",
+        "Request Fingerprint":
+          auditBlockField(requested, "Artifact Fingerprint") ?? "",
+        "Artifact Fingerprint":
+          auditBlockField(requested, "Artifact Fingerprint") ?? "",
+        "Review Appendix Artifact":
+          auditBlockField(requested, "Review Appendix Artifact") ?? "",
+        // Review Appendix Offset intentionally omitted.
+      },
+      proj,
+    );
+    appendFileSync(
+      artifact,
+      reviewAppendix("aidlc-product-lead-agent", 1, "READY"),
+      "utf-8",
+    );
+    const valid = runReview(proj, [...request, "--verdict", "READY"]);
+    expect(valid.status, valid.stderr).toBe(0);
+    expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(2);
+
+    const stage = resolveStage("requirements-analysis");
+    if (!stage) throw new Error("requirements-analysis missing from graph");
+    const receipts = freshReviewReceipts(
+      proj,
+      readFileSync(seededStateFile(proj), "utf-8"),
+      stage,
+      { reviewClass: "advisory" },
+    );
+    expect(receipts.stageVerdict).toBe("READY");
+  });
+
+  test("legacy equal-fingerprint request/completion rows remain readable", () => {
+    const proj = seedProject("feature");
+    writeReviewedArtifact(
+      proj,
+      "requirements-analysis",
+      "legacy reviewed requirements\n",
+    );
+    const stage = resolveStage("requirements-analysis");
+    if (!stage) throw new Error("requirements-analysis missing from graph");
+    const fingerprint = reviewArtifactFingerprint(proj, stage);
+    if (!fingerprint) throw new Error("legacy fingerprint failed");
+    const identity = {
+      Stage: "requirements-analysis",
+      Reviewer: "aidlc-product-lead-agent",
+      Iteration: "1",
+      "Artifact Fingerprint": fingerprint,
+    };
+    appendAuditEntry("REVIEW_REQUESTED", identity, proj);
+    appendAuditEntry(
+      "REVIEW_COMPLETED",
+      { ...identity, Verdict: "READY" },
+      proj,
+    );
+    const receipts = freshReviewReceipts(
+      proj,
+      readFileSync(seededStateFile(proj), "utf-8"),
+      stage,
+      { reviewClass: "advisory" },
+    );
+    expect(receipts.stageVerdict).toBe("READY");
+  });
+
+  test("one pending retry upgrades a valid legacy request to a modern binding", () => {
+    const proj = seedProject("feature");
+    writeReviewedArtifact(
+      proj,
+      "requirements-analysis",
+      "legacy pending requirements\n",
+    );
+    const stage = resolveStage("requirements-analysis");
+    if (!stage) throw new Error("requirements-analysis missing from graph");
+    const fingerprint = reviewArtifactFingerprint(proj, stage);
+    if (!fingerprint) throw new Error("legacy fingerprint failed");
+    appendAuditEntry(
+      "REVIEW_REQUESTED",
+      {
+        Stage: "requirements-analysis",
+        Reviewer: "aidlc-product-lead-agent",
+        Iteration: "1",
+        "Artifact Fingerprint": fingerprint,
+      },
+      proj,
+    );
+    const request = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+      "--iteration", "1",
+    ];
+    const upgraded = runReview(proj, [...request, "--retry-pending"]);
+    expect(upgraded.status, upgraded.stderr).toBe(0);
+    expect(upgraded.stdout).toContain('"upgrade":"legacy-request"');
+    const requests = auditBlocks(proj, "REVIEW_REQUESTED");
+    expect(requests).toHaveLength(2);
+    expect(auditBlockField(requests[1], "Upgrade")).toBe("legacy-request");
+    expect(auditBlockField(requests[1], "Review Appendix Artifact")).toBe(
+      "inception/requirements-analysis/requirements.md",
+    );
+
+    const secondRetry = runReview(proj, [...request, "--retry-pending"]);
+    expect(secondRetry.status).not.toBe(0);
+    expect(secondRetry.stderr).toContain(
+      "already used its one pending-request retry",
+    );
+    expect(runReview(proj, [...request, "--verdict", "READY"]).status).toBe(0);
+  });
+
+  test("a historical field-light retry gets one bounded modernizing dispatch", () => {
+    const proj = seedProject("feature");
+    writeReviewedArtifact(
+      proj,
+      "requirements-analysis",
+      "legacy retried requirements\n",
+    );
+    const stage = resolveStage("requirements-analysis");
+    if (!stage) throw new Error("requirements-analysis missing from graph");
+    const fingerprint = reviewArtifactFingerprint(proj, stage);
+    if (!fingerprint) throw new Error("legacy fingerprint failed");
+    const legacy = {
+      Stage: "requirements-analysis",
+      Reviewer: "aidlc-product-lead-agent",
+      Iteration: "1",
+      "Artifact Fingerprint": fingerprint,
+    };
+    appendAuditEntry("REVIEW_REQUESTED", legacy, proj);
+    appendAuditEntry(
+      "REVIEW_REQUESTED",
+      { ...legacy, Retry: "pending-request" },
+      proj,
+    );
+    const request = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+      "--iteration", "1",
+    ];
+    const upgraded = runReview(proj, [...request, "--retry-pending"]);
+    expect(upgraded.status, upgraded.stderr).toBe(0);
+    expect(upgraded.stdout).toContain('"upgrade":"legacy-request"');
+    const requests = auditBlocks(proj, "REVIEW_REQUESTED");
+    expect(requests).toHaveLength(3);
+    expect(auditBlockField(requests[2], "Upgrade")).toBe("legacy-request");
+    expect(auditBlockField(requests[2], "Review Appendix Offset")).not.toBeNull();
+
+    const secondRetry = runReview(proj, [...request, "--retry-pending"]);
+    expect(secondRetry.status).not.toBe(0);
+    expect(secondRetry.stderr).toContain(
+      "already used its one pending-request retry",
+    );
+    expect(runReview(proj, [...request, "--verdict", "READY"]).status).toBe(0);
+  });
+
+  test("malformed pending requests are safely invalidated and do not consume their ordinal", () => {
+    for (const malformed of ["partial appendix", "invalid source"] as const) {
+      const proj = seedProject("feature");
+      writeReviewedArtifact(
+        proj,
+        "requirements-analysis",
+        `${malformed} requirements\n`,
+      );
+      const stage = resolveStage("requirements-analysis");
+      if (!stage) throw new Error("requirements-analysis missing from graph");
+      const fingerprint = reviewArtifactFingerprint(proj, stage);
+      if (!fingerprint) throw new Error("request fingerprint failed");
+      appendAuditEntry(
+        "REVIEW_REQUESTED",
+        {
+          Stage: "requirements-analysis",
+          Reviewer: "aidlc-product-lead-agent",
+          Iteration: "1",
+          "Artifact Fingerprint": fingerprint,
+          ...(malformed === "partial appendix"
+            ? {
+                "Review Appendix Artifact":
+                  "inception/requirements-analysis/requirements.md",
+                // Offset intentionally absent, so the row has no valid binding.
+              }
+            : { "Source Fingerprint": "sha256:not-valid" }),
+        },
+        proj,
+      );
+      const request = [
+        "--stage", "requirements-analysis",
+        "--reviewer", "aidlc-product-lead-agent",
+        "--iteration", "1",
+      ];
+      const fresh = runReview(proj, request);
+      expect(fresh.status, `${malformed}: ${fresh.stderr}`).toBe(0);
+      expect(auditBlocks(proj, "REVIEW_REQUESTED")).toHaveLength(2);
+      expect(runReview(proj, [...request, "--verdict", "READY"]).status).toBe(0);
+    }
   });
 
   test("--unit requires an authoritative DAG or a matching active or merged Bolt", () => {

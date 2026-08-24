@@ -194,6 +194,8 @@ export interface RunStageDirective {
   // after the stage body completes. Absent (undefined) when no review step is
   // configured for this stage. See stage-protocol-reviewer.md §12a.
   reviewer?: string;
+  // Required Markdown output that owns the appended reviewer section.
+  review_artifact?: string;
   // reviewer_max_iterations — how many review cycles before escalating to the
   // human. Default 2 when reviewer is present. Absent when no reviewer.
   reviewer_max_iterations?: number;
@@ -306,6 +308,7 @@ export interface InvokeSwarmDirective {
   stage?: string;
   stage_file?: string;
   reviewer?: string;
+  review_artifact?: string;
   reviewer_max_iterations?: number;
   // review_class — the stage's DECLARED class, carried for observability.
   // Swarm reviews are exempt from scope caps and run overrides (the reviewer
@@ -505,6 +508,7 @@ const RUN_STAGE_FIELDS = [
   "sensors_applicable",
   "stage_file",
   "reviewer",
+  "review_artifact",
   "reviewer_max_iterations",
   "review_class",
   "protocol_modules",
@@ -545,6 +549,7 @@ const INVOKE_SWARM_FIELDS = [
   "stage",
   "stage_file",
   "reviewer",
+  "review_artifact",
   "reviewer_max_iterations",
   "review_class",
   "protocol_modules",
@@ -680,11 +685,25 @@ export function validateDirective(obj: unknown): ValidationResult {
       checkOptionalString(o, "stage", kind, errors);
       checkOptionalString(o, "stage_file", kind, errors);
       checkOptionalString(o, "reviewer", kind, errors);
+      checkOptionalString(o, "review_artifact", kind, errors);
       checkOptionalPositiveInteger(o, "reviewer_max_iterations", kind, errors);
       checkOptionalString(o, "review_class", kind, errors);
       checkEnum(o, "review_class", VALID_REVIEW_CLASSES, kind, errors);
       if ("review_class" in o && typeof o.reviewer !== "string") {
         errors.push(`${kind}: review_class requires reviewer`);
+      }
+      if (
+        typeof o.reviewer === "string" &&
+        typeof o.review_artifact !== "string"
+      ) {
+        errors.push(`${kind}: reviewer requires review_artifact`);
+      }
+      if (
+        "review_artifact" in o &&
+        typeof o.review_artifact === "string" &&
+        typeof o.reviewer !== "string"
+      ) {
+        errors.push(`${kind}: review_artifact requires reviewer`);
       }
       checkOptionalProtocolModules(o, kind, errors);
       checkOptionalString(o, "repo", kind, errors);
@@ -812,11 +831,25 @@ function checkRunStageShared(
   // stage declares a reviewer). Mirror the stage-schema validator: reviewer is
   // an optional string, reviewer_max_iterations an optional positive integer.
   checkOptionalString(o, "reviewer", kind, errors);
+  checkOptionalString(o, "review_artifact", kind, errors);
   checkOptionalPositiveInteger(o, "reviewer_max_iterations", kind, errors);
   checkOptionalString(o, "review_class", kind, errors);
   checkEnum(o, "review_class", VALID_REVIEW_CLASSES, kind, errors);
   if ("review_class" in o && typeof o.reviewer !== "string") {
     errors.push(`${kind}: review_class requires reviewer`);
+  }
+  if (
+    typeof o.reviewer === "string" &&
+    typeof o.review_artifact !== "string"
+  ) {
+    errors.push(`${kind}: reviewer requires review_artifact`);
+  }
+  if (
+    "review_artifact" in o &&
+    typeof o.review_artifact === "string" &&
+    typeof o.reviewer !== "string"
+  ) {
+    errors.push(`${kind}: review_artifact requires reviewer`);
   }
   if (kind === "run-stage") {
     checkOptionalProtocolModules(o, kind, errors);

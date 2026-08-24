@@ -53,7 +53,14 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
 
@@ -128,35 +135,68 @@ function walkStage(proj: string, slug: string): void {
     "code-generation": "aidlc-architecture-reviewer-agent",
   };
   if (reviewerFor[slug]) {
-    for (const suffix of [[], ["--verdict", "READY"]]) {
-      const review = spawnSync(
-        BUN,
-        [
-          LOG,
-          "review",
-          "--stage",
-          slug,
-          "--reviewer",
-          reviewerFor[slug],
-          "--iteration",
-          "1",
-          ...suffix,
-          "--project-dir",
-          proj,
-        ],
-        {
-          encoding: "utf-8",
-          env: {
-            ...env,
-            AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1",
-          },
-        },
+    const artifactDir =
+      slug === "requirements-analysis"
+        ? join(recordDirOf(proj), "inception", slug)
+        : join(recordDirOf(proj), "construction", "unit-alpha", slug);
+    const artifacts =
+      slug === "requirements-analysis"
+        ? ["requirements.md", "requirements-analysis-questions.md"]
+        : [
+            "code-generation-plan.md",
+            "unit-test-instructions.md",
+            "code-summary.md",
+            "traceability.json",
+          ];
+    mkdirSync(artifactDir, { recursive: true });
+    for (const name of artifacts) {
+      writeFileSync(join(artifactDir, name), `# ${name}\n`, "utf-8");
+    }
+    const artifact = join(
+      artifactDir,
+      slug === "requirements-analysis"
+        ? "requirements.md"
+        : "code-generation-plan.md",
+    );
+    const request = [
+      LOG,
+      "review",
+      "--stage",
+      slug,
+      "--reviewer",
+      reviewerFor[slug],
+      "--iteration",
+      "1",
+      "--project-dir",
+      proj,
+    ];
+    const reviewEnv = {
+      ...env,
+      AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1",
+    };
+    const requested = spawnSync(BUN, request, {
+      encoding: "utf-8",
+      env: reviewEnv,
+    });
+    if ((requested.status ?? -1) !== 0) {
+      throw new Error(
+        `review request ${slug} failed: ${requested.stdout ?? ""}${requested.stderr ?? ""}`,
       );
-      if ((review.status ?? -1) !== 0) {
-        throw new Error(
-          `review ${slug} failed: ${review.stdout ?? ""}${review.stderr ?? ""}`,
-        );
-      }
+    }
+    appendFileSync(
+      artifact,
+      `\n## Review\n\n**Verdict:** READY\n**Reviewer:** ${reviewerFor[slug]}\n**Iteration:** 1\n\n### Findings\n\nFixture review.\n`,
+      "utf-8",
+    );
+    const completed = spawnSync(
+      BUN,
+      [...request.slice(0, -2), "--verdict", "READY", ...request.slice(-2)],
+      { encoding: "utf-8", env: reviewEnv },
+    );
+    if ((completed.status ?? -1) !== 0) {
+      throw new Error(
+        `review completion ${slug} failed: ${completed.stdout ?? ""}${completed.stderr ?? ""}`,
+      );
     }
   }
   const gs = spawnSync(BUN, [STATE, "gate-start", slug, "--project-dir", proj], {

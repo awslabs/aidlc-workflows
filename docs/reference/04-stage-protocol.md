@@ -993,7 +993,12 @@ omits the reviewer block entirely and the stage runs reviewless.
 
 1. **Invoke.** Before every dispatch - the first, a NOT-READY re-invoke, or a
    re-review after a Part 0 gate-rejection revision - the conductor first
-   records the review request. For stale-source recovery this request-first
+   records the review request. The directive's `review_artifact` field names
+   the required Markdown output that owns the appendix; output ordering and
+   plugin additions cannot change it. If a terminal appendix already exists,
+   the request binds the exact bytes before that appendix, so deleting it does
+   not rebaseline the dispatched content. For stale-source recovery this
+   request-first
    order is what suspends the review freeze for exactly the named stage/Unit,
    while its stale condition still exists, in the session that recorded or
    retried it; source staleness alone never does. Restoring the reviewed
@@ -1004,21 +1009,20 @@ omits the reviewer block entirely and the stage runs reviewless.
    suspension if the stale condition remains. Restoring source mid-recovery
    closes the write window immediately: record the completed verdict against
    the restored state, or obtain Request Changes before editing again. After
-   the request succeeds, the conductor first runs
+   the request succeeds, on a re-dispatch the conductor first runs
    `aidlc-review-brief.ts context --stage <slug>` (plus `--unit` where
    applicable) and retains its hydrated findings as the prior-review context.
-   It then deletes any existing `## Review` section on the primary artifact and
+   It then deletes any existing `## Review` section and its separator bytes
+   from `review_artifact`, restoring the request-bound pre-append bytes, and
    delegates to the agent named in
    `directive.reviewer`. Review history lives in the audit ledger, so a leftover
    section cannot be mistaken for a fresh verdict. The gate and completion
-   remain blocked while the request is unmatched. After the reviewer replaces
-   the section, the conductor uses `--retry-pending` to bind the same pending
-   request to the current bytes before recording the verdict. That fingerprint
-   rebind is separate from the one permitted reviewer re-dispatch after an
-   incomplete attempt; neither consumes another review iteration or recovery
-   allowance. The reviewer receives the stage definition path, Q&A file,
+   remain blocked while the request is unmatched. The reviewer receives the
+   stage definition path, Q&A file,
    produced artifact paths, and validation tools from frontmatter - never the
-   builder's `memory.md` or plan, so it forms independent judgment.
+   builder's `memory.md` or plan, so it forms independent judgment. A retry
+   reuses the original artifact/source binding and never rebaselines current
+   bytes.
 2. **Review.** An `adversarial` review runs under the adversarial review contract:
    the reviewer tries to refute the artifact rather than confirm it, grounding
    findings in machine-checkable evidence where it exists (READY is the verdict
@@ -1027,8 +1031,11 @@ omits the reviewer block entirely and the stage runs reviewless.
    ranked by severity for the human at the gate, with no repair loop behind
    them. Either way the reviewer reads the definition, Q&A, and artifacts, runs
    any listed validation tools, and appends exactly ONE `## Review` section to
-   the primary artifact with exactly one verdict line: **READY** or
-   **NOT-READY**. The reviewers run under a hard turn budget (`maxTurns: 60`),
+   `review_artifact`. The complete suffix contains one matching Verdict,
+   Reviewer, and Iteration line and no second H2 section. The request binds
+   artifact bytes and workspace source before dispatch; retry cannot rebaseline
+   either, and completion uses one stable file-identity snapshot. The reviewers
+   run under a hard turn budget (`maxTurns: 60`),
    authored once in the persona frontmatter and enforced natively where the
    harness has a lever: Claude Code reads the key verbatim (the sub-agent is
    stopped mid-task, no final-message turn) and the opencode packager projects
@@ -1051,8 +1058,9 @@ omits the reviewer block entirely and the stage runs reviewless.
    2) → the lead agent re-runs to address the findings and the reviewer
    re-checks. NOT-READY with iterations exhausted → proceed to the gate with the
    unresolved findings noted.
-   A verdict only counts when it parses: exactly ONE current `## Review`
-   section with exactly one canonical verdict token. A missing section (a
+   A verdict only counts when the entire appended suffix parses as exactly ONE
+   owned `## Review` section with matching canonical identity fields. A missing
+   section (a
    capped or crashed reviewer is stopped without writing one - step 1 deletes
    any prior section before every dispatch, so a leftover can never stand in
    for it), a section without a canonical verdict line, or duplicated

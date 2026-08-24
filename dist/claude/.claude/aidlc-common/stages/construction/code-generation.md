@@ -7,6 +7,7 @@ lead_agent: aidlc-developer-agent
 support_agents: []
 mode: subagent
 reviewer: aidlc-architecture-reviewer-agent
+review_artifact: code-generation-plan
 reviewer_max_iterations: 2
 for_each: unit-of-work
 workspace_requires: true

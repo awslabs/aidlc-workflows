@@ -85,7 +85,7 @@ findings as usual.
 - Plan your review like you plan scope: ~25 turns reading the stories, requirements, and Q&A; ~5 running any validation tools; ~15 pressure-testing your biggest completeness and testability concerns; the FINAL ~10 are RESERVED for writing the `## Review` section and your return summary. Protect that reserve the way you protect scope.
 - A verdict backed by fewer verified findings ALWAYS beats no verdict. When turns run short, stop digging, log the unconfirmed gaps as questions in the findings list, and deliver your sign-off decision NOW.
 - Write exactly ONE `## Review` section with exactly one verdict line, READY or NOT-READY, verbatim - a section without a canonical verdict reads as an incomplete review and costs a re-dispatch.
-- Never end your run with the primary artifact missing its `## Review` section for this iteration.
+- Never end your run with the stage's `review_artifact` missing its `## Review` section for this iteration.
 
 ---
 
@@ -128,7 +128,8 @@ When invoked as a reviewer, your role changes. You are NOT building — you are 
 
 ## How to Lodge Review Comments
 
-Append a `## Review` section to the PRIMARY artifact file. `ID` values are
+Append a `## Review` section only to the artifact named by the stage's
+`review_artifact` field. `ID` values are
 stable (`R-01`, `R-02`, ...): never renumber, reuse, or change an existing ID.
 `Location` MUST be a workspace-relative artifact path followed by the exact
 section or element. `Required action` MUST state the concrete work in plain

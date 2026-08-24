@@ -39,6 +39,7 @@
 import { afterAll, beforeEach, afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  appendFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -58,6 +59,8 @@ import {
   gitCommitSourceListing,
   readAllAuditShards,
   sourceBaselineAuditFields,
+  reviewArtifactFingerprint,
+  resolveStage,
   workspaceSourceFingerprint,
   workspaceSourceListing,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -134,10 +137,37 @@ function recordReview(
   // Review requests require every declared output. Seed the minimal real
   // contract in fixtures that focus on source freshness; never overwrite a
   // test's content.
+  const definition = resolveStage(stage);
+  if (!definition?.review_artifact) {
+    throw new Error(`${stage} has no review_artifact`);
+  }
+  const reviewUnit =
+    definition.for_each === "unit-of-work" ? unit : undefined;
+  const artifactDir =
+    definition.for_each === "unit-of-work"
+      ? reviewUnit
+        ? join(seededRecordDir(proj), "construction", reviewUnit, stage)
+        : join(seededRecordDir(proj), "construction", stage)
+      : join(seededRecordDir(proj), definition.phase, stage);
+  mkdirSync(artifactDir, { recursive: true });
+  const reviewArtifactPath = join(
+    artifactDir,
+    `${definition.review_artifact}.md`,
+  );
+  if (!existsSync(reviewArtifactPath)) {
+    writeFileSync(reviewArtifactPath, `# ${definition.review_artifact}\n`, "utf-8");
+  } else {
+    const current = readFileSync(reviewArtifactPath, "utf-8");
+    const reviewStart = current.search(/^## Review[ \t]*$/m);
+    if (reviewStart !== -1) {
+      writeFileSync(
+        reviewArtifactPath,
+        `${current.slice(0, reviewStart).replace(/\s+$/, "")}\n`,
+        "utf-8",
+      );
+    }
+  }
   if (stage === "code-generation" || stage === "functional-design") {
-    const artifactDir = unit
-      ? join(seededRecordDir(proj), "construction", unit, stage)
-      : join(seededRecordDir(proj), "construction", stage);
     mkdirSync(artifactDir, { recursive: true });
     const artifacts =
       stage === "code-generation"
@@ -157,6 +187,8 @@ function recordReview(
       const path = join(artifactDir, artifact);
       if (!existsSync(path)) writeFileSync(path, `# ${artifact}\n`, "utf-8");
     }
+  }
+  if (stage === "code-generation" && reviewUnit) {
     const listing = workspaceSourceListing(proj);
     const writes = claimPaths ?? (listing === null
       ? []
@@ -168,7 +200,7 @@ function recordReview(
         }));
     writeFileSync(
       join(artifactDir, "source-manifest.json"),
-      `${JSON.stringify({ stage, unit, version: 1, writes }, null, 2)}\n`,
+      `${JSON.stringify({ stage, unit: reviewUnit, version: 1, writes }, null, 2)}\n`,
       "utf-8",
     );
   }
@@ -229,6 +261,11 @@ function recordReview(
       `recordReview request failed: ${requested.stdout ?? ""}${requested.stderr ?? ""}`,
     );
   }
+  appendFileSync(
+    reviewArtifactPath,
+    `\n## Review\n\n**Verdict:** ${verdict}\n**Reviewer:** ${reviewer}\n**Iteration:** ${iteration}\n\n### Findings\n\nFixture review.\n`,
+    "utf-8",
+  );
   const args = [...baseArgs, "--verdict", verdict];
   const r = spawnSync(BUN, args, {
     encoding: "utf-8",
@@ -916,6 +953,159 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
     expect(r.out).toContain(REVIEWER);
   }, 60_000);
 
+  test("source changed while review is pending cannot become the accepted request baseline", () => {
+    const definition = resolveStage("code-generation");
+    if (!definition?.review_artifact) {
+      throw new Error("code-generation review artifact missing");
+    }
+    const artifactDir = join(
+      seededRecordDir(proj),
+      "construction",
+      "unit-alpha",
+      "code-generation",
+    );
+    mkdirSync(artifactDir, { recursive: true });
+    const artifact = join(
+      artifactDir,
+      `${definition.review_artifact}.md`,
+    );
+    const artifactBase = "# code-generation-plan\n";
+    writeFileSync(artifact, artifactBase, "utf-8");
+    for (const name of [
+      "unit-test-instructions.md",
+      "code-summary.md",
+      "traceability.json",
+    ]) {
+      const path = join(artifactDir, name);
+      if (!existsSync(path)) writeFileSync(path, `${name}\n`, "utf-8");
+    }
+    const request = [
+      LOG,
+      "review",
+      "--stage",
+      "code-generation",
+      "--reviewer",
+      REVIEWER,
+      "--iteration",
+      "1",
+      "--project-dir",
+      proj,
+    ];
+    const originalSource = readFileSync(src, "utf-8");
+    expect(spawnSync(BUN, request, { encoding: "utf-8" }).status).toBe(0);
+    writeFileSync(src, "export const answer = 9001; // pending mutation\n", "utf-8");
+    appendFileSync(
+      artifact,
+      `\n## Review\n\n**Verdict:** READY\n**Reviewer:** ${REVIEWER}\n**Iteration:** 1\n\n### Findings\n\nPending source mutation.\n`,
+      "utf-8",
+    );
+
+    const completion = spawnSync(
+      BUN,
+      [...request, "--verdict", "READY"],
+      { encoding: "utf-8" },
+    );
+    expect(completion.status).not.toBe(0);
+    expect(`${completion.stdout}${completion.stderr}`).toContain(
+      "workspace source changed after REVIEW_REQUESTED",
+    );
+    writeFileSync(artifact, artifactBase, "utf-8");
+    const retryWhileStale = spawnSync(
+      BUN,
+      [...request, "--retry-pending"],
+      { encoding: "utf-8" },
+    );
+    expect(retryWhileStale.status).not.toBe(0);
+    expect(`${retryWhileStale.stdout}${retryWhileStale.stderr}`).toContain(
+      "cannot rebaseline source changed while review was pending",
+    );
+
+    writeFileSync(src, originalSource, "utf-8");
+    expect(
+      spawnSync(BUN, [...request, "--retry-pending"], {
+        encoding: "utf-8",
+      }).status,
+    ).toBe(0);
+    appendFileSync(
+      artifact,
+      `\n## Review\n\n**Verdict:** READY\n**Reviewer:** ${REVIEWER}\n**Iteration:** 1\n\n### Findings\n\nFresh source.\n`,
+      "utf-8",
+    );
+    expect(
+      spawnSync(BUN, [...request, "--verdict", "READY"], {
+        encoding: "utf-8",
+      }).status,
+    ).toBe(0);
+  });
+
+  test("a legacy workspace request upgrades once to request-time source binding", () => {
+    const definition = resolveStage("code-generation");
+    if (!definition?.review_artifact) {
+      throw new Error("code-generation review artifact missing");
+    }
+    const artifactDir = join(
+      seededRecordDir(proj),
+      "construction",
+      "unit-alpha",
+      "code-generation",
+    );
+    mkdirSync(artifactDir, { recursive: true });
+    for (const name of [
+      "code-generation-plan.md",
+      "unit-test-instructions.md",
+      "code-summary.md",
+      "traceability.json",
+    ]) {
+      writeFileSync(join(artifactDir, name), `${name}\n`, "utf-8");
+    }
+    const artifact = join(
+      artifactDir,
+      `${definition.review_artifact}.md`,
+    );
+    const fingerprint = reviewArtifactFingerprint(proj, definition);
+    if (!fingerprint) throw new Error("legacy artifact fingerprint failed");
+    appendAuditEntry(
+      "REVIEW_REQUESTED",
+      {
+        Stage: "code-generation",
+        Reviewer: REVIEWER,
+        Iteration: "1",
+        "Artifact Fingerprint": fingerprint,
+      },
+      proj,
+    );
+    const request = [
+      LOG,
+      "review",
+      "--stage",
+      "code-generation",
+      "--reviewer",
+      REVIEWER,
+      "--iteration",
+      "1",
+      "--project-dir",
+      proj,
+    ];
+    const upgrade = spawnSync(BUN, [...request, "--retry-pending"], {
+      encoding: "utf-8",
+    });
+    expect(upgrade.status, `${upgrade.stdout}${upgrade.stderr}`).toBe(0);
+    expect(upgrade.stdout).toContain('"upgrade":"legacy-request"');
+    const audit = readAllAuditShards(proj);
+    expect(audit).toContain("**Upgrade**: legacy-request");
+    expect(audit).toContain("**Source Fingerprint**: ");
+
+    appendFileSync(
+      artifact,
+      `\n## Review\n\n**Verdict:** READY\n**Reviewer:** ${REVIEWER}\n**Iteration:** 1\n\n### Findings\n\nUpgraded legacy request.\n`,
+      "utf-8",
+    );
+    const completed = spawnSync(BUN, [...request, "--verdict", "READY"], {
+      encoding: "utf-8",
+    });
+    expect(completed.status, `${completed.stdout}${completed.stderr}`).toBe(0);
+  });
+
   test("source mismatch permits one real recovery review within the normal budget", () => {
     recordReview(proj);
     writeFileSync(src, "export const answer = 200; // stale within budget\n", "utf-8");
@@ -985,7 +1175,15 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
     const shard = seededAuditShard(proj);
     writeFileSync(
       shard,
-      readFileSync(shard, "utf-8").replace(/^\*\*Source Fingerprint\*\*: .*$/gm, "**Source Fingerprint**: unbindable"),
+      readFileSync(shard, "utf-8")
+        .replace(
+          /^\*\*Source Fingerprint\*\*: .*$/gm,
+          "**Source Fingerprint**: unbindable",
+        )
+        .replace(
+          /^\*\*Request Source Fingerprint\*\*: .*$/gm,
+          "**Request Source Fingerprint**: unbindable",
+        ),
       "utf-8",
     );
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);

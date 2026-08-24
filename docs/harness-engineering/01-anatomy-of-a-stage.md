@@ -33,6 +33,7 @@ The frontmatter is a flat block of YAML keys. Some are mechanical — `slug`, `p
 | `lead_agent` / `support_agents` | Who runs the stage | One persona owns it; supporters add perspective. |
 | `mode` | Communication topology | `inline` (voices in the conductor's context), `subagent` (hub-and-spoke dispatch), `pipeline` (chain), or `mob` (mesh in bounded rounds). |
 | `for_each` | Whether it iterates | Names an artifact whose instances drive a once-per-instance run. |
+| `reviewer` / `review_artifact` | Independent quality review | If a reviewer is declared, name the one required Markdown output that owns its appended `## Review`; never rely on `produces` order. |
 
 A few notes on the calls that bite hardest:
 

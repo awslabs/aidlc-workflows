@@ -11,6 +11,7 @@ support_agents:
 mode: inline
 summary_confirmation: required
 reviewer: aidlc-architecture-reviewer-agent
+review_artifact: security-requirements
 reviewer_max_iterations: 2
 for_each: unit-of-work
 produces:

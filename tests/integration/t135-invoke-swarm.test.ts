@@ -65,7 +65,14 @@
 
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -330,8 +337,21 @@ function logWorktreeReview(
 ): void {
   const wt = join(proj, ".aidlc", "worktrees", `bolt-${unit}`);
   const dir = join(seededRecordDir(wt), "construction", unit, "code-generation");
+  mkdirSync(dir, { recursive: true });
+  const reviewArtifact = join(dir, "code-generation-plan.md");
+  if (!existsSync(reviewArtifact)) {
+    writeFileSync(reviewArtifact, "# code-generation-plan\n");
+  } else {
+    const current = readFileSync(reviewArtifact, "utf-8");
+    const reviewStart = current.search(/^## Review[ \t]*$/m);
+    if (reviewStart !== -1) {
+      writeFileSync(
+        reviewArtifact,
+        `${current.slice(0, reviewStart).replace(/\s+$/, "")}\n`,
+      );
+    }
+  }
   if (seedArtifacts) {
-    mkdirSync(dir, { recursive: true });
     for (const name of [
       "code-generation-plan",
       "unit-test-instructions",
@@ -358,31 +378,43 @@ function logWorktreeReview(
       writes: [{ path: `${unit}.txt` }],
     }, null, 2)}\n`,
   );
-  for (const terminal of [false, true]) {
-    const args = [
-      LOG_TOOL,
-      "review",
-      "--stage",
-      "code-generation",
-      "--unit",
-      unit,
-      "--reviewer",
-      "aidlc-architecture-reviewer-agent",
-      "--iteration",
-      String(iteration),
-    ];
-    if (terminal) args.push("--verdict", verdict);
-    args.push("--project-dir", wt);
-    const logged = spawnSync(BUN, args, {
-      encoding: "utf-8",
-      env: {
-        ...process.env,
-        AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1",
-      },
-    });
-    if (logged.status !== 0) {
-      throw new Error(`worktree review log failed: ${logged.stdout}${logged.stderr}`);
-    }
+  const args = [
+    LOG_TOOL,
+    "review",
+    "--stage",
+    "code-generation",
+    "--unit",
+    unit,
+    "--reviewer",
+    "aidlc-architecture-reviewer-agent",
+    "--iteration",
+    String(iteration),
+    "--project-dir",
+    wt,
+  ];
+  const env = {
+    ...process.env,
+    AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1",
+  };
+  const requested = spawnSync(BUN, args, { encoding: "utf-8", env });
+  if (requested.status !== 0) {
+    throw new Error(
+      `worktree review request failed: ${requested.stdout}${requested.stderr}`,
+    );
+  }
+  appendFileSync(
+    reviewArtifact,
+    `\n## Review\n\n**Verdict:** ${verdict}\n**Reviewer:** aidlc-architecture-reviewer-agent\n**Iteration:** ${iteration}\n\n### Findings\n\nFixture review.\n`,
+  );
+  const completed = spawnSync(
+    BUN,
+    [...args.slice(0, -2), "--verdict", verdict, ...args.slice(-2)],
+    { encoding: "utf-8", env },
+  );
+  if (completed.status !== 0) {
+    throw new Error(
+      `worktree review completion failed: ${completed.stdout}${completed.stderr}`,
+    );
   }
 }
 

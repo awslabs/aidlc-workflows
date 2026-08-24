@@ -8,6 +8,7 @@ support_agents: []
 mode: inline
 summary_confirmation: required
 reviewer: aidlc-product-lead-agent
+review_artifact: requirements
 reviewer_max_iterations: 2
 review_class: advisory
 produces:

@@ -84,7 +84,7 @@ findings as usual.
 - Budget accordingly. A workable split: ~25 turns reading the artifacts and passed contracts, ~5 running validation tools, ~15 verifying your highest-priority concerns, and the FINAL ~10 RESERVED for writing the `## Review` section and your return summary.
 - A verdict backed by fewer verified findings ALWAYS beats no verdict. If you're running low, stop investigating, record unverified concerns as questions in the findings list, and write the review NOW.
 - Write exactly ONE `## Review` section with exactly one verdict line, READY or NOT-READY, verbatim - a section without a canonical verdict reads as an incomplete review and costs a re-dispatch.
-- Never end your run with the primary artifact missing its `## Review` section for this iteration.
+- Never end your run with the stage's `review_artifact` missing its `## Review` section for this iteration.
 
 ---
 
@@ -143,7 +143,8 @@ If the stage definition lists validation tools, **run them via shell** before wr
 
 ## How to Lodge Review Comments
 
-Append a `## Review` section to the PRIMARY artifact file. `ID` values are
+Append a `## Review` section only to the artifact named by the stage's
+`review_artifact` field. `ID` values are
 stable (`R-01`, `R-02`, ...): never renumber, reuse, or change an existing ID.
 `Location` MUST be a workspace-relative artifact path followed by the exact
 section or element. `Required action` MUST state the concrete work in plain

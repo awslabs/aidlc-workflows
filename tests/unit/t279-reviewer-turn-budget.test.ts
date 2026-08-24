@@ -119,7 +119,7 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       expect(section).toMatch(/exactly ONE `## Review` section/);
       expect(section).toMatch(/exactly one verdict line/);
       expect(section).toMatch(
-        /Never end your run with the primary artifact missing its `## Review` section for this iteration\./,
+        /Never end your run with the stage's `review_artifact` missing its `## Review` section for this iteration\./,
       );
     });
 
@@ -224,6 +224,9 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       expect(labelled).toContain(
         "validated pending recovery request suspends the",
       );
+      expect(labelled).toContain(
+        "`directive.review_artifact` names the one required Markdown output",
+      );
       const request = labelled.indexOf(
         "before changing an existing `## Review` section, record the request",
       );
@@ -261,26 +264,44 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       expect(labelled).toMatch(
         /Read verdict.*delete `<record>\/\.aidlc-reviewer-dispatch\.json`.*validate it/s,
       );
-      // Exactly one section, exactly one canonical token.
-      expect(labelled).toContain("exactly ONE current `## Review` section");
-      expect(labelled).toMatch(/exactly one canonical token, READY or NOT-READY/);
+      // Exactly one owned suffix with canonical identity fields.
+      expect(labelled).toContain(
+        "entire appended suffix is exactly ONE terminal owned `## Review` section",
+      );
+      expect(labelled).toContain(
+        "canonical verdict, reviewer, and iteration fields",
+      );
       // Partial and duplicated sections are named incomplete, not guessed at.
       expect(labelled).toMatch(/no canonical verdict line/);
+      expect(labelled).toContain("semantic bytes before the heading");
+      expect(labelled).toContain(
+        "rendered Markdown or raw-HTML H1/H2 headings are terminal-section escapes",
+      );
+      expect(labelled).toContain(
+        "Validation uses Bun's Markdown parser",
+      );
+      expect(labelled).toContain(
+        "list/blockquote/table containers cannot mint top-level ownership",
+      );
+      expect(labelled).toContain(
+        "forged/missing/conflicting duplicate ownership fields",
+      );
       expect(labelled).toMatch(/never guess which was meant/);
       // The incomplete-attempt path: retry the SAME unmatched request once,
       // consuming no iteration (the advisory budget is one pass - counting a
       // cut-off attempt would exhaust it without any review happening).
       expect(labelled).toContain("**On an incomplete attempt:**");
-      expect(labelled).toMatch(
-        /Count reviewer dispatches, not fingerprint\s+rebind rows/,
+      expect(labelled).toMatch(/re-dispatch it exactly once/);
+      expect(labelled).toContain("has not already spent its retry");
+      expect(labelled).toMatch(/original artifact and source bytes are restored/);
+      expect(labelled).toMatch(/never mints a new fingerprint/);
+      expect(labelled).toContain("`Upgrade: legacy-request`");
+      expect(labelled).toContain(
+        "A field-light historical `Retry: pending-request` marker is not a modern binding",
       );
-      expect(labelled).toMatch(
-        /A prior fingerprint rebind does not consume this\s+re-dispatch allowance/,
+      expect(labelled).toContain(
+        "A structurally malformed request row has no authority and is ignored",
       );
-      expect(labelled).toMatch(
-        /neither use consumes a review iteration/,
-      );
-      expect(labelled).toMatch(/re-dispatch it\s+exactly once/);
       // The second incomplete attempt records the terminal receipt with the
       // named finding and routes per review class.
       expect(labelled).toContain(MISSING_VERDICT_FINDING);
@@ -289,7 +310,9 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       );
       expect(labelled).toMatch(/on `advisory` it is terminal/);
       expect(labelled).toMatch(/skip the lead re-invoke/);
-      expect(labelled).toMatch(/never presented on \(or deadlocked by\)/);
+      expect(labelled).toMatch(
+        /never presented on a silently missing verdict, and never deadlocks/,
+      );
       // The turn cap is named as the reachable cause of a missing section.
       expect(labelled).toMatch(/hard turn cap/);
       // The complete-review receipt sentence survives verbatim - it was
@@ -301,6 +324,16 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       // Step 1's dispatch-failure contract now names the incomplete attempt
       // as a retry-pending cause too.
       expect(labelled).toMatch(/or ends without a recorded verdict/);
+      expect(labelled).toMatch(
+        /reuses\s+those original fingerprints instead of rebaselining/,
+      );
+      expect(labelled).toContain(
+        "malformed audit `REVIEW_COMPLETED` row is ignored and does not consume the pending request",
+      );
+      expect(labelled).toContain("one coherent snapshot");
+      expect(labelled).toContain(
+        "A complete reviewer appendix therefore records directly",
+      );
     }
   });
 
@@ -354,16 +387,25 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       expect(labelled).toContain(
         "validated pending recovery request suspends the",
       );
-      // Canonical-verdict validation.
-      expect(labelled).toContain("exactly ONE current `## Review` section");
-      expect(labelled).toMatch(/exactly one canonical token, READY or NOT-READY/);
+      // Canonical-verdict + ownership validation.
+      expect(labelled).toContain(
+        "entire appended suffix is exactly ONE terminal owned `## Review` section",
+      );
+      expect(labelled).toContain(
+        "canonical verdict, reviewer, and iteration fields",
+      );
       // Incomplete attempt: one retry, then the terminal NOT-READY receipt.
       expect(labelled).toContain(MISSING_VERDICT_FINDING);
       expect(labelled).toMatch(/no\s+current `## Review` section/);
       expect(labelled).toContain("`--retry-pending`");
       expect(labelled).toMatch(/re-dispatch it\s+exactly once/);
-      expect(labelled).toMatch(
-        /\*\*fingerprint rebind\*\*, not a\s+reviewer re-dispatch/,
+      expect(labelled).toContain("never mints a new fingerprint");
+      expect(labelled).toContain("`Upgrade: legacy-request`");
+      expect(labelled).toContain(
+        "A structurally malformed request row has no authority and is ignored",
+      );
+      expect(labelled).toContain(
+        "complete reviewer appendix therefore records directly",
       );
       // The review-class contract is present on every harness - including
       // Copilot, which shipped without it (its bullet predated #718 and the

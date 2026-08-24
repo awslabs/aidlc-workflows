@@ -44,7 +44,12 @@ Everything else in this section is silent. Nothing is said about invoking, handi
    against the restored state, or obtain the human's Request Changes decision
    before editing again.
 
-   After the request succeeds, if the primary artifact already carries a
+   `directive.review_artifact` names the one required Markdown output that owns
+   the review appendix; no produces-list position, plugin-added output, or
+   directory enumeration may redefine it. On a per-unit review it resolves
+   inside that Unit. The request binds every declared artifact and the exact
+   bytes before any existing terminal appendix. After the request succeeds, if
+   that artifact already carries a
    `## Review` section (from a prior iteration, or predating a Part 0 revision),
    handle it in this order:
    1. On a re-dispatch (adversarial iteration greater than 1, a Part 0 revision
@@ -55,23 +60,17 @@ Everything else in this section is silent. Nothing is said about invoking, handi
       The tool overlays durable human dispositions from the audit ledger, so
       `Accepted risk` and `Rejected: <reason>` survive without editing the
       receipt-frozen artifact.
-   2. DELETE the existing `## Review` section. This makes step 3's
-      missing-section check mean the same thing on every path: a fresh review
-      that is cut off before writing leaves no old verdict to misread as
-      covering new work. Receipt history remains in the audit ledger; the
-      rendered context carries finding identity and disposition into the next
-      review.
+   2. DELETE the existing `## Review` section and every separator byte
+      introduced with it, restoring the request-bound pre-append bytes. This
+      makes step 3's missing-section check mean the same thing on every path: a
+      fresh review that is cut off before writing leaves no old verdict to
+      misread as covering new work. Receipt history remains in the audit ledger;
+      the rendered context carries finding identity and disposition into the
+      next review.
 
    Then delegate to the reviewer agent named in `directive.reviewer`. The
    request remains unmatched while the reviewer runs, so the approval gate and
    completion stay blocked.
-   Any deletion or replacement of the Review section changes the request
-   fingerprint; after the reviewer finishes writing, rerun the same request
-   with `--retry-pending` to bind that pending request to the current reviewed
-   bytes before recording the verdict. This is a **fingerprint rebind**, not a
-   reviewer re-dispatch; it does not consume the one incomplete-attempt
-   re-dispatch allowance, restore review budget, or create another recovery
-   slot.
 
    Pass:
    - The stage definition file path (`directive.stage_file`)
@@ -114,13 +113,21 @@ Everything else in this section is silent. Nothing is said about invoking, handi
    set still refuses a Unit that is absent. A named Unit's required outputs
    remain mandatory. If the request is refused, finish the named prerequisite
    before dispatching the reviewer.
+   The logger captures every declared artifact through one stable file-identity
+   snapshot, binds the request to the exact pre-append bytes of
+   `directive.review_artifact`, and records the current workspace and per-unit
+   source fingerprints where applicable. The reviewer may append only the
+   canonical section below after that byte boundary.
    If that dispatch fails, times out, or ends without a recorded verdict - the
    session died, or the reviewer returned an incomplete attempt (step 3: no
-   current `## Review` section, or no single canonical verdict) - rerun the
-   same request command with `--retry-pending` before dispatching again. The
-   logger accepts it only while that exact request is unmatched, marks the
-   retry in the audit, refreshes the artifact and source bindings to the bytes
-   being re-dispatched, and does not consume another review iteration. Never
+   current `## Review` section, or no single canonical verdict) - return to the
+   start of this step, delete any partial `## Review` appendix, then rerun the
+   same request command with `--retry-pending` immediately before dispatching
+   again. The logger accepts it exactly once, only while that exact request is unmatched and
+   the declared artifacts and workspace source exactly match the original
+   request; it reuses those original fingerprints instead of rebaselining
+   current bytes, marks the retry in the audit, and does not consume another
+   review iteration. Never
    use `--retry-pending` after a verdict; a receipt-invalidating write creates
    a new recovery request at the next ordinal, not a retry of the completed one.
 2. **Reviewer executes.** An `adversarial` review runs under the **adversarial review contract**:
@@ -136,42 +143,46 @@ Everything else in this section is silent. Nothing is said about invoking, handi
    - Reads the artifact(s) to evaluate what WAS produced
    - Verifies cross-unit contract claims against the passed shared inception contracts, not by sweeping or searching sibling units' design directories (no cross-unit grep or glob patterns); opens another unit's file only when the current unit's design explicitly names it as an integration point, and only that file
    - Runs any validation tools listed (via shell) and includes results in findings
-   - Appends exactly ONE `## Review` section to the primary artifact file with exactly one verdict line: READY or NOT-READY (step 3 treats anything else - missing, verdict-less, or duplicated - as an incomplete review)
+   - Appends exactly ONE terminal `## Review` section to `directive.review_artifact`, beginning at the request's recorded byte boundary. Before the heading it may add blank separator lines only. The section uses the knowledge template and contains exactly one total rendered `**Verdict:** READY|NOT-READY`, one total rendered `**Reviewer:** <directive.reviewer>`, and one total rendered `**Iteration:** <n>` line. It may use H3+ subsections inside the review, but no later H1, H2, setext, or raw-HTML H1/H2 heading may open unowned top-level content. Literal headings and ownership-field examples inside fenced or inline code do not count. Step 3 treats anything else as an incomplete review.
    - Returns a response whose FIRST line is its identity marker verbatim
      (`**Reviewer:** <reviewer-agent-name>`), so the `SUBAGENT_COMPLETED` audit
      event records which reviewer ran. The reviewer's persona owns this contract.
 
-3. **Read verdict.** After the reviewer returns, delete `<record>/.aidlc-reviewer-dispatch.json` if one was written (the enforcement window closes with the review; a leftover record would keep refusing sibling access for later, unrelated work), then read the `## Review` section from the primary artifact and validate it. The review is complete only when the artifact carries exactly ONE current `## Review` section whose verdict is exactly one canonical token, READY or NOT-READY. Anything else is an INCOMPLETE attempt, not a verdict: no section at all (the reviewer has a hard turn cap and may have been stopped before writing it - step 1 deletes any prior section before every dispatch, so a missing section means an incomplete review on every path, first entry or revision alike), a section with no canonical verdict line (a reviewer cut off mid-write), or more than one `## Review` section or verdict line (conflicting - never guess which was meant).
+3. **Read verdict.** After the reviewer returns, delete `<record>/.aidlc-reviewer-dispatch.json` if one was written (the enforcement window closes with the review; a leftover record would keep refusing sibling access for later, unrelated work), then read the `## Review` section from `directive.review_artifact` and validate it. The review is complete only when every pre-dispatch artifact byte and the request-time source fingerprint still match and the entire appended suffix is exactly ONE terminal owned `## Review` section with the canonical verdict, reviewer, and iteration fields above. Validation uses Bun's Markdown parser: fenced/inline code and HTML comments cannot supply or conflict with authority fields, list/blockquote/table containers cannot mint top-level ownership, and rendered Markdown or raw-HTML H1/H2 headings are terminal-section escapes. Anything else is an INCOMPLETE attempt, not a verdict: no section at all (the reviewer has a hard turn cap and may have been stopped before writing it - step 1 deletes any prior section before every dispatch, so a missing section means an incomplete review on every path, first entry or revision alike), semantic bytes before the heading, a later top-level heading, a section with no canonical verdict line, forged/missing/conflicting duplicate ownership fields, or duplicated sections/verdicts (conflicting - never guess which was meant). A malformed audit `REVIEW_COMPLETED` row is ignored and does not consume the pending request.
 
    **On an incomplete attempt:** no verdict exists to record, so the step-1
-   request is still unmatched. Count reviewer dispatches, not fingerprint
-   rebind rows. If this request has been dispatched only once, re-dispatch it
-   exactly once: rerun the same request command with `--retry-pending` to bind
-   any partial/current bytes, then return to step 1 (whose delete rule clears
-   any partial section). A prior fingerprint rebind does not consume this
-   re-dispatch allowance, and neither use consumes a review iteration. If the
-   second reviewer dispatch is ALSO incomplete, stop re-dispatching: record the
+   request is still unmatched. If the ledger does not yet mark a retry on this
+   request, re-dispatch it exactly once - return to step 1, delete the complete
+   appended suffix, then rerun the same request command with `--retry-pending`
+   immediately before dispatch. The logger accepts this only while the request
+   is unmatched, has not already spent its retry, and the original artifact and
+   source bytes are restored; it consumes no review iteration and never mints a
+   new fingerprint. A valid legacy unmatched request that predates
+   appendix/source fields may emit exactly one audit-marked
+   `Upgrade: legacy-request` modern binding, but only while its recorded full
+   artifact fingerprint still matches; the reviewer MUST then be freshly
+   dispatched. A field-light historical `Retry: pending-request` marker is not
+   a modern binding and therefore does not block that one modernization, while
+   the modern upgrade row itself spends the retry and blocks every later retry.
+   A structurally malformed request row has no authority and is ignored, so a
+   fresh normal request may reuse its ordinal. If the retried attempt is ALSO
+   incomplete, stop retrying: delete its partial suffix too, then record the
    terminal receipt with `--verdict NOT-READY` and the finding "review did not
-   complete within its turn budget", then proceed as that NOT-READY verdict
+   complete within its turn budget"; the logger accepts an empty suffix only
+   for this retried NOT-READY fallback. Proceed as that NOT-READY verdict
    directs for the effective review class - on `advisory` it is terminal
-   (present the gate using the required Review brief below, with the recorded
-   finding rendered in the same table shape because no valid `## Review` table
-   exists); on `adversarial` with iterations remaining, skip the lead re-invoke
-   (the artifact itself was never reviewed, so there is nothing for the builder
-   to act on) and go directly back to step 1 with a fresh iteration and a fresh
-   request; on `adversarial` with iterations exhausted, proceed to the gate
-   using the required Review brief below with that recorded finding. Recording
-   the receipt is what keeps the engine's gate and completion precondition
-   satisfiable: the gate is never presented on (or deadlocked by) a silently
-   missing verdict.
+   (present the gate using the required Review brief below, with
+   `--fallback-finding "review did not complete within its turn budget"` so the
+   recorded finding uses the normal table shape); on `adversarial` with
+   iterations remaining, skip the lead re-invoke (the artifact itself was never
+   reviewed, so there is nothing for the builder to act on) and go directly
+   back to step 1 with a fresh iteration and a fresh request; on `adversarial`
+   with iterations exhausted, proceed to the gate using the same fallback
+   Review brief. Recording the receipt is what keeps the engine's gate and
+   completion precondition satisfiable: the gate is never presented on a
+   silently missing verdict, and never deadlocks on one either.
 
-   **On a complete review**, if the reviewer wrote or replaced the `## Review`
-   section after the request, first rerun the same request with
-   `--retry-pending` so its fingerprint covers the current bytes. Then record
-   the terminal receipt with the same `aidlc-log.ts review` command plus
-   `--verdict <READY|NOT-READY>` (and the same `--unit` / `--single` fields).
-   The matching verdict ends the request-bound freeze suspension and re-arms
-   the normal terminal-review freeze.
+   **On a complete review**, record the terminal receipt with the same `aidlc-log.ts review` command plus `--verdict <READY|NOT-READY>` (and the same `--unit` / `--single` fields). The logger proves from one coherent snapshot that every dispatched artifact byte and the request-time source identity are unchanged, validates the complete owned suffix, and fingerprints the full post-review artifact for the terminal receipt. A complete reviewer appendix therefore records directly; do not run `--retry-pending` merely because appending `## Review` changed the full file bytes.
 
    The recorded receipt is TERMINAL whenever no further review pass follows it: do not write to any `produces[]` artifact between recording it and gate approval; for a per-unit `workspace_requires` stage, also do not write the unit's `source-manifest.json` or any claimed source path (a later write is deterministically invalidated at completion and the engine refuses the gate). A verdict may arrive with optional suggestions riding along; do NOT apply them - quote them verbatim in the completion summary for the human to weigh at the gate. A suggestion is gate input, not a defect (step 2: it is not grounds for NOT-READY, so it is not grounds for editing past the terminal receipt either). Riding suggestions also never change the gate itself: keep the §1 approval question's standard option order (Approve first, Request Changes second) - do not present Request Changes as the recommended or first option because a suggestion exists. On harnesses with PreToolUse enforcement the review-freeze hook refuses declared `produces[]`/`optional_produces[]` writes (`REVIEW_FREEZE_BLOCKED`); manifest and claimed-source writes are caught by the completion guard rather than the hook. A recorded gate rejection lifts the freeze for the revision path.
    If a write still invalidates the receipt, the first request after that stale

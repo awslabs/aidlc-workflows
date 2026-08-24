@@ -9,6 +9,7 @@ support_agents:
 mode: inline
 summary_confirmation: required
 reviewer: aidlc-architecture-reviewer-agent
+review_artifact: unit-of-work
 reviewer_max_iterations: 2
 review_class: advisory
 produces:

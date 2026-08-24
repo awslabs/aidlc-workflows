@@ -2681,8 +2681,10 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       "lead_agent: aidlc-product-agent",
       "support_agents: []",
       "reviewer: syn-kiro-reviewer-agent",
+      "review_artifact: reviewed-output",
       "mode: inline",
-      "produces: []",
+      "produces:",
+      "  - reviewed-output",
       "consumes: []",
       "requires_stage: []",
       "inputs: x",
@@ -3228,6 +3230,62 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       cwd: proj, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000,
     });
     expect(compile.status).toBe(0);
+  });
+
+  test("reviewer stages require an explicit review_artifact migration", () => {
+    const stage = (plugin: string, migrated: boolean) => [
+      "---",
+      `slug: ${plugin}-stage`,
+      `plugin: ${plugin}`,
+      "phase: inception",
+      "execution: ALWAYS",
+      "condition: always",
+      "lead_agent: aidlc-product-agent",
+      "support_agents: []",
+      "reviewer: aidlc-product-lead-agent",
+      ...(migrated ? ["review_artifact: reviewed-output"] : []),
+      "mode: inline",
+      "produces:",
+      "  - reviewed-output",
+      "consumes: []",
+      "requires_stage: []",
+      "inputs: x",
+      "outputs: y",
+      "---",
+      "",
+      "# Reviewer migration fixture",
+      "",
+    ].join("\n");
+
+    const stalePlugin = "syn-review-migration-old";
+    const stale = composeSynthetic(stalePlugin, {
+      [`stages/inception/${stalePlugin}-stage.md`]:
+        stage(stalePlugin, false),
+    });
+    expect(existsSync(join(
+      stale.proj,
+      ".claude",
+      "aidlc-common",
+      "stages",
+      "inception",
+      `${stalePlugin}-stage.md`,
+    ))).toBe(false);
+    expect(stale.drops).toContain("reviewer requires review_artifact");
+
+    const migratedPlugin = "syn-review-migration-new";
+    const migrated = composeSynthetic(migratedPlugin, {
+      [`stages/inception/${migratedPlugin}-stage.md`]:
+        stage(migratedPlugin, true),
+    });
+    expect(existsSync(join(
+      migrated.proj,
+      ".claude",
+      "aidlc-common",
+      "stages",
+      "inception",
+      `${migratedPlugin}-stage.md`,
+    ))).toBe(true);
+    expect(migrated.drops).not.toContain("reviewer requires review_artifact");
   });
 
   test("an aidlc--prefixed plugin name is refused at compose copy time (runner-path collision)", () => {

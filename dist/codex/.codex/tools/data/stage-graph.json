@@ -169,6 +169,7 @@
       "poc"
     ],
     "reviewer": "aidlc-product-lead-agent",
+    "review_artifact": "intent-statement",
     "reviewer_max_iterations": 2,
     "review_class": "advisory",
     "summary_confirmation": "required",
@@ -592,6 +593,7 @@
       "mvp"
     ],
     "reviewer": "aidlc-product-lead-agent",
+    "review_artifact": "wireframes",
     "reviewer_max_iterations": 2,
     "review_class": "advisory",
     "summary_confirmation": "required",
@@ -999,6 +1001,7 @@
       "express"
     ],
     "reviewer": "aidlc-product-lead-agent",
+    "review_artifact": "requirements",
     "reviewer_max_iterations": 2,
     "review_class": "advisory",
     "summary_confirmation": "required",
@@ -1097,6 +1100,7 @@
       "workshop"
     ],
     "reviewer": "aidlc-product-lead-agent",
+    "review_artifact": "stories",
     "reviewer_max_iterations": 2,
     "review_class": "advisory",
     "summary_confirmation": "required",
@@ -1203,6 +1207,7 @@
       "workshop"
     ],
     "reviewer": "aidlc-product-lead-agent",
+    "review_artifact": "mockups",
     "reviewer_max_iterations": 2,
     "review_class": "advisory",
     "summary_confirmation": "required",
@@ -1304,6 +1309,7 @@
       "workshop"
     ],
     "reviewer": "aidlc-architecture-reviewer-agent",
+    "review_artifact": "components",
     "reviewer_max_iterations": 2,
     "review_class": "advisory",
     "summary_confirmation": "required",
@@ -1406,6 +1412,7 @@
       "workshop"
     ],
     "reviewer": "aidlc-architecture-reviewer-agent",
+    "review_artifact": "unit-of-work",
     "reviewer_max_iterations": 2,
     "review_class": "advisory",
     "summary_confirmation": "required",
@@ -1504,6 +1511,7 @@
       "workshop"
     ],
     "reviewer": "aidlc-architecture-reviewer-agent",
+    "review_artifact": "contract-summary",
     "reviewer_max_iterations": 2,
     "review_class": "advisory",
     "summary_confirmation": "required",
@@ -1692,6 +1700,7 @@
       ],
       "functional-spec": [
         "service",
+        "spec",
         "ui",
         "library"
       ],
@@ -1747,6 +1756,7 @@
       "workshop"
     ],
     "reviewer": "aidlc-architecture-reviewer-agent",
+    "review_artifact": "functional-spec",
     "reviewer_max_iterations": 2,
     "review_class": "adversarial",
     "summary_confirmation": "required",
@@ -1896,6 +1906,7 @@
       "workshop"
     ],
     "reviewer": "aidlc-architecture-reviewer-agent",
+    "review_artifact": "security-requirements",
     "reviewer_max_iterations": 2,
     "review_class": "adversarial",
     "summary_confirmation": "required",
@@ -2058,6 +2069,7 @@
       "workshop"
     ],
     "reviewer": "aidlc-architecture-reviewer-agent",
+    "review_artifact": "security-design",
     "reviewer_max_iterations": 2,
     "review_class": "adversarial",
     "summary_confirmation": "required",
@@ -2226,6 +2238,7 @@
       "workshop"
     ],
     "reviewer": "aidlc-architecture-reviewer-agent",
+    "review_artifact": "cicd-pipeline",
     "reviewer_max_iterations": 2,
     "review_class": "adversarial",
     "summary_confirmation": "required",
@@ -2374,6 +2387,7 @@
       "express"
     ],
     "reviewer": "aidlc-architecture-reviewer-agent",
+    "review_artifact": "code-generation-plan",
     "reviewer_max_iterations": 2,
     "review_class": "adversarial",
     "inputs": "ALL prior design artifacts for this unit",

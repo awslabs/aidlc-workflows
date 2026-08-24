@@ -51,7 +51,8 @@ If the stage definition lists validation tools, **run them via shell** before wr
 
 ## How to Lodge Review Comments
 
-Append a `## Review` section to the PRIMARY artifact file. `ID` values are
+Append a `## Review` section only to the artifact named by the stage's
+`review_artifact` field. `ID` values are
 stable (`R-01`, `R-02`, ...): never renumber, reuse, or change an existing ID.
 `Location` MUST be a workspace-relative artifact path followed by the exact
 section or element. `Required action` MUST state the concrete work in plain

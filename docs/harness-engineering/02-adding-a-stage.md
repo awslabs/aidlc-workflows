@@ -85,6 +85,7 @@ fields that carry the structural weight:
 | `mode` | `inline`, `subagent`, `pipeline`, `mob`, or the reserved `agent-team` |
 | `for_each` | Optional — names an artifact whose instances drive iteration |
 | `summary_confirmation` | Optional — `required` for stages that always collect file-backed answers, `if-present` for conditional question flows |
+| `reviewer` / `review_artifact` | Optional pair — the review agent and the required Markdown `produces` entry that exclusively owns its `## Review` appendix |
 
 The body opens with `## Steps` — the imperative prose the lead agent follows.
 The `## Sensors` and `## Learn` compartments come after it. For the complete

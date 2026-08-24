@@ -24,7 +24,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -55,11 +55,24 @@ function logReviewReady(proj: string, stage: string, reviewer: string, unit?: st
   const args = [LOG, "review", "--stage", stage, "--reviewer", reviewer, "--iteration", "1"];
   if (unit) args.push("--unit", unit);
   args.push("--project-dir", proj);
-  for (const suffix of [[], ["--verdict", "READY"]]) {
-    const res = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
-    // Keep a log-record failure local, not surfaced later as a confusing gate error.
-    expect(res.status).toBe(0);
-  }
+  const requested = spawnSync(BUN, args, { encoding: "utf-8" });
+  expect(requested.status).toBe(0);
+  appendFileSync(
+    join(
+      seededRecordDir(proj),
+      "construction",
+      unit ?? "alpha",
+      stage,
+      "functional-spec.md",
+    ),
+    `\n## Review\n\n**Verdict:** READY\n**Reviewer:** ${reviewer}\n**Iteration:** 1\n\n### Findings\n\nFixture review.\n`,
+    "utf-8",
+  );
+  const completed = spawnSync(BUN, [...args, "--verdict", "READY"], {
+    encoding: "utf-8",
+  });
+  // Keep a log-record failure local, not surfaced later as a confusing gate error.
+  expect(completed.status).toBe(0);
 }
 
 function completeWave(proj: string, stage: string, unit: string): void {

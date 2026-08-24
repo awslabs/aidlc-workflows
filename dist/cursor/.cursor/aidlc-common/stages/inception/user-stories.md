@@ -11,6 +11,7 @@ support_agents:
 mode: mob
 summary_confirmation: required
 reviewer: aidlc-product-lead-agent
+review_artifact: stories
 reviewer_max_iterations: 2
 review_class: advisory
 produces:

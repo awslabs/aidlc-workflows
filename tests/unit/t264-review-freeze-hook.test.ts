@@ -28,6 +28,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -296,6 +297,21 @@ function openGate(p: string): void {
 }
 
 function recordReview(p: string, verdict: "READY" | "NOT-READY"): void {
+  const artifact = raArtifact(p);
+  mkdirSync(dirname(artifact), { recursive: true });
+  if (!existsSync(artifact)) {
+    writeFileSync(artifact, "# Requirements\n", "utf-8");
+  } else {
+    const current = readFileSync(artifact, "utf-8");
+    const reviewStart = current.search(/^## Review[ \t]*$/m);
+    if (reviewStart !== -1) {
+      writeFileSync(
+        artifact,
+        `${current.slice(0, reviewStart).replace(/\s+$/, "")}\n`,
+        "utf-8",
+      );
+    }
+  }
   const args = [
     LOG_TOOL,
     "review",
@@ -308,17 +324,27 @@ function recordReview(p: string, verdict: "READY" | "NOT-READY"): void {
     "--project-dir",
     p,
   ];
-  for (const suffix of [[], ["--verdict", verdict]]) {
-    const r = spawnSync(BUN, [...args, ...suffix], {
-      encoding: "utf-8",
-      env: {
-        ...process.env,
-        AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
-      },
-    });
-    if ((r.status ?? -1) !== 0) {
-      throw new Error(`review log failed: ${r.stdout}${r.stderr}`);
-    }
+  const env = {
+    ...process.env,
+    AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+  };
+  const requested = spawnSync(BUN, args, { encoding: "utf-8", env });
+  if ((requested.status ?? -1) !== 0) {
+    throw new Error(`review request failed: ${requested.stdout}${requested.stderr}`);
+  }
+  appendFileSync(
+    artifact,
+    `\n## Review\n\n**Verdict:** ${verdict}\n**Reviewer:** aidlc-product-lead-agent\n**Iteration:** 1\n\n### Findings\n\nFixture review.\n`,
+    "utf-8",
+  );
+  const completed = spawnSync(BUN, [...args, "--verdict", verdict], {
+    encoding: "utf-8",
+    env,
+  });
+  if ((completed.status ?? -1) !== 0) {
+    throw new Error(
+      `review completion failed: ${completed.stdout}${completed.stderr}`,
+    );
   }
 }
 

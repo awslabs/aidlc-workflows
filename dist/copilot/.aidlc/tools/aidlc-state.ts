@@ -432,7 +432,7 @@ function auditTailHasFields(
 //      AFTER the FIRST post-anchor HUMAN_TURN.
 //
 // The HUMAN_TURN pivot in conjunct 4 is load-bearing: the reviewer appends its
-// `## Review` section to the primary artifact BEFORE the human responds at the
+// `## Review` section to the stage's review_artifact BEFORE the human responds at the
 // gate (stage-protocol-reviewer.md §12a), firing an ARTIFACT_UPDATED on a produces file.
 // Anchoring the artifact window at the first post-anchor human turn (not the gate
 // open) excludes that legitimate pre-response append, so the reviewer's edit is
