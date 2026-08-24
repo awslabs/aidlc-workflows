@@ -1442,6 +1442,48 @@ export function resolveManagedSettingsCandidates(
   return ["/etc/claude-code/managed-settings.json"];
 }
 
+type ClaudeManagedBooleanKey = "disableAllHooks" | "allowManagedHooksOnly";
+
+function managedSettingsFiles(candidate: string): string[] {
+  const files = [candidate];
+  const fragmentsDir = join(dirname(candidate), "managed-settings.d");
+  try {
+    for (const name of readdirSync(fragmentsDir).sort()) {
+      if (!name.endsWith(".json")) continue;
+      const path = join(fragmentsDir, name);
+      try {
+        if (statSync(path).isFile()) files.push(path);
+      } catch {
+        // A fragment that vanished during enumeration carries no policy.
+      }
+    }
+  } catch {
+    // An absent or unreadable fragment directory carries no policy.
+  }
+  return files;
+}
+
+function resolveManagedBooleanSetting(
+  key: ClaudeManagedBooleanKey,
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv,
+): boolean | undefined {
+  for (const candidate of resolveManagedSettingsCandidates(platform, env)) {
+    let effective: boolean | undefined;
+    for (const path of managedSettingsFiles(candidate)) {
+      try {
+        const parsed = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+        const value = parsed[key];
+        if (typeof value === "boolean") effective = value;
+      } catch {
+        // Absent, unreadable, or malformed managed files do not define the key.
+      }
+    }
+    if (effective !== undefined) return effective;
+  }
+  return undefined;
+}
+
 interface NamingMismatch {
   file: string;
   stem: string;
@@ -1458,6 +1500,12 @@ const PLUGIN_DOCTOR_FINDING_ID_MAX = 48;
 const PLUGIN_NAME_REGEX = /^[a-z][a-z0-9-]*$/;
 const PLUGIN_DOCTOR_REQUIRED_JSON =
   '{"checks":[{"pass":boolean,"label":string,"fix"?:string,"severity"?:"error"|"advisory"}]}';
+const HOOK_EXECUTION_RECOVERY =
+  "1. Run /hooks to check hook approval and policy state. 2. If hooks need approval, approve them and fully restart the CLI; approval does not take effect until a full restart. 3. If /hooks says hooks are restricted by policy, only your Claude Code administrator can lift allowManagedHooksOnly in managed-settings.json. Until then, for an attended session, launch the CLI with AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 and AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD=1";
+// Hook heartbeats and audit rows are written in the same turn, normally
+// seconds apart. Five minutes absorbs host scheduling and slow tool-return
+// ordering without hiding a resumed workflow that advances after hooks die.
+const HOOK_HEARTBEAT_STALE_SLACK_MS = 5 * 60 * 1000;
 
 function frontmatterFields(filePath: string, kind: "Agent" | "Scope"): { name: string; plugin: string } {
   const body = readFileSync(filePath, "utf-8");
@@ -1991,55 +2039,88 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
     // via `--settings '{"disableAllHooks": true}'`, sitting between managed and
     // local, but that is not persisted to a file so it is unprobeable here.)
     //
-    // We inspect only the on-disk managed-settings FILE. Claude Code can also
-    // receive managed policy through channels we cannot read from here (MDM,
-    // Windows registry, a remote/server-managed source, a `managed-settings.d/`
-    // fragment dir) — so a pass means the resolved value is not true in the
-    // settings files we could inspect, not a guarantee the whole enterprise
-    // layer is clean.
+    // We inspect the on-disk managed-settings file and its alphabetical
+    // managed-settings.d fragments. Claude Code can also receive managed policy
+    // through channels we cannot read here (MDM, Windows registry, or a
+    // remote/server-managed source), so a pass is not a guarantee that every
+    // enterprise channel is clean.
     //
     // Managed-settings file location is platform-specific (resolved by the pure,
     // per-platform-tested resolveManagedSettingsCandidates below).
-    const managedCandidates = resolveManagedSettingsCandidates(process.platform, process.env);
-    const home = process.env.HOME || process.env.USERPROFILE || "";
-    const MANAGED_LABEL = "enterprise managed settings";
-    const hookDisableLayers: Array<[string, string]> = [
-      ...managedCandidates.map((p) => [p, MANAGED_LABEL] as [string, string]),
-      [join(projectDir, harness, "settings.local.json"), ".claude/settings.local.json"],
-      [join(projectDir, harness, "settings.json"), ".claude/settings.json"],
-      ...(home ? [[join(home, ".claude", "settings.json"), "~/.claude/settings.json"] as [string, string]] : []),
-    ];
-    let hooksDisabledBy: string | null = null;
-    for (const [path, label] of hookDisableLayers) {
-      try {
-        const parsed = JSON.parse(readFileSync(path, "utf-8")) as { disableAllHooks?: unknown };
-        // Only a layer that EXPLICITLY sets the boolean resolves it; a layer
-        // that omits the key defers to the next-lower layer.
-        if (typeof parsed.disableAllHooks === "boolean") {
-          if (parsed.disableAllHooks) hooksDisabledBy = label;
-          break; // highest-precedence definition wins, true or false
+    if (harnessName === "claude") {
+      const managedDisableAllHooks = resolveManagedBooleanSetting(
+        "disableAllHooks",
+        process.platform,
+        process.env,
+      );
+      const home = process.env.HOME || process.env.USERPROFILE || "";
+      const MANAGED_LABEL = "enterprise managed settings";
+      const hookDisableLayers: Array<[string, string]> = [
+        [
+          join(projectDir, harness, "settings.local.json"),
+          ".claude/settings.local.json",
+        ],
+        [join(projectDir, harness, "settings.json"), ".claude/settings.json"],
+        ...(home
+          ? [
+              [
+                join(home, ".claude", "settings.json"),
+                "~/.claude/settings.json",
+              ] as [string, string],
+            ]
+          : []),
+      ];
+      let hooksDisabledBy: string | null =
+        managedDisableAllHooks === true ? MANAGED_LABEL : null;
+      if (managedDisableAllHooks === undefined) {
+        for (const [path, label] of hookDisableLayers) {
+          try {
+            const parsed = JSON.parse(readFileSync(path, "utf-8")) as {
+              disableAllHooks?: unknown;
+            };
+            // Only a layer that EXPLICITLY sets the boolean resolves it; a layer
+            // that omits the key defers to the next-lower layer.
+            if (typeof parsed.disableAllHooks === "boolean") {
+              if (parsed.disableAllHooks) hooksDisabledBy = label;
+              break; // highest-precedence definition wins, true or false
+            }
+          } catch {
+            // Absent/unreadable/malformed layer — the wiring-config rows own
+            // those cases; only an explicit disableAllHooks value matters here.
+          }
         }
-      } catch {
-        // Absent/unreadable/malformed layer — the wiring-config rows own those
-        // cases; here we only care about an explicit disableAllHooks setting.
+      }
+      // Enterprise managed settings is the highest-precedence layer: nothing
+      // in a project or user file can override it.
+      const disabledByManaged = hooksDisabledBy === MANAGED_LABEL;
+      results.push({
+        pass: hooksDisabledBy === null,
+        label:
+          hooksDisabledBy === null
+            ? "Hooks enabled (resolved disableAllHooks is not true)"
+            : `Hooks DISABLED via "disableAllHooks": true in ${hooksDisabledBy} — AI-DLC cannot run (audit, state sync, sensors, and stage-graph rebuild are all silently skipped even though the hook files are present)`,
+        fix:
+          hooksDisabledBy === null
+            ? undefined
+            : disabledByManaged
+              ? `"disableAllHooks": true is enforced by enterprise managed settings — the highest-precedence layer, which a project or user setting cannot override. IT policy must remove it (or set it to false) for AI-DLC to run. If policy mandates disabled hooks, AI-DLC v2 is not compatible with this environment — its workflow engine is hook-driven.`
+              : `remove "disableAllHooks": true from ${hooksDisabledBy} (or set it to false in a higher-precedence layer such as .claude/settings.local.json) and restart the Claude Code session — AI-DLC's workflow engine is hook-driven and cannot advance while hooks are disabled.`,
+      });
+
+      if (
+        resolveManagedBooleanSetting(
+          "allowManagedHooksOnly",
+          process.platform,
+          process.env,
+        ) === true
+      ) {
+        results.push({
+          pass: false,
+          label: "Claude managed hook policy: allowManagedHooksOnly=true",
+          fix: "hooks from .claude/settings.json are blocked by organization policy (allowManagedHooksOnly); only the Claude Code administrator can lift it in managed-settings.json. Until then, the workflow's human-presence and summary-confirmation receipts cannot be minted; attended sessions can set AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 and AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD=1 in the environment that launches the CLI as a temporary bypass",
+        });
       }
     }
-    // Enterprise managed settings is the highest-precedence layer: nothing in a
-    // project or user file can override it, so the remedy must not suggest that.
-    const disabledByManaged = hooksDisabledBy === MANAGED_LABEL;
-    results.push({
-      pass: hooksDisabledBy === null,
-      label:
-        hooksDisabledBy === null
-          ? "Hooks enabled (resolved disableAllHooks is not true)"
-          : `Hooks DISABLED via "disableAllHooks": true in ${hooksDisabledBy} — AI-DLC cannot run (audit, state sync, sensors, and stage-graph rebuild are all silently skipped even though the hook files are present)`,
-      fix:
-        hooksDisabledBy === null
-          ? undefined
-          : disabledByManaged
-            ? `"disableAllHooks": true is enforced by enterprise managed settings — the highest-precedence layer, which a project or user setting cannot override. IT policy must remove it (or set it to false) for AI-DLC to run. If policy mandates disabled hooks, AI-DLC v2 is not compatible with this environment — its workflow engine is hook-driven.`
-            : `remove "disableAllHooks": true from ${hooksDisabledBy} (or set it to false in a higher-precedence layer such as .claude/settings.local.json) and restart the Claude Code session — AI-DLC's workflow engine is hook-driven and cannot advance while hooks are disabled.`,
-    });
   } else {
     // Kiro / Codex: the wiring config is not settings.json (it is
     // agents/aidlc.json / hooks.json — checked below). The core hook bodies
@@ -2585,21 +2666,74 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
   // Both hook-health and state-drift checks use the same intent-scoped ledger.
   const auditAllShards = readAllAuditShards(projectDir);
   const auditShardEvents = readAuditShardEvents(projectDir);
+  const stateMdPath = stateFilePath(projectDir);
+  let stateContent = "";
+  try {
+    if (existsSync(stateMdPath)) {
+      stateContent = readFileSync(stateMdPath, "utf-8");
+    }
+  } catch {
+    // An unreadable state contributes no progress evidence; audit remains usable.
+  }
+  const stateProgressedStages = new Set(
+    parseCheckboxes(stateContent)
+      .filter((entry) => entry.state !== "pending")
+      .map((entry) => entry.slug),
+  );
+  const stageOrGateEvents = auditShardEvents.filter(
+    (event) => event.event.startsWith("STAGE_") || event.event.startsWith("GATE_"),
+  );
+  let newestStageOrGateEvent: {
+    timestampMs: number;
+    timestampRaw: string;
+  } | null = null;
+  for (const event of stageOrGateEvents) {
+    const timestampMs = Date.parse(event.timestamp);
+    if (
+      Number.isFinite(timestampMs) &&
+      (newestStageOrGateEvent === null ||
+        timestampMs > newestStageOrGateEvent.timestampMs)
+    ) {
+      newestStageOrGateEvent = {
+        timestampMs,
+        timestampRaw: event.timestamp,
+      };
+    }
+  }
+  const auditProgressedStages = new Set(
+    stageOrGateEvents
+      .map(
+        (event) =>
+          auditBlockField(event.block, "Stage") ??
+          auditBlockField(event.block, "Slug"),
+      )
+      .filter((slug): slug is string => slug !== null),
+  );
+  const progressedStageCount = Math.max(
+    stateProgressedStages.size,
+    auditProgressedStages.size,
+  );
+  const workflowHasProgress = progressedStageCount > 0;
+  const workflowStageStarted = auditAllShards.includes("**Event**: STAGE_STARTED");
+  const hookExecutionRecovery =
+    harnessName === "claude"
+      ? HOOK_EXECUTION_RECOVERY
+      : "verify this harness's hook registration or trust configuration, then fully restart the harness before resuming the workflow";
 
   // 6. Hook heartbeats
   // Three states, discriminated by health-dir presence, readable heartbeats,
-  // and evidence that a workflow stage ran in the same intent-scoped ledger:
+  // and evidence that the workflow advanced in the same intent-scoped ledger:
   //   (a) .aidlc-hooks-health/ missing entirely, or present without .last files
-  //       before STAGE_STARTED → hooks have not had a chance to fire. Pass.
+  //       before workflow progress → hooks have not had a chance to fire. Pass.
   //       This preserves debug-only dirs and ignores doctor's HEALTH_CHECKED.
-  //   (b) Directory exists without .last files after STAGE_STARTED, or .last
-  //       files exist but are all unreadable → hooks should have fired. Fail.
-  //   (c) Directory has readable .last files → hooks are working; pass with
-  //       timestamps.
+  //   (b) No readable heartbeat after progress, or unreadable .last files →
+  //       hooks should have fired. Fail.
+  //   (c) Readable .last files exist → compare the newest one to progress.
   const healthDir = hooksHealthDir(projectDir);
   const heartbeatEntries: string[] = [];
+  let newestHeartbeat: { timestampMs: number; timestampRaw: string } | null =
+    null;
   const heartbeatDirExists = existsSync(healthDir);
-  const workflowStageStarted = auditAllShards.includes("**Event**: STAGE_STARTED");
   // Track .last presence separately from readable entries so an unreadable
   // heartbeat file remains a failure instead of looking like a fresh install.
   let hasHookFiredContent = false;
@@ -2612,6 +2746,13 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
           const ts = readFileSync(join(healthDir, f), "utf-8").trim();
           const name = f.replace(".last", "");
           heartbeatEntries.push(`${name} ${ts}`);
+          const timestampMs = Date.parse(ts);
+          if (
+            Number.isFinite(timestampMs) &&
+            (newestHeartbeat === null || timestampMs > newestHeartbeat.timestampMs)
+          ) {
+            newestHeartbeat = { timestampMs, timestampRaw: ts };
+          }
         } catch {
           // skip unreadable
         }
@@ -2621,28 +2762,68 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
     }
   }
   if (heartbeatEntries.length > 0) {
-    // (c) hooks working
+    if (
+      newestHeartbeat !== null &&
+      newestStageOrGateEvent !== null &&
+      newestStageOrGateEvent.timestampMs - newestHeartbeat.timestampMs >
+        HOOK_HEARTBEAT_STALE_SLACK_MS
+    ) {
+      results.push({
+        pass: false,
+        label: `Hooks last fired ${newestHeartbeat.timestampRaw}, but the workflow last advanced ${newestStageOrGateEvent.timestampRaw}`,
+        fix: hookExecutionRecovery,
+      });
+    } else {
+      results.push({
+        pass: true,
+        label: `Hooks last fired: ${heartbeatEntries.join(", ")}`,
+      });
+    }
+  } else if (
+    !heartbeatDirExists &&
+    workflowHasProgress
+  ) {
+    const stages = progressedStageCount === 1 ? "stage" : "stages";
     results.push({
-      pass: true,
-      label: `Hooks last fired: ${heartbeatEntries.join(", ")}`,
+      pass: false,
+      label: `Hooks have never executed although this workflow has progressed ${progressedStageCount} ${stages}`,
+      fix: hookExecutionRecovery,
+    });
+  } else if (
+    heartbeatDirExists &&
+    !hasHookFiredContent &&
+    workflowStageStarted
+  ) {
+    results.push({
+      pass: false,
+      label: "Hook heartbeat data",
+      fix: "health dir exists and the ledger shows STAGE_STARTED, but no hook has ever fired — verify hooks are registered in settings.json",
     });
   } else if (
     !heartbeatDirExists ||
     (!hasHookFiredContent && !workflowStageStarted)
   ) {
-    // (a) fresh install, pre-created dir, or debug-only dir before a stage ran.
+    // (a) fresh install, pre-created dir, or debug-only dir before progress.
     results.push({
       pass: true,
       label: "Hook heartbeats: not yet fired (first workflow stage will populate)",
     });
   } else {
-    // (b) a stage ran without any heartbeat, or heartbeat files are unreadable.
+    // (b) heartbeat files exist but are unreadable.
     results.push({
       pass: false,
       label: "Hook heartbeat data",
-      fix: !hasHookFiredContent && workflowStageStarted
-        ? "health dir exists and the ledger shows STAGE_STARTED, but no hook has ever fired — verify hooks are registered in settings.json"
-        : "health dir exists but no hooks have fired — verify hooks are registered in settings.json",
+      fix: "health dir exists but heartbeat files are unreadable — verify permissions and hook registration",
+    });
+  }
+
+  if (
+    stageOrGateEvents.length > 0 &&
+    !auditShardEvents.some((event) => event.event === "HUMAN_TURN")
+  ) {
+    results.push({
+      pass: true,
+      label: `Human-turn receipts: 0 HUMAN_TURN rows across ${stageOrGateEvents.length} stage/gate event(s) (advisory) - receipts are not being minted, so presence-gated checkpoints will refuse`,
     });
   }
 
@@ -2723,7 +2904,6 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
   // should be in a certain shape (e.g., Status=Completed after WORKFLOW_COMPLETED),
   // verify the state actually matches. Covers the rare case where audit-first
   // succeeded but the state write failed (disk full, permission lost mid-run).
-  const stateMdPath = stateFilePath(projectDir);
   if (existsSync(stateMdPath) && auditAllShards.length > 0) {
     try {
       const auditContent = auditAllShards;

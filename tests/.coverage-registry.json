@@ -7491,6 +7491,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t319-doctor-hooks-blocked.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t324-doctor-hooks-disabled.test.ts",
           "mechanism": "cli"
         },

@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.93] - 2026-08-25
+
+`/aidlc --doctor` now detects project hooks that never start, hooks that stop during a workflow, and Claude Code managed policy that permits only managed hooks. **Upgrade:** re-copy your `dist/<harness>/` shell into the project, approve Claude project hooks through `/hooks`, and fully restart Claude Code.
+
+* Zero hook heartbeats remain a passing first-run advisory only before workflow progress; after progress they fail with ordered hook-approval, restart, administrator-policy, and attended-session bypass guidance.
+* Existing heartbeats are compared with the newest stage or gate event and fail when workflow progress is more than five minutes newer; ledgers with stage or gate events but no `HUMAN_TURN` receipt also show a passing advisory.
+* Claude installs fail when effective managed `allowManagedHooksOnly: true` blocks `.claude/settings.json` hooks. The check shares the existing `AIDLC_MANAGED_SETTINGS_PATH`, current and legacy Windows locations, managed-setting precedence, and alphabetical `managed-settings.d/` fragment resolution used by `disableAllHooks`.
+
 ## [2.6.92] - 2026-08-25
 
 Filesystem descendant checks now enforce one mixed-separator boundary on every host, preventing Windows traversal and alias escapes while preserving valid in-bound drive and UNC paths. **Upgrade:** refresh your `dist/<harness>/` shell so every tool receives the strengthened shared path guard.

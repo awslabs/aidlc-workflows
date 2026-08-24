@@ -176,6 +176,8 @@ cp -r dist/claude/aidlc/   your-project/aidlc/     # the workspace shell — a s
 
 The first line copies the engine — the orchestrator, stage files, agent personas, hooks, knowledge files, and default settings. The second copies the **workspace shell**: the pre-built `aidlc/spaces/default/memory/` method tree the engine reads. It ships as a **sibling** of `.claude/` (not inside it), so it must be copied separately — or copy the whole `dist/claude/` tree at once. `/aidlc --doctor` fails its "workspace shell ready" check if `aidlc/spaces/default/memory/` is missing.
 
+Start (or fully restart) Claude Code from the project root, approve the project hooks when prompted or through `/hooks`, then fully restart Claude Code again so the approval takes effect; `/clear` is not enough. On managed fleets, if `/hooks` says hooks are restricted by policy, follow [Claude managed policy blocks project hooks](15-troubleshooting.md#claude-managed-policy-blocks-project-hooks).
+
 </details>
 
 <details markdown="1">
@@ -302,11 +304,12 @@ Run the health check to confirm everything is in place:
 |-------|-------------------|
 | Prerequisites | `bun` is installed and on `$PATH` |
 | Hook presence | Every hook `settings.json` wires (its `hooks` blocks + the `statusLine` command — all 16 framework hooks) exists in `.claude/hooks/`; a wired-but-missing hook fails loudly. Sourcing the expected roster from `settings.json` means adding a hook there auto-checks it |
-| Hooks enabled (Claude Code) | No inspected settings file globally disables hooks. Fails loudly when `"disableAllHooks": true` is resolved from any settings layer — enterprise managed settings, `.claude/settings.local.json`, `.claude/settings.json`, or `~/.claude/settings.json` — since that silently skips every present hook. Follows Claude Code's layer precedence, so a higher-precedence `false` suppresses a lower `true` |
+| Hooks enabled (Claude Code) | No inspected settings file globally disables hooks. Fails loudly when `"disableAllHooks": true` is resolved from enterprise managed settings (the platform file plus alphabetical `managed-settings.d/` fragments), `.claude/settings.local.json`, `.claude/settings.json`, or `~/.claude/settings.json`. Follows Claude Code's layer precedence, so a higher-precedence `false` suppresses a lower `true` |
 | Project structure | `.claude/settings.json` exists with expected configuration |
 | Workspace shell | `.claude/` + `aidlc/spaces/default/memory/` are present (the shipped shell) |
 | State file | the active intent's `aidlc-state.md` matches its audit trail (no drift) |
-| Hook heartbeats | `.aidlc-hooks-health/` contains recent timestamps from hook executions |
+| Hook heartbeats | `.aidlc-hooks-health/` contains timestamps from hook executions; zero heartbeats fail once workflow progresses, and heartbeats more than five minutes older than the latest stage/gate event fail as stopped |
+| Claude managed hook policy | On Claude Code, effective managed `allowManagedHooksOnly: true` is reported because it blocks every project hook in `.claude/settings.json`; it uses the same platform paths, fragment ordering, and `AIDLC_MANAGED_SETTINGS_PATH` override as the global-disable check |
 | Graph integrity | No cycles in `stage-graph.json`; every slug has a matching stage file |
 | Scope validation | All 11 scopes walk cleanly against the graph (advisories for scope-truncation gaps are expected) |
 | Schema + references | Every stage's YAML frontmatter validates, and every consumes/requires_stage reference resolves |
@@ -345,6 +348,8 @@ Run the health check to confirm everything is in place:
 |---------|-----|
 | `bun` not installed | Install via `curl -fsSL https://bun.sh/install \| bash`. On Windows: `npm install -g bun` or `powershell -c "irm bun.sh/install.ps1 \| iex"`. Ensure it is on PATH for non-interactive shells. |
 | Hook not present | Re-copy the `.claude/` directory from the distribution |
+| Hooks registered but never executed | Doctor names how many stages have progressed. Run `/hooks` to check approval and policy state; approve pending hooks and fully restart the CLI. If `/hooks` says hooks are restricted by policy, only the Claude Code administrator can lift managed `allowManagedHooksOnly`; use the two attended-session bypass variables below only as an interim. |
+| `allowManagedHooksOnly=true` | Ask the Claude Code administrator to lift the setting in managed `managed-settings.json`; project settings cannot override it. For attended recovery only, launch the CLI with `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` and `AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD=1`. |
 | `settings.json` missing | Re-copy from the distribution: `cp dist/claude/.claude/settings.json .claude/settings.json` |
 | Workspace shell missing | Re-copy the workspace shell from `dist/claude/` into your project root |
 | State file issues | Archive the active intent's record dir under `aidlc/spaces/<space>/intents/` and run `/aidlc` to start fresh |

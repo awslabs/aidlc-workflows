@@ -992,6 +992,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t291-review-receipt-recovery.test.ts",
     "unit/t302-protocol-modules.test.ts",
     "unit/t317-gate-pending-doctor.test.ts",
+    "unit/t319-doctor-hooks-blocked.test.ts",
     "unit/t315-pipeline-link-receipts.test.ts",
     "unit/t313-plugin-doctor-checks.test.ts",
     "unit/t320-review-confirmation-deadlock.test.ts",
