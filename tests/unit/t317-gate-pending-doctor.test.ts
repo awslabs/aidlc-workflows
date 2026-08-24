@@ -14,6 +14,7 @@ import {
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
+  seededAuditDir,
   seededAuditShard,
   seededStateFile,
   seedStateFile,
@@ -47,21 +48,27 @@ function projectAtGate(): string {
   return proj;
 }
 
+interface GateAuditRow {
+  timestamp: string;
+  event:
+    | "WORKFLOW_STARTED"
+    | "STAGE_JUMPED"
+    | "STAGE_STARTED"
+    | "STAGE_AWAITING_APPROVAL"
+    | "GATE_APPROVED";
+  recovered?: boolean;
+  revalidated?: boolean;
+  stage?: string | null;
+}
+
 function seedAudit(
   proj: string,
-  rows: Array<{
-    timestamp: string;
-    event:
-      | "WORKFLOW_STARTED"
-      | "STAGE_JUMPED"
-      | "STAGE_STARTED"
-      | "STAGE_AWAITING_APPROVAL"
-      | "GATE_APPROVED";
-    recovered?: boolean;
-    stage?: string | null;
-  }>,
+  rows: GateAuditRow[],
+  shardName?: string,
 ): void {
-  const shard = seededAuditShard(proj);
+  const shard = shardName
+    ? join(seededAuditDir(proj), shardName)
+    : seededAuditShard(proj);
   mkdirSync(join(shard, ".."), { recursive: true });
   const body = rows.map((row) => {
     const stage = row.stage === undefined ? "feasibility" : row.stage;
@@ -71,6 +78,7 @@ function seedAudit(
       `**Event**: ${row.event}`,
       ...(stage === null ? [] : [`**Stage**: ${stage}`]),
       ...(row.recovered ? ["**Recovered**: true"] : []),
+      ...(row.revalidated ? ["**Revalidated**: true"] : []),
     ].join("\n");
   }).join("\n\n---\n\n");
   writeFileSync(shard, `${body}\n`, "utf-8");
@@ -173,5 +181,49 @@ describe("t317 doctor gate-pending advisory", () => {
       },
     ]);
     expect(runDoctor(proj).out).not.toContain("Approval gate pending");
+  });
+
+  test("revalidation preserves the stale organic gate advisory", () => {
+    const proj = projectAtGate();
+    const now = Date.now();
+    seedAudit(proj, [
+      {
+        timestamp: new Date(
+          now - GATE_PENDING_ADVISORY_MS - 2 * 60 * 60 * 1000,
+        ).toISOString(),
+        event: "STAGE_AWAITING_APPROVAL",
+      },
+      {
+        timestamp: new Date(now - 60 * 60 * 1000).toISOString(),
+        event: "STAGE_AWAITING_APPROVAL",
+        revalidated: true,
+      },
+    ]);
+    expect(runDoctor(proj).out).toContain(
+      "Approval gate pending: Feasibility & Constraints",
+    );
+  });
+
+  test("same-second cross-shard boundary and gate omit the advisory", () => {
+    const permutations = [
+      ["a-boundary.md", "z-gate.md"],
+      ["z-boundary.md", "a-gate.md"],
+    ] as const;
+    for (const [boundaryShard, gateShard] of permutations) {
+      const proj = projectAtGate();
+      const timestamp = new Date(
+        Date.now() - GATE_PENDING_ADVISORY_MS - 2 * 60 * 60 * 1000,
+      ).toISOString();
+      seedAudit(proj, [{
+        timestamp,
+        event: "STAGE_STARTED",
+      }], boundaryShard);
+      seedAudit(proj, [{
+        timestamp,
+        event: "STAGE_AWAITING_APPROVAL",
+      }], gateShard);
+
+      expect(runDoctor(proj).out).not.toContain("Approval gate pending");
+    }
   });
 });

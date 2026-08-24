@@ -70,6 +70,7 @@ import { join } from "node:path";
 import {
   cleanupTestProject,
   createTestProject,
+  seededAuditDir,
   seededAuditShard,
   seededStateFile,
   seedStateFile,
@@ -146,22 +147,28 @@ function deleteStateLines(p: string, pattern: RegExp): void {
   writeFileSync(f, kept);
 }
 
+interface GateAuditRow {
+  timestamp: string;
+  event:
+    | "WORKFLOW_STARTED"
+    | "STAGE_JUMPED"
+    | "STAGE_STARTED"
+    | "STAGE_AWAITING_APPROVAL"
+    | "GATE_APPROVED"
+    | "GATE_REJECTED";
+  recovered?: boolean;
+  revalidated?: boolean;
+  stage?: string | null;
+}
+
 function seedAudit(
   p: string,
-  rows: Array<{
-    timestamp: string;
-    event:
-      | "WORKFLOW_STARTED"
-      | "STAGE_JUMPED"
-      | "STAGE_STARTED"
-      | "STAGE_AWAITING_APPROVAL"
-      | "GATE_APPROVED"
-      | "GATE_REJECTED";
-    recovered?: boolean;
-    stage?: string | null;
-  }>,
+  rows: GateAuditRow[],
+  shardName?: string,
 ): void {
-  const shard = seededAuditShard(p);
+  const shard = shardName
+    ? join(seededAuditDir(p), shardName)
+    : seededAuditShard(p);
   mkdirSync(join(shard, ".."), { recursive: true });
   const body = rows.map((row) => {
     const stage = row.stage === undefined ? "feasibility" : row.stage;
@@ -171,6 +178,7 @@ function seedAudit(
       `**Event**: ${row.event}`,
       ...(stage === null ? [] : [`**Stage**: ${stage}`]),
       ...(row.recovered ? ["**Recovered**: true"] : []),
+      ...(row.revalidated ? ["**Revalidated**: true"] : []),
     ].join("\n");
   }).join("\n\n---\n\n");
   writeFileSync(shard, `${body}\n`, "utf-8");
@@ -263,6 +271,72 @@ describe("t38 aidlc-utility status — gate awareness (migrated from t38-utility
     expect(r.status).toBe(0);
     expect(r.out).toContain("Awaiting your approval on Feasibility & Constraints");
     expect(r.out).not.toContain("waiting since");
+  });
+
+  test("1f: revalidation preserves the original organic gate timestamp", () => {
+    const p = seededProj();
+    sedState(p, /^- \[-\] feasibility/m, "- [?] feasibility");
+    const originalTimestamp = "2026-08-01T08:30:00Z";
+    seedAudit(p, [
+      {
+        timestamp: originalTimestamp,
+        event: "STAGE_AWAITING_APPROVAL",
+      },
+      {
+        timestamp: "2026-08-20T08:30:00Z",
+        event: "STAGE_AWAITING_APPROVAL",
+        revalidated: true,
+      },
+    ]);
+    const r = status(p);
+    expect(r.status).toBe(0);
+    expect(r.out).toContain(`waiting since ${originalTimestamp}, ~`);
+    expect(r.out).not.toContain("waiting since 2026-08-20T08:30:00Z");
+  });
+
+  test("1g: same-second cross-shard boundary and gate do not invent an order", () => {
+    const permutations = [
+      ["a-boundary.md", "z-gate.md"],
+      ["z-boundary.md", "a-gate.md"],
+    ] as const;
+    for (const [boundaryShard, gateShard] of permutations) {
+      const p = seededProj();
+      sedState(p, /^- \[-\] feasibility/m, "- [?] feasibility");
+      const timestamp = "2026-08-19T08:30:00Z";
+      seedAudit(p, [{
+        timestamp,
+        event: "STAGE_STARTED",
+      }], boundaryShard);
+      seedAudit(p, [{
+        timestamp,
+        event: "STAGE_AWAITING_APPROVAL",
+      }], gateShard);
+
+      const r = status(p);
+      expect(r.status).toBe(0);
+      expect(r.out).toContain("Awaiting your approval on Feasibility & Constraints");
+      expect(r.out).not.toContain("waiting since");
+    }
+  });
+
+  test("1h: same-second rows in one shard retain append order", () => {
+    const timestamp = "2026-08-19T08:30:00Z";
+
+    const opened = seededProj();
+    sedState(opened, /^- \[-\] feasibility/m, "- [?] feasibility");
+    seedAudit(opened, [
+      { timestamp, event: "STAGE_STARTED" },
+      { timestamp, event: "STAGE_AWAITING_APPROVAL" },
+    ]);
+    expect(status(opened).out).toContain(`waiting since ${timestamp}, ~`);
+
+    const cleared = seededProj();
+    sedState(cleared, /^- \[-\] feasibility/m, "- [?] feasibility");
+    seedAudit(cleared, [
+      { timestamp, event: "STAGE_AWAITING_APPROVAL" },
+      { timestamp, event: "STAGE_STARTED" },
+    ]);
+    expect(status(cleared).out).not.toContain("waiting since");
   });
 
   // --- Test 2: [R] state -> "Revising" phrase ---

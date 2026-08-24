@@ -98,6 +98,7 @@ import {
   parseStageFrontmatter,
   parseStateStageSuffixes,
   readAllAuditShards,
+  readAuditShardEvents,
   readActiveDirectiveMarker,
   recordHookDrop,
   readCurrentSessionId,
@@ -141,6 +142,7 @@ import {
   _resetStageGraphForTests,
   classifyStateVersion,
   CURRENT_STATE_VERSION,
+  type AuditShardEvent,
 } from "./aidlc-lib.ts";
 import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
 import {
@@ -1074,10 +1076,9 @@ interface PendingOrganicGate {
 }
 
 function pendingOrganicGate(
-  audit: string,
+  audit: AuditShardEvent[],
   stage: string,
 ): PendingOrganicGate | null {
-  if (audit.length === 0) return null;
   const relevant = new Set([
     "WORKFLOW_STARTED",
     "STAGE_JUMPED",
@@ -1087,46 +1088,65 @@ function pendingOrganicGate(
     "GATE_REJECTED",
   ]);
   const events = audit
-    .replace(/\r\n/g, "\n")
-    .split(/\n---\n/)
-    .map((block, position) => ({
-      event: auditBlockField(block, "Event") ?? "",
-      stage: auditBlockField(block, "Stage"),
-      timestamp: auditBlockField(block, "Timestamp") ?? "",
-      recovered: auditBlockField(block, "Recovered") === "true",
-      workflow: auditBlockField(block, "Workflow"),
-      position,
-    }))
     .filter((event) => relevant.has(event.event))
     .sort((a, b) => {
       if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
-      return a.position - b.position;
+      if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+      return a.pos - b.pos;
     });
 
   let pending: PendingOrganicGate | null = null;
-  for (const event of events) {
-    if (
-      event.event === "WORKFLOW_STARTED" ||
-      event.event === "STAGE_JUMPED" ||
-      (
-        event.event === "STAGE_STARTED" &&
-        event.stage === stage &&
-        !event.workflow?.startsWith("single-stage:")
-      )
+  for (let start = 0; start < events.length;) {
+    let end = start + 1;
+    while (
+      end < events.length &&
+      events[end].timestamp === events[start].timestamp
     ) {
-      pending = null;
-      continue;
+      end++;
     }
-    if (event.stage !== stage) continue;
-    if (event.event === "STAGE_AWAITING_APPROVAL") {
-      if (event.recovered) continue;
-      const timestampMs = Date.parse(event.timestamp);
+
+    // Only same-shard append order is causal. The last effective row in each
+    // shard can be globally last; disagreeing effects therefore fail closed.
+    const effectByShard = new Map<string, "open" | "clear">();
+    for (const event of events.slice(start, end)) {
+      const eventStage = auditBlockField(event.block, "Stage");
+      const boundary =
+        event.event === "WORKFLOW_STARTED" ||
+        event.event === "STAGE_JUMPED" ||
+        (
+          event.event === "STAGE_STARTED" &&
+          eventStage === stage &&
+          !auditBlockField(event.block, "Workflow")?.startsWith("single-stage:")
+        );
+      if (boundary) {
+        effectByShard.set(event.shard, "clear");
+        continue;
+      }
+      if (eventStage !== stage) continue;
+      if (event.event === "STAGE_AWAITING_APPROVAL") {
+        if (
+          auditBlockField(event.block, "Recovered") === "true" ||
+          auditBlockField(event.block, "Revalidated") === "true"
+        ) {
+          continue;
+        }
+        effectByShard.set(event.shard, "open");
+      } else {
+        effectByShard.set(event.shard, "clear");
+      }
+    }
+
+    const effects = new Set(effectByShard.values());
+    if (effects.size > 1 || effects.has("clear")) {
+      pending = null;
+    } else if (effects.has("open")) {
+      const timestamp = events[start].timestamp;
+      const timestampMs = Date.parse(timestamp);
       pending = Number.isFinite(timestampMs)
-        ? { timestamp: event.timestamp, timestampMs }
+        ? { timestamp, timestampMs }
         : null;
-    } else {
-      pending = null;
     }
+    start = end;
   }
   return pending;
 }
@@ -1186,7 +1206,7 @@ To get started:
     statusLine = `Awaiting your approval on ${displayName}`;
     try {
       const pending = pendingOrganicGate(
-        readAllAuditShards(projectDir, flags.intent, flags.space),
+        readAuditShardEvents(projectDir, flags.intent, flags.space),
         currentStage,
       );
       if (pending) {
@@ -2560,6 +2580,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
   const stateMdPath = stateFilePath(projectDir);
   // Read across every per-clone audit shard (single shard in the common case).
   const auditAllShards = readAllAuditShards(projectDir);
+  const auditShardEvents = readAuditShardEvents(projectDir);
   if (existsSync(stateMdPath) && auditAllShards.length > 0) {
     try {
       const auditContent = auditAllShards;
@@ -2705,7 +2726,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
         ? parseCheckboxes(stateContent).find((c) => c.slug === currentStage)
         : undefined;
       if (currentStage && currentCheckbox?.state === "awaiting-approval") {
-        const pending = pendingOrganicGate(auditAllShards, currentStage);
+        const pending = pendingOrganicGate(auditShardEvents, currentStage);
         if (pending) {
           const ageMs = Date.now() - pending.timestampMs;
           if (ageMs > GATE_PENDING_ADVISORY_MS) {
