@@ -748,9 +748,12 @@ This stage has a **two-part structure**: planning followed by generation.
    Number each plan step sequentially (Step 1, Step 2, etc.) for clear
    execution ordering and traceability.
 
-   Also create
-   `<record>/construction/{unit-name}/code-generation/unit-test-instructions.md`
-   before Plan Approval. Match the active test strategy:
+   Resolve one code-generation record directory from the directive:
+   `<record>/construction/<directive.unit>/code-generation/` when
+   `directive.unit` is present, otherwise the zero-Unit stage directory
+   `<record>/construction/code-generation/`. Also create
+   `unit-test-instructions.md` there before Plan Approval. Match the active test
+   strategy:
    - **Minimal**: Requirement-driven unit tests (1 test per requirement,
      happy-path floor per component), approximately 5-15 tests total
    - **Standard**: 5-8 tests per component, with key behavior coverage
@@ -768,11 +771,12 @@ This stage has a **two-part structure**: planning followed by generation.
 3. **Plan Approval** -- Request approval for both
    `code-generation-plan.md`, its Testing Contract, and
    `unit-test-instructions.md`. On a revision, reset the prior `[Answer]:` to
-   blank first. Run `aidlc-testing-posture.ts fingerprint --unit <unit>` after
-   both files are final, then create or reset
-   `<record>/construction/{unit-name}/code-generation/code-generation-questions.md`
-   with that `[Approval Fingerprint]`, a **Plan Approval** question, and blank
-   `[Answer]:`; render it as a structured question and stop the turn:
+   blank first. After both files are final, run
+   `aidlc-testing-posture.ts fingerprint --unit <unit>` for a unit directive or
+   `aidlc-testing-posture.ts fingerprint` for zero-Unit stage-level work. Then
+   create or reset `code-generation-questions.md` in the resolved record
+   directory with that `[Approval Fingerprint]`, a **Plan Approval** question,
+   and blank `[Answer]:`; render it as a structured question and stop the turn:
    - "Approve Plan" -- proceed to code generation
    - "Request Changes" -- revise the plan
 
@@ -793,10 +797,10 @@ This stage has a **two-part structure**: planning followed by generation.
    (subagent_type="aidlc-developer-agent").
 
    **Context passed to subagent:**
-   - As the first prompt line, the exact target marker
-     `AIDLC-UNIT: <directive.unit>` (or the current unit name for a
-     single-iteration directive without `unit`). Contextual dependencies do
-     not receive additional markers.
+   - As the first prompt line, the exact target marker:
+     `AIDLC-UNIT: <directive.unit>` for unit work, or
+     `AIDLC-STAGE: code-generation` for a zero-Unit directive. Contextual
+     dependencies do not receive additional target markers.
    - As the second line, `AIDLC-TESTING-CONTRACT: <contract_sha256>` from the
      approved plan. The dispatch guard rejects missing, different, or stale
      hashes.

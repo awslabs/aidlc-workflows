@@ -119,8 +119,9 @@ empty on both channels, so their written path must be recovered from the result
 text and audit-tail hooks (`rebuild-stage-graph`, `sync-workflow-state`) run
 from the audit trail. The graph-rebuild route also retains the shell result and session
 identity so a successful `intent-create` binds to the invoking session: modern
-events carry the exact `session_id`, while the legacy channel reuses the
-synthetic identity retained by SessionStart. Modern Stop likewise prefers its
+events carry the exact `session_id`, while the legacy channel derives a stable
+host-instance identity from the measured `VSCODE_IPC_HOOK`/`VSCODE_PID`
+environment and retains it at SessionStart. Modern Stop likewise prefers its
 event-local `session_id`, preventing one concurrent chat from consuming
 another chat's post-create handoff; legacy agentStop falls back to the retained
 identity. Later 1.x builds populate some PreToolUse and delegation inputs; the
@@ -136,13 +137,14 @@ fallback through `toolArgs.command`; raw prompt text is only a newer-generation
 compatibility shape.
 
 The payload acquisition is **gated to payload-dependent targets**
-(`audit-and-sensors`, `log-subagent`, `rebuild-stage-graph`), the terminal
-command seams, plus `session-start` and `continue-workflow` for their modern
-`session_id`. A non-empty `USER_PROMPT` is consumed immediately on 0.12 builds
-(which open stdin without ever writing); otherwise the adapter reads the 1.x
-stdin channel with a 2s broken-channel ceiling. Every other target - including
-the approval floor, which fires on every `PreToolUse` - touches neither channel
-and keeps its zero-latency path.
+(`audit-and-sensors`, `log-subagent`, `plan-approval-guard`,
+`rebuild-stage-graph`), the terminal-command seams, plus `session-start` and
+`continue-workflow` for their modern `session_id`, and `record-human-turn` for
+the exact approval response. A non-empty `USER_PROMPT` is consumed immediately
+on 0.12 builds (which open stdin without ever writing); otherwise the adapter
+reads the 1.x stdin channel with a 2s broken-channel ceiling. Every other target
+- including the approval floor, which fires on every `PreToolUse` - touches
+neither channel and keeps its zero-latency path.
 
 | Hook | Trigger (matcher) | Purpose |
 |------|-------------------|---------|
@@ -153,6 +155,7 @@ and keeps its zero-latency path.
 | `aidlc-continue-workflow` | `Stop` | Forwarding-loop audit (advisory-only; the Stop trigger cannot block on the IDE - enforcement relies on the conductor's own Stop protocol) |
 | `aidlc-block` | `PreToolUse` | Hard-blocks tool calls while an approval gate is open and no human has acted since (human-presence floor) |
 | `aidlc-write-audit-log` | `PostToolUse` (`fs_write\|str_replace\|fs_append`) | Logs artifact create/update, then fires applicable sensors (path from the tool result) |
+| `aidlc-plan-approval-guard` | `PreToolUse` | Enforces Code Generation Plan Approval with exact target classification when arguments are present. Legacy argument-less payloads permit only measured `fs_write`/`str_replace` plan-question writes. PostToolUse stays silent because 0.12 discards that output; the invoking Code Generation `next`/final `continue` directive carries one protected choice capability. Recovery first requires an exact human `Recover Plan Approval` response; another live window cannot initiate it, while a replacement window can recover after the owner PID exits or an IPC-only endpoint disappears. Takeover clears old response evidence before rotating the challenge. An interrupted pre-write window remains a recovery latch even when PostToolUse never runs; definitive `toolSuccess:false` or recognized failure prose clears it because no mutation occurred, while unknown outcomes remain latched. Adapter-owned recovery preserves the human ask while clearing only violation/window state after successful reissue. `UserPromptSubmit` can submit exact recovery/approval labels but cannot reveal or transfer them. Unknown mutators fail closed and shared files/audit retain no plaintext secret. |
 | `aidlc-log-subagent` | `PostToolUse` (`^(subagent_.+\|invoke_sub_agent)$`) | Records `SUBAGENT_COMPLETED` with the delegate's identity. The matcher is broad so any delegate name reaches the adapter; the adapter drops the auxiliary `subagent_response` shell |
 | `aidlc-rebuild-stage-graph` | `PostToolUse` (`execute_bash`) | Recompiles the runtime graph (gated on the audit tail) |
 | `aidlc-sync-workflow-state` | `PostToolUse` (`execute_bash`) | Forward-only sync of `Current Stage` from the latest `STAGE_STARTED` in the audit (the IDE surfaces no task payload to parse) |

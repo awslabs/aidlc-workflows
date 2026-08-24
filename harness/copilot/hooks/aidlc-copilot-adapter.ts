@@ -65,12 +65,10 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import {
   claimCopilotCommand,
   type CopilotCommandClaim,
   type CopilotDirectiveMetadata,
-  humanTurnMintAllowed,
   recordCopilotHumanSequence,
   resolveWorkflowSelection,
   settleCopilotCommand,
@@ -103,6 +101,9 @@ interface CopilotHookInput {
   agent_display_name?: string;
   stop_reason?: string;
   stop_hook_active?: boolean;
+  prompt?: string;
+  user_prompt?: string;
+  message?: string;
 }
 
 export async function run(
@@ -924,13 +925,18 @@ export async function run(
       } catch {
         return 0;
       }
-      try {
-        if (humanTurnMintAllowed()) {
-          appendAuditEntry("HUMAN_TURN", {}, projectDir);
-        }
-      } catch {
-        // best-effort presence record — advisory
-      }
+      runCore(
+        "aidlc-record-human-turn.ts",
+        JSON.stringify({
+          hook_event_name: "UserPromptSubmit",
+          ...(sessionId ? { session_id: sessionId } : {}),
+          prompt:
+            copilot.prompt ??
+            copilot.user_prompt ??
+            copilot.message ??
+          "",
+        }),
+      );
       if (sessionId) {
         try { recordCopilotHumanSequence(projectDir, stateContent, sessionId); }
         catch { /* bounded coordination remains best effort */ }
@@ -1033,6 +1039,14 @@ export async function run(
         );
         if (freeze.code === 2) {
           process.stdout.write(denyJson(freeze.stderr));
+          return 0;
+        }
+        const planApproval = runCoreWithStderr(
+          "aidlc-plan-approval-guard.ts",
+          canonicalInput,
+        );
+        if (planApproval.code === 2) {
+          process.stdout.write(denyJson(planApproval.stderr));
           return 0;
         }
         if (command.status === "unsupported") {
@@ -1143,6 +1157,18 @@ export async function run(
             );
             if (freeze.code === 2) {
               process.stdout.write(denyJson(freeze.stderr));
+              return 0;
+            }
+            const planApproval = runCoreWithStderr(
+              "aidlc-plan-approval-guard.ts",
+              JSON.stringify({
+                hook_event_name: "PreToolUse",
+                tool_name: call.toolName,
+                tool_input: call.toolInput,
+              }),
+            );
+            if (planApproval.code === 2) {
+              process.stdout.write(denyJson(planApproval.stderr));
               return 0;
             }
           }

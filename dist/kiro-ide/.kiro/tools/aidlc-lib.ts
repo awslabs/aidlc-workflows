@@ -2480,6 +2480,622 @@ export class SessionResolutionConflictError extends Error {
   }
 }
 
+const PLAN_APPROVAL_RUNTIME_DIR = "plan-approval";
+
+export interface PlanApprovalRuntimeIdentity {
+  targetId: string;
+  intentId: string;
+  directiveEpoch: string;
+  runFloor: string;
+  fingerprint: string;
+  questionsFile: string;
+  promptSha256: string;
+  sourceFloor: string;
+  markerRevision: number;
+}
+
+export interface PlanApprovalRuntimeChallenge extends PlanApprovalRuntimeIdentity {
+  version: 1;
+  session: string;
+  challengeId: string;
+  options: [string, string];
+  requireExactOptionLabels: boolean;
+  hashedOptionLabels: boolean;
+}
+
+export interface PlanApprovalRuntimeResponse {
+  version: 1;
+  session: string;
+  challengeId: string;
+  choice: "Approve Plan" | "Request Changes";
+  responseSha256: string;
+}
+
+export interface PlanApprovalRuntimeReceipt extends PlanApprovalRuntimeIdentity {
+  version: 1;
+  session: string;
+  challengeId: string;
+  choice: "Approve Plan";
+  questionsSha256: string;
+  certifiedSourceSha256: string;
+  status: "approved" | "generation";
+}
+
+export interface PlanApprovalRuntimeViolation {
+  version: 1;
+  markerRevision: number;
+  reason: string;
+  target: string;
+}
+
+export interface PlanApprovalLegacyWindow {
+  version: 1;
+  session: string;
+  toolName: string;
+  markerRevision: number;
+  targetId: string;
+  unit: string | null;
+}
+
+export interface PlanApprovalLegacyOfferCandidate {
+  session: string;
+  optionHashes: [string, string];
+}
+
+export interface PlanApprovalLegacyOffer {
+  version: 1;
+  session: string;
+  intentId: string;
+  markerRevision: number;
+  allowedUnits: Array<string | null>;
+  options: [string, string];
+}
+
+export const LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE =
+  "Recover Plan Approval";
+
+export interface PlanApprovalLegacyRecoveryChallenge {
+  version: 1;
+  session: string;
+  intentId: string;
+  markerRevision: number;
+  challengeId: string;
+}
+
+export interface PlanApprovalLegacyRecoveryResponse {
+  version: 1;
+  session: string;
+  challengeId: string;
+  responseSha256: string;
+}
+
+export interface KiroIdeLegacyPlanApprovalHost {
+  version: 1;
+  session: string;
+  pid: string;
+  ipc: string;
+}
+
+function planApprovalRuntimeDir(projectDir: string): string {
+  return join(sessionsDir(projectDir), PLAN_APPROVAL_RUNTIME_DIR);
+}
+
+function runtimeSessionSegment(session: string): string {
+  return session
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 96);
+}
+
+function planApprovalChallengePath(projectDir: string, session: string): string {
+  const segment = runtimeSessionSegment(session);
+  return segment
+    ? join(planApprovalRuntimeDir(projectDir), `challenge-${segment}.json`)
+    : "";
+}
+
+function planApprovalResponsePath(projectDir: string, session: string): string {
+  const segment = runtimeSessionSegment(session);
+  return segment
+    ? join(planApprovalRuntimeDir(projectDir), `response-${segment}.json`)
+    : "";
+}
+
+function planApprovalReceiptPath(
+  projectDir: string,
+  identity: Pick<PlanApprovalRuntimeIdentity, "targetId" | "directiveEpoch">,
+): string {
+  const key = createHash("sha256")
+    .update(`${identity.targetId}\n${identity.directiveEpoch}`, "utf-8")
+    .digest("hex");
+  return join(planApprovalRuntimeDir(projectDir), `receipt-${key}.json`);
+}
+
+function planApprovalViolationPath(projectDir: string): string {
+  return join(planApprovalRuntimeDir(projectDir), "violation.json");
+}
+
+function planApprovalLegacyWindowPath(projectDir: string, session: string): string {
+  const segment = runtimeSessionSegment(session);
+  return segment
+    ? join(planApprovalRuntimeDir(projectDir), `legacy-window-${segment}.json`)
+    : "";
+}
+
+function planApprovalLegacyOfferPath(
+  projectDir: string,
+  session: string,
+): string {
+  const segment = runtimeSessionSegment(session);
+  return segment
+    ? join(planApprovalRuntimeDir(projectDir), `legacy-offer-${segment}.json`)
+    : "";
+}
+
+function planApprovalLegacyRecoveryChallengePath(
+  projectDir: string,
+  session: string,
+): string {
+  const segment = runtimeSessionSegment(session);
+  return segment
+    ? join(
+      planApprovalRuntimeDir(projectDir),
+      `legacy-recovery-${segment}.json`,
+    )
+    : "";
+}
+
+function planApprovalLegacyRecoveryResponsePath(
+  projectDir: string,
+  session: string,
+): string {
+  const segment = runtimeSessionSegment(session);
+  return segment
+    ? join(
+      planApprovalRuntimeDir(projectDir),
+      `legacy-recovery-response-${segment}.json`,
+    )
+    : "";
+}
+
+function ensurePlanApprovalRuntimeDir(projectDir: string): string {
+  const dir = planApprovalRuntimeDir(projectDir);
+  assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, dir));
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function readPlanApprovalRuntimeJson<T>(path: string, what: string): T | null {
+  if (!path) return null;
+  try {
+    return JSON.parse(
+      readAtomicReplacedFileNoFollowOrThrow(path, what).toString("utf-8"),
+    ) as T;
+  } catch {
+    return null;
+  }
+}
+
+export function resetPlanApprovalRuntime(projectDir: string): void {
+  try {
+    const dir = planApprovalRuntimeDir(projectDir);
+    assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, dir));
+    rmSync(dir, { recursive: true, force: true });
+  } catch {
+    // A stale or redirected authority store is equivalent to no authority.
+  }
+}
+
+export function writePlanApprovalChallenge(
+  projectDir: string,
+  challenge: PlanApprovalRuntimeChallenge,
+): void {
+  ensurePlanApprovalRuntimeDir(projectDir);
+  const path = planApprovalChallengePath(projectDir, challenge.session);
+  if (!path) throw new Error("Plan Approval challenge requires a nonblank session");
+  writeFileAtomic(path, `${JSON.stringify(challenge, null, 2)}\n`);
+  try {
+    unlinkSync(planApprovalResponsePath(projectDir, challenge.session));
+  } catch {
+    // A prior response is optional and one-shot.
+  }
+}
+
+export function readPlanApprovalChallenge(
+  projectDir: string,
+  session: string,
+): PlanApprovalRuntimeChallenge | null {
+  const value = readPlanApprovalRuntimeJson<PlanApprovalRuntimeChallenge>(
+    planApprovalChallengePath(projectDir, session),
+    "Plan Approval challenge",
+  );
+  return value?.version === 1 && value.session === session ? value : null;
+}
+
+export function writePlanApprovalResponse(
+  projectDir: string,
+  response: PlanApprovalRuntimeResponse,
+): void {
+  ensurePlanApprovalRuntimeDir(projectDir);
+  const path = planApprovalResponsePath(projectDir, response.session);
+  if (!path) throw new Error("Plan Approval response requires a nonblank session");
+  writeFileAtomic(path, `${JSON.stringify(response, null, 2)}\n`);
+}
+
+export function readPlanApprovalResponse(
+  projectDir: string,
+  session: string,
+): PlanApprovalRuntimeResponse | null {
+  const value = readPlanApprovalRuntimeJson<PlanApprovalRuntimeResponse>(
+    planApprovalResponsePath(projectDir, session),
+    "Plan Approval response",
+  );
+  return value?.version === 1 && value.session === session ? value : null;
+}
+
+export function clearPlanApprovalChallenge(
+  projectDir: string,
+  session: string,
+): void {
+  for (const path of [
+    planApprovalChallengePath(projectDir, session),
+    planApprovalResponsePath(projectDir, session),
+  ]) {
+    if (!path) continue;
+    try {
+      unlinkSync(path);
+    } catch {
+      // Missing runtime state is already clear.
+    }
+  }
+}
+
+export function writePlanApprovalReceipt(
+  projectDir: string,
+  receipt: PlanApprovalRuntimeReceipt,
+): void {
+  ensurePlanApprovalRuntimeDir(projectDir);
+  writeFileAtomic(
+    planApprovalReceiptPath(projectDir, receipt),
+    `${JSON.stringify(receipt, null, 2)}\n`,
+  );
+}
+
+export function readPlanApprovalReceipt(
+  projectDir: string,
+  identity: Pick<PlanApprovalRuntimeIdentity, "targetId" | "directiveEpoch">,
+): PlanApprovalRuntimeReceipt | null {
+  const value = readPlanApprovalRuntimeJson<PlanApprovalRuntimeReceipt>(
+    planApprovalReceiptPath(projectDir, identity),
+    "Plan Approval receipt",
+  );
+  return value?.version === 1 ? value : null;
+}
+
+export function clearPlanApprovalReceipt(
+  projectDir: string,
+  identity: Pick<PlanApprovalRuntimeIdentity, "targetId" | "directiveEpoch">,
+): void {
+  try {
+    unlinkSync(planApprovalReceiptPath(projectDir, identity));
+  } catch {
+    // Missing runtime authority is already clear.
+  }
+}
+
+export function planApprovalRuntimeHasReceiptForMarker(
+  projectDir: string,
+  marker: Pick<
+    ActiveDirectiveMarker,
+    | "revision"
+    | "active_attempt"
+    | "code_generation_source_sha256"
+    | "code_generation_authority_revision"
+  >,
+): boolean {
+  const revision =
+    marker.code_generation_authority_revision ??
+    marker.active_attempt?.result_revision ??
+    marker.revision;
+  const sourceFloor = marker.code_generation_source_sha256;
+  if (!Number.isInteger(revision) || !sourceFloor) return false;
+  let names: string[];
+  try {
+    names = readdirSync(planApprovalRuntimeDir(projectDir))
+      .filter((name) => name.startsWith("receipt-") && name.endsWith(".json"));
+  } catch {
+    return false;
+  }
+  return names.some((name) => {
+    const receipt = readPlanApprovalRuntimeJson<PlanApprovalRuntimeReceipt>(
+      join(planApprovalRuntimeDir(projectDir), name),
+      "Plan Approval receipt",
+    );
+    return (
+      receipt?.version === 1 &&
+      receipt.markerRevision === revision &&
+      receipt.sourceFloor === sourceFloor &&
+      receipt.status === "generation"
+    );
+  });
+}
+
+export function writePlanApprovalViolation(
+  projectDir: string,
+  violation: PlanApprovalRuntimeViolation,
+): void {
+  ensurePlanApprovalRuntimeDir(projectDir);
+  writeFileAtomic(
+    planApprovalViolationPath(projectDir),
+    `${JSON.stringify(violation, null, 2)}\n`,
+  );
+}
+
+export function readPlanApprovalViolation(
+  projectDir: string,
+): PlanApprovalRuntimeViolation | null {
+  const value = readPlanApprovalRuntimeJson<PlanApprovalRuntimeViolation>(
+    planApprovalViolationPath(projectDir),
+    "Plan Approval violation",
+  );
+  return value?.version === 1 ? value : null;
+}
+
+export function clearPlanApprovalViolation(projectDir: string): void {
+  try {
+    unlinkSync(planApprovalViolationPath(projectDir));
+  } catch {
+    // Missing violation authority is already clear.
+  }
+}
+
+export function writePlanApprovalLegacyWindow(
+  projectDir: string,
+  window: PlanApprovalLegacyWindow,
+): void {
+  ensurePlanApprovalRuntimeDir(projectDir);
+  const path = planApprovalLegacyWindowPath(projectDir, window.session);
+  if (!path) throw new Error("legacy Plan Approval write window requires a session");
+  writeFileAtomic(
+    path,
+    `${JSON.stringify(window, null, 2)}\n`,
+  );
+}
+
+export function readPlanApprovalLegacyWindow(
+  projectDir: string,
+  session: string,
+): PlanApprovalLegacyWindow | null {
+  const value = readPlanApprovalRuntimeJson<PlanApprovalLegacyWindow>(
+    planApprovalLegacyWindowPath(projectDir, session),
+    "legacy Plan Approval write window",
+  );
+  return value?.version === 1 && value.session === session ? value : null;
+}
+
+export function readPlanApprovalLegacyWindows(
+  projectDir: string,
+): PlanApprovalLegacyWindow[] {
+  try {
+    return readdirSync(planApprovalRuntimeDir(projectDir))
+      .filter((name) => name.startsWith("legacy-window-") && name.endsWith(".json"))
+      .map((name) =>
+        readPlanApprovalRuntimeJson<PlanApprovalLegacyWindow>(
+          join(planApprovalRuntimeDir(projectDir), name),
+          "legacy Plan Approval write window",
+        )
+      )
+      .filter((value): value is PlanApprovalLegacyWindow =>
+        value?.version === 1 && Boolean(value.session)
+      );
+  } catch {
+    return [];
+  }
+}
+
+export function clearPlanApprovalLegacyWindow(projectDir: string, session: string): void {
+  const path = planApprovalLegacyWindowPath(projectDir, session);
+  if (!path) return;
+  try {
+    unlinkSync(path);
+  } catch {
+    // Missing window is already clear.
+  }
+}
+
+export function writePlanApprovalLegacyOffer(
+  projectDir: string,
+  offer: PlanApprovalLegacyOffer,
+): void {
+  ensurePlanApprovalRuntimeDir(projectDir);
+  const path = planApprovalLegacyOfferPath(projectDir, offer.session);
+  if (!path) throw new Error("legacy Plan Approval offer requires a nonblank session");
+  writeFileAtomic(path, `${JSON.stringify(offer, null, 2)}\n`);
+}
+
+export function readPlanApprovalLegacyOffer(
+  projectDir: string,
+  session: string,
+): PlanApprovalLegacyOffer | null {
+  const value = readPlanApprovalRuntimeJson<PlanApprovalLegacyOffer>(
+    planApprovalLegacyOfferPath(projectDir, session),
+    "legacy Plan Approval directive offer",
+  );
+  return value?.version === 1 && value.session === session ? value : null;
+}
+
+export function clearPlanApprovalLegacyOffer(
+  projectDir: string,
+  session: string,
+): void {
+  const path = planApprovalLegacyOfferPath(projectDir, session);
+  if (!path) return;
+  try {
+    unlinkSync(path);
+  } catch {
+    // Missing offer is already clear.
+  }
+}
+
+export function writePlanApprovalLegacyRecoveryChallenge(
+  projectDir: string,
+  challenge: PlanApprovalLegacyRecoveryChallenge,
+): void {
+  ensurePlanApprovalRuntimeDir(projectDir);
+  const path = planApprovalLegacyRecoveryChallengePath(
+    projectDir,
+    challenge.session,
+  );
+  if (!path) {
+    throw new Error("legacy Plan Approval recovery requires a nonblank session");
+  }
+  writeFileAtomic(path, `${JSON.stringify(challenge, null, 2)}\n`);
+  try {
+    unlinkSync(
+      planApprovalLegacyRecoveryResponsePath(projectDir, challenge.session),
+    );
+  } catch {
+    // A prior recovery response is optional and one-shot.
+  }
+}
+
+export function readPlanApprovalLegacyRecoveryChallenge(
+  projectDir: string,
+  session: string,
+): PlanApprovalLegacyRecoveryChallenge | null {
+  const value = readPlanApprovalRuntimeJson<PlanApprovalLegacyRecoveryChallenge>(
+    planApprovalLegacyRecoveryChallengePath(projectDir, session),
+    "legacy Plan Approval recovery challenge",
+  );
+  return value?.version === 1 && value.session === session ? value : null;
+}
+
+export function writePlanApprovalLegacyRecoveryResponse(
+  projectDir: string,
+  response: PlanApprovalLegacyRecoveryResponse,
+): void {
+  ensurePlanApprovalRuntimeDir(projectDir);
+  const path = planApprovalLegacyRecoveryResponsePath(
+    projectDir,
+    response.session,
+  );
+  if (!path) {
+    throw new Error("legacy Plan Approval recovery response requires a session");
+  }
+  writeFileAtomic(path, `${JSON.stringify(response, null, 2)}\n`);
+}
+
+export function readPlanApprovalLegacyRecoveryResponse(
+  projectDir: string,
+  session: string,
+): PlanApprovalLegacyRecoveryResponse | null {
+  const value = readPlanApprovalRuntimeJson<PlanApprovalLegacyRecoveryResponse>(
+    planApprovalLegacyRecoveryResponsePath(projectDir, session),
+    "legacy Plan Approval recovery response",
+  );
+  return value?.version === 1 && value.session === session ? value : null;
+}
+
+export function clearPlanApprovalLegacyRecovery(
+  projectDir: string,
+  session: string,
+): void {
+  for (const path of [
+    planApprovalLegacyRecoveryChallengePath(projectDir, session),
+    planApprovalLegacyRecoveryResponsePath(projectDir, session),
+  ]) {
+    if (!path) continue;
+    try {
+      unlinkSync(path);
+    } catch {
+      // Missing recovery authority is already clear.
+    }
+  }
+}
+
+export function kiroIdeLegacyPlanApprovalSessionId(
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  const ipc = env.VSCODE_IPC_HOOK?.trim() ?? "";
+  const pid = env.VSCODE_PID?.trim() ?? "";
+  if (!ipc && !pid) return null;
+  return `kiro-ide-legacy-${
+    createHash("sha256")
+      .update(`${ipc}\n${pid}`, "utf-8")
+      .digest("hex")
+      .slice(0, 24)
+  }`;
+}
+
+function kiroIdeLegacyPlanApprovalHostPath(
+  projectDir: string,
+  session: string,
+): string {
+  const segment = runtimeSessionSegment(session);
+  return segment
+    ? join(
+      sessionsDir(projectDir),
+      `.kiro-ide-legacy-plan-approval-${segment}.json`,
+    )
+    : "";
+}
+
+export function markKiroIdeLegacyPlanApprovalHost(
+  projectDir: string,
+  session: string,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  if (!session.trim()) {
+    throw new Error("legacy Kiro IDE host marker requires a nonblank session");
+  }
+  const dir = sessionsDir(projectDir);
+  assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, dir));
+  mkdirSync(dir, { recursive: true });
+  writeFileAtomic(
+    kiroIdeLegacyPlanApprovalHostPath(projectDir, session),
+    `${JSON.stringify({
+      version: 1,
+      session,
+      pid: env.VSCODE_PID?.trim() ?? "",
+      ipc: env.VSCODE_IPC_HOOK?.trim() ?? "",
+    }, null, 2)}\n`,
+  );
+}
+
+export function readKiroIdeLegacyPlanApprovalHost(
+  projectDir: string,
+  session: string,
+): KiroIdeLegacyPlanApprovalHost | null {
+  const path = kiroIdeLegacyPlanApprovalHostPath(projectDir, session);
+  if (!path) return null;
+  const value = readPlanApprovalRuntimeJson<KiroIdeLegacyPlanApprovalHost>(
+    path,
+    "legacy Kiro IDE host marker",
+  );
+  return value?.version === 1 &&
+      value.session === session &&
+      typeof value.pid === "string" &&
+      typeof value.ipc === "string"
+    ? value
+    : null;
+}
+
+export function clearKiroIdeLegacyPlanApprovalHost(
+  projectDir: string,
+  session: string,
+): void {
+  const path = kiroIdeLegacyPlanApprovalHostPath(projectDir, session);
+  if (!path) return;
+  try {
+    unlinkSync(path);
+  } catch {
+    // Missing legacy host marker is already clear.
+  }
+}
+
+// The per-session record file: `aidlc/.aidlc-sessions/<session-id>`. The
+// session id is normalised to the slug shape so a host-supplied id can never
+// escape the sessions dir (path traversal / separators); an empty id yields "".
 function sessionRecordPath(projectDir: string, sessionId: string): string {
   const valid = validSessionId(sessionId);
   if (!valid) return "";
@@ -3431,7 +4047,10 @@ interface ActiveDirectiveResume {
 
 export interface ActiveDirectiveMarker {
   version: 1 | 2; stage: string; unit?: string; state_sha256: string;
+  units?: string[];
   revision?: number; project_sha256?: string; intent_uuid?: string | null; state_present?: boolean;
+  code_generation_source_sha256?: string;
+  code_generation_authority_revision?: number;
   cursor_harness?: string;
   owner_session?: string; owner_epoch?: number; context_epoch?: number; kind?: ActiveDirectiveKind;
   part?: number; parts?: number; continue_token?: string; continue_token_sha256?: string;
@@ -3456,7 +4075,15 @@ export interface CopilotCommandClaim {
 export type CopilotClaimResult = { allowed: true; attemptId: string } |
   { allowed: false; reason: "duplicate" | "foreign" | "state" | "resume" | "recovery" };
 
-export type ActiveDirectiveWriteResult = "copilot-committed" | "generic-committed" | "preserved" | "stale-attempt";
+export type ActiveDirectiveWriteResult =
+  | "copilot-committed"
+  | "generic-committed"
+  | "legacy-plan-approval-owned"
+  | "legacy-plan-approval-recovery-required"
+  | "legacy-plan-approval-reissued"
+  | "legacy-plan-approval-transport"
+  | "preserved"
+  | "stale-attempt";
 
 export type CopilotStopEvidence =
   | { status: "foreign" | "resume" | "contended" }
@@ -3476,6 +4103,355 @@ export class ActiveDirectiveLockContendedError extends Error {
     super(message);
     this.name = "ActiveDirectiveLockContendedError";
   }
+}
+
+function validPlanApprovalLegacyOfferCandidate(
+  candidate: PlanApprovalLegacyOfferCandidate | undefined,
+): candidate is PlanApprovalLegacyOfferCandidate {
+  return Boolean(
+    candidate?.session.trim() &&
+      candidate.optionHashes.length === 2 &&
+      candidate.optionHashes.every((value) => /^[0-9a-f]{64}$/.test(value)),
+  );
+}
+
+type PlanApprovalLegacyOwner =
+  | { status: "none" }
+  | { status: "ambiguous" }
+  | {
+    status: "owned";
+    session: string;
+    live: boolean;
+    offer: PlanApprovalLegacyOffer | null;
+    challenge: PlanApprovalRuntimeChallenge | null;
+  };
+
+function legacyKiroHostIsLive(
+  host: KiroIdeLegacyPlanApprovalHost | null,
+): boolean {
+  if (!host) return true;
+  const pid = Number.parseInt(host.pid, 10);
+  if (Number.isInteger(pid) && pid > 0) {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code !== "ESRCH";
+    }
+  }
+  return host.ipc.trim() ? existsSync(host.ipc) : true;
+}
+
+function planApprovalAuthorityRevision(
+  marker: ActiveDirectiveMarker | null,
+): number | null {
+  return marker?.version === 2
+    ? marker.code_generation_authority_revision ??
+      marker.active_attempt?.result_revision ??
+      marker.revision ??
+      null
+    : null;
+}
+
+function planApprovalLegacyViolationMatches(
+  projectDir: string,
+  marker: ActiveDirectiveMarker | null,
+): boolean {
+  const markerRevision = planApprovalAuthorityRevision(marker);
+  const violation = readPlanApprovalViolation(projectDir);
+  return (
+    markerRevision !== null &&
+    violation?.version === 1 &&
+    violation.markerRevision === markerRevision
+  );
+}
+
+function planApprovalLegacyWindowMatches(
+  projectDir: string,
+  marker: ActiveDirectiveMarker | null,
+): boolean {
+  const markerRevision = planApprovalAuthorityRevision(marker);
+  let windows: PlanApprovalLegacyWindow[] = [];
+  try {
+    windows = readdirSync(planApprovalRuntimeDir(projectDir))
+      .filter((name) => name.startsWith("legacy-window-") && name.endsWith(".json"))
+      .map((name) =>
+        readPlanApprovalRuntimeJson<PlanApprovalLegacyWindow>(
+          join(planApprovalRuntimeDir(projectDir), name),
+          "legacy Plan Approval write window",
+        )
+      )
+      .filter((value): value is PlanApprovalLegacyWindow =>
+        value?.version === 1 && Boolean(value.session)
+      );
+  } catch {
+    return false;
+  }
+  return windows.some((window) => {
+  if (
+    marker?.version !== 2 ||
+    marker.stage !== "code-generation" ||
+    markerRevision === null ||
+    window?.version !== 1 ||
+    window.markerRevision !== markerRevision
+  ) {
+    return false;
+  }
+  if (
+    (marker.kind === "invoke-swarm" || marker.kind === "load-steering") &&
+    (marker.units?.length ?? 0) > 0
+  ) {
+    return (
+      window.unit !== null &&
+      (marker.units ?? []).includes(window.unit)
+    );
+  }
+  return window.unit === (marker.unit?.trim() || null);
+  });
+}
+
+function clearPlanApprovalLegacyWindowsForMarker(
+  projectDir: string,
+  marker: ActiveDirectiveMarker | null,
+): void {
+  const markerRevision = planApprovalAuthorityRevision(marker);
+  if (markerRevision === null) return;
+  let names: string[];
+  try {
+    names = readdirSync(planApprovalRuntimeDir(projectDir))
+      .filter((name) => name.startsWith("legacy-window-") && name.endsWith(".json"));
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    const path = join(planApprovalRuntimeDir(projectDir), name);
+    const window = readPlanApprovalRuntimeJson<PlanApprovalLegacyWindow>(
+      path,
+      "legacy Plan Approval write window",
+    );
+    if (window?.version === 1 && window.markerRevision === markerRevision) {
+      try { unlinkSync(path); } catch { /* already clear */ }
+    }
+  }
+}
+
+function findPlanApprovalLegacyOwner(
+  projectDir: string,
+  intentId: string,
+  marker: ActiveDirectiveMarker | null,
+): PlanApprovalLegacyOwner {
+  const markerRevision = planApprovalAuthorityRevision(marker);
+  if (markerRevision === null) return { status: "none" };
+  let names: string[];
+  try {
+    names = readdirSync(planApprovalRuntimeDir(projectDir));
+  } catch {
+    return { status: "none" };
+  }
+  const owners = new Map<
+    string,
+    {
+      offer: PlanApprovalLegacyOffer | null;
+      challenge: PlanApprovalRuntimeChallenge | null;
+    }
+  >();
+  for (const name of names) {
+    if (
+      !name.startsWith("legacy-offer-") &&
+      !name.startsWith("challenge-")
+    ) {
+      continue;
+    }
+    const path = join(planApprovalRuntimeDir(projectDir), name);
+    if (name.startsWith("legacy-offer-")) {
+      const offer = readPlanApprovalRuntimeJson<PlanApprovalLegacyOffer>(
+        path,
+        "legacy Plan Approval directive offer",
+      );
+      if (
+        offer?.version !== 1 ||
+        offer.intentId !== intentId ||
+        offer.markerRevision !== markerRevision ||
+        !offer.session
+      ) {
+        continue;
+      }
+      const owner = owners.get(offer.session) ?? {
+        offer: null,
+        challenge: null,
+      };
+      owner.offer = offer;
+      owners.set(offer.session, owner);
+      continue;
+    }
+    const challenge = readPlanApprovalRuntimeJson<PlanApprovalRuntimeChallenge>(
+      path,
+      "Plan Approval challenge",
+    );
+    if (
+      challenge?.version !== 1 ||
+      challenge.intentId !== intentId ||
+      challenge.markerRevision !== markerRevision ||
+      !challenge.session
+    ) {
+      continue;
+    }
+    const owner = owners.get(challenge.session) ?? {
+      offer: null,
+      challenge: null,
+    };
+    owner.challenge = challenge;
+    owners.set(challenge.session, owner);
+  }
+  if (owners.size === 0) return { status: "none" };
+  if (owners.size !== 1) return { status: "ambiguous" };
+  const [session, owner] = [...owners.entries()][0];
+  return {
+    status: "owned",
+    session,
+    live: legacyKiroHostIsLive(
+      readKiroIdeLegacyPlanApprovalHost(projectDir, session),
+    ),
+    ...owner,
+  };
+}
+
+function rotatePlanApprovalLegacyOwner(
+  projectDir: string,
+  candidate: PlanApprovalLegacyOfferCandidate,
+  owner: Extract<PlanApprovalLegacyOwner, { status: "owned" }>,
+): void {
+  if (owner.challenge) {
+    const challenge: PlanApprovalRuntimeChallenge = {
+      ...owner.challenge,
+      session: candidate.session,
+      options: candidate.optionHashes,
+      hashedOptionLabels: true,
+      challengeId: createHash("sha256")
+        .update(JSON.stringify({
+          previous: owner.challenge.challengeId,
+          session: candidate.session,
+          options: candidate.optionHashes,
+        }), "utf-8")
+        .digest("hex"),
+    };
+    if (owner.session !== candidate.session) {
+      clearPlanApprovalChallenge(projectDir, owner.session);
+    }
+    writePlanApprovalChallenge(projectDir, challenge);
+    return;
+  }
+  if (!owner.offer) {
+    throw new Error("legacy Plan Approval owner has no recoverable authority");
+  }
+  if (owner.session !== candidate.session) {
+    clearPlanApprovalLegacyOffer(projectDir, owner.session);
+  }
+  writePlanApprovalLegacyOffer(projectDir, {
+    ...owner.offer,
+    session: candidate.session,
+    options: candidate.optionHashes,
+  });
+}
+
+function legacyPlanApprovalRecoveryChallengeId(
+  session: string,
+  intentId: string,
+  markerRevision: number,
+): string {
+  return createHash("sha256")
+    .update(
+      `${session}\n${intentId}\n${markerRevision}\n${LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE}`,
+      "utf-8",
+    )
+    .digest("hex");
+}
+
+function planApprovalLegacyRecoverySatisfied(
+  projectDir: string,
+  session: string,
+  intentId: string,
+  markerRevision: number,
+): boolean {
+  const challenge = readPlanApprovalLegacyRecoveryChallenge(
+    projectDir,
+    session,
+  );
+  const response = readPlanApprovalLegacyRecoveryResponse(projectDir, session);
+  const challengeId = legacyPlanApprovalRecoveryChallengeId(
+    session,
+    intentId,
+    markerRevision,
+  );
+  return Boolean(
+    challenge &&
+      response &&
+      challenge.intentId === intentId &&
+      challenge.markerRevision === markerRevision &&
+      challenge.challengeId === challengeId &&
+      response.challengeId === challengeId &&
+      response.responseSha256 ===
+        createHash("sha256")
+          .update(LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE, "utf-8")
+          .digest("hex"),
+  );
+}
+
+function ensurePlanApprovalLegacyRecoveryChallenge(
+  projectDir: string,
+  session: string,
+  intentId: string,
+  markerRevision: number,
+): void {
+  const challengeId = legacyPlanApprovalRecoveryChallengeId(
+    session,
+    intentId,
+    markerRevision,
+  );
+  const existing = readPlanApprovalLegacyRecoveryChallenge(
+    projectDir,
+    session,
+  );
+  if (
+    existing?.intentId === intentId &&
+    existing.markerRevision === markerRevision &&
+    existing.challengeId === challengeId
+  ) {
+    return;
+  }
+  writePlanApprovalLegacyRecoveryChallenge(projectDir, {
+    version: 1,
+    session,
+    intentId,
+    markerRevision,
+    challengeId,
+  });
+}
+
+function installPlanApprovalLegacyOffer(
+  projectDir: string,
+  candidate: PlanApprovalLegacyOfferCandidate,
+  marker: ActiveDirectiveMarker,
+): void {
+  const intentId = marker.intent_uuid?.trim() ?? "";
+  const markerRevision = marker.code_generation_authority_revision;
+  if (!intentId || marker.stage !== "code-generation" || markerRevision === undefined) {
+    throw new Error("legacy Plan Approval offer requires active Code Generation authority");
+  }
+  const allowedUnits = marker.kind === "invoke-swarm"
+    ? [...new Set(marker.units ?? [])]
+    : [marker.unit?.trim() || null];
+  if (allowedUnits.length === 0) {
+    throw new Error("legacy Plan Approval offer requires an authoritative target");
+  }
+  writePlanApprovalLegacyOffer(projectDir, {
+    version: 1,
+    session: candidate.session,
+    intentId,
+    markerRevision,
+    allowedUnits,
+    options: candidate.optionHashes,
+  });
 }
 
 function resolveActiveDirectiveTarget(
@@ -3549,6 +4525,22 @@ function parseActiveDirectiveMarker(parsed: unknown): ActiveDirectiveMarker | nu
   if (
     parsed.version !== 2 || !/^[0-9a-f]{64}$/.test(String(parsed.project_sha256 ?? "")) ||
     (parsed.intent_uuid !== null && typeof parsed.intent_uuid !== "string") || typeof parsed.state_present !== "boolean" ||
+    ("code_generation_source_sha256" in parsed &&
+      !/^(?:[0-9a-f]{40}|[0-9a-f]{64}|unbindable)$/.test(
+        String(parsed.code_generation_source_sha256 ?? ""),
+      )) ||
+    ("code_generation_authority_revision" in parsed &&
+      !integer(parsed.code_generation_authority_revision)) ||
+    ("units" in parsed &&
+      (
+        !Array.isArray(parsed.units) ||
+        parsed.units.length === 0 ||
+        parsed.units.some(
+          (unit) =>
+            typeof unit !== "string" ||
+            validateUnitName(unit.trim()) !== null,
+        )
+      )) ||
     ("cursor_harness" in parsed &&
       (typeof parsed.cursor_harness !== "string" || !/^[a-z0-9][a-z0-9._-]*$/i.test(parsed.cursor_harness))) ||
     typeof parsed.owner_session !== "string" || parsed.owner_session.length === 0 ||
@@ -3634,6 +4626,20 @@ function transactActiveDirective<T>(
 ): T {
   const target = resolveActiveDirectiveTarget(projectDir, intent, space);
   return transactActiveDirectiveTarget(target, update);
+}
+
+export function withActiveDirectiveLock<T>(
+  projectDir: string,
+  operation: (
+    marker: ActiveDirectiveMarker | null,
+    target: ActiveDirectiveTarget,
+  ) => T,
+): T {
+  return transactActiveDirective(projectDir, (marker, target) => ({
+    marker,
+    result: operation(marker, target),
+    preserve: true,
+  }));
 }
 
 function transactActiveDirectiveTarget<T>(
@@ -3728,7 +4734,7 @@ function freshActiveDirectiveMarker(
   stage: string,
 ): ActiveDirectiveMarker {
   const context = activeDirectiveContext(target, stateContent);
-  const cursorHarness = installedHarnessName(target);
+  const cursorHarness = installedHarnessNameForTarget(target);
   const owner = `sessionless:${context.projectSha256.slice(0, 16)}`;
   return {
     version: 2, revision: 0, project_sha256: context.projectSha256,
@@ -3764,13 +4770,38 @@ function crossActiveDirectiveBoundary(
   };
 }
 
+function codeGenerationSourceFloorForPublication(
+  target: ActiveDirectiveTarget,
+  base: ActiveDirectiveMarker,
+  stage: string,
+  rotate: boolean,
+): string | undefined {
+  if (stage !== "code-generation") return undefined;
+  if (
+    !rotate &&
+    base.stage === "code-generation" &&
+    base.code_generation_source_sha256 !== undefined
+  ) {
+    return base.code_generation_source_sha256;
+  }
+  return workspaceSourceFingerprint(target.canonicalProjectDir) ??
+    UNBINDABLE_FINGERPRINT;
+}
+
 export function writeActiveDirectiveMarker(
   projectDir: string,
-  marker: Omit<CopilotDirectiveMetadata, "continueToken" | "stage"> & { stage: string; continue_token?: string; state_sha256: string },
+  marker: Omit<CopilotDirectiveMetadata, "continueToken" | "stage"> & {
+    stage: string;
+    continue_token?: string;
+    state_sha256: string;
+    units?: string[];
+  },
   invocation?: {
     attemptId?: string;
     commandKind?: CopilotCommandClaim["commandKind"];
     commandSha256?: string;
+    legacyPlanApprovalOffer?: PlanApprovalLegacyOfferCandidate;
+    legacyPlanApprovalSession?: string;
     resultSha256?: string;
   },
 ): ActiveDirectiveWriteResult {
@@ -3783,10 +4814,177 @@ export function writeActiveDirectiveMarker(
   if (!/^[0-9a-f]{64}$/.test(marker.state_sha256)) {
     throw new Error("Invalid active-directive state digest");
   }
-  return transactActiveDirective(projectDir, (current, target) => {
+  if (
+    invocation?.legacyPlanApprovalOffer !== undefined &&
+    !validPlanApprovalLegacyOfferCandidate(invocation.legacyPlanApprovalOffer)
+  ) {
+    throw new Error("Invalid legacy Plan Approval offer candidate");
+  }
+  if (
+    invocation?.legacyPlanApprovalSession !== undefined &&
+    !invocation.legacyPlanApprovalSession.trim()
+  ) {
+    throw new Error("Invalid legacy Plan Approval ownership session");
+  }
+  if (
+    invocation?.legacyPlanApprovalOffer &&
+    invocation.legacyPlanApprovalSession !==
+      invocation.legacyPlanApprovalOffer.session
+  ) {
+    throw new Error("Legacy Plan Approval offer/session mismatch");
+  }
+  let shouldResetRuntime = false;
+  const result = transactActiveDirective(projectDir, (current, target) => {
     const stateContent = existsSync(target.statePath) ? readFileSync(target.statePath, "utf-8") : null;
     const context = activeDirectiveContext(target, stateContent);
-    const cursorHarness = installedHarnessName(target);
+    const legacyOffer = invocation?.legacyPlanApprovalOffer;
+    const legacySession = invocation?.legacyPlanApprovalSession;
+    if (legacySession && context.intentUuid) {
+      const owner = findPlanApprovalLegacyOwner(
+        target.canonicalProjectDir,
+        context.intentUuid,
+        current,
+      );
+      if (owner.status === "ambiguous") {
+        return {
+          marker: current,
+          result: "legacy-plan-approval-owned" as const,
+          preserve: true,
+        };
+      }
+      if (owner.status === "owned") {
+        const sameOwner = owner.session === legacySession;
+        if (!sameOwner && owner.live) {
+          return {
+            marker: current,
+            result: "legacy-plan-approval-owned" as const,
+            preserve: true,
+          };
+        }
+        const markerRevision = planApprovalAuthorityRevision(current);
+        if (
+          markerRevision === null ||
+          !planApprovalLegacyRecoverySatisfied(
+            target.canonicalProjectDir,
+            legacySession,
+            context.intentUuid,
+            markerRevision,
+          )
+        ) {
+          if (markerRevision !== null) {
+            ensurePlanApprovalLegacyRecoveryChallenge(
+              target.canonicalProjectDir,
+              legacySession,
+              context.intentUuid,
+              markerRevision,
+            );
+          }
+          return {
+            marker: current,
+            result: "legacy-plan-approval-recovery-required" as const,
+            preserve: true,
+          };
+        }
+        if (legacyOffer) {
+          clearPlanApprovalLegacyRecovery(
+            target.canonicalProjectDir,
+            legacySession,
+          );
+          if (owner.session !== legacySession) {
+            clearPlanApprovalLegacyRecovery(
+              target.canonicalProjectDir,
+              owner.session,
+            );
+          }
+          clearPlanApprovalViolation(target.canonicalProjectDir);
+          clearPlanApprovalLegacyWindowsForMarker(target.canonicalProjectDir, current);
+          rotatePlanApprovalLegacyOwner(
+            target.canonicalProjectDir,
+            legacyOffer,
+            owner,
+          );
+          return {
+            marker: current,
+            result: "legacy-plan-approval-reissued" as const,
+            preserve: true,
+          };
+        }
+        return {
+          marker: current,
+          result: "legacy-plan-approval-transport" as const,
+          preserve: true,
+        };
+      }
+      if (
+        owner.status === "none" &&
+        (
+          planApprovalLegacyViolationMatches(
+            target.canonicalProjectDir,
+            current,
+          ) ||
+          planApprovalLegacyWindowMatches(
+            target.canonicalProjectDir,
+            current,
+          )
+        )
+      ) {
+        const markerRevision = planApprovalAuthorityRevision(current);
+        if (
+          markerRevision === null ||
+          !planApprovalLegacyRecoverySatisfied(
+            target.canonicalProjectDir,
+            legacySession,
+            context.intentUuid,
+            markerRevision,
+          )
+        ) {
+          if (markerRevision !== null) {
+            ensurePlanApprovalLegacyRecoveryChallenge(
+              target.canonicalProjectDir,
+              legacySession,
+              context.intentUuid,
+              markerRevision,
+            );
+          }
+          return {
+            marker: current,
+            result: "legacy-plan-approval-recovery-required" as const,
+            preserve: true,
+          };
+        }
+        if (!legacyOffer) {
+          return {
+            marker: current,
+            result: "legacy-plan-approval-transport" as const,
+            preserve: true,
+          };
+        }
+        clearPlanApprovalLegacyRecovery(
+          target.canonicalProjectDir,
+          legacySession,
+        );
+        clearPlanApprovalViolation(target.canonicalProjectDir);
+        clearPlanApprovalLegacyWindowsForMarker(target.canonicalProjectDir, current);
+        if (current?.version !== 2) {
+          return {
+            marker: current,
+            result: "legacy-plan-approval-owned" as const,
+            preserve: true,
+          };
+        }
+        installPlanApprovalLegacyOffer(
+          target.canonicalProjectDir,
+          legacyOffer,
+          current,
+        );
+        return {
+          marker: current,
+          result: "legacy-plan-approval-reissued" as const,
+          preserve: true,
+        };
+      }
+    }
+    const cursorHarness = installedHarnessNameForTarget(target);
     const copilotOwned = exactCopilotMarker(current, target, context);
     const attempt = current?.version === 2 ? current.active_attempt : undefined;
     const matchingAttempt = copilotOwned && attempt?.status === "pending" && invocation?.attemptId !== undefined &&
@@ -3807,6 +5005,46 @@ export function writeActiveDirectiveMarker(
       : freshActiveDirectiveMarker(target, stateContent, marker.stage);
     const token = marker.continue_token;
     const nextRevision = (base.revision ?? 0) + 1;
+    const rotateCodeGenerationFloor =
+      marker.stage === "code-generation" &&
+      base.stage === "code-generation" &&
+      planApprovalRuntimeHasReceiptForMarker(
+        target.canonicalProjectDir,
+        base,
+      );
+    const codeGenerationSourceSha256 =
+      codeGenerationSourceFloorForPublication(
+        target,
+        base,
+        marker.stage,
+        rotateCodeGenerationFloor,
+      );
+    const priorAuthorityRevision =
+      base.code_generation_authority_revision ??
+      base.active_attempt?.result_revision ??
+      base.revision ??
+      nextRevision;
+    const baseSwarmPlanning =
+      (base.kind === "invoke-swarm" || base.kind === "load-steering") &&
+      (base.units?.length ?? 0) > 0;
+    const nextSwarmPlanning =
+      marker.kind === "invoke-swarm" || marker.kind === "load-steering";
+    const requestedUnits = marker.units ?? base.units ?? [];
+    const preserveCodeGenerationAuthority =
+      marker.stage === "code-generation" &&
+      base.stage === "code-generation" &&
+      baseSwarmPlanning &&
+      nextSwarmPlanning &&
+      JSON.stringify(requestedUnits) === JSON.stringify(base.units ?? []) &&
+      !rotateCodeGenerationFloor &&
+      base.code_generation_source_sha256 !== undefined;
+    const codeGenerationAuthorityRevision =
+      marker.stage === "code-generation"
+        ? preserveCodeGenerationAuthority
+          ? priorAuthorityRevision
+          : nextRevision
+        : undefined;
+    shouldResetRuntime = !preserveCodeGenerationAuthority;
     const nextAttempt = matchingAttempt && attempt
       ? {
           ...attempt,
@@ -3828,7 +5066,19 @@ export function writeActiveDirectiveMarker(
       state_sha256: marker.state_sha256,
       kind: marker.kind,
       stage: marker.stage,
+      ...(codeGenerationSourceSha256
+        ? { code_generation_source_sha256: codeGenerationSourceSha256 }
+        : { code_generation_source_sha256: undefined }),
+      ...(codeGenerationAuthorityRevision !== undefined
+        ? {
+            code_generation_authority_revision:
+              codeGenerationAuthorityRevision,
+          }
+        : { code_generation_authority_revision: undefined }),
       ...(marker.unit ? { unit: marker.unit } : { unit: undefined }),
+      ...(requestedUnits.length > 0
+        ? { units: requestedUnits }
+        : { units: undefined }),
       ...(marker.part ? { part: marker.part } : { part: undefined }),
       ...(marker.parts ? { parts: marker.parts } : { parts: undefined }),
       ...(token ? { continue_token: token, continue_token_sha256: stateContentSha256(token) } : { continue_token: undefined, continue_token_sha256: undefined }),
@@ -3836,14 +5086,33 @@ export function writeActiveDirectiveMarker(
       needs_rehydrate: copilotOwned,
       ...(nextAttempt ? { active_attempt: nextAttempt } : {}),
     };
+    if (legacyOffer) {
+      if (shouldResetRuntime) {
+        resetPlanApprovalRuntime(target.canonicalProjectDir);
+        shouldResetRuntime = false;
+      }
+      installPlanApprovalLegacyOffer(
+        target.canonicalProjectDir,
+        legacyOffer,
+        next,
+      );
+    }
     return { marker: next, result: copilotOwned ? "copilot-committed" as const : "generic-committed" as const };
   });
+  if (
+    (result === "generic-committed" || result === "copilot-committed") &&
+    shouldResetRuntime
+  ) {
+    resetPlanApprovalRuntime(projectDir);
+  }
+  return result;
 }
 
 export function clearActiveDirectiveMarker(projectDir: string): void {
   transactActiveDirective(projectDir, (marker) =>
     marker?.version === 2 && !marker.owner_session?.startsWith("sessionless:") && marker.active_attempt?.status === "pending"
       ? { marker, result: true, preserve: true } : { marker: null, result: true });
+  resetPlanApprovalRuntime(projectDir);
 }
 
 export function refreshActiveDirectiveMarker(
@@ -3852,7 +5121,7 @@ export function refreshActiveDirectiveMarker(
   previousStateContent: string,
   nextStateContent: string,
 ): boolean {
-  return transactActiveDirective(projectDir, (marker) => {
+  const refreshed = transactActiveDirective(projectDir, (marker) => {
     if (!marker || marker.stage !== stage || marker.state_sha256 !== stateContentSha256(previousStateContent)) {
       return { marker, result: false, preserve: true };
     }
@@ -3866,6 +5135,8 @@ export function refreshActiveDirectiveMarker(
       result: true,
     };
   });
+  if (refreshed) resetPlanApprovalRuntime(projectDir);
+  return refreshed;
 }
 
 export function readActiveDirectiveMarker(
@@ -3915,14 +5186,14 @@ function exactCopilotMarker(
   target: ActiveDirectiveTarget,
   context: ReturnType<typeof activeDirectiveContext>,
 ): marker is ActiveDirectiveMarker & { version: 2 } {
-  return installedHarnessName(target) === "copilot" && marker?.version === 2 &&
+  return installedHarnessNameForTarget(target) === "copilot" && marker?.version === 2 &&
     (marker.cursor_harness === undefined || marker.cursor_harness === "copilot") &&
     !marker.owner_session?.startsWith("sessionless:") &&
     marker.project_sha256 === context.projectSha256 && marker.intent_uuid === context.intentUuid &&
     marker.state_sha256 === context.stateSha256 && marker.state_present === context.statePresent;
 }
 
-function installedHarnessName(target: ActiveDirectiveTarget): string | null {
+function installedHarnessNameForTarget(target: ActiveDirectiveTarget): string | null {
   const explicit = process.env.AIDLC_HARNESS_NAME?.trim();
   if (explicit && /^[a-z0-9][a-z0-9._-]*$/i.test(explicit)) return explicit;
   try {
@@ -3939,6 +5210,10 @@ function installedHarnessName(target: ActiveDirectiveTarget): string | null {
   }
 }
 
+export function installedHarnessName(projectDir: string): string | null {
+  return installedHarnessNameForTarget(resolveActiveDirectiveTarget(projectDir));
+}
+
 export function inspectContinuationCursor(
   projectDir: string,
   stateContent: string | null,
@@ -3949,7 +5224,7 @@ export function inspectContinuationCursor(
     target,
     stateSha256: context.stateSha256,
     statePresent: context.statePresent,
-    cursorHarness: installedHarnessName(target),
+    cursorHarness: installedHarnessNameForTarget(target),
   };
 }
 
@@ -3957,15 +5232,43 @@ export function advanceContinuationCursor(
   snapshot: ContinuationCursorSnapshot,
   presentedToken: string,
   successor: Omit<CopilotDirectiveMetadata, "continueToken" | "stage"> & {
-    stage: string; continue_token?: string; state_sha256: string;
+    stage: string;
+    continue_token?: string;
+    state_sha256: string;
+    units?: string[];
   },
   resultSha256: string,
   attemptId?: string,
-): "advanced" | "superseded" | "drift" {
+  legacyPlanApprovalOffer?: PlanApprovalLegacyOfferCandidate,
+  legacyPlanApprovalSession?: string,
+):
+  | "advanced"
+  | "legacy-plan-approval-owned"
+  | "legacy-plan-approval-recovery-required"
+  | "legacy-plan-approval-reissued"
+  | "legacy-plan-approval-transport"
+  | "superseded"
+  | "drift" {
   if (!/^[0-9a-f]{64}$/.test(resultSha256) || successor.state_sha256 !== snapshot.stateSha256) {
     return "drift";
   }
-  return transactActiveDirectiveTarget(snapshot.target, (current, target) => {
+  if (
+    legacyPlanApprovalOffer !== undefined &&
+    !validPlanApprovalLegacyOfferCandidate(legacyPlanApprovalOffer)
+  ) {
+    return "drift";
+  }
+  if (legacyPlanApprovalSession !== undefined && !legacyPlanApprovalSession.trim()) {
+    return "drift";
+  }
+  if (
+    legacyPlanApprovalOffer &&
+    legacyPlanApprovalSession !== legacyPlanApprovalOffer.session
+  ) {
+    return "drift";
+  }
+  let shouldResetRuntime = true;
+  const result = transactActiveDirectiveTarget(snapshot.target, (current, target) => {
     const currentTarget = resolveActiveDirectiveTarget(target.canonicalProjectDir);
     if (currentTarget.markerPath !== target.markerPath || currentTarget.intentUuid !== target.intentUuid) {
       return { marker: current, result: "drift" as const, preserve: true };
@@ -3975,7 +5278,152 @@ export function advanceContinuationCursor(
     if (context.stateSha256 !== snapshot.stateSha256 || context.statePresent !== snapshot.statePresent) {
       return { marker: current, result: "drift" as const, preserve: true };
     }
-    const cursorHarness = installedHarnessName(target);
+    if (legacyPlanApprovalSession && context.intentUuid) {
+      const owner = findPlanApprovalLegacyOwner(
+        target.canonicalProjectDir,
+        context.intentUuid,
+        current,
+      );
+      if (owner.status === "ambiguous") {
+        return {
+          marker: current,
+          result: "legacy-plan-approval-owned" as const,
+          preserve: true,
+        };
+      }
+      if (owner.status === "owned") {
+        const sameOwner = owner.session === legacyPlanApprovalSession;
+        if (!sameOwner && owner.live) {
+          return {
+            marker: current,
+            result: "legacy-plan-approval-owned" as const,
+            preserve: true,
+          };
+        }
+        const markerRevision = planApprovalAuthorityRevision(current);
+        if (
+          markerRevision === null ||
+          !planApprovalLegacyRecoverySatisfied(
+            target.canonicalProjectDir,
+            legacyPlanApprovalSession,
+            context.intentUuid,
+            markerRevision,
+          )
+        ) {
+          if (markerRevision !== null) {
+            ensurePlanApprovalLegacyRecoveryChallenge(
+              target.canonicalProjectDir,
+              legacyPlanApprovalSession,
+              context.intentUuid,
+              markerRevision,
+            );
+          }
+          return {
+            marker: current,
+            result: "legacy-plan-approval-recovery-required" as const,
+            preserve: true,
+          };
+        }
+        if (legacyPlanApprovalOffer) {
+          clearPlanApprovalLegacyRecovery(
+            target.canonicalProjectDir,
+            legacyPlanApprovalSession,
+          );
+          if (owner.session !== legacyPlanApprovalSession) {
+            clearPlanApprovalLegacyRecovery(
+              target.canonicalProjectDir,
+              owner.session,
+            );
+          }
+          clearPlanApprovalViolation(target.canonicalProjectDir);
+          clearPlanApprovalLegacyWindowsForMarker(target.canonicalProjectDir, current);
+          rotatePlanApprovalLegacyOwner(
+            target.canonicalProjectDir,
+            legacyPlanApprovalOffer,
+            owner,
+          );
+          return {
+            marker: current,
+            result: "legacy-plan-approval-reissued" as const,
+            preserve: true,
+          };
+        }
+        return {
+          marker: current,
+          result: "legacy-plan-approval-transport" as const,
+          preserve: true,
+        };
+      }
+      if (
+        owner.status === "none" &&
+        (
+          planApprovalLegacyViolationMatches(
+            target.canonicalProjectDir,
+            current,
+          ) ||
+          planApprovalLegacyWindowMatches(
+            target.canonicalProjectDir,
+            current,
+          )
+        )
+      ) {
+        const markerRevision = planApprovalAuthorityRevision(current);
+        if (
+          markerRevision === null ||
+          !planApprovalLegacyRecoverySatisfied(
+            target.canonicalProjectDir,
+            legacyPlanApprovalSession,
+            context.intentUuid,
+            markerRevision,
+          )
+        ) {
+          if (markerRevision !== null) {
+            ensurePlanApprovalLegacyRecoveryChallenge(
+              target.canonicalProjectDir,
+              legacyPlanApprovalSession,
+              context.intentUuid,
+              markerRevision,
+            );
+          }
+          return {
+            marker: current,
+            result: "legacy-plan-approval-recovery-required" as const,
+            preserve: true,
+          };
+        }
+        if (!legacyPlanApprovalOffer) {
+          return {
+            marker: current,
+            result: "legacy-plan-approval-transport" as const,
+            preserve: true,
+          };
+        }
+        clearPlanApprovalLegacyRecovery(
+          target.canonicalProjectDir,
+          legacyPlanApprovalSession,
+        );
+        clearPlanApprovalViolation(target.canonicalProjectDir);
+        clearPlanApprovalLegacyWindowsForMarker(target.canonicalProjectDir, current);
+        if (current?.version !== 2) {
+          return {
+            marker: current,
+            result: "legacy-plan-approval-owned" as const,
+            preserve: true,
+          };
+        }
+        installPlanApprovalLegacyOffer(
+          target.canonicalProjectDir,
+          legacyPlanApprovalOffer,
+          current,
+        );
+        return {
+          marker: current,
+          result: "legacy-plan-approval-reissued" as const,
+          preserve: true,
+        };
+      }
+    }
+    const cursorHarness = installedHarnessNameForTarget(target);
     if (!cursorHarness || cursorHarness !== snapshot.cursorHarness) {
       return { marker: current, result: "drift" as const, preserve: true };
     }
@@ -3998,6 +5446,36 @@ export function advanceContinuationCursor(
       pending.command_kind === "continue" && pending.cursor_input_sha256 === inputSha256 &&
       pending.owner_epoch === base.owner_epoch && pending.context_epoch === base.context_epoch;
     const token = successor.continue_token;
+    const codeGenerationSourceSha256 =
+      codeGenerationSourceFloorForPublication(
+        target,
+        base,
+        successor.stage,
+        false,
+      );
+    const requestedUnits = successor.units ?? base.units ?? [];
+    const preserveCodeGenerationAuthority =
+      successor.stage === "code-generation" &&
+      base.stage === "code-generation" &&
+      (base.kind === "load-steering" || base.kind === "invoke-swarm") &&
+      (successor.kind === "load-steering" ||
+        successor.kind === "invoke-swarm") &&
+      requestedUnits.length > 0 &&
+      base.code_generation_source_sha256 !== undefined &&
+      !planApprovalRuntimeHasReceiptForMarker(
+        target.canonicalProjectDir,
+        base,
+      );
+    const codeGenerationAuthorityRevision =
+      successor.stage === "code-generation"
+        ? preserveCodeGenerationAuthority
+          ? base.code_generation_authority_revision ??
+            base.active_attempt?.result_revision ??
+            base.revision ??
+            nextRevision
+          : nextRevision
+        : undefined;
+    shouldResetRuntime = !preserveCodeGenerationAuthority;
     const next: ActiveDirectiveMarker = {
       ...base,
       revision: nextRevision,
@@ -4006,7 +5484,19 @@ export function advanceContinuationCursor(
       state_sha256: successor.state_sha256,
       kind: successor.kind,
       stage: successor.stage,
+      ...(codeGenerationSourceSha256
+        ? { code_generation_source_sha256: codeGenerationSourceSha256 }
+        : { code_generation_source_sha256: undefined }),
+      ...(codeGenerationAuthorityRevision !== undefined
+        ? {
+            code_generation_authority_revision:
+              codeGenerationAuthorityRevision,
+          }
+        : { code_generation_authority_revision: undefined }),
       ...(successor.unit ? { unit: successor.unit } : { unit: undefined }),
+      ...(requestedUnits.length > 0
+        ? { units: requestedUnits }
+        : { units: undefined }),
       ...(successor.part ? { part: successor.part } : { part: undefined }),
       ...(successor.parts ? { parts: successor.parts } : { parts: undefined }),
       ...(token ? { continue_token: token, continue_token_sha256: stateContentSha256(token) } : { continue_token: undefined, continue_token_sha256: undefined }),
@@ -4016,8 +5506,23 @@ export function advanceContinuationCursor(
         ? { ...pending, result_sha256: resultSha256, result_revision: nextRevision }
         : pending.status === "pending" ? { ...pending, status: "failed" } : pending } : {}),
     };
+    if (legacyPlanApprovalOffer) {
+      if (shouldResetRuntime) {
+        resetPlanApprovalRuntime(target.canonicalProjectDir);
+        shouldResetRuntime = false;
+      }
+      installPlanApprovalLegacyOffer(
+        target.canonicalProjectDir,
+        legacyPlanApprovalOffer,
+        next,
+      );
+    }
     return { marker: next, result: "advanced" as const };
   });
+  if (result === "advanced" && shouldResetRuntime) {
+    resetPlanApprovalRuntime(snapshot.target.canonicalProjectDir);
+  }
+  return result;
 }
 
 export function invalidateActiveDirectiveContext(
@@ -4026,7 +5531,7 @@ export function invalidateActiveDirectiveContext(
   sessionId: string,
 ): boolean {
   if (!sessionId) return false;
-  return transactActiveDirective(projectDir, (marker, target) => {
+  const invalidated = transactActiveDirective(projectDir, (marker, target) => {
     const context = activeDirectiveContext(target, stateContent);
     if (
       marker?.version !== 2 || marker.owner_session !== sessionId ||
@@ -4046,6 +5551,8 @@ export function invalidateActiveDirectiveContext(
       result: true,
     };
   });
+  if (invalidated) resetPlanApprovalRuntime(projectDir);
+  return invalidated;
 }
 
 export function recordCopilotHumanSequence(
@@ -4595,6 +6102,7 @@ const GATE_RESOLUTION_EVENTS = new Set([
   "GATE_REJECTED",
   "QUESTION_ANSWERED",
   "SUMMARY_CONFIRMATION_RECORDED",
+  "PLAN_APPROVAL_RECORDED",
 ]);
 const DOCUMENT_AUDIT_EVENTS = new Set([
   "DOCUMENT_INDEXED",

@@ -892,6 +892,12 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     // t317 creates a deterministic plugin from copied tools, then proves the
     // scaffold validates, builds, and composes without checkout paths.
     "unit/t317-plugin-create.test.ts",
+    // t327 drives the real next/continue transport because stable authority
+    // publication is observable only across the emitted continuation cursor.
+    "unit/t327-code-generation-authority-publication.test.ts",
+    // t328 drives the shipped log, human-turn, and begin CLIs so protected
+    // challenge/response receipts and cross-process lock ordering are genuine.
+    "unit/t328-plan-approval-runtime-authority.test.ts",
     "integration/t102.test.ts",
     "integration/t104.test.ts",
     "integration/t105.test.ts",

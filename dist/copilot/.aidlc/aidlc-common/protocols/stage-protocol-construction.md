@@ -129,15 +129,13 @@ deterministic audit cross-check. The log is append-only. A human-directed
 backward jump does not count against the bound — only entries this protocol
 writes do.
 
-**Plan approval on replay.** This loop-back is a repair of the
-already-approved code-generation plan. The recorded Plan Approval answer remains
-authoritative: the conductor MUST NOT blank its `[Answer]:` for the loop-back
-revision, and records the plan delta in the Loop-Back Log entry instead. In
-gated mode, the human's "Retry with fix" answer IS the re-approval of the
-revised approach; carry that exact answer via `--user-input` on the replayed
-code-generation approval report. The plan-approval guard's evidence survives
-the jump because the non-empty plan and its approved questions file are
-preserved.
+**Plan approval on replay.** The jump creates a new directive authority epoch,
+so the prior Plan Approval receipt cannot authorize the replay. Preserve the
+Loop-Back Log, but blank `[Answer]:`, regenerate the target-bound fingerprint,
+and run Code Generation's Plan Approval decision/human-turn/answer receipt
+sequence again before generation. The human's "Retry with fix" choice authorizes
+the loop-back jump; it is not approval of plan bytes or a directive issued
+after that choice.
 
 **Autonomous loop-back procedure** (mode `autonomous`, bound not exhausted,
 impact-estimated fix identified):
@@ -154,12 +152,14 @@ impact-estimated fix identified):
    loop. Never compose the `execute` call by hand — the engine's print is the
    validated form.
 3. On the code-generation re-entry, follow "Re-entry settlement and review"
-   below. Apply the planned fix ONLY to the unit(s) the diagnosis names and
+   below. Before any fix generation, run the fresh target-bound Plan Approval
+   sequence required above; this is a human hard stop even though Construction
+   autonomy remains granted. Then apply the planned fix ONLY to the unit(s) the diagnosis names and
    apply the deterministic Artifact Re-use decisions (see "Autonomous failure
    loop-back" under Artifact Re-use in stage-protocol.md). The standing
    `Construction Autonomy Mode: autonomous` grant is unchanged by the jump;
    after every applicable unit has a fresh current-attempt review, the replayed
-   code-generation gate is auto-approved under it with
+   completion gate is auto-approved under it with
    `--user-input "Autonomous loop-back N per construction protocol module"` —
    the human already approved the original run of this stage; the replay is a
    repair of that approved shape, not a new autonomy inference (checklist item
@@ -407,12 +407,14 @@ prepare`:
    question. A revision resets `[Answer]:` to blank before the resolver or
    fingerprint is regenerated.
 2. STOP for each unanswered Plan Approval. After the human explicitly chooses
-   `Approve Plan`, record the answer and re-run `next`; the engine may re-emit
+   `Approve Plan`, record the answer through the reserved
+   `PLAN_APPROVAL_RECORDED` receipt and re-run `next`; the engine may re-emit
    the same batch while other units still need approval. Do not fork worktrees
    or dispatch implementation workers during these planning turns.
 3. Call `prepare` only after every unit in the emitted batch has current
    approval evidence. On autonomous Code Generation, `prepare` verifies the
-   plan, test instructions, embedded contract, answer, and fingerprint before
+   plan, test instructions, embedded contract, answer, target-bound fingerprint,
+   directive epoch, and human-owned receipt before
    creating any worktree. A stale memory/scope/test-strategy/project-type input
    therefore reopens approval instead of silently changing execution.
 4. Every worker brief starts with exactly:

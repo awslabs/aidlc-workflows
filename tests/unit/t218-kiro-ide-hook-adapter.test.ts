@@ -13,7 +13,7 @@
 // Either way the adapter scrapes the written file path out of the result prose
 // and drives the audit-tail hooks (rebuild-stage-graph, sync-workflow-state).
 //
-// covers: file:hooks/aidlc-sync-workflow-state.ts, file:hooks/aidlc-write-audit-log.ts, file:hooks/aidlc-rebuild-stage-graph.ts
+// covers: file:hooks/aidlc-sync-workflow-state.ts, file:hooks/aidlc-write-audit-log.ts, file:hooks/aidlc-rebuild-stage-graph.ts, function:markKiroIdeLegacyPlanApprovalHost, function:clearKiroIdeLegacyPlanApprovalHost, function:clearPlanApprovalViolation, function:readPlanApprovalLegacyWindows
 //
 // WHY SUBPROCESS. The adapter IS a subprocess shim — in-process unit testing
 // would bypass the exact stdin/env/stdout/exit-code surface being contracted.
@@ -23,6 +23,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   cpSync,
   existsSync,
@@ -39,7 +40,17 @@ import { fileURLToPath } from "node:url";
 import {
   readAllAuditShards,
   readIntentRegistry,
+  writePlanApprovalLegacyOffer,
+  writeActiveDirectiveMarker,
 } from "../../core/tools/aidlc-lib.ts";
+import {
+  approvalFingerprint,
+  codeGenerationRecordDir,
+  evaluateCodeGenerationApproval,
+  renderTestingContract,
+  resolveCodeGenerationAuthority,
+  resolveTestingPosture,
+} from "../../core/tools/aidlc-testing-posture.ts";
 import {
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
@@ -65,7 +76,11 @@ function pinnedShardName(): string {
 
 function seedShell(dir: string): void {
   const intentsDir = intentsDirOf(dir, DEFAULT_SPACE);
-  mkdirSync(join(dir, "aidlc", "spaces", DEFAULT_SPACE, "memory"), { recursive: true });
+  cpSync(
+    join(KIRO_IDE_TREE, "tools", "data", "memory-seed"),
+    join(dir, "aidlc", "spaces", DEFAULT_SPACE, "memory"),
+    { recursive: true },
+  );
   mkdirSync(seededRecordDir(dir), { recursive: true });
   writeFileSync(join(dir, "aidlc", "active-space"), `${DEFAULT_SPACE}\n`, "utf-8");
   writeFileSync(join(intentsDir, "active-intent"), `${DEFAULT_RECORD_DIR}\n`, "utf-8");
@@ -112,6 +127,67 @@ function readAudit(dir: string): string {
     .join("\n");
 }
 
+function seedCodeGenerationDirective(dir: string, unit?: string): void {
+  const statePath = seededStateFile(dir);
+  const state = readFileSync(statePath, "utf-8").replace(
+    /^- \*\*Current Stage\*\*:.*$/m,
+    "- **Current Stage**: code-generation",
+  );
+  writeFileSync(statePath, state);
+  writeActiveDirectiveMarker(dir, {
+    kind: "run-stage",
+    stage: "code-generation",
+    ...(unit ? { unit } : {}),
+    state_sha256: createHash("sha256").update(state).digest("hex"),
+  });
+}
+
+function initGitWorkspace(dir: string): void {
+  mkdirSync(join(dir, "src"), { recursive: true });
+  writeFileSync(join(dir, "src", "base.ts"), "export const base = true;\n");
+  for (const args of [
+    ["init", "-q"],
+    ["config", "user.email", "tests@example.com"],
+    ["config", "user.name", "AI-DLC Tests"],
+    ["add", "-A"],
+    ["commit", "-qm", "baseline"],
+  ]) {
+    const result = spawnSync("git", args, { cwd: dir, encoding: "utf-8" });
+    expect(result.status, result.stderr).toBe(0);
+  }
+}
+
+function seedStageLevelPlanApproval(dir: string): string {
+  const contract = resolveTestingPosture(dir);
+  const authority = resolveCodeGenerationAuthority(dir, { unit: null });
+  const record = codeGenerationRecordDir(dir, null);
+  mkdirSync(record, { recursive: true });
+  const plan = `# Plan\n\n${renderTestingContract(contract)}`;
+  const instructions = "# Unit Test Instructions\n\nRun the focused test.\n";
+  const fingerprint = approvalFingerprint(
+    plan,
+    instructions,
+    contract.contract_sha256,
+    authority,
+  );
+  const questions = join(record, "code-generation-questions.md");
+  writeFileSync(join(record, "code-generation-plan.md"), plan);
+  writeFileSync(join(record, "unit-test-instructions.md"), instructions);
+  writeFileSync(
+    questions,
+    [
+      "## Plan Approval",
+      "",
+      `[Approval Fingerprint]: ${fingerprint}`,
+      "- Approve Plan",
+      "- Request Changes",
+      "[Answer]:",
+      "",
+    ].join("\n"),
+  );
+  return questions;
+}
+
 /** Append a STAGE_STARTED block for <slug> to the seeded audit shard. */
 function appendStageStarted(dir: string, slug: string, ts: string): void {
   const shard = join(seededAuditDir(dir), pinnedShardName());
@@ -125,23 +201,81 @@ function runIde(
   projectDir: string,
   target: string,
   userPrompt: string | null,
+  envOverrides: Record<string, string | undefined> = {},
 ): { stdout: string; stderr: string; code: number } {
-  const env: Record<string, string> = { ...process.env, CLAUDE_PROJECT_DIR: projectDir };
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    CLAUDE_PROJECT_DIR: projectDir,
+    VSCODE_IPC_HOOK: `test-ipc:${projectDir}`,
+    VSCODE_PID: "218",
+    ...envOverrides,
+  };
   if (userPrompt === null) {
-    delete (env as Record<string, string | undefined>).USER_PROMPT;
+    delete env.USER_PROMPT;
   } else {
     env.USER_PROMPT = userPrompt;
   }
   const r = spawnSync(
     "bun",
     [join(projectDir, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), target],
-    { cwd: projectDir, input: "", encoding: "utf-8", env, timeout: 30_000 },
+    {
+      cwd: projectDir,
+      input: "",
+      encoding: "utf-8",
+      env: env as NodeJS.ProcessEnv,
+      timeout: 30_000,
+    },
   );
   return {
     stdout: r.stdout ?? "",
     stderr: r.stderr ?? "",
     code: r.status ?? -1,
   };
+}
+
+function legacySessionId(
+  projectDir: string,
+  ipc = `test-ipc:${projectDir}`,
+  pid = "218",
+): string {
+  return `kiro-ide-legacy-${
+    createHash("sha256")
+      .update(`${ipc}\n${pid}`, "utf-8")
+      .digest("hex")
+      .slice(0, 24)
+  }`;
+}
+
+function seedLegacyDirectiveChoices(
+  projectDir: string,
+  envOverrides: Record<string, string | undefined> = {},
+  unit: string | null = null,
+): { approve: string; requestChanges: string } {
+  const session = legacySessionId(
+    projectDir,
+    envOverrides.VSCODE_IPC_HOOK ?? `test-ipc:${projectDir}`,
+    envOverrides.VSCODE_PID ?? "218",
+  );
+  const nonce = createHash("sha256")
+    .update(`${projectDir}\n${unit ?? "<stage>"}`, "utf-8")
+    .digest("hex")
+    .slice(0, 12);
+  const approve = `Approve Plan [${nonce}]`;
+  const requestChanges = `Request Changes [${nonce}]`;
+  const authority = resolveCodeGenerationAuthority(projectDir, { unit });
+  writePlanApprovalLegacyOffer(projectDir, {
+    version: 1,
+    session,
+    intentId: authority.intentId,
+    markerRevision: authority.markerRevision,
+    allowedUnits: [unit],
+    options: [approve, requestChanges].map((option) =>
+      createHash("sha256")
+        .update(option.toLowerCase(), "utf-8")
+        .digest("hex")
+    ) as [string, string],
+  });
+  return { approve, requestChanges };
 }
 
 /** Run the IDE adapter with the context written to STDIN (the 1.x channel).
@@ -162,7 +296,13 @@ function runIdeStdin(
   const r = spawnSync(
     "bun",
     [join(projectDir, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), target],
-    { cwd: projectDir, input: stdinPayload, encoding: "utf-8", env, timeout: 30_000 },
+    {
+      cwd: projectDir,
+      input: stdinPayload,
+      encoding: "utf-8",
+      env: env as NodeJS.ProcessEnv,
+      timeout: 30_000,
+    },
   );
   return {
     stdout: r.stdout ?? "",
@@ -484,7 +624,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     const dir = scratchProject(false);
     try {
       rmSync(intentsDirOf(dir, DEFAULT_SPACE), { recursive: true, force: true });
-      const sessionId = "kiro-ide-legacy-current";
+      const sessionId = legacySessionId(dir);
       expect(runIde(dir, "session-start", null).code).toBe(0);
 
       const create = spawnSync(
@@ -621,7 +761,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
         rmSync(dir, { recursive: true, force: true });
       }
     }
-  });
+  }, 15_000);
 
   test("8: session-start emits plain-text context, not the JSON wrapper", () => {
     const dir = scratchProject(true);
@@ -635,7 +775,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     }
   });
 
-  test("8b: session-start forwards modern session_id and uses a legacy fallback id", () => {
+  test("8b: session-start forwards modern session_id and derives a legacy host identity", () => {
     const dir = scratchProject(true);
     try {
       const modern = runIdeStdin(
@@ -665,14 +805,40 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
         ).trim(),
       ).toBe("00000000-0000-7000-8000-000000000001");
 
-      const legacy = runIde(dir, "session-start", null);
+      const legacy = runIde(
+        dir,
+        "session-start",
+        JSON.stringify({ prompt: "continue" }),
+      );
       expect(legacy.code).toBe(0);
       expect(
         readFileSync(
-          join(dir, "aidlc", ".aidlc-sessions", "kiro-ide-legacy-current"),
+          join(dir, "aidlc", ".aidlc-sessions", legacySessionId(dir)),
           "utf-8",
         ).trim(),
       ).toBe("00000000-0000-7000-8000-000000000001");
+      const legacyHostMarker = join(
+        dir,
+        "aidlc",
+        ".aidlc-sessions",
+        `.kiro-ide-legacy-plan-approval-${legacySessionId(dir)}.json`,
+      );
+      expect(
+        JSON.parse(readFileSync(legacyHostMarker, "utf-8")).session,
+      ).toBe(legacySessionId(dir));
+
+      expect(
+        runIdeStdin(
+          dir,
+          "session-start",
+          ctx1x("", "", "SessionStart"),
+          {
+            VSCODE_IPC_HOOK: `test-ipc:${dir}`,
+            VSCODE_PID: "218",
+          },
+        ).code,
+      ).toBe(0);
+      expect(existsSync(legacyHostMarker)).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1110,7 +1276,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   test("9: stop blocks with a reason while the workflow has pending work", () => {
     const dir = scratchProject(true);
@@ -1329,6 +1495,1023 @@ async function runOpenStdinCommand(
   return { code: proc.exitCode, elapsedMs, stdout, timedOut: false };
 }
 
+describe("t218 Kiro IDE plan-approval enforcement", () => {
+  test("populated 1.x PreToolUse write and dispatch payloads are blocked before approval", () => {
+    const dir = scratchProject(true);
+    try {
+      seedCodeGenerationDirective(dir);
+      const write = runIdeStdin(
+        dir,
+        "plan-approval-guard",
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          cwd: dir,
+          tool_name: "fs_write",
+          tool_input: { path: join(dir, "src", "blocked.ts") },
+        }),
+      );
+      expect(write.code).toBe(2);
+
+      const dispatch = runIdeStdin(
+        dir,
+        "plan-approval-guard",
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          cwd: dir,
+          tool_name: "subagent_aidlc-developer-agent",
+          tool_input: {
+            prompt:
+              "AIDLC-STAGE: code-generation\n" +
+              `AIDLC-TESTING-CONTRACT: sha256:${"a".repeat(64)}`,
+          },
+        }),
+      );
+      expect(dispatch.code).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("legacy 0.12 consumes directive-issued choices while PostToolUse stays silent", () => {
+    const dir = scratchProject(true);
+    try {
+      const registration = JSON.parse(
+        readFileSync(
+          join(KIRO_IDE_TREE, "hooks", "aidlc-record-human-turn.kiro.hook"),
+          "utf-8",
+        ),
+      ) as {
+        when?: { type?: string };
+        then?: { command?: string };
+      };
+      expect(registration.when?.type).toBe("promptSubmit");
+      expect(registration.then?.command).toContain(
+        "aidlc-kiro-adapter.ts record-human-turn",
+      );
+      initGitWorkspace(dir);
+      seedCodeGenerationDirective(dir);
+      const choices = seedLegacyDirectiveChoices(dir);
+      expect(runIde(dir, "session-start", null).code).toBe(0);
+
+      // Kiro IDE 0.12 names the tool in USER_PROMPT but supplies no arguments.
+      // Planning writes remain possible before the exact approval prompt.
+      expect(
+        runIde(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({ toolName: "fs_write", toolArgs: {} }),
+        ).code,
+      ).toBe(0);
+      for (const toolName of [
+        "execute_bash",
+        "fs_append",
+        "create_file",
+        "edit_file",
+      ]) {
+        expect(
+          runIde(
+            dir,
+            "plan-approval-guard",
+            JSON.stringify({ toolName, toolArgs: {} }),
+          ).code,
+          toolName,
+        ).toBe(2);
+      }
+
+      const questions = seedStageLevelPlanApproval(dir);
+      const decision = runIde(
+        dir,
+        "audit-and-sensors",
+        ctx("fs_write", `Created the ${relative(dir, questions)} file.`),
+      );
+      expect(decision.code).toBe(0);
+      expect(decision.stdout.trim()).toBe("");
+      expect(readAudit(dir)).toContain("DECISION_RECORDED");
+      expect(readFileSync(questions, "utf-8")).not.toMatch(
+        /Approve Plan \[[0-9a-f]{8}\]/,
+      );
+
+      // Once the prompt is recorded, opaque legacy calls hard-stop until the
+      // human answers.
+      expect(
+        runIde(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({ toolName: "execute_bash", toolArgs: {} }),
+        ).code,
+      ).toBe(2);
+      expect(runIde(dir, "plan-approval-guard", null).code).toBe(2);
+
+      // A plain label from any same-host chat is not the directive capability
+      // and receives no secret in return.
+      const foreignReply = runIde(
+        dir,
+        "record-human-turn",
+        JSON.stringify({ prompt: "Approve Plan" }),
+      );
+      expect(foreignReply.code).toBe(0);
+      expect(foreignReply.stdout.trim()).toBe("");
+      expect(
+        runIde(
+          dir,
+          "record-human-turn",
+          JSON.stringify({ prompt: choices.approve }),
+        ).code,
+      ).toBe(0);
+      expect(
+        runIde(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({ toolName: "fs_write", toolArgs: {} }),
+        ).code,
+      ).toBe(0);
+
+      // A source mutation made anywhere in that opaque window cannot be
+      // legitimized by the later approval receipt.
+      writeFileSync(join(dir, "src", "base.ts"), "export const base = false;\n");
+      writeFileSync(
+        questions,
+        readFileSync(questions, "utf-8").replace(
+          "[Answer]:",
+          "[Answer]: Approve Plan",
+        ),
+      );
+      expect(
+        runIde(
+          dir,
+          "audit-and-sensors",
+          ctx("fs_write", `Created the ${relative(dir, questions)} file.`),
+        ).code,
+      ).toBe(0);
+      expect(evaluateCodeGenerationApproval(dir, { unit: null }).ok).toBe(false);
+      expect(
+        runIde(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({ toolName: "execute_bash", toolArgs: {} }),
+        ).code,
+      ).toBe(2);
+      expect(readAudit(dir)).not.toContain(
+        "**Event**: PLAN_APPROVAL_RECORDED",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 20000);
+
+  test("legacy file-tool mediation injects the contract and records a valid human approval", () => {
+    const dir = scratchProject(true);
+    try {
+      initGitWorkspace(dir);
+      seedCodeGenerationDirective(dir);
+      const choices = seedLegacyDirectiveChoices(dir);
+      expect(runIde(dir, "session-start", null).code).toBe(0);
+      expect(
+        runIde(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({ toolName: "fs_write", toolArgs: {} }),
+        ).code,
+      ).toBe(0);
+      const questions = seedStageLevelPlanApproval(dir);
+      const plan = join(
+        seededRecordDir(dir),
+        "construction",
+        "code-generation",
+        "code-generation-plan.md",
+      );
+      writeFileSync(plan, "# Plan\n\n## Steps\n\n- [ ] Implement\n", "utf-8");
+      expect(
+        runIde(
+          dir,
+          "audit-and-sensors",
+          ctx("fs_write", `Created the ${relative(dir, plan)} file.`),
+        ).code,
+      ).toBe(0);
+      expect(readFileSync(plan, "utf-8")).toContain("## Testing Contract");
+      const decision = runIde(
+        dir,
+        "audit-and-sensors",
+        ctx("fs_write", `Created the ${relative(dir, questions)} file.`),
+      );
+      expect(decision.code).toBe(0);
+      expect(decision.stdout.trim()).toBe("");
+      expect(readAudit(dir)).toContain("DECISION_RECORDED");
+      expect(readFileSync(questions, "utf-8")).not.toMatch(
+        /Approve Plan \[[0-9a-f]{8}\]/,
+      );
+      expect(
+        runIde(
+          dir,
+          "record-human-turn",
+          JSON.stringify({ prompt: choices.approve }),
+        ).code,
+      ).toBe(0);
+      writeFileSync(
+        questions,
+        readFileSync(questions, "utf-8").replace(
+          "[Answer]:",
+          "[Answer]: Approve Plan",
+        ),
+      );
+      expect(
+        runIde(
+          dir,
+          "audit-and-sensors",
+          ctx("fs_write", `Created the ${relative(dir, questions)} file.`),
+        ).code,
+      ).toBe(0);
+      expect(evaluateCodeGenerationApproval(dir, { unit: null }).ok).toBe(true);
+      expect(
+        runIde(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({ toolName: "execute_bash", toolArgs: {} }),
+        ).code,
+      ).toBe(0);
+      expect(runIde(dir, "plan-approval-guard", null).code).toBe(0);
+      writeFileSync(
+        join(dir, "src", "legacy-generated.ts"),
+        "export const generated = true;\n",
+      );
+      expect(runIde(dir, "plan-approval-guard", null).code).toBe(0);
+      expect(
+        runIde(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({ toolName: "execute_bash", toolArgs: {} }),
+        ).code,
+      ).toBe(0);
+      expect(evaluateCodeGenerationApproval(dir, { unit: null }).ok).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 20000);
+
+  test("legacy same-host chats cannot consume or overwrite another challenge", () => {
+    const dir = scratchProject(true);
+    const sharedHost = {
+      VSCODE_IPC_HOOK: `shared-chat-host:${dir}`,
+      VSCODE_PID: "301",
+    };
+    try {
+      initGitWorkspace(dir);
+      seedCodeGenerationDirective(dir);
+      const choices = seedLegacyDirectiveChoices(dir, sharedHost);
+      expect(runIde(dir, "session-start", null, sharedHost).code).toBe(0);
+      const questions = seedStageLevelPlanApproval(dir);
+      const plan = join(
+        seededRecordDir(dir),
+        "construction",
+        "code-generation",
+        "code-generation-plan.md",
+      );
+      writeFileSync(plan, "# Plan\n\n## Steps\n\n- [ ] Implement\n");
+      expect(
+        runIde(
+          dir,
+          "audit-and-sensors",
+          ctx("fs_write", `Created the ${relative(dir, plan)} file.`),
+          sharedHost,
+        ).code,
+      ).toBe(0);
+      const decisionA = runIde(
+        dir,
+        "audit-and-sensors",
+        ctx("fs_write", `Created the ${relative(dir, questions)} file.`),
+        sharedHost,
+      );
+      expect(decisionA.code).toBe(0);
+      expect(decisionA.stdout.trim()).toBe("");
+
+      const overwrite = runIde(
+        dir,
+        "audit-and-sensors",
+        ctx("fs_write", `Created the ${relative(dir, questions)} file.`),
+        sharedHost,
+      );
+      expect(overwrite.code).toBe(0);
+      expect(overwrite.stdout.trim()).toBe("");
+
+      expect(readFileSync(questions, "utf-8")).not.toContain(choices.approve);
+      expect(readAudit(dir)).not.toContain(choices.approve);
+      const foreignReply = runIde(
+        dir,
+        "record-human-turn",
+        JSON.stringify({ prompt: "Approve Plan" }),
+        sharedHost,
+      );
+      expect(foreignReply.code).toBe(0);
+      expect(foreignReply.stdout.trim()).toBe("");
+      writeFileSync(
+        questions,
+        readFileSync(questions, "utf-8").replace(
+          "[Answer]:",
+          "[Answer]: Approve Plan",
+        ),
+      );
+      expect(
+        runIde(
+          dir,
+          "audit-and-sensors",
+          ctx("fs_write", `Created the ${relative(dir, questions)} file.`),
+          sharedHost,
+        ).code,
+      ).toBe(0);
+      expect(evaluateCodeGenerationApproval(dir, { unit: null }).ok).toBe(false);
+
+      expect(
+        runIde(
+          dir,
+          "record-human-turn",
+          JSON.stringify({ prompt: choices.approve }),
+          sharedHost,
+        ).code,
+      ).toBe(0);
+      expect(
+        runIde(
+          dir,
+          "audit-and-sensors",
+          ctx("fs_write", `Created the ${relative(dir, questions)} file.`),
+          sharedHost,
+        ).code,
+      ).toBe(0);
+      expect(evaluateCodeGenerationApproval(dir, { unit: null }).ok).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  test("legacy noncanonical writes stay poisoned unless human recovery preserves the source floor", () => {
+    for (const target of [
+      "record",
+      "harness",
+      "external",
+      "unresolved",
+    ] as const) {
+      const dir = scratchProject(true);
+      try {
+        initGitWorkspace(dir);
+        seedCodeGenerationDirective(dir);
+        expect(
+          runIde(
+            dir,
+            "plan-approval-guard",
+            JSON.stringify({ toolName: "fs_write", toolArgs: {} }),
+          ).code,
+        ).toBe(0);
+        const path =
+          target === "record"
+            ? join(seededRecordDir(dir), "construction", "unexpected.md")
+            : target === "harness"
+              ? join(dir, ".kiro", "hooks", "unexpected.ts")
+              : `${dir}-external-write.txt`;
+        if (target !== "unresolved") {
+          mkdirSync(dirname(path), { recursive: true });
+          writeFileSync(path, "unexpected\n", "utf-8");
+        }
+        const result =
+          target === "unresolved"
+            ? "Wrote a file successfully"
+            : `Created the ${path} file.`;
+        expect(
+          runIde(
+            dir,
+            "audit-and-sensors",
+            ctx("fs_write", result),
+          ).code,
+          target,
+        ).toBe(0);
+        expect(
+          runIde(
+            dir,
+            "plan-approval-guard",
+            JSON.stringify({ toolName: "fs_write", toolArgs: {} }),
+          ).code,
+          target,
+        ).toBe(2);
+        const recovery = runIde(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({ toolName: "execute_bash", toolArgs: {} }),
+        );
+        expect(recovery.code, target).toBe(2);
+        expect(recovery.stderr, target).toContain(
+          "recovery requires a human response",
+        );
+        expect(
+          runIde(
+            dir,
+            "plan-approval-guard",
+            JSON.stringify({ toolName: "fs_write", toolArgs: {} }),
+          ).code,
+          target,
+        ).toBe(2);
+        expect(
+          runIde(
+            dir,
+            "record-human-turn",
+            JSON.stringify({ prompt: "continue" }),
+          ).code,
+          target,
+        ).toBe(0);
+        const noisyRecovery = runIde(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({ toolName: "execute_bash", toolArgs: {} }),
+        );
+        expect(noisyRecovery.code, target).toBe(2);
+        expect(noisyRecovery.stderr, target).toContain(
+          "recovery requires a human response",
+        );
+        expect(
+          runIde(
+            dir,
+            "record-human-turn",
+            JSON.stringify({ prompt: "Recover Plan Approval" }),
+          ).code,
+          target,
+        ).toBe(0);
+        const recovered = runIde(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({ toolName: "execute_bash", toolArgs: {} }),
+        );
+        expect(recovered.code, target).toBe(2);
+        expect(recovered.stderr, target).toContain(
+          "recovery issued a fresh directive",
+        );
+        const afterRecovery = runIde(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({ toolName: "fs_write", toolArgs: {} }),
+        );
+        expect(afterRecovery.code, target).toBe(target === "harness" ? 2 : 0);
+      } finally {
+        rmSync(`${dir}-external-write.txt`, { force: true });
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  }, 120_000);
+
+  test("legacy offer corruption or deletion requires exact human recovery before replacement", () => {
+    for (const mode of ["corrupt", "delete"] as const) {
+      const dir = scratchProject(true);
+      try {
+        initGitWorkspace(dir);
+        seedCodeGenerationDirective(dir);
+        seedLegacyDirectiveChoices(dir);
+        expect(
+          runIde(
+            dir,
+            "plan-approval-guard",
+            JSON.stringify({ toolName: "fs_write", toolArgs: {} }),
+          ).code,
+          mode,
+        ).toBe(0);
+        const offerPath = join(
+          dir,
+          "aidlc",
+          ".aidlc-sessions",
+          "plan-approval",
+          `legacy-offer-${legacySessionId(dir)}.json`,
+        );
+        if (mode === "delete") {
+          rmSync(offerPath, { force: true });
+        } else {
+          writeFileSync(offerPath, "corrupted offer\n");
+        }
+        expect(
+          runIde(
+            dir,
+            "audit-and-sensors",
+            ctx(
+              "fs_write",
+              mode === "delete"
+                ? `Deleted the ${offerPath} file.`
+                : `Created the ${offerPath} file.`,
+            ),
+          ).code,
+          mode,
+        ).toBe(0);
+
+        const recovery = runIde(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({ toolName: "execute_bash", toolArgs: {} }),
+        );
+        expect(recovery.code, mode).toBe(2);
+        expect(recovery.stderr, mode).toContain(
+          "recovery requires a human response",
+        );
+        expect(
+          runIde(
+            dir,
+            "plan-approval-guard",
+            JSON.stringify({ toolName: "fs_write", toolArgs: {} }),
+          ).code,
+          mode,
+        ).toBe(2);
+        expect(
+          runIde(
+            dir,
+            "record-human-turn",
+            JSON.stringify({ prompt: "Recover Plan Approval" }),
+          ).code,
+          mode,
+        ).toBe(0);
+        const recovered = runIde(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({ toolName: "execute_bash", toolArgs: {} }),
+        );
+        expect(recovered.code, mode).toBe(2);
+        expect(recovered.stderr, mode).toContain(
+          "recovery issued a fresh directive",
+        );
+        expect(
+          runIde(
+            dir,
+            "plan-approval-guard",
+            JSON.stringify({ toolName: "fs_write", toolArgs: {} }),
+          ).code,
+          mode,
+        ).toBe(0);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  }, 60000);
+
+  test("interrupted legacy authority write requires recovery without PostToolUse", () => {
+    const dir = scratchProject(true);
+    const ownerHost = {
+      VSCODE_IPC_HOOK: `interrupted-owner:${dir}`,
+      VSCODE_PID: "401",
+    };
+    const recoveryHost = {
+      VSCODE_IPC_HOOK: `interrupted-recovery:${dir}`,
+      VSCODE_PID: "402",
+    };
+    try {
+      initGitWorkspace(dir);
+      seedCodeGenerationDirective(dir);
+      seedLegacyDirectiveChoices(dir, ownerHost);
+      expect(
+        runIde(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({ toolName: "fs_write", toolArgs: {} }),
+          ownerHost,
+        ).code,
+      ).toBe(0);
+      const offerPath = join(
+        dir,
+        "aidlc",
+        ".aidlc-sessions",
+        "plan-approval",
+        `legacy-offer-${legacySessionId(
+          dir,
+          ownerHost.VSCODE_IPC_HOOK,
+          ownerHost.VSCODE_PID,
+        )}.json`,
+      );
+      rmSync(offerPath, { force: true });
+
+      expect(
+        runIde(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({ toolName: "fs_write", toolArgs: {} }),
+          recoveryHost,
+        ).code,
+      ).toBe(2);
+      const recovery = runIde(
+        dir,
+        "plan-approval-guard",
+        JSON.stringify({ toolName: "execute_bash", toolArgs: {} }),
+        recoveryHost,
+      );
+      expect(recovery.code).toBe(2);
+      expect(recovery.stderr).toContain(
+        "recovery requires a human response",
+      );
+      expect(
+        runIde(
+          dir,
+          "record-human-turn",
+          JSON.stringify({ prompt: "Recover Plan Approval" }),
+          recoveryHost,
+        ).code,
+      ).toBe(0);
+      const recovered = runIde(
+        dir,
+        "plan-approval-guard",
+        JSON.stringify({ toolName: "execute_bash", toolArgs: {} }),
+        recoveryHost,
+      );
+      expect(recovered.code).toBe(2);
+      expect(recovered.stderr).toContain(
+        "recovery issued a fresh directive",
+      );
+      expect(
+        runIde(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({ toolName: "fs_write", toolArgs: {} }),
+          recoveryHost,
+        ).code,
+      ).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  test("failed write cleanup cannot erase another host's interrupted-write latch", () => {
+    const dir = scratchProject(true);
+    const hostA = {
+      VSCODE_IPC_HOOK: `concurrent-a:${dir}`,
+      VSCODE_PID: "501",
+    };
+    const hostB = {
+      VSCODE_IPC_HOOK: `concurrent-b:${dir}`,
+      VSCODE_PID: "502",
+    };
+    try {
+      initGitWorkspace(dir);
+      seedCodeGenerationDirective(dir);
+      seedLegacyDirectiveChoices(dir, hostA);
+      expect(
+        runIde(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({ toolName: "fs_write", toolArgs: {} }),
+          hostA,
+        ).code,
+      ).toBe(0);
+      expect(
+        runIde(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({ toolName: "str_replace", toolArgs: {} }),
+          hostB,
+        ).code,
+      ).toBe(2);
+      expect(
+        runIde(
+          dir,
+          "audit-and-sensors",
+          JSON.stringify({
+            toolName: "str_replace",
+            toolArgs: {},
+            toolResult: "replacement failed",
+            toolSuccess: false,
+          }),
+          hostB,
+        ).code,
+      ).toBe(0);
+      rmSync(
+        join(
+          dir,
+          "aidlc",
+          ".aidlc-sessions",
+          "plan-approval",
+          `legacy-offer-${legacySessionId(
+            dir,
+            hostA.VSCODE_IPC_HOOK,
+            hostA.VSCODE_PID,
+          )}.json`,
+        ),
+        { force: true },
+      );
+
+      const recovery = runIde(
+        dir,
+        "plan-approval-guard",
+        JSON.stringify({ toolName: "execute_bash", toolArgs: {} }),
+        hostB,
+      );
+      expect(recovery.code).toBe(2);
+      expect(recovery.stderr).toContain(
+        "recovery requires a human response",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  test("foreign host cannot bypass an interrupted write after durable state deletion", () => {
+    const dir = scratchProject(true);
+    const hostA = {
+      VSCODE_IPC_HOOK: `state-loss-a:${dir}`,
+      VSCODE_PID: "601",
+    };
+    const hostB = {
+      VSCODE_IPC_HOOK: `state-loss-b:${dir}`,
+      VSCODE_PID: "602",
+    };
+    try {
+      initGitWorkspace(dir);
+      seedCodeGenerationDirective(dir);
+      expect(
+        runIde(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({ toolName: "fs_write", toolArgs: {} }),
+          hostA,
+        ).code,
+      ).toBe(0);
+      rmSync(seededStateFile(dir), { force: true });
+
+      const modernEnv = {
+        VSCODE_IPC_HOOK: `state-loss-modern:${dir}`,
+        VSCODE_PID: "603",
+      };
+      expect(
+        runIdeStdin(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            session_id: "modern-state-loss",
+            tool_name: "execute_bash",
+            tool_input: { command: "echo bypass" },
+          }),
+          modernEnv,
+        ).code,
+      ).toBe(2);
+      expect(
+        runIdeStdin(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            session_id: "modern-state-loss",
+            tool_name: "fs_write",
+            tool_input: {
+              path: join(dir, "src", "modern-bypass.ts"),
+              content: "export const bypass = true;\n",
+            },
+          }),
+          modernEnv,
+        ).code,
+      ).toBe(2);
+      for (const toolName of ["execute_bash", "fs_write"]) {
+        expect(
+          runIdeStdin(
+            dir,
+            "plan-approval-guard",
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              session_id: "modern-state-loss",
+              tool_name: toolName,
+              tool_input: [],
+            }),
+            modernEnv,
+          ).code,
+          toolName,
+        ).toBe(2);
+      }
+
+      expect(
+        runIde(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({ toolName: "fs_write", toolArgs: {} }),
+          hostB,
+        ).code,
+      ).toBe(2);
+      const shell = runIde(
+        dir,
+        "plan-approval-guard",
+        JSON.stringify({ toolName: "execute_bash", toolArgs: {} }),
+        hostB,
+      );
+      expect(shell.code).toBe(2);
+      expect(shell.stderr).toContain("Legacy Plan Approval recovery");
+      expect(
+        runIde(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({ toolName: "fs_write", toolArgs: {} }),
+          hostB,
+        ).code,
+      ).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  test("legacy writes that destroy state or marker authority remain poisoned before PostToolUse", () => {
+    for (const target of [
+      "state-corrupt",
+      "state-delete",
+      "marker-corrupt",
+      "marker-delete",
+    ] as const) {
+      const dir = scratchProject(true);
+      try {
+        initGitWorkspace(dir);
+        seedCodeGenerationDirective(dir);
+        expect(
+          runIde(
+            dir,
+            "plan-approval-guard",
+            JSON.stringify({ toolName: "fs_write", toolArgs: {} }),
+          ).code,
+          target,
+        ).toBe(0);
+        const path = target.startsWith("state")
+          ? seededStateFile(dir)
+          : join(seededRecordDir(dir), ".aidlc-active-directive.json");
+        if (target.endsWith("delete")) {
+          rmSync(path, { force: true });
+        } else {
+          writeFileSync(path, "corrupted authority\n");
+        }
+        expect(
+          runIde(
+            dir,
+            "audit-and-sensors",
+            ctx(
+              "fs_write",
+              target.endsWith("delete")
+                ? `Deleted the ${path} file.`
+                : `Created the ${path} file.`,
+            ),
+          ).code,
+          target,
+        ).toBe(0);
+        expect(
+          runIde(
+            dir,
+            "plan-approval-guard",
+            JSON.stringify({ toolName: "fs_write", toolArgs: {} }),
+          ).code,
+          target,
+        ).toBe(2);
+        const recovery = runIde(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({ toolName: "execute_bash", toolArgs: {} }),
+        );
+        expect(recovery.code, target).toBe(2);
+        if (target.startsWith("marker")) {
+          expect(recovery.stderr).toContain(
+            "recovery issued a fresh directive",
+          );
+          expect(
+            runIde(
+              dir,
+              "plan-approval-guard",
+              JSON.stringify({ toolName: "fs_write", toolArgs: {} }),
+            ).code,
+          ).toBe(0);
+        } else {
+          expect(recovery.stderr).toContain("recovery failed closed");
+          expect(
+            runIde(
+              dir,
+              "plan-approval-guard",
+              JSON.stringify({ toolName: "fs_write", toolArgs: {} }),
+            ).code,
+          ).toBe(2);
+        }
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  }, 30000);
+
+  test("partial and custom mutation payloads fail closed while reads remain available", () => {
+    const dir = scratchProject(true);
+    try {
+      seedCodeGenerationDirective(dir);
+      for (const toolName of [
+        "delete_file",
+        "apply_patch",
+        "custom_write_tool",
+        "fs_append",
+        "fs_write",
+        "move_file",
+        "rename_file",
+        "save_file",
+        "touch",
+        "truncate",
+        "shell",
+        "provider_specific_action",
+      ]) {
+        expect(
+          runIdeStdin(
+            dir,
+            "plan-approval-guard",
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              tool_name: toolName,
+              tool_input: { content: "opaque" },
+            }),
+          ).code,
+          toolName,
+        ).toBe(2);
+      }
+      expect(
+        runIdeStdin(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            tool_name: "fs_read",
+            tool_input: { path: "README.md" },
+          }),
+        ).code,
+      ).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  test("malformed Plan Approval payloads fail closed during active Code Generation", () => {
+    const dir = scratchProject(true);
+    try {
+      seedCodeGenerationDirective(dir);
+      for (const payload of [
+        "{broken",
+        JSON.stringify([]),
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: 42,
+          tool_input: {},
+        }),
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "fs_write",
+          tool_input: [],
+        }),
+      ]) {
+        expect(
+          runIdeStdin(dir, "plan-approval-guard", payload).code,
+          payload,
+        ).toBe(2);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  test("malformed payloads fail closed when the active directive is Code Generation but the durable stage differs", () => {
+    const dir = scratchProject(true);
+    try {
+      seedCodeGenerationDirective(dir);
+      const statePath = seededStateFile(dir);
+      const state = readFileSync(statePath, "utf-8").replace(
+        "- **Current Stage**: code-generation",
+        "- **Current Stage**: functional-design",
+      );
+      writeFileSync(statePath, state);
+      writeActiveDirectiveMarker(dir, {
+        kind: "run-stage",
+        stage: "code-generation",
+        state_sha256: createHash("sha256").update(state).digest("hex"),
+      });
+      expect(
+        runIdeStdin(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({
+            hook_event_name: "PreToolUse",
+            tool_name: "fs_write",
+            tool_input: [],
+          }),
+        ).code,
+      ).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("malformed Plan Approval payloads remain advisory outside Code Generation", () => {
+    for (const withState of [false, true]) {
+      const dir = scratchProject(withState);
+      try {
+        expect(
+          runIdeStdin(
+            dir,
+            "plan-approval-guard",
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              tool_name: "fs_write",
+              tool_input: [],
+            }),
+          ).code,
+          withState ? "non-Code-Generation state" : "no workflow state",
+        ).toBe(0);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+});
+
 describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", () => {
   test("N1: audit-and-sensors resolves a RELATIVE tool_response path from stdin and logs CREATE", () => {
     const dir = scratchProject(true);
@@ -1370,7 +2553,9 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
       writeFileSync(file, "# intent\n");
       const r = runIdeStdin(dir, "audit-and-sensors", ctx("fs_write", `Created the ${file} file.`));
       expect(r.code).toBe(0);
-      expect(readAudit(dir)).toContain("ARTIFACT_CREATED");
+      expect(readAudit(dir)).toMatch(
+        /\*\*Event\*\*: ARTIFACT_(?:CREATED|UPDATED)/,
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1445,7 +2630,7 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
     }
   });
 
-  test("N6: a payload-INDEPENDENT target never probes a held-open stdin", async () => {
+  test("N6: legacy human-response USER_PROMPT never probes a held-open stdin", async () => {
     // The stdin ceiling is raised to 15s for this run, so "never probed stdin"
     // is decided by a wide margin rather than a tight budget near the 2s
     // production ceiling: gating mint onto the read would park it for the full
@@ -1453,9 +2638,15 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
     // returns in milliseconds even on a loaded machine.
     const dir = scratchProject(true);
     try {
-      const r = await runIdeOpenStdin(dir, "record-human-turn", null, 30_000, {
-        AIDLC_IDE_STDIN_TIMEOUT_MS: String(RAISED_STDIN_TIMEOUT_MS),
-      });
+      const r = await runIdeOpenStdin(
+        dir,
+        "record-human-turn",
+        JSON.stringify({ prompt: "Approve Plan" }),
+        30_000,
+        {
+          AIDLC_IDE_STDIN_TIMEOUT_MS: String(RAISED_STDIN_TIMEOUT_MS),
+        },
+      );
       expect(r.timedOut).toBe(false);
       expect(r.code).toBe(0);
       expect(r.elapsedMs).toBeLessThan(NO_STDIN_PROBE_BUDGET_MS);
@@ -2020,6 +3211,62 @@ describe("t218 failed tool calls are not audited as writes (#417)", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test("T1b: guarded legacy write failures clear the pre-write latch for retry", () => {
+    for (const entry of [
+      {
+        toolName: "fs_write",
+        result: "Write failed before creating the file",
+        toolSuccess: false as boolean | undefined,
+      },
+      {
+        toolName: "str_replace",
+        result:
+          "Caught an error while replacing string String '[Answer]:' found multiple times in the file",
+        toolSuccess: undefined,
+      },
+    ]) {
+      const dir = scratchProject(true);
+      try {
+        initGitWorkspace(dir);
+        seedCodeGenerationDirective(dir);
+        expect(
+          runIde(
+            dir,
+            "plan-approval-guard",
+            JSON.stringify({ toolName: entry.toolName, toolArgs: {} }),
+          ).code,
+          entry.toolName,
+        ).toBe(0);
+        const payload: Record<string, unknown> = {
+          toolName: entry.toolName,
+          toolArgs: {},
+          toolResult: entry.result,
+        };
+        if (entry.toolSuccess !== undefined) {
+          payload.toolSuccess = entry.toolSuccess;
+        }
+        expect(
+          runIde(
+            dir,
+            "audit-and-sensors",
+            JSON.stringify(payload),
+          ).code,
+          entry.toolName,
+        ).toBe(0);
+        expect(
+          runIde(
+            dir,
+            "plan-approval-guard",
+            JSON.stringify({ toolName: entry.toolName, toolArgs: {} }),
+          ).code,
+          entry.toolName,
+        ).toBe(0);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  }, 30000);
 
   test("T2: toolSuccess=true on the same write IS audited (guard is not over-broad)", () => {
     const dir = scratchProject(true);

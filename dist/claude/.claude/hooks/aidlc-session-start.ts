@@ -174,7 +174,16 @@ try {
 const stateFile = stateFilePathForSelection(projectDir, selection);
 
 // No workflow active — retain only the session identity recorded above.
-if (!existsSync(stateFile)) return 0;
+if (!existsSync(stateFile)) {
+  if (sessionId) {
+    process.stdout.write(`${JSON.stringify({
+      additionalContext:
+        `AIDLC Runtime Session: ${sessionId}\n` +
+        "Use this exact value for any Plan Approval --session argument in this conversation.",
+    })}\n`);
+  }
+  return 0;
+}
 
 // Write health heartbeat
 const healthDir = hooksHealthDir(
@@ -200,7 +209,7 @@ if (eventType) {
   try {
     appendAuditEntry(
       eventType,
-      { Source: source },
+      { Source: source, ...(sessionId ? { Session: sessionId } : {}) },
       projectDir,
       selection.intent ?? undefined,
       selection.space,
@@ -294,7 +303,10 @@ if (rebindCheckOnly) {
     } else if (liveUuid) {
       writeSessionIntentUuid(projectDir, sessionId, liveUuid);
     }
-    process.stdout.write(`${JSON.stringify({ additionalContext: rebindOffer })}\n`);
+    process.stdout.write(`${JSON.stringify({
+      additionalContext:
+        `AIDLC Runtime Session: ${sessionId}\n${rebindOffer}`,
+    })}\n`);
   }
   return 0;
 }
@@ -351,6 +363,7 @@ try {
 
 const context = `AIDLC WORKFLOW ACTIVE
 ${rebindOffer}Scope: ${scope}
+Runtime Session: ${sessionId || "(unavailable)"}
 Lifecycle Phase: ${phase}
 Current Stage: ${stage}
 Status: ${status}

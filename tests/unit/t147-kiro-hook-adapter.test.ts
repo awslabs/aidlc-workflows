@@ -22,6 +22,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   appendFileSync,
   cpSync,
@@ -42,6 +43,7 @@ import {
   sanitizeHarnessPlainText,
   splitKiroCommandArgs,
   subagentInflightMarkerPath,
+  writeActiveDirectiveMarker,
   writeSessionIntentHandoff,
   writeSessionIntentUuid,
 } from "../../core/tools/aidlc-lib.ts";
@@ -216,6 +218,12 @@ function seedUnapprovedCodeGeneration(dir: string, unit: string): void {
     `$1code-generation`,
   );
   writeFileSync(seededStateFile(dir), state, "utf-8");
+  writeActiveDirectiveMarker(dir, {
+    kind: "run-stage",
+    stage: "code-generation",
+    unit,
+    state_sha256: createHash("sha256").update(state).digest("hex"),
+  });
   mkdirSync(join(seededRecordDir(dir), "construction", unit, "code-generation"), {
     recursive: true,
   });
@@ -302,6 +310,33 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       expect(r.code).toBe(2);
       expect(r.stderr).toContain("Code generation cannot start");
       expect(r.stderr).toContain("unit todo-core");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("1bb: plan-approval guard blocks native Kiro write and shell mutation payloads", () => {
+    const dir = scratchProject(true);
+    try {
+      seedUnapprovedCodeGeneration(dir, "todo-core");
+      for (const payload of [
+        {
+          hook_event_name: "preToolUse",
+          cwd: dir,
+          tool_name: "fs_write",
+          tool_input: { path: join(dir, "src", "blocked.ts") },
+        },
+        {
+          hook_event_name: "preToolUse",
+          cwd: dir,
+          tool_name: "execute_bash",
+          tool_input: { command: "sort input.txt -o src/blocked.txt" },
+        },
+      ]) {
+        const r = runAdapter(dir, "plan-approval-guard", payload);
+        expect(r.code).toBe(2);
+        expect(r.stderr).toContain("Code generation cannot");
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -901,6 +936,18 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         matcher: "execute_bash",
         command:
           `bun .kiro/hooks/aidlc-kiro-adapter.ts state-transition-guard ${config.name}`,
+        timeout_ms: 15000,
+      });
+      expect(config.hooks?.preToolUse ?? [], name).toContainEqual({
+        matcher: "fs_write",
+        command:
+          "bun .kiro/hooks/aidlc-kiro-adapter.ts plan-approval-guard",
+        timeout_ms: 15000,
+      });
+      expect(config.hooks?.preToolUse ?? [], name).toContainEqual({
+        matcher: "execute_bash",
+        command:
+          "bun .kiro/hooks/aidlc-kiro-adapter.ts plan-approval-guard",
         timeout_ms: 15000,
       });
     }

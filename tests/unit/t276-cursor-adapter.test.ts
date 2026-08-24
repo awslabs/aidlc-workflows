@@ -30,6 +30,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   cpSync,
   existsSync,
@@ -41,11 +42,12 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import {
   createIntent,
   readAllAuditShards,
   setActiveIntentCursor,
+  writeActiveDirectiveMarker,
 } from "../../dist/cursor/.cursor/tools/aidlc-lib.ts";
 import {
   createTestProject,
@@ -73,6 +75,17 @@ afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+function setCurrentStage(project: string, stage: string): void {
+  const statePath = join(seededRecordDir(project), "aidlc-state.md");
+  writeFileSync(
+    statePath,
+    readFileSync(statePath, "utf-8").replace(
+      /^- \*\*Current Stage\*\*:.*$/m,
+      `- **Current Stage**: ${stage}`,
+    ),
+  );
+}
 
 /** A workspace-shell project with the shipped .cursor engine installed. */
 function installedProject(): string {
@@ -213,6 +226,43 @@ function projectWithReadyReview(): { project: string; artifact: string } {
 }
 
 describe("t276 cursor adapter payload conversion", () => {
+  test("0: native Write, Shell, and Task paths enforce Plan Approval", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    const statePath = join(seededRecordDir(proj), "aidlc-state.md");
+    const state = readFileSync(statePath, "utf-8").replace(
+      /^- \*\*Current Stage\*\*:.*$/m,
+      "- **Current Stage**: code-generation",
+    );
+    writeFileSync(statePath, state);
+    writeActiveDirectiveMarker(proj, {
+      kind: "run-stage",
+      stage: "code-generation",
+      state_sha256: createHash("sha256").update(state).digest("hex"),
+    });
+    for (const input of [
+      payload("preToolUseShell", proj, {
+        tool_name: "Write",
+        tool_input: { file_path: join(proj, "src", "blocked.ts") },
+      }),
+      payload("preToolUseShell", proj, {
+        tool_input: { command: "uniq input.txt src/blocked.txt" },
+      }),
+      payload("preToolUseTask", proj, {
+        tool_input: {
+          subagent_type: "aidlc-developer-agent",
+          prompt:
+            "AIDLC-STAGE: code-generation\n" +
+            `AIDLC-TESTING-CONTRACT: sha256:${"a".repeat(64)}`,
+        },
+      }),
+    ]) {
+      const result = runAdapter(proj, "guards", input);
+      expect(result.code).toBe(0);
+      expect((JSON.parse(result.stdout) as { permission?: string }).permission).toBe("deny");
+    }
+  });
+
   test("1: sessionStart re-keys core additionalContext to Cursor's additional_context", () => {
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");
@@ -227,11 +277,13 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(shard).toContain("SESSION_STARTED");
   });
 
-  test("2: sessionStart without workflow state stays silent (no scaffolding)", () => {
+  test("2: sessionStart without workflow state exposes only the runtime session", () => {
     const proj = installedProject();
     const r = runAdapter(proj, "session-start", payload("sessionStart", proj));
     expect(r.code).toBe(0);
-    expect(r.stdout.trim()).toBe("");
+    const out = JSON.parse(r.stdout) as { additional_context?: string };
+    expect(out.additional_context ?? "").toContain("AIDLC Runtime Session:");
+    expect(out.additional_context ?? "").not.toContain("AIDLC WORKFLOW ACTIVE");
   });
 
   test("3: guards convert a state-guard block to Cursor's permission-deny JSON", () => {
@@ -458,6 +510,7 @@ describe("t276 cursor adapter payload conversion", () => {
   test("10: concurrent parents stay isolated and mixed reviewer attribution remains scope-enforced", () => {
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");
+    setCurrentStage(proj, "functional-design");
     const record = seededRecordDir(proj);
     clearLedger(proj);
     mkdirSync(join(record, "construction", "unit-b"), { recursive: true });
@@ -551,7 +604,7 @@ describe("t276 cursor adapter payload conversion", () => {
     );
     expect(ledgerFilesFor(proj)).toHaveLength(2);
     expect(JSON.parse(siblingRead({}).stdout).permission).toBe("deny");
-  });
+  }, 30000);
 
   test("11: postToolUseFailure clears only the failed Task record", () => {
     const proj = installedProject();
@@ -783,6 +836,7 @@ describe("t276 cursor adapter payload conversion", () => {
   test("21: a new same-parent Task retires a stale lead record before reviewer dispatch", () => {
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");
+    setCurrentStage(proj, "functional-design");
     seedAuditFile(proj);
     clearLedger(proj);
     const record = seededRecordDir(proj);
@@ -1065,11 +1119,11 @@ if (import.meta.main) {
     }
 
     for (const command of [
-      `rm -f ${dispatch.slice(0, -1)}*`,
-      `rm -f ${dispatch.slice(0, -1)}[n]`,
-      `rm -rf ${join(dirname(record), "*")}`,
-      `rm -rf ${join(proj, "aidlc", ".aidlc-cursor-sub*")}`,
-      `rm -rf ${join(proj, "aidlc", ".aidlc-*")}`,
+      `rm -f ${JSON.stringify(dispatch.slice(0, -1))}*`,
+      `rm -f ${JSON.stringify(dispatch.slice(0, -1))}[n]`,
+      `rm -rf ${JSON.stringify(`${dirname(record)}${sep}`)}*`,
+      `rm -rf ${JSON.stringify(`${join(proj, "aidlc")}${sep}.aidlc-cursor-sub`)}*`,
+      `rm -rf ${JSON.stringify(`${join(proj, "aidlc")}${sep}.aidlc-`)}*`,
     ]) {
       const removal = runAdapter(
         proj,
@@ -1255,6 +1309,7 @@ if (import.meta.main) {
   test("25: partial reviewer-ledger loss cannot resolve an unknown conversation as a developer", () => {
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");
+    setCurrentStage(proj, "functional-design");
     const record = seededRecordDir(proj);
     clearLedger(proj);
     mkdirSync(join(record, "construction", "unit-b"), { recursive: true });

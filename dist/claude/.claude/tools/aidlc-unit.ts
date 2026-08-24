@@ -71,8 +71,8 @@ import {
   writeClaimGeneration,
 } from "./aidlc-lib.js";
 import {
-  approvalFingerprint,
   parseTestingContract,
+  PLAN_APPROVAL_CHECKPOINT,
   resolveTestingPosture,
 } from "./aidlc-testing-posture.ts";
 
@@ -1225,6 +1225,7 @@ const TRANSPORTED_ATTEMPT_EVENTS = new Set([
   "STAGE_REVISING",
   "GATE_APPROVED",
   "GATE_REJECTED",
+  "PLAN_APPROVAL_RECORDED",
   "REVIEW_REQUESTED",
   "REVIEW_COMPLETED",
 ]);
@@ -1616,17 +1617,50 @@ function candidateEvidence(
       /^\[Approval Fingerprint\]:\s*(sha256:[0-9a-f]{64})\s*$/m.exec(questions);
     const embedded = parseTestingContract(plan);
     const currentContract = resolveTestingPosture(projectDir);
-    const expectedFingerprint = embedded &&
-        embedded.contract_sha256 === currentContract.contract_sha256
-      ? approvalFingerprint(
-        plan,
-        instructions,
-        currentContract.contract_sha256,
+    const approvalEvent = events.findLast((event) =>
+      event.event === "PLAN_APPROVAL_RECORDED" &&
+      attemptEventMatches(
+        event,
+        claim.unit,
+        claim.generation,
+        "code-generation",
       )
-      : null;
+    );
+    const questionsSha256 = createHash("sha256")
+      .update(questions, "utf-8")
+      .digest("hex");
+    const promptSha256 = createHash("sha256")
+      .update(
+        `${questions
+          .replace(/^\[Answer\]:[ \t]*.*$/gm, "[Answer]:")
+          .trimEnd()}\n`,
+        "utf-8",
+      )
+      .digest("hex");
     if (
       fingerprint &&
-      fingerprint[1] === expectedFingerprint &&
+      instructions.trim().length > 0 &&
+      embedded?.contract_sha256 === currentContract.contract_sha256 &&
+      approvalEvent &&
+      auditBlockField(approvalEvent.block, "Details") === "Approve Plan" &&
+      auditBlockField(approvalEvent.block, "Checkpoint") ===
+        PLAN_APPROVAL_CHECKPOINT &&
+      auditBlockField(approvalEvent.block, "Plan Target") ===
+        `unit:${claim.unit}` &&
+      auditBlockField(approvalEvent.block, "Intent") ===
+        claim.payload.intent_uuid &&
+      auditBlockField(approvalEvent.block, "Approval Fingerprint") ===
+        fingerprint[1] &&
+      auditBlockField(approvalEvent.block, "Questions File") ===
+        questionsPath &&
+      auditBlockField(approvalEvent.block, "Questions SHA-256") ===
+        questionsSha256 &&
+      auditBlockField(approvalEvent.block, "Prompt SHA-256") ===
+        promptSha256 &&
+      (auditBlockField(approvalEvent.block, "Directive Epoch") ?? "").length >
+        0 &&
+      (auditBlockField(approvalEvent.block, "Run floor") ?? "").length > 0 &&
+      (auditBlockField(approvalEvent.block, "Session") ?? "").length > 0 &&
       /^\[Answer\]:\s*A\.\s*Approve Plan\s*$/m.test(questions)
     ) {
       planFingerprint = fingerprint[1];
