@@ -805,7 +805,7 @@ describe("t271 review iteration ceiling", () => {
     expect(runReview(proj, [...request, "--verdict", "READY"]).status).toBe(0);
   });
 
-  test("--unit requires an authoritative DAG or a matching active Bolt", () => {
+  test("--unit requires an authoritative DAG or a matching active or merged Bolt", () => {
     const noDag = createTestProject();
     seedStateFile(noDag, "state-mid-inception.md");
     seedAuditFile(noDag);
@@ -847,7 +847,9 @@ describe("t271 review iteration ceiling", () => {
     }, mismatchedBolt);
     const mismatched = runReview(mismatchedBolt, [...base, "--unit", "ghost"]);
     expect(mismatched.status).not.toBe(0);
-    expect(mismatched.stderr).toContain("no matching active Bolt attempt");
+    expect(mismatched.stderr).toContain(
+      "no matching active or merged Bolt attempt",
+    );
 
     const closedBolt = createTestProject();
     seedStateFile(closedBolt, "state-mid-inception.md");
@@ -864,7 +866,9 @@ describe("t271 review iteration ceiling", () => {
     }, closedBolt);
     const closed = runReview(closedBolt, [...base, "--unit", "unit-alpha"]);
     expect(closed.status).not.toBe(0);
-    expect(closed.stderr).toContain("no matching active Bolt attempt");
+    expect(closed.stderr).toContain(
+      "no matching active or merged Bolt attempt",
+    );
 
     const proj = seedProject("feature");
     const unknown = runReview(proj, [...base, "--unit", "ghost"]);

@@ -41,6 +41,7 @@ import {
   recoveryGuidance,
   resolveBoltDag,
   reviewArtifactFingerprint,
+  reviewAttemptWindow,
   resolveProjectDir,
   resolveWorkflowSelection,
   resolveReviewClass,
@@ -785,6 +786,7 @@ function reviewAttemptSummary(
   reviewer: string,
   unit: string | undefined,
   workflow: string | undefined,
+  attemptWindow?: ReturnType<typeof reviewAttemptWindow> | null,
 ): ReviewAttemptSummary {
   const relevant = new Set([
     "WORKFLOW_STARTED",
@@ -871,23 +873,44 @@ function reviewAttemptSummary(
     }
     if (
       entry.event === "BOLT_STARTED" &&
-      unit !== undefined &&
-      auditBlockField(entry.block, "Bolt names") === unit &&
-      auditBlockField(entry.block, "Bolt slug") === expectedBoltSlug
+      unit !== undefined
     ) {
+      const names = (auditBlockField(entry.block, "Bolt names") ?? "")
+        .split(",")
+        .map((name) => name.trim());
+      const startedSlug = auditBlockField(entry.block, "Bolt slug");
+      if (
+        !names.includes(unit) ||
+        (startedSlug !== null && startedSlug !== expectedBoltSlug)
+      ) {
+        continue;
+      }
       if (tiedAcrossShards(i)) ambiguity = `cross-shard Bolt boundary tie at ${entry.timestamp}`;
       floor = i;
       boltStarted = true;
       boltBatch = auditBlockField(entry.block, "Batch number");
-      boltSlug = auditBlockField(entry.block, "Bolt slug");
+      boltSlug = startedSlug;
       if (!tiedAcrossShards(i)) ambiguity = null;
       continue;
     }
     if (
       (entry.event === "BOLT_COMPLETED" || entry.event === "BOLT_FAILED") &&
-      expectedBoltSlug !== null &&
-      auditBlockField(entry.block, "Bolt slug") === expectedBoltSlug
+      unit !== undefined
     ) {
+      const terminalNames = (
+        auditBlockField(
+          entry.block,
+          entry.event === "BOLT_FAILED" ? "Failed Bolt" : "Bolt names",
+        ) ?? ""
+      )
+        .split(",")
+        .map((name) => name.trim());
+      const terminalSlug = auditBlockField(entry.block, "Bolt slug");
+      const paired =
+        boltSlug !== null && terminalSlug !== null
+          ? boltSlug === terminalSlug
+          : terminalNames.includes(unit);
+      if (!paired) continue;
       const tied = tiedAcrossShards(i);
       if (tied) ambiguity = `cross-shard Bolt boundary tie at ${entry.timestamp}`;
       else ambiguity = null;
@@ -924,6 +947,46 @@ function reviewAttemptSummary(
       if (tied) ambiguity = `cross-shard stage boundary tie at ${entry.timestamp}`;
       else ambiguity = null;
       floor = i;
+      boltStarted = false;
+      boltBatch = null;
+      boltSlug = null;
+    }
+  }
+  if (
+    unit !== undefined &&
+    ambiguity?.startsWith("cross-shard Bolt boundary tie at ") &&
+    attemptWindow?.mergedBoltUnits.has(unit) === true &&
+    !attemptWindow.openBoltUnits.has(unit)
+  ) {
+    const timestamp = ambiguity.slice(
+      "cross-shard Bolt boundary tie at ".length,
+    );
+    const tied = attemptWindow.events.filter(
+      (event) => event.timestamp === timestamp,
+    );
+    const tiedShards = new Set(tied.map((event) => event.shard));
+    const lifecycleOnly =
+      tied.length > 1 &&
+      tiedShards.size > 1 &&
+      tied.every((event) => {
+        if (
+          event.event !== "BOLT_STARTED" &&
+          event.event !== "BOLT_COMPLETED" &&
+          event.event !== "BOLT_FAILED"
+        ) {
+          return false;
+        }
+        const field =
+          event.event === "BOLT_FAILED"
+            ? auditBlockField(event.block, "Failed Bolt")
+            : auditBlockField(event.block, "Bolt names");
+        return (field ?? "")
+          .split(",")
+          .map((name) => name.trim())
+          .includes(unit);
+      });
+    if (lifecycleOnly) {
+      ambiguity = null;
       boltStarted = false;
       boltBatch = null;
       boltSlug = null;
@@ -1151,6 +1214,12 @@ function handleReview(args: string[]): void {
     const autonomousCandidate =
       flags.unit !== undefined && isAutonomousSwarmStage(pd, state, node);
     const teamOwnership = isTeamUnitOwnership(state);
+    const unitResolution =
+      node.for_each === "unit-of-work" ? resolveBoltDag(pd, intent, space) : null;
+    const attemptWindow =
+      node.for_each === "unit-of-work"
+        ? reviewAttemptWindow(pd, state, node)
+        : null;
     const attempt = reviewAttemptSummary(
       readAuditShardEvents(pd, intent, space).filter(
         (row) => {
@@ -1181,9 +1250,10 @@ function handleReview(args: string[]): void {
       flags.reviewer,
       flags.unit,
       fields.Workflow,
+      attemptWindow,
     );
-    const unitResolution =
-      node.for_each === "unit-of-work" ? resolveBoltDag(pd, intent, space) : null;
+    const mergedBoltUnits =
+      attemptWindow?.mergedBoltUnits ?? new Set<string>();
     if (enforceAdmissibility && flags.unit) {
       const resolution = unitResolution ?? resolveBoltDag(pd, intent, space);
       if (resolution.state === "malformed") {
@@ -1193,12 +1263,16 @@ function handleReview(args: string[]): void {
             "unit-of-work-dependency.md before recording a per-unit review.",
         );
       }
-      if (resolution.state === "none" && !attempt.boltStarted) {
+      if (
+        resolution.state === "none" &&
+        !attempt.boltStarted &&
+        !attemptWindow?.mergedBoltUnits.has(flags.unit)
+      ) {
         refuseReview(
           `Cannot record review for "${flags.stage}" unit "${flags.unit}": no authoritative ` +
-            "unit DAG exists and no matching active Bolt attempt was found. Remove --unit " +
-            "for a stage-level no-DAG review, or run swarm prepare before recording the " +
-            "per-unit review.",
+            "unit DAG exists and no matching active or merged Bolt attempt was found. Run " +
+            `\`aidlc-bolt.ts start --name "${flags.unit}" --batch 1\` before retrying this ` +
+            "per-unit review, or remove --unit and record a stage-level no-DAG review.",
         );
       }
       if (resolution.state === "ok" && !resolution.units.includes(flags.unit)) {
@@ -1255,13 +1329,17 @@ function handleReview(args: string[]): void {
     const receipts =
       !scanReceipts || reviewClass === null
         ? null
-        : freshReviewReceipts(pd, state, node, { reviewClass });
+        : freshReviewReceipts(pd, state, node, {
+            reviewClass,
+            attemptWindow: attemptWindow ?? undefined,
+          });
     const requireRequiredArtifacts =
       process.env.AIDLC_SKIP_ARTIFACT_GUARD !== "1" &&
       !(
         unitResolution !== null &&
         unitResolution.state !== "ok" &&
-        flags.unit === undefined
+        flags.unit === undefined &&
+        mergedBoltUnits.size === 0
       );
     return {
       state,
@@ -1272,6 +1350,7 @@ function handleReview(args: string[]): void {
       autonomousCandidate,
       requireRequiredArtifacts,
       unitResolution,
+      mergedBoltUnits,
     };
   };
 
@@ -1335,6 +1414,7 @@ function handleReview(args: string[]): void {
           autonomousCandidate,
           requireRequiredArtifacts,
           unitResolution,
+          mergedBoltUnits,
         } = loadContext(true, !retryPending);
         const summaryEvidence = checkSummaryConfirmationEvidence(pd, node, {
           stateContent: state,
@@ -1414,6 +1494,7 @@ function handleReview(args: string[]): void {
           const fingerprint = reviewArtifactFingerprint(pd, node, flags.unit, {
             requireRequiredArtifacts,
             boltDag: unitResolution ?? undefined,
+            mergedBoltUnits,
           });
           if (fingerprint === null) {
             refuseReview(
@@ -1486,6 +1567,7 @@ function handleReview(args: string[]): void {
         const fingerprint = reviewArtifactFingerprint(pd, node, flags.unit, {
           requireRequiredArtifacts,
           boltDag: unitResolution ?? undefined,
+          mergedBoltUnits,
         });
         if (fingerprint === null) {
           refuseReview(
@@ -1534,6 +1616,7 @@ function handleReview(args: string[]): void {
         attempt,
         requireRequiredArtifacts,
         unitResolution,
+        mergedBoltUnits,
       } = loadContext(false, false);
       if (!attempt.pendingIterations.has(iteration)) {
         refuseReview(
@@ -1556,6 +1639,7 @@ function handleReview(args: string[]): void {
       const fingerprint = reviewArtifactFingerprint(pd, node, flags.unit, {
         requireRequiredArtifacts,
         boltDag: unitResolution ?? undefined,
+        mergedBoltUnits,
       });
       if (fingerprint === null) {
         refuseReview(

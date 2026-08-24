@@ -6412,6 +6412,10 @@ export interface FreshReviewReceipts {
   unitIterations: Map<string, number>;
   stagePending: PendingReviewProgress | null;
   unitPending: Map<string, PendingReviewProgress>;
+  /** Units whose latest paired Bolt lifecycle row is BOLT_COMPLETED. */
+  mergedBoltUnits: Set<string>;
+  /** Units whose latest paired Bolt lifecycle row is BOLT_STARTED. */
+  openBoltUnits: Set<string>;
 }
 
 export interface ReviewFingerprintStage {
@@ -6447,6 +6451,7 @@ export function reviewArtifactEntries(
   options: {
     boltDag?: BoltDagResolution;
     stateContent?: string | null;
+    mergedBoltUnits?: ReadonlySet<string>;
   } = {},
 ): ReviewArtifactEntry[] | null {
   const artifactsForKind = (kind: string | null) => [
@@ -6534,16 +6539,23 @@ export function reviewArtifactEntries(
     units = resolution.units;
     unitKinds = resolution.unitKinds ?? new Map();
   } else if (resolution.state === "none") {
-    return allArtifacts.map((artifact) => ({
-      logicalPath: `construction/${stage.slug}/${artifactFilename(artifact.name)}`,
-      path: join(
-        record,
-        "construction",
-        stage.slug,
-        artifactFilename(artifact.name),
-      ),
-      required: artifact.required,
-    }));
+    if (
+      options.mergedBoltUnits !== undefined &&
+      options.mergedBoltUnits.size > 0
+    ) {
+      units = [...options.mergedBoltUnits].sort();
+    } else {
+      return allArtifacts.map((artifact) => ({
+        logicalPath: `construction/${stage.slug}/${artifactFilename(artifact.name)}`,
+        path: join(
+          record,
+          "construction",
+          stage.slug,
+          artifactFilename(artifact.name),
+        ),
+        required: artifact.required,
+      }));
+    }
   } else {
     const construction = join(record, "construction");
     units = existsSync(construction)
@@ -6587,6 +6599,7 @@ export function reviewArtifactSnapshot(
     boltDag?: BoltDagResolution;
     stateContent?: string | null;
     captureBytes?: boolean;
+    mergedBoltUnits?: ReadonlySet<string>;
   } = {},
 ): ReviewArtifactSnapshot | null {
   let entries: ReviewArtifactEntry[] | null;
@@ -6594,6 +6607,7 @@ export function reviewArtifactSnapshot(
     entries = reviewArtifactEntries(projectDir, stage, unit, {
       boltDag: options.boltDag,
       stateContent: options.stateContent,
+      mergedBoltUnits: options.mergedBoltUnits,
     });
   } catch {
     return null;
@@ -6677,6 +6691,7 @@ export function reviewArtifactFingerprint(
     requireRequiredArtifacts?: boolean;
     boltDag?: BoltDagResolution;
     stateContent?: string | null;
+    mergedBoltUnits?: ReadonlySet<string>;
   } = {},
 ): string | null {
   return reviewArtifactSnapshot(projectDir, stage, unit, options)?.fingerprint ?? null;
@@ -6852,6 +6867,222 @@ function auditEventIsCrossShardTied<
   );
 }
 
+const REVIEW_RECEIPT_EVENTS = new Set([
+  "WORKFLOW_STARTED",
+  "STAGE_STARTED",
+  "STAGE_JUMPED",
+  "GATE_REJECTED",
+  "SESSION_STARTED",
+  "SESSION_RESUMED",
+  "BOLT_STARTED",
+  "BOLT_COMPLETED",
+  "BOLT_FAILED",
+  "ARTIFACT_CREATED",
+  "ARTIFACT_UPDATED",
+  "REVIEW_REQUESTED",
+  "REVIEW_COMPLETED",
+]);
+
+export interface ReviewAttemptWindow {
+  allEvents: AuditShardEvent[];
+  events: AuditShardEvent[];
+  floorIdx: number;
+  mergedBoltUnits: Set<string>;
+  openBoltUnits: Set<string>;
+}
+
+function boltEventUnits(event: AuditShardEvent): string[] {
+  const field =
+    event.event === "BOLT_FAILED"
+      ? auditBlockField(event.block, "Failed Bolt")
+      : auditBlockField(event.block, "Bolt names");
+  return (field ?? "")
+    .split(",")
+    .map((unit) => unit.trim())
+    .filter((unit) => unit.length > 0);
+}
+
+/**
+ * One audit snapshot supplies review freshness, no-DAG artifact enumeration,
+ * request admission, and gate coverage. Bolt terminal rows pair by slug when
+ * both rows carry one, and otherwise by Unit name.
+ */
+export function reviewAttemptWindow(
+  projectDir: string,
+  stateContent: string,
+  stage: { slug: string; for_each?: string },
+): ReviewAttemptWindow {
+  const allEvents = readAuditShardEvents(projectDir);
+  const events = allEvents
+    .filter((row) => REVIEW_RECEIPT_EVENTS.has(row.event))
+    .sort((a, b) => {
+      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+      if (a.shard === b.shard) return a.pos - b.pos;
+      return a.shardIndex - b.shardIndex;
+    });
+  const perUnit = stage.for_each === "unit-of-work";
+  const artifactPerUnit =
+    perUnit &&
+    !usesStageLevelPerUnitArtifacts(
+      getField(stateContent, "Scope"),
+      stateContent,
+    );
+  const unitMajor =
+    artifactPerUnit &&
+    getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
+  const teamOwnership = artifactPerUnit && isTeamUnitOwnership(stateContent);
+  let floorIdx = -1;
+  for (let i = 0; i < events.length; i++) {
+    const event = events[i];
+    let boundary =
+      event.event === "WORKFLOW_STARTED" || event.event === "STAGE_JUMPED";
+    if (!boundary && auditBlockField(event.block, "Stage") === stage.slug) {
+      boundary =
+        (event.event === "GATE_REJECTED" &&
+          !(teamOwnership && auditBlockField(event.block, "Unit"))) ||
+        (event.event === "STAGE_STARTED" &&
+          !unitMajor &&
+          !auditBlockField(event.block, "Workflow")?.startsWith(
+            "single-stage:",
+          ));
+    }
+    if (!boundary) continue;
+    const tiedCrossShard = events.some(
+      (candidate, index) =>
+        index !== i &&
+        candidate.timestamp === event.timestamp &&
+        candidate.shard !== event.shard,
+    );
+    // Team-owned attempts fail closed across a same-second cross-shard
+    // boundary by flooring the entire unordered timestamp group. Solo mode
+    // retains its legacy merged-shard ordering for compatibility.
+    if (tiedCrossShard && teamOwnership) {
+      let end = i;
+      while (
+        end + 1 < events.length &&
+        events[end + 1].timestamp === event.timestamp
+      ) {
+        end++;
+      }
+      floorIdx = end;
+      i = end;
+    } else {
+      floorIdx = i;
+    }
+  }
+
+  const attempts: Array<{
+    unit: string;
+    slug: string | null;
+    state: "open" | "merged" | "failed";
+  }> = [];
+  const applyBoltEvent = (event: AuditShardEvent): void => {
+    const units = boltEventUnits(event);
+    const slug = auditBlockField(event.block, "Bolt slug");
+    if (event.event === "BOLT_STARTED") {
+      for (const unit of units) {
+        attempts.push({ unit, slug, state: "open" });
+      }
+      return;
+    }
+    for (const unit of units) {
+      let attemptIndex = -1;
+      if (slug !== null) {
+        attemptIndex = attempts.findIndex(
+          (attempt) =>
+            attempt.state === "open" && attempt.slug === slug,
+        );
+        if (attemptIndex === -1) {
+          attemptIndex = attempts.findLastIndex(
+            (attempt) => attempt.slug === slug,
+          );
+        }
+      }
+      if (attemptIndex === -1) {
+        attemptIndex = attempts.findIndex(
+          (attempt) =>
+            attempt.state === "open" &&
+            attempt.unit === unit &&
+            (slug === null || attempt.slug === null),
+        );
+      }
+      if (attemptIndex === -1 && slug === null) {
+        attemptIndex = attempts.findLastIndex(
+          (attempt) => attempt.unit === unit,
+        );
+      }
+      if (attemptIndex === -1) continue;
+      const attempt = attempts[attemptIndex];
+      attempt.state =
+        event.event === "BOLT_COMPLETED" ? "merged" : "failed";
+    }
+  };
+  if (perUnit) {
+    for (let start = floorIdx + 1; start < events.length;) {
+      let end = start + 1;
+      while (
+        end < events.length &&
+        events[end].timestamp === events[start].timestamp
+      ) {
+        end++;
+      }
+      const group = events.slice(start, end);
+      const boltEvents = group.filter(
+        (event) =>
+          event.event === "BOLT_STARTED" ||
+          event.event === "BOLT_COMPLETED" ||
+          event.event === "BOLT_FAILED",
+      );
+      const byShard = new Map<string, AuditShardEvent[]>();
+      for (const event of boltEvents) {
+        const rows = byShard.get(event.shard) ?? [];
+        rows.push(event);
+        byShard.set(event.shard, rows);
+      }
+      const queues = [...byShard.values()];
+      const eventPriority = (event: AuditShardEvent): number =>
+        event.event === "BOLT_STARTED"
+          ? 0
+          : event.event === "BOLT_FAILED"
+            ? 1
+            : 2;
+      while (queues.length > 0) {
+        let selected = 0;
+        for (let index = 1; index < queues.length; index++) {
+          const priority =
+            eventPriority(queues[index][0]) -
+            eventPriority(queues[selected][0]);
+          if (
+            priority < 0 ||
+            (priority === 0 &&
+              queues[index][0].shardIndex <
+                queues[selected][0].shardIndex)
+          ) {
+            selected = index;
+          }
+        }
+        applyBoltEvent(queues[selected].shift()!);
+        if (queues[selected].length === 0) queues.splice(selected, 1);
+      }
+      start = end;
+    }
+  }
+
+  const mergedBoltUnits = new Set<string>();
+  const openBoltUnits = new Set<string>();
+  for (const attempt of attempts) {
+    if (attempt.state === "merged") mergedBoltUnits.add(attempt.unit);
+    else if (attempt.state === "open") openBoltUnits.add(attempt.unit);
+  }
+  return {
+    allEvents,
+    events,
+    floorIdx,
+    mergedBoltUnits,
+    openBoltUnits,
+  };
+}
+
 export function freshReviewReceipts(
   projectDir: string,
   stateContent: string,
@@ -6870,6 +7101,7 @@ export function freshReviewReceipts(
   options: {
     boltDag?: BoltDagResolution;
     reviewClass?: ReviewClass;
+    attemptWindow?: ReviewAttemptWindow;
   } = {},
 ): FreshReviewReceipts {
   const empty: FreshReviewReceipts = {
@@ -6891,6 +7123,8 @@ export function freshReviewReceipts(
     unitIterations: new Map(),
     stagePending: null,
     unitPending: new Map(),
+    mergedBoltUnits: new Set(),
+    openBoltUnits: new Set(),
   };
   const reviewer = stage.reviewer;
   if (!reviewer) return empty;
@@ -6907,32 +7141,15 @@ export function freshReviewReceipts(
   const unitMajor =
     perUnit && getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
   const teamOwnership = perUnit && isTeamUnitOwnership(stateContent);
-  const RELEVANT = new Set([
-    "WORKFLOW_STARTED",
-    "STAGE_STARTED",
-    "STAGE_JUMPED",
-    "GATE_REJECTED",
-    "SESSION_STARTED",
-    "SESSION_RESUMED",
-    "BOLT_STARTED",
-    "ARTIFACT_CREATED",
-    "ARTIFACT_UPDATED",
-    "REVIEW_REQUESTED",
-    "REVIEW_COMPLETED",
-  ]);
-  const allEvents = readAuditShardEvents(projectDir);
+  const attemptWindow =
+    options.attemptWindow ??
+    reviewAttemptWindow(projectDir, stateContent, stage);
+  const { allEvents, events, floorIdx, mergedBoltUnits, openBoltUnits } =
+    attemptWindow;
+  empty.mergedBoltUnits = mergedBoltUnits;
+  empty.openBoltUnits = openBoltUnits;
   const modernSourceBindingEvidence =
     hasModernSourceBindingEvidence(projectDir, allEvents);
-  const events = allEvents
-    .filter((row) => RELEVANT.has(row.event))
-    .sort((a, b) => {
-      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
-      // Same-shard ties have real append order. Cross-shard ties remain
-      // adjacent but causally unordered; authority-sensitive consumers below
-      // fail closed instead of trusting shard filename order.
-      if (a.shard === b.shard) return a.pos - b.pos;
-      return a.shardIndex - b.shardIndex;
-    });
   if (events.length === 0) {
     if (stage.workspace_requires === true && modernSourceBindingEvidence) {
       empty.sourceBaseline = { state: "invalid" };
@@ -6965,7 +7182,16 @@ export function freshReviewReceipts(
   };
 
   const dag = perUnit ? options.boltDag ?? resolveBoltDag(projectDir) : null;
-  const applicableUnits: Set<string> | null = dag?.state === "ok" ? new Set() : null;
+  const observedBoltUnits = new Set([
+    ...mergedBoltUnits,
+    ...openBoltUnits,
+  ]);
+  const applicableUnits: Set<string> | null =
+    dag?.state === "ok"
+      ? new Set()
+      : dag?.state === "none" && observedBoltUnits.size > 0
+        ? observedBoltUnits
+        : null;
   if (dag?.state === "ok" && applicableUnits !== null) {
     for (const unit of dag.units) {
       if (
@@ -6975,40 +7201,6 @@ export function freshReviewReceipts(
           dag.unitKinds?.get(unit) ?? null,
         ).length > 0
       ) applicableUnits.add(unit);
-    }
-  }
-
-  let floorIdx = -1;
-  for (let i = 0; i < events.length; i++) {
-    const e = events[i];
-    let boundary = e.event === "WORKFLOW_STARTED" || e.event === "STAGE_JUMPED";
-    if (!boundary && auditBlockField(e.block, "Stage") === stage.slug) {
-      boundary = (
-        e.event === "GATE_REJECTED" &&
-        !(teamOwnership && auditBlockField(e.block, "Unit"))
-      ) || (
-        e.event === "STAGE_STARTED" &&
-        !unitMajor &&
-        !auditBlockField(e.block, "Workflow")?.startsWith("single-stage:")
-      );
-    }
-    if (!boundary) continue;
-    const tiedCrossShard = events.some(
-      (candidate, index) =>
-        index !== i &&
-        candidate.timestamp === e.timestamp &&
-        candidate.shard !== e.shard,
-    );
-    // Team-owned attempts fail closed across a same-second cross-shard
-    // boundary by flooring the entire unordered timestamp group. Solo mode
-    // retains its legacy merged-shard ordering for compatibility.
-    if (tiedCrossShard && teamOwnership) {
-      let end = i;
-      while (end + 1 < events.length && events[end + 1].timestamp === e.timestamp) end++;
-      floorIdx = end;
-      i = end;
-    } else {
-      floorIdx = i;
     }
   }
 
@@ -7216,8 +7408,15 @@ export function freshReviewReceipts(
     const unit = auditBlockField(e.block, "Unit") || undefined;
     if (
       perUnit &&
+      dag?.state === "ok" &&
+      (unit === undefined || applicableUnits === null || !applicableUnits.has(unit))
+    ) continue;
+    if (
+      perUnit &&
+      dag?.state === "none" &&
       applicableUnits !== null &&
-      (unit === undefined || !applicableUnits.has(unit))
+      unit !== undefined &&
+      !applicableUnits.has(unit)
     ) continue;
     const requestKey = `${unit ?? ""}\u0000${iterationField}`;
     if (e.event === "REVIEW_REQUESTED") {
@@ -7277,6 +7476,7 @@ export function freshReviewReceipts(
       {
         boltDag: options.boltDag,
         stateContent,
+        mergedBoltUnits,
       },
     );
     const fingerprintUsable =
@@ -7619,6 +7819,8 @@ export function freshReviewReceipts(
     unitIterations,
     stagePending,
     unitPending,
+    mergedBoltUnits,
+    openBoltUnits,
   };
 }
 

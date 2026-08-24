@@ -6,6 +6,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
+  boltSlugForUnit,
   checkSummaryConfirmationEvidence,
   loadStageGraphAll,
   readAllAuditShards,
@@ -374,6 +375,19 @@ describe("t320 review/summary deadlock prevention", () => {
     ]) {
       writeFileSync(join(dir, name), `# ${name}\n`);
     }
+    writeFileSync(
+      join(dir, "source-manifest.json"),
+      `${JSON.stringify(
+        {
+          stage: "code-generation",
+          unit: "alpha",
+          version: 1,
+          writes: [],
+        },
+        null,
+        2,
+      )}\n`,
+    );
 
     const accepted = run(
       LOG,
@@ -395,14 +409,54 @@ describe("t320 review/summary deadlock prevention", () => {
         "AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD",
       ],
     );
-    // Base behaviour, deliberately preserved: with no authoritative Unit set
-    // and no active Bolt attempt, a per-unit review request is refused and the
-    // refusal names both executable routes. Membership admission is only
-    // skipped where the set is unverifiable AND a Bolt attempt is live.
+    // A historyless no-DAG Unit remains refused. A matching open or merged
+    // Bolt now supplies review-only membership without becoming a Unit DAG.
     expect(accepted.status).not.toBe(0);
     expect(accepted.stdout + accepted.stderr).toContain(
-      "no authoritative unit DAG exists and no matching active Bolt attempt",
+      "no authoritative unit DAG exists and no matching active or merged Bolt attempt",
     );
+
+    const slug = boltSlugForUnit("alpha");
+    appendAuditEntry(
+      "BOLT_STARTED",
+      {
+        "Bolt names": "alpha",
+        "Batch number": "1",
+        "Walking skeleton": "false",
+        "Bolt slug": slug,
+      },
+      proj,
+    );
+    appendAuditEntry(
+      "BOLT_COMPLETED",
+      {
+        "Bolt names": "alpha",
+        "Batch number": "1",
+        "Bolt slug": slug,
+      },
+      proj,
+    );
+    const postMerge = run(
+      LOG,
+      [
+        "review",
+        "--stage",
+        "code-generation",
+        "--reviewer",
+        "aidlc-architecture-reviewer-agent",
+        "--unit",
+        "alpha",
+        "--iteration",
+        "1",
+      ],
+      proj,
+      {
+        AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+      },
+      ["AIDLC_SKIP_ARTIFACT_GUARD"],
+    );
+    expect(postMerge.status).toBe(0);
+    expect(postMerge.stdout).toContain('"emitted":"REVIEW_REQUESTED"');
 
     const stageLevelProj = project("state-construction-with-worktree.md");
     const stageLevel = run(

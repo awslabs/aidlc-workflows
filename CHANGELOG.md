@@ -1,6 +1,17 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.114] - 2026-08-27
+
+No-DAG per-Unit review continuity now follows the current attempt's audit-observed Bolt lifecycle, lifting the 2.6.76 limitation without persisting a substitute Unit graph. **Upgrade:** refresh your `dist/<harness>/` shell so review admission, artifact fingerprints, receipt filtering, and gate coverage use the same audit window. An in-flight no-DAG stage-level review request stamped before this release, or while every Bolt was still open, may no longer match after a Bolt merges and replaces the stage-level fallback path with merged-Unit paths; re-dispatch its exact pending ordinal with `--retry-pending` before recording the verdict.
+
+* `aidlc-log.ts review --unit <unit>` remains available after that Unit's Bolt completes, including `--retry-pending` and stale-receipt recovery, while a Unit with no current-attempt Bolt history still refuses.
+* A no-DAG per-Unit stage with merged Bolts may satisfy its reviewer gate with either one fresh stage-level receipt or fresh per-Unit verdicts covering every merged Unit. Failed or discarded Bolts owe no review.
+* Stage-level review fingerprints enumerate only merged Bolt Units, because open-Bolt work is not yet present in the main tree. Per-Unit receipt filtering still recognizes both open and merged Units, and forged Unit receipts outside that observed set cannot satisfy coverage.
+* Same-second cross-shard Bolt reduction preserves causal append order within each shard and applies the stricter merged result only across genuinely unordered shard heads. A tied start/completion that settles merged accepts the gate's named per-Unit review command.
+* Bolt lifecycle truth remains per attempt: a Unit may be both merged and open when an older attempt landed while a newer attempt is still active. The merged work still owes review and the open attempt remains eligible for receipt filtering.
+* `aidlc-runtime.ts compile` cannot erase this continuity because the observed Unit set is derived from audit rows and is not written to `runtime-graph.json`.
+
 ## [2.6.113] - 2026-08-27
 
 Kiro CLI and Kiro IDE now preserve engine-authored routing questions instead of querying intent state and replacing them with a conductor-derived prompt. **Upgrade:** refresh your `dist/kiro/` or `dist/kiro-ide/` shell so the updated conductor and numbered-prose rendering contract are installed.

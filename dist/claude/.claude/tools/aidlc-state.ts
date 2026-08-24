@@ -3589,29 +3589,83 @@ function verifyReviewerPrecondition(
         `${action === "complete" ? "completing" : "presenting the approval gate"}.`,
     );
   }
-  if (resolution.state === "none" || resolution.units.length === 0) {
+  let reviewUnits: string[];
+  const noDagObserved = resolution.state === "none";
+  if (noDagObserved) {
+    if (receipts.mergedBoltUnits.size === 0) {
+      if (!sawStageReview) {
+        reviewerPreconditionError(stage.slug, reviewer, action);
+      }
+      return;
+    }
+    if (sawStageReview) return;
+    reviewUnits = [...receipts.mergedBoltUnits].sort();
+  } else if (resolution.units.length === 0) {
     if (!sawStageReview) {
       reviewerPreconditionError(stage.slug, reviewer, action);
     }
     return;
+  } else {
+    // A kind-pruned unit with no applicable produces[] never receives a stage
+    // directive, so it cannot owe a review. If every unit is vacuous, no
+    // stage-level fallback review is required.
+    const produces = stage.produces ?? [];
+    reviewUnits = resolution.units.filter(
+      (unit) =>
+        filterProducesByKind(
+          stage.produces_kinds,
+          produces,
+          resolution.unitKinds?.get(unit) ?? null,
+        ).length > 0,
+    );
   }
-
-  // A kind-pruned unit with no applicable produces[] never receives a stage
-  // directive, so it cannot owe a review. If every unit is vacuous, no
-  // stage-level fallback review is required.
-  const produces = stage.produces ?? [];
-  const reviewUnits = resolution.units.filter(
-    (unit) =>
-      filterProducesByKind(
-        stage.produces_kinds,
-        produces,
-        resolution.unitKinds?.get(unit) ?? null,
-      ).length > 0,
-  );
   if (reviewUnits.length === 0) return;
 
   const missing = reviewUnits.filter((u) => !reviewedUnits.has(u));
   if (missing.length > 0) {
+    if (noDagObserved) {
+      const requestCommands = missing.flatMap((unit) => {
+        if (
+          receipts.unitStaleProgress.get(unit)?.recoverySpent === true
+        ) {
+          return [];
+        }
+        const pending = receipts.unitPending.get(unit);
+        const iteration =
+          pending?.iteration ??
+          receipts.unitStaleProgress.get(unit)?.nextIteration ??
+          (receipts.unitIterations.get(unit) ?? 0) + 1;
+        const retry =
+          pending?.state === "retry-required" ? " --retry-pending" : "";
+        return [
+          `\`aidlc-log.ts review --stage ${stage.slug} --unit ${unit} ` +
+            `--reviewer ${reviewer} --iteration ${iteration}${retry}\``,
+        ];
+      });
+      const recoverySpent = missing.filter(
+        (unit) =>
+          receipts.unitStaleProgress.get(unit)?.recoverySpent === true,
+      );
+      const guidance =
+        requestCommands.length > 0
+          ? `Run ${requestCommands.join(", then ")} to request the missing ` +
+            "per-unit review, then record each verdict with the same command " +
+            "plus `--verdict <READY|NOT-READY>`."
+          : "";
+      const exhausted =
+        recoverySpent.length > 0
+          ? ` Recovery was already spent for ${recoverySpent.join(", ")}. ` +
+            recoveryGuidance(pd, content, stage.slug) +
+            " Only a human Request Changes decision resets that review attempt."
+          : "";
+      error(
+        `${reviewerPreconditionPrefix(stage.slug, action)}: merged Bolt ` +
+          `unit${missing.length === 1 ? "" : "s"} ${missing.join(", ")} ` +
+          `${missing.length === 1 ? "has" : "have"} no fresh recorded review. ` +
+          guidance +
+          exhausted,
+      );
+    }
     const stale = missing.filter((unit) => receipts.unitStale.has(unit));
     const neverReviewed = missing.filter((unit) => !receipts.unitStale.has(unit));
     const recoveryAvailable = stale.filter(

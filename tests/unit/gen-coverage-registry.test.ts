@@ -1056,6 +1056,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t321-source-recovery-freeze.test.ts",
     "unit/t322-fix-round-hardening.test.ts",
     "unit/t323-review-verdict-closure.test.ts",
+    "unit/t328-nodag-per-unit-continuity.test.ts",
     "unit/t312-orchestrate-session-binding.test.ts",
     "unit/t255-workspace-sync.test.ts",
     "unit/t314-source-freshness-receipts.test.ts",
