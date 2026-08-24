@@ -159,6 +159,7 @@ import {
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 import {
   compiledExecutable,
+  isCompiledExecutable,
   resolveHarnessPath,
   resolveSkillsPath,
   runtimeHarnessName,
@@ -1049,7 +1050,7 @@ async function handlePluginSync(projectDir: string): Promise<void> {
       CLAUDE_PLUGIN_ROOT: item.root,
       PLUGIN_ROOT: item.root,
     };
-    if (import.meta.url.includes("/$bunfs/")) {
+    if (isCompiledExecutable()) {
       const envKeys = [
         "AIDLC_HARNESS_DIR",
         "AIDLC_HARNESS_NAME",

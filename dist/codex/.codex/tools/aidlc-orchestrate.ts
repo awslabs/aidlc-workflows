@@ -188,7 +188,11 @@ import {
 // import is safe (aidlc-utility.ts main() runs only under import.meta.main,
 // and utility never imports this module - no cycle).
 import { detectWorkspace, inferScopeFromText } from "./aidlc-utility.ts";
-import { resolveHarnessPath, resolveHarnessRoot } from "./aidlc-runtime-paths.ts";
+import {
+  isCompiledExecutable,
+  resolveHarnessPath,
+  resolveHarnessRoot,
+} from "./aidlc-runtime-paths.ts";
 import { appendAuditEntries } from "./aidlc-audit.ts";
 import { inspectStageValidity } from "./aidlc-validity.ts";
 import {
@@ -448,7 +452,7 @@ function emit(directive: Directive): void {
 // the tools directory off THIS module's own location in source mode. A compiled
 // executable re-enters the public dispatcher grammar instead.
 const TOOLS_DIR = dirname(fileURLToPath(import.meta.url));
-const IS_COMPILED = import.meta.url.includes("/$bunfs/");
+const IS_COMPILED = isCompiledExecutable();
 
 function toolPath(file: string): string {
   return join(TOOLS_DIR, file);

@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.84] - 2026-08-25
+
+Compiled Windows executables now keep every routed command inside the native runtime instead of falling back to source-mode `bun` launches. Source installs continue to delegate through their running Bun executable. **Upgrade:** replace the executable and its adjacent `runtime/` directory, or refresh your selected `dist/<harness>/` shell for source installs.
+
+* Compiled-mode detection now recognizes a non-Bun `process.execPath` in addition to Bun's virtual-filesystem URL marker, covering native Windows path forms that do not contain the POSIX `/$bunfs/` substring.
+* Binary release gates run representative utility and doctor delegates with `PATH` empty, alongside the existing pathless routed-command matrix, and assert Windows executable classification without changing Bun source-mode classification.
+
 ## [2.6.83] - 2026-08-25
 
 Summary-confirmation artifact-write receipts now remain valid when the same workflow workspace is moved or cloned to a different filesystem location, without weakening their causal ordering. **Upgrade:** refresh your `dist/<harness>/` shell so completion guards use the portable receipt matcher.

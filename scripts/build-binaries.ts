@@ -857,7 +857,11 @@ function swarmReentryGate(artifact: string): GateResult {
 }
 
 function delegatePluginSyncGate(artifact: string): GateResult {
-  const result = run(artifact, ["plugin", "sync"], { cwd: tmpdir(), timeoutMs: 30_000 });
+  const result = run(artifact, ["plugin", "sync"], {
+    cwd: tmpdir(),
+    env: pathlessEnv(),
+    timeoutMs: 30_000,
+  });
   const output = `${result.stdout}\n${result.stderr}`;
   const moduleError = /Cannot find module|\/\$bunfs\//.test(output);
   const actual = result.stdout.trim();
@@ -1393,9 +1397,14 @@ function routedProjectDirGate(artifact: string): GateResult {
 }
 
 function delegateDoctorDataGate(artifact: string): GateResult {
-  const result = run(artifact, ["doctor"], { cwd: tmpdir(), timeoutMs: 30_000 });
+  const result = run(artifact, ["doctor"], {
+    cwd: tmpdir(),
+    env: pathlessEnv(),
+    timeoutMs: 30_000,
+  });
   const output = `${result.stdout}\n${result.stderr}`;
-  const crashSignature = output.match(/Cannot find module|\/\$bunfs\/|ENOENT/)?.[0] ?? "";
+  const crashSignature =
+    output.match(/Cannot find module|\/\$bunfs\/|uv_spawn ['"]bun['"]/)?.[0] ?? "";
   const reportEmitted = result.stdout.includes("AI-DLC Health Check");
   const schemaCount = /Schema validation: (\d+)\/(\d+) stages validated/.exec(result.stdout);
   const meaningfulSchemaCount =
