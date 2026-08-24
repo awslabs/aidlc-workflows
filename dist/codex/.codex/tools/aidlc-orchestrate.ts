@@ -3939,6 +3939,13 @@ function unitLedgerFor(projectDir: string, slug: string): UnitLedger {
   };
 }
 
+function kindVacuous(node: GraphStage, unitKind: string | null): boolean {
+  return (
+    (node.produces ?? []).length > 0 &&
+    applicableProduceNames(node, unitKind, false).length === 0
+  );
+}
+
 // A unit is SETTLED when its artifacts exist AND, when the receipt ledger is
 // in use, a current-attempt UNIT_COMPLETED receipt names it. Kind-vacuous
 // units (required set filters to empty — the stage does not apply) never
@@ -3955,8 +3962,7 @@ function unitSettled(
 ): boolean {
   if (!unitCovered(projectDir, node, unit, recordPrefix, codekbCtx, unitKind)) return false;
   if (!ledger.inUse) return true;
-  const names = node.produces ?? [];
-  if (names.length > 0 && applicableProduceNames(node, unitKind, false).length === 0) {
+  if (kindVacuous(node, unitKind)) {
     return true; // vacuous for this kind — no directive, no receipt to earn
   }
   return ledger.receipts.has(unit);
@@ -3997,6 +4003,9 @@ function nextUncoveredUnit(
       uncovered.push(unit);
       continue;
     }
+    // A kind-vacuous unit settles with no directive and owes no questions or
+    // summary confirmation.
+    if (kindVacuous(node, kinds?.get(unit) ?? null)) continue;
     const confirmation = checkSummaryConfirmationEvidence(projectDir, node, {
       stateContent,
       unit,
@@ -4617,6 +4626,7 @@ function emitUnitMajorRunStage(
         emit(directive);
         return;
       }
+      if (kindVacuous(k, kinds?.get(u) ?? null)) continue;
       const confirmation = checkSummaryConfirmationEvidence(projectDir, k, {
         stateContent,
         unit: u,

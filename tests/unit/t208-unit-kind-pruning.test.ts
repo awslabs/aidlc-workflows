@@ -132,8 +132,17 @@ function envNoScope(): NodeJS.ProcessEnv {
   return e;
 }
 
-function runNext(proj: string): Directive {
-  const r = runOrchestrateNext(ORCH, proj, [], { env: envNoScope() });
+function runNext(
+  proj: string,
+  enforceSummaryConfirmationGuard = false,
+): Directive {
+  const env = envNoScope();
+  if (enforceSummaryConfirmationGuard) {
+    delete env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD;
+    env.AIDLC_SKIP_ARTIFACT_GUARD = "1";
+    env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD = "1";
+  }
+  const r = runOrchestrateNext(ORCH, proj, [], { env });
   if (r.directive === null) {
     throw new Error(`runNext no JSON. status=${r.status}\n${r.stdout}\n${r.stderr}`);
   }
@@ -329,7 +338,8 @@ describe("t208 engine unit-kind pruning", () => {
   test("4: a packaging unit on functional-design is vacuously covered", () => {
     const proj = seedProject("functional-design");
     seedBoltDag(proj, [{ name: "pack", kind: "packaging" }]);
-    const d = runNext(proj);
+    const d = runNext(proj, true);
+    expect(d.kind).toBe("run-stage");
     expect(d.stage).toBe("functional-design");
     // pack owes nothing; every unit is covered -> the all-covered re-entry
     // presents the real gate (true) on the last unit with an empty produces set.

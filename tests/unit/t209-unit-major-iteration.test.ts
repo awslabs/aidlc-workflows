@@ -145,6 +145,7 @@ interface Directive {
 function constructionState(opts: {
   skeletonStance?: string;
   iteration?: string;
+  designBlockAction?: "EXECUTE" | "SKIP";
 }): string {
   const stanceLine = opts.skeletonStance
     ? `- **Skeleton Stance**: ${opts.skeletonStance}\n`
@@ -155,6 +156,7 @@ function constructionState(opts: {
   const iterationLine = opts.iteration
     ? `- **Construction Iteration**: ${opts.iteration}\n`
     : "";
+  const designBlockAction = opts.designBlockAction ?? "EXECUTE";
   return `# AI-DLC State Tracking
 
 ## Project Information
@@ -176,10 +178,10 @@ ${iterationLine}
 
 ### CONSTRUCTION PHASE
 - [-] functional-design — EXECUTE
-- [ ] nfr-requirements — EXECUTE
-- [ ] nfr-design — EXECUTE
-- [ ] infrastructure-design — EXECUTE
-- [ ] code-generation — EXECUTE
+- [ ] nfr-requirements — ${designBlockAction}
+- [ ] nfr-design — ${designBlockAction}
+- [ ] infrastructure-design — ${designBlockAction}
+- [ ] code-generation — ${designBlockAction}
 - [ ] build-and-test — EXECUTE
 
 ### INCEPTION PHASE
@@ -207,13 +209,16 @@ function coverFullGrid(proj: string, units: string[]): void {
 }
 
 /** Seed a fresh unit-major Construction project. Returns the proj dir. */
-function seedProject(iteration?: string): string {
+function seedProject(
+  iteration?: string,
+  designBlockAction?: "EXECUTE" | "SKIP",
+): string {
   const proj = createTestProject();
   tempDirs.push(proj);
   seedAidlcMemory(proj);
   writeFileSync(
     seededStateFile(proj),
-    constructionState({ skeletonStance: "on", iteration }),
+    constructionState({ skeletonStance: "on", iteration, designBlockAction }),
   );
   return proj;
 }
@@ -224,9 +229,17 @@ interface NextRun {
 }
 
 /** Run `aidlc-orchestrate.ts next`, capturing both its directive and diagnostics. */
-function runNextWithStderr(proj: string): NextRun {
+function runNextWithStderr(
+  proj: string,
+  enforceSummaryConfirmationGuard = false,
+): NextRun {
   const env = { ...process.env };
   delete env.AWS_AIDLC_DEFAULT_SCOPE;
+  if (enforceSummaryConfirmationGuard) {
+    delete env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD;
+    env.AIDLC_SKIP_ARTIFACT_GUARD = "1";
+    env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD = "1";
+  }
   const r = runOrchestrateNext(ORCH, proj, [], { env });
   if (r.directive === null) {
     throw new Error(
@@ -356,6 +369,20 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     expect(d.stage).toBe("functional-design");
     expect(d.unit).toBe("alpha");
     expect(d.gate).toBe(false);
+  }, 30000);
+
+  test("1b: a kind-vacuous unit does not block the next applicable unit", () => {
+    // Isolate the active stage: packaging is applicable to later unit-major
+    // stages, while this regression targets functional-design's vacuous guard.
+    const proj = seedProject("unit-major", "SKIP");
+    seedBoltDag(proj, [
+      { name: "pkg", kind: "packaging" },
+      { name: "alpha", kind: "library", depends_on: ["pkg"] },
+    ]);
+    const d = runNextWithStderr(proj, true).directive;
+    expect(d.kind).toBe("run-stage");
+    expect(d.stage).toBe("functional-design");
+    expect(d.unit).toBe("alpha");
   }, 30000);
 
   // 2: THE PIVOTAL ORDERING ASSERTION. With functional-design/alpha covered, the

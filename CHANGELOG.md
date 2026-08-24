@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.103] - 2026-08-26
+
+Kind-vacuous Construction units no longer deadlock summary-confirmation routing when their unit kind excludes every output of a per-unit stage. **Upgrade:** refresh your `dist/<harness>/` shell so unit-major routing and per-unit approval skip confirmation evidence that an inapplicable unit cannot produce.
+
+* Unit-major iteration now advances past kind-vacuous units to the next applicable stage and unit instead of emitting `Refusing to complete`.
+* Stage-major per-unit approval now presents the normal gate when all units are kind-vacuous, without requiring nonexistent questions or summary confirmation.
+
 ## [2.6.102] - 2026-08-26
 
 Rule files can now carry validated lifecycle metadata, and doctor separates stale team/project overlaps from live contradiction-review candidates without changing runtime rule delivery. **Upgrade:** refresh your `dist/<harness>/` shell; add lifecycle fields only where you want file-level drift triage.
