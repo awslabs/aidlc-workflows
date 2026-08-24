@@ -785,12 +785,8 @@ function realpathOrSelf(p: string): string {
 //   containment— re-check AFTER resolution, because that is when an escape
 //                becomes visible.
 export function resolveContainedPath(anchorReal: string, relPath: string): string {
-  if (isAbsolute(relPath) || relPath.split(/[\\/]/).includes("..")) {
-    throw new Error(`path escapes its anchor: ${relPath}`);
-  }
   const anchorNorm = realpathOrSelf(anchorReal);
-  assertNoSymlinkInChainOrThrow(anchorNorm, relPath.split("/").join(sep));
-  const candidate = join(anchorNorm, relPath.split("/").join(sep));
+  const candidate = assertNoSymlinkInChainOrThrow(anchorNorm, relPath);
   const real = realpathOrSelf(candidate);
   const anchorWithSep = anchorNorm.endsWith(sep) ? anchorNorm : anchorNorm + sep;
   if (real !== anchorNorm && !real.startsWith(anchorWithSep)) {

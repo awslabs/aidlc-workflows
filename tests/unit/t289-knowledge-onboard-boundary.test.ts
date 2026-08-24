@@ -217,12 +217,23 @@ describe("t289 containment is re-checked AFTER realpath", () => {
     doc(p, join("nested", "c.md"));
     const anchor = documentsDir(p, SPACE);
     expect(resolveContainedPath(anchor, "nested/c.md")).toContain(`nested${sep}c.md`);
+    expect(resolveContainedPath(anchor, "nested\\c.md")).toContain(`nested${sep}c.md`);
   });
 
   test("lexical escapes are refused before touching the disk", () => {
     const p = scratchProject();
     const anchor = documentsDir(p, SPACE);
-    for (const bad of ["../escape", "../../etc/passwd", "a/../../b", "/etc/passwd"]) {
+    for (const bad of [
+      "../escape",
+      "..\\escape",
+      "../../etc/passwd",
+      "a/..\\../b",
+      "/etc/passwd",
+      "\\Windows\\System32",
+      "C:\\outside",
+      "C:drive-relative",
+      "\\\\server\\share\\outside",
+    ]) {
       expect(() => resolveContainedPath(anchor, bad), bad).toThrow(/escapes its anchor/);
     }
   });

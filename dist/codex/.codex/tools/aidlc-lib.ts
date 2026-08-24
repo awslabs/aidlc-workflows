@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { accessSync, appendFileSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   resolveHarnessPath,
@@ -10731,9 +10731,43 @@ export function removeTreeSync(path: string): void {
   rmSync(path, { recursive: true, force: true });
 }
 
+// Parse an anchor-relative boundary path into components without first
+// normalizing away `..`. win32.parse recognises both slash families on every
+// host and preserves Windows drive/UNC roots, so a POSIX slash cannot hide a
+// component from a native Windows walk and a Windows root cannot become a
+// relative filename on POSIX.
+function boundaryRelativePartsOrThrow(anchorReal: string, rel: string): string[] {
+  if (win32.parse(rel).root !== "") {
+    throw new Error(`path escapes its anchor lexically: ${rel}`);
+  }
+
+  const parts: string[] = [];
+  let cursor = rel;
+  while (cursor !== "" && cursor !== ".") {
+    const parsed = win32.parse(cursor);
+    if (parsed.root !== "") {
+      throw new Error(`path escapes its anchor lexically: ${rel}`);
+    }
+    if (parsed.base !== "" && parsed.base !== ".") {
+      parts.unshift(parsed.base);
+    }
+    if (parsed.dir === "" || parsed.dir === ".") break;
+    if (parsed.dir === cursor) {
+      throw new Error(`path escapes its anchor lexically: ${rel}`);
+    }
+    cursor = parsed.dir;
+  }
+
+  if (parts.some((part) => part === "..")) {
+    throw new Error(`path component ".." escapes its anchor ${anchorReal}: ${rel}`);
+  }
+  return parts;
+}
+
 // Walk `rel` one component at a time from a REAL anchor and refuse if ANY
-// component is a symlink, returning the joined path when the whole chain is
-// clean. Throws (does not exit) so each caller attaches its own message and code.
+// component is a symlink or junction, returning the joined native path when the
+// whole chain is clean. Both slash families delimit components. Throws (does
+// not exit) so each caller attaches its own message and code.
 //
 // Why per-COMPONENT rather than one realpath of the leaf: a containment check on
 // the fully-resolved leaf answers "does this land inside?" but not "did we travel
@@ -10747,13 +10781,7 @@ export function removeTreeSync(path: string): void {
 // each leaf they touch, not once for the parent.
 export function assertNoSymlinkInChainOrThrow(anchorReal: string, rel: string): string {
   if (rel === "") return anchorReal;
-  if (isAbsolute(rel)) {
-    throw new Error(`path escapes its anchor lexically: ${rel}`);
-  }
-  const parts = rel.split(sep);
-  if (parts.some((part) => part === "..")) {
-    throw new Error(`path component ".." escapes its anchor ${anchorReal}: ${rel}`);
-  }
+  const parts = boundaryRelativePartsOrThrow(anchorReal, rel);
   let current = anchorReal;
   for (const part of parts) {
     if (part.length === 0) continue;
