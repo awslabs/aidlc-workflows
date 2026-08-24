@@ -18,7 +18,8 @@ else) are **mechanically identical** — same structure, same seams, same
 composer, same guarantees. The only difference is provenance: whose repository
 the plugin lives in and who reviewed it.
 
-This chapter walks the `test-pro` plugin end to end. Copy its shape for your own.
+Start a new repository with `aidlc-plugin-create.ts`; this chapter then walks
+the richer `test-pro` reference plugin end to end.
 
 ## When to write a plugin vs. a plain stage/rule
 
@@ -383,9 +384,29 @@ Trust is **host-native** — you don't build anything:
 > [Plugin Mechanism §8](../reference/18-plugin-mechanism.md) for the full
 > platform-team worked example.
 
-## Testing your plugin
+## Authoring and testing your plugin
 
-Use three tiers, from cheapest to most realistic:
+Start from the shipped scaffold, then use three test tiers from cheapest to
+most realistic.
+
+### Creating your plugin
+
+Create a deterministic minimal plugin repository:
+
+```bash
+bun <tools-dir>/aidlc-plugin-create.ts <name> [targetDir]
+bun <tools-dir>/aidlc-plugin-create.ts <name> [targetDir] --json
+```
+
+The name must be lowercase kebab-case, must match the target directory name,
+and cannot be `core`, `aidlc`, or use the reserved `aidlc-` prefix. Without
+`targetDir`, output lands at `./<name>/`. CREATE refuses a non-empty target and
+never overwrites existing files.
+
+The scaffold includes a schema-valid manifest, one namespaced example stage,
+scope, and agent, a root README with the full authoring flow, and a `tests/`
+README. It intentionally omits `hooks/compose.ts`; validation reports the
+documented absence warning and BUILD injects the bundled current hook.
 
 ### Validating your plugin
 
@@ -421,9 +442,9 @@ Validation checks:
   template bundled with the validator. Absence is valid because plugin build
   injects the current template.
 
-The user-facing `aidlc plugin validate`, `aidlc plugin build`, and
-`aidlc plugin test` verbs are not part of these toolchain phases. They arrive
-with the Plugins RFC route table in
+The user-facing `aidlc plugin create`, `aidlc plugin validate`,
+`aidlc plugin build`, and `aidlc plugin test` verbs are not part of these
+toolchain phases. They arrive with the Plugins RFC route table in
 [RFC #723 §2e](https://github.com/awslabs/aidlc-workflows/issues/723); until then,
 invoke the shipped Bun tools directly.
 
@@ -448,14 +469,16 @@ harness names exit `2`. Without `outDir`, output lands at
 
 The authoring flow is:
 
-1. **Validate** the authored root offline.
-2. **Build** each harness projection you support.
-3. **Test** composition against a disposable copy of a real install.
-4. **Publish** those generated directories and marketplace metadata from your
+1. **Create** a deterministic scaffold with `aidlc-plugin-create.ts`.
+2. **Author** the plugin-owned stages, scopes, agents, and other contributions.
+3. **Validate** the authored root offline.
+4. **Build** each harness projection you support.
+5. **Test** composition against a disposable copy of a real install.
+6. **Publish** those generated directories and marketplace metadata from your
    own repository.
 
-Both tools run from a copied AIDLC tools bundle and require neither an AIDLC
-project nor a framework checkout.
+All four tools run from a copied AIDLC tools bundle and require neither an
+AIDLC project nor a framework checkout.
 
 ### Testing composition
 

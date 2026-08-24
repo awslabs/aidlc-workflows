@@ -842,6 +842,9 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     // t316 spawns the shipped compose-tier tool against copied plugin/install
     // trees to prove candidate isolation, drops, graph checks, and idempotency.
     "unit/t316-plugin-test.test.ts",
+    // t317 creates a deterministic plugin from copied tools, then proves the
+    // scaffold validates, builds, and composes without checkout paths.
+    "unit/t317-plugin-create.test.ts",
     "integration/t102.test.ts",
     "integration/t104.test.ts",
     "integration/t105.test.ts",

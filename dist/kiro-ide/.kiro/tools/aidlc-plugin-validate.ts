@@ -63,7 +63,9 @@ export type PluginValidationRule =
   | "test-compose-drop"
   | "test-graph"
   | "test-idempotency"
-  | "test-live-mutation";
+  | "test-live-mutation"
+  | "create-target"
+  | "create-write";
 
 export interface PluginValidationFinding {
   file: string;
@@ -162,6 +164,43 @@ function addWarning(
   findings.warnings.push({ file, rule, message, fix });
 }
 
+export function validatePluginName(
+  declaredName: string,
+  rootName = declaredName,
+  file = MANIFEST_REL.split(sep).join("/"),
+): PluginValidationFinding[] {
+  const findings: PluginValidationFinding[] = [];
+  if (!PLUGIN_NAME_RE.test(declaredName)) {
+    findings.push({
+      file,
+      rule: "manifest-name",
+      message: `manifest name "${declaredName}" must be lowercase kebab-case`,
+      fix: "Use a name matching /^[a-z][a-z0-9-]*$/.",
+    });
+  }
+  if (
+    declaredName === "core" ||
+    declaredName === "aidlc" ||
+    declaredName.startsWith("aidlc-")
+  ) {
+    findings.push({
+      file,
+      rule: "manifest-name",
+      message: `manifest name "${declaredName}" is reserved`,
+      fix: 'Choose a name other than "core", "aidlc", or the "aidlc-" namespace.',
+    });
+  }
+  if (declaredName !== rootName) {
+    findings.push({
+      file,
+      rule: "manifest-name",
+      message: `manifest name "${declaredName}" does not equal plugin root directory "${rootName}"`,
+      fix: `Rename the directory to "${declaredName}" or set "name" to "${rootName}".`,
+    });
+  }
+  return findings;
+}
+
 export function walkPluginFiles(dir: string): string[] {
   if (!existsSync(dir)) return [];
   const out: string[] = [];
@@ -251,37 +290,9 @@ function validateManifest(
       `Set "name" to the plugin repository directory name "${rootName}".`,
     );
   } else {
-    if (!PLUGIN_NAME_RE.test(declaredName)) {
-      addError(
-        findings,
-        displayFile,
-        "manifest-name",
-        `manifest name "${declaredName}" must be lowercase kebab-case`,
-        "Use a name matching /^[a-z][a-z0-9-]*$/.",
-      );
-    }
-    if (
-      declaredName === "core" ||
-      declaredName === "aidlc" ||
-      declaredName.startsWith("aidlc-")
-    ) {
-      addError(
-        findings,
-        displayFile,
-        "manifest-name",
-        `manifest name "${declaredName}" is reserved`,
-        'Choose a name other than "core", "aidlc", or the "aidlc-" namespace.',
-      );
-    }
-    if (declaredName !== rootName) {
-      addError(
-        findings,
-        displayFile,
-        "manifest-name",
-        `manifest name "${declaredName}" does not equal plugin root directory "${rootName}"`,
-        `Rename the directory to "${declaredName}" or set "name" to "${rootName}".`,
-      );
-    }
+    findings.errors.push(
+      ...validatePluginName(declaredName, rootName, displayFile),
+    );
   }
 
   if (

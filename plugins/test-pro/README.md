@@ -2,7 +2,8 @@
 
 > A first-party **AIDLC plugin**: comprehensive, traceable test coverage layered
 > onto the AI-DLC workflow. Reference implementation of the plugin mechanism —
-> copy its shape for your own plugin. Design: [`docs/reference/18-plugin-mechanism.md`](../../docs/reference/18-plugin-mechanism.md).
+> start a new plugin with `aidlc-plugin-create.ts`, then use this richer example
+> for advanced surfaces. Design: [`docs/reference/18-plugin-mechanism.md`](../../docs/reference/18-plugin-mechanism.md).
 
 ## 1. What it does
 

@@ -3,8 +3,9 @@ All notable changes to this project will be documented in this file.
 
 ## [2.6.105] - 2026-08-26
 
-Plugin authors can now validate, build, and compose-test an authored plugin repository offline with shipped standalone tools, without a framework checkout or mutations to the install under test. **Upgrade:** refresh your `dist/<harness>/` shell to install the authoring tools, bundled hook templates, and harness target data.
+Plugin authors can now create, validate, build, and compose-test an authored plugin repository offline with shipped standalone tools, without a framework checkout or mutations to the install under test. **Upgrade:** refresh your `dist/<harness>/` shell to install the authoring tools, bundled hook templates, and harness target data.
 
+* Run `bun <tools-dir>/aidlc-plugin-create.ts <name> [targetDir] [--json]` to emit a deterministic minimal plugin that validates green on arrival; CREATE refuses non-empty targets and never vendors `hooks/compose.ts`.
 * Run `bun <tools-dir>/aidlc-plugin-validate.ts <plugin-root> [--json]`; exit codes are `0` valid, `1` findings, and `2` usage.
 * Validation covers manifest shape, stage schema, scope and agent identity, plugin-local duplicate artifact producers across `produces` and `optional_produces`, accidental test/fixture payloads under `tools/`, and vendored compose-hook drift.
 * Run `bun <tools-dir>/aidlc-plugin-build.ts <plugin-root> <harness> [outDir] [--json]` to validate then emit one host-native projection; output defaults to `<plugin-root>/dist/<harness>/`.
