@@ -118,6 +118,7 @@
 // Exit codes: 0 success, 1 wait-timeout / assertion miss, 2 usage/spawn error.
 
 import { spawn, spawnSync } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import {
   appendFileSync,
   existsSync,
@@ -130,7 +131,7 @@ import {
 } from "node:fs";
 import * as os from "node:os";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, posix, win32 } from "node:path";
 import { stateFilePathFor } from "./sdk-drive.ts";
 
 const POLL_INTERVAL_MS = 150;
@@ -138,6 +139,11 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_STABLE_MS = 600;
 const DEFAULT_TUI_SETTING_SOURCES = "project";
 const DEFAULT_ANSWER_GATE_TRACE_POLL_MS = 10_000;
+const WIN_KILL_GRACE_MS = 300;
+export const WIN_KILL_TIMEOUT_MS = 8_000;
+const WIN_PROCESS_QUERY_TIMEOUT_MS = 750;
+const WIN_TASKKILL_TIMEOUT_MS = 750;
+const WIN_CONSOLE_LIST_TIMEOUT_MS = 5_000;
 
 type Args = {
   positionals: string[];
@@ -179,7 +185,9 @@ function fail(msg: string, code = 2): never {
 }
 
 function safeTraceName(s: string): string {
-  return s.replace(/[^A-Za-z0-9._-]/g, "_");
+  const safe = s.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 80);
+  const digest = createHash("sha256").update(s).digest("hex").slice(0, 16);
+  return `${safe}-${digest}`;
 }
 
 function tuiTracePath(session: string): string | undefined {
@@ -263,6 +271,68 @@ function resolveWinExecutable(file: string): string {
   return file;
 }
 
+export type WindowsLaunchSpec = {
+  file: string;
+  args: string[];
+  windowsVerbatimArguments?: boolean;
+};
+
+const CMD_META_CHARS = /([()\][%!^"`<>&|;, *?])/g;
+
+function escapeCmdCommand(command: string): string {
+  return command.replace(CMD_META_CHARS, "^$1");
+}
+
+function escapeCmdArgument(argument: string): string {
+  // Quote for CommandLineToArgvW, then protect every cmd.exe metacharacter.
+  // This is the focused algorithm used by established Windows spawn adapters.
+  let escaped = argument.replace(/(?=(\\+?)?)\1"/g, "$1$1\\\"");
+  escaped = escaped.replace(/(?=(\\+?)?)\1$/, "$1$1");
+  escaped = `"${escaped}"`;
+  escaped = escaped.replace(CMD_META_CHARS, "^$1");
+  // Batch shims commonly forward `%*` into another command. Protect the same
+  // characters for that second cmd.exe parse as well as the outer /c parse.
+  return escaped.replace(CMD_META_CHARS, "^$1");
+}
+
+/**
+ * Adapt a resolved Windows target without enabling Node's generic shell mode.
+ * Batch files require one deliberately quoted cmd.exe command string; PowerShell
+ * scripts and ordinary executables retain structured argv.
+ */
+export function adaptWindowsLaunch(
+  file: string,
+  args: string[],
+  env: NodeJS.ProcessEnv = process.env,
+): WindowsLaunchSpec {
+  const lower = file.toLowerCase();
+  if (lower.endsWith(".cmd") || lower.endsWith(".bat")) {
+    const shellCommand = [
+      escapeCmdCommand(file),
+      ...args.map(escapeCmdArgument),
+    ].join(" ");
+    return {
+      file: env.ComSpec ?? env.COMSPEC ?? "cmd.exe",
+      args: ["/d", "/s", "/c", `"${shellCommand}"`],
+      windowsVerbatimArguments: true,
+    };
+  }
+  if (lower.endsWith(".ps1")) {
+    return {
+      file: "powershell.exe",
+      args: [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-File",
+        file,
+        ...args,
+      ],
+    };
+  }
+  return { file, args: [...args] };
+}
+
 function requireFlag(a: Args, name: string): string {
   const v = a.flags[name];
   if (!v) fail(`missing required --${name}`);
@@ -323,6 +393,641 @@ function answerGateTracePollMs(): number {
 // under node where Bun.sleep is absent).
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+function readPidFile(path: string): number | null {
+  if (!existsSync(path)) return null;
+  try {
+    const pid = Number.parseInt(readFileSync(path, "utf8").trim(), 10);
+    return Number.isFinite(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+export type BoundedCommandResult = {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
+  errorCode?: string;
+};
+
+export function runBoundedCommand(
+  file: string,
+  args: string[],
+  timeoutMs: number,
+  stdio: "ignore" | "pipe" = "pipe",
+): BoundedCommandResult {
+  const result = spawnSync(file, args, {
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: Math.max(1, timeoutMs),
+    killSignal: "SIGKILL",
+    stdio,
+  });
+  const errorCode = (result.error as NodeJS.ErrnoException | undefined)?.code;
+  return {
+    status: result.status,
+    stdout: typeof result.stdout === "string" ? result.stdout : "",
+    stderr: typeof result.stderr === "string" ? result.stderr : "",
+    timedOut: errorCode === "ETIMEDOUT",
+    errorCode,
+  };
+}
+
+function forceKillWindowsTree(
+  pid: number,
+  timeoutMs = WIN_TASKKILL_TIMEOUT_MS,
+): BoundedCommandResult {
+  return runBoundedCommand(
+    "taskkill",
+    ["/F", "/T", "/PID", String(pid)],
+    timeoutMs,
+    "ignore",
+  );
+}
+
+export type WindowsProcessIdentity = {
+  pid: number;
+  parentPid: number;
+  creationDate: string;
+  commandLine: string;
+};
+
+type WindowsDescendantSnapshot = {
+  currentRoot: WindowsProcessIdentity | null;
+  children: WindowsProcessIdentity[];
+};
+
+type WindowsProcessQuery<T> =
+  | { status: "ok"; value: T }
+  | { status: "absent" }
+  | { status: "error"; message: string };
+
+type WindowsSessionMeta = {
+  cols: number;
+  rows: number;
+  session?: string;
+  ownerToken?: string;
+};
+
+type WindowsSessionOwnership = {
+  schema: 1;
+  ownerToken: string;
+  session: string;
+  daemon?: WindowsProcessIdentity;
+  daemonChildren?: WindowsProcessIdentity[];
+  childPid: number;
+  childStartedAfter: string;
+  child?: WindowsProcessIdentity;
+  childExitedAt?: string;
+  orphanCleanupComplete?: boolean;
+  orphans?: WindowsProcessIdentity[];
+};
+
+export type WindowsSpawnAuthority = {
+  pid: number;
+  parentPid: number;
+  startedAfter: string;
+};
+
+type WindowsTargetExit = {
+  code?: number | null;
+  signal?: NodeJS.Signals | null;
+  error?: string;
+  exitedAt: string;
+  childPid?: number;
+  child?: WindowsProcessIdentity;
+  spawn?: WindowsSpawnAuthority;
+};
+
+const injectedCimFailures = new Set<string>();
+
+function writeCimTrace(line: string): void {
+  const tracePath = process.env.AIDLC_TUI_CIM_TRACE_FILE;
+  if (tracePath) appendFileSync(tracePath, `${line}\n`);
+}
+
+function shouldInjectCimFailure(context: string): boolean {
+  const configured = (process.env.AIDLC_TUI_CIM_FAIL_CONTEXTS ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (configured.includes(`${context}:always`)) {
+    writeCimTrace(`inject pid=${process.pid} context=${context}`);
+    return true;
+  }
+  if (!configured.includes(context) || injectedCimFailures.has(context)) {
+    return false;
+  }
+  injectedCimFailures.add(context);
+  writeCimTrace(`inject pid=${process.pid} context=${context}`);
+  return true;
+}
+
+function readJsonFile<T>(path: string): T | null {
+  if (!existsSync(path)) return null;
+  try {
+    return JSON.parse(readFileSync(path, "utf8")) as T;
+  } catch {
+    return null;
+  }
+}
+
+function readJsonFileWithRetry<T>(
+  path: string,
+  timeoutMs: number,
+): T | null {
+  const deadline = Date.now() + timeoutMs;
+  do {
+    const value = readJsonFile<T>(path);
+    if (value !== null || !existsSync(path)) return value;
+    sleepSync(25);
+  } while (Date.now() < deadline);
+  return readJsonFile<T>(path);
+}
+
+function windowsProcessQuery(
+  pid: number,
+  timeoutMs = WIN_PROCESS_QUERY_TIMEOUT_MS,
+  context = "process",
+): WindowsProcessQuery<WindowsProcessIdentity> {
+  if (shouldInjectCimFailure(context)) {
+    return {
+      status: "error",
+      message: `injected CIM failure for ${context}`,
+    };
+  }
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    `$p = Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}"`,
+    "if ($null -eq $p) { exit 3 }",
+    "$out = [pscustomobject]@{",
+    "  pid = [int]$p.ProcessId",
+    "  parentPid = [int]$p.ParentProcessId",
+    '  creationDate = $p.CreationDate.ToUniversalTime().ToString("o")',
+    "  commandLine = [string]$p.CommandLine",
+    "}",
+    "$out | ConvertTo-Json -Compress",
+  ].join("\n");
+  const result = runBoundedCommand(
+    "powershell.exe",
+    ["-NoProfile", "-NonInteractive", "-Command", script],
+    timeoutMs,
+  );
+  if (result.status === 3) return { status: "absent" };
+  if (result.status !== 0) {
+    return {
+      status: "error",
+      message:
+        result.timedOut
+          ? `process identity query timed out for pid ${pid}`
+          : `process identity query failed for pid ${pid}: ` +
+            `${result.stderr || result.errorCode || `exit ${result.status}`}`,
+    };
+  }
+  try {
+    return {
+      status: "ok",
+      value: JSON.parse(result.stdout.trim()) as WindowsProcessIdentity,
+    };
+  } catch {
+    return {
+      status: "error",
+      message: `process identity query returned invalid JSON for pid ${pid}`,
+    };
+  }
+}
+
+function windowsProcessFallbackQuery(
+  pid: number,
+  parentPid: number,
+  timeoutMs = WIN_PROCESS_QUERY_TIMEOUT_MS,
+  context = "process-fallback",
+): WindowsProcessQuery<WindowsProcessIdentity> {
+  if (shouldInjectCimFailure(context)) {
+    return {
+      status: "error",
+      message: `injected process fallback failure for ${context}`,
+    };
+  }
+  const script = [
+    `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue`,
+    "if ($null -eq $p) { exit 3 }",
+    "$out = [pscustomobject]@{",
+    "  pid = [int]$p.Id",
+    `  parentPid = ${parentPid}`,
+    '  creationDate = $p.StartTime.ToUniversalTime().ToString("o")',
+    "  commandLine = ''",
+    "}",
+    "$out | ConvertTo-Json -Compress",
+  ].join("\n");
+  const result = runBoundedCommand(
+    "powershell.exe",
+    ["-NoProfile", "-NonInteractive", "-Command", script],
+    timeoutMs,
+  );
+  if (result.status === 3) return { status: "absent" };
+  if (result.status !== 0) {
+    return {
+      status: "error",
+      message: `fallback process identity query failed for pid ${pid}`,
+    };
+  }
+  try {
+    return {
+      status: "ok",
+      value: JSON.parse(result.stdout.trim()) as WindowsProcessIdentity,
+    };
+  } catch {
+    return {
+      status: "error",
+      message: `fallback process identity query returned invalid JSON for pid ${pid}`,
+    };
+  }
+}
+
+function windowsDirectChildrenQuery(
+  parentPid: number,
+  timeoutMs = WIN_PROCESS_QUERY_TIMEOUT_MS,
+  context = "descendants",
+): WindowsProcessQuery<WindowsDescendantSnapshot> {
+  if (shouldInjectCimFailure(context)) {
+    return {
+      status: "error",
+      message: `injected CIM failure for ${context}`,
+    };
+  }
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    "$all = @(Get-CimInstance Win32_Process)",
+    "function Convert-Identity($p) {",
+    "  if ($null -eq $p) { return $null }",
+    "  return [pscustomobject]@{",
+    "    pid = [int]$p.ProcessId",
+    "    parentPid = [int]$p.ParentProcessId",
+    '    creationDate = $p.CreationDate.ToUniversalTime().ToString("o")',
+    "    commandLine = [string]$p.CommandLine",
+    "  }",
+    "}",
+    `$root = $all | Where-Object { [int]$_.ProcessId -eq ${parentPid} } | Select-Object -First 1`,
+    `$children = @($all | Where-Object { [int]$_.ParentProcessId -eq ${parentPid} } | ForEach-Object { Convert-Identity $_ })`,
+    "$out = [pscustomobject]@{",
+    "  currentRoot = Convert-Identity $root",
+    "  children = $children",
+    "}",
+    "ConvertTo-Json -InputObject $out -Depth 4 -Compress",
+  ].join("\n");
+  const result = runBoundedCommand(
+    "powershell.exe",
+    ["-NoProfile", "-NonInteractive", "-Command", script],
+    timeoutMs,
+  );
+  if (result.status !== 0) {
+    return {
+      status: "error",
+      message:
+        result.timedOut
+          ? `descendant identity query timed out for parent pid ${parentPid}`
+          : `descendant identity query failed for parent pid ${parentPid}: ` +
+            `${result.stderr || result.errorCode || `exit ${result.status}`}`,
+    };
+  }
+  try {
+    const parsed = JSON.parse(
+      result.stdout.trim(),
+    ) as WindowsDescendantSnapshot;
+    return {
+      status: "ok",
+      value: {
+        currentRoot: parsed.currentRoot ?? null,
+        children: Array.isArray(parsed.children)
+          ? parsed.children
+          : parsed.children
+            ? [parsed.children]
+            : [],
+      },
+    };
+  } catch {
+    return {
+      status: "error",
+      message: `descendant identity query returned invalid JSON for parent pid ${parentPid}`,
+    };
+  }
+}
+
+function sameWindowsProcess(
+  current: WindowsProcessIdentity,
+  recorded: WindowsProcessIdentity,
+): boolean {
+  return (
+    current.pid === recorded.pid &&
+    Date.parse(current.creationDate) === Date.parse(recorded.creationDate)
+  );
+}
+
+export function filterOwnedWindowsDescendants(
+  recordedRoot: WindowsProcessIdentity,
+  currentRoot: WindowsProcessIdentity | null,
+  children: WindowsProcessIdentity[],
+  exitedAt: string,
+): WindowsProcessIdentity[] {
+  if (currentRoot && !sameWindowsProcess(currentRoot, recordedRoot)) {
+    return [];
+  }
+  const started = Date.parse(recordedRoot.creationDate);
+  const exited = Date.parse(exitedAt);
+  if (!Number.isFinite(started) || !Number.isFinite(exited)) return [];
+  return children.filter((child) => {
+    const created = Date.parse(child.creationDate);
+    return (
+      child.parentPid === recordedRoot.pid &&
+      Number.isFinite(created) &&
+      created >= started &&
+      created <= exited
+    );
+  });
+}
+
+export function filterSpawnOwnedWindowsDescendants(
+  spawn: WindowsSpawnAuthority,
+  currentRoot: WindowsProcessIdentity | null,
+  children: WindowsProcessIdentity[],
+  exitedAt: string,
+): WindowsProcessQuery<WindowsProcessIdentity[]> {
+  const started = Date.parse(spawn.startedAfter);
+  const exited = Date.parse(exitedAt);
+  if (
+    !Number.isFinite(started) ||
+    !Number.isFinite(exited) ||
+    exited < started
+  ) {
+    return {
+      status: "error",
+      message: `invalid recorded lifetime for target pid ${spawn.pid}`,
+    };
+  }
+  if (currentRoot) {
+    const currentCreated = Date.parse(currentRoot.creationDate);
+    if (!Number.isFinite(currentCreated) || currentCreated <= exited) {
+      return {
+        status: "error",
+        message:
+          `target pid ${spawn.pid} is still live or was reused inside its ` +
+          "recorded lifetime",
+      };
+    }
+  }
+  const malformed = children.find(
+    (child) =>
+      child.parentPid === spawn.pid &&
+      !Number.isFinite(Date.parse(child.creationDate)),
+  );
+  if (malformed) {
+    return {
+      status: "error",
+      message:
+        `cannot verify child pid ${malformed.pid} of target pid ${spawn.pid}: ` +
+        "invalid creation time",
+    };
+  }
+  return {
+    status: "ok",
+    value: children.filter((child) => {
+      const created = Date.parse(child.creationDate);
+      return (
+        child.parentPid === spawn.pid &&
+        created >= started &&
+        created <= exited
+      );
+    }),
+  };
+}
+
+function validateWindowsSpawnIdentity(
+  spawn: WindowsSpawnAuthority,
+  current: WindowsProcessIdentity,
+): WindowsProcessQuery<WindowsProcessIdentity> {
+  const started = Date.parse(spawn.startedAfter);
+  const created = Date.parse(current.creationDate);
+  if (
+    current.pid !== spawn.pid ||
+    current.parentPid !== spawn.parentPid ||
+    !Number.isFinite(started) ||
+    !Number.isFinite(created) ||
+    created < started
+  ) {
+    return {
+      status: "error",
+      message:
+        `target pid ${spawn.pid} no longer matches its authoritative spawn ` +
+        "record",
+    };
+  }
+  return { status: "ok", value: current };
+}
+
+function isWindowsSpawnAuthority(
+  value: WindowsSpawnAuthority | null,
+): value is WindowsSpawnAuthority {
+  return (
+    value !== null &&
+    Number.isInteger(value.pid) &&
+    value.pid > 0 &&
+    Number.isInteger(value.parentPid) &&
+    value.parentPid > 0 &&
+    Number.isFinite(Date.parse(value.startedAfter))
+  );
+}
+
+export function filterConsoleOwnedWindowsProcesses(
+  firstSnapshot: number[],
+  identities: WindowsProcessIdentity[],
+  secondSnapshot: number[],
+): WindowsProcessIdentity[] {
+  const first = new Set(firstSnapshot);
+  const second = new Set(secondSnapshot);
+  return identities.filter(
+    (identity) => first.has(identity.pid) && second.has(identity.pid),
+  );
+}
+
+export function newConsoleProcessIds(
+  firstSnapshot: number[],
+  secondSnapshot: number[],
+): number[] {
+  const first = new Set(firstSnapshot);
+  return secondSnapshot.filter((pid) => !first.has(pid));
+}
+
+export function shouldForceKillWindowsChildRoot(
+  childExitedAt: string | undefined,
+  recorded: WindowsProcessIdentity | undefined,
+  current: WindowsProcessIdentity | undefined,
+): boolean {
+  return (
+    childExitedAt === undefined &&
+    recorded !== undefined &&
+    current !== undefined &&
+    sameWindowsProcess(current, recorded)
+  );
+}
+
+function commandLineHasArgument(
+  commandLine: string,
+  flag: string,
+  value: string,
+): boolean {
+  const escapedFlag = flag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapedValue = value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(
+    `(?:^|\\s)${escapedFlag}\\s+(?:"${escapedValue}"|${escapedValue})(?=\\s|$)`,
+    "i",
+  ).test(commandLine);
+}
+
+function discoverOwnedWindowsOrphans(
+  ownership: WindowsSessionOwnership,
+  timeoutMs: number,
+  context: string,
+): WindowsProcessQuery<WindowsProcessIdentity[]> {
+  if (ownership.childExitedAt && !ownership.child) {
+    return ownership.orphanCleanupComplete === true
+      ? { status: "ok", value: ownership.orphans ?? [] }
+      : {
+          status: "error",
+          message: "ConPTY console ownership has not been resolved",
+        };
+  }
+  if (!ownership.child || !ownership.childExitedAt) {
+    return { status: "ok", value: ownership.orphans ?? [] };
+  }
+  return discoverExitedWindowsDescendants(
+    ownership.child,
+    ownership.childExitedAt,
+    timeoutMs,
+    context,
+  );
+}
+
+function discoverExitedWindowsDescendants(
+  root: WindowsProcessIdentity,
+  exitedAt: string,
+  timeoutMs: number,
+  context: string,
+): WindowsProcessQuery<WindowsProcessIdentity[]> {
+  const query = windowsDirectChildrenQuery(
+    root.pid,
+    timeoutMs,
+    context,
+  );
+  if (query.status !== "ok") return query;
+  return {
+    status: "ok",
+    value: filterOwnedWindowsDescendants(
+      root,
+      query.value.currentRoot,
+      query.value.children,
+      exitedAt,
+    ),
+  };
+}
+
+function discoverTargetExitWindowsDescendants(
+  targetExit: WindowsTargetExit,
+  timeoutMs: number,
+  context: string,
+): WindowsProcessQuery<WindowsProcessIdentity[]> {
+  if (targetExit.error) return { status: "ok", value: [] };
+  if (targetExit.child) {
+    return discoverExitedWindowsDescendants(
+      targetExit.child,
+      targetExit.exitedAt,
+      timeoutMs,
+      context,
+    );
+  }
+  if (!targetExit.spawn) {
+    return {
+      status: "error",
+      message:
+        `target pid ${targetExit.childPid ?? "unknown"} exited without a ` +
+        "creation identity or authoritative spawn lifetime",
+    };
+  }
+  const query = windowsDirectChildrenQuery(
+    targetExit.spawn.pid,
+    timeoutMs,
+    context,
+  );
+  if (query.status !== "ok") return query;
+  return filterSpawnOwnedWindowsDescendants(
+    targetExit.spawn,
+    query.value.currentRoot,
+    query.value.children,
+    targetExit.exitedAt,
+  );
+}
+
+function liveOwnedWindowsProcesses(
+  recorded: WindowsProcessIdentity[],
+  timeoutMs: number,
+  context: string,
+): WindowsProcessQuery<WindowsProcessIdentity[]> {
+  const deadline = Date.now() + timeoutMs;
+  const live: WindowsProcessIdentity[] = [];
+  for (const identity of recorded) {
+    const remaining = Math.max(0, deadline - Date.now());
+    if (remaining <= 0) {
+      return {
+        status: "error",
+        message: `process identity liveness query timed out for ${context}`,
+      };
+    }
+    const query = windowsProcessQuery(
+      identity.pid,
+      Math.min(WIN_PROCESS_QUERY_TIMEOUT_MS, remaining),
+      context,
+    );
+    if (query.status === "error") return query;
+    if (
+      query.status === "ok" &&
+      sameWindowsProcess(query.value, identity)
+    ) {
+      live.push(identity);
+    }
+  }
+  return { status: "ok", value: live };
+}
+
+function mergeWindowsProcessIdentities(
+  identities: WindowsProcessIdentity[],
+): WindowsProcessIdentity[] {
+  const unique = new Map<string, WindowsProcessIdentity>();
+  for (const identity of identities) {
+    unique.set(`${identity.pid}:${identity.creationDate}`, identity);
+  }
+  return [...unique.values()];
+}
+
+function clearWindowsSessionAuthority(dir: string): void {
+  for (const name of ["pid", "child.pid", "meta.json", "ownership.json"]) {
+    rmSync(join(dir, name), { force: true });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -449,17 +1154,108 @@ const tmuxBackend: Backend = {
 //   <dir>/cmd.log   — append-only command log the daemon tails (send/kill).
 //   <dir>/grid.txt  — the latest reconstructed grid the daemon snapshots; the
 //                     capture/wait clients read it.
-//   <dir>/meta.json — { cols, rows } so a client can resize/diagnose.
+//   <dir>/meta.json — { cols, rows, ownerToken } for diagnostics + PID authority.
 //   <dir>/pid       — the daemon pid, for kill's force-terminate backstop.
 // The channels are deliberately dumb files (no named pipes / sockets) so the
 // same code runs anywhere a filesystem does.
 // ---------------------------------------------------------------------------
 
-function winSessionDir(session: string): string {
+export function winSessionDir(session: string): string {
   // Namespaced under tmpdir so parallel sessions never collide. The session
-  // name is sanitised to a filesystem-safe token.
+  // name is readable but its raw bytes are hashed so sanitisation collisions
+  // (`a/b` vs `a_b`) never share a command channel.
+  const safe = session.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 80);
+  const digest = createHash("sha256").update(session).digest("hex").slice(0, 16);
+  return join(tmpdir(), "tui-drive", `${safe}-${digest}`);
+}
+
+export function legacyWinSessionDir(session: string): string {
   const safe = session.replace(/[^A-Za-z0-9._-]/g, "_");
   return join(tmpdir(), "tui-drive", safe);
+}
+
+function existingWinSessionDir(session: string): {
+  dir: string;
+  legacy: boolean;
+} {
+  const current = winSessionDir(session);
+  if (existsSync(current)) return { dir: current, legacy: false };
+  const legacy = legacyWinSessionDir(session);
+  return {
+    dir: legacy,
+    legacy: existsSync(legacy),
+  };
+}
+
+function killLegacyWindowsSession(session: string, dir: string): void {
+  const daemonPid = readPidFile(join(dir, "pid"));
+  if (daemonPid === null) return;
+  const deadline = Date.now() + WIN_KILL_TIMEOUT_MS;
+  const remaining = (): number => Math.max(0, deadline - Date.now());
+  const daemonQuery = windowsProcessQuery(
+    daemonPid,
+    Math.min(WIN_PROCESS_QUERY_TIMEOUT_MS, Math.max(1, remaining())),
+    "legacy-daemon",
+  );
+  if (daemonQuery.status !== "ok") {
+    if (daemonQuery.status === "absent") {
+      rmSync(dir, { recursive: true, force: true });
+      return;
+    }
+    fail(`cannot verify legacy Windows session '${session}': ${daemonQuery.message}`, 1);
+  }
+  const commandLine = daemonQuery.value.commandLine;
+  if (
+    !commandLine.toLowerCase().includes("__win-daemon") ||
+    !commandLine.toLowerCase().includes("tui-drive.ts") ||
+    !commandLineHasArgument(commandLine, "--session", session)
+  ) {
+    return;
+  }
+
+  const owned = [daemonQuery.value];
+  // Pre-upgrade daemons recorded only their own PID and could orphan children
+  // via direct child.kill(). Force the exact verified daemon tree while its
+  // parent/descendant relationships are still intact.
+  forceKillWindowsTree(
+    daemonPid,
+    Math.min(WIN_TASKKILL_TIMEOUT_MS, Math.max(1, remaining())),
+  );
+  sleepSync(Math.min(100, remaining()));
+  let live = liveOwnedWindowsProcesses(
+    owned,
+    Math.max(1, remaining()),
+    "legacy-liveness",
+  );
+  if (live.status === "error") {
+    fail(`cannot verify legacy Windows session shutdown: ${live.message}`, 1);
+  }
+  let survivors = live.status === "ok" ? live.value : [];
+  while (survivors.length > 0 && remaining() > 0) {
+    for (const process of survivors) {
+      const budget = Math.min(WIN_TASKKILL_TIMEOUT_MS, remaining());
+      if (budget <= 0) break;
+      forceKillWindowsTree(process.pid, budget);
+    }
+    if (remaining() > 0) sleepSync(Math.min(100, remaining()));
+    live = liveOwnedWindowsProcesses(
+      survivors,
+      Math.max(1, remaining()),
+      "legacy-liveness",
+    );
+    if (live.status === "error") {
+      fail(`cannot verify legacy Windows session shutdown: ${live.message}`, 1);
+    }
+    survivors = live.status === "ok" ? live.value : [];
+  }
+  if (survivors.length > 0) {
+    fail(
+      `failed to terminate legacy Windows session '${session}' within ` +
+        `${WIN_KILL_TIMEOUT_MS}ms`,
+      1,
+    );
+  }
+  rmSync(dir, { recursive: true, force: true });
 }
 
 const win32Backend: Backend = {
@@ -471,7 +1267,11 @@ const win32Backend: Backend = {
     win32Backend.kill(session);
     rmSync(dir, { recursive: true, force: true });
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "meta.json"), JSON.stringify({ cols: width, rows: height }));
+    const ownerToken = randomUUID();
+    writeFileSync(
+      join(dir, "meta.json"),
+      JSON.stringify({ cols: width, rows: height, session, ownerToken }),
+    );
 
     // Fork the daemon UNDER NODE (never bun — node-pty input wedges under bun,
     // microsoft/node-pty #748). We re-exec THIS file with the `__win-daemon`
@@ -498,6 +1298,8 @@ const win32Backend: Backend = {
         "__win-daemon",
         "--session",
         session,
+        "--owner-token",
+        ownerToken,
         "--cwd",
         cwd,
         "--width",
@@ -523,10 +1325,24 @@ const win32Backend: Backend = {
   send(session, keys, literal, noEnter) {
     const dir = winSessionDir(session);
     if (!existsSync(dir)) fail(`no live session '${session}'`, 1);
+    const meta = readJsonFile<WindowsSessionMeta>(join(dir, "meta.json"));
+    if (
+      meta?.session !== session ||
+      typeof meta.ownerToken !== "string"
+    ) {
+      fail(`no authenticated live session '${session}'`, 1);
+    }
     // The daemon translates these the same way tmux does: named keys (Enter,
     // Down, ...) vs literal text. We forward the raw intent; the daemon owns the
     // keystroke encoding (CSI sequences for arrows, \r for Enter).
-    const record = `${JSON.stringify({ kind: "send", keys, literal, noEnter })}\n`;
+    const record = `${JSON.stringify({
+      kind: "send",
+      session,
+      ownerToken: meta.ownerToken,
+      keys,
+      literal,
+      noEnter,
+    })}\n`;
     appendFileSync(join(dir, "cmd.log"), record);
   },
 
@@ -534,46 +1350,470 @@ const win32Backend: Backend = {
     // node-pty has no colour-escape passthrough equivalent to tmux -e; the grid
     // is always reconstructed as plain text (xterm strips SGR into cell attrs we
     // do not re-serialise). _ansi is accepted for surface parity and ignored.
-    const dir = winSessionDir(session);
+    const { dir } = existingWinSessionDir(session);
     const gridPath = join(dir, "grid.txt");
     if (!existsSync(gridPath)) return "";
     return readFileSync(gridPath, "utf8");
   },
 
   kill(session) {
-    const dir = winSessionDir(session);
+    const resolved = existingWinSessionDir(session);
+    const { dir } = resolved;
     if (!existsSync(dir)) return;
-    // 1) Ask the daemon to tear the pty down cleanly (it filters the ConPTY
-    //    "Socket is closed" / AttachConsole teardown noise itself).
-    try {
-      appendFileSync(join(dir, "cmd.log"), `${JSON.stringify({ kind: "kill" })}\n`);
-    } catch {
-      // channel already gone — fall through to the force-kill backstop.
+    if (resolved.legacy) {
+      killLegacyWindowsSession(session, dir);
+      return;
     }
-    // 2) Force-kill backstop: node-pty hangs on ConPTY teardown (p.kill() →
-    //    "Socket is closed"), so never block on it. Hard-terminate the daemon
-    //    pid after a short grace; the daemon's process.exit closes the pty.
-    const pidPath = join(dir, "pid");
-    if (existsSync(pidPath)) {
-      const pid = Number.parseInt(readFileSync(pidPath, "utf8").trim(), 10);
-      if (Number.isFinite(pid)) {
-        // Best-effort: SIGTERM, then the OS reaps. On Windows taskkill /F /PID
-        // is the reliable force-terminate (Stop-Process equivalent from the
-        // capture-v3 spike); on POSIX a plain kill suffices (this branch only
-        // runs on win32 in practice, but stays portable for local inspection).
-        if (process.platform === "win32") {
-          spawnSync("taskkill", ["/F", "/T", "/PID", String(pid)], {
-            stdio: "ignore",
-          });
+    const daemonPid = readPidFile(join(dir, "pid"));
+    const childPid = readPidFile(join(dir, "child.pid"));
+    if (process.platform !== "win32") {
+      for (const pid of [daemonPid, childPid]) {
+        if (pid === null) continue;
+        try {
+          process.kill(pid, "SIGTERM");
+        } catch {
+          // already dead
+        }
+      }
+      clearWindowsSessionAuthority(dir);
+      return;
+    }
+
+    const deadline = Date.now() + WIN_KILL_TIMEOUT_MS;
+    const remaining = (): number => Math.max(0, deadline - Date.now());
+    const meta = readJsonFile<WindowsSessionMeta>(join(dir, "meta.json"));
+    const ownershipPath = join(dir, "ownership.json");
+    const targetSpawnPath = join(dir, "target-spawn.json");
+    const targetExitPath = join(dir, "target-exit.json");
+    let ownership = readJsonFileWithRetry<WindowsSessionOwnership>(
+      ownershipPath,
+      250,
+    );
+    const ownedProcesses: WindowsProcessIdentity[] = [];
+    const verificationErrors: string[] = [];
+    let daemonStatus: "absent" | "error" | "legacy" | "mismatch" | "owned" =
+      daemonPid === null ? "absent" : "error";
+
+    const channelAuthenticated =
+      meta?.session === session &&
+      typeof meta.ownerToken === "string";
+
+    if (daemonPid !== null) {
+      const query = windowsProcessQuery(
+        daemonPid,
+        Math.min(WIN_PROCESS_QUERY_TIMEOUT_MS, Math.max(1, remaining())),
+        "kill-daemon",
+      );
+      if (query.status === "error") {
+        daemonStatus = "error";
+      } else if (query.status === "absent") {
+        daemonStatus = "absent";
+      } else {
+        const cmd = query.value.commandLine;
+        const markerMatches =
+          cmd.toLowerCase().includes("__win-daemon") &&
+          cmd.toLowerCase().includes("tui-drive.ts") &&
+          commandLineHasArgument(cmd, "--session", session);
+        if (!markerMatches) {
+          daemonStatus = "mismatch";
+        } else if (!meta?.ownerToken) {
+          // Tokenless legacy sessions may receive their channel-scoped graceful
+          // request, but never gain force-kill authority from a recyclable PID.
+          daemonStatus = "legacy";
+        } else if (
+          commandLineHasArgument(cmd, "--owner-token", meta.ownerToken)
+        ) {
+          daemonStatus = "owned";
+          ownedProcesses.push(query.value);
         } else {
-          try {
-            process.kill(pid, "SIGTERM");
-          } catch {
-            // already dead
+          daemonStatus = "mismatch";
+        }
+      }
+    }
+
+    ownership = readJsonFileWithRetry<WindowsSessionOwnership>(
+      ownershipPath,
+      Math.min(1_000, Math.max(1, remaining())),
+    );
+    if (ownership === null && existsSync(ownershipPath)) {
+      verificationErrors.push("ownership metadata remained unreadable");
+    }
+    if (daemonStatus === "error" && daemonPid !== null && remaining() > 0) {
+      const recheck = windowsProcessQuery(
+        daemonPid,
+        Math.min(WIN_PROCESS_QUERY_TIMEOUT_MS, Math.max(1, remaining())),
+        "kill-daemon-recheck",
+      );
+      if (recheck.status === "error") {
+        verificationErrors.push(recheck.message);
+      } else if (recheck.status === "absent") {
+        daemonStatus = "absent";
+      } else {
+        const cmd = recheck.value.commandLine;
+        const markerMatches =
+          cmd.toLowerCase().includes("__win-daemon") &&
+          cmd.toLowerCase().includes("tui-drive.ts") &&
+          commandLineHasArgument(cmd, "--session", session);
+        if (
+          markerMatches &&
+          meta?.ownerToken &&
+          commandLineHasArgument(cmd, "--owner-token", meta.ownerToken)
+        ) {
+          daemonStatus = "owned";
+          ownedProcesses.push(recheck.value);
+        } else {
+          daemonStatus = markerMatches ? "legacy" : "mismatch";
+        }
+      }
+    }
+
+    const validOwnership =
+      ownership?.schema === 1 &&
+        ownership.session === session &&
+        typeof meta?.ownerToken === "string" &&
+        ownership.ownerToken === meta.ownerToken
+        ? ownership
+        : null;
+    const ownershipValid = validOwnership !== null;
+
+    let targetDiscoveryResolved = true;
+    let targetRequiresWrapperAuthority = false;
+    let targetLivenessError = "target liveness could not be verified";
+    let targetSpawn = readJsonFileWithRetry<WindowsSpawnAuthority>(
+      targetSpawnPath,
+      250,
+    );
+    if (targetSpawn === null && existsSync(targetSpawnPath)) {
+      verificationErrors.push("target spawn metadata remained unreadable");
+      targetDiscoveryResolved = false;
+    } else if (targetSpawn !== null && !isWindowsSpawnAuthority(targetSpawn)) {
+      verificationErrors.push("target spawn metadata was invalid");
+      targetSpawn = null;
+      targetDiscoveryResolved = false;
+    }
+    let targetExit = readJsonFileWithRetry<WindowsTargetExit>(
+      targetExitPath,
+      250,
+    );
+    if (targetExit === null && existsSync(targetExitPath)) {
+      verificationErrors.push("target exit metadata remained unreadable");
+      targetDiscoveryResolved = false;
+    }
+    if (targetSpawn && !targetExit && targetDiscoveryResolved) {
+      const targetDeadline = Math.min(deadline, Date.now() + 2_500);
+      let targetObservedAbsent = false;
+      let current: WindowsProcessQuery<WindowsProcessIdentity> = {
+        status: "error",
+        message: "target liveness query did not run",
+      };
+      while (Date.now() < targetDeadline) {
+        current = windowsProcessQuery(
+          targetSpawn.pid,
+          Math.min(
+            WIN_PROCESS_QUERY_TIMEOUT_MS,
+            Math.max(1, targetDeadline - Date.now()),
+          ),
+          "kill-target-live",
+        );
+        if (current.status === "ok") {
+          const validated = validateWindowsSpawnIdentity(
+            targetSpawn,
+            current.value,
+          );
+          if (validated.status === "ok") {
+            ownedProcesses.unshift(validated.value);
+          } else {
+            verificationErrors.push(validated.message);
+            targetDiscoveryResolved = false;
+          }
+          break;
+        }
+        targetExit = readJsonFileWithRetry<WindowsTargetExit>(
+          targetExitPath,
+          Math.min(100, Math.max(1, targetDeadline - Date.now())),
+        );
+        if (targetExit) break;
+        if (current.status === "absent") targetObservedAbsent = true;
+        if (current.status === "error") {
+          targetLivenessError = current.message;
+          while (Date.now() < targetDeadline && !targetExit) {
+            sleepSync(Math.min(100, targetDeadline - Date.now()));
+            targetExit = readJsonFileWithRetry<WindowsTargetExit>(
+              targetExitPath,
+              Math.min(100, Math.max(1, targetDeadline - Date.now())),
+            );
+          }
+          if (!targetExit) targetRequiresWrapperAuthority = true;
+          break;
+        }
+        if (Date.now() < targetDeadline) sleepSync(100);
+      }
+      if (
+        current.status !== "ok" &&
+        targetExit === null &&
+        targetDiscoveryResolved
+      ) {
+        if (targetObservedAbsent) {
+          verificationErrors.push(
+            `target pid ${targetSpawn.pid} exited before its exit metadata was recorded`,
+          );
+          targetDiscoveryResolved = false;
+        } else {
+          targetRequiresWrapperAuthority = true;
+          if (current.status === "error") {
+            targetLivenessError = current.message;
           }
         }
       }
     }
+    if (targetExit && targetDiscoveryResolved) {
+      let targetQuery: WindowsProcessQuery<WindowsProcessIdentity[]> = {
+        status: "error",
+        message: "target descendant discovery did not run",
+      };
+      do {
+        targetQuery = discoverTargetExitWindowsDescendants(
+          targetExit,
+          Math.min(
+            WIN_PROCESS_QUERY_TIMEOUT_MS,
+            Math.max(1, remaining()),
+          ),
+          "kill-target-descendants",
+        );
+        if (targetQuery.status === "ok") break;
+        if (remaining() > 0) sleepSync(Math.min(100, remaining()));
+      } while (remaining() > 0);
+      if (targetQuery.status === "ok") {
+        ownedProcesses.unshift(...targetQuery.value);
+      } else {
+        verificationErrors.push(
+          targetQuery.status === "error"
+            ? targetQuery.message
+            : "target descendant discovery returned no snapshot",
+        );
+        targetDiscoveryResolved = false;
+      }
+    }
+
+    let orphanDiscoveryResolved =
+      !ownershipValid ||
+      !validOwnership?.childExitedAt ||
+      validOwnership.orphanCleanupComplete === true;
+    if (
+      validOwnership?.childExitedAt &&
+      validOwnership.orphanCleanupComplete !== true
+    ) {
+      if (!validOwnership.child) {
+        while (remaining() > 0) {
+          const latest = readJsonFileWithRetry<WindowsSessionOwnership>(
+            ownershipPath,
+            Math.min(250, Math.max(1, remaining())),
+          );
+          if (
+            latest?.schema === 1 &&
+            latest.session === session &&
+            latest.ownerToken === meta?.ownerToken &&
+            latest.orphanCleanupComplete === true
+          ) {
+            validOwnership.orphans = latest.orphans ?? [];
+            validOwnership.orphanCleanupComplete = true;
+            orphanDiscoveryResolved = true;
+            break;
+          }
+          sleepSync(Math.min(100, remaining()));
+        }
+        if (validOwnership.orphanCleanupComplete !== true) {
+          verificationErrors.push(
+            "ConPTY console ownership was not resolved before cleanup deadline",
+          );
+          orphanDiscoveryResolved = false;
+        }
+      } else {
+      let query: WindowsProcessQuery<WindowsProcessIdentity[]> = {
+        status: "error",
+        message: "orphan discovery did not run",
+      };
+      do {
+        query = discoverOwnedWindowsOrphans(
+          validOwnership,
+          Math.min(
+            WIN_PROCESS_QUERY_TIMEOUT_MS,
+            Math.max(1, remaining()),
+          ),
+          "kill-orphans",
+        );
+        if (query.status === "ok") break;
+        if (remaining() > 0) sleepSync(Math.min(100, remaining()));
+      } while (remaining() > 0);
+      if (query.status === "ok") {
+        validOwnership.orphans = query.value;
+        orphanDiscoveryResolved = true;
+        writeFileSync(ownershipPath, JSON.stringify(validOwnership));
+      } else {
+        verificationErrors.push(
+          query.status === "error"
+            ? query.message
+            : "parent-first orphan discovery returned no snapshot",
+        );
+        orphanDiscoveryResolved = false;
+      }
+      }
+    }
+
+    if (validOwnership) {
+      for (const recorded of [
+        ...(validOwnership.daemonChildren ?? []),
+        ...(validOwnership.child ? [validOwnership.child] : []),
+        ...(validOwnership.orphans ?? []),
+      ]) {
+        if (remaining() <= 0) break;
+        let query: WindowsProcessQuery<WindowsProcessIdentity>;
+        do {
+          query = windowsProcessQuery(
+            recorded.pid,
+            Math.min(
+              WIN_PROCESS_QUERY_TIMEOUT_MS,
+              Math.max(1, remaining()),
+            ),
+            "kill-owned-process",
+          );
+          if (query.status !== "error") break;
+          if (remaining() > 0) sleepSync(Math.min(100, remaining()));
+        } while (remaining() > 0);
+        if (query.status === "error") {
+          verificationErrors.push(query.message);
+        }
+        if (
+          query.status === "ok" &&
+          sameWindowsProcess(query.value, recorded)
+        ) {
+          if (
+            validOwnership.child &&
+            sameWindowsProcess(recorded, validOwnership.child)
+          ) {
+            ownedProcesses.unshift(recorded);
+          } else {
+            ownedProcesses.push(recorded);
+          }
+        }
+      }
+    }
+    if (targetRequiresWrapperAuthority) {
+      const wrapper = validOwnership?.child;
+      if (
+        !wrapper ||
+        validOwnership?.childExitedAt ||
+        !ownedProcesses.some((process) =>
+          sameWindowsProcess(process, wrapper)
+        )
+      ) {
+        verificationErrors.push(
+          `${targetLivenessError}; stable wrapper identity was not reverified`,
+        );
+        targetDiscoveryResolved = false;
+      }
+    }
+    if (!targetDiscoveryResolved) {
+      fail(
+        `cannot verify Windows session '${session}' target cleanup ` +
+          `(${verificationErrors.join("; ") || "target ownership unresolved"})`,
+        1,
+      );
+    }
+
+    if (daemonStatus === "mismatch" && !ownershipValid) {
+      clearWindowsSessionAuthority(dir);
+      return;
+    }
+    if (channelAuthenticated) {
+      try {
+        appendFileSync(
+          join(dir, "cmd.log"),
+          `${JSON.stringify({
+            kind: "kill",
+            session,
+            ownerToken: meta.ownerToken,
+          })}\n`,
+        );
+      } catch {
+        // channel already gone — identity-verified force cleanup may still work.
+      }
+    }
+    sleepSync(Math.min(WIN_KILL_GRACE_MS, remaining()));
+    let liveQuery = liveOwnedWindowsProcesses(
+      mergeWindowsProcessIdentities(ownedProcesses),
+      Math.max(1, remaining()),
+      "kill-liveness",
+    );
+    if (liveQuery.status === "error") {
+      verificationErrors.push(liveQuery.message);
+    }
+    let survivors =
+      liveQuery.status === "ok" ? liveQuery.value : [];
+    while (survivors.length > 0 && remaining() > 0) {
+      for (const process of survivors) {
+        const budget = Math.min(WIN_TASKKILL_TIMEOUT_MS, remaining());
+        if (budget <= 0) break;
+        forceKillWindowsTree(process.pid, budget);
+      }
+      if (remaining() > 0) sleepSync(Math.min(100, remaining()));
+      liveQuery = liveOwnedWindowsProcesses(
+        survivors,
+        Math.max(1, remaining()),
+        "kill-liveness",
+      );
+      if (liveQuery.status === "error") {
+        verificationErrors.push(liveQuery.message);
+        break;
+      }
+      survivors = liveQuery.status === "ok" ? liveQuery.value : [];
+    }
+
+    const knownLive = [daemonPid, childPid]
+      .filter((pid): pid is number => pid !== null)
+      .filter(processIsAlive);
+    writeCimTrace(
+      `kill-summary pid=${process.pid} session=${session} ` +
+        `ownershipValid=${ownershipValid} daemonStatus=${daemonStatus} ` +
+        `errors=${JSON.stringify(verificationErrors)} ` +
+        `targetResolved=${targetDiscoveryResolved} ` +
+        `orphanResolved=${orphanDiscoveryResolved} ` +
+        `survivors=${survivors.map((process) => process.pid).join(",")} ` +
+        `knownLive=${knownLive.join(",")}`,
+    );
+    if (
+      survivors.length > 0 ||
+      !targetDiscoveryResolved ||
+      !orphanDiscoveryResolved ||
+      verificationErrors.length > 0 ||
+      (
+        knownLive.length > 0 &&
+        daemonStatus !== "mismatch"
+      )
+    ) {
+      const details = [
+        survivors.length > 0
+          ? `surviving verified pid(s): ${survivors.map((process) => process.pid).join(", ")}`
+          : "",
+        knownLive.length > 0
+          ? `live unverified pid(s): ${knownLive.join(", ")}`
+          : "",
+        !targetDiscoveryResolved ? "target exit ownership unresolved" : "",
+        !orphanDiscoveryResolved ? "parent-first orphan discovery unresolved" : "",
+        ...verificationErrors,
+      ].filter(Boolean);
+      fail(
+        `failed to terminate Windows session '${session}' process tree within ` +
+          `${WIN_KILL_TIMEOUT_MS}ms (${details.join("; ")})`,
+        1,
+      );
+    }
+
+    if (validOwnership?.childExitedAt) {
+      validOwnership.orphanCleanupComplete = true;
+      writeFileSync(ownershipPath, JSON.stringify(validOwnership));
+    }
+    clearWindowsSessionAuthority(dir);
   },
 };
 
@@ -599,8 +1839,109 @@ function fileURLToPathSafe(url: string): string {
 // every path except the node daemon).
 // ---------------------------------------------------------------------------
 
+async function runWinChildWrapper(a: Args): Promise<void> {
+  const cwd = requireFlag(a, "cwd");
+  const releaseFile = requireFlag(a, "release-file");
+  const spawnFile = requireFlag(a, "spawn-file");
+  const exitFile = requireFlag(a, "exit-file");
+  if (a.rest.length === 0) process.exit(2);
+  while (!existsSync(releaseFile)) await sleep(25);
+  const file = resolveWinExecutable(a.rest[0]);
+  const launch = adaptWindowsLaunch(file, a.rest.slice(1));
+  const startedAfter = new Date().toISOString();
+  const child = spawn(launch.file, launch.args, {
+    cwd,
+    env: process.env,
+    stdio: "inherit",
+    windowsHide: false,
+    windowsVerbatimArguments: launch.windowsVerbatimArguments,
+  });
+  const spawnAuthority: WindowsSpawnAuthority | undefined =
+    child.pid === undefined
+      ? undefined
+      : {
+          pid: child.pid,
+          parentPid: process.pid,
+          startedAfter,
+        };
+  if (spawnAuthority) {
+    writeFileSync(spawnFile, JSON.stringify(spawnAuthority));
+  }
+  let childIdentity: WindowsProcessIdentity | undefined;
+  let identityCaptureComplete = false;
+  let pendingExit: Omit<
+    WindowsTargetExit,
+    "childPid" | "child" | "spawn"
+  > | undefined;
+  const writeTargetExit = (
+    record: Omit<WindowsTargetExit, "childPid" | "child" | "spawn">,
+  ): void => {
+    if (!identityCaptureComplete) {
+      pendingExit = record;
+      return;
+    }
+    writeFileSync(
+      exitFile,
+      JSON.stringify({
+        ...record,
+        childPid: child.pid,
+        child: childIdentity,
+        spawn: spawnAuthority,
+      } satisfies WindowsTargetExit),
+    );
+  };
+  child.on("error", (err) => {
+    writeTargetExit({
+      error: err.message,
+      exitedAt: new Date().toISOString(),
+    });
+  });
+  child.on("exit", (code, signal) => {
+    writeTargetExit({
+      code,
+      signal,
+      exitedAt: new Date().toISOString(),
+    });
+  });
+  const identityDeadline = Date.now() + 2_000;
+  while (child.pid !== undefined && Date.now() < identityDeadline) {
+    const fallback = windowsProcessFallbackQuery(
+      child.pid,
+      process.pid,
+      Math.min(
+        WIN_PROCESS_QUERY_TIMEOUT_MS,
+        Math.max(1, identityDeadline - Date.now()),
+      ),
+      "target-start-fallback",
+    );
+    if (fallback.status === "ok") {
+      childIdentity = fallback.value;
+      break;
+    }
+    const query = windowsProcessQuery(
+      child.pid,
+      Math.min(
+        WIN_PROCESS_QUERY_TIMEOUT_MS,
+        Math.max(1, identityDeadline - Date.now()),
+      ),
+      "target-start",
+    );
+    if (query.status === "ok") {
+      childIdentity = query.value;
+      break;
+    }
+    await sleep(25);
+  }
+  identityCaptureComplete = true;
+  if (pendingExit) writeTargetExit(pendingExit);
+  // Stay alive as the stable ConPTY root until the daemon has cleaned every
+  // other console member and terminates this wrapper.
+  await new Promise<never>(() => {});
+}
+
 async function runWinDaemon(a: Args): Promise<void> {
   const session = requireFlag(a, "session");
+  const ownerToken = requireFlag(a, "owner-token");
   const cwd = requireFlag(a, "cwd");
   const cols = Number(a.flags.width ?? "120");
   const rows = Number(a.flags.height ?? "40");
@@ -647,17 +1988,130 @@ async function runWinDaemon(a: Args): Promise<void> {
 
   const term = new Terminal({ cols, rows, allowProposedApi: true });
 
-  // Resolve to an absolute path on Windows: node-pty's ConPTY backend does no
-  // PATH lookup, so a bare `claude` throws "File not found:" even when on PATH.
-  const file = resolveWinExecutable(cmd[0]);
-  const args = cmd.slice(1);
-  const child = pty.spawn(file, args, {
+  const releaseFile = join(dir, "wrapper.release");
+  const targetSpawnFile = join(dir, "target-spawn.json");
+  const targetExitFile = join(dir, "target-exit.json");
+  rmSync(releaseFile, { force: true });
+  rmSync(targetSpawnFile, { force: true });
+  rmSync(targetExitFile, { force: true });
+  const selfPath = fileURLToPathSafe(import.meta.url);
+  const childStartedAfter = new Date().toISOString();
+  const child = pty.spawn(process.execPath, [
+    "--experimental-strip-types",
+    selfPath,
+    "__win-child-wrapper",
+    "--cwd",
+    cwd,
+    "--release-file",
+    releaseFile,
+    "--spawn-file",
+    targetSpawnFile,
+    "--exit-file",
+    targetExitFile,
+    "--",
+    ...cmd,
+  ], {
     name: "xterm-256color",
     cols,
     rows,
     cwd,
     env: process.env as Record<string, string>,
   });
+  writeFileSync(join(dir, "child.pid"), String(child.pid));
+  const childIdentityDeadline = Date.now() + 2_000;
+  let childIdentityQuery: WindowsProcessQuery<WindowsProcessIdentity>;
+  do {
+    childIdentityQuery = windowsProcessQuery(
+      child.pid,
+      Math.min(
+        WIN_PROCESS_QUERY_TIMEOUT_MS,
+        Math.max(1, childIdentityDeadline - Date.now()),
+      ),
+      "child-start",
+    );
+    if (childIdentityQuery.status === "ok") break;
+    const fallback = windowsProcessFallbackQuery(
+      child.pid,
+      process.pid,
+      WIN_PROCESS_QUERY_TIMEOUT_MS,
+      "child-start-fallback",
+    );
+    if (fallback.status === "ok") {
+      childIdentityQuery = fallback;
+      break;
+    }
+    if (Date.now() < childIdentityDeadline) sleepSync(100);
+  } while (Date.now() < childIdentityDeadline);
+  if (childIdentityQuery.status !== "ok") {
+    childIdentityQuery = windowsProcessFallbackQuery(
+      child.pid,
+      process.pid,
+      WIN_PROCESS_QUERY_TIMEOUT_MS,
+      "child-start-fallback",
+    );
+  }
+  const daemonIdentityQuery = windowsProcessQuery(
+    process.pid,
+    WIN_PROCESS_QUERY_TIMEOUT_MS,
+    "daemon-start",
+  );
+  let daemonChildren: WindowsProcessIdentity[] = [];
+  if (daemonIdentityQuery.status === "ok") {
+    const childrenQuery = windowsDirectChildrenQuery(
+      process.pid,
+      WIN_PROCESS_QUERY_TIMEOUT_MS,
+      "daemon-children-start",
+    );
+    if (childrenQuery.status === "ok") {
+      daemonChildren = filterOwnedWindowsDescendants(
+        daemonIdentityQuery.value,
+        childrenQuery.value.currentRoot,
+        childrenQuery.value.children,
+        new Date().toISOString(),
+      ).filter((recorded) => {
+        const current = windowsProcessQuery(
+          recorded.pid,
+          WIN_PROCESS_QUERY_TIMEOUT_MS,
+          "daemon-child-start-verify",
+        );
+        return (
+          current.status === "ok" &&
+          sameWindowsProcess(current.value, recorded)
+        );
+      });
+    }
+  }
+  const ownership: WindowsSessionOwnership = {
+    schema: 1,
+    ownerToken,
+    session,
+    daemon:
+      daemonIdentityQuery.status === "ok"
+        ? daemonIdentityQuery.value
+        : undefined,
+    daemonChildren,
+    childPid: child.pid,
+    childStartedAfter,
+    child:
+      childIdentityQuery.status === "ok"
+        ? childIdentityQuery.value
+        : undefined,
+  };
+  const ownershipPath = join(dir, "ownership.json");
+  writeFileSync(ownershipPath, JSON.stringify(ownership));
+  const startupErrors: string[] = [];
+  if (daemonIdentityQuery.status === "error") {
+    startupErrors.push(daemonIdentityQuery.message);
+  }
+  if (childIdentityQuery.status === "error") {
+    startupErrors.push(childIdentityQuery.message);
+  }
+  if (startupErrors.length > 0) {
+    writeFileSync(join(dir, "daemon-error.txt"), `${startupErrors.join("\n")}\n`);
+  }
+  if (childIdentityQuery.status === "ok") {
+    writeFileSync(releaseFile, "go\n");
+  }
 
   child.onData((data) => term.write(data));
 
@@ -683,32 +2137,422 @@ async function runWinDaemon(a: Args): Promise<void> {
   };
   const snapTimer = setInterval(snapshot, POLL_INTERVAL_MS);
 
+  const consoleProcessList = async (): Promise<WindowsProcessQuery<number[]>> => {
+    const agent = (child as unknown as {
+      _agent?: { _getConsoleProcessList?: () => Promise<number[]> };
+    })._agent;
+    if (typeof agent?._getConsoleProcessList !== "function") {
+      return {
+        status: "error",
+        message: "node-pty ConPTY console process list is unavailable",
+      };
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const pids = await Promise.race([
+        agent._getConsoleProcessList(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error("ConPTY console process list timed out")),
+            WIN_CONSOLE_LIST_TIMEOUT_MS,
+          );
+        }),
+      ]);
+      return { status: "ok", value: pids };
+    } catch (err) {
+      return {
+        status: "error",
+        message: err instanceof Error ? err.message : String(err),
+      };
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
+
+  const consoleIdentitySnapshot = async (
+    context: string,
+  ): Promise<WindowsProcessQuery<WindowsProcessIdentity[]>> => {
+    const list = await consoleProcessList();
+    if (list.status !== "ok") return list;
+    const identities: WindowsProcessIdentity[] = [];
+    for (const pid of list.value) {
+      const query = windowsProcessQuery(
+        pid,
+        WIN_PROCESS_QUERY_TIMEOUT_MS,
+        `${context}-identity`,
+      );
+      if (query.status === "error") return query;
+      if (
+        query.status === "ok" &&
+        !query.value.commandLine.includes("conpty_console_list_agent")
+      ) {
+        identities.push(query.value);
+      }
+    }
+    return { status: "ok", value: identities };
+  };
+
+  const discoverConsoleOwnedProcesses = async (
+    context: string,
+  ): Promise<WindowsProcessQuery<WindowsProcessIdentity[]>> => {
+    if (shouldInjectCimFailure(context)) {
+      return { status: "error", message: `injected CIM failure for ${context}` };
+    }
+    const deadline = Date.now() + WIN_KILL_TIMEOUT_MS;
+    const accepted = new Map<string, WindowsProcessIdentity>();
+    let first = await consoleIdentitySnapshot(`${context}-first`);
+    if (first.status !== "ok") return first;
+    while (Date.now() < deadline) {
+      const second = await consoleIdentitySnapshot(`${context}-second`);
+      if (second.status !== "ok") return second;
+      const firstPids = first.value.map((identity) => identity.pid);
+      const secondPids = second.value.map((identity) => identity.pid);
+      for (const identity of filterConsoleOwnedWindowsProcesses(
+        firstPids,
+        first.value,
+        secondPids,
+      )) {
+        accepted.set(`${identity.pid}:${identity.creationDate}`, identity);
+      }
+      if (newConsoleProcessIds(firstPids, secondPids).length === 0) {
+        const current = new Set(secondPids);
+        return {
+          status: "ok",
+          value: [...accepted.values()].filter((identity) =>
+            current.has(identity.pid)
+          ),
+        };
+      }
+      first = second;
+    }
+    return {
+      status: "error",
+      message: "ConPTY console membership did not stabilize",
+    };
+  };
+
+  const cleanupTargetConsoleMembers = async (
+    context: string,
+    targetExit: WindowsTargetExit,
+  ): Promise<boolean> => {
+    const deadline = Date.now() + WIN_KILL_TIMEOUT_MS;
+    const accumulated = new Map<string, WindowsProcessIdentity>();
+    if (!targetExit.error) {
+      const detached = discoverTargetExitWindowsDescendants(
+        targetExit,
+        Math.min(
+          WIN_PROCESS_QUERY_TIMEOUT_MS,
+          Math.max(1, deadline - Date.now()),
+        ),
+        `${context}-descendants`,
+      );
+      if (detached.status !== "ok") {
+        writeFileSync(
+          join(dir, "daemon-error.txt"),
+          `${
+            detached.status === "error"
+              ? detached.message
+              : "target descendant discovery returned no snapshot"
+          }\n`,
+        );
+        return false;
+      }
+      let survivors = detached.value;
+      for (const identity of survivors) {
+        accumulated.set(`${identity.pid}:${identity.creationDate}`, identity);
+      }
+      while (survivors.length > 0 && Date.now() < deadline) {
+        for (const process of survivors) {
+          forceKillWindowsTree(
+            process.pid,
+            Math.min(
+              WIN_TASKKILL_TIMEOUT_MS,
+              Math.max(1, deadline - Date.now()),
+            ),
+          );
+        }
+        if (Date.now() < deadline) await sleep(100);
+        const live = liveOwnedWindowsProcesses(
+          survivors,
+          Math.max(1, deadline - Date.now()),
+          `${context}-descendant-liveness`,
+        );
+        if (live.status !== "ok") {
+          writeFileSync(
+            join(dir, "daemon-error.txt"),
+            `${
+              live.status === "error"
+                ? live.message
+                : "target descendant liveness returned no snapshot"
+            }\n`,
+          );
+          return false;
+        }
+        survivors = live.value;
+      }
+      if (survivors.length > 0) {
+        writeFileSync(
+          join(dir, "daemon-error.txt"),
+          `target exit left surviving descendant pid(s): ${
+            survivors.map((process) => process.pid).join(", ")
+          }\n`,
+        );
+        return false;
+      }
+    }
+    while (Date.now() < deadline) {
+      const query = await discoverConsoleOwnedProcesses(context);
+      if (query.status !== "ok") return false;
+      const candidates = query.value.filter(
+        (identity) => identity.pid !== child.pid,
+      );
+      for (const identity of candidates) {
+        accumulated.set(`${identity.pid}:${identity.creationDate}`, identity);
+        forceKillWindowsTree(
+          identity.pid,
+          Math.min(
+            WIN_TASKKILL_TIMEOUT_MS,
+            Math.max(1, deadline - Date.now()),
+          ),
+        );
+      }
+      if (Date.now() < deadline) await sleep(100);
+      const after = await consoleIdentitySnapshot(`${context}-verify`);
+      if (after.status !== "ok") return false;
+      if (after.value.every((identity) => identity.pid === child.pid)) {
+        ownership.orphans = [...accumulated.values()];
+        ownership.orphanCleanupComplete = true;
+        writeFileSync(ownershipPath, JSON.stringify(ownership));
+        return true;
+      }
+    }
+    return false;
+  };
+
   // Tail the command log for send/kill. We track the byte offset consumed so we
   // never re-process a record.
   let consumed = 0;
-  const teardown = (): void => {
-    clearInterval(snapTimer);
-    snapshot(); // final grid
-    try {
-      // node-pty hangs on ConPTY teardown; don't block. Best-effort kill, then
-      // hard-exit so the OS reaps the pty. Filter the AttachConsole stderr noise
-      // by simply not surfacing it.
-      child.kill();
-    } catch {
-      // "Socket is closed" / AttachConsole — expected on ConPTY teardown.
+  let targetExitHandled = false;
+  const cleanupExitedChildDescendants = async (
+    context: string,
+  ): Promise<boolean> => {
+    if (!ownership.childExitedAt) return true;
+    if (!ownership.child) {
+      writeFileSync(
+        join(dir, "daemon-error.txt"),
+        "stable ConPTY wrapper identity was unavailable\n",
+      );
+      return false;
     }
-    process.exit(0);
+    const query = discoverOwnedWindowsOrphans(
+      ownership,
+      WIN_PROCESS_QUERY_TIMEOUT_MS,
+      context,
+    );
+    if (query.status !== "ok") {
+      writeFileSync(
+        join(dir, "daemon-error.txt"),
+        `${
+          query.status === "error"
+            ? query.message
+            : "parent-first orphan discovery returned no snapshot"
+        }\n`,
+      );
+      return false;
+    }
+    ownership.orphans = query.value;
+    writeFileSync(ownershipPath, JSON.stringify(ownership));
+    const deadline = Date.now() + WIN_KILL_TIMEOUT_MS;
+    let survivors = query.value;
+    while (survivors.length > 0 && Date.now() < deadline) {
+      for (const process of survivors) {
+        const budget = Math.min(
+          WIN_TASKKILL_TIMEOUT_MS,
+          Math.max(0, deadline - Date.now()),
+        );
+        if (budget <= 0) break;
+        forceKillWindowsTree(process.pid, budget);
+      }
+      if (Date.now() < deadline) {
+        sleepSync(Math.min(100, deadline - Date.now()));
+      }
+      const live = liveOwnedWindowsProcesses(
+        survivors,
+        Math.max(1, deadline - Date.now()),
+        `${context}-liveness`,
+      );
+      if (live.status === "error") {
+        writeFileSync(join(dir, "daemon-error.txt"), `${live.message}\n`);
+        return false;
+      }
+      survivors = live.status === "ok" ? live.value : [];
+    }
+    if (survivors.length > 0) {
+      writeFileSync(
+        join(dir, "daemon-error.txt"),
+        `child exit left surviving descendant pid(s): ${
+          survivors.map((process) => process.pid).join(", ")
+        }\n`,
+      );
+      return false;
+    }
+    ownership.orphanCleanupComplete = true;
+    writeFileSync(ownershipPath, JSON.stringify(ownership));
+    rmSync(join(dir, "daemon-error.txt"), { force: true });
+    return true;
   };
 
-  child.onExit(() => {
+  const cleanupDaemonChildren = (context: string): boolean => {
+    if (process.platform !== "win32" || !ownership.daemon) return true;
+    let candidates = ownership.daemonChildren ?? [];
+    const query = windowsDirectChildrenQuery(
+      ownership.daemon.pid,
+      WIN_PROCESS_QUERY_TIMEOUT_MS,
+      context,
+    );
+    if (query.status === "ok") {
+      candidates = filterOwnedWindowsDescendants(
+        ownership.daemon,
+        query.value.currentRoot,
+        query.value.children,
+        new Date().toISOString(),
+      );
+      ownership.daemonChildren = candidates;
+      writeFileSync(ownershipPath, JSON.stringify(ownership));
+    }
+    const deadline = Date.now() + WIN_KILL_TIMEOUT_MS;
+    let survivors = candidates;
+    while (survivors.length > 0 && Date.now() < deadline) {
+      for (const process of survivors) {
+        const budget = Math.min(
+          WIN_TASKKILL_TIMEOUT_MS,
+          Math.max(0, deadline - Date.now()),
+        );
+        if (budget <= 0) break;
+        forceKillWindowsTree(process.pid, budget);
+      }
+      if (Date.now() < deadline) {
+        sleepSync(Math.min(100, deadline - Date.now()));
+      }
+      const live = liveOwnedWindowsProcesses(
+        survivors,
+        Math.max(1, deadline - Date.now()),
+        `${context}-liveness`,
+      );
+      if (live.status === "error") {
+        writeFileSync(join(dir, "daemon-error.txt"), `${live.message}\n`);
+        return false;
+      }
+      survivors = live.status === "ok" ? live.value : [];
+    }
+    if (survivors.length > 0) {
+      writeFileSync(
+        join(dir, "daemon-error.txt"),
+        `daemon child cleanup left surviving pid(s): ${
+          survivors.map((process) => process.pid).join(", ")
+        }\n`,
+      );
+      return false;
+    }
+    return true;
+  };
+
+  const teardown = async (): Promise<boolean> => {
+    if (
+      ownership.childExitedAt &&
+      ownership.orphanCleanupComplete !== true &&
+      !(await cleanupExitedChildDescendants("daemon-kill-orphans"))
+    ) {
+      return false;
+    }
+    if (!ownership.childExitedAt) {
+      if (!ownership.child) {
+        writeFileSync(
+          join(dir, "daemon-error.txt"),
+          "ConPTY child identity is unavailable; refusing PID-based teardown\n",
+        );
+        return false;
+      }
+      const live = liveOwnedWindowsProcesses(
+        [ownership.child],
+        WIN_PROCESS_QUERY_TIMEOUT_MS,
+        "daemon-kill-child",
+      );
+      if (live.status !== "ok") {
+        writeFileSync(
+          join(dir, "daemon-error.txt"),
+          `${
+            live.status === "error"
+              ? live.message
+              : "ConPTY child liveness returned no snapshot"
+          }\n`,
+        );
+        return false;
+      }
+      try {
+        if (
+          shouldForceKillWindowsChildRoot(
+            ownership.childExitedAt,
+            ownership.child,
+            live.value[0],
+          )
+        ) {
+          forceKillWindowsTree(ownership.child.pid);
+        }
+      } catch {
+        // "Socket is closed" / AttachConsole — expected on ConPTY teardown.
+      }
+    }
+    if (!cleanupDaemonChildren("daemon-kill-children")) return false;
     clearInterval(snapTimer);
-    snapshot();
-    // Leave the grid in place so a final capture sees the end-state, then exit.
+    snapshot(); // final grid
     process.exit(0);
+    return true;
+  };
+
+  child.onExit(async () => {
+    snapshot();
+    ownership.childExitedAt = new Date().toISOString();
+    ownership.orphanCleanupComplete = false;
+    writeFileSync(ownershipPath, JSON.stringify(ownership));
+    if (
+      process.platform !== "win32" ||
+      (
+        (await cleanupExitedChildDescendants("child-exit")) &&
+        cleanupDaemonChildren("child-exit-daemon-children")
+      )
+    ) {
+      clearInterval(snapTimer);
+      // Leave the grid in place so a final capture sees the end-state, then exit.
+      process.exit(0);
+    }
   });
 
   const pump = async (): Promise<void> => {
     for (;;) {
+      if (!targetExitHandled && existsSync(targetExitFile)) {
+        const targetExit = readJsonFileWithRetry<WindowsTargetExit>(
+          targetExitFile,
+          250,
+        );
+        if (targetExit === null) {
+          await sleep(25);
+          continue;
+        }
+        targetExitHandled = true;
+        if (await cleanupTargetConsoleMembers("target-exit", targetExit)) {
+          forceKillWindowsTree(child.pid);
+        } else {
+          const errorPath = join(dir, "daemon-error.txt");
+          if (!existsSync(errorPath)) {
+            writeFileSync(
+              errorPath,
+              "target exit console cleanup did not converge\n",
+            );
+          }
+          targetExitHandled = false;
+        }
+      }
       if (existsSync(cmdLogPath)) {
         const raw = readFileSync(cmdLogPath, "utf8");
         if (raw.length > consumed) {
@@ -716,15 +2560,28 @@ async function runWinDaemon(a: Args): Promise<void> {
           consumed = raw.length;
           for (const line of fresh.split("\n")) {
             if (!line.trim()) continue;
-            let rec: { kind: string; keys?: string; literal?: boolean; noEnter?: boolean };
+            let rec: {
+              kind: string;
+              session?: string;
+              ownerToken?: string;
+              keys?: string;
+              literal?: boolean;
+              noEnter?: boolean;
+            };
             try {
               rec = JSON.parse(line);
             } catch {
               continue;
             }
+            if (
+              rec.session !== session ||
+              rec.ownerToken !== ownerToken
+            ) {
+              continue;
+            }
             if (rec.kind === "kill") {
-              teardown();
-              return;
+              if (await teardown()) return;
+              continue;
             }
             if (rec.kind === "send") {
               child.write(encodeKeys(rec.keys ?? "", rec.literal === true));
@@ -957,16 +2814,149 @@ function affirmedOnDisk(projectDir: string): boolean {
 //   (none)                          terminate on the practices-affirmation timestamp
 type Terminator = { describe: string; done: () => boolean };
 
-// Does a relative path (optionally containing a single `*` glob in its last
-// segment, or any segment) resolve to an existing, non-empty file under root?
-function fileSignalMet(
+export type PortablePathKind =
+  | "relative"
+  | "posix-absolute"
+  | "git-bash-absolute"
+  | "drive-absolute"
+  | "unc-absolute";
+
+export type PortablePathParts = {
+  kind: PortablePathKind;
+  root: string;
+  segments: string[];
+};
+
+export type PortablePathPlatform = "posix" | "win32";
+
+function portableSegments(rest: string | undefined): string[] {
+  return (rest ?? "")
+    .split(/[\\/]+/)
+    .filter((segment) => segment.length > 0 && segment !== ".");
+}
+
+/** Parse path roots and separators without depending on the host OS. */
+export function parsePortablePath(
+  input: string,
+  platform: PortablePathPlatform = portablePathPlatform(),
+): PortablePathParts {
+  const unc =
+    input.startsWith("\\\\") || platform === "win32"
+      ? /^(?:\\\\|\/\/)([^\\/]+)[\\/]([^\\/]+)(?:[\\/](.*))?$/.exec(input)
+      : null;
+  if (unc) {
+    return {
+      kind: "unc-absolute",
+      root: `\\\\${unc[1]}\\${unc[2]}\\`,
+      segments: portableSegments(unc[3]),
+    };
+  }
+
+  const drive = /^([A-Za-z]):[\\/](.*)$/.exec(input);
+  if (drive) {
+    return {
+      kind: "drive-absolute",
+      root: `${drive[1].toUpperCase()}:\\`,
+      segments: portableSegments(drive[2]),
+    };
+  }
+
+  const gitBash =
+    platform === "win32"
+      ? /^\/([A-Za-z])(?:[\\/](.*))?$/.exec(input)
+      : null;
+  if (gitBash) {
+    return {
+      kind: "git-bash-absolute",
+      root: `${gitBash[1].toUpperCase()}:\\`,
+      segments: portableSegments(gitBash[2]),
+    };
+  }
+
+  if (input.startsWith("/")) {
+    return {
+      kind: "posix-absolute",
+      root: "/",
+      segments: portableSegments(input.slice(1)),
+    };
+  }
+
+  return {
+    kind: "relative",
+    root: "",
+    segments: portableSegments(input),
+  };
+}
+
+function portablePathPlatform(): PortablePathPlatform {
+  return os.platform() === "win32" ? "win32" : "posix";
+}
+
+function portablePathToNative(
+  parts: PortablePathParts,
+  platform: PortablePathPlatform,
+  base?: string,
+): string {
+  if (parts.kind === "relative") {
+    const pathApi = platform === "win32" ? win32 : posix;
+    return pathApi.resolve(base ?? ".", ...parts.segments);
+  }
+  if (parts.kind === "posix-absolute") {
+    if (platform === "posix") return posix.join("/", ...parts.segments);
+    const driveRoot = win32.parse(base ?? process.cwd()).root || "\\";
+    return win32.join(driveRoot, ...parts.segments);
+  }
+  return win32.join(parts.root, ...parts.segments);
+}
+
+/**
+ * Resolve a portable path pattern into a native absolute anchor plus glob
+ * segments. Absolute drive, UNC, Git-Bash, and POSIX roots stay structural;
+ * relative patterns remain anchored under projectRoot.
+ */
+export function resolvePortablePathPattern(
+  projectRoot: string,
+  pattern: string,
+  platform: PortablePathPlatform = portablePathPlatform(),
+): PortablePathParts {
+  const rootParts = parsePortablePath(projectRoot, platform);
+  const nativeProjectRoot = portablePathToNative(rootParts, platform);
+  const patternParts = parsePortablePath(pattern, platform);
+  if (patternParts.kind === "relative") {
+    return {
+      ...patternParts,
+      root: nativeProjectRoot,
+    };
+  }
+  if (patternParts.kind === "posix-absolute" && platform === "win32") {
+    return {
+      ...patternParts,
+      root: win32.parse(nativeProjectRoot).root || "\\",
+    };
+  }
+  return patternParts;
+}
+
+function globSegmentRegex(segment: string, caseInsensitive: boolean): RegExp {
+  const escaped = segment
+    .replace(/[.+?^${}()|[\]\\]/g, "\\$&")
+    .replaceAll("*", ".*");
+  return new RegExp(`^${escaped}$`, caseInsensitive ? "i" : "");
+}
+
+// Does a portable path (optionally containing `*` in any segment) resolve to an
+// existing, non-empty file? Relative patterns are anchored under root.
+export function fileSignalMet(
   root: string,
   rel: string,
   requireNonEmpty = true,
 ): boolean {
+  const platform = portablePathPlatform();
+  const resolved = resolvePortablePathPattern(root, rel, platform);
+  const joinPath = platform === "win32" ? win32.join : posix.join;
   // Walk the path segment by segment, expanding a `*` segment to its dir entries.
-  let dirs = [root];
-  const segs = rel.split("/").filter((s) => s.length > 0);
+  let dirs = [resolved.root];
+  const segs = resolved.segments;
   for (let i = 0; i < segs.length; i++) {
     const seg = segs[i];
     const isLast = i === segs.length - 1;
@@ -980,14 +2970,12 @@ function fileSignalMet(
         } catch {
           entries = [];
         }
-        const re = new RegExp(
-          `^${seg.replaceAll(".", "\\.").replaceAll("*", ".*")}$`,
-        );
+        const re = globSegmentRegex(seg, platform === "win32");
         for (const e of entries) {
-          if (re.test(e)) next.push(join(d, e));
+          if (re.test(e)) next.push(joinPath(d, e));
         }
       } else {
-        next.push(join(d, seg));
+        next.push(joinPath(d, seg));
       }
     }
     dirs = next;
@@ -1324,9 +3312,31 @@ async function handleRevisionRecovery(
   return false;
 }
 
+function teardownAnswerGate(
+  backend: Backend,
+  session: string,
+  reason: string,
+): void {
+  writeTuiTrace(session, "answer_gate_teardown", { reason });
+  backend.kill(session);
+}
+
+function failAnswerGate(
+  backend: Backend,
+  session: string,
+  msg: string,
+  code = 1,
+): never {
+  teardownAnswerGate(backend, session, "error");
+  fail(msg, code);
+}
+
 async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
   const session = requireFlag(a, "session");
-  const projectDir = requireFlag(a, "project-dir");
+  const projectDir = a.flags["project-dir"];
+  if (!projectDir) {
+    failAnswerGate(backend, session, "missing required --project-dir", 2);
+  }
   // The journey's pass condition is the ON-DISK terminator (--until-*); these
   // timeouts are pure HANG-BACKSTOPS, never budgets — a healthy run returns the
   // instant the disk signal lands, long before any timer.
@@ -1347,7 +3357,22 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
   // default, or a journey-specific file/state-field via --until-* (see
   // makeTerminator). The keystroke strategy is the same for every journey;
   // only this terminator differs.
-  const term = makeTerminator(projectDir, a);
+  const untilField = a.flags["until-state-field"];
+  if (untilField && untilField.indexOf("=") <= 0) {
+    failAnswerGate(
+      backend,
+      session,
+      `--until-state-field expects <name>=<regex>, got '${untilField}'`,
+      2,
+    );
+  }
+  let term: Terminator;
+  try {
+    term = makeTerminator(projectDir, a);
+  } catch (err) {
+    teardownAnswerGate(backend, session, "invalid-terminator");
+    throw err;
+  }
 
   // --reject-first-gate: on the FIRST approval gate (a single-select menu whose
   // options include "Request changes"), select that option (Down → Enter) instead
@@ -1373,7 +3398,9 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
     (assertFileAbsentAtOption === undefined) !==
       (assertFileAbsent === undefined)
   ) {
-    fail(
+    failAnswerGate(
+      backend,
+      session,
       "--assert-file-absent-at-option and --assert-file-absent must be supplied together",
       2,
     );
@@ -1381,7 +3408,9 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
   let absenceAssertionObserved = false;
   const assertAbsenceObservationCompleted = (): void => {
     if (assertFileAbsentAtOption && !absenceAssertionObserved) {
-      fail(
+      failAnswerGate(
+        backend,
+        session,
         `option '${assertFileAbsentAtOption}' was never observed; ` +
           `could not assert '${assertFileAbsent}' absent`,
         1,
@@ -1440,7 +3469,9 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
         overallMs,
         screen: backend.capture(session, false),
       });
-      fail(
+      failAnswerGate(
+        backend,
+        session,
         `answer-gate: overall timeout (${overallMs}ms) — terminator (${term.describe}) ` +
           `never met after ${answered} answer(s). HANG BACKSTOP, not a pass.`,
         1,
@@ -1483,7 +3514,9 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
         terminator: term.describe,
         screen,
       });
-      fail(
+      failAnswerGate(
+        backend,
+        session,
         `answer-gate: per-gate timeout (${perGateMs}ms) — no menu appeared and ` +
           `terminator (${term.describe}) not yet met (answered ${answered} so far). ` +
           `HANG BACKSTOP, not a pass.\n---- last pane ----\n${screen}\n-------------------`,
@@ -1520,7 +3553,9 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
       gridHasOption(grid, assertFileAbsentAtOption)
     ) {
       if (fileSignalMet(projectDir, assertFileAbsent, false)) {
-        fail(
+        failAnswerGate(
+          backend,
+          session,
           `'${assertFileAbsent}' already exists while option ` +
             `'${assertFileAbsentAtOption}' is awaiting an answer`,
           1,
@@ -1627,6 +3662,9 @@ async function main(): Promise<void> {
   // selection so it owns the pty itself rather than proxying to a backend.
   if (sub === "__win-daemon") {
     return runWinDaemon(a);
+  }
+  if (sub === "__win-child-wrapper") {
+    return runWinChildWrapper(a);
   }
 
   const backend = selectBackend();
