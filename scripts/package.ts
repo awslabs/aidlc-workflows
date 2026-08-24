@@ -1057,6 +1057,7 @@ function buildRepositoryPluginProjection(
   pluginName: string,
   harnessName: string,
   outDir: string,
+  outputBoundary = REPO_ROOT,
 ): void {
   const target = pluginTargetFor(harnessName);
   if (!target) {
@@ -1068,6 +1069,7 @@ function buildRepositoryPluginProjection(
     pluginRoot: join(PLUGINS_ROOT, pluginName),
     target,
     outDir,
+    outputBoundary,
     templateHooksDir: PLUGIN_HOOKS_TEMPLATE_SRC,
     reviewerAgents: reviewerAgentSet(CORE_ROOT),
   });
@@ -1108,7 +1110,12 @@ function checkPlugins(harnesses: string[], full: boolean): string[] {
       for (const harnessName of pluginHarnessesFor(harnesses)) {
         const committed = join(REPO_ROOT, "dist", "plugins", pluginName, harnessName);
         const built = join(tmp, pluginName, harnessName);
-        buildRepositoryPluginProjection(pluginName, harnessName, built);
+        buildRepositoryPluginProjection(
+          pluginName,
+          harnessName,
+          built,
+          tmp,
+        );
         problems.push(...diffTrees(built, committed, `plugins/${pluginName}/${harnessName}`));
       }
     }
@@ -1173,12 +1180,22 @@ if (argv[0] === "plugin" && argv[1] === "build") {
   const outArg = outDir.replace(/[/\\]+$/, "") || outDir;
   const resolvedOut = isAbsolute(outArg) ? outArg : join(process.cwd(), outArg);
   try {
-    assertPluginBuildOutput(resolvedOut, target, force);
+    assertPluginBuildOutput(
+      resolvedOut,
+      target,
+      force,
+      resolvedOut,
+    );
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
   }
-  buildRepositoryPluginProjection(pluginName, harnessName, resolvedOut);
+  buildRepositoryPluginProjection(
+    pluginName,
+    harnessName,
+    resolvedOut,
+    resolvedOut,
+  );
   process.exit(0);
 }
 

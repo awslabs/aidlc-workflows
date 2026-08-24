@@ -7,8 +7,9 @@ Plugin authors can now create, validate, build, and compose-test an authored plu
 
 * Run `bun <tools-dir>/aidlc-plugin-create.ts <name> [targetDir] [--json]` to emit a deterministic minimal plugin that validates green on arrival; CREATE refuses non-empty targets and never vendors `hooks/compose.ts`.
 * Run `bun <tools-dir>/aidlc-plugin-validate.ts <plugin-root> [--json]`; exit codes are `0` valid, `1` findings, and `2` usage.
-* Validation covers manifest shape, stage schema, scope and agent identity, plugin-local duplicate artifact producers across `produces` and `optional_produces`, accidental test/fixture payloads under `tools/`, and vendored compose-hook drift.
+* Validation covers manifest shape, stage schema, scope and agent identity, plugin-local duplicate artifact producers across `produces` and `optional_produces`, accidental test/fixture payloads under `tools/`, vendored compose-hook drift, and linked authored content; plugin content symlinks are rejected instead of silently omitted.
 * Run `bun <tools-dir>/aidlc-plugin-build.ts <plugin-root> <harness> [outDir] [--json]` to validate then emit one host-native projection; output defaults to `<plugin-root>/dist/<harness>/`.
+* BUILD refuses symlinks inside its caller-owned output boundary, including a linked `<plugin-root>/dist`, before cleanup or writes can reach the linked directory; environmental path aliases above that boundary remain supported.
 * The checkout packager and standalone builder share one emitter. Harness manifests generate the bundled target table, and isolated proof tests byte-compare all seven externally built test-pro projections with committed `dist/plugins` output.
 * Run `bun <tools-dir>/aidlc-plugin-test.ts <plugin-root> --install <project-root> [--harness <name>] [--json]` to compose into a disposable install candidate, report drops, compile the post-compose graph, verify plugin stages/scopes, and prove a second compose is idempotent.
 * `--dist <version>` is reserved until RFC #722 milestone 2 supplies a released runtime-bundle channel; test against an existing install in this release.

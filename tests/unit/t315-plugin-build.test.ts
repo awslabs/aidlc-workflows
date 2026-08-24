@@ -11,6 +11,7 @@ import {
   readdirSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -136,6 +137,25 @@ describe("t315 standalone plugin builder", () => {
     ).toEqual([]);
   });
 
+  test("custom output under a symlinked environmental ancestor remains valid", () => {
+    const pluginRoot = copyPlugin("symlinked-environment-custom");
+    const realEnvironment = join(scratch, "real-environment");
+    const linkedEnvironment = join(scratch, "linked-environment");
+    mkdirSync(realEnvironment, { recursive: true });
+    symlinkSync(
+      realEnvironment,
+      linkedEnvironment,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const outDir = join(linkedEnvironment, "owned-output");
+
+    const result = run([pluginRoot, "claude", outDir, "--json"]);
+    expect(result.status, result.stderr).toBe(0);
+    expect(
+      treeDiff(join(EXPECTED_ROOT, "claude"), outDir),
+    ).toEqual([]);
+  });
+
   test("a matching vendored compose hook is used without changing output", () => {
     const pluginRoot = copyPlugin("vendored-hook");
     const vendored = join(pluginRoot, "hooks", "compose.ts");
@@ -170,6 +190,59 @@ describe("t315 standalone plugin builder", () => {
     expect(json.valid).toBe(false);
     expect(json.errors.map((finding) => finding.rule)).toContain(
       "manifest-missing",
+    );
+    expect(existsSync(outDir)).toBe(false);
+  });
+
+  test("default output refuses a symlinked dist parent without touching its target", () => {
+    const pluginRoot = copyPlugin("symlinked-default-parent");
+    const linkedTarget = join(scratch, "symlinked-dist-target");
+    mkdirSync(linkedTarget, { recursive: true });
+    writeFileSync(join(linkedTarget, "sentinel.txt"), "unchanged\n", "utf-8");
+    const distLink = join(pluginRoot, "dist");
+    symlinkSync(
+      linkedTarget,
+      distLink,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+
+    const result = run([pluginRoot, "claude", "--json"]);
+    expect(result.status).toBe(1);
+    const parsed = JSON.parse(result.stdout) as {
+      errors: Array<{ rule: string; message: string }>;
+    };
+    expect(parsed.errors).toContainEqual(
+      expect.objectContaining({
+        rule: "build-output",
+        message: expect.stringContaining(
+          `parent path component "${distLink}" is a symlink`,
+        ),
+      }),
+    );
+    expect(readdirSync(linkedTarget)).toEqual(["sentinel.txt"]);
+    expect(readFileSync(join(linkedTarget, "sentinel.txt"), "utf-8")).toBe(
+      "unchanged\n",
+    );
+  });
+
+  test("linked authored content refuses the build before output creation", () => {
+    const pluginRoot = copyPlugin("symlinked-content");
+    const linkedSource = join(scratch, "linked-plugin-tool.ts");
+    writeFileSync(linkedSource, 'console.log("linked");\n', "utf-8");
+    const linkedTool = join(pluginRoot, "tools", "linked-plugin-tool.ts");
+    symlinkSync(linkedSource, linkedTool, "file");
+    const outDir = join(scratch, "symlinked-content-output");
+
+    const result = run([pluginRoot, "claude", outDir, "--json"]);
+    expect(result.status).toBe(1);
+    const parsed = JSON.parse(result.stdout) as {
+      errors: Array<{ file: string; rule: string }>;
+    };
+    expect(parsed.errors).toContainEqual(
+      expect.objectContaining({
+        file: "tools/linked-plugin-tool.ts",
+        rule: "content-symlink",
+      }),
     );
     expect(existsSync(outDir)).toBe(false);
   });

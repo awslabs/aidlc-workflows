@@ -436,6 +436,9 @@ Validation checks:
 - agents use `<plugin>-<role>-agent.md` and match their frontmatter identity;
 - no two plugin stages produce the same artifact across `produces` and
   `optional_produces`, even when no stage consumes it;
+- authored plugin content uses regular files and directories; symlinks under
+  stages, scopes, agents, contributions, sensors, knowledge, tools, or hooks
+  are rejected instead of being silently omitted or followed;
 - `tools/` contains no nested `tests/`, `fixtures/`, or `*.test.ts` payloads
   that composition would copy into an install;
 - a vendored `hooks/compose.ts`, when present, is byte-identical to the
@@ -465,7 +468,11 @@ bun <tools-dir>/aidlc-plugin-build.ts <plugin-root> cursor --json
 The builder runs validation in-process before it writes anything. Errors refuse
 the build with exit `1`; warnings proceed. Invalid command usage and unknown
 harness names exit `2`. Without `outDir`, output lands at
-`<plugin-root>/dist/<harness>/`.
+`<plugin-root>/dist/<harness>/`. BUILD also rejects a symlink at the output path,
+inside an existing output subtree, or between the trusted build boundary and
+the output. For the default output that boundary is the plugin root, so a linked
+`<plugin-root>/dist` is refused; environmental aliases above the boundary do
+not invalidate an otherwise-owned output.
 
 The authoring flow is:
 

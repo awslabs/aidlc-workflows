@@ -8,6 +8,7 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -312,6 +313,94 @@ describe("t314 standalone plugin validator", () => {
       (finding) => finding.rule === "tools-payload",
     );
     expect(payloads).toHaveLength(3);
+  });
+
+  test("linked plugin files and directories fail with path-specific findings", () => {
+    const root = fixture();
+    const parent = dirname(root);
+    const linkedStageSource = join(parent, "linked-stage-source.md");
+    writeFileSync(
+      linkedStageSource,
+      stageBody("fixture-plugin-linked-stage"),
+      "utf-8",
+    );
+    const linkedStage = join(
+      root,
+      "stages",
+      "construction",
+      "fixture-plugin-linked-stage.md",
+    );
+    symlinkSync(linkedStageSource, linkedStage, "file");
+
+    const linkedDirSource = join(parent, "linked-tools-source");
+    mkdirSync(linkedDirSource, { recursive: true });
+    writeFileSync(
+      join(linkedDirSource, "helper.ts"),
+      'console.log("linked");\n',
+      "utf-8",
+    );
+    const linkedDir = join(root, "tools", "linked-dir");
+    symlinkSync(
+      linkedDirSource,
+      linkedDir,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+
+    const result = validatePluginRoot(root);
+    const linked = result.errors.filter(
+      (finding) => finding.rule === "content-symlink",
+    );
+    expect(result.valid).toBe(false);
+    expect(linked.map((finding) => finding.file)).toEqual([
+      "stages/construction/fixture-plugin-linked-stage.md",
+      "tools/linked-dir",
+    ]);
+    expect(
+      linked.every((finding) =>
+        finding.message.includes("symlinks are unsupported")
+      ),
+    ).toBe(true);
+
+    const cli = runTool([root, "--json"]);
+    expect(cli.status).toBe(1);
+    expect(
+      JSON.parse(cli.stdout).errors.map(
+        (finding: { rule: string }) => finding.rule,
+      ),
+    ).toContain("content-symlink");
+  });
+
+  test("a linked .aidlc-plugin metadata directory is rejected explicitly", () => {
+    const root = fixture();
+    const metadata = join(root, ".aidlc-plugin");
+    const linkedMetadata = join(dirname(root), "linked-metadata");
+    renameSync(metadata, linkedMetadata);
+    symlinkSync(
+      linkedMetadata,
+      metadata,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+
+    const result = validatePluginRoot(root);
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContainEqual(
+      expect.objectContaining({
+        file: ".aidlc-plugin",
+        rule: "content-symlink",
+        message: "plugin content symlinks are unsupported",
+      }),
+    );
+
+    const cli = runTool([root, "--json"]);
+    expect(cli.status).toBe(1);
+    expect(
+      JSON.parse(cli.stdout).errors,
+    ).toContainEqual(
+      expect.objectContaining({
+        file: ".aidlc-plugin",
+        rule: "content-symlink",
+      }),
+    );
   });
 
   test("g: a matching vendored hook passes and a stale hook fails naming both paths", () => {

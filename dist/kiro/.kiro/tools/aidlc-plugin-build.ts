@@ -2,7 +2,14 @@
 // Offline builder for one authored AIDLC plugin and one target harness.
 
 import { existsSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import {
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 import {
   assertPluginBuildOutput,
   buildPluginProjection,
@@ -117,6 +124,13 @@ export function main(argv: string[]): number {
   const outDir = outArg
     ? resolve(outArg)
     : join(pluginRoot, "dist", harness);
+  const relativeToPlugin = relative(pluginRoot, outDir);
+  const outputInsidePlugin =
+    !isAbsolute(relativeToPlugin) &&
+    relativeToPlugin !== ".." &&
+    !relativeToPlugin.startsWith(`..${sep}`);
+  const outputBoundary =
+    !outArg || outputInsidePlugin ? pluginRoot : outDir;
   let validation = validatePluginRoot(pluginRoot);
   if (!validation.valid) {
     writeResult(
@@ -157,11 +171,12 @@ export function main(argv: string[]): number {
   }
 
   try {
-    assertPluginBuildOutput(outDir, target);
+    assertPluginBuildOutput(outDir, target, false, outputBoundary);
     buildPluginProjection({
       pluginRoot,
       target,
       outDir,
+      outputBoundary,
       templateHooksDir: dirname(
         join(
           bundledPluginHookTemplatesDir(),

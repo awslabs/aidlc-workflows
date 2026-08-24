@@ -11,6 +11,7 @@ import {
   readdirSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -198,6 +199,46 @@ describe("t316 standalone plugin compose test", () => {
     expect(json.errors.map((finding) => finding.rule)).toContain(
       "test-compose-drop",
     );
+    expect(treeDigest(installRoot)).toBe(before);
+  });
+
+  test("linked authored content refuses TEST without touching the live install", () => {
+    const { pluginRoot, installRoot } = copyFixture("linked-content");
+    const linkedSource = join(scratch, "linked-content-source");
+    mkdirSync(linkedSource, { recursive: true });
+    writeFileSync(
+      join(linkedSource, "payload.txt"),
+      "linked payload\n",
+      "utf-8",
+    );
+    const linkedDir = join(pluginRoot, "knowledge", "linked-content");
+    symlinkSync(
+      linkedSource,
+      linkedDir,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const before = treeDigest(installRoot);
+
+    const result = run([
+      pluginRoot,
+      "--install",
+      installRoot,
+      "--json",
+    ]);
+    expect(result.status).toBe(1);
+    const json = JSON.parse(result.stdout) as {
+      valid: boolean;
+      errors: Array<{ file: string; rule: string }>;
+      composedFiles: string[];
+    };
+    expect(json.valid).toBe(false);
+    expect(json.errors).toContainEqual(
+      expect.objectContaining({
+        file: "knowledge/linked-content",
+        rule: "content-symlink",
+      }),
+    );
+    expect(json.composedFiles).toEqual([]);
     expect(treeDigest(installRoot)).toBe(before);
   });
 

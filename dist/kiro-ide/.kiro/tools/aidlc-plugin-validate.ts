@@ -7,6 +7,7 @@
 
 import {
   existsSync,
+  lstatSync,
   readFileSync,
   readdirSync,
   statSync,
@@ -37,6 +38,7 @@ export type PluginValidationRule =
   | "manifest-json"
   | "manifest-shape"
   | "manifest-name"
+  | "content-symlink"
   | "stage-frontmatter"
   | "stage-schema"
   | "stage-filename"
@@ -119,6 +121,17 @@ const CONTRIBUTION_KEYS = new Set([
   "knowledge",
   "tools",
 ]);
+const PLUGIN_SYMLINK_SCAN_DIRS = [
+  ".aidlc-plugin",
+  "stages",
+  "sensors",
+  "tools",
+  "contributions",
+  "scopes",
+  "agents",
+  "knowledge",
+  "hooks",
+] as const;
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return (
@@ -201,17 +214,83 @@ export function validatePluginName(
   return findings;
 }
 
-export function walkPluginFiles(dir: string): string[] {
-  if (!existsSync(dir)) return [];
-  const out: string[] = [];
+export interface PluginFileScan {
+  files: string[];
+  symlinks: string[];
+}
+
+export function scanPluginFiles(dir: string): PluginFileScan {
+  let rootStat: ReturnType<typeof lstatSync>;
+  try {
+    rootStat = lstatSync(dir);
+  } catch {
+    return { files: [], symlinks: [] };
+  }
+  if (rootStat.isSymbolicLink()) {
+    return { files: [], symlinks: [dir] };
+  }
+  if (!rootStat.isDirectory()) {
+    return { files: rootStat.isFile() ? [dir] : [], symlinks: [] };
+  }
+
+  const files: string[] = [];
+  const symlinks: string[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) =>
     a.name.localeCompare(b.name),
   )) {
     const path = join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...walkPluginFiles(path));
-    else if (entry.isFile()) out.push(path);
+    if (entry.isSymbolicLink()) symlinks.push(path);
+    else if (entry.isDirectory()) {
+      const nested = scanPluginFiles(path);
+      files.push(...nested.files);
+      symlinks.push(...nested.symlinks);
+    } else if (entry.isFile()) files.push(path);
   }
-  return out;
+  return { files, symlinks };
+}
+
+export function pluginContentSymlinks(pluginRoot: string): string[] {
+  const root = resolve(pluginRoot);
+  return PLUGIN_SYMLINK_SCAN_DIRS.flatMap((dir) =>
+    scanPluginFiles(join(root, dir)).symlinks
+  ).sort((left, right) => left.localeCompare(right));
+}
+
+export function assertPluginContentHasNoSymlinks(
+  pluginRoot: string,
+): void {
+  const root = resolve(pluginRoot);
+  const symlinks = pluginContentSymlinks(root);
+  if (symlinks.length === 0) return;
+  const linked = posixRelative(root, symlinks[0]);
+  throw new Error(
+    `${linked}: plugin content symlinks are unsupported; replace the link with a regular file or directory`,
+  );
+}
+
+export function walkPluginFiles(dir: string): string[] {
+  const scan = scanPluginFiles(dir);
+  if (scan.symlinks.length > 0) {
+    throw new Error(
+      `${scan.symlinks[0]}: plugin content symlinks are unsupported; replace the link with a regular file or directory`,
+    );
+  }
+  return scan.files;
+}
+
+function validatePluginContentSymlinks(
+  root: string,
+  findings: MutableFindings,
+): void {
+  for (const linked of pluginContentSymlinks(root)) {
+    addError(
+      findings,
+      posixRelative(root, linked),
+      "content-symlink",
+      "plugin content symlinks are unsupported",
+      "Replace the link with a regular file or directory inside the plugin root.",
+    );
+  }
 }
 
 export function bundledPluginComposeTemplatePath(): string {
@@ -421,7 +500,7 @@ function validateStages(
     string,
     Array<{ file: string; slug: string }>
   >();
-  for (const file of walkPluginFiles(join(root, "stages")).filter((path) =>
+  for (const file of scanPluginFiles(join(root, "stages")).files.filter((path) =>
     path.endsWith(".md"),
   )) {
     const displayFile = posixRelative(root, file);
@@ -516,7 +595,7 @@ function validateScopes(
   findings: MutableFindings,
 ): void {
   const prefix = `${pluginName}-`;
-  for (const file of walkPluginFiles(join(root, "scopes")).filter((path) =>
+  for (const file of scanPluginFiles(join(root, "scopes")).files.filter((path) =>
     path.endsWith(".md"),
   )) {
     const displayFile = posixRelative(root, file);
@@ -599,7 +678,7 @@ function validateAgents(
   const filenameRe = new RegExp(
     `^${escaped}-[a-z][a-z0-9-]*-agent$`,
   );
-  for (const file of walkPluginFiles(join(root, "agents")).filter((path) =>
+  for (const file of scanPluginFiles(join(root, "agents")).files.filter((path) =>
     path.endsWith(".md"),
   )) {
     const displayFile = posixRelative(root, file);
@@ -652,7 +731,7 @@ function validateTools(
   findings: MutableFindings,
 ): void {
   const toolsRoot = join(root, "tools");
-  for (const file of walkPluginFiles(toolsRoot)) {
+  for (const file of scanPluginFiles(toolsRoot).files) {
     const rel = posixRelative(toolsRoot, file);
     const segments = rel.split("/");
     const filename = segments.at(-1) ?? "";
@@ -756,6 +835,7 @@ export function validatePluginRoot(
   }
 
   const { pluginName } = validateManifest(root, findings);
+  validatePluginContentSymlinks(root, findings);
   validateStages(
     root,
     pluginName,

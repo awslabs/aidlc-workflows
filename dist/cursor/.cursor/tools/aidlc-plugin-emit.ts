@@ -25,6 +25,11 @@ import {
   resolve,
   sep,
 } from "node:path";
+import {
+  assertPluginContentHasNoSymlinks,
+  scanPluginFiles,
+  walkPluginFiles,
+} from "./aidlc-plugin-validate.ts";
 
 export type PluginTargetKind = "store" | "kiro" | "kiro-ide" | "cursor";
 
@@ -42,6 +47,7 @@ export interface BuildPluginProjectionOptions {
   pluginRoot: string;
   target: PluginTarget;
   outDir: string;
+  outputBoundary?: string;
   templateHooksDir: string;
   reviewerAgents?: Iterable<string>;
 }
@@ -69,19 +75,6 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
     value !== null &&
     !Array.isArray(value)
   );
-}
-
-function walk(dir: string): string[] {
-  if (!existsSync(dir)) return [];
-  const out: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) =>
-    a.name.localeCompare(b.name),
-  )) {
-    const path = join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...walk(path));
-    else if (entry.isFile()) out.push(path);
-  }
-  return out;
 }
 
 export function readPluginTargets(path: string): PluginTargetTable {
@@ -127,7 +120,7 @@ export function readPluginTargets(path: string): PluginTargetTable {
 
 export function pluginReviewerAgents(pluginRoot: string): Set<string> {
   const reviewers = new Set<string>();
-  for (const file of walk(join(pluginRoot, "stages")).filter((path) =>
+  for (const file of walkPluginFiles(join(pluginRoot, "stages")).filter((path) =>
     path.endsWith(".md"),
   )) {
     const match = readFileSync(file, "utf-8").match(
@@ -351,7 +344,7 @@ function copyPluginContent(
   for (const dir of CONTENT_DIRS) {
     const sourceDir = join(pluginRoot, dir);
     if (!existsSync(sourceDir)) continue;
-    for (const file of walk(sourceDir)) {
+    for (const file of walkPluginFiles(sourceDir)) {
       const outputDir =
         target.kind === "cursor" && dir === "agents"
           ? join(outDir, "aidlc", "agents")
@@ -376,26 +369,72 @@ function copyPluginContent(
   }
 }
 
+function assertBuildPathHasNoSymlinks(
+  outDir: string,
+  resolvedOut: string,
+  outputBoundary: string,
+): void {
+  const boundary = resolve(outputBoundary);
+  const boundaryRelative = relative(boundary, resolvedOut);
+  if (
+    isAbsolute(boundaryRelative) ||
+    boundaryRelative === ".." ||
+    boundaryRelative.startsWith(`..${sep}`)
+  ) {
+    throw new Error(
+      `refusing to build into "${outDir}" - output escapes trusted boundary "${boundary}".`,
+    );
+  }
+
+  let current = boundary;
+  for (const segment of boundaryRelative
+    .split(sep)
+    .filter(Boolean)) {
+    current = join(current, segment);
+    let currentStat: ReturnType<typeof lstatSync>;
+    try {
+      currentStat = lstatSync(current);
+    } catch {
+      return;
+    }
+    if (!currentStat.isSymbolicLink()) continue;
+    if (current === resolvedOut) {
+      throw new Error(
+        `refusing to build into "${outDir}" - it is a symlink; point at a real directory path.`,
+      );
+    }
+    throw new Error(
+      `refusing to build into "${outDir}" - parent path component "${current}" is a symlink; point at a real directory path.`,
+    );
+  }
+
+  const linked = scanPluginFiles(resolvedOut).symlinks[0];
+  if (!linked) return;
+  if (linked === resolvedOut) {
+    throw new Error(
+      `refusing to build into "${outDir}" - it is a symlink; point at a real directory path.`,
+    );
+  }
+  throw new Error(
+    `refusing to build into "${outDir}" - existing output contains symlink "${linked}"; remove the link before rebuilding.`,
+  );
+}
+
 export function assertPluginBuildOutput(
   outDir: string,
   target: PluginTarget,
   force = false,
+  outputBoundary = outDir,
 ): void {
   const outArg = outDir.replace(/[/\\]+$/, "") || outDir;
   const resolvedOut = isAbsolute(outArg)
     ? outArg
     : resolve(process.cwd(), outArg);
-  let outLstat: ReturnType<typeof lstatSync> | null = null;
-  try {
-    outLstat = lstatSync(resolvedOut);
-  } catch {
-    outLstat = null;
-  }
-  if (outLstat?.isSymbolicLink()) {
-    throw new Error(
-      `refusing to build into "${outDir}" - it is a symlink; point at a real directory path.`,
-    );
-  }
+  assertBuildPathHasNoSymlinks(
+    outDir,
+    resolvedOut,
+    outputBoundary,
+  );
   if (!existsSync(resolvedOut)) return;
   if (!statSync(resolvedOut).isDirectory()) {
     throw new Error(
@@ -430,6 +469,12 @@ export function buildPluginProjection(
 ): PluginProjectionResult {
   const pluginRoot = resolve(options.pluginRoot);
   const outDir = resolve(options.outDir);
+  assertBuildPathHasNoSymlinks(
+    options.outDir,
+    outDir,
+    options.outputBoundary ?? outDir,
+  );
+  assertPluginContentHasNoSymlinks(pluginRoot);
   const manifest = readPluginManifest(pluginRoot);
   const pluginName = pluginNameFromManifest(pluginRoot, manifest);
   const version = manifest.version || "0.0.1";
@@ -491,7 +536,7 @@ export function buildPluginProjection(
     pluginName,
     harness: options.target.harnessName,
     outDir,
-    files: walk(outDir).map((file) =>
+    files: walkPluginFiles(outDir).map((file) =>
       relative(outDir, file).split(sep).join("/"),
     ),
   };
