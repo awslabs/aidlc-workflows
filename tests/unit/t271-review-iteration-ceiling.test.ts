@@ -105,6 +105,25 @@ function seedProject(scope: "bugfix" | "feature"): string {
   return proj;
 }
 
+function writeSourceManifest(proj: string, unit: string): void {
+  const dir = join(
+    seededRecordDir(proj),
+    "construction",
+    unit,
+    "code-generation",
+  );
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "source-manifest.json"),
+    `${JSON.stringify(
+      { stage: "code-generation", unit, version: 1, writes: [] },
+      null,
+      2,
+    )}\n`,
+    "utf-8",
+  );
+}
+
 function writeReviewedArtifact(
   proj: string,
   stage: "requirements-analysis" | "code-generation",
@@ -131,11 +150,7 @@ function writeReviewedArtifact(
       `\`\`\`yaml\nunits:\n  - name: ${unit}\n    depends_on: []\n\`\`\`\n`,
       "utf-8",
     );
-    writeFileSync(
-      join(dir, "source-manifest.json"),
-      `${JSON.stringify({ stage, unit, version: 1, writes: [] }, null, 2)}\n`,
-      "utf-8",
-    );
+    writeSourceManifest(proj, unit);
   }
   return path;
 }
@@ -469,6 +484,7 @@ describe("t271 review iteration ceiling", () => {
       "Walking skeleton": "false",
       "Bolt slug": "unit-alpha",
     }, proj);
+    writeSourceManifest(proj, "unit-alpha");
     for (const iteration of ["1", "2"]) {
       const request = [
         "--stage", "code-generation",
@@ -522,6 +538,7 @@ describe("t271 review iteration ceiling", () => {
       "Walking skeleton": "false",
       "Bolt slug": "unit-alpha",
     }, proj);
+    writeSourceManifest(proj, "unit-alpha");
 
     const graph = JSON.parse(readFileSync(STAGE_GRAPH, "utf-8")) as Array<Record<string, unknown>>;
     const codeGeneration = graph.find((stage) => stage.slug === "code-generation");
@@ -768,6 +785,7 @@ describe("t271 review iteration ceiling", () => {
       "Walking skeleton": "false",
       "Bolt slug": boltSlugForUnit("2fa"),
     }, boltBacked);
+    writeSourceManifest(boltBacked, "2fa");
     const boltReview = runReview(boltBacked, [...base, "--unit", "2fa"]);
     expect(boltReview.status, boltReview.stderr).toBe(0);
 
@@ -805,6 +823,7 @@ describe("t271 review iteration ceiling", () => {
     const unknown = runReview(proj, [...base, "--unit", "ghost"]);
     expect(unknown.status).not.toBe(0);
     expect(unknown.stderr).toContain("not present in the authoritative unit DAG");
+    writeSourceManifest(proj, "unit-alpha");
     expect(runReview(proj, [...base, "--unit", "unit-alpha"]).status).toBe(0);
   });
 
