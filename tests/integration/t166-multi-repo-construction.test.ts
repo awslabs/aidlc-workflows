@@ -2,6 +2,8 @@
 // covers: function:redactProjectDirPrefix
 // covers: function:resolveAuditProjectPath
 // covers: function:resolveAuditWorktreePath
+// covers: function:workspaceSourceExclusionPathspecs
+// covers: function:workspaceSourcePathIsExcluded
 //
 // Mechanism: cli (spawned dist tools) + real git. P7 — multi-repo construction:
 // `aidlc-worktree create/merge` thread `--repo <name>` so `git worktree add` and
@@ -214,6 +216,149 @@ function recordMainReview(
   }
   const completed = spawnSync(BUN, [LOG_TOOL, ...args, "--verdict", "READY"], { encoding: "utf-8", cwd: proj });
   return { status: completed.status ?? -1, out: `${completed.stdout ?? ""}${completed.stderr ?? ""}`, stdout: completed.stdout ?? "" };
+}
+
+function recordWorktreeReview(
+  wt: string,
+  unit: string,
+  sourcePath: string,
+): RunResult {
+  const record = activeRecord(wt);
+  const dir = join(record, "construction", unit, "code-generation");
+  mkdirSync(dir, { recursive: true });
+  for (const name of ["code-generation-plan.md", "unit-test-instructions.md", "code-summary.md"]) {
+    writeFileSync(join(dir, name), `# ${name}\n`);
+  }
+  writeFileSync(join(dir, "traceability.json"), "{}\n");
+  writeFileSync(
+    join(dir, "source-manifest.json"),
+    `${JSON.stringify({
+      stage: "code-generation",
+      unit,
+      version: 1,
+      writes: [{ path: sourcePath }],
+    }, null, 2)}\n`,
+  );
+  const args = [
+    "review", "--stage", "code-generation", "--reviewer",
+    "aidlc-architecture-reviewer-agent", "--unit", unit, "--iteration", "1",
+    "--project-dir", wt,
+  ];
+  const requested = spawnSync(BUN, [LOG_TOOL, ...args], {
+    encoding: "utf-8",
+    cwd: wt,
+  });
+  if ((requested.status ?? -1) !== 0) {
+    return {
+      status: requested.status ?? -1,
+      out: `${requested.stdout ?? ""}${requested.stderr ?? ""}`,
+      stdout: requested.stdout ?? "",
+    };
+  }
+  const completed = spawnSync(
+    BUN,
+    [LOG_TOOL, ...args, "--verdict", "READY"],
+    { encoding: "utf-8", cwd: wt },
+  );
+  return {
+    status: completed.status ?? -1,
+    out: `${completed.stdout ?? ""}${completed.stderr ?? ""}`,
+    stdout: completed.stdout ?? "",
+  };
+}
+
+function uncommittedSiblingRootSourceScenario(
+  rootName: "aidlc" | ".aidlc",
+): {
+  finalized: RunResult;
+  merged: RunResult;
+  mainBytes: string;
+  sourceCommitBytes: string;
+} {
+  const proj = freshWorkspace();
+  const repo = makeSiblingRepo(proj, "repo-a");
+  const sourcePath = `${rootName}/application.ts`;
+  mkdirSync(join(repo, rootName), { recursive: true });
+  writeFileSync(join(repo, sourcePath), "export const reviewed = 1;\n");
+  git(repo, "add", "--", sourcePath);
+  git(repo, "commit", "-q", "-m", `seed sibling ${rootName} source`);
+  const unit = rootName === "aidlc" ? "root-aidlc" : "root-dot-aidlc";
+  const created = runUtil(
+    proj,
+    "intent-create",
+    "--scope",
+    "feature",
+    "--repos",
+    "repo-a",
+  );
+  if (created.status !== 0) throw new Error(created.out);
+  seedOneUnitDag(proj, unit);
+  const prepared = runSwarm(
+    proj,
+    "prepare",
+    "--batch",
+    "1",
+    "--units",
+    unit,
+    "--base",
+    "main",
+    "--repo",
+    "repo-a",
+  );
+  if (prepared.status !== 0) throw new Error(prepared.out);
+  const wt = worktreeDir(proj, unit);
+  writeFileSync(join(wt, sourcePath), "export const reviewed = 2;\n");
+  const reviewed = recordWorktreeReview(wt, unit, sourcePath);
+  if (reviewed.status !== 0) throw new Error(reviewed.out);
+  const finalized = runSwarm(
+    proj,
+    "finalize",
+    "--batch",
+    "1",
+    "--units",
+    unit,
+    "--claimed",
+    unit,
+    "--check-cmd",
+    "true",
+  );
+  const audit = readAllAuditShards(proj);
+  const convergence = audit
+    .split("\n---\n")
+    .find(
+      (block) =>
+        block.includes("**Event**: SWARM_UNIT_CONVERGED") &&
+        block.includes(`**Unit name**: ${unit}`),
+    );
+  const sourceCommit =
+    convergence?.match(/^\*\*Source Commit\*\*: ([0-9a-f]{40,64})$/m)?.[1] ??
+    "";
+  const sourceCommitBytes =
+    sourceCommit === ""
+      ? ""
+      : git(repo, "show", `${sourceCommit}:${sourcePath}`).out;
+  const merged =
+    finalized.status === 0
+      ? runWorktree(
+          proj,
+          "merge",
+          "--slug",
+          unit,
+          "--target",
+          "main",
+          "--strategy",
+          "squash",
+          "--repo",
+          "repo-a",
+        )
+      : { status: -1, out: finalized.out, stdout: "" };
+  return {
+    finalized,
+    merged,
+    mainBytes:
+      merged.status === 0 ? readFileSync(join(repo, sourcePath), "utf-8") : "",
+    sourceCommitBytes,
+  };
 }
 
 function compositionScenario(
@@ -1760,6 +1905,25 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
     test("merge through the symlink alias finds the same creation authority", () => {
       expect(merged.status, merged.out).toBe(0);
       expect(existsSync(join(proj, "path-alias.txt"))).toBe(true);
+    });
+  });
+
+  describe("sibling-repo root source survives real review, finalize, and merge", () => {
+    const aidlcRoot = uncommittedSiblingRootSourceScenario("aidlc");
+    const dotAidlcRoot = uncommittedSiblingRootSourceScenario(".aidlc");
+
+    test("uncommitted aidlc/ source is bound into Source Commit and merged", () => {
+      expect(aidlcRoot.finalized.status, aidlcRoot.finalized.out).toBe(0);
+      expect(aidlcRoot.merged.status, aidlcRoot.merged.out).toBe(0);
+      expect(aidlcRoot.sourceCommitBytes).toBe("export const reviewed = 2;\n");
+      expect(aidlcRoot.mainBytes).toBe("export const reviewed = 2;\n");
+    });
+
+    test("uncommitted .aidlc/ source is bound without retaining injected metadata", () => {
+      expect(dotAidlcRoot.finalized.status, dotAidlcRoot.finalized.out).toBe(0);
+      expect(dotAidlcRoot.merged.status, dotAidlcRoot.merged.out).toBe(0);
+      expect(dotAidlcRoot.sourceCommitBytes).toBe("export const reviewed = 2;\n");
+      expect(dotAidlcRoot.mainBytes).toBe("export const reviewed = 2;\n");
     });
   });
 

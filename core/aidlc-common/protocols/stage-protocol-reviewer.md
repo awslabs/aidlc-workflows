@@ -53,12 +53,17 @@ Everything else in this section is silent. Nothing is said about invoking, handi
 
    Immediately before every reviewer dispatch, record the request:
    `bun {{HARNESS_DIR}}/tools/aidlc-log.ts review --stage "<directive.stage>" --reviewer "<directive.reviewer>" --iteration <n>`; add `--unit "<directive.unit>"` on a per-unit stage and `--single` on an isolated stage run.
+   For a per-unit `workspace_requires` stage, this command validates
+   `source-manifest.json` and binds both its bytes and the currently claimed
+   source bytes into `REVIEW_REQUESTED`; it refuses before dispatch when the
+   manifest is missing or invalid.
    If that dispatch fails, times out, or ends without a recorded verdict - the
    session died, or the reviewer returned an incomplete attempt (step 3: no
    current `## Review` section, or no single canonical verdict) - rerun the
    same request command with `--retry-pending` before dispatching again. The
    logger accepts it only while that exact request is unmatched, marks the
-   retry in the audit, and does not consume another review iteration. Never
+   retry in the audit, refreshes the artifact and source bindings to the bytes
+   being re-dispatched, and does not consume another review iteration. Never
    use `--retry-pending` after a verdict; a receipt-invalidating write creates
    a new recovery request at the next ordinal, not a retry of the completed one.
 

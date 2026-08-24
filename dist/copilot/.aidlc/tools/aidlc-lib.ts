@@ -6411,13 +6411,83 @@ const AIDLC_SENSOR_CACHE_GLOBS = [
   ":(glob)**/aidlc/spaces/*/intents/**/.aidlc-sensors/**",
 ];
 
+interface WorkspaceSourceExclusionContext {
+  carriesWorkspaceShell: boolean;
+  exactPaths: string[];
+}
+
+function worktreeSourceExclusionContext(
+  projectDir: string,
+): WorkspaceSourceExclusionContext | null {
+  const metaPath = join(projectDir, ".aidlc", "worktree-meta.json");
+  if (!existsSync(metaPath)) {
+    return { carriesWorkspaceShell: true, exactPaths: [] };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(metaPath, "utf-8"));
+  } catch {
+    return null;
+  }
+  if (
+    !isPlainObject(parsed) ||
+    !("repoSelector" in parsed) ||
+    (
+      parsed.repoSelector !== null &&
+      (typeof parsed.repoSelector !== "string" ||
+        parsed.repoSelector.length === 0)
+    )
+  ) {
+    return null;
+  }
+  if (parsed.repoSelector === null) {
+    return { carriesWorkspaceShell: true, exactPaths: [] };
+  }
+  const exactPaths = [
+    ".aidlc/worktree-meta.json",
+    ".aidlc/base-source-listing.tsv",
+    "aidlc/.aidlc-clone-id",
+  ];
+  if ("intentRecord" in parsed) {
+    if (
+      typeof parsed.intentRecord !== "string" ||
+      !/^aidlc\/spaces\/[^/]+\/intents\/[^/]+$/.test(parsed.intentRecord)
+    ) {
+      return null;
+    }
+    exactPaths.push(`${parsed.intentRecord}/`);
+  }
+  return { carriesWorkspaceShell: false, exactPaths };
+}
+
 function sourceGitExclusionPathspecs(
   carriesWorkspaceShell: boolean,
+  repoDir?: string,
 ): string[] {
+  let exactPaths: string[] = [];
+  if (!carriesWorkspaceShell && repoDir !== undefined) {
+    const context = worktreeSourceExclusionContext(repoDir);
+    if (context !== null && !context.carriesWorkspaceShell) {
+      exactPaths = context.exactPaths;
+    }
+  }
   return [
     ...(carriesWorkspaceShell ? AIDLC_SHELL_DIR_NAMES : []),
+    ...exactPaths.map((path) => `:(top)${path}`),
     ...AIDLC_SENSOR_CACHE_GLOBS,
   ];
+}
+
+export function workspaceSourceExclusionPathspecs(
+  projectDir: string,
+): string[] | null {
+  const context = worktreeSourceExclusionContext(projectDir);
+  return context === null
+    ? null
+    : sourceGitExclusionPathspecs(
+        context.carriesWorkspaceShell,
+        projectDir,
+      );
 }
 
 // Git runs a configured `clean` filter as content enters the index, so the tree
@@ -6620,7 +6690,7 @@ export function gitCommitSourceListing(
     if (checkout.status !== 0) return null;
 
     const shellPatterns =
-      sourceGitExclusionPathspecs(carriesWorkspaceShell);
+      sourceGitExclusionPathspecs(carriesWorkspaceShell, repoDir);
     const excluded = spawnSync(
       "git",
       [
@@ -6757,7 +6827,10 @@ function gitTreeSourceState(repoDir: string, carriesWorkspaceShell: boolean): Gi
     // Drop the aidlc workspace family from the fingerprint and listing. The
     // root shell names apply only where the workspace shell lives; the sensor
     // cache glob remains depth-tolerant exactly as documented above.
-    const excluded = sourceGitExclusionPathspecs(carriesWorkspaceShell);
+    const excluded = sourceGitExclusionPathspecs(
+      carriesWorkspaceShell,
+      repoDir,
+    );
     if (excluded.length > 0) {
       const removed = spawnSync(
         "git",
@@ -6881,7 +6954,12 @@ export function workspaceSourceState(
     if (!isGitRepoDir(projectDir)) {
       return emptyNoGitWorkspaceSourceState(projectDir);
     }
-    const state = gitTreeSourceState(projectDir, true);
+    const context = worktreeSourceExclusionContext(projectDir);
+    if (context === null) return null;
+    const state = gitTreeSourceState(
+      projectDir,
+      context.carriesWorkspaceShell,
+    );
     if (state === null) return null;
     return {
       fingerprint: state.fingerprint,
@@ -7063,12 +7141,32 @@ function normalizeManifestSourcePath(path: string): { path: string; prefix: bool
   return { path: `${segments.join("/")}${prefix ? "/" : ""}`, prefix };
 }
 
-function sourcePathIsExcluded(path: string, carriesWorkspaceShell: boolean): boolean {
+function sourcePathIsExcluded(
+  path: string,
+  carriesWorkspaceShell: boolean,
+  projectDir?: string,
+): boolean {
   const withoutTrailingSlash = path.replace(/\/+$/, "");
   if (
     carriesWorkspaceShell &&
     (path === "aidlc/" || path === ".aidlc/" || path.startsWith("aidlc/") || path.startsWith(".aidlc/"))
   ) return true;
+
+  if (!carriesWorkspaceShell && projectDir !== undefined) {
+    const context = worktreeSourceExclusionContext(projectDir);
+    if (
+      context !== null &&
+      !context.carriesWorkspaceShell &&
+      context.exactPaths.some((excluded) => {
+        const normalized = excluded.replace(/\/+$/, "");
+        return withoutTrailingSlash === normalized ||
+          (excluded.endsWith("/") &&
+            withoutTrailingSlash.startsWith(`${normalized}/`));
+      })
+    ) {
+      return true;
+    }
+  }
 
   const segments = withoutTrailingSlash.split("/");
   for (let i = 0; i + 4 < segments.length; i++) {
@@ -7079,14 +7177,23 @@ function sourcePathIsExcluded(path: string, carriesWorkspaceShell: boolean): boo
   return false;
 }
 
+export function workspaceSourcePathIsExcluded(
+  projectDir: string,
+  path: string,
+): boolean | null {
+  const context = worktreeSourceExclusionContext(projectDir);
+  if (context === null) return null;
+  return sourcePathIsExcluded(
+    path,
+    context.carriesWorkspaceShell,
+    projectDir,
+  );
+}
+
 export interface ReadUnitSourceManifestOptions {
   /** Bolt worktrees fingerprint exactly one selected repo even if their forked
    * record still names the parent multi-repo intent. */
   worktreeRelative?: boolean;
-}
-
-function isBoltWorktreeProjectDir(projectDir: string): boolean {
-  return existsSync(join(projectDir, ".aidlc", "worktree-meta.json"));
 }
 
 interface GitPathModeIndex {
@@ -7471,7 +7578,13 @@ function symlinkClaimTargetReason(
         return `${JSON.stringify(claimPath)} contains symlink ${JSON.stringify(link)} whose fully resolved target ${JSON.stringify(resolved)} is outside the repository. ${remedy}`;
       }
       const repoRelative = resolvedRelative.replaceAll("\\", "/");
-      if (sourcePathIsExcluded(repoRelative, carriesWorkspaceShell)) {
+      if (
+        sourcePathIsExcluded(
+          repoRelative,
+          carriesWorkspaceShell,
+          sourceRepoDir,
+        )
+      ) {
         return `${JSON.stringify(claimPath)} contains symlink ${JSON.stringify(link)} whose fully resolved target ${JSON.stringify(repoRelative)} is excluded from source evidence. ${remedy}`;
       }
       const ignored = ignoredSourceClaimReason(
@@ -7534,12 +7647,28 @@ export function readUnitSourceManifest(
   if (value.version !== 1) return { ok: false, reason: "version must equal 1" };
   if (!Array.isArray(value.writes)) return { ok: false, reason: "writes must be an array" };
 
-  const recordedRepos =
-    options.worktreeRelative || isBoltWorktreeProjectDir(projectDir)
-      ? []
-      : intentRepos(projectDir);
+  const worktreeContext =
+    options.worktreeRelative ||
+      existsSync(join(projectDir, ".aidlc", "worktree-meta.json"))
+      ? worktreeSourceExclusionContext(projectDir)
+      : null;
+  if (
+    (
+      options.worktreeRelative ||
+      existsSync(join(projectDir, ".aidlc", "worktree-meta.json"))
+    ) &&
+    worktreeContext === null
+  ) {
+    return {
+      ok: false,
+      reason: "worktree metadata is missing or malformed",
+    };
+  }
+  const worktreeRelative = worktreeContext !== null;
+  const recordedRepos = worktreeRelative ? [] : intentRepos(projectDir);
   const recordedRepoSet = new Set(recordedRepos);
-  const carriesWorkspaceShell = recordedRepos.length === 0;
+  const carriesWorkspaceShell =
+    worktreeContext?.carriesWorkspaceShell ?? recordedRepos.length === 0;
   const claims = new Set<string>();
   const prefixes: string[] = [];
   const seen = new Set<string>();
@@ -7573,11 +7702,17 @@ export function readUnitSourceManifest(
 
     const normalized = normalizeManifestSourcePath(write.path);
     if ("reason" in normalized) return { ok: false, reason: `writes[${index}].path: ${normalized.reason}` };
-    if (sourcePathIsExcluded(normalized.path, carriesWorkspaceShell)) {
+    if (
+      sourcePathIsExcluded(
+        normalized.path,
+        carriesWorkspaceShell,
+        worktreeRelative ? projectDir : undefined,
+      )
+    ) {
       return { ok: false, reason: `writes[${index}].path is inside the framework record/shell exclusions` };
     }
     const sourceRepoDir =
-      options.worktreeRelative || isBoltWorktreeProjectDir(projectDir)
+      worktreeRelative
         ? projectDir
         : canonicalRepo === undefined
           ? projectDir

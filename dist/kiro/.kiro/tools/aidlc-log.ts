@@ -47,6 +47,7 @@ import {
   summaryConfirmationContentHash,
   stateFilePath,
   toPosix,
+  unitSourceFingerprint,
   UNBINDABLE_FINGERPRINT,
   withAuditLock,
   workspaceSourceState,
@@ -745,6 +746,8 @@ type ReviewAttemptSummary = {
   boltSlug: string | null;
   pendingIterations: Set<number>;
   pendingFingerprints: Map<number, string | null>;
+  pendingSourceFingerprints: Map<number, string | null>;
+  pendingUnitSourceFingerprints: Map<number, string | null>;
   recoveryIteration: number | null;
   recoverySpent: boolean;
   ambiguity: string | null;
@@ -874,6 +877,8 @@ function reviewAttemptSummary(
   let recoverySpent = false;
   const pendingIterations = new Set<number>();
   const pendingFingerprints = new Map<number, string | null>();
+  const pendingSourceFingerprints = new Map<number, string | null>();
+  const pendingUnitSourceFingerprints = new Map<number, string | null>();
   for (let i = floor + 1; i < events.length; i++) {
     const entry = events[i];
     if (
@@ -914,9 +919,19 @@ function reviewAttemptSummary(
         iteration,
         auditBlockField(entry.block, "Artifact Fingerprint"),
       );
+      pendingSourceFingerprints.set(
+        iteration,
+        auditBlockField(entry.block, "Source Fingerprint"),
+      );
+      pendingUnitSourceFingerprints.set(
+        iteration,
+        auditBlockField(entry.block, "Unit Source Fingerprint"),
+      );
     } else {
       pendingIterations.delete(iteration);
       pendingFingerprints.delete(iteration);
+      pendingSourceFingerprints.delete(iteration);
+      pendingUnitSourceFingerprints.delete(iteration);
     }
   }
   return {
@@ -926,6 +941,8 @@ function reviewAttemptSummary(
     boltSlug,
     pendingIterations,
     pendingFingerprints,
+    pendingSourceFingerprints,
+    pendingUnitSourceFingerprints,
     recoveryIteration,
     recoverySpent,
     ambiguity,
@@ -1123,6 +1140,44 @@ function handleReview(args: string[]): void {
     return { state, node, attempt, budget, receipts, autonomousCandidate };
   };
 
+  const stampRequestedSourceBinding = (
+    node: ReturnType<typeof loadStageGraphAll>[number],
+  ): void => {
+    if (!node.workspace_requires) return;
+    const sourceState = workspaceSourceState(pd, intent, space);
+    fields["Source Fingerprint"] =
+      sourceState?.fingerprint ?? UNBINDABLE_FINGERPRINT;
+    const bindsUnitSource =
+      flags.unit !== undefined &&
+      node.for_each === "unit-of-work" &&
+      flags.single !== "true";
+    if (!bindsUnitSource) return;
+    const manifest = readUnitSourceManifest(
+      pd,
+      flags.stage as string,
+      flags.unit as string,
+    );
+    if (!manifest.ok) {
+      const manifestPath = `${relativeRecordDir(pd, intent, space) ?? "aidlc"}/construction/${flags.unit}/${flags.stage}/source-manifest.json`;
+      refuseReview(
+        `Cannot record REVIEW_REQUESTED for "${flags.stage}": unit "${flags.unit}" has no valid source manifest at ` +
+          `${manifestPath} (${manifest.reason}). Write the manifest listing every application-source path ` +
+          "the reviewer will inspect, then dispatch the review.",
+      );
+    }
+    fields["Unit Source Fingerprint"] =
+      sourceState === null
+        ? UNBINDABLE_FINGERPRINT
+        : writeUnitSourceSnapshot(
+            pd,
+            flags.stage as string,
+            flags.unit as string,
+            sourceState.listing,
+            manifest,
+            manifest.rawBytesSha256,
+          );
+  };
+
   // REVIEW_REQUESTED owns its ordinal: require a positive integer, count prior
   // requests in the current attempt, and append under the same lock. This closes
   // duplicate/missing-label bypasses and makes concurrent requests serialize.
@@ -1211,6 +1266,7 @@ function handleReview(args: string[]): void {
             );
           }
           fields["Artifact Fingerprint"] = fingerprint;
+          stampRequestedSourceBinding(node);
           emitAudit(pd, "REVIEW_REQUESTED", fields, intent, space);
           retried = true;
           return;
@@ -1274,6 +1330,7 @@ function handleReview(args: string[]): void {
           );
         }
         fields["Artifact Fingerprint"] = fingerprint;
+        stampRequestedSourceBinding(node);
         emitAudit(pd, "REVIEW_REQUESTED", fields, intent, space);
       }, intent, space);
     } catch (e) {
@@ -1349,9 +1406,7 @@ function handleReview(args: string[]): void {
       const manifest = bindsUnitSource
         ? readUnitSourceManifest(pd, flags.stage, flags.unit as string)
         : null;
-      const sourceBindingBypassed =
-        manifest?.ok === false && process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1";
-      if (manifest?.ok === false && !sourceBindingBypassed) {
+      if (manifest?.ok === false) {
         const manifestPath = `${relativeRecordDir(pd, intent, space) ?? "aidlc"}/construction/${flags.unit}/${flags.stage}/source-manifest.json`;
         refuseReview(
           `Cannot record review for "${flags.stage}": unit "${flags.unit}" has no valid source manifest at ` +
@@ -1366,15 +1421,59 @@ function handleReview(args: string[]): void {
       // receipts fail closed while fieldless legacy evidence keeps migrating.
       if (node.workspace_requires) {
         const sourceState = workspaceSourceState(pd, intent, space);
-        fields["Source Fingerprint"] =
+        const sourceFingerprint =
           sourceState?.fingerprint ?? UNBINDABLE_FINGERPRINT;
+        const requestedSourceFingerprint =
+          attempt.pendingSourceFingerprints.get(iteration);
+        if (
+          requestedSourceFingerprint === undefined ||
+          requestedSourceFingerprint === null
+        ) {
+          refuseReview(
+            `Refusing REVIEW_COMPLETED for "${flags.stage}": the matching REVIEW_REQUESTED ` +
+              `iteration ${iteration} has no source fingerprint. Re-dispatch that exact ` +
+              "iteration with --retry-pending before recording the verdict.",
+          );
+        }
+        if (sourceFingerprint !== requestedSourceFingerprint) {
+          refuseReview(
+            `Refusing REVIEW_COMPLETED for "${flags.stage}": workspace source changed after ` +
+              `REVIEW_REQUESTED iteration ${iteration}. Re-dispatch that exact iteration with ` +
+              "--retry-pending so the reviewer inspects the current bytes.",
+          );
+        }
+        fields["Source Fingerprint"] = sourceFingerprint;
         if (bindsUnitSource) {
-          if (sourceBindingBypassed) {
-            fields["Unit Source Binding Bypass"] = "true";
-          } else if (sourceState === null) {
-            fields["Unit Source Fingerprint"] = UNBINDABLE_FINGERPRINT;
-          } else if (manifest?.ok === true) {
-            fields["Unit Source Fingerprint"] = writeUnitSourceSnapshot(
+          const unitFingerprint =
+            sourceState === null || manifest?.ok !== true
+              ? UNBINDABLE_FINGERPRINT
+              : unitSourceFingerprint(
+                  sourceState.listing,
+                  manifest,
+                  manifest.rawBytesSha256,
+                );
+          const requestedUnitFingerprint =
+            attempt.pendingUnitSourceFingerprints.get(iteration);
+          if (
+            requestedUnitFingerprint === undefined ||
+            requestedUnitFingerprint === null
+          ) {
+            refuseReview(
+              `Refusing REVIEW_COMPLETED for "${flags.stage}": the matching REVIEW_REQUESTED ` +
+                `iteration ${iteration} has no unit source fingerprint. Re-dispatch that exact ` +
+                "iteration with --retry-pending before recording the verdict.",
+            );
+          }
+          if (unitFingerprint !== requestedUnitFingerprint) {
+            refuseReview(
+              `Refusing REVIEW_COMPLETED for "${flags.stage}": unit source or source-manifest.json ` +
+                `changed after REVIEW_REQUESTED iteration ${iteration}. Re-dispatch that exact ` +
+                "iteration with --retry-pending so the reviewer inspects the current bytes.",
+            );
+          }
+          fields["Unit Source Fingerprint"] = unitFingerprint;
+          if (sourceState !== null && manifest?.ok === true) {
+            writeUnitSourceSnapshot(
               pd,
               flags.stage,
               flags.unit as string,

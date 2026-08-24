@@ -50,6 +50,8 @@ import {
   UNBINDABLE_FINGERPRINT,
   validateUnitName,
   workspaceSourceFingerprint,
+  workspaceSourceExclusionPathspecs,
+  workspaceSourcePathIsExcluded,
   workspaceSourceState,
   worktreePath,
   worktreeStateFilePath,
@@ -1882,6 +1884,13 @@ function handleMerge(args: string[]): void {
     flags.space,
     repoTarget.repo,
   );
+  const frameworkPathspecs = workspaceSourceExclusionPathspecs(wtPath);
+  if (frameworkPathspecs === null) {
+    errorWithSlug(
+      slug,
+      "cannot resolve the Bolt worktree source role from its metadata",
+    );
+  }
   const aggregateBefore = assertAggregateSourceBeforeMerge(
     pd,
     slug,
@@ -1913,11 +1922,7 @@ function handleMerge(args: string[]): void {
       .filter(Boolean)
       .filter((line) => {
         const path = line.slice(3);
-        if (path.startsWith("aidlc/")) return false;
-        if (path.startsWith(".aidlc/")) return false;
-        return !/(?:^|\/)aidlc\/spaces\/[^/]+\/intents\/.*\/\.aidlc-sensors(?:\/|$)/.test(
-          path,
-        );
+        return workspaceSourcePathIsExcluded(wtPath, path) !== true;
       });
     if (applicationLines.length > 0) {
       const detail = applicationLines.join(", ");
@@ -2228,12 +2233,7 @@ function handleMerge(args: string[]): void {
     // Finalization writes framework metadata into the Bolt even when source
     // freshness is bypassed. Remove only that known residue so ordinary
     // worktree removal can still protect uncommitted application source.
-    const frameworkPaths = [
-      ":(top)aidlc/",
-      ":(top).aidlc/",
-      ":(glob)**/aidlc/spaces/*/intents/**/.aidlc-sensors/**",
-    ];
-    for (const frameworkPath of frameworkPaths) {
+    for (const frameworkPath of frameworkPathspecs) {
       const tracked = runGit(["ls-files", "-z", "--", frameworkPath], wtPath);
       if (!tracked.ok) {
         errorWithSlug(
@@ -2253,7 +2253,10 @@ function handleMerge(args: string[]): void {
         );
       }
     }
-    const clean = runGit(["clean", "-ffdx", "--", ...frameworkPaths], wtPath);
+    const clean = runGit(
+      ["clean", "-ffdx", "--", ...frameworkPathspecs],
+      wtPath,
+    );
     if (!clean.ok) {
       errorWithSlug(
         slug,
@@ -2277,11 +2280,7 @@ function handleMerge(args: string[]): void {
       .filter(Boolean)
       .filter((line) => {
         const path = line.slice(3);
-        if (path.startsWith("aidlc/")) return false;
-        if (path.startsWith(".aidlc/")) return false;
-        return !/(?:^|\/)aidlc\/spaces\/[^/]+\/intents\/.*\/\.aidlc-sensors(?:\/|$)/.test(
-          path,
-        );
+        return workspaceSourcePathIsExcluded(wtPath, path) !== true;
       });
     if (remainingApplicationLines.length > 0) {
       errorWithSlug(
@@ -2295,12 +2294,7 @@ function handleMerge(args: string[]): void {
     // entry, so remove the shell as a unit; non-forced worktree removal below
     // must continue to protect every application path.
     const clean = runGit(
-      [
-        "clean",
-        "-ffdx",
-        "--",
-        ":(top).aidlc/",
-      ],
+      ["clean", "-ffdx", "--", ...frameworkPathspecs],
       wtPath,
     );
     if (!clean.ok) {

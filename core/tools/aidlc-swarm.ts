@@ -116,6 +116,7 @@ import {
   worktreePath,
   worktreeRuntimeGraphPath,
   workspaceSourceFingerprint as worktreeSourceFingerprint,
+  workspaceSourceExclusionPathspecs,
   workspaceSourceListing,
   worktreeStateFilePath,
 } from "./aidlc-lib.ts";
@@ -582,6 +583,13 @@ function reviewerReceiptError(
   // fail-open behavior. Modern worktrees must validate the exact unit binding
   // that the reviewer saw before trusting its claims for footprint coverage.
   if (baseCommit !== null) {
+    const frameworkPathspecs = workspaceSourceExclusionPathspecs(wt);
+    if (frameworkPathspecs === null) {
+      return {
+        error:
+          `claimed converged but worktree source-role metadata is malformed for unit "${unit}"`,
+      };
+    }
     const recordedUnitFp = auditBlockField(
       latestTerminal.block,
       "Unit Source Fingerprint",
@@ -628,14 +636,20 @@ function reviewerReceiptError(
         return { error: `claimed converged but the worktree footprint could not be computed for unit "${unit}"` };
       }
       const excluded = git([
-        "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--",
-        ":(top)aidlc/", ":(top).aidlc/",
-        ":(glob)**/aidlc/spaces/*/intents/**/.aidlc-sensors/**",
+        "reset", "-q", "HEAD", "--",
+        ...frameworkPathspecs,
       ]);
       if (excluded.status !== 0) return { error: `claimed converged but framework paths could not be excluded from unit "${unit}"'s footprint` };
       const tree = git(["write-tree"]);
       if (tree.status !== 0 || !tree.stdout.trim()) return { error: `claimed converged but the worktree footprint tree could not be written for unit "${unit}"` };
-      const diff = git(["diff", "--name-only", "-z", "--no-renames", baseCommit, tree.stdout.trim(), "--", ":(exclude,top)aidlc/**", ":(exclude,top).aidlc/**", ":(exclude,glob)**/aidlc/spaces/*/intents/**/.aidlc-sensors/**"]);
+      const diff = git([
+        "diff",
+        "--name-only",
+        "-z",
+        "--no-renames",
+        baseCommit,
+        tree.stdout.trim(),
+      ]);
       if (diff.status !== 0) return { error: `claimed converged but the worktree footprint could not be compared for unit "${unit}"` };
       const outside = new Set(
         diff.stdout
@@ -703,6 +717,10 @@ function bindReviewedSource(
     maxBuffer: 512 * 1024 * 1024,
   });
   try {
+    const frameworkPathspecs = workspaceSourceExclusionPathspecs(wt);
+    if (frameworkPathspecs === null) {
+      return { error: "cannot resolve the Bolt worktree source role" };
+    }
     const head = git(["rev-parse", "HEAD^{commit}"]);
     if (head.status !== 0 || !head.stdout.trim()) return { error: "cannot resolve the Bolt HEAD commit" };
     if (git(["read-tree", "HEAD"]).status !== 0) return { error: "cannot seed the source snapshot index" };
@@ -756,8 +774,7 @@ function bindReviewedSource(
     }
     const restore = git([
       "reset", "-q", "HEAD", "--",
-      ":(top)aidlc/", ":(top).aidlc/",
-      ":(glob)**/aidlc/spaces/*/intents/**/.aidlc-sensors/**",
+      ...frameworkPathspecs,
     ]);
     if (restore.status !== 0) return { error: "cannot exclude framework state from the source snapshot" };
     const tree = git(["write-tree"]);

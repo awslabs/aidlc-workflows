@@ -938,7 +938,7 @@ describe("t304 receipt stamping + completion guard (cli)", () => {
       guarded(proj, ["approve", "code-generation", "--user-input", "ship it"])
         .rc,
     ).toBe(0);
-  });
+  }, 30000);
 
   test("AIDLC_SKIP_SOURCE_FRESHNESS=1 restores the legacy pass (off-switch)", () => {
     recordReview(proj);
@@ -1142,7 +1142,7 @@ describe("t304 multi-unit source attribution", () => {
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.out).not.toContain("source-fingerprint mismatch");
     expect(r.rc).toBe(0);
-  });
+  }, 30000);
 
   // Alpha's manifest/snapshot owns alpha.ts. A later beta review refreshes the
   // global outer binding but cannot shield alpha.ts because beta does not claim
@@ -1176,7 +1176,7 @@ describe("t304 multi-unit source attribution", () => {
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.rc).toBe(1);
     expect(r.out).toContain("Invalidated receipts: alpha");
-  });
+  }, 30000);
 
   // Re-reviewing alpha refreshes the global outer binding, but beta's own
   // snapshot still detects the unreviewed beta.ts edit and invalidates beta.

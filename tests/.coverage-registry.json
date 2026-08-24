@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 632,
+    "total": 638,
     "enumeratedByClass": {
-      "function": 369,
+      "function": 375,
       "audit": 87,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 188,
+      "function": 194,
       "audit": 45,
       "scope": 11,
       "stage": 11,
@@ -4636,6 +4636,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:workspaceSourceExclusionPathspecs",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t166-multi-repo-construction.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:workspaceSourceFingerprint",
       "minMechanism": "none",
       "coveredBy": [
@@ -4653,6 +4665,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t305-per-unit-attribution-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:workspaceSourcePathIsExcluded",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t166-multi-repo-construction.test.ts",
           "mechanism": "cli"
         }
       ],

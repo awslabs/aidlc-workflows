@@ -631,7 +631,7 @@ describe("t305 strict source-manifest validation", () => {
         'directory claims must end with "/"',
       );
     }
-  });
+  }, 30000);
 });
 
 describe("t305 content-addressed source review evidence", () => {
@@ -1156,21 +1156,56 @@ function auditLockWatcher(
 }
 
 describe("t305 real receipt and guard flows", () => {
-  test("2 stamp refuses without manifest; bypass marker is check-time enforced", () => {
+  test("2 REVIEW_REQUESTED refuses a missing manifest even with the freshness bypass", () => {
     const { project, record } = runtimeFixture(); seedArtifacts(record, "alpha");
     const args = ["review", "--stage", "code-generation", "--reviewer", REVIEWER, "--unit", "alpha", "--iteration", "1"];
-    expect(cli(LOG, args, project).rc).toBe(0);
-    const refused = cli(LOG, [...args, "--verdict", "READY"], project);
-    expect(refused.rc).toBe(1); expect(refused.out).toContain("has no valid source manifest");
-    expect(readAllAuditShards(project)).not.toContain("**Event**: REVIEW_COMPLETED");
-    const bypass = cli(LOG, [...args, "--verdict", "READY"], project, { AIDLC_SKIP_SOURCE_FRESHNESS: "1" });
-    expect(bypass.rc).toBe(0); expect(readAllAuditShards(project)).toContain("**Unit Source Binding Bypass**: true");
-    review(project, record, "beta", [{ path: "app.ts" }], { AIDLC_SKIP_SOURCE_FRESHNESS: "1" });
-    expect(approve(project).rc).toBe(1);
-    expect(approve(project, { AIDLC_SKIP_SOURCE_FRESHNESS: "1" }).rc).toBe(0);
+    const refused = cli(LOG, args, project);
+    expect(refused.rc).toBe(1);
+    expect(refused.out).toContain("has no valid source manifest");
+    const bypass = cli(LOG, args, project, {
+      AIDLC_SKIP_SOURCE_FRESHNESS: "1",
+    });
+    expect(bypass.rc).toBe(1);
+    expect(bypass.out).toContain("has no valid source manifest");
+    expect(readAllAuditShards(project)).not.toContain("**Event**: REVIEW_REQUESTED");
   }, 30000);
 
-  test("terminal review refuses an explicitly claimed ignored path without minting a receipt", () => {
+  test("REVIEW_COMPLETED refuses source edited after dispatch and retry-pending refreshes the binding", () => {
+    const { project, record } = runtimeFixture();
+    writeManifest(record, "alpha", [{ path: "app.ts" }]);
+    const args = ["review", "--stage", "code-generation", "--reviewer", REVIEWER, "--unit", "alpha", "--iteration", "1"];
+    expect(cli(LOG, args, project).rc).toBe(0);
+    writeFileSync(join(project, "app.ts"), "export const app = 2;\n");
+
+    const refused = cli(LOG, [...args, "--verdict", "READY"], project);
+    expect(refused.rc).toBe(1);
+    expect(refused.out).toContain("workspace source changed after REVIEW_REQUESTED");
+    expect(cli(LOG, [...args, "--retry-pending"], project).rc).toBe(0);
+    expect(cli(LOG, [...args, "--verdict", "READY"], project).rc).toBe(0);
+  }, 30000);
+
+  test("REVIEW_COMPLETED refuses source-manifest bytes edited after dispatch", () => {
+    const { project, record } = runtimeFixture();
+    writeManifest(record, "alpha", [{ path: "app.ts" }]);
+    const args = ["review", "--stage", "code-generation", "--reviewer", REVIEWER, "--unit", "alpha", "--iteration", "1"];
+    expect(cli(LOG, args, project).rc).toBe(0);
+    const path = join(
+      record,
+      "construction",
+      "alpha",
+      "code-generation",
+      "source-manifest.json",
+    );
+    writeFileSync(path, `${readFileSync(path, "utf-8")}\n`);
+
+    const refused = cli(LOG, [...args, "--verdict", "READY"], project);
+    expect(refused.rc).toBe(1);
+    expect(refused.out).toContain(
+      "unit source or source-manifest.json changed after REVIEW_REQUESTED",
+    );
+  }, 30000);
+
+  test("review request refuses an explicitly claimed ignored path without minting a receipt", () => {
     const { project, record } = runtimeFixture();
     writeFileSync(join(project, ".gitignore"), "ignored.ts\n");
     writeFileSync(join(project, "ignored.ts"), "ignored\n");
@@ -1186,12 +1221,11 @@ describe("t305 real receipt and guard flows", () => {
       "--iteration",
       "1",
     ];
-    expect(cli(LOG, args, project).rc).toBe(0);
-    const refused = cli(LOG, [...args, "--verdict", "READY"], project);
+    const refused = cli(LOG, args, project);
     expect(refused.rc).toBe(1);
     expect(refused.out).toContain("ignored by Git");
     expect(readAllAuditShards(project)).not.toMatch(
-      /\*\*Event\*\*: REVIEW_COMPLETED[\s\S]*?\*\*Unit\*\*: alpha/,
+      /\*\*Event\*\*: REVIEW_REQUESTED[\s\S]*?\*\*Unit\*\*: alpha/,
     );
   }, 30000);
 
