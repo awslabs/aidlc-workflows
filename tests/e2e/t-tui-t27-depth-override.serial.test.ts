@@ -85,7 +85,10 @@ import { join } from "node:path";
 import { resolveWinNode } from "../harness/tui-drive.ts";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { seededAuditDir, seededStateFile } from "../harness/fixtures.ts";
-import { cleanupTuiProject, setupTuiProject } from "../harness/tui-fixtures.ts";
+import {
+  cleanupTuiProjectAfterKill,
+  setupTuiProject,
+} from "../harness/tui-fixtures.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const AIDLC_SRC = join(import.meta.dir, "..", "..", "dist", "claude", ".claude");
@@ -293,8 +296,11 @@ describe("t-tui-t27 depth override (config-change lands + renders)", () => {
         // what the headless SDK path could not see, asserted without grepping prose.
         expect(pane).toContain("· IDEATION");
       } finally {
-        drive(["kill", "--session", session]);
-        cleanupTuiProject(proj);
+        cleanupTuiProjectAfterKill(
+          proj,
+          session,
+          drive(["kill", "--session", session]),
+        );
       }
     },
     TEST_TIMEOUT_MS,
@@ -332,8 +338,11 @@ describe("t-tui-t27 depth override (config-change lands + renders)", () => {
         expect(after).toBe(before);
         expect(readAllAuditShards(proj)).not.toMatch(/^\*\*Event\*\*: DEPTH_CHANGED$/m);
       } finally {
-        drive(["kill", "--session", session]);
-        cleanupTuiProject(proj);
+        cleanupTuiProjectAfterKill(
+          proj,
+          session,
+          drive(["kill", "--session", session]),
+        );
       }
     },
     TEST_TIMEOUT_MS,

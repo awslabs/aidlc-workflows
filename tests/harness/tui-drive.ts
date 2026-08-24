@@ -155,6 +155,9 @@ export const WIN_KILL_TIMEOUT_MS = 8_000;
 const WIN_PROCESS_QUERY_TIMEOUT_MS = 750;
 const WIN_TASKKILL_TIMEOUT_MS = 750;
 const WIN_CONSOLE_LIST_TIMEOUT_MS = 5_000;
+const WINDOWS_SESSION_CLEANUP_ATTEMPTS = 20;
+const WINDOWS_SESSION_CLEANUP_WAIT_MS = 100;
+const RETRYABLE_WINDOWS_RM_CODES = new Set(["EBUSY", "ENOTEMPTY", "EPERM"]);
 
 type Args = {
   positionals: string[];
@@ -410,6 +413,41 @@ function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+export interface WindowsSessionCleanupOptions {
+  attempts?: number;
+  waitMs?: number;
+  remove?: (path: string) => void;
+  sleep?: (ms: number) => void;
+}
+
+export function removeWindowsSessionDirWithRetry(
+  path: string,
+  options: WindowsSessionCleanupOptions = {},
+): void {
+  const attempts = options.attempts ?? WINDOWS_SESSION_CLEANUP_ATTEMPTS;
+  const waitMs = options.waitMs ?? WINDOWS_SESSION_CLEANUP_WAIT_MS;
+  const remove = options.remove ??
+    ((target: string) => rmSync(target, { recursive: true, force: true }));
+  const wait = options.sleep ?? sleepSync;
+
+  for (let attempt = 1; ; attempt++) {
+    try {
+      remove(path);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (
+        typeof code !== "string" ||
+        !RETRYABLE_WINDOWS_RM_CODES.has(code) ||
+        attempt >= attempts
+      ) {
+        throw error;
+      }
+      wait(waitMs);
+    }
+  }
+}
+
 function processIsAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -489,6 +527,31 @@ function forceKillWindowsTree(
   );
 }
 
+export interface WindowsForcedTerminationOptions {
+  now?: () => number;
+  terminate?: (pid: number, timeoutMs: number) => void;
+  maxAttemptMs?: number;
+}
+
+export function forceKillWindowsProcessesWithinDeadline(
+  processes: Array<{ pid: number }>,
+  deadline: number,
+  options: WindowsForcedTerminationOptions = {},
+): void {
+  const now = options.now ?? Date.now;
+  const terminate = options.terminate ??
+    ((pid: number, timeoutMs: number) => {
+      forceKillWindowsTree(pid, timeoutMs);
+    });
+  const maxAttemptMs = options.maxAttemptMs ?? WIN_TASKKILL_TIMEOUT_MS;
+
+  for (const processInfo of processes) {
+    const budget = Math.min(maxAttemptMs, Math.max(0, deadline - now()));
+    if (budget <= 0) break;
+    terminate(processInfo.pid, budget);
+  }
+}
+
 export type WindowsProcessIdentity = {
   pid: number;
   parentPid: number;
@@ -511,6 +574,7 @@ type WindowsSessionMeta = {
   rows: number;
   session?: string;
   ownerToken?: string;
+  cwd?: string;
 };
 
 type WindowsSessionOwnership = {
@@ -589,6 +653,11 @@ function readJsonFileWithRetry<T>(
   return readJsonFile<T>(path);
 }
 
+export function parsePowerShellBase64Json<T>(raw: string): T {
+  const encoded = raw.replace(/^\uFEFF/, "").trim();
+  return JSON.parse(Buffer.from(encoded, "base64").toString("utf8")) as T;
+}
+
 function windowsProcessQuery(
   pid: number,
   timeoutMs = WIN_PROCESS_QUERY_TIMEOUT_MS,
@@ -610,7 +679,8 @@ function windowsProcessQuery(
     '  creationDate = $p.CreationDate.ToUniversalTime().ToString("o")',
     "  commandLine = [string]$p.CommandLine",
     "}",
-    "$out | ConvertTo-Json -Compress",
+    "$json = $out | ConvertTo-Json -Compress",
+    "[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))",
   ].join("\n");
   const result = runBoundedCommand(
     "powershell.exe",
@@ -631,7 +701,7 @@ function windowsProcessQuery(
   try {
     return {
       status: "ok",
-      value: JSON.parse(result.stdout.trim()) as WindowsProcessIdentity,
+      value: parsePowerShellBase64Json<WindowsProcessIdentity>(result.stdout),
     };
   } catch {
     return {
@@ -662,7 +732,8 @@ function windowsProcessFallbackQuery(
     '  creationDate = $p.StartTime.ToUniversalTime().ToString("o")',
     "  commandLine = ''",
     "}",
-    "$out | ConvertTo-Json -Compress",
+    "$json = $out | ConvertTo-Json -Compress",
+    "[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))",
   ].join("\n");
   const result = runBoundedCommand(
     "powershell.exe",
@@ -679,7 +750,7 @@ function windowsProcessFallbackQuery(
   try {
     return {
       status: "ok",
-      value: JSON.parse(result.stdout.trim()) as WindowsProcessIdentity,
+      value: parsePowerShellBase64Json<WindowsProcessIdentity>(result.stdout),
     };
   } catch {
     return {
@@ -718,7 +789,8 @@ function windowsDirectChildrenQuery(
     "  currentRoot = Convert-Identity $root",
     "  children = $children",
     "}",
-    "ConvertTo-Json -InputObject $out -Depth 4 -Compress",
+    "$json = ConvertTo-Json -InputObject $out -Depth 4 -Compress",
+    "[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))",
   ].join("\n");
   const result = runBoundedCommand(
     "powershell.exe",
@@ -736,9 +808,9 @@ function windowsDirectChildrenQuery(
     };
   }
   try {
-    const parsed = JSON.parse(
-      result.stdout.trim(),
-    ) as WindowsDescendantSnapshot;
+    const parsed = parsePowerShellBase64Json<WindowsDescendantSnapshot>(
+      result.stdout,
+    );
     return {
       status: "ok",
       value: {
@@ -1055,7 +1127,16 @@ function mergeWindowsProcessIdentities(
 }
 
 function clearWindowsSessionAuthority(dir: string): void {
-  for (const name of ["pid", "child.pid", "meta.json", "ownership.json"]) {
+  for (
+    const name of [
+      "pid",
+      "child.pid",
+      "meta.json",
+      "ownership.json",
+      "target-spawn.json",
+      "target-exit.json",
+    ]
+  ) {
     rmSync(join(dir, name), { force: true });
   }
 }
@@ -1191,7 +1272,7 @@ const tmuxBackend: Backend = {
 //   <dir>/cmd.log   — append-only command log the daemon tails (send/kill).
 //   <dir>/grid.txt  — the latest reconstructed grid the daemon snapshots; the
 //                     capture/wait clients read it.
-//   <dir>/meta.json — { cols, rows, ownerToken } for diagnostics + PID authority.
+//   <dir>/meta.json — { cols, rows, ownerToken, cwd } for diagnostics + PID authority.
 //   <dir>/pid       — the daemon pid, for kill's force-terminate backstop.
 //   <dir>/child.pid — the node-pty child pid.
 //   <dir>/tree.pids — the daemon's kill-time process-tree snapshot.
@@ -1238,7 +1319,7 @@ function killLegacyWindowsSession(session: string, dir: string): void {
   );
   if (daemonQuery.status !== "ok") {
     if (daemonQuery.status === "absent") {
-      rmSync(dir, { recursive: true, force: true });
+      removeWindowsSessionDirWithRetry(dir);
       return;
     }
     fail(`cannot verify legacy Windows session '${session}': ${daemonQuery.message}`, 1);
@@ -1294,7 +1375,7 @@ function killLegacyWindowsSession(session: string, dir: string): void {
       1,
     );
   }
-  rmSync(dir, { recursive: true, force: true });
+  removeWindowsSessionDirWithRetry(dir);
 }
 
 const win32Backend: Backend = {
@@ -1318,12 +1399,12 @@ const win32Backend: Backend = {
         1,
       );
     }
-    rmSync(dir, { recursive: true, force: true });
+    removeWindowsSessionDirWithRetry(dir);
     mkdirSync(dir, { recursive: true });
     const ownerToken = randomUUID();
     writeFileSync(
       join(dir, "meta.json"),
-      JSON.stringify({ cols: width, rows: height, session, ownerToken }),
+      JSON.stringify({ cols: width, rows: height, session, ownerToken, cwd }),
     );
 
     // Fork the daemon UNDER NODE (never bun — node-pty input wedges under bun,
@@ -1804,11 +1885,7 @@ const win32Backend: Backend = {
     let survivors =
       liveQuery.status === "ok" ? liveQuery.value : [];
     while (survivors.length > 0 && remaining() > 0) {
-      for (const process of survivors) {
-        const budget = Math.min(WIN_TASKKILL_TIMEOUT_MS, remaining());
-        if (budget <= 0) break;
-        forceKillWindowsTree(process.pid, budget);
-      }
+      forceKillWindowsProcessesWithinDeadline(survivors, deadline);
       if (remaining() > 0) sleepSync(Math.min(100, remaining()));
       liveQuery = liveOwnedWindowsProcesses(
         survivors,
@@ -1914,12 +1991,11 @@ async function runWinChildWrapper(a: Args): Promise<void> {
   const exitFile = requireFlag(a, "exit-file");
   if (a.rest.length === 0) process.exit(2);
   while (!existsSync(releaseFile)) await sleep(25);
-  const codePage = runBoundedCommand(
-    "chcp.com",
-    ["65001"],
-    DEFAULT_PROCESS_SNAPSHOT_TIMEOUT_MS,
-    "ignore",
-  );
+  const codePage = spawnSync("chcp.com", ["65001"], {
+    stdio: "ignore",
+    windowsHide: false,
+    timeout: DEFAULT_PROCESS_SNAPSHOT_TIMEOUT_MS,
+  });
   if (codePage.status !== 0) {
     process.stderr.write("tui-drive child launch failed: unable to select UTF-8 console mode\n");
     process.exit(127);

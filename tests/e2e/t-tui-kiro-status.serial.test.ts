@@ -25,7 +25,11 @@ import { existsSync, readFileSync } from "node:fs";
 import * as os from "node:os";
 import { join } from "node:path";
 import { seededStateFile } from "../harness/fixtures.ts";
-import { cleanupTuiProject, KIRO_SRC, setupTuiProject } from "../harness/tui-fixtures.ts";
+import {
+  cleanupTuiProjectAfterKill,
+  KIRO_SRC,
+  setupTuiProject,
+} from "../harness/tui-fixtures.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const IS_WIN = os.platform() === "win32";
@@ -126,8 +130,11 @@ describe("t-tui-kiro-status (read-only status through the Kiro print-directive a
         // Read-only contract: the state file is byte-identical afterwards.
         expect(readFileSync(statePath, "utf8")).toBe(stateBefore);
       } finally {
-        drive(["kill", "--session", session]);
-        cleanupTuiProject(sandbox);
+        cleanupTuiProjectAfterKill(
+          sandbox,
+          session,
+          drive(["kill", "--session", session]),
+        );
       }
     },
     TEST_TIMEOUT_MS,
@@ -149,8 +156,11 @@ describe("t-tui-kiro-status (read-only status through the Kiro print-directive a
         // per-intent state file the seeded record would hold never appears.
         expect(existsSync(seededStateFile(sandbox))).toBe(false);
       } finally {
-        drive(["kill", "--session", session]);
-        cleanupTuiProject(sandbox);
+        cleanupTuiProjectAfterKill(
+          sandbox,
+          session,
+          drive(["kill", "--session", session]),
+        );
       }
     },
     TEST_TIMEOUT_MS,

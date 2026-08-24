@@ -9,6 +9,7 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -31,23 +32,30 @@ import {
   filterConsoleOwnedWindowsProcesses,
   filterOwnedWindowsDescendants,
   filterSpawnOwnedWindowsDescendants,
+  forceKillWindowsProcessesWithinDeadline,
   gridHasOption,
   gridIsApprovalGate,
   normalizeTuiCommand,
   newConsoleProcessIds,
+  parsePowerShellBase64Json,
   parsePortablePath,
   pickRevisionOption,
   pickRevisionTypeSomethingOption,
   resolvePortablePathPattern,
+  removeWindowsSessionDirWithRetry,
   runBoundedCommand,
   shouldForceKillWindowsChildRoot,
   winSessionDir,
 } from "../harness/tui-drive.ts";
 import {
+  assertNoPendingTuiSessionsForProject,
   cleanupTuiProject,
+  cleanupTuiProjectAfterKill,
   compileTuiRuntimeGraph,
   createKiroNumberedProseAnswerState,
   nextKiroNumberedProseAnswer,
+  pendingTuiSessionsForProject,
+  removeTuiProjectTreeWithRetry,
   setupTuiProject,
 } from "../harness/tui-fixtures.ts";
 import { seededRecordDir } from "../harness/fixtures.ts";
@@ -561,6 +569,139 @@ describe("tui-drive bounded Windows subprocesses", () => {
     expect(
       shouldForceKillWindowsChildRoot(undefined, recorded, recycled),
     ).toBe(false);
+  });
+});
+
+describe("TUI cleanup hardening", () => {
+  test("PowerShell process metadata preserves Unicode through ASCII transport", () => {
+    const identity = {
+      pid: 6001,
+      parentPid: 6000,
+      creationDate: "2026-08-26T00:00:00.000Z",
+      commandLine: "node -e \"←→ ▓░ ✓✔ ❯☐☒ —\"",
+    };
+    const encoded = Buffer.from(
+      JSON.stringify(identity),
+      "utf8",
+    ).toString("base64");
+
+    expect(
+      parsePowerShellBase64Json<typeof identity>(`\uFEFF${encoded}\r\n`),
+    ).toEqual(identity);
+  });
+
+  test("one forced-termination deadline bounds a multi-process batch", () => {
+    let now = 0;
+    const attempts: Array<{ pid: number; timeoutMs: number }> = [];
+
+    forceKillWindowsProcessesWithinDeadline(
+      [{ pid: 6101 }, { pid: 6102 }, { pid: 6103 }],
+      5_000,
+      {
+        now: () => now,
+        maxAttemptMs: 5_000,
+        terminate: (pid, timeoutMs) => {
+          attempts.push({ pid, timeoutMs });
+          now += timeoutMs;
+        },
+      },
+    );
+
+    expect(attempts).toEqual([{ pid: 6101, timeoutMs: 5_000 }]);
+    expect(now).toBe(5_000);
+  });
+
+  test("retries transient Windows session-directory cleanup", () => {
+    let removeCalls = 0;
+    const waits: number[] = [];
+
+    removeWindowsSessionDirWithRetry("C:\\temp\\tui-session", {
+      attempts: 4,
+      waitMs: 25,
+      remove: () => {
+        removeCalls++;
+        if (removeCalls < 3) {
+          const error = new Error("locked") as NodeJS.ErrnoException;
+          error.code = "EBUSY";
+          throw error;
+        }
+      },
+      sleep: (ms) => waits.push(ms),
+    });
+
+    expect(removeCalls).toBe(3);
+    expect(waits).toEqual([25, 25]);
+  });
+
+  test("retries transient workspace cleanup", () => {
+    let removeCalls = 0;
+    const waits: number[] = [];
+
+    removeTuiProjectTreeWithRetry("C:\\temp\\project", {
+      attempts: 4,
+      waitMs: 20,
+      remove: () => {
+        removeCalls++;
+        if (removeCalls < 2) {
+          const error = new Error("busy") as NodeJS.ErrnoException;
+          error.code = "EPERM";
+          throw error;
+        }
+      },
+      sleep: (ms) => waits.push(ms),
+    });
+
+    expect(removeCalls).toBe(2);
+    expect(waits).toEqual([20]);
+  });
+
+  test("cwd metadata associates a pending session with its workspace", () => {
+    const project = mkdtempSync(join(tmpdir(), "aidlc-session-project-"));
+    const sessionsRoot = mkdtempSync(join(tmpdir(), "aidlc-session-root-"));
+    const session = "pending-session";
+    const sessionDir = join(sessionsRoot, "hashed-channel");
+    mkdirSync(sessionDir);
+    writeFileSync(
+      join(sessionDir, "meta.json"),
+      JSON.stringify({
+        cols: 120,
+        rows: 40,
+        session,
+        ownerToken: "owner-token",
+        cwd: project,
+      }),
+    );
+    writeFileSync(join(sessionDir, "pid"), "6201");
+
+    try {
+      expect(pendingTuiSessionsForProject(project, sessionsRoot)).toEqual([
+        { name: session, recordedPid: 6201 },
+      ]);
+      expect(() =>
+        assertNoPendingTuiSessionsForProject(project, sessionsRoot)
+      ).toThrow(/pending-session/);
+      expect(existsSync(project)).toBe(true);
+    } finally {
+      rmSync(sessionsRoot, { recursive: true, force: true });
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  test("a failed kill leaves the workspace intact", () => {
+    const project = mkdtempSync(join(tmpdir(), "aidlc-kill-failure-"));
+    try {
+      expect(() =>
+        cleanupTuiProjectAfterKill(project, "failed-session", {
+          rc: 9,
+          stderr: "verified process survived",
+        })
+      ).toThrow(
+        /kill failed for session 'failed-session' \(rc=9\)[\s\S]*verified process survived/,
+      );
+      expect(existsSync(project)).toBe(true);
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
   });
 });
 

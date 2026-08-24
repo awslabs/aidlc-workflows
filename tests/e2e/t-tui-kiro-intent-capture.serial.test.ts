@@ -61,7 +61,7 @@ import { join } from "node:path";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
 import {
-  cleanupTuiProject,
+  cleanupTuiProjectAfterKill,
   createKiroNumberedProseAnswerState,
   KIRO_SRC,
   markdownH2Section,
@@ -322,8 +322,11 @@ describe("t-tui-kiro-intent-capture (numbered-prose gates on the shipped dist/ki
         expect(questionAnsweredAt).toBeGreaterThan(summaryConfirmedAt);
         expect(gateOpenedAt).toBeGreaterThan(questionAnsweredAt);
       } finally {
-        drive(["kill", "--session", session]);
-        cleanupTuiProject(sandbox);
+        cleanupTuiProjectAfterKill(
+          sandbox,
+          session,
+          drive(["kill", "--session", session]),
+        );
       }
     },
     TEST_TIMEOUT_MS,

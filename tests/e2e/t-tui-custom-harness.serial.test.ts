@@ -136,6 +136,7 @@ import { driveAidlc, recordDirFor, stateFilePathFor } from "../harness/sdk-drive
 import { resolveWinNode } from "../harness/tui-drive.ts";
 import {
   cleanupTuiProject,
+  cleanupTuiProjectAfterKill,
   compileTuiRuntimeGraph,
   setupTuiProject,
 } from "../harness/tui-fixtures.ts";
@@ -317,8 +318,11 @@ describe("t-tui-custom-harness (the {sdk,tui} two-driver journey)", () => {
         expect(pane).toContain(`> ${SNAPSHOT_STAGE_SLUG}`);
         expect(pane).toContain(`-- ${CUSTOM_AGENT_DISPLAY}`);
       } finally {
-        drive(["kill", "--session", session]);
-        cleanupTuiProject(proj);
+        cleanupTuiProjectAfterKill(
+          proj,
+          session,
+          drive(["kill", "--session", session]),
+        );
       }
     },
     90_000,
@@ -592,8 +596,11 @@ describe("t-tui-custom-harness (the {sdk,tui} two-driver journey)", () => {
         const tailKnowledge = readFileSync(tailArtifact, "utf8").includes(CUSTOM_KNOWLEDGE_MARKER);
         expect(headKnowledge || tailKnowledge).toBe(true);
       } finally {
-        drive(["kill", "--session", session]);
-        cleanupTuiProject(tuiProj);
+        cleanupTuiProjectAfterKill(
+          tuiProj,
+          session,
+          drive(["kill", "--session", session]),
+        );
       }
     },
     TEST_TIMEOUT_MS,

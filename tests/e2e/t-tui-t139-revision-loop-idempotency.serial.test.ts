@@ -77,7 +77,12 @@ import * as os from "node:os";
 import { join } from "node:path";
 import { stateFilePathFor } from "../harness/sdk-drive.ts";
 import { gridHasMenu, resolveWinNode } from "../harness/tui-drive.ts";
-import { cleanupTuiProject, setupTuiProject } from "../harness/tui-fixtures.ts";
+import {
+  assertTuiDriveKill,
+  cleanupTuiProject,
+  cleanupTuiProjectAfterKill,
+  setupTuiProject,
+} from "../harness/tui-fixtures.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const AIDLC_SRC = join(import.meta.dir, "..", "..", "dist", "claude", ".claude");
@@ -320,7 +325,10 @@ describe("t-tui-t139 revision-loop idempotency (reject->approve == clean approve
         );
         expect(cleanRc).toBe(0);
         const clean = readTerminal(cleanSandbox);
-        drive(["kill", "--session", cleanSession]);
+        assertTuiDriveKill(
+          drive(["kill", "--session", cleanSession]),
+          cleanSession,
+        );
 
         // CLEAN sanity: it reached the milestone with NO rejection.
         expect(clean.scope).toMatch(/bugfix/i);
@@ -404,11 +412,19 @@ describe("t-tui-t139 revision-loop idempotency (reject->approve == clean approve
           expect(revised.revisionCount).toBeGreaterThan(clean.revisionCount);
         } finally {
           if (pollTimer) clearInterval(pollTimer);
-          if (revisedSession) drive(["kill", "--session", revisedSession]);
+          if (revisedSession) {
+            assertTuiDriveKill(
+              drive(["kill", "--session", revisedSession]),
+              revisedSession,
+            );
+          }
         }
       } finally {
-        drive(["kill", "--session", cleanSession]);
-        cleanupTuiProject(cleanSandbox);
+        cleanupTuiProjectAfterKill(
+          cleanSandbox,
+          cleanSession,
+          drive(["kill", "--session", cleanSession]),
+        );
         if (revisedSandbox) cleanupTuiProject(revisedSandbox);
       }
     },

@@ -54,7 +54,10 @@ import { existsSync, readFileSync } from "node:fs";
 import * as os from "node:os";
 import { join } from "node:path";
 import { resolveWinNode } from "../harness/tui-drive.ts";
-import { cleanupTuiProject, setupTuiProject } from "../harness/tui-fixtures.ts";
+import {
+  cleanupTuiProjectAfterKill,
+  setupTuiProject,
+} from "../harness/tui-fixtures.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const AIDLC_SRC = join(import.meta.dir, "..", "..", "dist", "claude", ".claude");
@@ -176,8 +179,11 @@ function captureWorkflowStatusline(): string {
     }
     return pane;
   } finally {
-    drive(["kill", "--session", session]);
-    cleanupTuiProject(sandbox);
+    cleanupTuiProjectAfterKill(
+      sandbox,
+      session,
+      drive(["kill", "--session", session]),
+    );
   }
 }
 

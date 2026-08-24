@@ -57,6 +57,10 @@ import {
   WIN_KILL_TIMEOUT_MS,
   winSessionDir,
 } from "../harness/tui-drive.ts";
+import {
+  assertTuiDriveKill,
+  cleanupTuiProjectAfterKill,
+} from "../harness/tui-fixtures.ts";
 
 // ---------------------------------------------------------------------------
 // Locate the driver + pick the runtime per platform (§2.1, D-TUI-7).
@@ -118,6 +122,20 @@ function drive(args: string[]): Run {
     env: process.env,
   });
   return { rc: res.status ?? -1, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
+}
+
+function recordSessionKill(
+  session: string,
+  errors: unknown[],
+): void {
+  try {
+    assertTuiDriveKill(
+      drive(["kill", "--session", session]),
+      session,
+    );
+  } catch (error) {
+    errors.push(error);
+  }
 }
 
 async function waitUntil(
@@ -365,6 +383,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
     () => {
       const session = `aidlc_tui_preflight_${process.pid}`;
       const sandbox = mkdtempSync(join(tmpdir(), "aidlc-tui-preflight-"));
+      let runError: unknown;
       try {
         // 1) start the known-answer target in a fixed-size session.
         const started = drive([
@@ -421,10 +440,29 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
         expect(captured.rc).toBe(0);
         expect(captured.stdout).toContain(GLYPH_SENTINEL);
         expect(captured.stdout).not.toContain("\x1b[");
-      } finally {
-        drive(["kill", "--session", session]);
-        if (existsSync(sandbox)) rmSync(sandbox, { recursive: true, force: true });
+      } catch (error) {
+        runError = error;
       }
+      let cleanupError: unknown;
+      try {
+        cleanupTuiProjectAfterKill(
+          sandbox,
+          session,
+          drive(["kill", "--session", session]),
+        );
+      } catch (error) {
+        cleanupError = error;
+      }
+      if (cleanupError !== undefined) {
+        if (runError === undefined) throw cleanupError;
+        throw new Error(
+          `TUI preflight and cleanup both failed.\n` +
+            `original test error: ${String(runError)}\n` +
+            `cleanup error: ${String(cleanupError)}`,
+          { cause: runError },
+        );
+      }
+      if (runError !== undefined) throw runError;
     },
     20_000,
   );
@@ -443,7 +481,15 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
       const cmdShim = join(sandbox, "claude shim.cmd");
       const legacyDaemonScript = join(sandbox, "legacy-tui-drive.ts");
       const sessions: string[] = [];
-
+      const cleanupErrors: unknown[] = [];
+      const throwRecordedCleanupErrors = (): void => {
+        if (cleanupErrors.length === 0) return;
+        const recorded = cleanupErrors.splice(0);
+        throw new Error(
+          `Windows TUI case cleanup failed:\n${recorded.map(String).join("\n")}`,
+          { cause: recorded[0] },
+        );
+      };
       writeFileSync(
         childScript,
         [
@@ -719,7 +765,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
           ).toBe(true);
           expect(liveRecordedIdentities(recorded)).toEqual([]);
         } finally {
-          drive(["kill", "--session", session]);
+          recordSessionKill(session, cleanupErrors);
         }
       };
 
@@ -822,7 +868,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
           ).toBe(true);
           expect(liveRecordedIdentities(recorded)).toEqual([]);
         } finally {
-          drive(["kill", "--session", session]);
+          recordSessionKill(session, cleanupErrors);
         }
       };
 
@@ -922,7 +968,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
           } else {
             process.env.AIDLC_TUI_CIM_TRACE_FILE = priorTrace;
           }
-          drive(["kill", "--session", session]);
+          recordSessionKill(session, cleanupErrors);
         }
       };
 
@@ -1003,7 +1049,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
           ).toBe(true);
           expect(liveRecordedIdentities(recorded)).toEqual([]);
         } finally {
-          drive(["kill", "--session", session]);
+          recordSessionKill(session, cleanupErrors);
         }
       };
 
@@ -1120,8 +1166,8 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
             ),
           ).toBe(true);
         } finally {
-          drive(["kill", "--session", staleSession]);
-          drive(["kill", "--session", actualSession]);
+          recordSessionKill(staleSession, cleanupErrors);
+          recordSessionKill(actualSession, cleanupErrors);
         }
       };
 
@@ -1266,8 +1312,8 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
             ),
           ).toBe(true);
         } finally {
-          drive(["kill", "--session", sessionA]);
-          drive(["kill", "--session", sessionB]);
+          recordSessionKill(sessionA, cleanupErrors);
+          recordSessionKill(sessionB, cleanupErrors);
         }
       };
 
@@ -1341,7 +1387,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
             ),
           ).toBe(true);
         } finally {
-          drive(["kill", "--session", session]);
+          recordSessionKill(session, cleanupErrors);
         }
       };
 
@@ -1444,7 +1490,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
           } else {
             process.env.AIDLC_TUI_CIM_FAIL_CONTEXTS = prior;
           }
-          drive(["kill", "--session", session]);
+          recordSessionKill(session, cleanupErrors);
         }
       };
 
@@ -1506,7 +1552,7 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
           } else {
             process.env.AIDLC_TUI_CIM_FAIL_CONTEXTS = prior;
           }
-          drive(["kill", "--session", session]);
+          recordSessionKill(session, cleanupErrors);
         }
       };
 
@@ -1608,53 +1654,77 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
             } else {
               process.env.AIDLC_TUI_CIM_TRACE_FILE = priorTrace;
             }
-            drive(["kill", "--session", session]);
+            recordSessionKill(session, cleanupErrors);
           }
         };
 
+      let runError: unknown;
       try {
         await runShimCase("cmd");
+        throwRecordedCleanupErrors();
         await runShimCase("ps1");
+        throwRecordedCleanupErrors();
         await runMissingTargetIdentityFastExit();
+        throwRecordedCleanupErrors();
         await runCase("posix", () => "signals/*/done.txt", true);
+        throwRecordedCleanupErrors();
         await runCase("native", () => "signals\\*\\done.txt", true, true);
+        throwRecordedCleanupErrors();
         await runCase(
           "drive",
           (caseDir) => join(caseDir, "signals", "*", "done.txt"),
           true,
         );
+        throwRecordedCleanupErrors();
         await runCase(
           "gitbash",
           (caseDir) => gitBashPath(join(caseDir, "signals", "*", "done.txt")),
           true,
         );
+        throwRecordedCleanupErrors();
         await runCase(
           "unc",
           (caseDir) =>
             uncLocalhostPath(join(caseDir, "signals", "*", "done.txt")),
           true,
         );
+        throwRecordedCleanupErrors();
         await runCase(
           "mixed",
           (caseDir) =>
             mixedDrivePath(join(caseDir, "signals", "*", "done.txt")),
           true,
         );
+        throwRecordedCleanupErrors();
         await runCase("timeout", () => "signals\\*\\missing.txt", false);
+        throwRecordedCleanupErrors();
         await runParentFirstExit();
+        throwRecordedCleanupErrors();
         await runStalePidOwnership();
+        throwRecordedCleanupErrors();
         await runTokenlessLegacyOwnership();
+        throwRecordedCleanupErrors();
         await runPreUpgradeLegacySession();
+        throwRecordedCleanupErrors();
         await runCollidingSessions();
+        throwRecordedCleanupErrors();
         await runOrdinaryCimFailure();
+        throwRecordedCleanupErrors();
         await runParentFirstCimFailure();
+        throwRecordedCleanupErrors();
         await runChildIdentityRetry();
+        throwRecordedCleanupErrors();
         await runPersistentNonRootVerificationFailure();
-      } finally {
-        for (const session of sessions) {
-          drive(["kill", "--session", session]);
-        }
-        if (existsSync(sandbox)) {
+        throwRecordedCleanupErrors();
+      } catch (error) {
+        runError = error;
+      }
+
+      for (const session of sessions) {
+        recordSessionKill(session, cleanupErrors);
+      }
+      if (cleanupErrors.length === 0 && existsSync(sandbox)) {
+        try {
           const removed = await removeTreeWithRetry(sandbox, 5_000);
           if (!removed) {
             process.stderr.write(
@@ -1662,7 +1732,20 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
                 `preserved for delayed cleanup: ${sandbox}\n`,
             );
           }
+        } catch (error) {
+          cleanupErrors.push(error);
         }
+      }
+      if (cleanupErrors.length > 0) {
+        throw new Error(
+          `Windows TUI preflight cleanup failed; workspace preserved at ${sandbox}\n` +
+            `original test error: ${String(runError ?? "none")}\n` +
+            `cleanup errors:\n${cleanupErrors.map(String).join("\n")}`,
+          { cause: runError ?? cleanupErrors[0] },
+        );
+      }
+      if (runError !== undefined) {
+        throw runError;
       }
     },
     300_000,

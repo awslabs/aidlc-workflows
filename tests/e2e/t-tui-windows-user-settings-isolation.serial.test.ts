@@ -17,7 +17,6 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
 import * as os from "node:os";
@@ -25,8 +24,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveWinNode } from "../harness/tui-drive.ts";
 import {
+  assertTuiDriveKill,
+  cleanupTuiProject,
   completedClaudeTurnPattern,
   isolatedTuiUserProfileEnv,
+  removeTuiProjectTreeWithRetry,
 } from "../harness/tui-fixtures.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
@@ -53,6 +55,10 @@ interface TraceRecord {
   noEnter?: boolean;
   pattern?: string;
   stableMs?: number;
+}
+
+interface ProbeCleanupState {
+  allKillsSucceeded: boolean;
 }
 
 function drive(args: string[], env: NodeJS.ProcessEnv): Run {
@@ -198,6 +204,7 @@ function runProbe(
   tracePath: string,
   settingArgs: string[],
   expectedMarker: string,
+  cleanupState: ProbeCleanupState,
 ): { pane: string; trace: TraceRecord[] } {
   const env = { ...baseEnv, AIDLC_TUI_TRACE_FILE: tracePath };
   try {
@@ -292,7 +299,9 @@ function runProbe(
     expect(completionWait.stableMs).toBe(600);
     return { pane, trace };
   } finally {
-    drive(["kill", "--session", session], env);
+    const killed = drive(["kill", "--session", session], env);
+    if (killed.rc !== 0) cleanupState.allKillsSucceeded = false;
+    assertTuiDriveKill(killed, session);
   }
 }
 
@@ -336,6 +345,7 @@ describe("Windows Claude TUI user-settings isolation", () => {
       );
       expect(probeEnv.CLAUDE_CONFIG_DIR).toBeUndefined();
       expect(probeEnv.AIDLC_TUI_SETTING_SOURCES).toBeUndefined();
+      const cleanupState: ProbeCleanupState = { allKillsSucceeded: true };
 
       try {
         const traceDir = process.env.AIDLC_TEST_LOG_DIR ?? sandbox;
@@ -350,6 +360,7 @@ describe("Windows Claude TUI user-settings isolation", () => {
           explicitTrace,
           ["--setting-sources", "user,project"],
           USER_SENTINEL,
+          cleanupState,
         );
         expect(explicit.pane).toContain(USER_SENTINEL);
         expect(explicit.pane).toContain(PROJECT_SENTINEL);
@@ -371,6 +382,7 @@ describe("Windows Claude TUI user-settings isolation", () => {
           isolatedTrace,
           [],
           PROJECT_SENTINEL,
+          cleanupState,
         );
         expect(isolated.pane).toContain(PROJECT_SENTINEL);
         expect(isolated.pane).not.toContain(USER_SENTINEL);
@@ -385,8 +397,14 @@ describe("Windows Claude TUI user-settings isolation", () => {
           "--dangerously-skip-permissions",
         ]);
       } finally {
-        if (existsSync(sandbox)) {
-          rmSync(sandbox, { recursive: true, force: true });
+        if (cleanupState.allKillsSucceeded) {
+          cleanupTuiProject(project);
+          if (existsSync(sandbox)) removeTuiProjectTreeWithRetry(sandbox);
+        } else {
+          process.stderr.write(
+            `[t-tui-windows-user-settings-isolation] kill failed; ` +
+              `workspace preserved at ${sandbox}\n`,
+          );
         }
       }
     },

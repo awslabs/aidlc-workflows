@@ -78,7 +78,7 @@ import { resolveWinNode } from "../harness/tui-drive.ts";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
 import {
-  cleanupTuiProject,
+  cleanupTuiProjectAfterKill,
   markdownH2Section,
   setupTuiProject,
 } from "../harness/tui-fixtures.ts";
@@ -442,8 +442,11 @@ describe("t-tui-t73-intent-capture (answering the stage gate produces artifacts 
         expect(sawSelectFooter || sawSubmitStrip).toBe(true);
       } finally {
         if (pollTimer) clearInterval(pollTimer);
-        drive(["kill", "--session", session]);
-        cleanupTuiProject(sandbox);
+        cleanupTuiProjectAfterKill(
+          sandbox,
+          session,
+          drive(["kill", "--session", session]),
+        );
       }
     },
     TEST_TIMEOUT_MS,

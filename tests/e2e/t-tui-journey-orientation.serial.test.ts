@@ -186,10 +186,15 @@ function captureOrientationStatusline(sampleIndex: number): OrientationSample {
     String(PROCESS_EXIT_TIMEOUT_MS),
   ]);
   let fixtureCleanupError: unknown;
-  try {
-    cleanupTuiProject(sandbox);
-  } catch (error) {
-    fixtureCleanupError = error;
+  if (killed.rc === 0 && dead.rc === 0) {
+    try {
+      cleanupTuiProject(sandbox);
+    } catch (error) {
+      fixtureCleanupError = error;
+    }
+  } else {
+    fixtureCleanupError =
+      `skipped because process teardown failed; workspace preserved at ${sandbox}`;
   }
 
   if (killed.rc !== 0 || dead.rc !== 0 || fixtureCleanupError !== undefined) {

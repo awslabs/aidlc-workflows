@@ -5,7 +5,7 @@
 // every platform by checking the files that make that run repeatable.
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
@@ -134,5 +134,42 @@ describe("t152 Windows portability guard", () => {
     expect(typeCheck).toContain('`${result.stdout ?? ""}${result.stderr ?? ""}`');
     expect(typeCheck).toContain("stdout.split(/\\r?\\n/)");
     expect(typeCheck).toContain("parseTscOutput(output)");
+  });
+
+  test("Windows forced termination uses one shared deadline", () => {
+    const driver = read("tests/harness/tui-drive.ts");
+    expect(driver).toContain("forceKillWindowsProcessesWithinDeadline");
+    expect(driver).toContain("deadline - now()");
+    expect(driver).toContain(
+      "forceKillWindowsProcessesWithinDeadline(survivors, deadline)",
+    );
+  });
+
+  test("Windows ConPTY and process metadata keep UTF-8 boundaries explicit", () => {
+    const driver = read("tests/harness/tui-drive.ts");
+    expect(driver).toContain('"chcp.com", ["65001"]');
+    expect(driver).toContain("windowsHide: false");
+    expect(
+      driver.match(
+        /\[Convert\]::ToBase64String\(\[Text\.Encoding\]::UTF8\.GetBytes\(\$json\)\)/g,
+      ),
+    ).toHaveLength(3);
+    expect(driver).toContain("parsePowerShellBase64Json");
+    expect(driver).toContain('"target-spawn.json",');
+    expect(driver).toContain('"target-exit.json",');
+  });
+
+  test("TUI journeys do not silently ignore kill failures", () => {
+    const e2eDir = join(TESTS, "e2e");
+    const files = readdirSync(e2eDir)
+      .filter((name) => /^t-tui.*\.test\.ts$/.test(name))
+      .sort();
+    expect(files.length).toBeGreaterThan(0);
+    for (const name of files) {
+      const body = readFileSync(join(e2eDir, name), "utf8");
+      expect(body, name).not.toMatch(
+        /^\s*drive\(\["kill"[^\n]*\]\);\s*$/m,
+      );
+    }
   });
 });
