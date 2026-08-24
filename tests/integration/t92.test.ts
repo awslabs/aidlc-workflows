@@ -11,19 +11,20 @@
 // in-process handleFire() twin would lose the exit-code half AND the
 // process.exit(0) / lock-orphan-recovery behaviour the .sh relies on.
 //
-// SPAWN vs IN-PROCESS split: ALL 47 cases are spawn-based. There is
+// SPAWN vs IN-PROCESS split: ALL 48 cases are spawn-based. There is
 // no pure-function arm — every behaviour (argv validation exit codes,
 // truth-table branches, audit emission, concurrency, lock-orphan
 // recovery) is observed through the real CLI subprocess + the audit.md it
-// writes. So spawnCount = 45-worth-of-cases, inProcessCount = 0.
+// writes. So spawnCount = 46-worth-of-cases, inProcessCount = 0.
 //
-// Tests 44-45 (Groups N + O) are additions beyond the original .sh's
+// Tests 44-46 (Groups N + O + P) are additions beyond the original .sh's
 // plan-43, guarding the type-check status gate: test 44 covers the
 // config-load failure (tsc non-zero + zero parseable diagnostics ->
 // script-error: exit-<n>, not a false PASS); test 45 covers the cross-file
 // edge (tsc non-zero with diagnostics for OTHER files but none for the
 // target -> per-file clean PASS, gate keys on allErrors not the filtered
-// errors).
+// errors); test 46 keeps monorepo package caches under the project record and
+// namespaces them by tsconfig.
 //
 // SUBCOMMAND UNIT: this .cli file credits the `aidlc-sensor fire`
 // subcommand unit (covers KEY subcommand:aidlc-sensor:fire). `list` and
@@ -500,6 +501,7 @@ function runPassedTsReal(
   passedId: string;
   path: string;
   note: string;
+  cacheExists: boolean;
   detailExists: boolean;
   subdir: string;
 } {
@@ -519,7 +521,8 @@ function runPassedTsReal(
     passedId: auditField(f, "SENSOR_PASSED", "Fire id"),
     path: auditField(f, "SENSOR_PASSED", "Output path"),
     note: auditField(f, "SENSOR_PASSED", "Note"),
-    detailExists: existsSync(join(recordRoot(proj), ".aidlc-sensors")),
+    cacheExists: existsSync(join(recordRoot(proj), ".aidlc-sensors")),
+    detailExists: existsSync(join(recordRoot(proj), ".aidlc-sensors", stage)),
     subdir,
   };
 }
@@ -617,6 +620,7 @@ describe("t92 Group B: PASSED real round-trip per sensor", () => {
     expect(r.firedId).not.toBe("");
     expect(r.firedId).toBe(r.passedId);
     expect(isInteger(r.dur)).toBe(true);
+    expect(r.cacheExists).toBe(false);
     expect(r.detailExists).toBe(false);
     expect(r.path).toBe(`${r.subdir}/sample.ts`);
     expect(r.note).toBe("");
@@ -631,6 +635,7 @@ describe("t92 Group B: PASSED real round-trip per sensor", () => {
     expect(r.firedId).not.toBe("");
     expect(r.firedId).toBe(r.passedId);
     expect(isInteger(r.dur)).toBe(true);
+    expect(r.cacheExists).toBe(true);
     expect(r.detailExists).toBe(false);
     expect(r.path).toBe(`${r.subdir}/sample.ts`);
     expect(r.note).toBe("");
@@ -1365,4 +1370,81 @@ describe("t92 Group O: type-check status gate (cross-file errors, none for targe
     expect(auditEventCount(f, "SENSOR_FAILED")).toBe(0);
     expect(auditField(f, "SENSOR_PASSED", "Note")).toBe("");
   }, 30000);
+});
+
+// ============================================================
+// Group P — type-check incremental cache placement. A monorepo can have one
+// tsconfig per package, but the framework cache belongs to the project record,
+// not a package-local aidlc/ tree. Each project-relative tsconfig path gets a
+// stable hash suffix so package fires do not overwrite one shared buildinfo.
+// ============================================================
+
+describe("t92 Group P: type-check monorepo cache placement", () => {
+  test("46: package tsconfigs share the record cache with collision-resistant buildinfo files", () => {
+    const proj = makeProj();
+    const packagesDir = join(proj, "packages");
+    writeFileSync(
+      join(proj, "tsconfig.base.json"),
+      `${JSON.stringify({
+        compilerOptions: {
+          strict: true,
+          target: "ES2022",
+          module: "ESNext",
+          moduleResolution: "Bundler",
+          skipLibCheck: true,
+        },
+      }, null, 2)}\n`,
+      "utf-8",
+    );
+
+    const packageNames = ["pkg-100616", "pkg-114664"];
+    // These paths have the same first eight SHA-256 hex characters. Keeping
+    // both in this test prevents a shortened cache key from aliasing them.
+    for (const name of packageNames) {
+      const packageDir = join(packagesDir, name);
+      mkdirSync(join(packageDir, "src"), { recursive: true });
+      writeFileSync(
+        join(packageDir, "tsconfig.json"),
+        `${JSON.stringify({
+          extends: "../../tsconfig.base.json",
+          include: ["src/**/*.ts"],
+        }, null, 2)}\n`,
+        "utf-8",
+      );
+      writeFileSync(
+        join(packageDir, "src", "index.ts"),
+        "export const value: number = 1;\n",
+        "utf-8",
+      );
+    }
+
+    for (const name of packageNames) {
+      const result = fire(
+        [
+          "type-check",
+          "--stage",
+          "code-generation",
+          "--output-path",
+          join(packagesDir, name, "src", "index.ts"),
+        ],
+        { CLAUDE_PROJECT_DIR: proj },
+      );
+      expect(result.rc, `${name}: type-check fire`).toBe(0);
+    }
+
+    for (const name of packageNames) {
+      expect(
+        existsSync(join(packagesDir, name, "aidlc")),
+        `${name}: no package-local aidlc tree`,
+      ).toBe(false);
+    }
+
+    const cacheDir = join(recordRoot(proj), ".aidlc-sensors");
+    expect(existsSync(cacheDir), "project record cache exists").toBe(true);
+    const buildinfoFiles = readdirSync(cacheDir)
+      .filter((name) => /^\.tsbuildinfo-[0-9a-f]{64}$/.test(name))
+      .sort();
+    expect(buildinfoFiles).toHaveLength(2);
+    expect(new Set(buildinfoFiles).size).toBe(2);
+  }, 60000);
 });

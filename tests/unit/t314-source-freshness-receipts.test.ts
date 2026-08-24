@@ -421,21 +421,20 @@ describe("t314 workspace source fingerprint (in-process)", () => {
     }
   }, 20000);
 
-  // #646 review P2 - the aidlc-workspace exclusion was top-level
-  // only; the type-check sensor anchors `.aidlc-sensors/.tsbuildinfo` at the
-  // tsconfig dir (aidlc-sensor-type-check.ts's sensorsDir), which a monorepo
-  // subpackage can nest arbitrarily deep, so nested engine-written churn
-  // there altered the fingerprint with no real source change. The cache is
-  // matched by the path the engine actually writes (sensorsDir -> docsRoot ->
-  // intentsDir -> workspaceRoot), not by its leaf name - see the sibling test
-  // below for why the leaf alone is not safe to exclude.
+  // #646 review P2 - the aidlc-workspace exclusion was top-level only. Before
+  // 2.6.94, type-check anchored `.aidlc-sensors/.tsbuildinfo` at the tsconfig
+  // dir, so a monorepo subpackage could retain an engine-written cache
+  // arbitrarily deep after upgrade. That legacy churn must not alter the
+  // fingerprint. The cache is matched by the path the engine wrote
+  // (sensorsDir -> docsRoot -> intentsDir -> workspaceRoot), not by its leaf
+  // name - see the sibling test below for why the leaf alone is unsafe.
   test("excludes a nested .aidlc-sensors cache (any depth), but not real nested source", () => {
     const src = seedGitRepo(dir);
     const fp1 = workspaceSourceFingerprint(dir);
 
-    // Engine-written sensor cache, nested under a monorepo subpackage - not at
-    // the workspace root. The tsconfig anchor is `services/backend`, so the
-    // cache lands at the anchor's own `aidlc/spaces/<space>/intents/` root.
+    // Legacy engine-written sensor cache, nested under a monorepo subpackage -
+    // not at the workspace root. Before 2.6.94 the `services/backend` tsconfig
+    // anchor gave the cache its own `aidlc/spaces/<space>/intents/` root.
     const cache = join(
       dir, "services", "backend", "aidlc", "spaces", "default", "intents", ".aidlc-sensors",
     );

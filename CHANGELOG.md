@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.96] - 2026-08-26
+
+Type-check sensor incremental state now stays in the project record and uses a distinct cache per tsconfig, preventing package-local `aidlc/` trees in monorepos. **Upgrade:** refresh your `dist/<harness>/` shell and drop any user-side workaround ignore rules; legacy package-local cache directories may be removed individually after confirming they contain only sensor cache data.
+
+* Type-check keeps `--project` and the tsconfig-directory working directory while writing `.tsbuildinfo-<sha256>` files under the project record's `.aidlc-sensors/` directory, keyed by the project-relative tsconfig path.
+* Every harness now ignores the full engine-shaped sensor-cache path at any depth, covering legacy package-local trees without ignoring unrelated `.aidlc-sensors` directories.
+
 ## [2.6.95] - 2026-08-25
 
 `/aidlc --doctor` now reports consumed artifacts with multiple loaded producers before runtime silently selects the first producer by graph load order. **Upgrade:** refresh your `dist/<harness>/` shell to install the new advisory check; no workflow migration is required.

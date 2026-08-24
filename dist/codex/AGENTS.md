@@ -88,5 +88,6 @@ Commit the `aidlc/` workspace tree — the record (state, the per-clone audit sh
 - `aidlc/active-space` and `aidlc/spaces/*/intents/active-intent` (per-user cursors)
 - `aidlc/.aidlc-clone-id` (per-clone audit-shard token) and `aidlc/.aidlc-sessions/`
 - `aidlc/spaces/*/intents/.aidlc-*` (pre-intent hooks-health scratch)
+- `**/aidlc/spaces/*/intents/**/.aidlc-sensors/` (engine-shaped sensor caches at any depth, including legacy package-local trees)
 - `aidlc/spaces/*/intents/*/runtime-graph.json` (also covers per-Bolt worktree fragments by relative-path glob)
 - `aidlc/spaces/*/intents/*/.aidlc-*` (recovery, hooks-health, sensors scratch)

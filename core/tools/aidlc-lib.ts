@@ -7421,11 +7421,12 @@ export function repoDir(projectDir: string, repoName: string): string {
 // pathspec a directory match, so a root FILE named `aidlc` stays in the walk.
 const AIDLC_SHELL_DIR_NAMES = ["aidlc/", ".aidlc/"];
 
-// The sensor cache is the one member of the family that is NOT root-anchored:
-// the type-check sensor anchors `.aidlc-sensors/.tsbuildinfo` at the tsconfig
-// dir (core/tools/aidlc-sensor-type-check.ts's `sensorsDir`), which a
-// monorepo's per-package tsconfig can put anywhere under repoDir. So this one
-// needs a depth-tolerant pathspec while the shell names stay root-anchored.
+// The sensor-cache exclusion remains depth-tolerant for legacy and worktree
+// paths. Before 2.6.94, the type-check sensor anchored
+// `.aidlc-sensors/.tsbuildinfo` at the nearest tsconfig directory, so monorepo
+// package caches could appear anywhere under repoDir. Those stray trees persist
+// in upgraded repositories, and Bolt worktree record mirrors can also sit below
+// the workspace roof, while the shell names stay root-anchored.
 //
 // #646 review - the shell/any-depth split is deliberate, not an oversight: an
 // earlier fix applied `**/<name>/**` to ALL four names to close a *reported*
@@ -7445,10 +7446,10 @@ const AIDLC_SHELL_DIR_NAMES = ["aidlc/", ".aidlc/"];
 // engine actually writes instead of by its leaf. Every writer resolves through
 // `sensorsDir()` -> `docsRoot()` -> `intentsDir()` -> `workspaceRoot()`, so the
 // cache is always `<anchor>/aidlc/spaces/<space>/intents[/<record>]/
-// .aidlc-sensors/` - the `<anchor>` is what varies (roof, Bolt worktree, or a
-// monorepo package's tsconfig dir), which is exactly what the leading `**/`
-// absorbs. The inner `/**/` also matches zero directories, covering the flat
-// (no active record) form the type-check anchor produces.
+// .aidlc-sensors/`. The `<anchor>` can be the roof, a Bolt worktree, or a
+// legacy pre-2.6.94 monorepo package tsconfig directory, which is exactly what
+// the leading `**/` absorbs. The inner `/**/` also matches zero directories,
+// covering the flat (no active record) form.
 const AIDLC_SENSOR_CACHE_GLOBS = [
   ":(glob)**/aidlc/spaces/*/intents/**/.aidlc-sensors/**",
 ];
@@ -9501,11 +9502,11 @@ export function composeMarkerPath(projectDir: string): string {
 export const COMPOSE_MARKER_TTL_MS = 24 * 60 * 60 * 1000;
 
 // `<baseDir>/.aidlc-sensors` — the sensor detail-output / tsbuildinfo directory.
-// `baseDir` is the project dir for the dispatcher, or a tsconfig anchor for the
-// type-check sensor; callers append a stage slug as needed. The tsconfig-anchor
-// caller passes a non-projectDir base, so the record-dir resolution is OPT-OUT:
-// only resolve per-intent when the caller passes intent/space context; a bare
-// baseDir keeps the flat `.aidlc-sensors` leaf for the type-check anchor case.
+// `baseDir` is the project dir for current dispatcher and type-check callers;
+// callers append a stage slug as needed. Before 2.6.94, type-check passed a
+// tsconfig directory instead, creating legacy package-local record trees. A
+// bare baseDir still keeps the flat `.aidlc-sensors` leaf when no intent/space
+// context is supplied.
 export function sensorsDir(baseDir: string, intent?: string, space?: string): string {
   if (intent === undefined && space === undefined) {
     return join(docsRoot(baseDir), ".aidlc-sensors");
