@@ -391,13 +391,13 @@ Configures CI pipeline with lint, build, test, and security scan stages. Quality
 
 | Aspect | Bugfix | Feature |
 |--------|--------|---------|
-| Stages executed | 7 | 33 |
+| Stages executed | 9 | 33 |
 | Depth | Minimal | Standard |
-| Phases | Initialization + Inception + Construction | All 5 |
+| Phases | Initialization + Inception + Construction + Operation | All 5 |
 | Units of work | 1 | 3 |
 | Bolt-by-Bolt Construction | No (bugfix runs a single Bolt) | Yes — 2 Bolts (walking skeleton + 1 parallel batch) |
 | Conditional stages | Most skipped | Most executed |
-| Approval gates | 4 | Walking skeleton + ladder prompt; remaining Bolts per autonomy mode |
+| Approval gates | 6 | Walking skeleton + ladder prompt; remaining Bolts per autonomy mode |
 
 ---
 
