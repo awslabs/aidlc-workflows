@@ -1,6 +1,16 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.122] - 2026-08-27
+
+Code Generation source-freshness receipts now bind supported non-Git and missing-Git workspaces without weakening per-Unit attribution or autonomous swarm Source Commits. **Upgrade:** refresh your `dist/<harness>/` shell. In-flight `workspace_requires` reviews from earlier versions must be reviewed once more before completion because the source identity format changed.
+
+* The source boundary is one bounded filesystem identity and canonical per-path listing, so unchanged source remains stable when repository metadata or the Git executable appears or disappears. Ordinary and ignored application bytes, external source-symlink targets, workspace-roof files, and registered binary or extensionless source are covered; framework state, VCS metadata, dependency/cache paths, and unregistered generated-output directories remain excluded.
+* Real source under `build/`, `coverage/`, `dist/`, `logs/`, `target/`, or `tmp/` can be declared in root `.aidlc-source-paths.json` with schema `{"version":1,"paths":[...]}`. Invalid, unreadable, unstable, or over-budget boundaries record `unbindable` and fail closed.
+* Autonomous swarm snapshots use that exact boundary for footprint verification and immutable Source Commits. Clean-filter raw-byte rewriting is restricted to filesystem-included regular paths, commit reconstruction reads immutable tree/blob bytes without checkout filters, bound merges refuse configured smudge/process filters before target mutation, external symlink targets that a Git tree cannot represent are rejected before source authority is minted, and registered generated source still carries the reviewed raw bytes.
+* Initialized nested repositories and submodules resolve their checked-out commit directly from bounded Git metadata, so source identity remains stable when the Git executable is unavailable and malformed metadata fails closed without a process crash.
+* New-submodule recovery shares one 30-second cumulative deadline and a 32-proof cap across the full `finalize` call, while retaining the existing per-command, advertised-ref, refspec-size, recursion, and materialized-checkout bounds.
+
 ## [2.6.121] - 2026-08-27
 
 Reviewer receipts now bind one explicit review artifact, every dispatched artifact byte, and workspace source before dispatch, then validate the complete reviewer-owned appendix from one stable completion snapshot. Artifact snapshots reject filesystem aliases outside the workflow record or CodeKB boundary. **Upgrade:** refresh your complete `dist/<harness>/` shell. For every custom or plugin stage declaring `reviewer:`, add `review_artifact:` selecting one required Markdown entry from `produces[]`; for per-Unit stages it must apply to every relevant Unit kind. Composition and graph compilation reject reviewer stages that are not migrated.

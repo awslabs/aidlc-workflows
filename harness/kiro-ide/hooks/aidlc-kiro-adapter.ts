@@ -74,7 +74,7 @@
 //                  sync-workflow-state | log-subagent | continue-workflow |
 //                  session-end | verb-intercept | terminal-command-guard
 
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import {
@@ -92,6 +92,7 @@ import {
   markKiroIdeLegacyPlanApprovalHost,
   clearPlanApprovalLegacyWindow,
   recordHookDrop,
+  readPlanApprovalViolation,
   readPlanApprovalLegacyWindow,
   readPlanApprovalLegacyWindows,
   readActiveDirectiveMarker,
@@ -223,6 +224,34 @@ function runLegacyRecoveryNext(
   projectDir: string,
   sessionId: string,
 ): { ok: boolean; detail: string; recoveryRequired?: boolean } {
+  const priorViolation = readPlanApprovalViolation(projectDir);
+  const priorState = legacyPlanApprovalGuardState(projectDir);
+  const priorAuthority =
+    priorState.violated === true && priorState.target !== null
+      ? (() => {
+          try {
+            return resolveCodeGenerationAuthority(
+              projectDir,
+              priorState.target,
+            );
+          } catch {
+            return null;
+          }
+        })()
+      : null;
+  const harnessViolation =
+    priorAuthority !== null &&
+    priorViolation?.reason === "unsupported legacy write target" &&
+    priorViolation.markerRevision === priorAuthority.markerRevision &&
+    (() => {
+      const rel = relative(join(projectDir, ".kiro"), priorViolation.target);
+      return rel === "" ||
+        (
+          !isAbsolute(rel) &&
+          rel !== ".." &&
+          !rel.startsWith(`..${sep}`)
+        );
+    })();
   let args = ["next", "--project-dir", projectDir];
   for (let step = 0; step < 64; step++) {
     const result = Bun.spawnSync(
@@ -273,6 +302,24 @@ function runLegacyRecoveryNext(
     if (directive.kind !== "load-steering") {
       clearPlanApprovalViolation(projectDir);
       clearPlanApprovalLegacyWindow(projectDir, sessionId);
+      if (harnessViolation && priorViolation && priorAuthority) {
+        const state = legacyPlanApprovalGuardState(projectDir);
+        if (state.active && state.target !== null) {
+          const authority = resolveCodeGenerationAuthority(
+            projectDir,
+            state.target,
+          );
+          if (
+            authority.intentId === priorAuthority.intentId &&
+            authority.targetId === priorAuthority.targetId
+          ) {
+            writePlanApprovalViolation(projectDir, {
+              ...priorViolation,
+              markerRevision: authority.markerRevision,
+            });
+          }
+        }
+      }
       return { ok: true, detail: stdout };
     }
     if (!directive.continue_token) {

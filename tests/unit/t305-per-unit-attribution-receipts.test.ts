@@ -388,7 +388,7 @@ describe("t305 strict source-manifest validation", () => {
     }
     expect(
       workspaceSourceListing(project)?.has("\0force-dir/key.secret"),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   test("validates fully resolved symlink targets for exact and directory claims", () => {
@@ -563,13 +563,7 @@ describe("t305 strict source-manifest validation", () => {
       "code-generation",
       "alpha",
     );
-    expect(linkedDirectoryExact.ok).toBe(false);
-    if (!linkedDirectoryExact.ok) {
-      expect(linkedDirectoryExact.reason).toContain("linked-directory");
-      expect(linkedDirectoryExact.reason).toContain(
-        'directory claims must end with "/"',
-      );
-    }
+    expect(linkedDirectoryExact.ok).toBe(true);
 
     manifest(record, "alpha", {
       stage: "code-generation",
@@ -670,7 +664,7 @@ describe("t305 content-addressed source review evidence", () => {
     expect(sourceListingEntriesEqual(`100644 ${oid}`, `100755 ${oid}`)).toBe(false);
   });
 
-  test("an unchanged no-Git greenfield binds to empty source while raw application files fail closed", () => {
+  test("a no-Git workspace binds both empty and populated source listings", () => {
     const project = createTestProject();
     dirs.push(project);
     const empty = workspaceSourceState(project);
@@ -679,10 +673,15 @@ describe("t305 content-addressed source review evidence", () => {
     expect(empty?.fingerprint).toMatch(/^[0-9a-f]{64}$/);
 
     writeFileSync(join(project, "untracked-without-git.ts"), "unbound\n");
-    expect(workspaceSourceState(project)).toBeNull();
+    const populated = workspaceSourceState(project);
+    expect(populated).not.toBeNull();
+    expect(populated?.listing.get("\0untracked-without-git.ts")).toMatch(
+      /^100644 [0-9a-f]{64}$/,
+    );
+    expect(populated?.fingerprint).not.toBe(empty?.fingerprint);
   });
 
-  test("no-Git workflow creation and jump both emit empty modern unit-major baselines", () => {
+  test("no-Git workflow creation is empty while a jump preserves populated source", () => {
     const project = createTestProject();
     dirs.push(project);
     const creationResult = spawnSync(
@@ -785,21 +784,21 @@ describe("t305 content-addressed source review evidence", () => {
       /^\*\*Source Baseline\*\*: (sha256:[0-9a-f]{64})$/m,
     )?.[1];
     expect(jumpField).toMatch(/^sha256:[0-9a-f]{64}$/);
-    expect(jumpField).not.toBe(initial);
+    expect(jumpField).toBe(initial);
     expect(
       readBaselineSourceSnapshot(
         jumped,
         "code-generation",
         jumpField as string,
       )?.size,
-    ).toBe(0);
+    ).toBe(1);
     const selected = currentStageSourceBaseline(
       jumped,
       "code-generation",
       true,
     );
     expect(selected.state).toBe("ready");
-    if (selected.state === "ready") expect(selected.listing.size).toBe(0);
+    if (selected.state === "ready") expect(selected.listing.size).toBe(1);
     const selectedStageMajor = currentStageSourceBaseline(
       jumped,
       "code-generation",
@@ -807,7 +806,7 @@ describe("t305 content-addressed source review evidence", () => {
     );
     expect(selectedStageMajor.state).toBe("ready");
     if (selectedStageMajor.state === "ready") {
-      expect(selectedStageMajor.listing.size).toBe(0);
+      expect(selectedStageMajor.listing.size).toBe(1);
     }
     const opening = currentSwarmSourceOpeningFingerprint(
       jumped,

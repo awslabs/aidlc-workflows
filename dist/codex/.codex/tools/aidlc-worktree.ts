@@ -342,10 +342,13 @@ function rawBaseSourceListing(
   baseCommit: string,
   carriesWorkspaceShell: boolean,
 ): { serialized: string; hash: string } | null {
+  // This is captured once at worktree creation, so bind the live external
+  // target bytes that the opening review baseline actually sees.
   const listing = gitCommitSourceListing(
     repoCwd,
     baseCommit,
     carriesWorkspaceShell,
+    true,
   );
   if (listing === null) return null;
   const serialized = serializeSourceListing(listing);
@@ -2099,6 +2102,48 @@ function refuseConfiguredMergeDrivers(
   );
 }
 
+function refuseConfiguredCheckoutFilters(
+  slug: string,
+  repoCwd: string,
+  record: ConvergedSourceRecord | null,
+): void {
+  if (
+    record?.kind !== "bound" ||
+    process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1"
+  ) {
+    return;
+  }
+  const configured = runGit(
+    [
+      "config",
+      "-z",
+      "--name-only",
+      "--get-regexp",
+      "^filter\\..*\\.(smudge|process)$",
+    ],
+    repoCwd,
+  );
+  if (!configured.ok && configured.code === 1) return;
+  if (!configured.ok) {
+    errorWithSlug(
+      slug,
+      "refusing to merge: cannot inspect effective repository checkout-filter configuration",
+    );
+  }
+  const keys = [
+    ...new Set(
+      configured.stdout
+        .split("\0")
+        .map((key) => key.trim())
+        .filter(Boolean),
+    ),
+  ].sort();
+  errorWithSlug(
+    slug,
+    `refusing to merge: repository checkout-filter configuration is present (${keys.join(", ")}); remove the filter.<name>.smudge/process configuration, or retry with AIDLC_SKIP_SOURCE_FRESHNESS=1`,
+  );
+}
+
 function handleMerge(args: string[]): void {
   const flags = parseFlags(args);
   const slug = validateSlug(flags.slug);
@@ -2242,6 +2287,7 @@ function handleMerge(args: string[]): void {
     }
   }
   refuseConfiguredMergeDrivers(slug, repoCwd, sourceRecord);
+  refuseConfiguredCheckoutFilters(slug, repoCwd, sourceRecord);
 
   // Rebase requires a remote for <target>. The remote-existence check is
   // a pre-audit guard (no state change). The actual `git fetch` is post-

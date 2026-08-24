@@ -259,9 +259,26 @@ that the transient unclaimed change is gone. Any ordinary post-review edit,
 stale or legacy unit binding, missing evidence, or remaining unclaimed delta
 still takes the normal global-first refusal path.
 
-An unchanged no-Git greenfield whose only paths are the AIDLC record/shell binds
-to the canonical empty source state. A non-framework path appearing before Git
-is initialized remains unbindable and fails closed.
+The fingerprint and canonical per-path listing come from one bounded filesystem
+walk, independent of repository metadata and Git executable availability.
+Ordinary and ignored application bytes, external source-symlink targets, and
+workspace-roof files remain bound. Framework state, exact sensor caches, VCS
+metadata, dependency/cache directories or symlinks, and unregistered
+`build/`, `coverage/`, `dist/`, `logs/`, `target/`, and `tmp/` directories or
+symlinks remain outside the source boundary.
+
+Real source beneath a conditional generated-output directory, including binary
+or extensionless source, can be declared in root `.aidlc-source-paths.json`:
+
+```json
+{"version":1,"paths":["dist/worker.js","build/source"]}
+```
+
+Registered paths are content-bound regardless of encoding and are included in
+the canonical listing and autonomous swarm Source Commit. Absolute, traversing,
+framework, sensor-cache, and dependency/cache paths are rejected. Missing
+registered repositories contribute an explicit marker; unreadable, unstable,
+over-budget, or malformed boundaries remain `unbindable` and fail closed.
 
 Migration is deliberate: a pre-upgrade workflow with no baseline skips the
 unclaimed check, and a fieldless per-unit receipt retains the #629 global
@@ -272,9 +289,16 @@ per-unit checks; missing/invalid-manifest receipts explicitly record
 completion. In a modern Bolt, finalize also verifies the attested base-to-
 worktree footprint is a subset of the reviewed manifest claims before the
 settled-swarm stage-level exemption applies.
-`AIDLC_SKIP_SOURCE_FRESHNESS=1` disables the check. Swarm finalization records an
-immutable reviewed `Source Commit`; a bypassed finalize records
-`Source Freshness Bypass: true`, and merge must repeat the same switch.
+
+Swarm footprint verification and immutable Source Commit creation apply the
+same boundary. Clean-filter raw-byte replacement is restricted to exact
+filesystem-included regular paths, so excluded generated or framework files
+cannot re-enter after shaping. New-submodule recovery shares one 30-second
+cumulative deadline and a 32-proof cap across the entire `finalize` call, in
+addition to the per-command, ref-count, refspec-size, recursion, and
+materialized-checkout bounds. `AIDLC_SKIP_SOURCE_FRESHNESS=1` disables the
+check; a bypassed finalize records `Source Freshness Bypass: true`, and merge
+must repeat the same switch.
 
 **Gate-revision backstop.** If the conductor revises an artifact at an open
 gate without first reporting rejection, the `approved` report reconciles the
@@ -382,7 +406,7 @@ legacy Unit-less rows retain stage-global behavior.
 | `SUMMARY_CONFIRMATION_RECORDED` | `tools/aidlc-log.ts` | Human-backed consolidated-summary receipt; new rows carry `Hash Scope: confirmed-content-v1`, which preserves the canonical order of the preamble and all visible Q<n> and feedback sections, including follow-up questions after an assumption decision. Exactly one post-summary `Assumption Confirmation` section and its contents are excluded; a same-named pre-summary section remains hashed. Any other visible Markdown or raw-HTML heading after the summary fails closed. Stage-specific pre-summary headings remain valid. Unscoped receipts retain legacy whole-file verification and need reconfirmation after an allowed append. Reserved from public audit append. |
 | `PLAN_APPROVAL_RECORDED` | `tools/aidlc-log.ts` | Human-backed Code Generation plan receipt; bound to intent, stage or Unit target, directive epoch, run floor, source floor, fingerprint, prompt, session response, and questions digest. Protected runtime state is the authority; this row is provenance only. |
 | `REVIEW_REQUESTED` | `tools/aidlc-log.ts` | Fires when the conductor dispatches the reviewer defined by `stage-protocol-reviewer.md` §12a. The stage's required `review_artifact` scalar explicitly selects the Markdown append owner; plugin-added outputs and produces ordering cannot change it. A new `--unit` request must name a member of the authoritative DAG or a Unit proven by a matching open or merge-confirmed tool-owned Bolt attempt in the current no-DAG attempt; a completion still awaiting its `AUDIT_MERGED` merge evidence, like a historyless Unit, refuses. A single stable file-identity snapshot records every declared artifact, the exact owner byte boundary, and request-time workspace source for `workspace_requires` stages. When a prior appendix exists, the request also records and returns a random Review Challenge that the replacement appendix must render exactly. A stale-receipt recovery records whether artifact, source, or both kinds of staleness opened its scoped write suspension, so restoring that cause closes the window even after the old appendix is removed. `--retry-pending` is accepted once after a modern binding exists and reuses those artifact/source identities and challenge. A valid field-light legacy chain, including a pending nonempty-appendix request without a challenge, may emit one `Upgrade: legacy-request` after exact full-artifact equality even if it contains a historical unbound Retry marker; that modern upgrade row spends the retry and requires a fresh reviewer dispatch. Malformed request rows are ignored so a fresh request can reuse the ordinal. |
-| `REVIEW_COMPLETED` | `tools/aidlc-log.ts` | Fires only after a matching positive-iteration request. One coherent artifact snapshot must preserve every requested prefix byte and file identity. Its entire suffix must be blank separators plus exactly one terminal `## Review` H2 containing one total matching rendered Verdict, Reviewer, and Iteration line, and exactly one matching Request Challenge when the request issued one. Bun's Markdown parser rejects later Markdown or raw-HTML H1/H2 headings, malformed verdicts, and conflicting rendered ownership fields; literal examples in fenced/inline code and HTML comments carry no authority, while list/blockquote/table containers cannot mint top-level ownership. Request-time and completion source fingerprints, including per-unit source-manifest bindings where applicable, must also match. Malformed completion rows do not consume pending requests. `READY` is terminal immediately; advisory `NOT-READY` is terminal after its normal-flow pass; adversarial `NOT-READY` is terminal only at `reviewer_max_iterations`. A terminal receipt invalidated by a later declared-output or source write gets one distinct recovery request; either recovery verdict is terminal, and a second invalidation requires human reset. Legacy equal-fingerprint receipts remain readable. Gate-opening and all completion routes require a matching terminal receipt; per-unit stages require one receipt per applicable unit. A no-DAG per-Unit stage with merged Bolts accepts either one fresh stage-level receipt or fresh per-Unit receipts for every merged Unit; failed or discarded Bolts owe nothing, and open Bolts add no separate gate block. With no merged Unit, only a Unit-less stage-level receipt satisfies the fallback. Autonomous finalize additionally requires current artifact/source bindings and required files. |
+| `REVIEW_COMPLETED` | `tools/aidlc-log.ts` | Fires only after a matching positive-iteration request. One coherent artifact snapshot must preserve every requested prefix byte and file identity. Its entire suffix must be blank separators plus exactly one terminal `## Review` H2 containing one total matching rendered Verdict, Reviewer, and Iteration line, and exactly one matching Request Challenge when the request issued one. Bun's Markdown parser rejects later Markdown or raw-HTML H1/H2 headings, malformed verdicts, and conflicting rendered ownership fields; literal examples in fenced/inline code and HTML comments carry no authority, while list/blockquote/table containers cannot mint top-level ownership. Request-time and completion source fingerprints use the Git-independent bounded filesystem identity, or `unbindable` when it cannot be read safely, and must match; per-unit source-manifest bindings must also match where applicable. Malformed completion rows do not consume pending requests. `READY` is terminal immediately; advisory `NOT-READY` is terminal after its normal-flow pass; adversarial `NOT-READY` is terminal only at `reviewer_max_iterations`. A terminal receipt invalidated by a later declared-output or source write gets one distinct recovery request; either recovery verdict is terminal, and a second invalidation requires human reset. Legacy equal-fingerprint receipts remain readable. Gate-opening and all completion routes require a matching terminal receipt; per-unit stages require one receipt per applicable unit. A no-DAG per-Unit stage with merged Bolts accepts either one fresh stage-level receipt or fresh per-Unit receipts for every merged Unit; failed or discarded Bolts owe nothing, and open Bolts add no separate gate block. With no merged Unit, only a Unit-less stage-level receipt satisfies the fallback. Autonomous finalize additionally requires current artifact/source bindings and required files. |
 | `PIPELINE_LINK_COMPLETED` | `tools/aidlc-log.ts` | Fires after one declared pipeline link returns. Carries `Stage`, `Link`, and `Position k/N`; multi-repo chains also carry `Repo`, and isolated runs carry `Workflow=single-stage:<slug>`. The tool refuses undeclared, duplicate, or out-of-order links within that receipt scope. Main-workflow gate-start, approval, advance, finalize, and workflow completion ignore isolated rows and require every scanned-repo current-attempt link receipt. |
 
 ### Unit lifecycle (inline per-unit Construction stages)

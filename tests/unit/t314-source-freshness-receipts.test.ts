@@ -9,14 +9,14 @@
 // emit no audit events. A source file could therefore change after the
 // architecture reviewer recorded a terminal verdict and the stale receipt
 // still satisfied the completion guard. The fix binds the receipt to a
-// git-native source fingerprint (temp-index `git write-tree` over tracked +
-// untracked content), stamped on REVIEW_COMPLETED by `aidlc-log.ts review`
-// and recomputed/compared by verifyReviewerPrecondition on every completion
-// route. This file pins:
+// deterministic, bounded filesystem fingerprint shared by Git, non-Git, and
+// missing-Git workspaces. The fingerprint is stamped on REVIEW_COMPLETED by
+// `aidlc-log.ts review` and recomputed/compared by verifyReviewerPrecondition
+// on every completion route. This file pins:
 //
 //   1. FINGERPRINT SEMANTICS (in-process) - deterministic; content-addressed
 //      (revert restores it); sensitive to tracked edits AND untracked adds;
-//      null off-git; never mutates the real index.
+//      bindable off-git; never mutates the real index.
 //   2. STAMPING (cli) - `review --verdict` records `Source Fingerprint` for
 //      the workspace_requires stage (code-generation) and NOT for a
 //      record-artifact stage (feasibility).
@@ -47,12 +47,13 @@ import {
   readdirSync,
   readlinkSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, resolve as resolvePath } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   boltSlugForUnit,
@@ -61,8 +62,10 @@ import {
   sourceBaselineAuditFields,
   reviewArtifactFingerprint,
   resolveStage,
+  shapeSourceSnapshotIndex,
   workspaceSourceFingerprint,
   workspaceSourceListing,
+  workspaceSourcePathIsExcluded,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
@@ -92,6 +95,14 @@ function git(dir: string, args: string[]): void {
   if ((r.status ?? -1) !== 0) {
     throw new Error(`git ${args.join(" ")} failed: ${r.stdout}${r.stderr}`);
   }
+}
+
+function singleGitMetadataLineForTest(raw: string): string {
+  const line = raw.replace(/\r?\n$/, "");
+  if (line.length === 0 || line.includes("\n") || line.includes("\r")) {
+    throw new Error("expected one Git metadata line");
+  }
+  return line;
 }
 
 // Turn a dir into a committed git repo with one source file.
@@ -345,7 +356,7 @@ describe("t314 workspace source fingerprint (in-process)", () => {
   test("deterministic, content-addressed, and edit-sensitive", () => {
     const src = seedGitRepo(dir);
     const fp1 = workspaceSourceFingerprint(dir);
-    expect(fp1).toMatch(/^[0-9a-f]{40}$/); // single repo -> the tree sha itself
+    expect(fp1).toMatch(/^[0-9a-f]{64}$/);
     expect(workspaceSourceFingerprint(dir)).toBe(fp1); // deterministic
 
     writeFileSync(src, "export const answer = 43;\n", "utf-8"); // tracked edit
@@ -361,7 +372,7 @@ describe("t314 workspace source fingerprint (in-process)", () => {
     expect(workspaceSourceFingerprint(dir)).toBe(fp1);
   });
 
-  test("never mutates the real index, and binds only an empty off-git workspace", () => {
+  test("never mutates the real index, and fingerprints non-Git workspaces", () => {
     const src = seedGitRepo(dir);
     writeFileSync(src, "export const answer = 99;\n", "utf-8"); // dirty worktree
     workspaceSourceFingerprint(dir);
@@ -373,11 +384,419 @@ describe("t314 workspace source fingerprint (in-process)", () => {
     expect(status).toContain(" M app.ts");
     const plain = mkdtempSync(join(tmpdir(), "t314-plain-"));
     try {
-      expect(workspaceSourceFingerprint(plain)).toMatch(/^[0-9a-f]{64}$/);
-      writeFileSync(join(plain, "raw.ts"), "unbound\n");
-      expect(workspaceSourceFingerprint(plain)).toBeNull();
+      const first = workspaceSourceFingerprint(plain);
+      expect(first).toMatch(/^[0-9a-f]{64}$/);
+      writeFileSync(join(plain, "app.ts"), "export const plain = true;\n");
+      expect(workspaceSourceFingerprint(plain)).not.toBe(first);
     } finally {
       rmSync(plain, { recursive: true, force: true });
+    }
+  });
+
+  test("Git repository availability does not change the source identity", () => {
+    const src = seedGitRepo(dir);
+    const gitMetadata = `${dir}-git-metadata`;
+    try {
+      const withGit = workspaceSourceFingerprint(dir);
+      renameSync(join(dir, ".git"), gitMetadata);
+      expect(workspaceSourceFingerprint(dir)).toBe(withGit);
+      writeFileSync(src, "export const answer = 100;\n");
+      expect(workspaceSourceFingerprint(dir)).not.toBe(withGit);
+    } finally {
+      if (existsSync(gitMetadata)) {
+        renameSync(gitMetadata, join(dir, ".git"));
+      }
+    }
+  });
+
+  test("dependency and cache trees stay outside the boundary while nested application source remains bound", () => {
+    seedGitRepo(dir);
+    const baseline = workspaceSourceFingerprint(dir);
+    for (const name of [
+      "node_modules",
+      ".cache",
+      ".gradle",
+      ".mypy_cache",
+      ".next",
+      ".nuxt",
+      ".pytest_cache",
+      ".ruff_cache",
+      ".tox",
+      ".venv",
+      "venv",
+    ]) {
+      const nested = join(dir, name, "deep");
+      mkdirSync(nested, { recursive: true });
+      writeFileSync(join(nested, "volatile.js"), `generated("${name}");\n`);
+    }
+    expect(workspaceSourceFingerprint(dir)).toBe(baseline);
+
+    writeFileSync(
+      join(dir, ".aidlc-source-paths.json"),
+      `${JSON.stringify({ version: 1, paths: ["src/build/rules.ts"] })}\n`,
+    );
+    const registeredBaseline = workspaceSourceFingerprint(dir);
+    const application = join(dir, "src", "build", "rules.ts");
+    mkdirSync(join(application, ".."), { recursive: true });
+    writeFileSync(application, "export const rule = 1;\n");
+    expect(workspaceSourceFingerprint(dir)).not.toBe(registeredBaseline);
+  });
+
+  test("ignored application source outside generated-output boundaries remains bound", () => {
+    seedGitRepo(dir);
+    writeFileSync(join(dir, ".gitignore"), "ignored-source.ts\n");
+    git(dir, ["add", ".gitignore"]);
+    git(dir, ["commit", "-qm", "ignore application source fixture"]);
+    const ignoredSource = join(dir, "ignored-source.ts");
+    writeFileSync(ignoredSource, "export const ignored = 1;\n");
+    const baseline = workspaceSourceFingerprint(dir);
+
+    writeFileSync(ignoredSource, "export const ignored = 2;\n");
+    expect(workspaceSourceFingerprint(dir)).not.toBe(baseline);
+  });
+
+  test("user-owned top-level dot-directories remain application source", () => {
+    seedGitRepo(dir);
+    mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+    const workflow = join(dir, ".github", "workflows", "build.yml");
+    writeFileSync(workflow, "name: build-one\n");
+    const baseline = workspaceSourceFingerprint(dir);
+
+    writeFileSync(workflow, "name: build-two\n");
+    expect(workspaceSourceFingerprint(dir)).not.toBe(baseline);
+  });
+
+  test("ignored generated output stays outside the boundary while registered ignored source remains bound", () => {
+    seedGitRepo(dir);
+    writeFileSync(join(dir, ".gitignore"), "dist/\n");
+    writeFileSync(
+      join(dir, ".aidlc-source-paths.json"),
+      `${JSON.stringify({ version: 1, paths: ["dist/worker.js"] }, null, 2)}\n`,
+    );
+    git(dir, ["add", ".gitignore", ".aidlc-source-paths.json"]);
+    git(dir, ["commit", "-qm", "register ignored source"]);
+    mkdirSync(join(dir, "dist"), { recursive: true });
+    writeFileSync(join(dir, "dist", "worker.js"), "export const worker = 1;\n");
+    writeFileSync(join(dir, "dist", "bundle.js"), "generated(1);\n");
+    const baseline = workspaceSourceFingerprint(dir);
+
+    writeFileSync(join(dir, "dist", "bundle.js"), "generated(2);\n");
+    expect(workspaceSourceFingerprint(dir)).toBe(baseline);
+
+    writeFileSync(join(dir, "dist", "worker.js"), "export const worker = 2;\n");
+    expect(workspaceSourceFingerprint(dir)).not.toBe(baseline);
+  });
+
+  test("registered binary source under a generated-output boundary remains bound", () => {
+    writeFileSync(
+      join(dir, ".aidlc-source-paths.json"),
+      `${JSON.stringify({ version: 1, paths: ["dist/module.wasm"] })}\n`,
+    );
+    mkdirSync(join(dir, "dist"), { recursive: true });
+    const module = join(dir, "dist", "module.wasm");
+    writeFileSync(module, Buffer.from([0, 1, 2, 3]));
+    const baseline = workspaceSourceFingerprint(dir);
+
+    writeFileSync(module, Buffer.from([0, 1, 2, 4]));
+    expect(workspaceSourceFingerprint(dir)).not.toBe(baseline);
+  });
+
+  test("dependency-name symlinks remain outside the source boundary", () => {
+    writeFileSync(join(dir, "app.ts"), "export const app = true;\n");
+    const external = mkdtempSync(join(tmpdir(), "t304-dependency-store-"));
+    try {
+      writeFileSync(join(external, "pkg.js"), "module.exports = 1;\n");
+      symlinkSync(external, join(dir, "node_modules"), "dir");
+      const baseline = workspaceSourceFingerprint(dir);
+
+      writeFileSync(join(external, "pkg.js"), "module.exports = 2;\n");
+      expect(workspaceSourceFingerprint(dir)).toBe(baseline);
+    } finally {
+      rmSync(external, { recursive: true, force: true });
+    }
+  });
+
+  test("workspace-shell and generated-output symlinks remain outside the source boundary", () => {
+    writeFileSync(join(dir, "app.ts"), "export const app = true;\n");
+    const shellTarget = mkdtempSync(join(tmpdir(), "t304-shell-target-"));
+    const generatedTarget = mkdtempSync(join(tmpdir(), "t304-generated-target-"));
+    try {
+      writeFileSync(join(shellTarget, "audit.md"), "review row one\n");
+      writeFileSync(join(generatedTarget, "bundle.js"), "generated(1);\n");
+      symlinkSync(shellTarget, join(dir, "aidlc"), "dir");
+      symlinkSync(generatedTarget, join(dir, "dist"), "dir");
+      const baseline = workspaceSourceFingerprint(dir);
+      expect(baseline).not.toBeNull();
+
+      writeFileSync(join(shellTarget, "audit.md"), "review row two\n");
+      writeFileSync(join(generatedTarget, "bundle.js"), "generated(2);\n");
+      expect(workspaceSourceFingerprint(dir)).toBe(baseline);
+    } finally {
+      rmSync(shellTarget, { recursive: true, force: true });
+      rmSync(generatedTarget, { recursive: true, force: true });
+    }
+  });
+
+  test("registered source beneath a generated-output symlink remains bindable", () => {
+    const sourceTarget = mkdtempSync(join(tmpdir(), "t304-linked-dist-source-"));
+    try {
+      writeFileSync(
+        join(dir, ".aidlc-source-paths.json"),
+        `${JSON.stringify({ version: 1, paths: ["dist/worker.js"] })}\n`,
+      );
+      writeFileSync(join(sourceTarget, "worker.js"), "export const worker = 1;\n");
+      symlinkSync(sourceTarget, join(dir, "dist"), "dir");
+      const baseline = workspaceSourceFingerprint(dir);
+      expect(baseline).toMatch(/^[0-9a-f]{64}$/);
+
+      writeFileSync(join(sourceTarget, "worker.js"), "export const worker = 2;\n");
+      expect(workspaceSourceFingerprint(dir)).not.toBe(baseline);
+    } finally {
+      rmSync(sourceTarget, { recursive: true, force: true });
+    }
+  });
+
+  test("a registered alias strengthens an earlier source-only traversal of the same target", () => {
+    const sourceTarget = mkdtempSync(join(tmpdir(), "t304-alias-strength-"));
+    try {
+      writeFileSync(
+        join(dir, ".aidlc-source-paths.json"),
+        `${JSON.stringify({ version: 1, paths: ["dist/module.wasm"] })}\n`,
+      );
+      writeFileSync(join(sourceTarget, "module.wasm"), Buffer.from([0, 1, 2, 3]));
+      symlinkSync(sourceTarget, join(dir, "a-link"), "dir");
+      symlinkSync(sourceTarget, join(dir, "dist"), "dir");
+      const baseline = workspaceSourceFingerprint(dir);
+      expect(baseline).toMatch(/^[0-9a-f]{64}$/);
+
+      writeFileSync(join(sourceTarget, "module.wasm"), Buffer.from([0, 1, 2, 4]));
+      expect(workspaceSourceFingerprint(dir)).not.toBe(baseline);
+    } finally {
+      rmSync(sourceTarget, { recursive: true, force: true });
+    }
+  });
+
+  test("entry, directory, and dangling-symlink budgets fail closed", () => {
+    const originalEntries = process.env.AIDLC_TEST_SOURCE_MAX_ENTRIES;
+    const originalDirectories = process.env.AIDLC_TEST_SOURCE_MAX_DIRECTORIES;
+    const originalSymlinks = process.env.AIDLC_TEST_SOURCE_MAX_SYMLINKS;
+    const restore = (
+      name: string,
+      value: string | undefined,
+    ): void => {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    };
+    try {
+      process.env.AIDLC_TEST_SOURCE_MAX_ENTRIES = "4";
+      for (let i = 0; i < 5; i++) {
+        mkdirSync(join(dir, `empty-${i}`));
+      }
+      expect(workspaceSourceFingerprint(dir)).toBeNull();
+      rmSync(dir, { recursive: true, force: true });
+      mkdirSync(dir);
+
+      process.env.AIDLC_TEST_SOURCE_MAX_ENTRIES = "100";
+      process.env.AIDLC_TEST_SOURCE_MAX_DIRECTORIES = "3";
+      mkdirSync(join(dir, "a", "b", "c"), { recursive: true });
+      expect(workspaceSourceFingerprint(dir)).toBeNull();
+      rmSync(dir, { recursive: true, force: true });
+      mkdirSync(dir);
+
+      process.env.AIDLC_TEST_SOURCE_MAX_DIRECTORIES = "100";
+      process.env.AIDLC_TEST_SOURCE_MAX_SYMLINKS = "2";
+      for (let i = 0; i < 3; i++) {
+        symlinkSync(`missing-${i}`, join(dir, `dangling-${i}`), "file");
+      }
+      expect(workspaceSourceFingerprint(dir)).toBeNull();
+      rmSync(dir, { recursive: true, force: true });
+      mkdirSync(dir);
+
+      process.env.AIDLC_TEST_SOURCE_MAX_ENTRIES = "3";
+      registerRepos(dir, ["repo-a"]);
+      mkdirSync(join(dir, "repo-a"));
+      mkdirSync(join(dir, "unrelated-a"));
+      mkdirSync(join(dir, "unrelated-b"));
+      expect(workspaceSourceFingerprint(dir)).toBeNull();
+    } finally {
+      restore("AIDLC_TEST_SOURCE_MAX_ENTRIES", originalEntries);
+      restore("AIDLC_TEST_SOURCE_MAX_DIRECTORIES", originalDirectories);
+      restore("AIDLC_TEST_SOURCE_MAX_SYMLINKS", originalSymlinks);
+    }
+  });
+
+  test("the ignored-source registry rejects traversal, dependency, and active-harness paths", () => {
+    seedGitRepo(dir);
+    for (const path of [
+      "../outside.ts",
+      "node_modules/pkg/source.ts",
+      ".claude/custom.ts",
+    ]) {
+      writeFileSync(
+        join(dir, ".aidlc-source-paths.json"),
+        `${JSON.stringify({ version: 1, paths: [path] })}\n`,
+      );
+      expect(workspaceSourceFingerprint(dir)).toBeNull();
+    }
+  });
+
+  test("source identity excludes every installed harness root regardless of the executing harness", () => {
+    seedGitRepo(dir);
+    for (const [installedDir, name] of [
+      [".claude", "claude"],
+      [".kiro", "kiro-ide"],
+    ] as const) {
+      const dataDir = join(dir, installedDir, "tools", "data");
+      mkdirSync(dataDir, { recursive: true });
+      writeFileSync(
+        join(dataDir, "harness.json"),
+        `${JSON.stringify({ name })}\n`,
+      );
+      writeFileSync(
+        join(dir, installedDir, "managed.ts"),
+        `export const harness = ${JSON.stringify(name)};\n`,
+      );
+    }
+    const originalHarnessDir = process.env.AIDLC_HARNESS_DIR;
+    try {
+      process.env.AIDLC_HARNESS_DIR = ".claude";
+      const claudeFingerprint = workspaceSourceFingerprint(dir);
+      const claudeListing = workspaceSourceListing(dir);
+      process.env.AIDLC_HARNESS_DIR = ".kiro";
+      const kiroFingerprint = workspaceSourceFingerprint(dir);
+      const kiroListing = workspaceSourceListing(dir);
+
+      expect(claudeFingerprint).not.toBeNull();
+      expect(kiroFingerprint).toBe(claudeFingerprint);
+      expect(kiroListing).toEqual(claudeListing);
+      expect(
+        [...(kiroListing?.keys() ?? [])].some(
+          (path) => path.includes(".claude/") || path.includes(".kiro/"),
+        ),
+      ).toBe(false);
+
+      writeFileSync(
+        join(dir, ".kiro", "managed.ts"),
+        "export const harness = \"changed\";\n",
+      );
+      expect(workspaceSourceFingerprint(dir)).toBe(kiroFingerprint);
+
+      writeFileSync(join(dir, "app.ts"), "export const app = 2;\n");
+      expect(workspaceSourceFingerprint(dir)).not.toBe(kiroFingerprint);
+    } finally {
+      if (originalHarnessDir === undefined) {
+        delete process.env.AIDLC_HARNESS_DIR;
+      } else {
+        process.env.AIDLC_HARNESS_DIR = originalHarnessDir;
+      }
+    }
+  });
+
+  test("an unverified harness-like directory remains source under every runtime", () => {
+    seedGitRepo(dir);
+    mkdirSync(join(dir, ".kiro"), { recursive: true });
+    const hiddenSource = join(dir, ".kiro", "application.ts");
+    writeFileSync(hiddenSource, "export const application = 1;\n");
+    const originalHarnessDir = process.env.AIDLC_HARNESS_DIR;
+    try {
+      process.env.AIDLC_HARNESS_DIR = ".claude";
+      const claudeFingerprint = workspaceSourceFingerprint(dir);
+      process.env.AIDLC_HARNESS_DIR = ".kiro";
+      const kiroFingerprint = workspaceSourceFingerprint(dir);
+      expect(kiroFingerprint).toBe(claudeFingerprint);
+      expect(
+        workspaceSourcePathIsExcluded(dir, ".kiro/application.ts"),
+      ).toBe(false);
+
+      writeFileSync(hiddenSource, "export const application = 2;\n");
+      expect(workspaceSourceFingerprint(dir)).not.toBe(kiroFingerprint);
+    } finally {
+      if (originalHarnessDir === undefined) {
+        delete process.env.AIDLC_HARNESS_DIR;
+      } else {
+        process.env.AIDLC_HARNESS_DIR = originalHarnessDir;
+      }
+    }
+  });
+
+  test("the source registry itself must be a regular file", () => {
+    seedGitRepo(dir);
+    const external = `${dir}-external-source-registry.json`;
+    try {
+      writeFileSync(
+        external,
+        `${JSON.stringify({ version: 1, paths: ["dist/worker.js"] })}\n`,
+      );
+      symlinkSync(external, join(dir, ".aidlc-source-paths.json"), "file");
+      git(dir, ["add", "--", ".aidlc-source-paths.json"]);
+      git(dir, ["commit", "-qm", "track symlinked source registry"]);
+      const head = spawnSync(
+        "git",
+        ["-C", dir, "rev-parse", "HEAD"],
+        { encoding: "utf-8" },
+      ).stdout.trim();
+      expect(workspaceSourceFingerprint(dir)).toBeNull();
+      expect(gitCommitSourceListing(dir, head, true)).toBeNull();
+
+      writeFileSync(external, "not-json\n");
+      expect(gitCommitSourceListing(dir, head, true)).toBeNull();
+      rmSync(external);
+      expect(workspaceSourceFingerprint(dir)).toBeNull();
+      expect(gitCommitSourceListing(dir, head, true)).toBeNull();
+    } finally {
+      rmSync(external, { force: true });
+    }
+  });
+
+  test("a logical registry alias into a physically excluded tree is rejected", () => {
+    mkdirSync(join(dir, "node_modules"), { recursive: true });
+    writeFileSync(
+      join(dir, "node_modules", "worker.ts"),
+      "export const dependency = true;\n",
+    );
+    symlinkSync("node_modules", join(dir, "dist"), "dir");
+    writeFileSync(
+      join(dir, ".aidlc-source-paths.json"),
+      `${JSON.stringify({ version: 1, paths: ["dist/worker.ts"] })}\n`,
+    );
+    expect(workspaceSourceFingerprint(dir)).toBeNull();
+  });
+
+  test("a registry alias cannot enter a reserved harness directory", () => {
+    mkdirSync(join(dir, ".codex"), { recursive: true });
+    writeFileSync(
+      join(dir, ".codex", "worker.ts"),
+      "export const hidden = true;\n",
+    );
+    symlinkSync(".codex", join(dir, "dist"), "dir");
+    writeFileSync(
+      join(dir, ".aidlc-source-paths.json"),
+      `${JSON.stringify({ version: 1, paths: ["dist/worker.ts"] })}\n`,
+    );
+    expect(workspaceSourceFingerprint(dir)).toBeNull();
+  });
+
+  test("a registered alias cannot leave the workspace and re-enter it", () => {
+    const outside = mkdtempSync(join(tmpdir(), "t314-registry-hop-"));
+    try {
+      mkdirSync(join(dir, "generated-src"), { recursive: true });
+      writeFileSync(
+        join(dir, "generated-src", "worker.js"),
+        "export const worker = true;\n",
+      );
+      symlinkSync(
+        join(dir, "generated-src"),
+        join(outside, "hop"),
+        "dir",
+      );
+      symlinkSync(join(outside, "hop"), join(dir, "dist"), "dir");
+      writeFileSync(
+        join(dir, ".aidlc-source-paths.json"),
+        `${JSON.stringify({ version: 1, paths: ["dist/worker.js"] })}\n`,
+      );
+      expect(workspaceSourceFingerprint(dir)).toBeNull();
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
     }
   });
 
@@ -417,6 +836,179 @@ describe("t314 workspace source fingerprint (in-process)", () => {
       rmSync(subDir, { recursive: true, force: true });
     }
   }, 20000); // git submodule add is a real clone op - slower than bun's 5000ms default under load
+
+  test("an initialized submodule keeps the same fingerprint and gitlink listing without Git on PATH", () => {
+    const subDir = mkdtempSync(join(tmpdir(), "t314-fp-sub-nogit-"));
+    const noGitPath = mkdtempSync(join(tmpdir(), "t314-empty-path-"));
+    try {
+      git(subDir, ["init", "-q"]);
+      git(subDir, ["config", "user.email", "t@test"]);
+      git(subDir, ["config", "user.name", "t"]);
+      writeFileSync(join(subDir, "lib.ts"), "export const v = 1;\n", "utf-8");
+      git(subDir, ["add", "-A"]);
+      git(subDir, ["commit", "-qm", "sub init"]);
+
+      seedGitRepo(dir);
+      git(dir, [
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        "-q",
+        subDir,
+        "vendor/sub",
+      ]);
+      git(dir, ["commit", "-qm", "add submodule"]);
+      const nestedDir = join(dir, "vendor", "sub");
+      git(nestedDir, ["checkout", "-q", "--detach"]);
+      git(nestedDir, ["config", "pack.indexVersion", "1"]);
+      git(nestedDir, ["gc", "--prune=now"]);
+
+      const baseline = workspaceSourceFingerprint(dir);
+      const nestedHead = spawnSync(
+        "git",
+        ["-C", nestedDir, "rev-parse", "HEAD"],
+        { encoding: "utf-8" },
+      ).stdout.trim();
+      expect(baseline).not.toBeNull();
+      expect(nestedHead).toMatch(/^[0-9a-f]{40,64}$/);
+
+      const gitProbe = spawnSync("git", ["--version"], {
+        encoding: "utf-8",
+        env: { ...process.env, PATH: noGitPath },
+      });
+      expect(gitProbe.status ?? -1).not.toBe(0);
+
+      const libPath = join(AIDLC_SRC, "tools", "aidlc-lib.ts");
+      const child = spawnSync(
+        BUN,
+        [
+          "-e",
+          [
+            `const lib = await import(${JSON.stringify(libPath)});`,
+            `const project = ${JSON.stringify(dir)};`,
+            "const listing = lib.workspaceSourceListing(project);",
+            "console.log(JSON.stringify({",
+            "  fingerprint: lib.workspaceSourceFingerprint(project),",
+            '  gitlink: listing?.get("\\0vendor/sub") ?? null,',
+            "}));",
+          ].join("\n"),
+        ],
+        {
+          encoding: "utf-8",
+          env: { ...process.env, PATH: noGitPath },
+          timeout: 30_000,
+        },
+      );
+      expect(child.status, child.stderr).toBe(0);
+      expect(JSON.parse(child.stdout)).toEqual({
+        fingerprint: baseline,
+        gitlink: `160000 ${nestedHead}`,
+      });
+
+      const marker = singleGitMetadataLineForTest(
+        readFileSync(join(nestedDir, ".git"), "utf-8"),
+      );
+      expect(marker.startsWith("gitdir: ")).toBe(true);
+      const pointer = marker.slice("gitdir: ".length);
+      const nestedGitDir = isAbsolute(pointer)
+        ? pointer
+        : resolvePath(nestedDir, pointer);
+      const headPath = join(nestedGitDir, "HEAD");
+      const originalHead = readFileSync(headPath, "utf-8");
+      writeFileSync(headPath, `${"a".repeat(41)}\n`);
+      expect(workspaceSourceFingerprint(dir)).toBeNull();
+      writeFileSync(headPath, `${"a".repeat(64)}\n`);
+      expect(workspaceSourceFingerprint(dir)).toBeNull();
+      writeFileSync(headPath, `${"0".repeat(40)}\n`);
+      expect(workspaceSourceFingerprint(dir)).toBeNull();
+      writeFileSync(headPath, originalHead);
+      expect(workspaceSourceFingerprint(dir)).toBe(baseline);
+
+      const configPath = join(nestedGitDir, "config");
+      const originalConfig = readFileSync(configPath, "utf-8");
+      writeFileSync(
+        configPath,
+        `${originalConfig}\n[extensions "ignored"]\n\tobjectFormat = sha256\n`,
+      );
+      expect(workspaceSourceFingerprint(dir)).toBe(baseline);
+      const versionOneConfig = originalConfig.replace(
+        /repositoryformatversion\s*=\s*0/i,
+        "repositoryformatversion = 1",
+      );
+      expect(versionOneConfig).not.toBe(originalConfig);
+      writeFileSync(
+        configPath,
+        `${versionOneConfig}\n[extensions]\n\tunknownFeature = true\n`,
+      );
+      expect(workspaceSourceFingerprint(dir)).toBeNull();
+      writeFileSync(configPath, originalConfig);
+      expect(workspaceSourceFingerprint(dir)).toBe(baseline);
+    } finally {
+      rmSync(subDir, { recursive: true, force: true });
+      rmSync(noGitPath, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  test("a nested linked worktree resolves shared branch refs from commondir", () => {
+    const repo = mkdtempSync(join(tmpdir(), "t314-linked-origin-"));
+    try {
+      seedGitRepo(repo);
+      const linked = join(dir, "linked");
+      git(repo, [
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "linked-source",
+        linked,
+      ]);
+      const linkedHead = spawnSync(
+        "git",
+        ["-C", linked, "rev-parse", "HEAD"],
+        { encoding: "utf-8" },
+      ).stdout.trim();
+      writeFileSync(
+        join(repo, "app.ts"),
+        "export const answer = 43;\n",
+        "utf-8",
+      );
+      git(repo, ["add", "app.ts"]);
+      git(repo, ["commit", "-qm", "advance main"]);
+      const otherHead = spawnSync(
+        "git",
+        ["-C", repo, "rev-parse", "HEAD"],
+        { encoding: "utf-8" },
+      ).stdout.trim();
+
+      const marker = singleGitMetadataLineForTest(
+        readFileSync(join(linked, ".git"), "utf-8"),
+      );
+      const pointer = marker.slice("gitdir: ".length);
+      const linkedGitDir = isAbsolute(pointer)
+        ? pointer
+        : resolvePath(linked, pointer);
+      mkdirSync(join(linkedGitDir, "refs", "heads"), { recursive: true });
+      writeFileSync(
+        join(linkedGitDir, "refs", "heads", "linked-source"),
+        `${otherHead}\n`,
+      );
+      expect(workspaceSourceListing(dir)?.get("\0linked")).toBe(
+        `160000 ${linkedHead}`,
+      );
+
+      const commonPath = join(linkedGitDir, "commondir");
+      const originalCommon = readFileSync(commonPath, "utf-8");
+      writeFileSync(commonPath, "missing-common-dir\n");
+      expect(workspaceSourceListing(dir)).toBeNull();
+      writeFileSync(commonPath, originalCommon);
+      expect(workspaceSourceListing(dir)?.get("\0linked")).toBe(
+        `160000 ${linkedHead}`,
+      );
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  }, 30000);
 
   // #646 review - reproduction. Without `-z`, git's
   // default core.quotePath wraps a path containing a non-ASCII byte (or other
@@ -561,7 +1153,7 @@ describe("t314 workspace source fingerprint (in-process)", () => {
     expect(workspaceSourceFingerprint(dir)).not.toBe(fp1);
   });
 
-  test("a filtered tracked symlink never fingerprints bytes outside the repository", () => {
+  test("live identity binds an external symlink while commit reconstruction stays tree-only during target mutation", () => {
     seedGitRepo(dir);
     git(dir, ["config", "core.symlinks", "true"]);
     git(dir, ["config", "filter.tidy.clean", "sed 's/[[:space:]]*$//'"]);
@@ -572,13 +1164,99 @@ describe("t314 workspace source fingerprint (in-process)", () => {
       symlinkSync(external, join(dir, "outside.link"), "file");
       git(dir, ["add", "--", ".gitattributes", "outside.link"]);
       git(dir, ["commit", "-qm", "tracked filtered symlink"]);
+      const head = spawnSync(
+        "git",
+        ["-C", dir, "rev-parse", "HEAD"],
+        { encoding: "utf-8" },
+      ).stdout.trim();
       const fp = workspaceSourceFingerprint(dir);
+      const committedBefore = gitCommitSourceListing(dir, head, true);
       expect(fp).not.toBeNull();
+      expect(committedBefore?.has("\0outside.link")).toBe(true);
+      expect(committedBefore?.has("\0outside.link@target")).toBe(false);
 
-      // The tracked source is the link text, which did not change. Following
-      // the destination here would bind arbitrary bytes outside the repo.
       writeFileSync(external, "external v2\n", "utf-8");
-      expect(workspaceSourceFingerprint(dir)).toBe(fp);
+      expect(workspaceSourceFingerprint(dir)).not.toBe(fp);
+      const committedAfter = gitCommitSourceListing(dir, head, true);
+      expect([...(committedAfter ?? new Map()).entries()]).toEqual([
+        ...(committedBefore ?? new Map()).entries(),
+      ]);
+    } finally {
+      rmSync(external, { force: true });
+    }
+  });
+
+  test("commit reconstruction ignores mutable smudge output", () => {
+    seedGitRepo(dir);
+    const external = mkdtempSync(join(tmpdir(), "t314-smudge-listing-"));
+    try {
+      const script = join(external, "smudge.mjs");
+      const payload = join(external, "payload.txt");
+      writeFileSync(
+        script,
+        [
+          'import { readFileSync } from "node:fs";',
+          "process.stdin.resume();",
+          "process.stdin.on('end', () => {",
+          "  process.stdout.write(readFileSync(process.argv.at(-1)));",
+          "});",
+          "",
+        ].join("\n"),
+      );
+      writeFileSync(payload, "SMUDGED-ONE\n");
+      git(dir, [
+        "config",
+        "filter.mutable.smudge",
+        `"${process.execPath}" "${script}" "${payload}"`,
+      ]);
+      writeFileSync(join(dir, ".gitattributes"), "app.ts filter=mutable\n");
+      git(dir, ["add", "--", ".gitattributes", "app.ts"]);
+      git(dir, ["commit", "-qm", "track smudged source"]);
+      const head = spawnSync(
+        "git",
+        ["-C", dir, "rev-parse", "HEAD"],
+        { encoding: "utf-8" },
+      ).stdout.trim();
+
+      const before = gitCommitSourceListing(dir, head, true);
+      expect(before).not.toBeNull();
+      writeFileSync(payload, "SMUDGED-TWO\n");
+      const after = gitCommitSourceListing(dir, head, true);
+      expect([...(after ?? new Map()).entries()]).toEqual([
+        ...(before ?? new Map()).entries(),
+      ]);
+    } finally {
+      rmSync(external, { recursive: true, force: true });
+    }
+  });
+
+  test("commit reconstruction never reads a symlinked worktree metadata target", () => {
+    seedGitRepo(dir);
+    const external = `${dir}-external-worktree-meta.json`;
+    try {
+      mkdirSync(join(dir, ".aidlc"), { recursive: true });
+      writeFileSync(external, `${JSON.stringify({ repoSelector: null })}\n`);
+      symlinkSync(
+        external,
+        join(dir, ".aidlc", "worktree-meta.json"),
+        "file",
+      );
+      git(dir, ["add", "--", ".aidlc/worktree-meta.json"]);
+      git(dir, ["commit", "-qm", "track symlinked worktree metadata"]);
+      const head = spawnSync(
+        "git",
+        ["-C", dir, "rev-parse", "HEAD"],
+        { encoding: "utf-8" },
+      ).stdout.trim();
+      const before = gitCommitSourceListing(dir, head, false);
+      expect(before?.has("\0.aidlc/worktree-meta.json")).toBe(true);
+      expect(before?.has("\0.aidlc/worktree-meta.json@target")).toBe(false);
+
+      writeFileSync(external, "not-json\n");
+      const after = gitCommitSourceListing(dir, head, false);
+      expect([...(after ?? new Map()).entries()]).toEqual([
+        ...(before ?? new Map()).entries(),
+      ]);
     } finally {
       rmSync(external, { force: true });
     }
@@ -791,6 +1469,53 @@ process.stdin.on("data", (chunk) => {
     expect(workspaceSourceFingerprint(dir)).not.toBe(fp1);
   });
 
+  test("a root FILE named aidlc is also source without Git", () => {
+    const baseline = workspaceSourceFingerprint(dir);
+    writeFileSync(join(dir, "aidlc"), "#!/bin/sh\nexec bun ./cli.ts \"$@\"\n", "utf-8");
+    expect(workspaceSourceFingerprint(dir)).not.toBe(baseline);
+  });
+
+  test("snapshot shaping preserves regular files that share boundary names", () => {
+    seedGitRepo(dir);
+    for (const name of ["aidlc", "dist", "node_modules"]) {
+      writeFileSync(join(dir, name), `regular source file ${name}\n`);
+    }
+    const indexFile = join(
+      tmpdir(),
+      `t304-boundary-file-index-${process.pid}-${Date.now()}`,
+    );
+    const env = { ...process.env, GIT_INDEX_FILE: indexFile };
+    try {
+      expect(
+        spawnSync("git", ["-C", dir, "read-tree", "HEAD"], {
+          env,
+          encoding: "utf-8",
+        }).status,
+      ).toBe(0);
+      expect(
+        spawnSync("git", ["-C", dir, "add", "-A"], {
+          env,
+          encoding: "utf-8",
+        }).status,
+      ).toBe(0);
+      expect(shapeSourceSnapshotIndex(dir, indexFile, true)).not.toBeNull();
+      const tree = spawnSync("git", ["-C", dir, "write-tree"], {
+        env,
+        encoding: "utf-8",
+      }).stdout.trim();
+      const files = spawnSync(
+        "git",
+        ["-C", dir, "ls-tree", "-r", "--name-only", tree],
+        { encoding: "utf-8" },
+      ).stdout;
+      for (const name of ["aidlc", "dist", "node_modules"]) {
+        expect(files).toContain(name);
+      }
+    } finally {
+      rmSync(indexFile, { force: true });
+    }
+  });
+
   // #646 review - the exclusion was applied relative to EVERY fingerprinted
   // repo dir, so for a recorded sibling repo it stripped `repo-a/aidlc/**`.
   // But the record tree is the SIBLING `<workspace>/aidlc/` (repoDir /
@@ -913,6 +1638,49 @@ process.stdin.on("data", (chunk) => {
       "utf-8",
     );
     expect(workspaceSourceFingerprint(dir)).not.toBe(fp1);
+  });
+
+  test("partial multi-repo layouts stay bindable and detect a missing repo appearing", () => {
+    const repoA = join(dir, "repo-a");
+    mkdirSync(repoA, { recursive: true });
+    seedGitRepo(repoA);
+    registerRepos(dir, ["repo-a", "repo-b"]);
+
+    const partial = workspaceSourceFingerprint(dir);
+    expect(partial).toMatch(/^[0-9a-f]{64}$/);
+
+    const repoB = join(dir, "repo-b");
+    mkdirSync(repoB, { recursive: true });
+    writeFileSync(join(repoB, "app.ts"), "export const b = true;\n");
+    expect(workspaceSourceFingerprint(dir)).not.toBe(partial);
+  });
+
+  test("registered repo subsets ignore unrelated sibling repos but bind workspace-roof source", () => {
+    const repoA = join(dir, "repo-a");
+    const repoB = join(dir, "repo-b");
+    mkdirSync(repoA, { recursive: true });
+    mkdirSync(repoB, { recursive: true });
+    seedGitRepo(repoA);
+    seedGitRepo(repoB);
+    registerRepos(dir, ["repo-a"]);
+    const compose = join(dir, "docker-compose.yml");
+    writeFileSync(compose, "services:\n  api:\n    image: one\n");
+    const baseline = workspaceSourceFingerprint(dir);
+    const repoBMetadata = `${dir}-repo-b-git-metadata`;
+    try {
+      renameSync(join(repoB, ".git"), repoBMetadata);
+      expect(workspaceSourceFingerprint(dir)).toBe(baseline);
+
+      writeFileSync(join(repoB, "app.ts"), "export const unrelated = true;\n");
+      expect(workspaceSourceFingerprint(dir)).toBe(baseline);
+    } finally {
+      if (existsSync(repoBMetadata)) {
+        renameSync(repoBMetadata, join(repoB, ".git"));
+      }
+    }
+
+    writeFileSync(compose, "services:\n  api:\n    image: two\n");
+    expect(workspaceSourceFingerprint(dir)).not.toBe(baseline);
   });
 });
 
@@ -1265,6 +2033,141 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
   }
 });
 
+describe("t304 non-Git and unavailable-Git completion paths", () => {
+  let proj: string;
+  let src: string;
+
+  beforeEach(() => {
+    resetAidlcEnv();
+    proj = createTestProject();
+    seedStateFile(proj, "state-mid-ideation.md");
+    src = join(proj, "app.ts");
+    writeFileSync(src, "export const answer = 42;\n");
+    guarded(proj, ["checkbox", "code-generation=in-progress"]);
+  });
+
+  afterEach(() => cleanupTestProject(proj));
+
+  test("non-Git review receipt completes normally while source is unchanged", () => {
+    recordReview(proj);
+    const fingerprint = readAllAuditShards(proj).match(
+      /\*\*Source Fingerprint\*\*: ([0-9a-f]{64})/,
+    )?.[1];
+    expect(fingerprint).toBeDefined();
+
+    const approved = guarded(
+      proj,
+      ["approve", "code-generation", "--user-input", "ship it"],
+    );
+    expect(approved.rc, approved.out).toBe(0);
+  });
+
+  test("non-Git source edits invalidate the receipt and a fresh review restores completion", () => {
+    recordReview(proj);
+    writeFileSync(src, "export const answer = 43;\n");
+    const stale = guarded(
+      proj,
+      ["approve", "code-generation", "--user-input", "ship it"],
+    );
+    expect(stale.rc).not.toBe(0);
+    expect(stale.out).toContain("project source changed after");
+
+    recordReview(proj);
+    const recovered = guarded(
+      proj,
+      ["approve", "code-generation", "--user-input", "ship it"],
+    );
+    expect(recovered.rc, recovered.out).toBe(0);
+  });
+
+  test("registered non-Git binary source invalidates completion after review", () => {
+    writeFileSync(
+      join(proj, ".aidlc-source-paths.json"),
+      `${JSON.stringify({ version: 1, paths: ["dist/module.wasm"] })}\n`,
+    );
+    mkdirSync(join(proj, "dist"), { recursive: true });
+    const module = join(proj, "dist", "module.wasm");
+    writeFileSync(module, Buffer.from([0, 1, 2, 3]));
+    recordReview(proj);
+
+    writeFileSync(module, Buffer.from([0, 1, 2, 4]));
+    const stale = guarded(
+      proj,
+      ["approve", "code-generation", "--user-input", "ship it"],
+    );
+    expect(stale.rc).not.toBe(0);
+    expect(stale.out).toContain("project source changed after");
+  });
+
+  test("registered source through a generated-output symlink reviews normally and invalidates on change", () => {
+    const sourceTarget = mkdtempSync(join(tmpdir(), "t304-linked-review-source-"));
+    try {
+      writeFileSync(
+        join(proj, ".aidlc-source-paths.json"),
+        `${JSON.stringify({ version: 1, paths: ["dist/worker.js"] })}\n`,
+      );
+      writeFileSync(join(sourceTarget, "worker.js"), "export const worker = 1;\n");
+      symlinkSync(sourceTarget, join(proj, "dist"), "dir");
+      recordReview(proj);
+      expect(readAllAuditShards(proj)).toMatch(
+        /\*\*Source Fingerprint\*\*: [0-9a-f]{64}/,
+      );
+
+      writeFileSync(join(sourceTarget, "worker.js"), "export const worker = 2;\n");
+      const stale = guarded(
+        proj,
+        ["approve", "code-generation", "--user-input", "ship it"],
+      );
+      expect(stale.rc).not.toBe(0);
+      expect(stale.out).toContain("project source changed after");
+    } finally {
+      rmSync(sourceTarget, { recursive: true, force: true });
+    }
+  });
+
+  test("a receipt stamped with Git remains valid after repository metadata becomes unavailable", () => {
+    seedGitRepo(proj);
+    const gitMetadata = `${proj}-git-metadata`;
+    try {
+      recordReview(proj);
+      renameSync(join(proj, ".git"), gitMetadata);
+      const approved = guarded(
+        proj,
+        ["approve", "code-generation", "--user-input", "ship it"],
+      );
+      expect(approved.rc, approved.out).toBe(0);
+    } finally {
+      if (existsSync(gitMetadata)) {
+        renameSync(gitMetadata, join(proj, ".git"));
+      }
+    }
+  });
+
+  test("Git becoming available after a non-Git recovery review does not spend a second recovery", () => {
+    recordReview(proj);
+    writeFileSync(src, "export const answer = 43;\n");
+    const stale = guarded(
+      proj,
+      ["approve", "code-generation", "--user-input", "ship it"],
+    );
+    expect(stale.rc).not.toBe(0);
+    expect(stale.out).toContain("project source changed after");
+
+    recordReview(proj);
+    git(proj, ["init", "-q"]);
+    git(proj, ["config", "user.email", "t@test"]);
+    git(proj, ["config", "user.name", "t"]);
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "Git became available"]);
+
+    const approved = guarded(
+      proj,
+      ["approve", "code-generation", "--user-input", "ship it"],
+    );
+    expect(approved.rc, approved.out).toBe(0);
+  });
+});
+
 // Per-unit attribution composes two boundaries. The newest global fingerprint
 // proves no source changed after the last terminal review. Unit snapshots bind
 // manifest bytes plus exact/directory claims and are checked newest-first, so a
@@ -1500,20 +2403,29 @@ describe("t314 multi-unit source attribution", () => {
     while (Math.floor(Date.now() / 1000) === repoBoundarySecond) {}
 
     writeFileSync(join(repoA, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
-    recordReview(proj, "code-generation", REVIEWER, "alpha");
+    recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [
+      { repo: "repo-a", path: "alpha.ts" },
+    ]);
     writeFileSync(join(repoA, "beta.ts"), "export const beta = 2;\n", "utf-8");
-    recordReview(proj, "code-generation", REVIEWER, "beta");
+    recordReview(proj, "code-generation", REVIEWER, "beta", "READY", [
+      { repo: "repo-a", path: "beta.ts" },
+    ]);
 
     const clean = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(clean.out).not.toContain("project source changed after");
     expect(clean.rc).toBe(0);
 
     // Now edit inside the recorded repo after the last review: must refuse.
-    // Reopening without a human rejection keeps the prior per-unit receipts;
-    // one bounded source-staleness recovery receipt rebinds the workspace-global
-    // source state, by the documented policy, before the new edit invalidates it.
+    // Reopening without a human rejection keeps the prior per-unit receipts.
+    // With accurate per-unit claims, a re-review only counts as the one
+    // bounded stale-receipt recovery when the unit's claimed scope really
+    // changed, so stale alpha's scope first, spend the recovery rebinding it,
+    // then let a further edit invalidate the recovery receipt.
     guarded(proj, ["checkbox", "code-generation=in-progress"]);
-    recordReview(proj, "code-generation", REVIEWER, "alpha");
+    writeFileSync(join(repoA, "alpha.ts"), "export const alpha = 99;\n", "utf-8");
+    recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [
+      { repo: "repo-a", path: "alpha.ts" },
+    ]);
     writeFileSync(join(repoA, "alpha.ts"), "export const alpha = 999;\n", "utf-8");
     const dirty = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(dirty.rc).not.toBe(0);
@@ -1665,12 +2577,58 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     args: string[],
     extraEnv?: Record<string, string>,
   ): { rc: number; out: string } {
+    if (args[0] === "prepare") {
+      const unitsIndex = args.indexOf("--units");
+      if (unitsIndex !== -1 && args[unitsIndex + 1]) {
+        seedBoltDag(proj, args[unitsIndex + 1].split(","));
+      }
+    }
     const r = spawnSync(BUN, [SWARM_TOOL, "--project-dir", proj, ...args], {
       cwd: proj,
       encoding: "utf-8",
       env: { ...process.env, ...extraEnv },
     });
     return { rc: r.status ?? -1, out: r.stdout ?? "" };
+  }
+
+  function addNestedSubmodule(
+    proj: string,
+    nestedGitignore: string,
+  ): void {
+    const nestedOrigin = mkdtempSync(
+      join(tmpdir(), "aidlc-t304-nested-origin-"),
+    );
+    const outerOrigin = mkdtempSync(
+      join(tmpdir(), "aidlc-t304-outer-origin-"),
+    );
+    extraDirs.push(nestedOrigin, outerOrigin);
+    seedGitRepo(nestedOrigin);
+    writeFileSync(join(nestedOrigin, ".gitignore"), nestedGitignore);
+    git(nestedOrigin, ["add", ".gitignore"]);
+    git(nestedOrigin, ["commit", "-qm", "nested ignore policy"]);
+
+    seedGitRepo(outerOrigin);
+    git(outerOrigin, [
+      "-c",
+      "protocol.file.allow=always",
+      "submodule",
+      "add",
+      "-q",
+      nestedOrigin,
+      "vendor/nested",
+    ]);
+    git(outerOrigin, ["commit", "-qm", "add nested submodule"]);
+
+    git(proj, [
+      "-c",
+      "protocol.file.allow=always",
+      "submodule",
+      "add",
+      "-q",
+      outerOrigin,
+      "vendor/outer",
+    ]);
+    git(proj, ["commit", "-qm", "add outer submodule"]);
   }
 
   test("finalize refuses a claimed unit whose worktree source changed after its terminal review", () => {
@@ -1700,6 +2658,641 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     const row = env.units.find((u: { unit: string }) => u.unit === "foo");
     expect(row?.status).toBe("failed");
     expect(row?.detail).toContain("source-fingerprint mismatch");
+  }, 120000);
+
+  test("dependency churn after review neither invalidates swarm convergence nor enters the Source Commit", () => {
+    const proj = makeFixture();
+    runSwarm(proj, ["prepare", "--batch", "1", "--units", "deps", "--base", "main"]);
+    const wt = wtPath(proj, "deps");
+    writeFileSync(join(wt, "reviewed.ts"), "export const reviewed = true;\n");
+    const dependency = join(wt, "node_modules", "pkg", "cache.js");
+    mkdirSync(join(dependency, ".."), { recursive: true });
+    writeFileSync(dependency, "module.exports = 1;\n");
+    recordReview(wt, "code-generation", REVIEWER, "deps");
+
+    writeFileSync(dependency, "module.exports = 2;\n");
+    const finalized = runSwarm(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "deps",
+      "--claimed",
+      "deps",
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('reviewed.ts')"`,
+    ]);
+    expect(finalized.rc, finalized.out).toBe(0);
+
+    const audit = readAllAuditShards(proj);
+    const sourceCommit = /\*\*Event\*\*: SWARM_UNIT_CONVERGED[\s\S]*?\*\*Unit name\*\*: deps[\s\S]*?\*\*Source Commit\*\*: ([0-9a-f]{40})/.exec(
+      audit,
+    )?.[1];
+    expect(sourceCommit).toBeDefined();
+    const tree = spawnSync(
+      "git",
+      ["-C", proj, "ls-tree", "-r", "--name-only", sourceCommit ?? ""],
+      { encoding: "utf-8" },
+    );
+    expect(tree.status).toBe(0);
+    expect(tree.stdout).toContain("reviewed.ts");
+    expect(tree.stdout).not.toContain("node_modules/");
+  }, 120000);
+
+  test("a hard-excluded dependency symlink added after review cannot enter the Source Commit", () => {
+    const proj = makeFixture();
+    const external = mkdtempSync(join(tmpdir(), "aidlc-t304-dependency-link-"));
+    extraDirs.push(external);
+    writeFileSync(join(external, "pkg.js"), "module.exports = 'unreviewed';\n");
+    runSwarm(proj, ["prepare", "--batch", "1", "--units", "dep-link", "--base", "main"]);
+    const wt = wtPath(proj, "dep-link");
+    writeFileSync(join(wt, "reviewed.ts"), "export const reviewed = true;\n");
+    recordReview(wt, "code-generation", REVIEWER, "dep-link");
+
+    symlinkSync(external, join(wt, "node_modules"), "dir");
+    const finalized = runSwarm(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "dep-link",
+      "--claimed",
+      "dep-link",
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('reviewed.ts')"`,
+    ]);
+    expect(finalized.rc, finalized.out).toBe(0);
+
+    const audit = readAllAuditShards(proj);
+    const sourceCommit = /\*\*Event\*\*: SWARM_UNIT_CONVERGED[\s\S]*?\*\*Unit name\*\*: dep-link[\s\S]*?\*\*Source Commit\*\*: ([0-9a-f]{40})/.exec(
+      audit,
+    )?.[1];
+    expect(sourceCommit).toBeDefined();
+    const tree = spawnSync(
+      "git",
+      ["-C", proj, "ls-tree", "-r", "--name-only", sourceCommit ?? ""],
+      { encoding: "utf-8" },
+    );
+    expect(tree.status).toBe(0);
+    expect(tree.stdout).not.toContain("node_modules");
+  }, 120000);
+
+  test("finalize rejects an external source symlink before minting Source Commit authority", () => {
+    const proj = makeFixture();
+    const external = mkdtempSync(join(tmpdir(), "aidlc-t314-external-source-"));
+    extraDirs.push(external);
+    const target = join(proj, "tracked-target.ts");
+    writeFileSync(target, "export const target = 'reviewed';\n");
+    symlinkSync(target, join(external, "hop"), "file");
+    symlinkSync(join(external, "hop"), join(proj, "outside.ts"), "file");
+    git(proj, ["add", "--", "tracked-target.ts", "outside.ts"]);
+    git(proj, ["commit", "-qm", "add out-and-back source link"]);
+    runSwarm(proj, [
+      "prepare",
+      "--batch",
+      "1",
+      "--units",
+      "external-link",
+      "--base",
+      "main",
+    ]);
+    const wt = wtPath(proj, "external-link");
+    writeFileSync(join(wt, "unit.ts"), "export const unit = true;\n");
+    recordReview(
+      wt,
+      "code-generation",
+      REVIEWER,
+      "external-link",
+      "READY",
+      [{ path: "unit.ts" }],
+    );
+
+    const finalized = runSwarm(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "external-link",
+      "--claimed",
+      "external-link",
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('unit.ts')"`,
+    ]);
+    expect(finalized.rc).toBe(2);
+    const row = JSON.parse(finalized.out).units.find(
+      (unit: { unit: string }) => unit.unit === "external-link",
+    );
+    expect(row?.detail).toContain(
+      "cannot bind external source symlink target (outside.ts)",
+    );
+    expect(readAllAuditShards(proj)).not.toMatch(
+      /\*\*Event\*\*: SWARM_UNIT_CONVERGED[\s\S]*?\*\*Unit name\*\*: external-link/,
+    );
+    const refs = spawnSync(
+      "git",
+      [
+        "-C",
+        proj,
+        "for-each-ref",
+        "refs/aidlc/reviewed-source/external-link/",
+      ],
+      { encoding: "utf-8" },
+    );
+    expect(refs.status).toBe(0);
+    expect(refs.stdout.trim()).toBe("");
+  }, 120000);
+
+  test("clean-filtered generated and harness files stay at HEAD in the Source Commit", () => {
+    const proj = makeFixture();
+    ensureDagUnit(proj, "filtered-excluded");
+    git(proj, ["config", "filter.tidy.clean", "sed 's/[[:space:]]*$//'"]);
+    writeFileSync(
+      join(proj, ".gitattributes"),
+      "dist/** filter=tidy\n.claude/** filter=tidy\n",
+    );
+    mkdirSync(join(proj, "dist"), { recursive: true });
+    mkdirSync(join(proj, ".claude", "tools", "data"), { recursive: true });
+    writeFileSync(
+      join(proj, ".claude", "tools", "data", "harness.json"),
+      `${JSON.stringify({ name: "claude" })}\n`,
+    );
+    writeFileSync(join(proj, "dist", "out.js"), "BASELINE_GENERATED\n");
+    writeFileSync(join(proj, ".claude", "managed.md"), "BASELINE_HARNESS\n");
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "tracked filtered exclusions"]);
+
+    runSwarm(proj, [
+      "prepare",
+      "--batch",
+      "1",
+      "--units",
+      "filtered-excluded",
+      "--base",
+      "main",
+    ]);
+    const wt = wtPath(proj, "filtered-excluded");
+    writeFileSync(join(wt, "reviewed.ts"), "export const reviewed = true;\n");
+    recordReview(wt, "code-generation", REVIEWER, "filtered-excluded");
+    writeFileSync(join(wt, "dist", "out.js"), "UNREVIEWED_GENERATED   \n");
+    writeFileSync(
+      join(wt, ".claude", "managed.md"),
+      "UNREVIEWED_HARNESS   \n",
+    );
+
+    const finalized = runSwarm(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "filtered-excluded",
+      "--claimed",
+      "filtered-excluded",
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('reviewed.ts')"`,
+    ]);
+    expect(finalized.rc, finalized.out).toBe(0);
+    const sourceCommit = /\*\*Event\*\*: SWARM_UNIT_CONVERGED[\s\S]*?\*\*Unit name\*\*: filtered-excluded[\s\S]*?\*\*Source Commit\*\*: ([0-9a-f]{40})/.exec(
+      readAllAuditShards(proj),
+    )?.[1];
+    expect(sourceCommit).toBeDefined();
+    for (const [path, expected] of [
+      ["dist/out.js", "BASELINE_GENERATED\n"],
+      [".claude/managed.md", "BASELINE_HARNESS\n"],
+    ] as const) {
+      const shown = spawnSync(
+        "git",
+        ["-C", proj, "show", `${sourceCommit}:${path}`],
+        { encoding: "utf-8" },
+      );
+      expect(shown.status, `${shown.stdout}${shown.stderr}`).toBe(0);
+      expect(shown.stdout).toBe(expected);
+    }
+  }, 120000);
+
+  test("registered clean-filtered generated source keeps reviewed raw bytes", () => {
+    const proj = makeFixture();
+    ensureDagUnit(proj, "filtered-registered");
+    git(proj, ["config", "filter.tidy.clean", "sed 's/[[:space:]]*$//'"]);
+    writeFileSync(join(proj, ".gitattributes"), "dist/** filter=tidy\n");
+    git(proj, ["add", ".gitattributes"]);
+    git(proj, ["commit", "-qm", "configure generated source filter"]);
+
+    runSwarm(proj, [
+      "prepare",
+      "--batch",
+      "1",
+      "--units",
+      "filtered-registered",
+      "--base",
+      "main",
+    ]);
+    const wt = wtPath(proj, "filtered-registered");
+    writeFileSync(
+      join(wt, ".aidlc-source-paths.json"),
+      `${JSON.stringify({ version: 1, paths: ["dist/worker.js"] })}\n`,
+    );
+    mkdirSync(join(wt, "dist"), { recursive: true });
+    const reviewed = "export const worker = 'reviewed';   \n";
+    writeFileSync(join(wt, "dist", "worker.js"), reviewed);
+    recordReview(wt, "code-generation", REVIEWER, "filtered-registered");
+
+    const finalized = runSwarm(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "filtered-registered",
+      "--claimed",
+      "filtered-registered",
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('dist/worker.js')"`,
+    ]);
+    expect(finalized.rc, finalized.out).toBe(0);
+    const sourceCommit = /\*\*Event\*\*: SWARM_UNIT_CONVERGED[\s\S]*?\*\*Unit name\*\*: filtered-registered[\s\S]*?\*\*Source Commit\*\*: ([0-9a-f]{40})/.exec(
+      readAllAuditShards(proj),
+    )?.[1];
+    expect(sourceCommit).toBeDefined();
+    const shown = spawnSync(
+      "git",
+      ["-C", proj, "show", `${sourceCommit}:dist/worker.js`],
+      { encoding: "utf-8" },
+    );
+    expect(shown.status, `${shown.stdout}${shown.stderr}`).toBe(0);
+    expect(shown.stdout).toBe(reviewed);
+  }, 120000);
+
+  test("ordinary ignored and registered binary source enter the bound Source Commit and later merge", () => {
+    const proj = makeFixture();
+    runSwarm(proj, ["prepare", "--batch", "1", "--units", "ignored", "--base", "main"]);
+    const wt = wtPath(proj, "ignored");
+    writeFileSync(
+      join(wt, ".gitignore"),
+      `${readFileSync(join(wt, ".gitignore"), "utf-8")}ignored-source.ts\ndist/\n`,
+    );
+    writeFileSync(
+      join(wt, ".aidlc-source-paths.json"),
+      `${JSON.stringify({
+        version: 1,
+        paths: ["dist/module.wasm", "ignored-source.ts"],
+      })}\n`,
+    );
+    mkdirSync(join(wt, "dist"), { recursive: true });
+    writeFileSync(join(wt, "dist", "module.wasm"), Buffer.from([0, 1, 2, 3]));
+    writeFileSync(join(wt, "reviewed.ts"), "export const reviewed = true;\n");
+    writeFileSync(
+      join(wt, "ignored-source.ts"),
+      "export const ignored = 'reviewed and merged';\n",
+    );
+    recordReview(wt, "code-generation", REVIEWER, "ignored");
+
+    const finalized = runSwarm(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "ignored",
+      "--claimed",
+      "ignored",
+      "--check-cmd",
+      `"${process.execPath}" -e "const fs=require('fs');fs.accessSync('ignored-source.ts');fs.accessSync('dist/module.wasm')"`,
+    ]);
+    expect(finalized.rc, finalized.out).toBe(0);
+
+    const audit = readAllAuditShards(proj);
+    const sourceCommit = /\*\*Event\*\*: SWARM_UNIT_CONVERGED[\s\S]*?\*\*Unit name\*\*: ignored[\s\S]*?\*\*Source Commit\*\*: ([0-9a-f]{40})/.exec(
+      audit,
+    )?.[1];
+    expect(sourceCommit).toBeDefined();
+    const tree = spawnSync(
+      "git",
+      ["-C", proj, "ls-tree", "-r", "--name-only", sourceCommit ?? ""],
+      { encoding: "utf-8" },
+    );
+    expect(tree.status).toBe(0);
+    expect(tree.stdout).toContain("ignored-source.ts");
+    expect(tree.stdout).toContain("dist/module.wasm");
+
+    const merged = spawnSync(
+      BUN,
+      [
+        WORKTREE_TOOL,
+        "merge",
+        "--slug",
+        "ignored",
+        "--target",
+        "main",
+        "--strategy",
+        "squash",
+        "--project-dir",
+        proj,
+      ],
+      { cwd: proj, encoding: "utf-8" },
+    );
+    expect(merged.status, `${merged.stdout}${merged.stderr}`).toBe(0);
+    expect(readFileSync(join(proj, "ignored-source.ts"), "utf-8")).toContain(
+      "reviewed and merged",
+    );
+    expect(readFileSync(join(proj, "dist", "module.wasm"))).toEqual(
+      Buffer.from([0, 1, 2, 3]),
+    );
+  }, 120000);
+
+  test("registered source through an internal generated-boundary symlink finalizes and merges", () => {
+    const proj = makeFixture();
+    runSwarm(proj, ["prepare", "--batch", "1", "--units", "linked", "--base", "main"]);
+    const wt = wtPath(proj, "linked");
+    writeFileSync(
+      join(wt, ".gitignore"),
+      `${readFileSync(join(wt, ".gitignore"), "utf-8")}generated-src/worker.js\n`,
+    );
+    writeFileSync(
+      join(wt, ".aidlc-source-paths.json"),
+      `${JSON.stringify({
+        version: 1,
+        paths: ["dist/worker.js"],
+      })}\n`,
+    );
+    mkdirSync(join(wt, "generated-src"), { recursive: true });
+    writeFileSync(
+      join(wt, "generated-src", "worker.js"),
+      "export const linked = 'reviewed';\n",
+    );
+    symlinkSync("generated-src", join(wt, "dist"), "dir");
+    recordReview(wt, "code-generation", REVIEWER, "linked");
+
+    const finalized = runSwarm(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "linked",
+      "--claimed",
+      "linked",
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('dist/worker.js')"`,
+    ]);
+    expect(finalized.rc, finalized.out).toBe(0);
+
+    const audit = readAllAuditShards(proj);
+    const sourceCommit = /\*\*Event\*\*: SWARM_UNIT_CONVERGED[\s\S]*?\*\*Unit name\*\*: linked[\s\S]*?\*\*Source Commit\*\*: ([0-9a-f]{40})/.exec(
+      audit,
+    )?.[1];
+    expect(sourceCommit).toBeDefined();
+    const tree = spawnSync(
+      "git",
+      ["-C", proj, "ls-tree", "-r", "--name-only", sourceCommit ?? ""],
+      { encoding: "utf-8" },
+    );
+    expect(tree.status).toBe(0);
+    expect(tree.stdout).toContain("dist");
+    expect(tree.stdout).toContain("generated-src/worker.js");
+
+    const merged = spawnSync(
+      BUN,
+      [
+        WORKTREE_TOOL,
+        "merge",
+        "--slug",
+        "linked",
+        "--target",
+        "main",
+        "--strategy",
+        "squash",
+        "--project-dir",
+        proj,
+      ],
+      { cwd: proj, encoding: "utf-8" },
+    );
+    expect(merged.status, `${merged.stdout}${merged.stderr}`).toBe(0);
+    expect(
+      readFileSync(join(proj, "generated-src", "worker.js"), "utf-8"),
+    ).toContain("reviewed");
+    const mergedLink = lstatSync(join(proj, "dist"));
+    if (mergedLink.isSymbolicLink()) {
+      expect(readlinkSync(join(proj, "dist"))).toBe("generated-src");
+    } else {
+      expect(readFileSync(join(proj, "dist"), "utf-8").trim()).toBe(
+        "generated-src",
+      );
+    }
+  }, 120000);
+
+  test("a staged registered-source deletion remains deleted in the Source Commit and merge", () => {
+    const proj = makeFixture();
+    writeFileSync(
+      join(proj, ".aidlc-source-paths.json"),
+      `${JSON.stringify({ version: 1, paths: ["dist/worker.js"] })}\n`,
+    );
+    mkdirSync(join(proj, "dist"), { recursive: true });
+    writeFileSync(join(proj, "dist", "worker.js"), "export const stale = true;\n");
+    git(proj, ["add", ".aidlc-source-paths.json", "dist/worker.js"]);
+    git(proj, ["commit", "-qm", "tracked registered source"]);
+    appendAuditEntry(
+      "STAGE_JUMPED",
+      {
+        Target: "code-generation",
+        ...sourceBaselineAuditFields(proj, "code-generation"),
+      },
+      proj,
+    );
+    const deletionBoundarySecond = Math.floor(Date.now() / 1000);
+    while (Math.floor(Date.now() / 1000) === deletionBoundarySecond) {}
+
+    runSwarm(proj, ["prepare", "--batch", "1", "--units", "deleted", "--base", "main"]);
+    const wt = wtPath(proj, "deleted");
+    rmSync(join(wt, "dist", "worker.js"));
+    git(wt, ["add", "-A", "--", "dist/worker.js"]);
+    recordReview(
+      wt,
+      "code-generation",
+      REVIEWER,
+      "deleted",
+      "READY",
+      [
+        { path: ".aidlc-source-paths.json" },
+        { path: "dist/worker.js" },
+      ],
+    );
+
+    const finalized = runSwarm(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "deleted",
+      "--claimed",
+      "deleted",
+      "--check-cmd",
+      `"${process.execPath}" -e "process.exit(require('fs').existsSync('dist/worker.js')?1:0)"`,
+    ]);
+    expect(finalized.rc, finalized.out).toBe(0);
+
+    const audit = readAllAuditShards(proj);
+    const sourceCommit = /\*\*Event\*\*: SWARM_UNIT_CONVERGED[\s\S]*?\*\*Unit name\*\*: deleted[\s\S]*?\*\*Source Commit\*\*: ([0-9a-f]{40})/.exec(
+      audit,
+    )?.[1];
+    expect(sourceCommit).toBeDefined();
+    const tree = spawnSync(
+      "git",
+      ["-C", proj, "ls-tree", "-r", "--name-only", sourceCommit ?? ""],
+      { encoding: "utf-8" },
+    );
+    expect(tree.status).toBe(0);
+    expect(tree.stdout).not.toContain("dist/worker.js");
+
+    const merged = spawnSync(
+      BUN,
+      [
+        WORKTREE_TOOL,
+        "merge",
+        "--slug",
+        "deleted",
+        "--target",
+        "main",
+        "--strategy",
+        "squash",
+        "--project-dir",
+        proj,
+      ],
+      { cwd: proj, encoding: "utf-8" },
+    );
+    expect(merged.status, `${merged.stdout}${merged.stderr}`).toBe(0);
+    expect(existsSync(join(proj, "dist", "worker.js"))).toBe(false);
+  }, 120000);
+
+  test("an internal symlink sorted before its real directory cannot suppress ignored source from the Source Commit", () => {
+    const proj = makeFixture();
+    runSwarm(proj, ["prepare", "--batch", "1", "--units", "alias", "--base", "main"]);
+    const wt = wtPath(proj, "alias");
+    writeFileSync(
+      join(wt, ".gitignore"),
+      `${readFileSync(join(wt, ".gitignore"), "utf-8")}z-source/ignored-source.ts\n`,
+    );
+    writeFileSync(
+      join(wt, ".aidlc-source-paths.json"),
+      `${JSON.stringify({
+        version: 1,
+        paths: ["z-source/ignored-source.ts"],
+      })}\n`,
+    );
+    mkdirSync(join(wt, "z-source"), { recursive: true });
+    writeFileSync(
+      join(wt, "z-source", "ignored-source.ts"),
+      "export const aliased = 'reviewed';\n",
+    );
+    symlinkSync("z-source", join(wt, "a-link"), "dir");
+    recordReview(wt, "code-generation", REVIEWER, "alias");
+
+    const finalized = runSwarm(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "alias",
+      "--claimed",
+      "alias",
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('a-link/ignored-source.ts')"`,
+    ]);
+    expect(finalized.rc, finalized.out).toBe(0);
+
+    const audit = readAllAuditShards(proj);
+    const sourceCommit = /\*\*Event\*\*: SWARM_UNIT_CONVERGED[\s\S]*?\*\*Unit name\*\*: alias[\s\S]*?\*\*Source Commit\*\*: ([0-9a-f]{40})/.exec(
+      audit,
+    )?.[1];
+    expect(sourceCommit).toBeDefined();
+    const tree = spawnSync(
+      "git",
+      ["-C", proj, "ls-tree", "-r", "--name-only", sourceCommit ?? ""],
+      { encoding: "utf-8" },
+    );
+    expect(tree.status).toBe(0);
+    expect(tree.stdout).toContain("a-link");
+    expect(tree.stdout).toContain("z-source/ignored-source.ts");
+
+    const merged = spawnSync(
+      BUN,
+      [
+        WORKTREE_TOOL,
+        "merge",
+        "--slug",
+        "alias",
+        "--target",
+        "main",
+        "--strategy",
+        "squash",
+        "--project-dir",
+        proj,
+      ],
+      { cwd: proj, encoding: "utf-8" },
+    );
+    expect(merged.status, `${merged.stdout}${merged.stderr}`).toBe(0);
+    expect(
+      readFileSync(join(proj, "z-source", "ignored-source.ts"), "utf-8"),
+    ).toContain("reviewed");
+  }, 120000);
+
+  test("swarm source and exclusion batching stay below Windows command-line limits", () => {
+    const proj = makeFixture();
+    runSwarm(proj, ["prepare", "--batch", "1", "--units", "argv", "--base", "main"]);
+    const wt = wtPath(proj, "argv");
+    writeFileSync(
+      join(wt, ".gitignore"),
+      `${readFileSync(join(wt, ".gitignore"), "utf-8")}ignored-*.ts\n`,
+    );
+    const names: string[] = [];
+    for (let i = 0; i < 400; i++) {
+      const name = `ignored-${String(i).padStart(3, "0")}-${"x".repeat(72)}.ts`;
+      names.push(name);
+      writeFileSync(join(wt, name), `export const value${i} = ${i};\n`);
+    }
+    writeFileSync(
+      join(wt, ".aidlc-source-paths.json"),
+      `${JSON.stringify({ version: 1, paths: names })}\n`,
+    );
+    recordReview(wt, "code-generation", REVIEWER, "argv");
+    const dependencyTarget = mkdtempSync(
+      join(tmpdir(), "aidlc-t304-argv-dependency-"),
+    );
+    extraDirs.push(dependencyTarget);
+    writeFileSync(join(dependencyTarget, "pkg.js"), "module.exports = true;\n");
+    for (let i = 0; i < 320; i++) {
+      const parent = join(
+        wt,
+        "packages",
+        `excluded-${String(i).padStart(3, "0")}-${"y".repeat(60)}`,
+      );
+      mkdirSync(parent, { recursive: true });
+      symlinkSync(dependencyTarget, join(parent, "node_modules"), "dir");
+    }
+
+    const finalized = runSwarm(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "argv",
+      "--claimed",
+      "argv",
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('${names.at(-1)}')"`,
+    ]);
+    expect(finalized.rc, finalized.out).toBe(0);
+
+    const audit = readAllAuditShards(proj);
+    const sourceCommit = /\*\*Event\*\*: SWARM_UNIT_CONVERGED[\s\S]*?\*\*Unit name\*\*: argv[\s\S]*?\*\*Source Commit\*\*: ([0-9a-f]{40})/.exec(
+      audit,
+    )?.[1];
+    expect(sourceCommit).toBeDefined();
+    const tree = spawnSync(
+      "git",
+      ["-C", proj, "ls-tree", "-r", "--name-only", sourceCommit ?? ""],
+      { encoding: "utf-8" },
+    );
+    expect(tree.status).toBe(0);
+    expect(tree.stdout).toContain(names[0]);
+    expect(tree.stdout).toContain(names.at(-1) ?? "");
+    expect(tree.stdout).not.toContain("node_modules");
   }, 120000);
 
   test("finalize fails closed when reviewed bytes live only in a dirty initialized submodule", () => {
@@ -1743,6 +3336,870 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     });
     expect(refs.status).toBe(0);
     expect(refs.stdout.trim()).toBe("");
+  }, 120000);
+
+  test("review request fails closed when source is ignored inside an initialized submodule", () => {
+    const proj = makeFixture();
+    const origin = mkdtempSync(join(tmpdir(), "aidlc-t304-submodule-ignored-"));
+    extraDirs.push(origin);
+    seedGitRepo(origin);
+    writeFileSync(join(origin, ".gitignore"), "ignored-source.ts\n");
+    git(origin, ["add", ".gitignore"]);
+    git(origin, ["commit", "-qm", "ignore application source"]);
+    git(proj, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", origin, "vendor/sub"]);
+    git(proj, ["commit", "-qm", "add ignored-source submodule"]);
+
+    runSwarm(proj, ["prepare", "--batch", "1", "--units", "subignored", "--base", "main"]);
+    const wt = wtPath(proj, "subignored");
+    git(wt, ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive"]);
+    writeFileSync(
+      join(wt, "vendor", "sub", "ignored-source.ts"),
+      "export const ignored = 'reviewed but not in gitlink';\n",
+    );
+    expect(() =>
+      recordReview(wt, "code-generation", REVIEWER, "subignored")
+    ).toThrow("ignored by Git");
+    expect(readAllAuditShards(proj)).not.toMatch(
+      /\*\*Event\*\*: SWARM_UNIT_CONVERGED[\s\S]*?\*\*Unit name\*\*: subignored/,
+    );
+  }, 120000);
+
+  test("ignored dependency cache inside an initialized submodule does not block finalize", () => {
+    const proj = makeFixture();
+    const origin = mkdtempSync(join(tmpdir(), "aidlc-t304-submodule-cache-"));
+    extraDirs.push(origin);
+    seedGitRepo(origin);
+    writeFileSync(join(origin, ".gitignore"), "node_modules/\n");
+    git(origin, ["add", ".gitignore"]);
+    git(origin, ["commit", "-qm", "ignore dependency cache"]);
+    git(proj, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", origin, "vendor/sub"]);
+    git(proj, ["commit", "-qm", "add dependency-cache submodule"]);
+
+    runSwarm(proj, ["prepare", "--batch", "1", "--units", "subcache", "--base", "main"]);
+    const wt = wtPath(proj, "subcache");
+    git(wt, ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive"]);
+    mkdirSync(join(wt, "vendor", "sub", "node_modules", "pkg"), {
+      recursive: true,
+    });
+    writeFileSync(
+      join(wt, "vendor", "sub", "node_modules", "pkg", "cache.js"),
+      "module.exports = 'cache';\n",
+    );
+    recordReview(wt, "code-generation", REVIEWER, "subcache");
+
+    const finalized = runSwarm(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "subcache",
+      "--claimed",
+      "subcache",
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('vendor/sub/node_modules/pkg/cache.js')"`,
+    ]);
+    expect(finalized.rc, finalized.out).toBe(0);
+  }, 120000);
+
+  test("nested initialized submodule ignored source blocks review recursively", () => {
+    const proj = makeFixture();
+    addNestedSubmodule(proj, "ignored-source.ts\n");
+    runSwarm(proj, ["prepare", "--batch", "1", "--units", "nestedignored", "--base", "main"]);
+    const wt = wtPath(proj, "nestedignored");
+    git(wt, [
+      "-c",
+      "protocol.file.allow=always",
+      "submodule",
+      "update",
+      "--init",
+      "--recursive",
+    ]);
+    const nested = join(wt, "vendor", "outer", "vendor", "nested");
+    writeFileSync(
+      join(nested, "ignored-source.ts"),
+      "export const nestedIgnored = 'reviewed but not in nested gitlink';\n",
+    );
+    expect(() =>
+      recordReview(wt, "code-generation", REVIEWER, "nestedignored")
+    ).toThrow("ignored by Git");
+  }, 120000);
+
+  test("nested initialized submodule ignored dependency cache remains allowed", () => {
+    const proj = makeFixture();
+    addNestedSubmodule(proj, "node_modules/\n");
+    runSwarm(proj, ["prepare", "--batch", "1", "--units", "nestedcache", "--base", "main"]);
+    const wt = wtPath(proj, "nestedcache");
+    git(wt, [
+      "-c",
+      "protocol.file.allow=always",
+      "submodule",
+      "update",
+      "--init",
+      "--recursive",
+    ]);
+    const cache = join(
+      wt,
+      "vendor",
+      "outer",
+      "vendor",
+      "nested",
+      "node_modules",
+      "pkg",
+    );
+    mkdirSync(cache, { recursive: true });
+    writeFileSync(join(cache, "cache.js"), "module.exports = 'nested cache';\n");
+    recordReview(wt, "code-generation", REVIEWER, "nestedcache");
+
+    const finalized = runSwarm(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "nestedcache",
+      "--claimed",
+      "nestedcache",
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('vendor/outer/vendor/nested/node_modules/pkg/cache.js')"`,
+    ]);
+    expect(finalized.rc, finalized.out).toBe(0);
+  }, 120000);
+
+  test("ignored embedded Git checkout source is shaped as a gitlink and rejected when dirty", () => {
+    const proj = makeFixture();
+    runSwarm(proj, ["prepare", "--batch", "1", "--units", "embeddedignored", "--base", "main"]);
+    const wt = wtPath(proj, "embeddedignored");
+    writeFileSync(
+      join(wt, ".gitignore"),
+      `${readFileSync(join(wt, ".gitignore"), "utf-8")}embedded/\n`,
+    );
+    writeFileSync(
+      join(wt, ".aidlc-source-paths.json"),
+      `${JSON.stringify({ version: 1, paths: ["embedded"] })}\n`,
+    );
+    const embedded = join(wt, "embedded");
+    mkdirSync(embedded);
+    git(embedded, ["init", "-q"]);
+    git(embedded, ["config", "user.email", "t@test"]);
+    git(embedded, ["config", "user.name", "t"]);
+    writeFileSync(join(embedded, "app.ts"), "export const embedded = true;\n");
+    writeFileSync(join(embedded, ".gitignore"), "ignored-source.ts\n");
+    git(embedded, ["add", "-A"]);
+    git(embedded, ["commit", "-qm", "embedded source"]);
+    writeFileSync(
+      join(embedded, "ignored-source.ts"),
+      "export const ignored = 'reviewed but not in gitlink';\n",
+    );
+    recordReview(wt, "code-generation", REVIEWER, "embeddedignored");
+
+    const finalized = runSwarm(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "embeddedignored",
+      "--claimed",
+      "embeddedignored",
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('embedded/ignored-source.ts')"`,
+    ]);
+    expect(finalized.rc).toBe(2);
+    const row = JSON.parse(finalized.out).units.find(
+      (unit: { unit: string }) => unit.unit === "embeddedignored",
+    );
+    expect(row?.detail).toContain("embedded");
+    expect(row?.detail).toContain("ignored application source");
+  }, 120000);
+
+  test("ignored clean embedded Git checkout is rejected without tracked submodule metadata", () => {
+    const proj = makeFixture();
+    runSwarm(proj, ["prepare", "--batch", "1", "--units", "embeddedcache", "--base", "main"]);
+    const wt = wtPath(proj, "embeddedcache");
+    writeFileSync(
+      join(wt, ".gitignore"),
+      `${readFileSync(join(wt, ".gitignore"), "utf-8")}embedded/\n`,
+    );
+    writeFileSync(
+      join(wt, ".aidlc-source-paths.json"),
+      `${JSON.stringify({ version: 1, paths: ["embedded"] })}\n`,
+    );
+    const embedded = join(wt, "embedded");
+    mkdirSync(embedded);
+    git(embedded, ["init", "-q"]);
+    git(embedded, ["config", "user.email", "t@test"]);
+    git(embedded, ["config", "user.name", "t"]);
+    writeFileSync(join(embedded, "app.ts"), "export const embedded = true;\n");
+    writeFileSync(join(embedded, ".gitignore"), "node_modules/\n");
+    git(embedded, ["add", "-A"]);
+    git(embedded, ["commit", "-qm", "embedded source"]);
+    mkdirSync(join(embedded, "node_modules", "pkg"), { recursive: true });
+    writeFileSync(
+      join(embedded, "node_modules", "pkg", "cache.js"),
+      "module.exports = 'cache';\n",
+    );
+    recordReview(wt, "code-generation", REVIEWER, "embeddedcache");
+
+    const finalized = runSwarm(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "embeddedcache",
+      "--claimed",
+      "embeddedcache",
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('embedded/node_modules/pkg/cache.js')"`,
+    ]);
+    expect(finalized.rc).toBe(2);
+    const row = JSON.parse(finalized.out).units.find(
+      (unit: { unit: string }) => unit.unit === "embeddedcache",
+    );
+    expect(row?.detail).toContain("not a tracked submodule");
+    expect(row?.detail).toContain("git submodule add");
+    expect(readAllAuditShards(proj)).not.toMatch(
+      /\*\*Event\*\*: SWARM_UNIT_CONVERGED[\s\S]*?\*\*Unit name\*\*: embeddedcache/,
+    );
+  }, 120000);
+
+  test("unignored bare embedded Git checkout is rejected despite git add discovering its gitlink", () => {
+    const proj = makeFixture();
+    runSwarm(proj, ["prepare", "--batch", "1", "--units", "embeddedbare", "--base", "main"]);
+    const wt = wtPath(proj, "embeddedbare");
+    const embedded = join(wt, "embedded");
+    mkdirSync(embedded);
+    git(embedded, ["init", "-q"]);
+    git(embedded, ["config", "user.email", "t@test"]);
+    git(embedded, ["config", "user.name", "t"]);
+    writeFileSync(join(embedded, "app.ts"), "export const embedded = true;\n");
+    git(embedded, ["add", "-A"]);
+    git(embedded, ["commit", "-qm", "embedded source"]);
+    recordReview(wt, "code-generation", REVIEWER, "embeddedbare");
+
+    const finalized = runSwarm(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "embeddedbare",
+      "--claimed",
+      "embeddedbare",
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('embedded/app.ts')"`,
+    ]);
+    expect(finalized.rc).toBe(2);
+    const row = JSON.parse(finalized.out).units.find(
+      (unit: { unit: string }) => unit.unit === "embeddedbare",
+    );
+    expect(row?.detail).toContain("not a tracked submodule");
+    expect(row?.detail).toContain("git submodule add");
+  }, 120000);
+
+  test("new-submodule recovery proof cap is shared across claimed units", () => {
+    const proj = makeFixture();
+    const units = ["proof-a", "proof-b"];
+    seedBoltDag(proj, units);
+    const origins = units.map((unit) => {
+      const origin = mkdtempSync(
+        join(tmpdir(), `aidlc-t304-${unit}-origin-`),
+      );
+      extraDirs.push(origin);
+      seedGitRepo(origin);
+      return origin;
+    });
+    runSwarm(proj, [
+      "prepare",
+      "--batch",
+      "1",
+      "--units",
+      units.join(","),
+      "--base",
+      "main",
+    ]);
+    for (let index = 0; index < units.length; index++) {
+      const unit = units[index];
+      const wt = wtPath(proj, unit);
+      git(wt, [
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        "-q",
+        origins[index],
+        "declared",
+      ]);
+      recordReview(wt, "code-generation", REVIEWER, unit);
+    }
+
+    const finalized = runSwarm(
+      proj,
+      [
+        "finalize",
+        "--batch",
+        "1",
+        "--units",
+        units.join(","),
+        "--claimed",
+        units.join(","),
+        "--check-cmd",
+        `"${process.execPath}" -e "require('fs').accessSync('declared/app.ts')"`,
+      ],
+      { AIDLC_TEST_NEW_GITLINK_RECOVERY_PROOF_CAP: "1" },
+    );
+    expect(finalized.rc).toBe(2);
+    const result = JSON.parse(finalized.out) as {
+      units: Array<{ detail?: string; status: string; unit: string }>;
+    };
+    expect(result.units.find((row) => row.unit === "proof-a")?.status).toBe(
+      "converged",
+    );
+    expect(
+      result.units.find((row) => row.unit === "proof-b")?.detail,
+    ).toContain("recovery proof cap exceeded (1 per finalize)");
+  }, 120000);
+
+  test("new-submodule recovery obeys the remaining aggregate deadline", () => {
+    const proj = makeFixture();
+    ensureDagUnit(proj, "proof-deadline");
+    const origin = mkdtempSync(
+      join(tmpdir(), "aidlc-t304-proof-deadline-origin-"),
+    );
+    const shimDir = mkdtempSync(
+      join(tmpdir(), "aidlc-t304-proof-deadline-bin-"),
+    );
+    extraDirs.push(origin, shimDir);
+    seedGitRepo(origin);
+    const realGit = spawnSync("sh", ["-c", "command -v git"], {
+      encoding: "utf-8",
+    }).stdout.trim();
+    expect(realGit).not.toBe("");
+    writeFileSync(
+      join(shimDir, "git"),
+      [
+        "#!/bin/sh",
+        'if [ "$1" = "ls-remote" ]; then sleep 1; fi',
+        `exec ${JSON.stringify(realGit)} "$@"`,
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    runSwarm(proj, [
+      "prepare",
+      "--batch",
+      "1",
+      "--units",
+      "proof-deadline",
+      "--base",
+      "main",
+    ]);
+    const wt = wtPath(proj, "proof-deadline");
+    git(wt, [
+      "-c",
+      "protocol.file.allow=always",
+      "submodule",
+      "add",
+      "-q",
+      origin,
+      "declared",
+    ]);
+    recordReview(wt, "code-generation", REVIEWER, "proof-deadline");
+
+    const started = Date.now();
+    const finalized = runSwarm(
+      proj,
+      [
+        "finalize",
+        "--batch",
+        "1",
+        "--units",
+        "proof-deadline",
+        "--claimed",
+        "proof-deadline",
+        "--check-cmd",
+        `"${process.execPath}" -e "require('fs').accessSync('declared/app.ts')"`,
+      ],
+      {
+        AIDLC_TEST_NEW_GITLINK_RECOVERY_BUDGET_MS: "100",
+        AIDLC_TEST_NEW_GITLINK_RECOVERY_COMMAND_TIMEOUT_MS: "1000",
+        PATH: `${shimDir}:${process.env.PATH ?? ""}`,
+      },
+    );
+    expect(Date.now() - started).toBeLessThan(5000);
+    expect(finalized.rc).toBe(2);
+    const row = (
+      JSON.parse(finalized.out) as {
+        units: Array<{ detail?: string; unit: string }>;
+      }
+    ).units.find((unit) => unit.unit === "proof-deadline");
+    expect(row?.detail).toContain(
+      "recovery deadline exceeded (100ms cumulative per finalize)",
+    );
+  }, 120000);
+
+  test("new submodule with gitmodules recovery metadata finalizes normally", () => {
+    const proj = makeFixture();
+    const origin = mkdtempSync(join(tmpdir(), "aidlc-t304-new-submodule-"));
+    extraDirs.push(origin);
+    seedGitRepo(origin);
+    runSwarm(proj, ["prepare", "--batch", "1", "--units", "newsub", "--base", "main"]);
+    const wt = wtPath(proj, "newsub");
+    git(wt, [
+      "-c",
+      "protocol.file.allow=always",
+      "submodule",
+      "add",
+      "-q",
+      origin,
+      "declared",
+    ]);
+    recordReview(wt, "code-generation", REVIEWER, "newsub");
+
+    const finalized = runSwarm(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "newsub",
+      "--claimed",
+      "newsub",
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('declared/app.ts')"`,
+    ]);
+    expect(finalized.rc, finalized.out).toBe(0);
+
+    const audit = readAllAuditShards(proj);
+    const sourceCommit = /\*\*Event\*\*: SWARM_UNIT_CONVERGED[\s\S]*?\*\*Unit name\*\*: newsub[\s\S]*?\*\*Source Commit\*\*: ([0-9a-f]{40})/.exec(
+      audit,
+    )?.[1];
+    expect(sourceCommit).toBeDefined();
+    const tree = spawnSync(
+      "git",
+      ["-C", proj, "ls-tree", "-r", "--name-only", sourceCommit ?? ""],
+      { encoding: "utf-8" },
+    );
+    expect(tree.status).toBe(0);
+    expect(tree.stdout).toContain(".gitmodules");
+    expect(tree.stdout).toContain("declared");
+
+    const merged = spawnSync(
+      BUN,
+      [
+        WORKTREE_TOOL,
+        "merge",
+        "--slug",
+        "newsub",
+        "--target",
+        "main",
+        "--strategy",
+        "squash",
+        "--project-dir",
+        proj,
+      ],
+      { cwd: proj, encoding: "utf-8" },
+    );
+    expect(merged.status, `${merged.stdout}${merged.stderr}`).toBe(0);
+    const recovered = spawnSync(
+      "git",
+      [
+        "-C",
+        proj,
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "update",
+        "--init",
+        "--recursive",
+      ],
+      { encoding: "utf-8" },
+    );
+    expect(recovered.status, `${recovered.stdout}${recovered.stderr}`).toBe(0);
+    expect(readFileSync(join(proj, "declared", "app.ts"), "utf-8")).toContain(
+      "answer",
+    );
+  }, 120000);
+
+  test("new submodule pinned to an older advertised-history commit remains recoverable", () => {
+    const proj = makeFixture();
+    const origin = mkdtempSync(join(tmpdir(), "aidlc-t304-historic-submodule-"));
+    extraDirs.push(origin);
+    seedGitRepo(origin);
+    const historicCommit = spawnSync(
+      "git",
+      ["-C", origin, "rev-parse", "HEAD"],
+      { encoding: "utf-8" },
+    ).stdout.trim();
+    writeFileSync(join(origin, "app.ts"), "export const answer = 43;\n");
+    git(origin, ["commit", "-qam", "new tip"]);
+
+    runSwarm(proj, ["prepare", "--batch", "1", "--units", "historicsub", "--base", "main"]);
+    const wt = wtPath(proj, "historicsub");
+    git(wt, [
+      "-c",
+      "protocol.file.allow=always",
+      "submodule",
+      "add",
+      "-q",
+      origin,
+      "declared",
+    ]);
+    git(join(wt, "declared"), ["checkout", "-q", historicCommit]);
+    git(wt, ["add", "declared"]);
+    recordReview(wt, "code-generation", REVIEWER, "historicsub");
+
+    const finalized = runSwarm(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "historicsub",
+      "--claimed",
+      "historicsub",
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('declared/app.ts')"`,
+    ]);
+    expect(finalized.rc, finalized.out).toBe(0);
+
+    const merged = spawnSync(
+      BUN,
+      [
+        WORKTREE_TOOL,
+        "merge",
+        "--slug",
+        "historicsub",
+        "--target",
+        "main",
+        "--strategy",
+        "squash",
+        "--project-dir",
+        proj,
+      ],
+      { cwd: proj, encoding: "utf-8" },
+    );
+    expect(merged.status, `${merged.stdout}${merged.stderr}`).toBe(0);
+    const recovered = spawnSync(
+      "git",
+      [
+        "-C",
+        proj,
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "update",
+        "--init",
+        "--recursive",
+      ],
+      { encoding: "utf-8" },
+    );
+    expect(recovered.status, `${recovered.stdout}${recovered.stderr}`).toBe(0);
+    const recoveredCommit = spawnSync(
+      "git",
+      ["-C", join(proj, "declared"), "rev-parse", "HEAD"],
+      { encoding: "utf-8" },
+    ).stdout.trim();
+    expect(recoveredCommit).toBe(historicCommit);
+    expect(readFileSync(join(proj, "declared", "app.ts"), "utf-8")).toContain(
+      "answer = 42",
+    );
+  }, 120000);
+
+  test("new submodule pinned to older history remains recoverable after remote advancement", () => {
+    const proj = makeFixture();
+    const origin = mkdtempSync(join(tmpdir(), "aidlc-t304-advanced-submodule-"));
+    extraDirs.push(origin);
+    seedGitRepo(origin);
+    const historicCommit = spawnSync(
+      "git",
+      ["-C", origin, "rev-parse", "HEAD"],
+      { encoding: "utf-8" },
+    ).stdout.trim();
+    writeFileSync(join(origin, "app.ts"), "export const answer = 43;\n");
+    git(origin, ["commit", "-qam", "tip before clone"]);
+
+    runSwarm(proj, ["prepare", "--batch", "1", "--units", "advancedsub", "--base", "main"]);
+    const wt = wtPath(proj, "advancedsub");
+    git(wt, [
+      "-c",
+      "protocol.file.allow=always",
+      "submodule",
+      "add",
+      "-q",
+      origin,
+      "declared",
+    ]);
+    git(join(wt, "declared"), ["checkout", "-q", historicCommit]);
+    git(wt, ["add", "declared"]);
+
+    writeFileSync(join(origin, "app.ts"), "export const answer = 44;\n");
+    git(origin, ["commit", "-qam", "remote advanced"]);
+    recordReview(wt, "code-generation", REVIEWER, "advancedsub");
+
+    const finalized = runSwarm(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "advancedsub",
+      "--claimed",
+      "advancedsub",
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('declared/app.ts')"`,
+    ]);
+    expect(finalized.rc, finalized.out).toBe(0);
+
+    const merged = spawnSync(
+      BUN,
+      [
+        WORKTREE_TOOL,
+        "merge",
+        "--slug",
+        "advancedsub",
+        "--target",
+        "main",
+        "--strategy",
+        "squash",
+        "--project-dir",
+        proj,
+      ],
+      { cwd: proj, encoding: "utf-8" },
+    );
+    expect(merged.status, `${merged.stdout}${merged.stderr}`).toBe(0);
+    const recovered = spawnSync(
+      "git",
+      [
+        "-C",
+        proj,
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "update",
+        "--init",
+        "--recursive",
+      ],
+      { encoding: "utf-8" },
+    );
+    expect(recovered.status, `${recovered.stdout}${recovered.stderr}`).toBe(0);
+    const recoveredCommit = spawnSync(
+      "git",
+      ["-C", join(proj, "declared"), "rev-parse", "HEAD"],
+      { encoding: "utf-8" },
+    ).stdout.trim();
+    expect(recoveredCommit).toBe(historicCommit);
+  }, 120000);
+
+  test("new submodule remains recoverable after its remote branch is renamed", () => {
+    const proj = makeFixture();
+    const origin = mkdtempSync(join(tmpdir(), "aidlc-t304-renamed-submodule-"));
+    extraDirs.push(origin);
+    seedGitRepo(origin);
+    const originalBranch = spawnSync(
+      "git",
+      ["-C", origin, "branch", "--show-current"],
+      { encoding: "utf-8" },
+    ).stdout.trim();
+    const historicCommit = spawnSync(
+      "git",
+      ["-C", origin, "rev-parse", "HEAD"],
+      { encoding: "utf-8" },
+    ).stdout.trim();
+    writeFileSync(join(origin, "app.ts"), "export const answer = 43;\n");
+    git(origin, ["commit", "-qam", "tip before clone"]);
+
+    runSwarm(proj, [
+      "prepare",
+      "--batch",
+      "1",
+      "--units",
+      "renamedsub",
+      "--base",
+      "main",
+    ]);
+    const wt = wtPath(proj, "renamedsub");
+    git(wt, [
+      "-c",
+      "protocol.file.allow=always",
+      "submodule",
+      "add",
+      "-q",
+      origin,
+      "declared",
+    ]);
+    git(join(wt, "declared"), ["checkout", "-q", historicCommit]);
+    git(wt, ["add", "declared"]);
+
+    git(origin, ["branch", "-m", originalBranch, "recovery-trunk"]);
+    for (let i = 0; i < 40; i++) {
+      git(origin, ["branch", `published-after-clone-${i}`]);
+    }
+    recordReview(wt, "code-generation", REVIEWER, "renamedsub");
+
+    const finalized = runSwarm(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "renamedsub",
+      "--claimed",
+      "renamedsub",
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('declared/app.ts')"`,
+    ]);
+    expect(finalized.rc, finalized.out).toBe(0);
+
+    const merged = spawnSync(
+      BUN,
+      [
+        WORKTREE_TOOL,
+        "merge",
+        "--slug",
+        "renamedsub",
+        "--target",
+        "main",
+        "--strategy",
+        "squash",
+        "--project-dir",
+        proj,
+      ],
+      { cwd: proj, encoding: "utf-8" },
+    );
+    expect(merged.status, `${merged.stdout}${merged.stderr}`).toBe(0);
+    const recovered = spawnSync(
+      "git",
+      [
+        "-C",
+        proj,
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "update",
+        "--init",
+        "--recursive",
+      ],
+      { encoding: "utf-8" },
+    );
+    expect(recovered.status, `${recovered.stdout}${recovered.stderr}`).toBe(0);
+    const recoveredCommit = spawnSync(
+      "git",
+      ["-C", join(proj, "declared"), "rev-parse", "HEAD"],
+      { encoding: "utf-8" },
+    ).stdout.trim();
+    expect(recoveredCommit).toBe(historicCommit);
+  }, 120000);
+
+  test("an exact advertised submodule tip must still be fetchable", () => {
+    const proj = makeFixture();
+    const origin = mkdtempSync(join(tmpdir(), "aidlc-t304-broken-tip-submodule-"));
+    extraDirs.push(origin);
+    seedGitRepo(origin);
+    const tip = spawnSync("git", ["-C", origin, "rev-parse", "HEAD"], {
+      encoding: "utf-8",
+    }).stdout.trim();
+
+    runSwarm(proj, [
+      "prepare",
+      "--batch",
+      "1",
+      "--units",
+      "brokentip",
+      "--base",
+      "main",
+    ]);
+    const wt = wtPath(proj, "brokentip");
+    git(wt, [
+      "-c",
+      "protocol.file.allow=always",
+      "submodule",
+      "add",
+      "-q",
+      origin,
+      "declared",
+    ]);
+    git(wt, ["add", "declared"]);
+    recordReview(wt, "code-generation", REVIEWER, "brokentip");
+
+    const tipObject = join(
+      origin,
+      ".git",
+      "objects",
+      tip.slice(0, 2),
+      tip.slice(2),
+    );
+    expect(existsSync(tipObject)).toBe(true);
+    rmSync(tipObject);
+    const advertised = spawnSync(
+      "git",
+      ["ls-remote", origin, "HEAD", "refs/heads/*"],
+      { encoding: "utf-8" },
+    );
+    expect(advertised.status, `${advertised.stdout}${advertised.stderr}`).toBe(
+      0,
+    );
+    expect(advertised.stdout).toContain(tip);
+
+    const finalized = runSwarm(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "brokentip",
+      "--claimed",
+      "brokentip",
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('declared/app.ts')"`,
+    ]);
+    expect(finalized.rc).toBe(2);
+    const row = JSON.parse(finalized.out).units.find(
+      (unit: { unit: string }) => unit.unit === "brokentip",
+    );
+    expect(row?.detail).toContain(
+      "cannot fetch advertised recovery history",
+    );
+    expect(readAllAuditShards(proj)).not.toMatch(
+      /\*\*Event\*\*: SWARM_UNIT_CONVERGED[\s\S]*?\*\*Unit name\*\*: brokentip/,
+    );
+  }, 120000);
+
+  test("new submodule with an unavailable recovery URL cannot finalize", () => {
+    const proj = makeFixture();
+    const origin = mkdtempSync(join(tmpdir(), "aidlc-t304-dead-submodule-"));
+    extraDirs.push(origin);
+    seedGitRepo(origin);
+    runSwarm(proj, ["prepare", "--batch", "1", "--units", "deadsub", "--base", "main"]);
+    const wt = wtPath(proj, "deadsub");
+    git(wt, [
+      "-c",
+      "protocol.file.allow=always",
+      "submodule",
+      "add",
+      "-q",
+      origin,
+      "declared",
+    ]);
+    git(wt, [
+      "config",
+      "-f",
+      ".gitmodules",
+      "submodule.declared.url",
+      `${origin}-missing`,
+    ]);
+    recordReview(wt, "code-generation", REVIEWER, "deadsub");
+
+    const finalized = runSwarm(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "deadsub",
+      "--claimed",
+      "deadsub",
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('declared/app.ts')"`,
+    ]);
+    expect(finalized.rc).toBe(2);
+    const row = JSON.parse(finalized.out).units.find(
+      (unit: { unit: string }) => unit.unit === "deadsub",
+    );
+    expect(row?.detail).toContain("recovery endpoint is unavailable");
+    expect(readAllAuditShards(proj)).not.toMatch(
+      /\*\*Event\*\*: SWARM_UNIT_CONVERGED[\s\S]*?\*\*Unit name\*\*: deadsub/,
+    );
   }, 120000);
 
   test("a finalize-time bypass cannot become fieldless legacy evidence after the switch is unset", () => {
@@ -2024,6 +4481,108 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     expect(readlinkSync(join(proj, "link.txt"))).toBe("target.txt");
     expect(readFileSync(join(proj, "target.txt"), "utf-8").replace(/\r\n/g, "\n"))
       .toBe("reviewed target\n");
+  }, 120000);
+
+  test("mutable checkout filters are refused before target mutation or source-merge authority", () => {
+    const proj = makeFixture();
+    const external = mkdtempSync(join(tmpdir(), "aidlc-t314-smudge-merge-"));
+    extraDirs.push(external);
+    const script = join(external, "smudge.mjs");
+    const payload = join(external, "payload.txt");
+    writeFileSync(
+      script,
+      [
+        'import { readFileSync } from "node:fs";',
+        "process.stdin.resume();",
+        "process.stdin.on('end', () => {",
+        "  process.stdout.write(readFileSync(process.argv.at(-1)));",
+        "});",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(payload, "REVIEWED\n");
+
+    ensureDagUnit(proj, "smudge");
+    runSwarm(proj, [
+      "prepare",
+      "--batch",
+      "1",
+      "--units",
+      "smudge",
+      "--base",
+      "main",
+    ]);
+    const wt = wtPath(proj, "smudge");
+    git(wt, [
+      "config",
+      "filter.mutable.smudge",
+      `"${process.execPath}" "${script}" "${payload}"`,
+    ]);
+    writeFileSync(join(wt, ".gitattributes"), "smudged.ts filter=mutable\n");
+    writeFileSync(join(wt, "smudged.ts"), "REVIEWED\n");
+    recordReview(wt, "code-generation", REVIEWER, "smudge");
+    const finalized = runSwarm(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "smudge",
+      "--claimed",
+      "smudge",
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('smudged.ts')"`,
+    ]);
+    expect(finalized.rc, finalized.out).toBe(0);
+
+    writeFileSync(payload, "UNREVIEWED\n");
+    const beforeHead = spawnSync(
+      "git",
+      ["-C", proj, "rev-parse", "HEAD"],
+      { encoding: "utf-8" },
+    ).stdout.trim();
+    const beforeStatus = spawnSync(
+      "git",
+      ["-C", proj, "status", "--porcelain=v1"],
+      { encoding: "utf-8" },
+    ).stdout;
+    const merge = spawnSync(
+      BUN,
+      [
+        WORKTREE_TOOL,
+        "merge",
+        "--slug",
+        "smudge",
+        "--target",
+        "main",
+        "--strategy",
+        "squash",
+        "--project-dir",
+        proj,
+      ],
+      { cwd: proj, encoding: "utf-8" },
+    );
+    const output = `${merge.stdout}${merge.stderr}`;
+    expect(merge.status).not.toBe(0);
+    expect(output).toContain("repository checkout-filter configuration is present");
+    expect(output).toContain("filter.mutable.smudge");
+    expect(output).not.toContain("[merge-succeeded:");
+    expect(readAllAuditShards(proj)).not.toContain(
+      "**Event**: SWARM_SOURCE_MERGED",
+    );
+    const afterHead = spawnSync(
+      "git",
+      ["-C", proj, "rev-parse", "HEAD"],
+      { encoding: "utf-8" },
+    ).stdout.trim();
+    const afterStatus = spawnSync(
+      "git",
+      ["-C", proj, "status", "--porcelain=v1"],
+      { encoding: "utf-8" },
+    ).stdout;
+    expect(afterHead).toBe(beforeHead);
+    expect(afterStatus).toBe(beforeStatus);
+    expect(existsSync(join(proj, "smudged.ts"))).toBe(false);
+    expect(existsSync(wt)).toBe(true);
   }, 120000);
 
   test("finalize merges a claimed unit whose worktree source is unchanged since its terminal review", () => {

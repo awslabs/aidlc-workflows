@@ -1,4 +1,4 @@
-// covers: function:recordPlanApprovalReceipt, function:beginCodeGeneration
+// covers: function:recordPlanApprovalReceipt, function:beginCodeGeneration, function:readPlanApprovalViolation
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { createHash, randomUUID } from "node:crypto";
@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { appendAuditEntry } from "../../core/tools/aidlc-audit.ts";
 import {
   clearActiveDirectiveMarker,
+  readPlanApprovalViolation,
   refreshActiveDirectiveMarker,
   sessionsDir,
   writeActiveDirectiveMarker,
@@ -214,6 +215,41 @@ function approve(project: string, questions: string, session: string): void {
 }
 
 describe("t328 Plan Approval runtime authority", () => {
+  test("rejects malformed Plan Approval violation records", () => {
+    const project = createProject();
+    const runtimeDir = join(sessionsDir(project), "plan-approval");
+    const violationPath = join(runtimeDir, "violation.json");
+    mkdirSync(runtimeDir, { recursive: true });
+    for (const value of [
+      { version: 1, markerRevision: 1, reason: "unsupported" },
+      { version: 1, markerRevision: 1, reason: "unsupported", target: 42 },
+      {
+        version: 1,
+        markerRevision: -1,
+        reason: "unsupported",
+        target: project,
+      },
+      { version: 1, markerRevision: 1, reason: "", target: project },
+      {
+        version: 1,
+        markerRevision: 1,
+        reason: "unsupported",
+        target: "relative",
+      },
+    ]) {
+    writeFileSync(violationPath, `${JSON.stringify(value)}\n`);
+    expect(readPlanApprovalViolation(project)).toBeNull();
+  }
+  const unresolved = {
+    version: 1 as const,
+    markerRevision: 1,
+    reason: "legacy write target was not recoverable",
+    target: "(unresolved write target)",
+  };
+  writeFileSync(violationPath, `${JSON.stringify(unresolved)}\n`);
+  expect(readPlanApprovalViolation(project)).toEqual(unresolved);
+});
+
   test("accepts the native Claude AskUserQuestion PostToolUse response", () => {
     const project = createProject();
     const questions = seedPlan(project);

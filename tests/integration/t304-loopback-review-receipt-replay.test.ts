@@ -14,6 +14,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { sourceBaselineAuditFields } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -97,7 +99,6 @@ function run(
       AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
       AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
       AIDLC_SKIP_REVISION_BACKSTOP: "1",
-      AIDLC_SKIP_SOURCE_FRESHNESS: "1",
     },
   });
   const stdout = result.stdout ?? "";
@@ -125,7 +126,6 @@ function next(args: string[] = []): Directive {
       AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
       AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
       AIDLC_SKIP_REVISION_BACKSTOP: "1",
-      AIDLC_SKIP_SOURCE_FRESHNESS: "1",
     },
   });
   expect(result.status).toBe(0);
@@ -230,6 +230,16 @@ describe("t304 loop-back refreshes per-unit Code Generation reviews", () => {
     project = createOrchestrationTestProject();
     writeFileSync(seededStateFile(project), STATE_CONTENT, "utf-8");
     seedBoltDag(project, UNITS);
+    appendAuditEntry(
+      "WORKFLOW_STARTED",
+      {
+        Scope: "feature",
+        ...sourceBaselineAuditFields(project, "code-generation"),
+      },
+      project,
+    );
+    const boundarySecond = Math.floor(Date.now() / 1000);
+    while (Math.floor(Date.now() / 1000) === boundarySecond) {}
     for (const unit of UNITS) {
       writeCodeGenerationArtifacts(unit);
       recordReview(unit);
@@ -243,7 +253,7 @@ describe("t304 loop-back refreshes per-unit Code Generation reviews", () => {
       "--user-input",
       "Approve",
     ]);
-    expect(firstApproval.kind).not.toBe("error");
+    expect(firstApproval.kind, JSON.stringify(firstApproval)).not.toBe("error");
     expect(readFileSync(seededStateFile(project), "utf-8")).toContain(
       "- **Current Stage**: build-and-test",
     );

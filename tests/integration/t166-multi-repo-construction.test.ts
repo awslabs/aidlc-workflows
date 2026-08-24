@@ -498,7 +498,12 @@ function compositionScenario(
       ...(codeGeneration.consumes ?? []),
       { artifact: "composition-missing-producer", required: true },
     ];
-    const graphPath = join(proj, "composition-stage-graph.json");
+    // Framework-owned `.aidlc/` sits outside the bound source boundary, so
+    // this test-only graph cannot invalidate the recorded review's source
+    // fingerprint the way a workspace-roof file would.
+    const graphDir = join(proj, ".aidlc");
+    mkdirSync(graphDir, { recursive: true });
+    const graphPath = join(graphDir, "composition-stage-graph.json");
     writeFileSync(graphPath, `${JSON.stringify(graph, null, 2)}\n`);
     stateEnv.AIDLC_STAGE_GRAPH = graphPath;
   }
