@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.80] - 2026-08-25
+
+Concurrent sessions in one checkout now keep workflow selection, usage, lifecycle events, learning candidates, and fresh-intent handoffs bound to the owning session for independent intents within the same space. **Upgrade:** refresh your `dist/<harness>/` shell; Codex users must also re-run `bun scripts/package.ts codex trust --project <absolute-project-path>` because the new Bash session-binding hook adds a trust-table entry.
+
+* Session bindings live under the existing gitignored `aidlc/.aidlc-sessions/` runtime directory and resolve before shared cursor fallbacks. Cold sessions retain an explicit null-intent binding, while intent creation and intent or space switching move the binding, UUID attribution, and lifecycle ownership together.
+* Learning surfacing, usage folding, SessionEnd, and Stop-hook fresh-intent handoffs resolve through the session binding instead of accepting a concurrently moved shared cursor.
+* Hook payload identity, `AIDLC_SESSION_OVERRIDE`, and validated PID ancestry provide one session identity for spawned tools; conflicting identities refuse before workflow writes. The Codex adapter pins its validated payload into every POSIX Bash command and core-hook child, so sandboxed macOS does not depend on `ps` ancestry.
+* Harness-native method includes remain one mutable checkout-wide surface, so concurrent sessions in different spaces can still race on ambient delivered rules. Windows and shared-process harness sessions retain shared-cursor behavior where no distinct identity is available.
+
 ## [2.6.79] - 2026-08-25
 
 Stop-hook recovery now preserves an opaque load-steering continuation token ahead of the potentially large rule payload without changing the required apply-then-continue action order. **Upgrade:** re-copy your `dist/<harness>/` shell into the project; active workflows need no state migration.
@@ -38,6 +47,7 @@ Review-freeze and consolidated-summary confirmation no longer form a deadlock wh
 * Known limitation: a per-Unit stage without an authored `unit-of-work-dependency.md` requires a stage-level review receipt once its Bolts have closed. Author that document before Construction to retain per-Unit review coverage.
 * Review-freeze directs reviewer suggestions to the gate without applying them. Other recovery refusals direct active stages to Request Changes, `[R]` stages to `/aidlc --stage <slug>`, completed stages to restore reviewed source or redo the stage, and off-plan stages to a scope that includes them.
 * Cursor guard calls reuse one lightweight review-freeze command/target parse per invocation and skip the freeze subprocess only when that exact parse proves there is no write target, restoring margin below the per-tool timeout without weakening real-write enforcement.
+
 ## [2.6.75] - 2026-08-24
 
 Shared write hooks now normalize project-relative file payloads before applying audit and sensor path logic, enforcing the hooks' absolute-path invariant even if an adapter boundary is bypassed. **Upgrade:** refresh your `dist/<harness>/` shell; existing workflows require no migration.

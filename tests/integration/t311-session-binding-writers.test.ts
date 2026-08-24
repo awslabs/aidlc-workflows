@@ -268,6 +268,8 @@ describe("t311 session binding writers", () => {
       intent: null,
     });
     expect(readSessionIntentUuid(proj, "empty-space-session")).toBeNull();
+    const other = createIntent(proj, "other-session", "default", "feature");
+    setActiveIntentCursor(proj, other.dirName, "default");
     expect(intentUsageKey(proj, "empty-space-session")).toBe(
       "record:team-empty/legacy",
     );

@@ -51,6 +51,7 @@ import {
   sessionsDir,
   setActiveIntentCursor,
   setActiveSpaceCursor,
+  writeSessionBinding,
 } from "../../core/tools/aidlc-lib.ts";
 import {
   DEFAULT_RECORD_DIR,
@@ -358,7 +359,7 @@ describe("t149 Codex structured request_user_input presence", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   test("a valid selection outside an active workflow is a no-op", () => {
     const dir = scratchProject(false);
@@ -375,6 +376,61 @@ describe("t149 Codex structured request_user_input presence", () => {
 });
 
 describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
+  test("0: Bash commands inherit the validated payload session", () => {
+    const dir = scratchProject(true);
+    try {
+      writeSessionBinding(
+        dir,
+        "codex-command-session",
+        DEFAULT_SPACE,
+        DEFAULT_RECORD_DIR,
+      );
+      const other = createIntent(dir, "cursor-other", DEFAULT_SPACE, "feature");
+      writeFileSync(
+        join(intentsDirOf(dir, DEFAULT_SPACE), other.dirName, "aidlc-state.md"),
+        readFileSync(seededStateFile(dir), "utf-8"),
+      );
+      setActiveIntentCursor(dir, other.dirName, DEFAULT_SPACE);
+      const command = "bun .codex/tools/aidlc-orchestrate.ts next";
+      const r = runAdapter(dir, "bind-bash-session", {
+        hook_event_name: "PreToolUse",
+        session_id: "codex-command-session",
+        cwd: dir,
+        tool_name: "Bash",
+        tool_input: { command },
+      });
+      expect(r.code, r.stderr).toBe(0);
+      const output = JSON.parse(r.stdout) as {
+        hookSpecificOutput?: {
+          hookEventName?: string;
+          updatedInput?: { command?: string };
+        };
+      };
+      expect(output.hookSpecificOutput?.hookEventName).toBe("PreToolUse");
+      expect(output.hookSpecificOutput?.updatedInput?.command).toBe(
+        "export AIDLC_SESSION_OVERRIDE='codex-command-session' " +
+          "AIDLC_SESSION_OVERRIDE_SOURCE='payload'; " +
+          command,
+      );
+
+      const humanTurn = runAdapter(dir, "record-human-turn", {
+        hook_event_name: "UserPromptSubmit",
+        session_id: "codex-command-session",
+        turn_id: "bound-human-turn",
+        cwd: dir,
+      });
+      expect(humanTurn.code, humanTurn.stderr).toBe(0);
+      expect(readRecordAudit(dir, DEFAULT_RECORD_DIR)).toContain(
+        "**Event**: HUMAN_TURN",
+      );
+      expect(readRecordAudit(dir, other.dirName)).not.toContain(
+        "**Event**: HUMAN_TURN",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("1: stop blocks with a reason while the workflow has pending work (verbatim contract)", () => {
     const dir = scratchProject(true);
     try {

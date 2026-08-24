@@ -201,12 +201,15 @@ space's ambient rules the harness delivers next. This increment supports
 concurrent intents within one space; concurrent multi-space ambient method
 delivery remains future work.
 
-On Windows, PID ancestry resolution returns no session identity. Shared-process
-harnesses also cannot distinguish chats that use one process, including Kiro
-IDE multi-chat and multi-session opencode. Children of payload-bearing hooks
-follow the payload session; tools without that parent still fall back to the
-shared cursors when ancestry is unavailable unless the harness process has a
-valid `AIDLC_SESSION_OVERRIDE`.
+On POSIX, the Codex adapter pins the validated hook payload session into every
+core-hook child and Bash command, so macOS sandbox denial of `ps` does not weaken
+Codex workflow selection. On Windows, PID ancestry resolution returns no session
+identity and the POSIX command rewrite is unavailable. Shared-process harnesses
+also cannot distinguish chats that use one process, including Kiro IDE
+multi-chat and multi-session opencode. Children of payload-bearing hooks follow
+the payload session; tools without that parent still fall back to the shared
+cursors when ancestry is unavailable unless the harness process has a valid
+`AIDLC_SESSION_OVERRIDE`.
 
 Known limitation: hook writes and the intent and space switch verbs on those
 platforms retain the pre-existing v2 shared-cursor and `.current-session`

@@ -32,6 +32,9 @@ import { projectTier } from "../../core/tools/aidlc-tiers.ts";
 const HOOK_WIRING: Array<{ event: string; matcher?: string; target: string }> = [
   { event: "SessionStart", target: "session-start" },
   { event: "UserPromptSubmit", target: "record-human-turn" },
+  // POSIX Codex commands receive the validated payload session directly, so
+  // sandboxed macOS does not depend on `ps` ancestry for workflow isolation.
+  { event: "PreToolUse", matcher: "Bash", target: "bind-bash-session" },
   { event: "PreToolUse", matcher: "spawn_agent", target: "deliver-stage-rules" },
   { event: "PreToolUse", target: "state-transition-guard" },
   // No matcher: the reviewer-scope target self-filters (Bash + apply_patch;

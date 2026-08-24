@@ -32,6 +32,7 @@ import {
   listSpaces,
   readAllAuditShards,
   readIntentRegistry,
+  setActiveIntentCursor,
   slugify,
   updateIntentStatus,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -409,10 +410,10 @@ describe("t164 --new-intent birth directive hands off to a fresh session", () =>
     const second = activeIntent(proj);
     expect(second).not.toBeNull();
     expect(second).not.toBe(first);
+    setActiveIntentCursor(proj, first!, "default");
 
     // The real Stop hook must honor the explicit post-create handoff instead of
-    // consulting the newly active intent and forcing this old conversation back
-    // into its pending workflow.
+    // consulting the shared cursor, which another session moved before Stop.
     const stop = runHook(CONTINUE_WORKFLOW, {
       hook_event_name: "Stop",
       stop_hook_active: false,
@@ -427,7 +428,7 @@ describe("t164 --new-intent birth directive hands off to a fresh session", () =>
         session_id: "handoff-session-1",
       }),
     ).toBe(0);
-    expect(activeIntent(proj)).toBe(second);
+    expect(activeIntent(proj)).toBe(first);
 
     const firstAudit = readIntentAudit(proj, first!);
     const secondAuditBeforeStart = readIntentAudit(proj, second!);
@@ -440,8 +441,9 @@ describe("t164 --new-intent birth directive hands off to a fresh session", () =>
     expect(
       fireHook(SESSION_START, { source: "clear", session_id: "handoff-session-2" }),
     ).toBe(0);
+    const firstAuditAfterStart = readIntentAudit(proj, first!);
     const secondAudit = readIntentAudit(proj, second!);
-    expect(secondAudit).toContain("**Event**: SESSION_STARTED");
+    expect(firstAuditAfterStart).toContain("**Event**: SESSION_STARTED");
     expect(secondAudit).toContain("**Event**: SESSION_ENDED");
   });
 

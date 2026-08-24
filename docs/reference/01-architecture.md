@@ -450,9 +450,12 @@ the cursors remain the write-through fallback. The engine passes its resolved
 identity to child tools through `AIDLC_SESSION_OVERRIDE`, which is also the
 headless automation seam when set on the harness process.
 
-Windows ancestry is unavailable, and multiple Kiro IDE chats can share one
-process. Spawned tools in those cases use shared-cursor behavior unless the
-harness process supplies `AIDLC_SESSION_OVERRIDE`.
+The Codex adapter additionally pins its validated payload identity into every
+POSIX Bash command and core-hook child, so sandboxed macOS does not depend on
+`ps` ancestry. Windows ancestry is unavailable and the POSIX command rewrite
+does not apply there; multiple Kiro IDE chats can also share one process.
+Spawned tools in those cases use shared-cursor behavior unless the harness
+process supplies `AIDLC_SESSION_OVERRIDE`.
 
 Project-aware path helpers resolve through the same selection ladder: an
 explicit selector, then the session binding, then the shared cursor as the

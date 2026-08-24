@@ -31,10 +31,14 @@ let proj = "";
 const originalSessionOverride = process.env.AIDLC_SESSION_OVERRIDE;
 const originalSessionOverrideSource =
   process.env.AIDLC_SESSION_OVERRIDE_SOURCE;
+const originalTestSessionPlatform = process.env.AIDLC_TEST_SESSION_PLATFORM;
+const originalTestPsDenied = process.env.AIDLC_TEST_PS_DENIED;
 
 beforeEach(() => {
   delete process.env.AIDLC_SESSION_OVERRIDE;
   delete process.env.AIDLC_SESSION_OVERRIDE_SOURCE;
+  delete process.env.AIDLC_TEST_SESSION_PLATFORM;
+  delete process.env.AIDLC_TEST_PS_DENIED;
   proj = createTestProject();
 });
 
@@ -49,6 +53,16 @@ afterEach(() => {
   } else {
     process.env.AIDLC_SESSION_OVERRIDE_SOURCE =
       originalSessionOverrideSource;
+  }
+  if (originalTestSessionPlatform === undefined) {
+    delete process.env.AIDLC_TEST_SESSION_PLATFORM;
+  } else {
+    process.env.AIDLC_TEST_SESSION_PLATFORM = originalTestSessionPlatform;
+  }
+  if (originalTestPsDenied === undefined) {
+    delete process.env.AIDLC_TEST_PS_DENIED;
+  } else {
+    process.env.AIDLC_TEST_PS_DENIED = originalTestPsDenied;
   }
   cleanupTestProject(proj);
   proj = "";
@@ -220,6 +234,21 @@ describe("t318 session binding helpers", () => {
   test("the PID map is optional and missing entries preserve cursor fallback", () => {
     rmSync(sessionPidMapDir(proj), { recursive: true, force: true });
     expect(resolveSessionIdFromAncestry(proj)).toBeNull();
+  });
+
+  test("a payload override selects its binding when Darwin ps access is denied", () => {
+    const bound = createIntent(proj, "bound", "default", "feature");
+    const cursor = createIntent(proj, "cursor", "default", "feature");
+    writeSessionBinding(proj, "codex-session", "default", bound.dirName);
+    setActiveIntentCursor(proj, cursor.dirName, "default");
+    process.env.AIDLC_TEST_SESSION_PLATFORM = "darwin";
+    process.env.AIDLC_TEST_PS_DENIED = "1";
+    writeSessionPidEntry(proj, process.ppid, "ancestry-session");
+
+    expect(resolveSessionIdFromAncestry(proj)).toBeNull();
+    process.env.AIDLC_SESSION_OVERRIDE = "codex-session";
+    process.env.AIDLC_SESSION_OVERRIDE_SOURCE = "payload";
+    expect(resolveWorkflowSelection(proj).intent).toBe(bound.dirName);
   });
 
   test("every authored harness already ignores the sessions directory", () => {

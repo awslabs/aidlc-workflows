@@ -117,7 +117,6 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync,
 import { join } from "node:path";
 import {
   ActiveDirectiveLockContendedError,
-  activeIntentUuid,
   clearSessionIntentHandoff,
   composeMarkerPath,
   consumeCopilotConversation,
@@ -125,6 +124,7 @@ import {
   COMPOSE_MARKER_TTL_MS,
   docsRoot,
   errorMessage,
+  findIntentByUuid,
   getField,
   hasCurrentSharedResumeWait,
   hasPendingDecision,
@@ -1176,9 +1176,8 @@ try {
 // A confirmed second intent deliberately moves the shared cursor before this
 // old conversation ends. The PostToolUse hook writes an exact per-session
 // receipt for that transition. Allow only when the receipt is fresh, the
-// session now owns the created intent, and that intent is still the active
-// cursor; the receipt itself retains the original UUID for continuation proof.
-// An unrelated concurrent cursor change satisfies none of these.
+// session now owns the created intent. The shared cursor is intentionally not
+// evidence here: another session may move it before this Stop event.
 if (sessionId) {
   const handoff = readSessionIntentHandoff(projectDir, sessionId);
   if (handoff) {
@@ -1186,12 +1185,15 @@ if (sessionId) {
     const fresh =
       handoff.issuedAtMs <= now &&
       now - handoff.issuedAtMs <= SESSION_INTENT_HANDOFF_TTL_MS;
+    const target = findIntentByUuid(projectDir, handoff.toIntentUuid);
     const exactBoundary =
       fresh &&
       readSessionIntentUuid(projectDir, sessionId) === handoff.toIntentUuid &&
-      activeIntentUuid(projectDir) === handoff.toIntentUuid;
-    clearSessionIntentHandoff(projectDir, sessionId);
+      target !== null &&
+      selection.space === target.space &&
+      selection.intent === target.dirName;
     if (exactBoundary) {
+      clearSessionIntentHandoff(projectDir, sessionId);
       resetGuard(projectDir);
       recordHookDrop(
         projectDir,
@@ -1200,6 +1202,7 @@ if (sessionId) {
       );
       return allowStop();
     }
+    if (!fresh) clearSessionIntentHandoff(projectDir, sessionId);
   }
 }
 

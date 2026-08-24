@@ -2313,6 +2313,18 @@ const sessionAncestryCache = new Map<
   { sessionId: string | null; expiresAt: number }
 >();
 
+function sessionProcessPlatform(): NodeJS.Platform {
+  const testPlatform = process.env.AIDLC_TEST_SESSION_PLATFORM;
+  if (
+    testPlatform === "linux" ||
+    testPlatform === "darwin" ||
+    testPlatform === "win32"
+  ) {
+    return testPlatform;
+  }
+  return process.platform;
+}
+
 export function sessionPidMapDir(projectDir: string): string {
   return join(sessionsDir(projectDir), "pids");
 }
@@ -2338,6 +2350,7 @@ function linuxProcessIdentity(pid: number): ProcessIdentity | null {
 }
 
 function macProcessIdentity(pid: number, deadlineMs: number): ProcessIdentity | null {
+  if (process.env.AIDLC_TEST_PS_DENIED === "1") return null;
   const timeout = Math.max(1, deadlineMs - Date.now());
   if (timeout <= 1) return null;
   try {
@@ -2357,8 +2370,9 @@ function macProcessIdentity(pid: number, deadlineMs: number): ProcessIdentity | 
 
 function processIdentity(pid: number, deadlineMs: number): ProcessIdentity | null {
   if (!Number.isSafeInteger(pid) || pid <= 1 || Date.now() >= deadlineMs) return null;
-  if (process.platform === "linux") return linuxProcessIdentity(pid);
-  if (process.platform === "darwin") return macProcessIdentity(pid, deadlineMs);
+  const platform = sessionProcessPlatform();
+  if (platform === "linux") return linuxProcessIdentity(pid);
+  if (platform === "darwin") return macProcessIdentity(pid, deadlineMs);
   // Windows process ancestry is optional in this increment. Returning null
   // preserves cursor behavior without paying for a PowerShell process.
   return null;
@@ -2458,7 +2472,7 @@ function gcSessionPidEntries(projectDir: string, deadlineMs: number): void {
 // siblings, not descendants, of that short-lived hook.
 export function writeSessionPidAncestry(projectDir: string, sessionId: string): void {
   sessionAncestryCache.delete(projectDir);
-  if (validSessionId(sessionId) === null || process.platform === "win32") return;
+  if (validSessionId(sessionId) === null || sessionProcessPlatform() === "win32") return;
   const deadline = Date.now() + SESSION_ANCESTRY_BUDGET_MS;
   gcSessionPidEntries(projectDir, deadline);
   const seen = new Set<number>();
@@ -2515,7 +2529,7 @@ export function hookChildEnv(
 }
 
 function resolveSessionIdFromAncestryUncached(projectDir: string): string | null {
-  if (process.platform === "win32") return null;
+  if (sessionProcessPlatform() === "win32") return null;
   if (!existsSync(sessionPidMapDir(projectDir))) return null;
   const deadline = Date.now() + SESSION_ANCESTRY_BUDGET_MS;
   const seen = new Set<number>();
@@ -7714,7 +7728,7 @@ export function workspaceSourceState(
   intent?: string,
   space?: string,
 ): WorkspaceSourceState | null {
-  const repos = intentRepos(projectDir, intent ?? null, space);
+  const repos = intentRepos(projectDir, intent, space);
   if (repos.length === 0) {
     if (!isGitRepoDir(projectDir)) {
       return emptyNoGitWorkspaceSourceState(projectDir);
@@ -8612,7 +8626,7 @@ export function sourceBaselineAuditFields(
   intent?: string,
   space?: string,
 ): Record<string, string> {
-  const repos = intentRepos(projectDir, intent ?? null, space);
+  const repos = intentRepos(projectDir, intent, space);
   const hasGitCheckout =
     repos.length === 0
       ? isGitRepoDir(projectDir)
