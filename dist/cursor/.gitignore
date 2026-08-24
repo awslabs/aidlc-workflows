@@ -46,9 +46,10 @@ aidlc/.aidlc-unit-participant
 aidlc/.aidlc-claim-registry.json
 aidlc/.aidlc-unit-releases/
 aidlc/.aidlc-unit-merges/
-# Cursor's reconstructed subagent identity registry; protected by the adapter
-# and recreated per install/session.
+# Cursor's reconstructed subagent identity registry and independent active
+# delegation witnesses; protected by the adapter and recreated per session.
 aidlc/.aidlc-cursor-subagents/
+aidlc/.aidlc-cursor-subagent-*.json
 # Per-conversation session→intent map (resume rebind, P8): per-user runtime
 # state keyed by Claude Code session_id, never shared truth.
 aidlc/.aidlc-sessions/

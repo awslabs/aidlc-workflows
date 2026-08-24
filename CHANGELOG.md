@@ -57,7 +57,6 @@ Minimal workflows now avoid unrelated framework knowledge, duplicate conductor s
 * Isolated Reverse Engineering reuse now emits synthetic-workflow evidence for all-reuse and mixed-reuse runs only when the complete canonical CodeKB artifact set exists and source freshness matches; missing, redirected, invalid, or later-stale evidence cannot complete.
 * Reverse Engineering keeps every recorded repo identity qualified through its handoff filename, receipt chain, resume evidence, and CodeKB destination, including an intent with exactly one registered repo.
 * Plugin composition records exact recursive knowledge ownership and retains provenance for still-installed files removed from a later plugin version, so Minimal context retains active plugin files while deselected or removed plugin knowledge cannot become unowned context.
-
 ## [2.6.116] - 2026-08-27
 
 The question protocol now reuses answers already captured in the current record, closing a top field-feedback gap where teams saw the same question resurface after they had answered it, sometimes after stating that the answer was final. **Upgrade:** refresh your `dist/<harness>/` shell.

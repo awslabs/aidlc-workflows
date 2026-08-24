@@ -1,5 +1,8 @@
 import { statSync } from "node:fs";
 import { basename, isAbsolute, join, resolve } from "node:path";
+// The file-writing tools whose targets the freeze inspects. Read-only tools
+// never invalidate a receipt.
+const WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 
 function shellWords(command: string): string[] {
   const words: string[] = [];
@@ -15,6 +18,14 @@ function shellWords(command: string): string[] {
     if (escaped) {
       word += ch;
       escaped = false;
+      continue;
+    }
+    if (
+      ch === "\\" &&
+      quote === '"' &&
+      !'$`"\\\n'.includes(command[i + 1] ?? "")
+    ) {
+      word += ch;
       continue;
     }
     if (ch === "\\" && quote !== "'") {
@@ -51,6 +62,13 @@ function shellCommandSegments(command: string): string[] {
       escaped = false;
       continue;
     }
+    if (
+      ch === "\\" &&
+      quote === '"' &&
+      !'$`"\\\n'.includes(command[i + 1] ?? "")
+    ) {
+      continue;
+    }
     if (ch === "\\" && quote !== "'") {
       escaped = true;
       continue;
@@ -75,36 +93,91 @@ function shellCommandSegments(command: string): string[] {
 export interface ShellInvocation {
   name: string;
   args: string[];
+  ambiguous?: boolean;
+}
+
+function shellExecutableName(value: string): string {
+  const normalized = value.replaceAll("\\", "/");
+  const leaf = normalized.slice(normalized.lastIndexOf("/") + 1);
+  return leaf.replace(/\.(?:exe|com|cmd|bat)$/i, "").toLowerCase();
+}
+
+interface WrapperOptionSpec {
+  shortValues?: readonly string[];
+  longValues?: readonly string[];
+  shortOptionalValues?: readonly string[];
+  longOptionalValues?: readonly string[];
+  shortFlags?: readonly string[];
+  longFlags?: readonly string[];
+  numericShortValue?: boolean;
 }
 
 function consumeWrapperOptions(
   words: string[],
   index: number,
-  shortValueOptions = new Set<string>(),
-  longValueOptions = new Set<string>(),
-): number {
+  spec: WrapperOptionSpec,
+): { index: number; ambiguous: boolean } {
+  const shortValues = new Set(spec.shortValues ?? []);
+  const longValues = new Set(spec.longValues ?? []);
+  const shortOptionalValues = new Set(spec.shortOptionalValues ?? []);
+  const longOptionalValues = new Set(spec.longOptionalValues ?? []);
+  const shortFlags = new Set(spec.shortFlags ?? []);
+  const longFlags = new Set(spec.longFlags ?? []);
   while (index < words.length) {
     const option = words[index];
-    if (option === "--") return index + 1;
-    if (option === "-" || !option.startsWith("-")) return index;
+    if (option === "--") return { index: index + 1, ambiguous: false };
+    if (option === "-" || !option.startsWith("-")) return { index, ambiguous: false };
     if (option.startsWith("--")) {
       const equals = option.indexOf("=");
       const name = equals === -1 ? option : option.slice(0, equals);
+      if (longValues.has(name)) {
+        if (equals !== -1) {
+          index++;
+        } else if (words[index + 1] !== undefined) {
+          index += 2;
+        } else {
+          return { index, ambiguous: true };
+        }
+        continue;
+      }
+      if (longOptionalValues.has(name) || longFlags.has(name)) {
+        index++;
+        continue;
+      }
+      return { index, ambiguous: true };
+    }
+    if (spec.numericShortValue && /^-\d+$/.test(option)) {
       index++;
-      if (equals === -1 && longValueOptions.has(name)) index++;
       continue;
     }
     const name = option.slice(0, 2);
-    index++;
-    if (shortValueOptions.has(name) && option.length === 2) index++;
+    if (shortValues.has(name)) {
+      if (option.length > 2) {
+        index++;
+      } else if (words[index + 1] !== undefined) {
+        index += 2;
+      } else {
+        return { index, ambiguous: true };
+      }
+      continue;
+    }
+    if (shortOptionalValues.has(name)) {
+      index++;
+      continue;
+    }
+    if (
+      option.length > 1 &&
+      [...option.slice(1)].every((flag) => shortFlags.has(`-${flag}`))
+    ) {
+      index++;
+      continue;
+    }
+    return { index, ambiguous: true };
   }
-  return index;
+  return { index, ambiguous: false };
 }
 
-function shellInvocation(
-  words: string[],
-  depth = 0,
-): ShellInvocation | null {
+function shellInvocation(words: string[], depth = 0): ShellInvocation | null {
   if (depth > 8) return null;
   let index = 0;
   const skipAssignments = () => {
@@ -113,7 +186,7 @@ function shellInvocation(
   skipAssignments();
 
   while (index < words.length) {
-    const wrapper = basename(words[index]);
+    const wrapper = shellExecutableName(words[index]);
     if (["}", "fi", "done", "esac"].includes(wrapper)) return null;
     if (["{", "then", "else", "do", "!"].includes(wrapper)) {
       index++;
@@ -131,7 +204,20 @@ function shellInvocation(
       while (index < words.length && words[index].startsWith("-")) {
         const option = words[index++];
         if (option === "--") break;
+        // `command -v/-V` queries a name; it does not execute the following word.
         if (option.includes("v") || option.includes("V")) return null;
+        if (![...option.slice(1)].every((flag) => flag === "p")) {
+          return { name: "", args: [], ambiguous: true };
+        }
+      }
+      skipAssignments();
+      continue;
+    }
+    if (wrapper === "builtin") {
+      index++;
+      if (words[index] === "--") index++;
+      else if ((words[index] ?? "").startsWith("-")) {
+        return { name: "", args: [], ambiguous: true };
       }
       skipAssignments();
       continue;
@@ -157,46 +243,79 @@ function shellInvocation(
           index++;
           continue;
         }
-        if (/^(?:-u|--unset|-C|--chdir)$/.test(option)) {
+        if (option.startsWith("-S") && option.length > 2) {
+          splitCommand = shellWords(option.slice(2));
+          index++;
+          continue;
+        }
+        if (/^-(?:u|C|a).+/.test(option)) {
+          index++;
+          continue;
+        }
+        if (/^(?:-u|--unset|-C|--chdir|-a|--argv0)$/.test(option)) {
           index += 2;
           continue;
         }
-        if (/^(?:--unset|--chdir)=/.test(option) || option === "-i") {
+        if (
+          /^(?:--unset|--chdir|--argv0)=/.test(option) ||
+          option === "-" ||
+          option === "-i" ||
+          option === "--ignore-environment" ||
+          option === "-0" ||
+          option === "--null"
+        ) {
           index++;
           continue;
         }
-        if (option.startsWith("-")) {
+        if (/^-[i0v]+$/.test(option)) {
           index++;
           continue;
         }
+        if (
+          option === "-v" ||
+          option === "--debug" ||
+          option === "--list-signal-handling" ||
+          option === "--help" ||
+          option === "--version" ||
+          /^(?:--default-signal|--ignore-signal|--block-signal)(?:=.*)?$/.test(option)
+        ) {
+          index++;
+          continue;
+        }
+        if (option.startsWith("-")) return { name: "", args: [], ambiguous: true };
         break;
       }
       skipAssignments();
       if (splitCommand.length > 0) {
-        return shellInvocation(
-          [...splitCommand, ...words.slice(index)],
-          depth + 1,
-        );
+        return shellInvocation([...splitCommand, ...words.slice(index)], depth + 1);
       }
       continue;
     }
 
-    const simpleWrappers: Record<
-      string,
-      { shortValues?: string[]; longValues?: string[] }
-    > = {
-      exec: {},
-      nohup: {},
-      nice: { shortValues: ["-n"], longValues: ["--adjustment"] },
+    const simpleWrappers: Record<string, WrapperOptionSpec> = {
+      exec: { shortValues: ["-a"], shortFlags: ["-c", "-l"] },
+      nohup: { longFlags: ["--help", "--version"] },
+      nice: {
+        shortValues: ["-n"],
+        longValues: ["--adjustment"],
+        longFlags: ["--help", "--version"],
+        numericShortValue: true,
+      },
       ionice: {
         shortValues: ["-c", "-n", "-p", "-P", "-u"],
         longValues: ["--class", "--classdata", "--pid", "--pgid", "--uid"],
+        shortFlags: ["-t"],
+        longFlags: ["--ignore", "--help", "--version"],
       },
       stdbuf: {
         shortValues: ["-i", "-o", "-e"],
         longValues: ["--input", "--output", "--error"],
+        longFlags: ["--help", "--version"],
       },
-      setsid: {},
+      setsid: {
+        shortFlags: ["-c", "-f", "-w"],
+        longFlags: ["--ctty", "--fork", "--wait", "--help", "--version"],
+      },
       sudo: {
         shortValues: ["-C", "-D", "-g", "-h", "-p", "-r", "-t", "-T", "-u"],
         longValues: [
@@ -209,46 +328,86 @@ function shellInvocation(
           "--type",
           "--user",
         ],
+        shortOptionalValues: ["-E"],
+        longOptionalValues: ["--preserve-env"],
+        shortFlags: ["-A", "-b", "-e", "-H", "-K", "-k", "-l", "-n", "-P", "-S", "-s", "-V", "-v"],
+        longFlags: [
+          "--askpass",
+          "--background",
+          "--edit",
+          "--help",
+          "--login",
+          "--non-interactive",
+          "--remove-timestamp",
+          "--reset-timestamp",
+          "--set-home",
+          "--shell",
+          "--stdin",
+          "--validate",
+          "--version",
+        ],
       },
-      doas: { shortValues: ["-C", "-u"] },
+      doas: {
+        shortValues: ["-C", "-u"],
+        shortFlags: ["-L", "-n", "-s"],
+      },
       xargs: {
-        shortValues: ["-a", "-E", "-I", "-L", "-n", "-P", "-s"],
+        shortValues: ["-a", "-d", "-E", "-I", "-J", "-L", "-n", "-P", "-s"],
         longValues: [
           "--arg-file",
-          "--eof",
-          "--replace",
-          "--max-lines",
+          "--delimiter",
           "--max-args",
           "--max-procs",
           "--max-chars",
+          "--process-slot-var",
+        ],
+        shortOptionalValues: ["-e", "-i", "-l"],
+        longOptionalValues: ["--eof", "--replace", "--max-lines"],
+        shortFlags: ["-0", "-o", "-p", "-r", "-t", "-x"],
+        longFlags: [
+          "--null",
+          "--open-tty",
+          "--interactive",
+          "--no-run-if-empty",
+          "--show-limits",
+          "--verbose",
+          "--exit",
+          "--help",
+          "--version",
         ],
       },
       time: {
         shortValues: ["-f", "-o"],
         longValues: ["--format", "--output"],
+        shortFlags: ["-a", "-p", "-v"],
+        longFlags: ["--append", "--portability", "--verbose", "--help", "--version"],
       },
-      unbuffer: {},
+      unbuffer: { shortFlags: ["-p"] },
     };
     const spec = simpleWrappers[wrapper];
     if (spec) {
-      index = consumeWrapperOptions(
-        words,
-        index + 1,
-        new Set(spec.shortValues ?? []),
-        new Set(spec.longValues ?? []),
-      );
+      const consumed = consumeWrapperOptions(words, index + 1, spec);
+      if (consumed.ambiguous) return { name: "", args: [], ambiguous: true };
+      index = consumed.index;
       skipAssignments();
       continue;
     }
 
     if (wrapper === "timeout") {
-      index = consumeWrapperOptions(
-        words,
-        index + 1,
-        new Set(["-k", "-s"]),
-        new Set(["--kill-after", "--signal"]),
-      );
-      if (index < words.length) index++;
+      const consumed = consumeWrapperOptions(words, index + 1, {
+        shortValues: ["-k", "-s"],
+        longValues: ["--kill-after", "--signal"],
+        longFlags: [
+          "--foreground",
+          "--preserve-status",
+          "--verbose",
+          "--help",
+          "--version",
+        ],
+      });
+      if (consumed.ambiguous) return { name: "", args: [], ambiguous: true };
+      index = consumed.index;
+      if (index < words.length) index++; // duration
       skipAssignments();
       continue;
     }
@@ -259,7 +418,7 @@ function shellInvocation(
   const executable = words[index];
   if (!executable) return null;
   return {
-    name: basename(executable),
+    name: shellExecutableName(executable),
     args: words.slice(index + 1),
   };
 }
@@ -273,10 +432,7 @@ export function shellCommandInvocations(command: string): ShellInvocation[] {
   return invocations;
 }
 
-function shellWordAt(
-  command: string,
-  start: number,
-): { word: string; end: number } | null {
+function shellWordAt(command: string, start: number): { word: string; end: number } | null {
   let word = "";
   let quote: "'" | '"' | null = null;
   let escaped = false;
@@ -365,6 +521,8 @@ function parseShellArgs(
       continue;
     }
 
+    // Short options may be clustered. A value-taking option consumes the
+    // cluster remainder (`-t/tmp`) or the next word (`-t /tmp`).
     for (let j = 1; j < arg.length; j++) {
       const name = `-${arg[j]}`;
       options.add(name);
@@ -378,10 +536,8 @@ function parseShellArgs(
   return { operands, options, optionValues };
 }
 
-export function shellWriteTargets(
-  command: string,
-  cwd = process.cwd(),
-): string[] {
+/** Concrete filesystem targets of a mutation-capable shell command. */
+export function shellWriteTargets(command: string, cwd = process.cwd()): string[] {
   const out: string[] = [];
   const add = (raw: string | undefined) => {
     if (!raw) return;
@@ -407,12 +563,17 @@ export function shellWriteTargets(
     if (!rawDestination || !directoryDestination) return;
     const destination = normalizeShellTarget(rawDestination, cwd);
     if (!destination) return;
+    // cp/install/mv accept a directory destination. Add each concrete child
+    // candidate as well as the destination itself without consulting the
+    // pre-command filesystem, which may not contain the directory yet.
     for (const rawSource of rawSources) {
       const source = normalizeShellTarget(rawSource, cwd);
       if (source) add(join(destination, basename(source)));
     }
   };
 
+  // Scan output redirections outside quotes. This catches compact forms such
+  // as `printf x>>file` as well as quoted targets and $PWD-relative paths.
   let quote: "'" | '"' | null = null;
   let escaped = false;
   for (let i = 0; i < command.length; i++) {
@@ -436,10 +597,9 @@ export function shellWriteTargets(
     if (ch !== ">") continue;
 
     let targetStart = i + 1;
-    if (command[targetStart] === ">" || command[targetStart] === "|") {
-      targetStart++;
-    }
+    if (command[targetStart] === ">" || command[targetStart] === "|") targetStart++;
     while (/\s/.test(command[targetStart] ?? "")) targetStart++;
+    // `2>&1` and `2>&-` duplicate/close descriptors; `>&file` writes a file.
     if (command[targetStart] === "&") {
       const fd = shellWordAt(command, targetStart + 1);
       if (!fd || /^\d+$|^-$/.test(fd.word)) continue;
@@ -453,7 +613,14 @@ export function shellWriteTargets(
     i = parsed.end - 1;
   }
 
-  for (const { name: commandName, args } of shellCommandInvocations(command)) {
+  // Parse each command segment independently so a mutator never claims a
+  // later read-only command's operands. Only destination/in-place operands are
+  // candidates for commands that also have read-only source operands.
+  for (const { name: commandName, args, ambiguous } of shellCommandInvocations(command)) {
+    if (ambiguous) {
+      add(cwd);
+      continue;
+    }
     if (commandName === "dd") {
       for (const arg of args) if (arg.startsWith("of=")) add(arg);
       continue;
@@ -475,9 +642,7 @@ export function shellWriteTargets(
       ].at(-1);
       const destination = targetDirectory ?? parsed.operands.at(-1);
       const hasTargetDirectory = targetDirectory !== undefined;
-      const sources = hasTargetDirectory
-        ? parsed.operands
-        : parsed.operands.slice(0, -1);
+      const sources = hasTargetDirectory ? parsed.operands : parsed.operands.slice(0, -1);
       addDestination(
         destination,
         sources,
@@ -487,13 +652,7 @@ export function shellWriteTargets(
       const parsed = parseShellArgs(
         args,
         new Set(["-g", "-m", "-o", "-S", "-t"]),
-        new Set([
-          "--group",
-          "--mode",
-          "--owner",
-          "--suffix",
-          "--target-directory",
-        ]),
+        new Set(["--group", "--mode", "--owner", "--suffix", "--target-directory"]),
       );
       const targetDirectory = [
         ...(parsed.optionValues.get("-t") ?? []),
@@ -504,9 +663,7 @@ export function shellWriteTargets(
       } else {
         const destination = targetDirectory ?? parsed.operands.at(-1);
         const hasTargetDirectory = targetDirectory !== undefined;
-        const sources = hasTargetDirectory
-          ? parsed.operands
-          : parsed.operands.slice(0, -1);
+        const sources = hasTargetDirectory ? parsed.operands : parsed.operands.slice(0, -1);
         addDestination(
           destination,
           sources,
@@ -525,18 +682,14 @@ export function shellWriteTargets(
       ].at(-1);
       const destination = targetDirectory ?? parsed.operands.at(-1);
       const hasTargetDirectory = targetDirectory !== undefined;
-      const sources = hasTargetDirectory
-        ? parsed.operands
-        : parsed.operands.slice(0, -1);
+      const sources = hasTargetDirectory ? parsed.operands : parsed.operands.slice(0, -1);
       for (const source of sources) add(source);
       addDestination(
         destination,
         sources,
         hasTargetDirectory || sources.length > 1 || isDirectory(destination),
       );
-    } else if (
-      ["rm", "tee", "touch", "truncate", "unlink"].includes(commandName)
-    ) {
+    } else if (["rm", "tee", "touch", "truncate", "unlink"].includes(commandName)) {
       const parsed =
         commandName === "touch"
           ? parseShellArgs(
@@ -558,38 +711,28 @@ export function shellWriteTargets(
         new Set(["-e", "-f", "-l"]),
         new Set(["--expression", "--file", "--line-length"]),
       );
-      if (!parsed.options.has("-i") && !parsed.options.has("--in-place")) {
-        continue;
-      }
+      if (!parsed.options.has("-i") && !parsed.options.has("--in-place")) continue;
       const programFromOption =
         parsed.optionValues.has("-e") ||
         parsed.optionValues.has("-f") ||
         parsed.optionValues.has("--expression") ||
         parsed.optionValues.has("--file");
-      for (const operand of parsed.operands.slice(programFromOption ? 0 : 1)) {
-        add(operand);
-      }
+      for (const operand of parsed.operands.slice(programFromOption ? 0 : 1)) add(operand);
     } else if (commandName === "perl") {
       const parsed = parseShellArgs(
         args,
         new Set(["-E", "-F", "-I", "-M", "-e", "-m"]),
       );
-      if (!parsed.options.has("-i") && !parsed.options.has("--in-place")) {
-        continue;
-      }
-      const programFromOption =
-        parsed.optionValues.has("-e") || parsed.optionValues.has("-E");
-      for (const operand of parsed.operands.slice(programFromOption ? 0 : 1)) {
-        add(operand);
-      }
+      if (!parsed.options.has("-i") && !parsed.options.has("--in-place")) continue;
+      const programFromOption = parsed.optionValues.has("-e") || parsed.optionValues.has("-E");
+      for (const operand of parsed.operands.slice(programFromOption ? 0 : 1)) add(operand);
     }
   }
 
   return [...new Set(out)];
 }
 
-const WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
-
+/** Target paths of a write-tool call. */
 export function writeTargets(
   toolName: string,
   toolInput: Record<string, unknown> | undefined,
@@ -602,12 +745,12 @@ export function writeTargets(
   if (!WRITE_TOOLS.has(toolName)) return [];
   const ti = toolInput ?? {};
   const out: string[] = [];
-  const push = (value: unknown) => {
-    if (typeof value === "string" && value.length > 0) out.push(value);
+  const push = (v: unknown) => {
+    if (typeof v === "string" && v.length > 0) out.push(v);
   };
   push(ti.file_path);
   push(ti.notebook_path);
   push(ti.path);
-  if (Array.isArray(ti.paths)) for (const path of ti.paths) push(path);
+  if (Array.isArray(ti.paths)) for (const p of ti.paths) push(p);
   return out;
 }

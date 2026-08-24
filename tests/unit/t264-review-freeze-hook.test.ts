@@ -47,6 +47,7 @@ import {
   judgeFreeze,
   REVIEW_FREEZE_FALLBACK_GUIDANCE,
   reviewFreezeRecoveryGuidance,
+  shellCommandInvocations,
   writeTargets,
 } from "../../dist/claude/.claude/hooks/aidlc-review-freeze.ts";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -88,6 +89,65 @@ const NFR = {
   reviewer: "aidlc-architecture-reviewer-agent",
   produces: ["nfr-requirements"],
 };
+
+test("wrapper value options retain the nested executable and arguments", () => {
+  for (const command of [
+    "env -a git HOME=/alternate git pwn",
+    "env --argv0 git HOME=/alternate git pwn",
+    "env --argv0=git HOME=/alternate git pwn",
+    "command env -a git HOME=/alternate git pwn",
+    "exec -a ignored env HOME=/alternate git pwn",
+    "command exec -a ignored env HOME=/alternate git pwn",
+    "xargs -d : env HOME=/alternate git pwn",
+    "xargs --delimiter : env HOME=/alternate git pwn",
+    "xargs --delimiter=: env HOME=/alternate git pwn",
+    "xargs --eof env HOME=/alternate git pwn",
+    "xargs --eof=STOP env HOME=/alternate git pwn",
+    "xargs --replace env HOME=/alternate git pwn",
+    "xargs --replace=TOKEN env HOME=/alternate git pwn",
+    "xargs --max-lines env HOME=/alternate git pwn",
+    "xargs --max-lines=1 env HOME=/alternate git pwn",
+    "xargs -L 1 env HOME=/alternate git pwn",
+    "xargs --process-slot-var SLOT env HOME=/alternate git pwn",
+    "xargs -J REPL env HOME=/alternate git pwn",
+    "xargs -rt --max-lines env HOME=/alternate git pwn",
+    "ENV.EXE HOME=/alternate GIT.EXE pwn",
+    "\"C:/Program Files/Git/usr/bin/env.exe\" HOME=/alternate \"C:/Program Files/Git/cmd/git.exe\" pwn",
+    String.raw`"C:\Program Files\Git\usr\bin\env.exe" HOME=/alternate "C:\Program Files\Git\cmd\git.exe" pwn`,
+    "env -uHOME HOME=/alternate git pwn",
+    "env -C/tmp git pwn",
+    "env -agit HOME=/alternate git pwn",
+    "env -i0 HOME=/alternate git pwn",
+  ]) {
+    expect(shellCommandInvocations(command), command).toEqual([
+      { name: "git", args: ["pwn"] },
+    ]);
+  }
+});
+
+test("unknown wrapper options remain explicitly ambiguous", () => {
+  expect(
+    shellCommandInvocations(
+      "xargs --future-value SLOT env HOME=/alternate git pwn",
+    ),
+  ).toEqual([{ name: "", args: [], ambiguous: true }]);
+});
+
+test("builtin wrappers recursively expose evaluators", () => {
+  for (const command of [
+    "builtin eval 'printf harmless'",
+    "builtin -- eval 'printf harmless'",
+    "builtin builtin -- eval 'printf harmless'",
+  ]) {
+    expect(shellCommandInvocations(command), command).toEqual([
+      { name: "eval", args: ["printf harmless"] },
+    ]);
+  }
+  expect(shellCommandInvocations("builtin -p eval")).toEqual([
+    { name: "", args: [], ambiguous: true },
+  ]);
+});
+
 const NONE: ReadonlySet<string> = new Set();
 const ready = { stageVerdict: "READY", unitVerdicts: new Map<string, string>() };
 const notReady = { stageVerdict: "NOT-READY", unitVerdicts: new Map<string, string>() };

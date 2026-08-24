@@ -114,8 +114,9 @@ projection directly (no `emit.ts`, no split dot-dir). The distribution is:
 - **Subagent identity is reconstructed.** Cursor emits no per-subagent identity
   on hook payloads (its `subagentStart`/`subagentStop` events are documented but
   never fire on the CLI), so the adapter maintains a protected project-local
-  runtime ledger under `aidlc/.aidlc-cursor-subagents/`: top-level conversations
-  register themselves at `sessionStart`/`beforeSubmitPrompt`
+  runtime ledger under `aidlc/.aidlc-cursor-subagents/` plus independent
+  `aidlc/.aidlc-cursor-subagent-*.json` active-delegation witnesses. Top-level
+  conversations register themselves at `sessionStart`/`beforeSubmitPrompt`
   (subagent conversations get neither event), each Task spawn records its
   agent, and reviewer read-scope enforcement attributes calls from conversations
   that are not registered top-level sessions. A parent's next synchronous Task
@@ -123,12 +124,12 @@ projection directly (no `emit.ts`, no split dot-dir). The distribution is:
   `postToolUse`); genuine cross-parent ambiguity stays conservative whenever a
   reviewer is live, so it cannot disable reviewer-scope enforcement. Delegated
   tools cannot access the ledger or dispatch record, including through ancestor
-  deletes or unquoted shell glob/character-class paths; if attribution storage is
-  missing or unreadable while a reviewer dispatch remains active, operations
-  fail closed rather than escaping reviewer enforcement. Review delegates may
-  use ordinary Shell commands, but general-purpose interpreters and dynamic
-  command evaluation are denied; use Cursor's native read/search tools and let
-  the parent conversation run executable probes.
+  deletes or unquoted shell glob/character-class paths. If the primary ledger is
+  missing or unreadable while any delegation witness remains active, operations
+  fail closed rather than losing delegated-agent attribution. Delegates may use
+  ordinary Shell commands, but general-purpose interpreters and dynamic command
+  evaluation are denied; use Cursor's native read/search tools and let the parent
+  conversation run executable probes.
 - **Generated stage and scope runners are explicit-only.** Cursor receives
   `disable-model-invocation: true` on generated runner skills, including plugin
   runners, so ordinary coding prompts cannot auto-activate state-mutating

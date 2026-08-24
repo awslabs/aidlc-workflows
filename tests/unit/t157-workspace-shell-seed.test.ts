@@ -264,6 +264,14 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
       expect(lines, `${h}: ignores engine-shaped sensor caches at any depth`).toContain(
         "**/aidlc/spaces/*/intents/**/.aidlc-sensors/",
       );
+      if (h === "cursor") {
+        expect(lines, "cursor: ignores the primary subagent ledger").toContain(
+          "aidlc/.aidlc-cursor-subagents/",
+        );
+        expect(lines, "cursor: ignores independent delegation witnesses").toContain(
+          "aidlc/.aidlc-cursor-subagent-*.json",
+        );
+      }
 
       const repo = mkdtempSync(join(tmpdir(), `aidlc-t157-gitignore-${h}-`));
       tempDirs.push(repo);
