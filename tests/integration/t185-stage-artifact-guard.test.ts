@@ -41,7 +41,13 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
 import {
   AIDLC_SRC,
@@ -1608,6 +1614,40 @@ X. Other (please specify)
       const result = summaryGuarded(proj, ["advance", "feasibility"]);
       expect(result.rc).toBe(0);
       expect(field(proj, "Current Stage")).not.toBe("feasibility");
+    });
+
+    test("accepts a legacy pre-move absolute artifact write after the workspace moves", () => {
+      const questions = writeSummaryQuestions(proj);
+      confirmSummary(proj, questions);
+      const artifact = join(
+        seededRecordDir(proj),
+        "ideation",
+        "feasibility",
+        "feasibility-assessment.md",
+      );
+      writeRecordDoc(
+        proj,
+        "ideation/feasibility/feasibility-assessment.md",
+      );
+      appendFileSync(
+        seededAuditShard(proj),
+        [
+          "",
+          "## ARTIFACT_CREATED",
+          `**Timestamp**: ${new Date().toISOString()}`,
+          "**Event**: ARTIFACT_CREATED",
+          `**File**: ${artifact}`,
+          "**Tool**: Write",
+          "",
+          "---",
+          "",
+        ].join("\n"),
+      );
+      const moved = `${proj}-moved`;
+      renameSync(proj, moved);
+      proj = moved;
+
+      expect(summaryGuarded(proj, ["advance", "feasibility"]).rc).toBe(0);
     });
 
     test("normalizes line endings in a scoped receipt", () => {
