@@ -154,6 +154,20 @@ function writeCodeGenerationArtifacts(unit: string): void {
     `{"stage":"code-generation","unit":"${unit}","upstream_ids":[],"coverage":[]}\n`,
     "utf-8",
   );
+  writeFileSync(
+    join(dir, "source-manifest.json"),
+    `${JSON.stringify(
+      {
+        stage: "code-generation",
+        unit,
+        version: 1,
+        writes: [],
+      },
+      null,
+      2,
+    )}\n`,
+    "utf-8",
+  );
 }
 
 function recordReview(unit: string): void {
