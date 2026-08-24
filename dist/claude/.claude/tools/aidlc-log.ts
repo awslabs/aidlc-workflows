@@ -1245,7 +1245,7 @@ function handleReview(args: string[]): void {
           autonomousCandidate,
           requireRequiredArtifacts,
           unitResolution,
-        } = loadContext(true);
+        } = loadContext(true, !retryPending);
         const summaryEvidence = checkSummaryConfirmationEvidence(pd, node, {
           stateContent: state,
           unit: flags.unit,

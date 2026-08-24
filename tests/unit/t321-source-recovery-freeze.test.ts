@@ -11,10 +11,15 @@ import {
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
+  freshReviewReceipts,
+  loadStageGraphAll,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
   seedAidlcMemory,
+  seededAuditDir,
   seedBoltDag,
   seededRecordDir,
   seededStateFile,
@@ -142,7 +147,77 @@ function seedCodeGenerationOutputs(proj: string, unit: string): string {
   return join(dir, "code-generation-plan.md");
 }
 
+function auditBlock(
+  timestamp: string,
+  event: string,
+  fields: Record<string, string>,
+): string {
+  return [
+    "# AI-DLC Audit Log",
+    "",
+    `## ${event}`,
+    `**Timestamp**: ${timestamp}`,
+    `**Event**: ${event}`,
+    ...Object.entries(fields).map(([key, value]) => `**${key}**: ${value}`),
+    "",
+    "---",
+    "",
+  ].join("\n");
+}
+
 describe("t321 request-bound source-recovery freeze suspension", () => {
+  test("cross-shard session ties keep recovery retryable but never leave its write suspension active", () => {
+    const timestamp = "2026-08-24T22:00:00Z";
+    for (const sessionEvent of ["SESSION_STARTED", "SESSION_RESUMED"]) {
+      for (const requestSortsFirst of [true, false]) {
+        const proj = createTestProject();
+        tempDirs.push(proj);
+        seedAidlcMemory(proj);
+        seedStateFile(proj, "state-construction.md");
+        seedBoltDag(proj, ["alpha"]);
+        const auditDir = seededAuditDir(proj);
+        mkdirSync(auditDir, { recursive: true });
+        const requestShard = requestSortsFirst
+          ? "a-review.md"
+          : "z-review.md";
+        const sessionShard = requestSortsFirst
+          ? "z-session.md"
+          : "a-session.md";
+        writeFileSync(
+          join(auditDir, requestShard),
+          auditBlock(timestamp, "REVIEW_REQUESTED", {
+            Stage: "functional-design",
+            Reviewer: "aidlc-architecture-reviewer-agent",
+            Unit: "alpha",
+            Iteration: "2",
+            Recovery: "stale-receipt",
+            "Artifact Fingerprint": `sha256:${"a".repeat(64)}`,
+          }),
+        );
+        writeFileSync(
+          join(auditDir, sessionShard),
+          auditBlock(timestamp, sessionEvent, { Source: "test" }),
+        );
+        const stage = loadStageGraphAll().find(
+          (entry) => entry.slug === "functional-design",
+        );
+        expect(stage).toBeDefined();
+        const receipts = freshReviewReceipts(
+          proj,
+          readFileSync(seededStateFile(proj), "utf-8"),
+          stage!,
+          { reviewClass: "adversarial" },
+        );
+        expect(receipts.unitPending.get("alpha")).toEqual({
+          state: "retry-required",
+          iteration: 2,
+          recovery: true,
+          suspensionActive: false,
+        });
+      }
+    }
+  });
+
   test("only the requested Unit thaws until the matching recovery verdict", () => {
     const proj = createTestProject();
     tempDirs.push(proj);

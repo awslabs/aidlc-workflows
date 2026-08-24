@@ -4,7 +4,6 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   mkdirSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -51,7 +50,7 @@ function runReview(proj: string, args: string[]) {
 }
 
 describe("t323 review verdict closure", () => {
-  test("an accepted request remains closable after its Unit set disappears", () => {
+  test("an accepted request remains closable after its Unit leaves a resolvable DAG", () => {
     const proj = createTestProject();
     tempDirs.push(proj);
     seedAidlcMemory(proj);
@@ -97,9 +96,7 @@ describe("t323 review verdict closure", () => {
     ];
     expect(runReview(proj, args).status).toBe(0);
 
-    rmSync(join(seededRecordDir(proj), "runtime-graph.json"), {
-      force: true,
-    });
+    seedBoltDag(proj, ["beta"]);
 
     writeFileSync(primary, "# functional-spec.md\n\n## Review\n\nREADY\n");
     const staleVerdict = runReview(proj, [...args, "--verdict", "READY"]);

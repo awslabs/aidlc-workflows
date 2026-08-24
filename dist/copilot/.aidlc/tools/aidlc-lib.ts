@@ -5873,6 +5873,27 @@ export function freshReviewReceipts(
   const eventIsCrossShardTied = (index: number): boolean => {
     return auditEventIsCrossShardTied(events, index);
   };
+  const requestTieIsSessionBoundaryOnly = (index: number): boolean => {
+    const event = events[index];
+    let sawSessionBoundary = false;
+    for (let other = 0; other < events.length; other++) {
+      if (
+        other === index ||
+        events[other].timestamp !== event.timestamp ||
+        events[other].shard === event.shard
+      ) {
+        continue;
+      }
+      if (
+        events[other].event !== "SESSION_STARTED" &&
+        events[other].event !== "SESSION_RESUMED"
+      ) {
+        return false;
+      }
+      sawSessionBoundary = true;
+    }
+    return sawSessionBoundary;
+  };
 
   const perUnit = stage.for_each === "unit-of-work";
   const unitMajor =
@@ -5968,9 +5989,47 @@ export function freshReviewReceipts(
   let stageIteration: number | null = null;
   let stageReceiptRecovery = false;
   let stagePending: PendingReviewProgress | null = null;
+  const resetUnitReviewState = (unit: string): void => {
+    for (const [key, request] of pendingRequests) {
+      if (request.unit === unit) pendingRequests.delete(key);
+    }
+    unitVerdicts.delete(unit);
+    unitStale.delete(unit);
+    unitStaleProgress.delete(unit);
+    unitIterations.delete(unit);
+    unitReceiptRecovery.delete(unit);
+    unitPending.delete(unit);
+    if (newestSourceUnit === unit) {
+      newestSourceFingerprint = null;
+      newestSourceUnit = null;
+      newestSourceProgress = null;
+      sourceRecoverySpent = false;
+    }
+  };
+  let groupTimestamp: string | null = null;
+  let deferredSessionBoundary = false;
+  const deferredBoltUnits = new Set<string>();
+  const applyDeferredBoundaries = (): void => {
+    if (deferredSessionBoundary) {
+      for (const request of pendingRequests.values()) {
+        request.suspensionActive = false;
+      }
+    }
+    for (const unit of deferredBoltUnits) resetUnitReviewState(unit);
+    deferredSessionBoundary = false;
+    deferredBoltUnits.clear();
+  };
   for (let i = floorIdx + 1; i < events.length; i++) {
     const e = events[i];
+    if (groupTimestamp !== null && e.timestamp !== groupTimestamp) {
+      applyDeferredBoundaries();
+    }
+    groupTimestamp = e.timestamp;
     if (e.event === "SESSION_STARTED" || e.event === "SESSION_RESUMED") {
+      if (eventIsCrossShardTied(i)) {
+        deferredSessionBoundary = true;
+        continue;
+      }
       for (const request of pendingRequests.values()) {
         request.suspensionActive = false;
       }
@@ -5981,22 +6040,12 @@ export function freshReviewReceipts(
         .split(",")
         .map((unit) => unit.trim())
         .filter((unit) => unit.length > 0);
+      if (eventIsCrossShardTied(i)) {
+        for (const unit of units) deferredBoltUnits.add(unit);
+        continue;
+      }
       for (const unit of units) {
-        for (const [key, request] of pendingRequests) {
-          if (request.unit === unit) pendingRequests.delete(key);
-        }
-        unitVerdicts.delete(unit);
-        unitStale.delete(unit);
-        unitStaleProgress.delete(unit);
-        unitIterations.delete(unit);
-        unitReceiptRecovery.delete(unit);
-        unitPending.delete(unit);
-        if (newestSourceUnit === unit) {
-          newestSourceFingerprint = null;
-          newestSourceUnit = null;
-          newestSourceProgress = null;
-          sourceRecoverySpent = false;
-        }
+        resetUnitReviewState(unit);
       }
       continue;
     }
@@ -6062,7 +6111,10 @@ export function freshReviewReceipts(
     ) continue;
     const requestKey = `${unit ?? ""}\u0000${iterationField}`;
     if (e.event === "REVIEW_REQUESTED") {
-      if (eventIsCrossShardTied(i)) continue;
+      const tiedAcrossShards = eventIsCrossShardTied(i);
+      const sessionBoundaryOnlyTie =
+        tiedAcrossShards && requestTieIsSessionBoundaryOnly(i);
+      if (tiedAcrossShards && !sessionBoundaryOnlyTie) continue;
       const previous = pendingRequests.get(requestKey);
       const recovery =
         previous?.recovery === true ||
@@ -6077,6 +6129,7 @@ export function freshReviewReceipts(
         shard: e.shard,
         suspensionActive:
           recovery &&
+          !sessionBoundaryOnlyTie &&
           /^sha256:[0-9a-f]{64}$/.test(
             auditBlockField(e.block, "Artifact Fingerprint") ?? "",
           ),
@@ -6205,6 +6258,7 @@ export function freshReviewReceipts(
       stageStaleProgress = null;
     }
   }
+  applyDeferredBoundaries();
 
   for (const request of pendingRequests.values()) {
     const pending: PendingReviewProgress = {

@@ -10,6 +10,7 @@ import {
   boltSlugForUnit,
   freshReviewReceipts,
   loadStageGraphAll,
+  reviewArtifactFingerprint,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
@@ -17,6 +18,7 @@ import {
   cleanupWorktreeFixture,
   createTestProject,
   seedAidlcMemory,
+  seededAuditDir,
   seedBoltDag,
   seededRecordDir,
   seededStateFile,
@@ -56,7 +58,105 @@ function runReview(proj: string, args: string[]) {
   };
 }
 
+function auditBlock(
+  timestamp: string,
+  event: string,
+  fields: Record<string, string>,
+): string {
+  return [
+    "# AI-DLC Audit Log",
+    "",
+    `## ${event}`,
+    `**Timestamp**: ${timestamp}`,
+    `**Event**: ${event}`,
+    ...Object.entries(fields).map(([key, value]) => `**${key}**: ${value}`),
+    "",
+    "---",
+    "",
+  ].join("\n");
+}
+
 describe("t322 fix-round hardening", () => {
+  test("a cross-shard Bolt boundary invalidates a tied receipt in both filename orders", () => {
+    const timestamp = "2026-08-24T22:00:00Z";
+    for (const receiptSortsFirst of [true, false]) {
+      const proj = createTestProject();
+      tempDirs.push(proj);
+      seedAidlcMemory(proj);
+      seedStateFile(proj, "state-construction.md");
+      seedBoltDag(proj, ["alpha"]);
+      const dir = join(
+        seededRecordDir(proj),
+        "construction",
+        "alpha",
+        "functional-design",
+      );
+      mkdirSync(dir, { recursive: true });
+      for (const name of [
+        "entities.md",
+        "rules.md",
+        "functional-spec.md",
+        "traceability.json",
+      ]) {
+        writeFileSync(join(dir, name), `# ${name}\n`);
+      }
+      const stage = loadStageGraphAll().find(
+        (entry) => entry.slug === "functional-design",
+      )!;
+      const fingerprint = reviewArtifactFingerprint(
+        proj,
+        stage,
+        "alpha",
+        { requireRequiredArtifacts: true },
+      );
+      expect(fingerprint).not.toBeNull();
+      const auditDir = seededAuditDir(proj);
+      mkdirSync(auditDir, { recursive: true });
+      writeFileSync(
+        join(auditDir, "m-request.md"),
+        auditBlock("2026-08-24T21:59:59Z", "REVIEW_REQUESTED", {
+          Stage: "functional-design",
+          Reviewer: "aidlc-architecture-reviewer-agent",
+          Unit: "alpha",
+          Iteration: "1",
+          "Artifact Fingerprint": fingerprint!,
+        }),
+      );
+      const receiptShard = receiptSortsFirst
+        ? "a-receipt.md"
+        : "z-receipt.md";
+      const boltShard = receiptSortsFirst ? "z-bolt.md" : "a-bolt.md";
+      writeFileSync(
+        join(auditDir, receiptShard),
+        auditBlock(timestamp, "REVIEW_COMPLETED", {
+          Stage: "functional-design",
+          Reviewer: "aidlc-architecture-reviewer-agent",
+          Unit: "alpha",
+          Iteration: "1",
+          Verdict: "READY",
+          "Artifact Fingerprint": fingerprint!,
+        }),
+      );
+      writeFileSync(
+        join(auditDir, boltShard),
+        auditBlock(timestamp, "BOLT_STARTED", {
+          "Bolt names": "alpha",
+          "Batch number": "2",
+          "Walking skeleton": "false",
+          "Bolt slug": boltSlugForUnit("alpha"),
+        }),
+      );
+      const receipts = freshReviewReceipts(
+        proj,
+        readFileSync(seededStateFile(proj), "utf-8"),
+        stage,
+        { reviewClass: "adversarial" },
+      );
+      expect(receipts.unitVerdicts.has("alpha")).toBe(false);
+      expect(receipts.unitPending.has("alpha")).toBe(false);
+    }
+  });
+
   test("a fresh Bolt attempt floors an unmatched recovery from the prior attempt", () => {
     const proj = createTestProject();
     tempDirs.push(proj);
