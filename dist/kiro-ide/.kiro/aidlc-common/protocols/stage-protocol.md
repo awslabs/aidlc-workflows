@@ -84,6 +84,15 @@ prompts required by their surrounding instructions. They are not literal
 questions to paste into chat: at the required workflow point, their content
 MUST still be presented through the annex-defined mechanism.
 
+The `prompt`, `header`, and `options[].description` fields in a question spec,
+plus any free-text follow-up, are human-facing prose: render them in the
+resolved conversation language. An `options[].label` literal that this
+protocol spells verbatim — including `Approve`, `Request Changes`,
+`Accept as-is`, and `X. Other (please specify)` — is a preserved token and
+stays English; localize only the prose around it. Fill bracketed placeholders
+such as `[Stage Name]` and `[next stage]` with values governed by their own
+language and token rules.
+
 For any harness that renders options as prose, every question creates a fresh
 response-key scope: the first visible option is `1`, the second is `2`, and so
 on, regardless of numbered content earlier in the message or other questions

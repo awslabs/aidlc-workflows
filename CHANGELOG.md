@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.71] - 2026-08-24
+
+Non-English workflows now keep the agent's human-facing conversation and structured-question prose in the resolved conversation language, including status updates and narration between tool calls from the orchestrator and delegated agents. **Upgrade:** refresh your `dist/<harness>/` shell; existing workspaces keep their own memory tree, so merge the extended `Conversation language — what to localize` rule into each `aidlc/spaces/<space>/memory/org.md` by hand and start a fresh session for it to load.
+
+* Chat messages, status updates, progress reports, and transitional narration between tool calls now follow the resolved conversation language on every turn, for orchestrators and delegated agents alike.
+* Structured-question `prompt`, `header`, `options[].description`, and free-text follow-ups are localized, while protocol-defined `options[].label` literals such as `Approve` and `X. Other (please specify)` remain unchanged English tokens.
+
 ## [2.6.70] - 2026-08-24
 
 Bugfix and refactor workflows now carry verified changes through the existing deployment path instead of stopping after Build and Test. **Upgrade:** refresh your `dist/<harness>/` shell to pick up the expanded scope grids, deployment fallback, and skip-provenance fix.
