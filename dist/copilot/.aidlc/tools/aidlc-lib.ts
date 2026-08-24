@@ -9504,9 +9504,10 @@ export const COMPOSE_MARKER_TTL_MS = 24 * 60 * 60 * 1000;
 // `<baseDir>/.aidlc-sensors` — the sensor detail-output / tsbuildinfo directory.
 // `baseDir` is the project dir for current dispatcher and type-check callers;
 // callers append a stage slug as needed. Before 2.6.94, type-check passed a
-// tsconfig directory instead, creating legacy package-local record trees. A
-// bare baseDir still keeps the flat `.aidlc-sensors` leaf when no intent/space
-// context is supplied.
+// tsconfig directory instead, creating legacy package-local record trees. With
+// no explicit intent/space, `docsRoot` follows the active-intent cursor (or lone
+// record) when one resolves, so caches and failure details share the manifest's
+// per-intent location; only pre-intent does it fall back to the flat space root.
 export function sensorsDir(baseDir: string, intent?: string, space?: string): string {
   if (intent === undefined && space === undefined) {
     return join(docsRoot(baseDir), ".aidlc-sensors");
